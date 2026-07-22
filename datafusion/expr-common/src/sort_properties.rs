@@ -142,7 +142,47 @@ pub struct ExprProperties {
     /// Indicates whether the expression preserves lexicographical ordering
     /// of its inputs. For example, string concatenation preserves ordering,
     /// while addition does not.
+    ///
+    /// This is a *non-strict* (monotone) property: inputs advancing in
+    /// lexicographical order never make the output decrease, but distinct
+    /// inputs may map to equal outputs (ties). See
+    /// [`Self::strictly_order_preserving`] for the strict variant and an
+    /// explanation of the difference.
     pub preserves_lex_ordering: bool,
+    /// Indicates whether the expression is strictly order-preserving with
+    /// respect to its inputs that are `Ordered`: the output is ordered in the
+    /// same direction, equal outputs can only result from equal values of
+    /// those inputs (i.e. the mapping is one-to-one), and nulls map to nulls.
+    ///
+    /// i.e. setting this to true means that `a.cmp(b) == f(a).cmp(f(b))`
+    ///
+    /// # Difference from [`Self::preserves_lex_ordering`]
+    ///
+    /// `preserves_lex_ordering` only promises monotonicity, which allows the
+    /// expression to collapse distinct input values into equal outputs;
+    /// `floor`, `date_trunc` and narrowing casts are monotone but do exactly
+    /// that. This field additionally rules such collapses out, so
+    /// `strictly_order_preserving` implies (same-direction)
+    /// `preserves_lex_ordering`, but not vice versa.
+    ///
+    /// The distinction matters for suffix sort keys. Optimizers use this
+    /// field to substitute a sort key with an expression computed from it:
+    /// if data is sorted by `[x, y]`, it is also sorted by `[expr(x), y]`.
+    /// That claim requires `y` to be sorted within each run of equal
+    /// `expr(x)` values, which only holds if equal outputs imply equal `x`
+    /// values. With a merely monotone expression such as `floor`, one output
+    /// run can span several `x` groups, and `y` restarts at each group:
+    ///
+    /// ```text
+    /// sorted by [x, y]:  (1.2, 5), (1.8, 1), (2.5, 3)
+    /// [floor(x), y]:     (1, 5),   (1, 1),   (2, 3)   <-- y not sorted within
+    ///                                                     the "1" run
+    /// ```
+    ///
+    /// Hence a monotone expression only justifies the length-1 ordering
+    /// `[expr(x)]`, while a strictly order-preserving one keeps the entire
+    /// suffix valid. When in doubt, set to `false`.
+    pub strictly_order_preserving: bool,
 }
 
 impl ExprProperties {
@@ -153,6 +193,7 @@ impl ExprProperties {
             sort_properties: SortProperties::default(),
             range: Interval::make_unbounded(&DataType::Null).unwrap(),
             preserves_lex_ordering: false,
+            strictly_order_preserving: false,
         }
     }
 
@@ -171,6 +212,16 @@ impl ExprProperties {
     /// Sets whether the expression maintains lexicographical ordering and returns the modified instance.
     pub fn with_preserves_lex_ordering(mut self, preserves_lex_ordering: bool) -> Self {
         self.preserves_lex_ordering = preserves_lex_ordering;
+        self
+    }
+
+    /// Sets whether the expression is strictly order-preserving and returns
+    /// the modified instance.
+    pub fn with_strictly_order_preserving(
+        mut self,
+        strictly_order_preserving: bool,
+    ) -> Self {
+        self.strictly_order_preserving = strictly_order_preserving;
         self
     }
 }

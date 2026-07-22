@@ -33,13 +33,13 @@ use self::dependency::{
 use crate::equivalence::{
     AcrossPartitions, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
-use crate::expressions::{CastExpr, Column, Literal, with_new_schema};
+use crate::expressions::{Column, Literal, with_new_schema};
 use crate::{
     ConstExpr, LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr,
     PhysicalSortRequirement,
 };
 
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Constraint, Constraints, HashMap, Result, plan_err};
 use datafusion_expr::interval_arithmetic::Interval;
@@ -195,24 +195,30 @@ impl OrderingEquivalenceCache {
 }
 
 impl EquivalenceProperties {
-    /// Helper used by the ordering equivalence rule when considering whether a
-    /// cast-bearing expression can replace an existing sort key without
-    /// invalidating the ordering.
+    /// Helper used by the ordering equivalence rule when considering whether
+    /// an expression can replace an existing sort key without invalidating
+    /// the ordering.
     ///
-    /// The substitution is only allowed when the cast wraps the very same child
-    /// expression that the original sort used and the casted type is a
-    /// widening/order-preserving conversion. Without those restrictions, a
-    /// narrowing cast could collapse distinct values and violate the existing
+    /// The substitution is only allowed when, treating the sort key as the
+    /// only ordered input, the expression reports the same ordering *and*
+    /// that it is a one-to-one, order-preserving function of it (see
+    /// [`ExprProperties::strictly_order_preserving`]). For example, a
+    /// widening `CAST` of the sort key qualifies, while a narrowing one does
+    /// not, as it could collapse distinct values and violate the existing
     /// sort order.
-    fn substitute_cast_ordering(
+    fn substitute_order_preserving_ordering(
         r_expr: Arc<dyn PhysicalExpr>,
         sort_expr: &PhysicalSortExpr,
-        expr_type: &DataType,
+        schema: &SchemaRef,
     ) -> Option<PhysicalSortExpr> {
-        let cast_expr = r_expr.downcast_ref::<CastExpr>()?;
-
-        (cast_expr.expr().eq(&sort_expr.expr)
-            && CastExpr::check_bigger_cast(cast_expr.cast_type(), expr_type))
+        if r_expr.eq(&sort_expr.expr) {
+            // No point in substituting an expression with itself.
+            return None;
+        }
+        let dependencies = Dependencies::new(std::iter::once(sort_expr.clone()));
+        let properties = get_expr_properties(&r_expr, &dependencies, schema).ok()?;
+        (properties.strictly_order_preserving
+            && properties.sort_properties == SortProperties::Ordered(sort_expr.options))
         .then(|| PhysicalSortExpr::new(r_expr, sort_expr.options))
     }
 
@@ -482,6 +488,7 @@ impl EquivalenceProperties {
                         sort_properties: SortProperties::Ordered(next.options),
                         range: Interval::make_unbounded(&data_type)?,
                         preserves_lex_ordering: true,
+                        strictly_order_preserving: true,
                     });
                 }
                 // Check if the expression is monotonic in all arguments:
@@ -840,7 +847,9 @@ impl EquivalenceProperties {
     ///
     /// TODO: Handle all scenarios that allow substitution; e.g. when `x` is
     ///       sorted, `atan(x + 1000)` should also be substituted. For now, we
-    ///       only consider single-column `CAST` expressions.
+    ///       consider widening `CAST` expressions and single-child expressions
+    ///       that declare themselves one-to-one order-preserving via
+    ///       [`PhysicalExpr::is_strictly_order_preserving`].
     fn substitute_oeq_class(
         schema: &SchemaRef,
         mapping: &ProjectionMapping,
@@ -852,21 +861,17 @@ impl EquivalenceProperties {
             order
                 .into_iter()
                 .map(|sort_expr| {
-                    // The sort expression comes from this schema, so the
-                    // following call to `unwrap` is safe.
-                    let expr_type = sort_expr.expr.data_type(schema).unwrap();
                     let original_sort_expr = sort_expr.clone();
-                    // TODO: Add one-to-one analysis for ScalarFunctions.
                     mapping
                         .iter()
                         .map(|(source, _target)| source)
                         .filter(|source| expr_refers(source, &original_sort_expr.expr))
                         .cloned()
                         .filter_map(|r_expr| {
-                            Self::substitute_cast_ordering(
+                            Self::substitute_order_preserving_ordering(
                                 r_expr,
                                 &original_sort_expr,
-                                &expr_type,
+                                schema,
                             )
                         })
                         .chain(std::iter::once(sort_expr))
@@ -1469,23 +1474,28 @@ fn get_expr_properties(
     schema: &SchemaRef,
 ) -> Result<ExprProperties> {
     if let Some(column_order) = dependencies.iter().find(|&order| expr.eq(&order.expr)) {
-        // If exact match is found, return its ordering.
+        // If exact match is found, return its ordering. As a leaf, it is
+        // trivially a strictly order-preserving (identity) mapping of itself.
         Ok(ExprProperties {
             sort_properties: SortProperties::Ordered(column_order.options),
             range: Interval::make_unbounded(&expr.data_type(schema)?)?,
             preserves_lex_ordering: false,
+            strictly_order_preserving: true,
         })
     } else if expr.downcast_ref::<Column>().is_some() {
         Ok(ExprProperties {
             sort_properties: SortProperties::Unordered,
             range: Interval::make_unbounded(&expr.data_type(schema)?)?,
             preserves_lex_ordering: false,
+            strictly_order_preserving: true,
         })
     } else if let Some(literal) = expr.downcast_ref::<Literal>() {
         Ok(ExprProperties {
             sort_properties: SortProperties::Singleton,
             range: literal.value().into(),
             preserves_lex_ordering: true,
+            // Vacuously true: a literal has no ordered inputs.
+            strictly_order_preserving: true,
         })
     } else {
         // Find orderings of its children

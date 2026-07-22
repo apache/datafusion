@@ -761,6 +761,7 @@ mod tests {
                 .unwrap(),
                 sort_properties: sp,
                 preserves_lex_ordering: false,
+                strictly_order_preserving: false,
             }
         }
 
