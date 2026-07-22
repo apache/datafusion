@@ -468,6 +468,58 @@ QUALIFY
     rn = 1 AND count(DISTINCT cs.customer_id) > 0
 "#;
 
+// https://github.com/apache/datafusion/issues/23668
+//
+// Extends the #23317 aggregate-scope fix to the window and ORDER BY clauses.
+// Reuses issue_23317_context() (same derived-projection shape).
+
+// Window sorting by an aggregate, over a derived-projection input. Already
+// correct today; this locks the OVER clause against keeping the out-of-scope
+// `cs` qualifier across the refactor.
+const ISSUE_23668_WINDOW_QUERY: &str = r#"
+SELECT
+    date_part('year', c.signup_date) AS signup_year,
+    count(DISTINCT cs.customer_id) AS customers,
+    row_number() OVER (ORDER BY count(DISTINCT cs.customer_id) DESC) AS rn
+FROM
+    "warehouse"."main"."sales" cs
+    JOIN "warehouse"."main"."customers" c USING (customer_id)
+GROUP BY
+    1
+"#;
+
+// ORDER BY an aggregate that is NOT selected, so it can't use a select alias
+// and is unprojected through the Aggregate. It must be normalized like the
+// SELECT list, not keep the out-of-scope `cs` qualifier.
+const ISSUE_23668_ORDER_BY_QUERY: &str = r#"
+SELECT
+    date_part('year', c.signup_date) AS signup_year,
+    count(DISTINCT cs.customer_id) AS customers
+FROM
+    "warehouse"."main"."sales" cs
+    JOIN "warehouse"."main"."customers" c USING (customer_id)
+GROUP BY
+    1
+ORDER BY
+    round(sum(cs.total_revenue), 2) DESC
+"#;
+
+// ORDER BY a selected aggregate: the optimizer keeps a top-level Sort, so this
+// covers the direct `Sort` arm (the other sort caller, vs the projection-
+// absorbed one above).
+const ISSUE_23668_TOP_LEVEL_SORT_QUERY: &str = r#"
+SELECT
+    date_part('year', c.signup_date) AS signup_year,
+    count(DISTINCT cs.customer_id) AS customers
+FROM
+    "warehouse"."main"."sales" cs
+    JOIN "warehouse"."main"."customers" c USING (customer_id)
+GROUP BY
+    1
+ORDER BY
+    customers DESC
+"#;
+
 fn issue_23317_context() -> Result<SessionContext> {
     let ctx = SessionContext::new();
 
@@ -607,6 +659,87 @@ async fn optimized_duckdb_unparse_qualify_unqualifies_agg_input() -> Result<()> 
     assert!(
         !sql.contains(r#"count(DISTINCT "cs"."customer_id")"#),
         "QUALIFY must not reference out-of-scope alias cs: {sql}",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn optimized_duckdb_unparse_window_over_agg_unqualifies_input() -> Result<()> {
+    let ctx = issue_23317_context()?;
+    assert!(ctx.remove_optimizer_rule(SingleDistinctToGroupBy::new().name()));
+
+    let plan = ctx
+        .sql(ISSUE_23668_WINDOW_QUERY)
+        .await?
+        .into_optimized_plan()?;
+    let dialect = DuckDBDialect::new();
+    let unparser = Unparser::new(&dialect);
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+
+    assert_issue_23317_unparsed_sql_plans(&ctx, &sql).await?;
+
+    assert!(
+        sql.contains(r#"OVER (ORDER BY count(DISTINCT "customer_id")"#),
+        "window ORDER BY aggregate should resolve against the derived projection output: {sql}",
+    );
+    assert!(
+        !sql.contains(r#"count(DISTINCT "cs"."customer_id")"#),
+        "window OVER clause must not reference out-of-scope alias cs: {sql}",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn optimized_duckdb_unparse_order_by_unqualifies_agg_input() -> Result<()> {
+    let ctx = issue_23317_context()?;
+    assert!(ctx.remove_optimizer_rule(SingleDistinctToGroupBy::new().name()));
+
+    let plan = ctx
+        .sql(ISSUE_23668_ORDER_BY_QUERY)
+        .await?
+        .into_optimized_plan()?;
+    let dialect = DuckDBDialect::new();
+    let unparser = Unparser::new(&dialect);
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+
+    assert_issue_23317_unparsed_sql_plans(&ctx, &sql).await?;
+
+    assert!(
+        sql.contains(r#"ORDER BY round(sum("total_revenue"), 2)"#),
+        "ORDER BY aggregate should resolve against the derived projection output: {sql}",
+    );
+    assert!(
+        !sql.contains(r#"sum("cs"."total_revenue")"#),
+        "ORDER BY must not reference out-of-scope alias cs: {sql}",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn optimized_duckdb_unparse_top_level_sort_over_agg_stays_in_scope() -> Result<()> {
+    let ctx = issue_23317_context()?;
+    assert!(ctx.remove_optimizer_rule(SingleDistinctToGroupBy::new().name()));
+
+    let plan = ctx
+        .sql(ISSUE_23668_TOP_LEVEL_SORT_QUERY)
+        .await?
+        .into_optimized_plan()?;
+    let dialect = DuckDBDialect::new();
+    let unparser = Unparser::new(&dialect);
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+
+    assert_issue_23317_unparsed_sql_plans(&ctx, &sql).await?;
+
+    assert!(
+        sql.contains(r#"ORDER BY "customers""#),
+        "top-level ORDER BY should resolve to the select alias: {sql}",
+    );
+    assert!(
+        !sql.contains(r#""cs"."customer_id") AS "customers""#),
+        "aggregate output must not reference out-of-scope alias cs: {sql}",
     );
 
     Ok(())
