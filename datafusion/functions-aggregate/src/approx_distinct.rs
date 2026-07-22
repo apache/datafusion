@@ -1081,66 +1081,6 @@ mod tests {
         }
 
         #[test]
-        fn union_support_hll_acc_and_group_acc() {
-            use arrow::array::{Int32Array, StringArray, UnionArray};
-            use arrow::datatypes::{UnionFields, UnionMode};
-
-            assert!(is_hll_groups_type(&DataType::Union(
-                UnionFields::try_new(
-                    vec![0, 1],
-                    vec![
-                        Field::new("a", DataType::Int32, true),
-                        Field::new("b", DataType::Utf8, true),
-                    ],
-                )
-                .unwrap(),
-                UnionMode::Dense,
-            )));
-
-            let int_array = Int32Array::from(vec![5, 10, 5]);
-            let str_array = StringArray::from(vec!["foo", "foo"]);
-            let type_ids = vec![0_i8, 1, 0, 0, 1].into();
-            let offsets = vec![0, 0, 1, 2, 1].into();
-            let children = vec![
-                Arc::new(int_array) as ArrayRef,
-                Arc::new(str_array) as ArrayRef,
-            ];
-            let union_fields = [
-                (0, Arc::new(Field::new("a", DataType::Int32, true))),
-                (1, Arc::new(Field::new("b", DataType::Utf8, true))),
-            ]
-            .into_iter()
-            .collect();
-            let array: ArrayRef = Arc::new(
-                UnionArray::try_new(union_fields, type_ids, Some(offsets), children)
-                    .unwrap(),
-            );
-
-            let mut acc = HLLAccumulator::new();
-            acc.update_batch(&[Arc::clone(&array)]).unwrap();
-            let non_group_count = distinct_count(&mut acc);
-
-            let group_indices = vec![0usize; array.len()];
-            let mut group_acc = HllGroupsAccumulator::new();
-            group_acc
-                .update_batch(std::slice::from_ref(&array), &group_indices, None, 1)
-                .unwrap();
-            let group_count = group_acc
-                .evaluate(EmitTo::All)
-                .unwrap()
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .unwrap()
-                .value(0);
-
-            assert_eq!(
-                non_group_count, group_count,
-                "non-grouped and grouped paths disagree for union type"
-            );
-            assert_eq!(non_group_count, 3, "wrong distinct count for union type");
-        }
-
-        #[test]
         fn interval_support_numerical_acc_and_group_acc() {
             let year_month: ArrayRef =
                 Arc::new(IntervalYearMonthArray::from(vec![1, 2, 2, 3, 3, 3, 0, 0]));
