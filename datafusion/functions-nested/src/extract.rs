@@ -970,7 +970,7 @@ where
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Returns the first non-null element in the array.",
+    description = "Returns the first non-null element in the array. Returns NULL if the array is empty or all elements are NULL.",
     syntax_example = "array_any_value(array)",
     sql_example = r#"```sql
 > select array_any_value([NULL, 1, 2, 3]);
@@ -1071,9 +1071,7 @@ where
         }
 
         // the list element is empty; there is no value to take, so the result
-        // is NULL. Without this guard the no-nulls branch below would read
-        // `values[start]`, which is either the next element (wrong value) or
-        // out of bounds when `start == values.len()` (panic).
+        // is NULL.
         if start == end {
             mutable.try_extend_nulls(1)?;
             continue;
@@ -1247,8 +1245,7 @@ mod tests {
     }
 
     // An empty (length-0) list element that is not null must yield NULL, not
-    // the next element's value. Previously the no-nulls branch unconditionally
-    // read values[start], returning the wrong element for interior empty lists.
+    // the next element's value.
     #[test]
     fn test_array_any_value_empty_list_element() -> Result<()> {
         let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
@@ -1262,14 +1259,13 @@ mod tests {
         let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
 
         assert_eq!(result.value(0), 1);
-        assert!(result.is_null(1)); // empty list -> NULL (previously read `2`)
+        assert!(result.is_null(1)); // empty list -> NULL
         assert_eq!(result.value(2), 2);
 
         Ok(())
     }
 
-    // A trailing empty list element has start == values.len(); the old code did
-    // `extend(0, start, start + 1)` and panicked with an out-of-bounds slice.
+    // A trailing empty list element has start == values.len().
     #[test]
     fn test_array_any_value_trailing_empty_list_element() -> Result<()> {
         let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
