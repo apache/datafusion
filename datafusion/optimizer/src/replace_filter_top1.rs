@@ -21,15 +21,15 @@ use crate::optimizer::{ApplyOrder, ApplyOrder::BottomUp};
 use crate::{OptimizerConfig, OptimizerRule};
 use std::sync::Arc;
 
-use datafusion_common::ScalarValue::{self, UInt64};
+use datafusion_common::ScalarValue;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Column, Result};
 use datafusion_expr::{
     Aggregate, BinaryExpr, Expr, Filter, LogicalPlan, Operator, SortExpr,
 };
-use datafusion_expr::{ExprFunctionExt, LogicalPlanBuilder, col, lit};
+use datafusion_expr::{ExprFunctionExt, LogicalPlanBuilder, lit};
 
-/// Optimizer that replaces logical [[Filter]] with a "top 1" predicate, that has a child  with a logical [[Window]] with a function using `row_number`
+/// Optimizer that replaces logical [[Filter]] with a "topredicate, that has a child  with a logical [[Window]] with a function using `row_number`
 /// to an aggregate
 ///
 /// ```text
@@ -226,108 +226,236 @@ fn has_valid_window_input(
 
 #[cfg(test)]
 mod tests {
-    use crate::assert_optimized_plan_eq_snapshot;
-    use crate::replace_filter_top1::ReplaceFilterTop1;
-    use crate::test::*;
-    use arrow::datatypes::{Fields, Schema};
-    use std::sync::Arc;
-
+    use super::*;
     use crate::OptimizerContext;
-    use datafusion_common::Result;
-    use datafusion_expr::{
-        Expr, col, logical_plan::builder::LogicalPlanBuilder, table_scan,
-    };
-    use datafusion_functions_aggregate::sum::sum;
+    use crate::test::*;
 
-    macro_rules! assert_optimized_plan_equal {
-        (
-            $plan:expr,
-            @ $expected:literal $(,)?
-        ) => {{
-            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
-            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(ReplaceFilterTop1::new())];
-            assert_optimized_plan_eq_snapshot!(
-                optimizer_ctx,
-                rules,
-                $plan,
-                @ $expected,
-            )
-        }};
+    use std::collections::HashSet;
+
+    use chrono::{DateTime, Utc};
+    use datafusion_common::DataFusionError;
+    use datafusion_common::alias::AliasGenerator;
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::WindowFunctionDefinition;
+    use datafusion_expr::col;
+    use datafusion_expr::expr::WindowFunction;
+    use datafusion_expr::planner::ExprPlanner;
+    use datafusion_expr::registry::FunctionRegistry;
+    use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
+
+    /// A minimal [`FunctionRegistry`] that only knows `first_value` (all the
+    /// rewrite needs). `OptimizerContext` provides no registry on its own.
+    struct TestRegistry;
+
+    impl FunctionRegistry for TestRegistry {
+        fn udfs(&self) -> HashSet<String> {
+            HashSet::new()
+        }
+        fn higher_order_function_names(&self) -> HashSet<String> {
+            HashSet::new()
+        }
+        fn udafs(&self) -> HashSet<String> {
+            HashSet::new()
+        }
+        fn udwfs(&self) -> HashSet<String> {
+            HashSet::new()
+        }
+        fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>> {
+            Err(DataFusionError::Plan(format!("udf {name} not found")))
+        }
+        fn higher_order_function(&self, name: &str) -> Result<Arc<HigherOrderUDF>> {
+            Err(DataFusionError::Plan(format!(
+                "higher order fn {name} not found"
+            )))
+        }
+        fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
+            match name {
+                "first_value" => {
+                    Ok(datafusion_functions_aggregate::first_last::first_value_udaf())
+                }
+                _ => Err(DataFusionError::Plan(format!("udaf {name} not found"))),
+            }
+        }
+        fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
+            Err(DataFusionError::Plan(format!("udwf {name} not found")))
+        }
+        fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
+            vec![]
+        }
+    }
+
+    /// Wraps [`OptimizerContext`] to supply the [`TestRegistry`].
+    struct TestConfig {
+        inner: OptimizerContext,
+        registry: TestRegistry,
+    }
+
+    impl TestConfig {
+        fn new() -> Self {
+            Self {
+                inner: OptimizerContext::new(),
+                registry: TestRegistry,
+            }
+        }
+    }
+
+    impl OptimizerConfig for TestConfig {
+        fn query_execution_start_time(&self) -> Option<DateTime<Utc>> {
+            self.inner.query_execution_start_time()
+        }
+        fn alias_generator(&self) -> &Arc<AliasGenerator> {
+            self.inner.alias_generator()
+        }
+        fn options(&self) -> Arc<ConfigOptions> {
+            self.inner.options()
+        }
+        fn function_registry(&self) -> Option<&dyn FunctionRegistry> {
+            Some(&self.registry)
+        }
+    }
+
+    /// Build a `row_number()` window expr with the given PARTITION BY / ORDER BY.
+    fn row_number_window(partition_by: Vec<Expr>, order_by: Vec<SortExpr>) -> Expr {
+        Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::row_number::row_number_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(partition_by)
+        .order_by(order_by)
+        .build()
+        .unwrap()
+    }
+
+    /// `Filter(<pred over rn>) -> WindowAggr(row_number PARTITION BY .. ORDER BY c DESC) -> TableScan`.
+    /// `make_predicate` receives the `rn` column expression.
+    fn top1_plan(
+        partition_by: Vec<Expr>,
+        make_predicate: impl FnOnce(Expr) -> Expr,
+    ) -> Result<LogicalPlan> {
+        let table_scan = test_table_scan()?;
+        let window = row_number_window(partition_by, vec![col("c").sort(false, true)]);
+        let window_plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .build()?;
+        // The row_number output is the last column of the WindowAggr schema;
+        // its name is fully normalized/qualified here (unlike the pre-build expr).
+        let rn = Expr::Column(window_plan.schema().columns().last().unwrap().clone());
+        LogicalPlanBuilder::from(window_plan)
+            .filter(make_predicate(rn))?
+            .build()
+    }
+
+    fn rewrite(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+        ReplaceFilterTop1::new().rewrite(plan, &TestConfig::new())
+    }
+
+    // ---------- rewrite fires ----------
+
+    #[test]
+    fn rewrite_rn_eq_1() -> Result<()> {
+        let plan = top1_plan(vec![col("a")], |rn| rn.eq(lit(1u64)))?;
+        let optimized = rewrite(plan)?;
+        assert!(optimized.transformed);
+        insta::assert_snapshot!(optimized.data, @r"
+Projection: test.a, test.b, test.c, UInt64(1) AS row_number() PARTITION BY [test.a] ORDER BY [test.c DESC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+  Aggregate: groupBy=[[test.a]], aggr=[[first_value(test.b) ORDER BY [test.c DESC NULLS FIRST] AS b, first_value(test.c) ORDER BY [test.c DESC NULLS FIRST] AS c]]
+    TableScan: test
+");
+        Ok(())
     }
 
     #[test]
-    fn eliminate_redundant_distinct_simple() -> Result<()> {
-        let table_scan = test_table_scan().unwrap();
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("c")], Vec::<Expr>::new())?
-            .project(vec![col("c")])?
-            .distinct()?
-            .build()?;
-
-        assert_optimized_plan_equal!(plan, @r"
-        Projection: test.c
-          Aggregate: groupBy=[[test.c]], aggr=[[]]
-            TableScan: test
-        ")
+    fn rewrite_rn_eq_1_literal_on_left() -> Result<()> {
+        let plan = top1_plan(vec![col("a")], |rn| lit(1u64).eq(rn))?;
+        let optimized = rewrite(plan)?;
+        assert!(optimized.transformed);
+        insta::assert_snapshot!(optimized.data, @r"
+Projection: test.a, test.b, test.c, UInt64(1) AS row_number() PARTITION BY [test.a] ORDER BY [test.c DESC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+  Aggregate: groupBy=[[test.a]], aggr=[[first_value(test.b) ORDER BY [test.c DESC NULLS FIRST] AS b, first_value(test.c) ORDER BY [test.c DESC NULLS FIRST] AS c]]
+    TableScan: test
+");
+        Ok(())
     }
 
     #[test]
-    fn eliminate_redundant_distinct_pair() -> Result<()> {
-        let table_scan = test_table_scan().unwrap();
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a"), col("b")], Vec::<Expr>::new())?
-            .project(vec![col("a"), col("b")])?
-            .distinct()?
-            .build()?;
-
-        assert_optimized_plan_equal!(plan, @r"
-        Projection: test.a, test.b
-          Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]
-            TableScan: test
-        ")
+    fn rewrite_rn_lteq_1() -> Result<()> {
+        let plan = top1_plan(vec![col("a")], |rn| rn.lt_eq(lit(1u64)))?;
+        let optimized = rewrite(plan)?;
+        assert!(optimized.transformed);
+        insta::assert_snapshot!(optimized.data, @r"
+Projection: test.a, test.b, test.c, UInt64(1) AS row_number() PARTITION BY [test.a] ORDER BY [test.c DESC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+  Aggregate: groupBy=[[test.a]], aggr=[[first_value(test.b) ORDER BY [test.c DESC NULLS FIRST] AS b, first_value(test.c) ORDER BY [test.c DESC NULLS FIRST] AS c]]
+    TableScan: test
+");
+        Ok(())
     }
 
     #[test]
-    fn do_not_eliminate_distinct() -> Result<()> {
-        let table_scan = test_table_scan().unwrap();
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("a"), col("b")])?
-            .distinct()?
-            .build()?;
+    fn rewrite_rn_lt_2() -> Result<()> {
+        let plan = top1_plan(vec![col("a")], |rn| rn.lt(lit(2u64)))?;
+        let optimized = rewrite(plan)?;
+        assert!(optimized.transformed);
+        insta::assert_snapshot!(optimized.data, @r"
+Projection: test.a, test.b, test.c, UInt64(1) AS row_number() PARTITION BY [test.a] ORDER BY [test.c DESC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+  Aggregate: groupBy=[[test.a]], aggr=[[first_value(test.b) ORDER BY [test.c DESC NULLS FIRST] AS b, first_value(test.c) ORDER BY [test.c DESC NULLS FIRST] AS c]]
+    TableScan: test
+");
+        Ok(())
+    }
 
-        assert_optimized_plan_equal!(plan, @r"
-        Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]
-          Projection: test.a, test.b
-            TableScan: test
-        ")
+    // ---------- rewrite does not fire ----------
+
+    #[test]
+    fn no_rewrite_rn_eq_2() -> Result<()> {
+        let plan = top1_plan(vec![col("a")], |rn| rn.eq(lit(2u64)))?;
+        let optimized = rewrite(plan)?;
+        assert!(!optimized.transformed);
+        Ok(())
     }
 
     #[test]
-    fn do_not_eliminate_distinct_with_aggr() -> Result<()> {
-        let table_scan = test_table_scan().unwrap();
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a"), col("b"), col("c")], vec![sum(col("c"))])?
-            .project(vec![col("a"), col("b")])?
-            .distinct()?
-            .build()?;
-
-        assert_optimized_plan_equal!(plan, @r"
-        Aggregate: groupBy=[[test.a, test.b]], aggr=[[]]
-          Projection: test.a, test.b
-            Aggregate: groupBy=[[test.a, test.b, test.c]], aggr=[[sum(test.c)]]
-              TableScan: test
-        ")
+    fn no_rewrite_predicate_on_other_column() -> Result<()> {
+        // predicate compares `a`, not the row_number column
+        let plan = top1_plan(vec![col("a")], |_rn| col("a").eq(lit(1u64)))?;
+        let optimized = rewrite(plan)?;
+        assert!(!optimized.transformed);
+        Ok(())
     }
 
     #[test]
-    fn use_limit_1_when_no_columns() -> Result<()> {
-        let plan = table_scan(Some("test"), &Schema::new(Fields::empty()), None)?
-            .distinct()?
+    fn no_rewrite_missing_partition_by() -> Result<()> {
+        let plan = top1_plan(vec![], |rn| rn.eq(lit(1u64)))?;
+        let optimized = rewrite(plan)?;
+        assert!(!optimized.transformed);
+        Ok(())
+    }
+
+    #[test]
+    fn no_rewrite_not_row_number() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let window = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("a")])
+        .order_by(vec![col("c").sort(false, true)])
+        .build()
+        .unwrap();
+        let window_plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .build()?;
+        let rank_col =
+            Expr::Column(window_plan.schema().columns().last().unwrap().clone());
+        let plan = LogicalPlanBuilder::from(window_plan)
+            .filter(rank_col.eq(lit(1u64)))?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @r"
-        Limit: skip=0, fetch=1
-          TableScan: test
-        ")
+        let optimized = rewrite(plan)?;
+        assert!(!optimized.transformed);
+        Ok(())
     }
 }
