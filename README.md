@@ -67,6 +67,8 @@ See [use cases] for examples. The following related subprojects target end users
   queries.
 - [DataFusion Comet](https://github.com/apache/datafusion-comet/) is an accelerator for Apache Spark based on
   DataFusion.
+- [DataFusion Ballista](https://github.com/apache/datafusion-ballista/) is a distributed query execution engine
+  that scales DataFusion across a cluster of nodes.
 
 "Out of the box,"
 DataFusion offers [SQL](https://datafusion.apache.org/user-guide/sql/index.html) and [DataFrame](https://datafusion.apache.org/user-guide/dataframe.html) APIs, excellent [performance],

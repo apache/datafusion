@@ -27,9 +27,11 @@ use crate::datasource::listing::{
 };
 use crate::execution::context::SessionState;
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{Result, config_datafusion_err};
-use datafusion_common::{ToDFSchema, arrow_datafusion_err, plan_err};
+use datafusion_common::{
+    ToDFSchema, arrow_datafusion_err, internal_datafusion_err, plan_err,
+};
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
@@ -71,20 +73,66 @@ impl TableProviderFactory for ListingTableFactory {
             ))?
             .create(session_state, &cmd.options)?;
 
-        let mut table_path =
-            ListingTableUrl::parse(&cmd.location)?.with_table_ref(cmd.name.clone());
-        let file_extension = match table_path.is_collection() {
-            // Setting the extension to be empty instead of allowing the default extension seems
-            // odd, but was done to ensure existing behavior isn't modified. It seems like this
-            // could be refactored to either use the default extension or set the fully expected
-            // extension when compression is included (e.g. ".csv.gz")
-            true => "",
-            false => &get_extension(cmd.location.as_str()),
+        let table_paths = cmd
+            .locations
+            .iter()
+            .map(|location| {
+                Ok(ListingTableUrl::parse(location)?.with_table_ref(cmd.name.clone()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let Some(first_path) = table_paths.first() else {
+            return plan_err!("CREATE EXTERNAL TABLE requires at least one location");
         };
-        let mut options = ListingOptions::new(file_format)
-            .with_session_config_options(session_state.config())
-            .with_file_extension(file_extension);
 
+        let mut seen_paths = HashSet::with_capacity(table_paths.len());
+        if let Some(duplicate) = table_paths.iter().find(|path| !seen_paths.insert(*path))
+        {
+            return plan_err!(
+                "Duplicate location '{}' in CREATE EXTERNAL TABLE",
+                duplicate.as_str()
+            );
+        }
+
+        // `ListingTable` resolves a single object store (from the first location)
+        // and scans every location with it, so locations spanning different
+        // object stores would silently read the wrong data. Reading across
+        // object stores is intentionally not supported (see
+        // https://github.com/apache/datafusion/issues/16303); reject it here with
+        // a clear error rather than producing incorrect results at scan time.
+        let object_store_url = first_path.object_store();
+        if let Some(other) = table_paths
+            .iter()
+            .find(|path| path.object_store() != object_store_url)
+        {
+            return plan_err!(
+                "All locations of a CREATE EXTERNAL TABLE must be on the same \
+                 object store, but found '{}' and '{}'",
+                object_store_url.as_str(),
+                other.object_store().as_str()
+            );
+        }
+
+        // With a single location the historical extension handling is kept. With
+        // more than one location the files may have different extensions, so the
+        // extension filter is left empty and the explicit paths/globs are used
+        // as provided.
+        let file_extension = if table_paths.len() == 1 {
+            match first_path.is_collection() {
+                // Setting the extension to be empty instead of allowing the default extension seems
+                // odd, but was done to ensure existing behavior isn't modified. It seems like this
+                // could be refactored to either use the default extension or set the fully expected
+                // extension when compression is included (e.g. ".csv.gz")
+                true => String::new(),
+                false => get_extension(&cmd.locations[0]),
+            }
+        } else {
+            String::new()
+        };
+        let mut options =
+            ListingOptions::new(file_format).with_file_extension(file_extension);
+
+        // Partition columns are derived from the first location; all locations
+        // are expected to share the same partitioning.
         let (provided_schema, table_partition_cols) = if cmd.schema.fields().is_empty() {
             let infer_parts = session_state
                 .config_options()
@@ -92,7 +140,7 @@ impl TableProviderFactory for ListingTableFactory {
                 .listing_table_factory_infer_partitions;
             let part_cols = if cmd.table_partition_cols.is_empty() && infer_parts {
                 options
-                    .infer_partitions(session_state, &table_path)
+                    .infer_partitions(session_state, first_path)
                     .await?
                     .into_iter()
             } else {
@@ -142,36 +190,75 @@ impl TableProviderFactory for ListingTableFactory {
 
         options = options.with_table_partition_cols(table_partition_cols);
 
-        options
-            .validate_partitions(session_state, &table_path)
-            .await?;
+        // Validate partitions against every location before any glob rewriting.
+        for table_path in &table_paths {
+            options
+                .validate_partitions(session_state, table_path)
+                .await?;
+        }
 
-        let resolved_schema = match provided_schema {
+        let (resolved_table_paths, resolved_schema) = match provided_schema {
             // We will need to check the table columns against the schema
             // this is done so that we can do an ORDER BY for external table creation
             // specifically for parquet file format.
             // See: https://github.com/apache/datafusion/issues/7317
             None => {
-                // if the folder then rewrite a file path as 'path/*.parquet'
-                // to only read the files the reader can understand
-                if table_path.is_folder() && table_path.get_glob().is_none() {
-                    // Since there are no files yet to infer an actual extension,
-                    // derive the pattern based on compression type.
-                    // So for gzipped CSV the pattern is `*.csv.gz`
-                    let glob = match options.format.compression_type() {
-                        Some(compression) => {
-                            match options.format.get_ext_with_compression(&compression) {
-                                // Use glob based on `FileFormat` extension
-                                Ok(ext) => format!("*.{ext}"),
-                                // Fallback to `file_type`, if not supported by `FileFormat`
-                                Err(_) => format!("*.{}", cmd.file_type.to_lowercase()),
+                let mut resolved_paths = Vec::with_capacity(table_paths.len());
+                let mut inferred_schema: Option<(String, SchemaRef)> = None;
+                for mut table_path in table_paths {
+                    // if the folder then rewrite a file path as 'path/*.parquet'
+                    // to only read the files the reader can understand
+                    if table_path.is_folder() && table_path.get_glob().is_none() {
+                        // Since there are no files yet to infer an actual extension,
+                        // derive the pattern based on compression type.
+                        // So for gzipped CSV the pattern is `*.csv.gz`
+                        let glob = match options.format.compression_type() {
+                            Some(compression) => {
+                                match options
+                                    .format
+                                    .get_ext_with_compression(&compression)
+                                {
+                                    // Use glob based on `FileFormat` extension
+                                    Ok(ext) => format!("*.{ext}"),
+                                    // Fallback to `file_type`, if not supported by `FileFormat`
+                                    Err(_) => {
+                                        format!("*.{}", cmd.file_type.to_lowercase())
+                                    }
+                                }
                             }
+                            None => format!("*.{}", cmd.file_type.to_lowercase()),
+                        };
+                        table_path = table_path.with_glob(glob.as_ref())?;
+                    }
+                    let schema = options.infer_schema(session_state, &table_path).await?;
+                    // All locations must resolve to the same fields. Schema
+                    // and field metadata may differ between files without
+                    // changing the fields read by the table.
+                    let location = table_path.to_string();
+                    match &inferred_schema {
+                        None => inferred_schema = Some((location, schema)),
+                        Some((existing_location, existing))
+                            if !schemas_have_same_fields(existing, &schema) =>
+                        {
+                            return plan_err!(
+                                "All locations of a CREATE EXTERNAL TABLE must have the \
+                                 same schema, but schema inferred from '{}' differs from \
+                                 schema inferred from '{}'",
+                                location,
+                                existing_location
+                            );
                         }
-                        None => format!("*.{}", cmd.file_type.to_lowercase()),
-                    };
-                    table_path = table_path.with_glob(glob.as_ref())?;
+                        Some(_) => {}
+                    }
+                    resolved_paths.push(table_path);
                 }
-                let schema = options.infer_schema(session_state, &table_path).await?;
+                // `table_paths` was guaranteed non-empty above, so the loop ran
+                // at least once and `inferred_schema` is always `Some` here.
+                let (_, schema) = inferred_schema.ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "no schema could be inferred from the provided locations"
+                    )
+                })?;
                 let df_schema = Arc::clone(&schema).to_dfschema()?;
                 let column_refs: HashSet<_> = cmd
                     .order_exprs
@@ -186,11 +273,11 @@ impl TableProviderFactory for ListingTableFactory {
                     }
                 }
 
-                schema
+                (resolved_paths, schema)
             }
-            Some(s) => s,
+            Some(s) => (table_paths, s),
         };
-        let config = ListingTableConfig::new(table_path)
+        let config = ListingTableConfig::new_with_multi_paths(resolved_table_paths)
             .with_listing_options(options.with_file_sort_order(cmd.order_exprs.clone()))
             .with_schema(resolved_schema);
         let provider = ListingTable::try_new(config)?
@@ -222,6 +309,19 @@ fn get_extension(path: &str) -> String {
     }
 }
 
+fn schemas_have_same_fields(left: &SchemaRef, right: &SchemaRef) -> bool {
+    left.fields().len() == right.fields().len()
+        && left
+            .fields()
+            .iter()
+            .zip(right.fields())
+            .all(|(left, right)| {
+                left.name() == right.name()
+                    && left.data_type() == right.data_type()
+                    && left.is_nullable() == right.is_nullable()
+            })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,20 +329,59 @@ mod tests {
         datasource::file_format::csv::CsvFormat, execution::context::SessionContext,
         test_util::parquet_test_data,
     };
-    use datafusion_execution::cache::CacheAccessor;
-    use datafusion_execution::cache::cache_manager::CacheManagerConfig;
-    use datafusion_execution::cache::file_statistics_cache::DefaultFileStatisticsCache;
+    use arrow::datatypes::{Field, Schema};
+    use datafusion_execution::cache::cache_manager::{
+        CacheManagerConfig, DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
+    };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use glob::Pattern;
     use std::collections::HashMap;
     use std::fs;
     use std::fs::File;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use datafusion_common::parsers::CompressionTypeVariant;
     use datafusion_common::{DFSchema, TableReference};
+    use datafusion_execution::cache::Cache;
+    use datafusion_execution::cache::default_cache::DefaultCache;
     use datafusion_expr::registry::ExtensionTypeRegistryRef;
+
+    fn factory_and_state() -> (ListingTableFactory, SessionState) {
+        let factory = ListingTableFactory::new();
+        let context = SessionContext::new();
+        let state = context.state();
+        (factory, state)
+    }
+
+    fn write_csv(path: &Path, contents: &str) {
+        fs::write(path, contents).unwrap();
+    }
+
+    fn csv_cmd_with_locations(paths: &[&Path]) -> CreateExternalTable {
+        let locations = paths
+            .iter()
+            .map(|path| path.to_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+
+        CreateExternalTable::builder(
+            TableReference::bare("foo"),
+            locations[0].clone(),
+            "csv",
+            Arc::new(DFSchema::empty()),
+        )
+        .with_locations(locations)
+        .with_options(HashMap::from([("format.has_header".into(), "true".into())]))
+        .build()
+    }
+
+    fn assert_error_contains(error: impl std::fmt::Display, expected: &str) {
+        let error = error.to_string();
+        assert!(
+            error.contains(expected),
+            "expected error to contain '{expected}', got: {error}"
+        );
+    }
 
     #[tokio::test]
     async fn test_create_using_non_std_file_ext() {
@@ -475,6 +614,151 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_with_multiple_locations() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_a = dir.path().join("file_a.csv");
+        let file_b = dir.path().join("file_b.csv");
+        write_csv(&file_a, "c1,c2\n1,a\n2,b\n");
+        write_csv(&file_b, "c1,c2\n3,c\n");
+
+        let (factory, state) = factory_and_state();
+        let cmd = csv_cmd_with_locations(&[&file_a, &file_b]);
+
+        let table_provider = factory.create(&state, &cmd).await.unwrap();
+        let listing_table = table_provider.downcast_ref::<ListingTable>().unwrap();
+
+        // Both locations are registered as table paths
+        assert_eq!(2, listing_table.table_paths().len());
+
+        // Schema is inferred from the files and shared across both locations
+        let field_names: Vec<_> = listing_table
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        assert_eq!(field_names, vec!["c1".to_string(), "c2".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_create_with_duplicate_locations_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file.csv");
+        write_csv(&file, "c1,c2\n1,a\n");
+
+        let (factory, state) = factory_and_state();
+        let cmd = csv_cmd_with_locations(&[&file, &file]);
+        let err = factory.create(&state, &cmd).await.unwrap_err();
+        assert_error_contains(err, "Duplicate location");
+    }
+
+    #[tokio::test]
+    async fn test_create_with_overlapping_locations_reads_each_file_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_a = dir.path().join("file_a.csv");
+        let file_b = dir.path().join("file_b.csv");
+        write_csv(&file_a, "c1,c2\n1,a\n");
+        write_csv(&file_b, "c1,c2\n2,b\n");
+
+        let (factory, state) = factory_and_state();
+        let cmd = csv_cmd_with_locations(&[dir.path(), file_a.as_path()]);
+        let table_provider = factory.create(&state, &cmd).await.unwrap();
+        let listing_table = table_provider.downcast_ref::<ListingTable>().unwrap();
+
+        let listed_files = listing_table
+            .list_files_for_scan(&state, &[], None)
+            .await
+            .unwrap()
+            .file_groups
+            .iter()
+            .map(|group| group.len())
+            .sum::<usize>();
+        assert_eq!(listed_files, 2);
+    }
+
+    #[tokio::test]
+    async fn test_create_with_multiple_locations_mismatched_schema_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_a = dir.path().join("file_a.csv");
+        let file_b = dir.path().join("file_b.csv");
+        write_csv(&file_a, "c1,c2\n1,a\n");
+        // Different column names -> different inferred schema
+        write_csv(&file_b, "x1,x2\n1,a\n");
+
+        let (factory, state) = factory_and_state();
+        let cmd = csv_cmd_with_locations(&[&file_a, &file_b]);
+        let err = factory.create(&state, &cmd).await.unwrap_err();
+        assert_error_contains(err, "same schema");
+    }
+
+    #[test]
+    fn test_schema_comparison_ignores_schema_metadata() {
+        let fields =
+            vec![
+                Field::new("c1", DataType::Int32, true).with_metadata(HashMap::from([(
+                    "field_source".to_string(),
+                    "a".to_string(),
+                )])),
+            ];
+        let schema_a = Arc::new(Schema::new_with_metadata(
+            fields.clone(),
+            HashMap::from([("source".to_string(), "a".to_string())]),
+        ));
+        let schema_b =
+            Arc::new(Schema::new_with_metadata(
+                vec![Field::new("c1", DataType::Int32, true).with_metadata(
+                    HashMap::from([("field_source".to_string(), "b".to_string())]),
+                )],
+                HashMap::from([("source".to_string(), "b".to_string())]),
+            ));
+        let schema_c =
+            Arc::new(Schema::new(vec![Field::new("c2", DataType::Int32, true)]));
+
+        assert_ne!(schema_a, schema_b);
+        assert!(schemas_have_same_fields(&schema_a, &schema_b));
+        assert!(!schemas_have_same_fields(&schema_a, &schema_c));
+    }
+
+    #[tokio::test]
+    async fn test_create_with_no_locations_errors() {
+        let (factory, state) = factory_and_state();
+
+        let cmd = CreateExternalTable::builder(
+            TableReference::bare("foo"),
+            "unused",
+            "csv",
+            Arc::new(DFSchema::empty()),
+        )
+        .with_locations(vec![])
+        .build();
+
+        let err = factory.create(&state, &cmd).await.unwrap_err();
+        assert_error_contains(err, "at least one location");
+    }
+
+    #[tokio::test]
+    async fn test_create_with_locations_on_different_stores_errors() {
+        let (factory, state) = factory_and_state();
+
+        // Two locations on different object stores (different buckets) are not
+        // supported: ListingTable would scan both against the first store.
+        let cmd = CreateExternalTable::builder(
+            TableReference::bare("foo"),
+            "s3://bucket_a/file.parquet",
+            "parquet",
+            Arc::new(DFSchema::empty()),
+        )
+        .with_locations(vec![
+            "s3://bucket_a/file.parquet".to_string(),
+            "s3://bucket_b/file.parquet".to_string(),
+        ])
+        .build();
+
+        let err = factory.create(&state, &cmd).await.unwrap_err();
+        assert_error_contains(err, "same object store");
+    }
+
+    #[tokio::test]
     async fn test_statistics_cache_prewarming() {
         let factory = ListingTableFactory::new();
 
@@ -484,7 +768,8 @@ mod tests {
             .to_string();
 
         // Test with collect_statistics enabled
-        let file_statistics_cache = Arc::new(DefaultFileStatisticsCache::default());
+        let file_statistics_cache =
+            Arc::new(DefaultCache::new(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT));
         let cache_config = CacheManagerConfig::default()
             .with_file_statistics_cache(Some(file_statistics_cache.clone()));
         let runtime = RuntimeEnvBuilder::new()
@@ -514,7 +799,8 @@ mod tests {
         );
 
         // Test with collect_statistics disabled
-        let file_statistics_cache = Arc::new(DefaultFileStatisticsCache::default());
+        let file_statistics_cache =
+            Arc::new(DefaultCache::new(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT));
         let cache_config = CacheManagerConfig::default()
             .with_file_statistics_cache(Some(file_statistics_cache.clone()));
         let runtime = RuntimeEnvBuilder::new()

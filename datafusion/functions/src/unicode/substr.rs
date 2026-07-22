@@ -17,11 +17,11 @@
 
 use std::sync::Arc;
 
-use crate::strings::{StringViewArrayBuilder, append_view};
+use crate::strings::append_view;
 use crate::utils::make_scalar_function;
 use arrow::array::{
     Array, ArrayRef, AsArray, GenericStringArray, Int64Array, OffsetSizeTrait,
-    StringArrayType, StringViewArray, make_view,
+    StringArrayType, StringViewArray,
 };
 use arrow::buffer::{NullBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
@@ -111,9 +111,8 @@ impl ScalarUDFImpl for SubstrFunc {
         &self.signature
     }
 
-    // `SubstrFunc` always generates `Utf8View` output for its efficiency.
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8View)
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(arg_types[0].clone())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -319,131 +318,37 @@ fn string_view_substr(
     }
 }
 
-fn values_fit_in_i32<T: OffsetSizeTrait>(string_array: &GenericStringArray<T>) -> bool {
-    // The Arrow spec defines StringView offset fields as signed 32-bit
-    // integers, so the maximum representable offset is i32::MAX.
-    string_array
-        .offsets()
-        .last()
-        .map(|offset| offset.as_usize() <= i32::MAX as usize)
-        .unwrap_or(true)
-}
-
-#[inline]
-fn append_view_from_buffer(
-    views_buf: &mut Vec<u128>,
-    substr: &str,
-    byte_offset: usize,
-) -> bool {
-    let byte_offset =
-        u32::try_from(byte_offset).expect("validated string buffer offset fits in i32");
-    let view = make_view(substr.as_bytes(), 0, byte_offset);
-    views_buf.push(view);
-    substr.len() > 12
-}
-
-#[expect(clippy::needless_range_loop)]
 fn generic_string_substr<T: OffsetSizeTrait>(
     string_array: &GenericStringArray<T>,
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
-    // We'd like to return a StringViewArray that points into the input string
-    // array's values buffer. Since the Arrow spec defines StringView offsets
-    // as i32, we can't use this approach when the values buffer is >2GB, so
-    // fallback to copying.
-    if !values_fit_in_i32(string_array) {
-        return generic_string_substr_copy(string_array, args);
-    }
-
     let start_array = as_int64_array(&args[0])?;
     let count_array_opt = args.get(1).map(|a| as_int64_array(a)).transpose()?;
 
     let is_ascii = enable_ascii_fast_path(&string_array, start_array, count_array_opt);
-    let offsets = string_array.value_offsets();
-    let mut views_buf = Vec::with_capacity(string_array.len());
-    let mut has_out_of_line = false;
-
-    // Combine null bitmaps from all inputs in bulk.
     let nulls = NullBuffer::union_many([
         string_array.nulls(),
         start_array.nulls(),
         count_array_opt.and_then(|a| a.nulls()),
     ]);
 
-    for i in 0..string_array.len() {
-        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
-            views_buf.push(0);
-            continue;
-        }
+    let result = (0..string_array.len())
+        .map(|i| {
+            if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+                return Ok(None);
+            }
 
-        let string = string_array.value(i);
-        let source_offset = offsets[i].as_usize();
-        let start = start_array.value(i);
-        let count = count_array_opt.map(|a| a.value(i));
+            let string = string_array.value(i);
+            let start = start_array.value(i);
+            let count = count_array_opt.map(|a| a.value(i));
 
-        let (byte_start, byte_end) = get_true_start_end(string, start, count, is_ascii)?;
-        has_out_of_line |= append_view_from_buffer(
-            &mut views_buf,
-            &string[byte_start..byte_end],
-            source_offset + byte_start,
-        );
-    }
+            let (byte_start, byte_end) =
+                get_true_start_end(string, start, count, is_ascii)?;
+            Ok(Some(&string[byte_start..byte_end]))
+        })
+        .collect::<Result<GenericStringArray<T>>>()?;
 
-    let views_buf = ScalarBuffer::from(views_buf);
-
-    // If all result strings are stored inline, we don't need to retain the
-    // input string array.
-    let data_buffers = if has_out_of_line {
-        vec![string_array.values().clone()]
-    } else {
-        vec![]
-    };
-
-    // Safety:
-    // (1) The blocks of the given views are all provided
-    // (2) Each referenced range in the source values buffer is within bounds
-    unsafe {
-        let array = StringViewArray::new_unchecked(views_buf, data_buffers, nulls);
-        Ok(Arc::new(array) as ArrayRef)
-    }
-}
-
-// Fallback for `generic_string_substr` if we can't use zerocopy because the
-// input string array is too large.
-fn generic_string_substr_copy<T: OffsetSizeTrait>(
-    string_array: &GenericStringArray<T>,
-    args: &[ArrayRef],
-) -> Result<ArrayRef> {
-    let start_array = as_int64_array(&args[0])?;
-    let count_array_opt = args.get(1).map(|a| as_int64_array(a)).transpose()?;
-
-    let is_ascii = enable_ascii_fast_path(&string_array, start_array, count_array_opt);
-
-    // Combine null bitmaps from all inputs in bulk.
-    let nulls = NullBuffer::union_many([
-        string_array.nulls(),
-        start_array.nulls(),
-        count_array_opt.and_then(|a| a.nulls()),
-    ]);
-
-    let len = string_array.len();
-    let mut result_builder = StringViewArrayBuilder::with_capacity(len);
-
-    for i in 0..len {
-        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
-            result_builder.append_placeholder();
-            continue;
-        }
-
-        let string = string_array.value(i);
-        let start = start_array.value(i);
-        let count = count_array_opt.map(|a| a.value(i));
-
-        let (byte_start, byte_end) = get_true_start_end(string, start, count, is_ascii)?;
-        result_builder.append_value(&string[byte_start..byte_end]);
-    }
-
-    Ok(Arc::new(result_builder.finish(nulls)?) as ArrayRef)
+    Ok(Arc::new(result) as ArrayRef)
 }
 
 #[cfg(test)]
@@ -451,9 +356,10 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{
-        Array, ArrayRef, AsArray, Int64Array, StringArray, StringViewArray,
+        Array, ArrayRef, AsArray, Int64Array, LargeStringArray, StringArray,
+        StringViewArray,
     };
-    use arrow::datatypes::DataType::Utf8View;
+    use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 
     use datafusion_common::{Result, ScalarValue, exec_err};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -563,8 +469,21 @@ mod tests {
             ],
             Ok(Some("alphabet")),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            SubstrFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(
+                    "alphabet".to_string()
+                ))),
+                ColumnarValue::Scalar(ScalarValue::from(0i64)),
+            ],
+            Ok(Some("alphabet")),
+            &str,
+            LargeUtf8,
+            LargeStringArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -574,8 +493,8 @@ mod tests {
             ],
             Ok(Some("ésoj")),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -585,8 +504,8 @@ mod tests {
             ],
             Ok(Some("joséésoj")),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -596,8 +515,8 @@ mod tests {
             ],
             Ok(Some("alphabet")),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -607,8 +526,8 @@ mod tests {
             ],
             Ok(Some("lphabet")),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -618,8 +537,8 @@ mod tests {
             ],
             Ok(Some("phabet")),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -629,8 +548,8 @@ mod tests {
             ],
             Ok(Some("alphabet")),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -640,8 +559,8 @@ mod tests {
             ],
             Ok(Some("")),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -651,8 +570,8 @@ mod tests {
             ],
             Ok(None),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -663,8 +582,8 @@ mod tests {
             ],
             Ok(Some("ph")),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -675,8 +594,8 @@ mod tests {
             ],
             Ok(Some("phabet")),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -687,8 +606,8 @@ mod tests {
             ],
             Ok(Some("alph")),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
         // starting from 5 (10 + -5)
         test_function!(
@@ -700,8 +619,8 @@ mod tests {
             ],
             Ok(Some("alph")),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
         // starting from -1 (4 + -5)
         test_function!(
@@ -713,8 +632,8 @@ mod tests {
             ],
             Ok(Some("")),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
         // starting from 0 (5 + -5)
         test_function!(
@@ -726,8 +645,8 @@ mod tests {
             ],
             Ok(Some("")),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -738,8 +657,8 @@ mod tests {
             ],
             Ok(None),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -750,8 +669,8 @@ mod tests {
             ],
             Ok(None),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -762,8 +681,8 @@ mod tests {
             ],
             exec_err!("negative count not allowed: -1"),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -774,8 +693,8 @@ mod tests {
             ],
             Ok(Some("és")),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
         #[cfg(not(feature = "unicode_expressions"))]
         test_function!(
@@ -788,8 +707,8 @@ mod tests {
                 "function substr requires compilation with feature flag: unicode_expressions."
             ),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -799,8 +718,8 @@ mod tests {
             ],
             exec_err!("start position overflow: -9223372036854775808"),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -811,8 +730,8 @@ mod tests {
             ],
             exec_err!("start position overflow: -9223372036854775808"),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
         test_function!(
             SubstrFunc::new(),
@@ -823,8 +742,8 @@ mod tests {
             ],
             Ok(Some("arge count")),
             &str,
-            Utf8View,
-            StringViewArray
+            Utf8,
+            StringArray
         );
 
         Ok(())
@@ -832,7 +751,6 @@ mod tests {
 
     #[test]
     fn test_sliced_string_array_array_args() -> Result<()> {
-        // Use strings longer than 12 bytes so the result views are out-of-line.
         let string_array = Arc::new(StringArray::from(vec![
             "skipped_prefix_value",
             "alphabet_long_string",
@@ -843,7 +761,7 @@ mod tests {
         let count_array = Arc::new(Int64Array::from(vec![15, 14])) as ArrayRef;
 
         let result = super::substr(&[string_array, start_array, count_array])?;
-        let result = result.as_string_view();
+        let result = result.as_string::<i32>();
 
         assert_eq!(result.value(0), "phabet_long_str");
         assert_eq!(result.value(1), "ésojanother_lo");

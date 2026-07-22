@@ -19,7 +19,9 @@ use super::super::conversion::*;
 use super::error::{DFSqlLogicTestError, Result};
 use crate::engines::output::DFColumnType;
 use arrow::array::{Array, AsArray};
-use arrow::datatypes::{Fields, Schema};
+use arrow::datatypes::{
+    Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Fields, Schema,
+};
 use arrow::util::display::ArrayFormatter;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
 use datafusion::common::internal_datafusion_err;
@@ -209,13 +211,21 @@ pub fn cell_to_string(col: &ArrayRef, row: usize, is_spark_path: bool) -> Result
                     Ok(f64_to_str(result))
                 }
             }
+            DataType::Decimal32(_, scale) => {
+                let value = get_row_value!(array::Decimal32Array, col, row);
+                Ok(arrow_decimal_to_str::<Decimal32Type>(value, *scale))
+            }
+            DataType::Decimal64(_, scale) => {
+                let value = get_row_value!(array::Decimal64Array, col, row);
+                Ok(arrow_decimal_to_str::<Decimal64Type>(value, *scale))
+            }
             DataType::Decimal128(_, scale) => {
                 let value = get_row_value!(array::Decimal128Array, col, row);
-                Ok(decimal_128_to_str(value, *scale))
+                Ok(arrow_decimal_to_str::<Decimal128Type>(value, *scale))
             }
             DataType::Decimal256(_, scale) => {
                 let value = get_row_value!(array::Decimal256Array, col, row);
-                Ok(decimal_256_to_str(value, *scale))
+                Ok(arrow_decimal_to_str::<Decimal256Type>(value, *scale))
             }
             DataType::LargeUtf8 => Ok(varchar_to_str(get_row_value!(
                 array::LargeStringArray,
@@ -268,9 +278,11 @@ pub fn convert_schema_to_types(columns: &Fields) -> Vec<DFColumnType> {
             | DataType::UInt16
             | DataType::UInt32
             | DataType::UInt64 => DFColumnType::Integer,
-            DataType::Float16
-            | DataType::Float32
-            | DataType::Float64
+            DataType::Float16 | DataType::Float32 | DataType::Float64 => {
+                DFColumnType::Float
+            }
+            DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _) => DFColumnType::Float,
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {

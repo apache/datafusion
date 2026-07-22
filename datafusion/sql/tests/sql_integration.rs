@@ -867,17 +867,25 @@ fn select_filter_cannot_use_alias() {
 
 #[test]
 fn select_neg_filter() {
+    // NOT requires a boolean expression; applying it to a Utf8 column is an error
     let sql = "SELECT id, first_name, last_name \
                    FROM person WHERE NOT state";
-    let plan = logical_plan(sql).unwrap();
-    assert_snapshot!(
-        plan,
-        @r"
-    Projection: person.id, person.first_name, person.last_name
-      Filter: NOT person.state
-        TableScan: person
-    "
+    let err = logical_plan(sql).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("Unary operator 'NOT' requires a boolean expression"),
+        "unexpected error: {err}"
     );
+}
+
+#[test]
+fn select_not_bool_filter() {
+    let sql = "SELECT order_id FROM orders WHERE NOT delivered";
+    let plan = logical_plan(sql).unwrap();
+    let expected = "Projection: orders.order_id\
+        \n  Filter: NOT orders.delivered\
+        \n    TableScan: orders";
+    assert_eq!(expected, format!("{plan}"));
 }
 
 #[test]
@@ -2268,6 +2276,29 @@ fn create_external_table_csv() {
         plan,
         @r#"CreateExternalTable: Bare { table: "t" }"#
     );
+}
+
+#[test]
+fn create_external_table_multiple_locations() {
+    let sql = "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION ('foo.csv', 'bar.csv')";
+    let plan = logical_plan(sql).unwrap();
+    let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = plan else {
+        panic!("expected a CreateExternalTable plan");
+    };
+    assert_eq!(
+        cmd.locations,
+        vec!["foo.csv".to_string(), "bar.csv".to_string()]
+    );
+}
+
+#[test]
+fn create_external_table_location_with_literal_comma() {
+    let sql = "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo,bar.csv'";
+    let plan = logical_plan(sql).unwrap();
+    let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = plan else {
+        panic!("expected a CreateExternalTable plan");
+    };
+    assert_eq!(cmd.locations, vec!["foo,bar.csv".to_string()]);
 }
 
 #[test]

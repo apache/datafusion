@@ -218,6 +218,7 @@ datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
 datafusion.execution.collect_statistics true
 datafusion.execution.enable_ansi_mode false
+datafusion.execution.enable_file_stream_work_stealing true
 datafusion.execution.enable_migration_aggregate true
 datafusion.execution.enable_recursive_ctes true
 datafusion.execution.enforce_batch_size_in_joins false
@@ -343,6 +344,7 @@ datafusion.optimizer.use_statistics_registry false
 datafusion.runtime.file_statistics_cache_limit 20M
 datafusion.runtime.list_files_cache_limit 1M
 datafusion.runtime.list_files_cache_ttl NULL
+datafusion.runtime.max_spill_merge_fan_in 0
 datafusion.runtime.max_temp_directory_size 100G
 datafusion.runtime.memory_limit unlimited
 datafusion.runtime.metadata_cache_limit 50M
@@ -373,8 +375,9 @@ datafusion.catalog.location NULL Location scanned to load tables for `default` s
 datafusion.catalog.newlines_in_values false Specifies whether newlines in (quoted) CSV values are supported. This is the default value for `format.newlines_in_values` for `CREATE EXTERNAL TABLE` if not specified explicitly in the statement. Parsing newlines in quoted values may be affected by execution behaviour such as parallel file scanning. Setting this to `true` ensures that newlines in values are parsed successfully, which may reduce performance.
 datafusion.execution.batch_size 8192 Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption
 datafusion.execution.coalesce_batches true When set to true, record batches will be examined between each operator and small batches will be coalesced into larger batches. This is helpful when there are highly selective filters or joins that could produce tiny output batches. The target batch size is determined by the configuration setting
-datafusion.execution.collect_statistics true Should DataFusion collect statistics when first creating a table. Has no effect after the table is created. Applies to the default `ListingTableProvider` in DataFusion. Defaults to true.
+datafusion.execution.collect_statistics true Should DataFusion collect statistics when first creating a table. Has no effect after the table is created. Defaults to true.
 datafusion.execution.enable_ansi_mode false Whether to enable ANSI SQL mode. The flag is experimental and relevant only for DataFusion Spark built-in functions When `enable_ansi_mode` is set to `true`, the query engine follows ANSI SQL semantics for expressions, casting, and error handling. This means: - **Strict type coercion rules:** implicit casts between incompatible types are disallowed. - **Standard SQL arithmetic behavior:** operations such as division by zero,   numeric overflow, or invalid casts raise runtime errors rather than returning   `NULL` or adjusted values. - **Consistent ANSI behavior** for string concatenation, comparisons, and `NULL` handling. When `enable_ansi_mode` is `false` (the default), the engine uses a more permissive, non-ANSI mode designed for user convenience and backward compatibility. In this mode: - Implicit casts between types are allowed (e.g., string to integer when possible). - Arithmetic operations are more lenient — for example, `abs()` on the minimum   representable integer value returns the input value instead of raising overflow. - Division by zero or invalid casts may return `NULL` instead of failing. # Default `false` — ANSI SQL mode is disabled by default.
+datafusion.execution.enable_file_stream_work_stealing true When `true` (the default), DataFusion's built-in file scans dynamically rebalance files across partitions at query execution time: a partition that goes idle reads files (or byte-range morsels) originally assigned to a sibling partition, which keeps all partitions busy in a single process. Executors that depend on the plan-time partition assignment — such as Ballista and datafusion-distributed, which run each partition as an isolated task and never poll the siblings — should set this to `false` so each partition reads only its own file group and no runtime reassignment occurs.
 datafusion.execution.enable_migration_aggregate true Temporary switch for aggregate stream implementations that are being migrated from `GroupedHashAggregateStream`. When set to true, DataFusion tries the migrated implementations when their preconditions are satisfied. When set to false, grouped aggregation falls back to `GroupedHashAggregateStream`. This option will be removed after the migration is finished. See <https://github.com/apache/datafusion/issues/22710> for details.
 datafusion.execution.enable_recursive_ctes true Should DataFusion support recursive CTEs
 datafusion.execution.enforce_batch_size_in_joins false Should DataFusion enforce batch size in joins or not. By default, DataFusion will not enforce batch size in joins. Enforcing batch size in joins can reduce memory usage when joining large tables with a highly-selective join filter, but is also slightly slower.
@@ -486,7 +489,7 @@ datafusion.optimizer.max_passes 3 Number of times that the optimizer will attemp
 datafusion.optimizer.prefer_existing_sort false When true, DataFusion will opportunistically remove sorts when the data is already sorted, (i.e. setting `preserve_order` to true on `RepartitionExec`  and using `SortPreservingMergeExec`) When false, DataFusion will maximize plan parallelism using `RepartitionExec` even if this requires subsequently resorting data using a `SortExec`.
 datafusion.optimizer.prefer_existing_union false When set to true, the optimizer will not attempt to convert Union to Interleave
 datafusion.optimizer.prefer_hash_join true When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin. HashJoin can work more efficiently than SortMergeJoin but consumes more memory
-datafusion.optimizer.preserve_file_partitions 0 Minimum number of distinct partition values required to group files by their Hive partition column values (enabling Hash partitioning declaration). How the option is used:     - preserve_file_partitions=0: Disable it.     - preserve_file_partitions=1: Always enable it.     - preserve_file_partitions=N, actual file partitions=M: Only enable when M >= N.     This threshold preserves I/O parallelism when file partitioning is below it. Note: This may reduce parallelism, rooting from the I/O level, if the number of distinct partitions is less than the target_partitions.
+datafusion.optimizer.preserve_file_partitions 0 Minimum number of distinct partition values required to group files by their Hive partition column values (enabling output partitioning declaration). How the option is used:     - preserve_file_partitions=0: Disable it.     - preserve_file_partitions=1: Always enable it.     - preserve_file_partitions=N, actual file partitions=M: Only enable when M >= N.     This threshold preserves I/O parallelism when file partitioning is below it. Note: This may reduce parallelism, rooting from the I/O level, if the number of distinct partitions is less than the target_partitions.
 datafusion.optimizer.repartition_aggregations true Should DataFusion repartition data using the aggregate keys to execute aggregates in parallel using the provided `target_partitions` level
 datafusion.optimizer.repartition_file_min_size 1048576 Minimum total file size in bytes for file-group byte-range splitting to fire. Files (or merged file groups) smaller than this stay as one partition. Lower values produce more, smaller partitions — better at filling `target_partitions` worth of cores when files are modestly sized, at the cost of slightly more per-partition open / metadata-load overhead.
 datafusion.optimizer.repartition_file_scans true When set to `true`, datasource partitions will be repartitioned to achieve maximum parallelism. This applies to both in-memory partitions and FileSource's file groups (1 group is 1 partition). For FileSources, only Parquet and CSV formats are currently supported. If set to `true` for a FileSource, all files will be repartitioned evenly (i.e., a single large file might be partitioned into smaller chunks) for parallel scanning. If set to `false` for a FileSource, different files will be read in parallel, but repartitioning won't happen within a single file. If set to `true` for an in-memory source, all memtable's partitions will have their batches repartitioned evenly to the desired number of `target_partitions`. Repartitioning can change the total number of partitions and batches per partition, but does not slice the initial record tables provided to the MemTable on creation.
@@ -500,6 +503,7 @@ datafusion.optimizer.use_statistics_registry false When set to true, the physica
 datafusion.runtime.file_statistics_cache_limit 20M Maximum memory to use for file statistics cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.
 datafusion.runtime.list_files_cache_limit 1M Maximum memory to use for list files cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.
 datafusion.runtime.list_files_cache_ttl NULL TTL (time-to-live) of the entries in the list file cache. Supports units m (minutes), and s (seconds). Example: '2m' for 2 minutes.
+datafusion.runtime.max_spill_merge_fan_in 0 Maximum number of spill files opened by one external merge pass. Use 0 for unlimited. Values below 2 still use 2 so a merge can make progress.
 datafusion.runtime.max_temp_directory_size 100G Maximum temporary file directory size. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.
 datafusion.runtime.memory_limit unlimited Maximum memory limit for query execution. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.
 datafusion.runtime.metadata_cache_limit 50M Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes) or '0' for 0. Example: '2G' for 2 gigabytes.
@@ -777,7 +781,7 @@ OPTIONS ('format.has_header' 'true');
 query TTTT
 SHOW CREATE TABLE abc;
 ----
-datafusion public abc CREATE EXTERNAL TABLE abc STORED AS CSV LOCATION ../../testing/data/csv/aggregate_test_100.csv
+datafusion public abc CREATE EXTERNAL TABLE abc STORED AS CSV LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
 # show_external_create_table_with_order
 statement ok
@@ -790,7 +794,7 @@ OPTIONS ('format.has_header' 'true');
 query TTTT
 SHOW CREATE TABLE abc_ordered;
 ----
-datafusion public abc_ordered CREATE EXTERNAL TABLE abc_ordered STORED AS CSV WITH ORDER (c1) LOCATION ../../testing/data/csv/aggregate_test_100.csv
+datafusion public abc_ordered CREATE EXTERNAL TABLE abc_ordered STORED AS CSV WITH ORDER (c1) LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
 statement ok
 DROP TABLE abc_ordered;
@@ -806,7 +810,7 @@ OPTIONS ('format.has_header' 'true');
 query TTTT
 SHOW CREATE TABLE abc_multi_order;
 ----
-datafusion public abc_multi_order CREATE EXTERNAL TABLE abc_multi_order STORED AS CSV WITH ORDER (c1, c2 DESC) LOCATION ../../testing/data/csv/aggregate_test_100.csv
+datafusion public abc_multi_order CREATE EXTERNAL TABLE abc_multi_order STORED AS CSV WITH ORDER (c1, c2 DESC) LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
 statement ok
 DROP TABLE abc_multi_order;
@@ -822,7 +826,7 @@ OPTIONS ('format.has_header' 'true');
 query TTTT
 SHOW CREATE TABLE abc_order_nulls;
 ----
-datafusion public abc_order_nulls CREATE EXTERNAL TABLE abc_order_nulls STORED AS CSV WITH ORDER (c1 NULLS LAST, c2 DESC NULLS FIRST) LOCATION ../../testing/data/csv/aggregate_test_100.csv
+datafusion public abc_order_nulls CREATE EXTERNAL TABLE abc_order_nulls STORED AS CSV WITH ORDER (c1 NULLS LAST, c2 DESC NULLS FIRST) LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 
 statement ok
 DROP TABLE abc_order_nulls;
@@ -876,15 +880,6 @@ datafusion public string_agg 1 IN expression String NULL false 1
 datafusion public string_agg 2 IN delimiter String NULL false 1
 datafusion public string_agg 1 OUT NULL String NULL false 1
 
-# test variable length arguments
-query TTTBI rowsort
-select specific_name, data_type, parameter_mode, is_variadic, rid from information_schema.parameters where specific_name = 'concat';
-----
-concat Binary IN true 0
-concat String IN true 1
-concat String OUT false 0
-concat String OUT false 1
-
 # test ceorcion signature
 query TTITI rowsort
 select specific_name, data_type, ordinal_position, parameter_mode, rid from information_schema.parameters where specific_name = 'repeat';
@@ -901,6 +896,17 @@ date_trunc String [precision, expression] [String, String] SCALAR Truncates a ti
 date_trunc Time(ns) [precision, expression] [String, Time(ns)] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 date_trunc Timestamp(ns) [precision, expression] [String, Timestamp(ns)] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 date_trunc Timestamp(ns, "+TZ") [precision, expression] [String, Timestamp(ns, "+TZ")] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
+
+# Table functions (UDTFs) appear in information_schema.routines with
+# function_type = TABLE and data_type = TABLE.
+# Note: built-in `generate_series` and `range` are registered as BOTH a
+# scalar UDF and a UDTF, so this test filters to the TABLE rows to make
+# a stable assertion.
+query TTT rowsort
+select routine_name, data_type, function_type from information_schema.routines where function_type = 'TABLE' order by routine_name;
+----
+generate_series TABLE TABLE
+range TABLE TABLE
 
 statement ok
 show functions

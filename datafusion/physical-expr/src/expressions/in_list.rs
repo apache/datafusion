@@ -38,6 +38,7 @@ use datafusion_expr::{ColumnarValue, expr_vec_fmt};
 
 mod array_static_filter;
 mod primitive_filter;
+mod result;
 mod static_filter;
 mod strategy;
 
@@ -3524,6 +3525,7 @@ mod tests {
             DataType::UInt16,
             DataType::UInt32,
             DataType::UInt64,
+            DataType::Float16,
             DataType::Float32,
             DataType::Float64,
         ];

@@ -24,6 +24,7 @@ use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
@@ -35,7 +36,7 @@ use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
-use crate::execution_plan::{EvaluationType, SchedulingType};
+use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use log::{debug, trace};
 
 /// Sort preserving merge execution plan
@@ -180,17 +181,6 @@ impl SortPreservingMergeExec {
         .with_evaluation_type(drive)
         .with_scheduling_type(scheduling)
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for SortPreservingMergeExec {
@@ -266,7 +256,13 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::UnspecifiedDistribution]
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+        crate::InputDistributionRequirements::new(vec![
+            Distribution::UnspecifiedDistribution,
+        ])
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -294,6 +290,17 @@ impl ExecutionPlan for SortPreservingMergeExec {
             SortPreservingMergeExec::new(self.expr.clone(), children.swap_remove(0))
                 .with_fetch(self.fetch),
         ))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn execute(
@@ -380,8 +387,25 @@ impl ExecutionPlan for SortPreservingMergeExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Arc<Statistics>> {
-        self.input.partition_statistics(None)
+    fn child_stats_requests(&self, _partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(None)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let stats = input_stats[0].as_ref().clone();
+        Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        if self.fetch.is_none() {
+            CardinalityEffect::Equal
+        } else {
+            CardinalityEffect::LowerEqual
+        }
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -431,9 +455,12 @@ mod tests {
     use crate::metrics::{MetricValue, Timestamp};
     use crate::repartition::RepartitionExec;
     use crate::sorts::sort::SortExec;
+    use crate::statistics::StatisticsContext;
     use crate::stream::RecordBatchReceiverStream;
     use crate::test::TestMemoryExec;
-    use crate::test::exec::{BlockingExec, assert_strong_count_converges_to_zero};
+    use crate::test::exec::{
+        BlockingExec, StatisticsExec, assert_strong_count_converges_to_zero,
+    };
     use crate::test::{self, assert_is_pending, make_partition};
     use crate::{collect, common};
 
@@ -443,8 +470,9 @@ mod tests {
     };
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion_common::stats::Precision;
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_common::{assert_batches_eq, exec_err};
+    use datafusion_common::{ColumnStatistics, assert_batches_eq, exec_err};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_execution::RecordBatchStream;
     use datafusion_execution::config::SessionConfig;
@@ -467,7 +495,8 @@ mod tests {
             .with_memory_limit(20_000_000, 1.0)
             .build_arc()?;
         let mut config = SessionConfig::new();
-        config.options_mut().execution.batch_size = target_batch_size;
+        config.options_mut().execution.batch_size =
+            datafusion_common::config::ConfigNonZeroUsize::try_new(target_batch_size)?;
         let task_ctx = TaskContext::default()
             .with_runtime(runtime)
             .with_session_config(config);
@@ -506,6 +535,52 @@ mod tests {
         let spm = SortPreservingMergeExec::new(sort, Arc::new(repartition_exec))
             .with_round_robin_repartition(enable_round_robin_repartition);
         Ok(Arc::new(spm))
+    }
+
+    #[test]
+    fn test_fetch_caps_statistics() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Exact(1_000),
+                total_byte_size: Precision::Exact(8_000),
+                column_statistics: vec![ColumnStatistics::new_unknown()],
+            },
+            schema.clone(),
+        ));
+        let sort = [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
+
+        let spm = SortPreservingMergeExec::new(sort, input).with_fetch(Some(1));
+        let statistics =
+            StatisticsContext::new().compute(&spm, &StatisticsArgs::new())?;
+
+        assert_eq!(statistics.num_rows, Precision::Exact(1));
+        assert_eq!(statistics.total_byte_size, Precision::Inexact(8));
+        assert!(matches!(
+            spm.cardinality_effect(),
+            CardinalityEffect::LowerEqual
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_fetch_preserves_statistics() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input_stats = Statistics {
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Exact(8_000),
+            column_statistics: vec![ColumnStatistics::new_unknown()],
+        };
+        let input = Arc::new(StatisticsExec::new(input_stats.clone(), schema.clone()));
+        let sort = [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
+
+        let spm = SortPreservingMergeExec::new(sort, input);
+        let statistics =
+            StatisticsContext::new().compute(&spm, &StatisticsArgs::new())?;
+
+        assert_eq!(*statistics, input_stats);
+        assert!(matches!(spm.cardinality_effect(), CardinalityEffect::Equal));
+        Ok(())
     }
 
     /// This test verifies that memory usage stays within limits when the tie breaker is enabled.
