@@ -686,7 +686,12 @@ impl FunctionCallKind {
 /// used as the argument of a *window* function such as `sum(sum(x)) OVER ()`,
 /// is legal and accepted: there the inner aggregate is evaluated by the
 /// `Aggregate` node and the window function is evaluated on top of its result.
-pub fn check_aggregate_nesting<'a>(
+///
+/// Callers do not need to invoke this directly: [`Aggregate::try_new`] enforces
+/// the invariant for every way of building an `Aggregate`.
+///
+/// [`Aggregate::try_new`]: crate::logical_plan::Aggregate::try_new
+pub(crate) fn check_aggregate_nesting<'a>(
     exprs: impl IntoIterator<Item = &'a Expr>,
 ) -> Result<()> {
     check_nesting(
@@ -703,7 +708,14 @@ pub fn check_aggregate_nesting<'a>(
 /// calls cannot be nested`) and have no physical equivalent. The nested call is
 /// searched for in the arguments, `PARTITION BY`, `ORDER BY` and `FILTER` of
 /// each window function call.
-pub fn check_window_nesting<'a>(exprs: impl IntoIterator<Item = &'a Expr>) -> Result<()> {
+///
+/// Callers do not need to invoke this directly: [`Window::try_new`] enforces
+/// the invariant for every way of building a `Window`.
+///
+/// [`Window::try_new`]: crate::logical_plan::Window::try_new
+pub(crate) fn check_window_nesting<'a>(
+    exprs: impl IntoIterator<Item = &'a Expr>,
+) -> Result<()> {
     check_nesting(exprs, FunctionCallKind::Window, &[FunctionCallKind::Window])
 }
 
