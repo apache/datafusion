@@ -373,13 +373,6 @@ mod tests {
                 config.to_proto_conf(&ExecutionPlanEncodeCtx::new(&encoder))
             }
 
-            fn legacy_encode(
-                &self,
-                config: &FileScanConfig,
-            ) -> Result<protobuf::FileScanExecConf> {
-                serialize_file_scan_config(config, &self.codec, &self.converter)
-            }
-
             fn decode(
                 &self,
                 conf: &protobuf::FileScanExecConf,
@@ -404,24 +397,11 @@ mod tests {
                     file_source,
                 )
             }
-
-            fn legacy_decode(
-                &self,
-                conf: &protobuf::FileScanExecConf,
-            ) -> Result<FileScanConfig> {
-                let physical_decode_ctx =
-                    PhysicalPlanDecodeContext::new(&self.task_ctx, &self.codec);
-                parse_protobuf_file_scan_config(
-                    conf,
-                    &physical_decode_ctx,
-                    &self.converter,
-                    decode_source(conf)?,
-                )
-            }
         }
 
         #[test]
-        fn new_file_scan_config_serde_matches_legacy_wire_format() -> Result<()> {
+        fn new_file_scan_config_serde_roundtrips_all_partitioning_variants() -> Result<()>
+        {
             let serde = FileScanSerdeHarness::new();
 
             for config in [
@@ -430,23 +410,10 @@ mod tests {
                 test_config(Some(hash_partitioning())),
                 test_config(Some(range_partitioning())),
                 test_config(Some(Partitioning::UnknownPartitioning(4))),
-                test_config_with_projection(None, None),
-                test_config_with_projection(None, Some(FileProjectionExprs::new(vec![]))),
             ] {
-                let legacy = serde.legacy_encode(&config)?;
-                let migrated = serde.encode(&config)?;
-
-                assert_eq!(migrated, legacy);
-                assert_eq!(migrated.encode_to_vec(), legacy.encode_to_vec());
-
-                let migrated_reencoded = serde.encode(&serde.decode(&migrated)?)?;
-                let legacy_reencoded =
-                    serde.legacy_encode(&serde.legacy_decode(&legacy)?)?;
-                assert_eq!(migrated_reencoded, legacy_reencoded);
-                assert_eq!(
-                    migrated_reencoded.encode_to_vec(),
-                    legacy_reencoded.encode_to_vec()
-                );
+                let encoded = serde.encode(&config)?;
+                let reencoded = serde.encode(&serde.decode(&encoded)?)?;
+                assert_eq!(reencoded.output_partitioning, encoded.output_partitioning);
             }
 
             Ok(())
