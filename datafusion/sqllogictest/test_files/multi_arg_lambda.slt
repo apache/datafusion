@@ -18,45 +18,75 @@
 statement ok
 set datafusion.sql_parser.dialect = databricks;
 
-query I
-SELECT multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> a+1);
-----
-2
+statement ok
+CREATE TABLE t AS SELECT 1 as x;
 
-query I
-SELECT multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> b+1);
+query II
+SELECT
+    multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> a+1),
+    multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> a+x)
+from t;
 ----
-3
+2 2
 
-query I
-SELECT multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> c+1);
+query II
+SELECT
+    multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> b+1),
+    multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> b+x)
+from t;
 ----
-4
+3 3
 
-query I
-SELECT multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> a+b);
+query II
+SELECT
+    multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> c+1),
+    multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> c+x)
+from t;
 ----
-3
+4 4
 
-query I
-SELECT multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> a+c);
+query II
+SELECT
+    multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> a+b+1),
+    multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> a+b+x)
+from t;
 ----
-4
+4 4
 
-query I
-SELECT multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> b+c);
+query II
+SELECT
+    multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> a+c+1),
+    multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> a+c+x)
+from t;
 ----
-5
+5 5
 
-query I
-SELECT multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> a+b+c);
+query II
+SELECT
+    multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> b+c+1),
+    multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> b+c+x)
+from t;
 ----
-6
+6 6
 
-query I
-SELECT multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> 1);
+query II
+SELECT
+    multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> a+b+c+1),
+    multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> a+b+c+x)
+from t;
 ----
-1
+7 7
+
+query II
+SELECT
+    multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> 1),
+    multi_arg_higher_order_udf(1, 2, 3, (a, b, c) -> x)
+from t;
+----
+1 1
 
 statement ok
 set datafusion.sql_parser.dialect = generic;
+
+statement ok
+DROP TABLE t;
