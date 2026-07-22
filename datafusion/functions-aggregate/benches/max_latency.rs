@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use criterion::{Criterion, criterion_group, criterion_main, BenchmarkId, Throughput};
-use rand::Rng;
 use std::collections::VecDeque;
+use std::time::{Instant, Duration};
 use datafusion_common::ScalarValue;
+use rand::Rng;
 
 // === Old Two-Stack Queue Implementation ===
 #[derive(Debug)]
@@ -32,15 +32,6 @@ impl<T: Clone + PartialOrd> TwoStackMax<T> {
         Self {
             push_stack: Vec::new(),
             pop_stack: Vec::new(),
-        }
-    }
-
-    pub fn max(&self) -> Option<&T> {
-        match (self.push_stack.last(), self.pop_stack.last()) {
-            (None, None) => None,
-            (Some((_, max)), None) => Some(max),
-            (None, Some((_, max))) => Some(max),
-            (Some((_, a)), Some((_, b))) => Some(if a > b { a } else { b }),
         }
     }
 
@@ -80,7 +71,7 @@ impl<T: Clone + PartialOrd> TwoStackMax<T> {
     }
 }
 
-// === Production Monotonic Deque Implementation (storing T directly) ===
+// === Production Monotonic Deque Implementation ===
 #[derive(Debug)]
 pub struct MonotonicMax<T> {
     fifo: VecDeque<T>,
@@ -93,10 +84,6 @@ impl<T: Clone + PartialOrd> MonotonicMax<T> {
             fifo: VecDeque::new(),
             deque: VecDeque::new(),
         }
-    }
-
-    pub fn max(&self) -> Option<&T> {
-        self.deque.front()
     }
 
     pub fn push(&mut self, val: T) {
@@ -125,11 +112,6 @@ fn generate_random_i64(size: usize) -> Vec<i64> {
     (0..size).map(|_| rng.gen_range(0..1000000)).collect()
 }
 
-fn generate_random_f64(size: usize) -> Vec<f64> {
-    let mut rng = rand::thread_rng();
-    (0..size).map(|_| rng.r#gen()).collect()
-}
-
 fn generate_random_strings(size: usize) -> Vec<String> {
     let mut rng = rand::thread_rng();
     (0..size)
@@ -140,72 +122,84 @@ fn generate_random_strings(size: usize) -> Vec<String> {
         .collect()
 }
 
-fn bench_sliding_max(c: &mut Criterion) {
-    let data_size = 50000;
-    
-    // Generate raw inputs
-    let i64_raw = generate_random_i64(data_size);
-    let f64_raw = generate_random_f64(data_size);
-    let str_raw = generate_random_strings(data_size);
+fn main() {
+    let dataset_size = 5000000; // 5M elements
+    println!("Generating raw inputs of size {}...", dataset_size);
+    let i64_raw = generate_random_i64(dataset_size);
+    let str_raw = generate_random_strings(dataset_size);
 
-    // Map to ScalarValue types
     let scalar_int_data: Vec<ScalarValue> = i64_raw.iter().map(|&val| ScalarValue::Int64(Some(val))).collect();
-    let scalar_float_data: Vec<ScalarValue> = f64_raw.iter().map(|&val| ScalarValue::Float64(Some(val))).collect();
-    let scalar_timestamp_data: Vec<ScalarValue> = i64_raw.iter().map(|&val| ScalarValue::TimestampNanosecond(Some(val), None)).collect();
-    let scalar_decimal_data: Vec<ScalarValue> = i64_raw.iter().map(|&val| ScalarValue::Decimal128(Some(val as i128), 38, 10)).collect();
     let scalar_utf8_data: Vec<ScalarValue> = str_raw.iter().map(|val| ScalarValue::Utf8(Some(val.clone()))).collect();
 
     let datasets = vec![
         ("scalar_int64", scalar_int_data),
-        ("scalar_float64", scalar_float_data),
-        ("scalar_timestamp", scalar_timestamp_data),
-        ("scalar_decimal128", scalar_decimal_data),
         ("scalar_utf8_string", scalar_utf8_data),
     ];
 
+    println!("Starting end-to-end latency measurements...");
     for (label, data) in datasets {
-        let mut group = c.benchmark_group(format!("sliding_window_max_{}", label));
-        
-        for window_size in [100, 1000, 5000] {
-            group.throughput(Throughput::Elements(data_size as u64));
+        println!("\n==================================================");
+        println!("DATATYPE: {}", label);
+        println!("==================================================");
 
-            group.bench_with_input(
-                BenchmarkId::new("two_stack_queue", window_size),
-                &window_size,
-                |b, &w| {
-                    b.iter(|| {
-                        let mut q = TwoStackMax::new();
-                        for (i, val) in data.iter().enumerate() {
-                            q.push(val.clone());
-                            if i >= w {
-                                q.pop();
-                            }
-                            let _res = q.max();
-                        }
-                    });
-                },
-            );
+        for window_size in [1000, 10000, 100000] {
+            println!("  --- Window Size: {} ---", window_size);
 
-            group.bench_with_input(
-                BenchmarkId::new("monotonic_deque", window_size),
-                &window_size,
-                |b, &w| {
-                    b.iter(|| {
-                        let mut q = MonotonicMax::new();
-                        for (i, val) in data.iter().enumerate() {
-                            q.push(val.clone());
-                            if i >= w {
-                                q.pop();
-                            }
-                            let _res = q.max();
+            // Two-Stack Max Latency
+            {
+                let mut q = TwoStackMax::new();
+                let mut max_push_time = Duration::ZERO;
+                let mut max_pop_time = Duration::ZERO;
+
+                let start_total = Instant::now();
+                for (i, val) in data.iter().enumerate() {
+                    let t0 = Instant::now();
+                    q.push(val.clone());
+                    let t_push = t0.elapsed();
+                    if t_push > max_push_time {
+                        max_push_time = t_push;
+                    }
+
+                    if i >= window_size {
+                        let t0 = Instant::now();
+                        q.pop();
+                        let t_pop = t0.elapsed();
+                        if t_pop > max_pop_time {
+                            max_pop_time = t_pop;
                         }
-                    });
-                },
-            );
+                    }
+                }
+                let total_duration = start_total.elapsed();
+                println!("    Two-Stack Queue: Total Time = {:?}, Max Push = {:?}, Max Pop = {:?}", total_duration, max_push_time, max_pop_time);
+            }
+
+            // Monotonic Deque Max Latency
+            {
+                let mut q = MonotonicMax::new();
+                let mut max_push_time = Duration::ZERO;
+                let mut max_pop_time = Duration::ZERO;
+
+                let start_total = Instant::now();
+                for (i, val) in data.iter().enumerate() {
+                    let t0 = Instant::now();
+                    q.push(val.clone());
+                    let t_push = t0.elapsed();
+                    if t_push > max_push_time {
+                        max_push_time = t_push;
+                    }
+
+                    if i >= window_size {
+                        let t0 = Instant::now();
+                        q.pop();
+                        let t_pop = t0.elapsed();
+                        if t_pop > max_pop_time {
+                            max_pop_time = t_pop;
+                        }
+                    }
+                }
+                let total_duration = start_total.elapsed();
+                println!("    Monotonic Deque: Total Time = {:?}, Max Push = {:?}, Max Pop = {:?}", total_duration, max_push_time, max_pop_time);
+            }
         }
-        group.finish();
     }
 }
-
-criterion_group!(benches, bench_sliding_max);
-criterion_main!(benches);
