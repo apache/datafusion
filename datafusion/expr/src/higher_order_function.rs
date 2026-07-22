@@ -348,12 +348,9 @@ impl LambdaArgument {
             exec_datafusion_err!("lambdas with zero parameters are not supported")
         })?;
 
-        let spread_captures = self
-            .captures
-            .as_ref()
-            .filter(|b| !b.columns().is_empty())
-            .map(|captures| {
-                let spread_columns = if captures
+        let columns = match &self.captures {
+            Some(captures) if !captures.columns().is_empty() => {
+                if captures
                     .schema_ref()
                     .fields()
                     .iter()
@@ -361,19 +358,19 @@ impl LambdaArgument {
                 {
                     let null = Arc::new(NullArray::new(row_count)) as _;
 
-                    vec![null; captures.num_columns()]
+                    std::iter::repeat_n(null, captures.num_columns())
+                        .chain(args)
+                        .collect()
                 } else {
                     spread_captures(captures.columns())?
-                };
-
-                RecordBatch::try_new(captures.schema(), spread_columns)
-            })
-            .transpose()?;
-
-        let columns = match spread_captures {
-            Some(captures) => captures.columns().iter().cloned().chain(args).collect(),
-            None => args,
+                        .into_iter()
+                        .chain(args)
+                        .collect()
+                }
+            }
+            _ => args,
         };
+
         let merged = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
 
         self.body.evaluate(&merged)

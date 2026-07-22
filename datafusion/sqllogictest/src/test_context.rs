@@ -725,11 +725,11 @@ fn register_multi_arg_lambda_udf(ctx: &SessionContext) {
     // a dummy udf that provides every value argument it receives as a parameter to it's lambda, the last argument:
     // multi_arg_higher_order_udf([..value_args], ([..value_args_as_params]) -> ...)
     #[derive(Debug, PartialEq, Eq, Hash)]
-    struct MultiArgHigherOrderUdf {
+    struct MultiArgHigherOrderUDF {
         signature: HigherOrderSignature,
     }
 
-    impl HigherOrderUDFImpl for MultiArgHigherOrderUdf {
+    impl HigherOrderUDFImpl for MultiArgHigherOrderUDF {
         fn name(&self) -> &str {
             "multi_arg_higher_order_udf"
         }
@@ -801,7 +801,7 @@ fn register_multi_arg_lambda_udf(ctx: &SessionContext) {
     }
 
     ctx.register_higher_order_function(Arc::new(HigherOrderUDF::new_from_impl(
-        MultiArgHigherOrderUdf {
+        MultiArgHigherOrderUDF {
             signature: HigherOrderSignature::variadic_any(Volatility::Immutable),
         },
     )));

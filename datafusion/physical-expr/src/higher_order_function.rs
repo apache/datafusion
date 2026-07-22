@@ -337,20 +337,40 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
                         .map(|(name, param)| param.renamed(name.as_str()))
                         .collect();
 
-                    let (fields, columns): (Vec<_>, _) = std::iter::zip(batch.schema_ref().fields(), batch.columns())
-                        .enumerate()
-                        .map(|(i, (field, array))| if lambda.used_column_indices().contains(&i) {
-                            (Arc::clone(field), Arc::clone(array))
-                        } else {
-                            (Arc::new(Field::new(field.name(), DataType::Null, true)), Arc::new(NullArray::new(batch.num_rows())) as _)
-                        })
-                        .collect();
+                    let mut null_array = None;
+                    let mut null_field = None;
 
-                    let batch= RecordBatch::try_new_with_options(
+                    let (fields, columns): (Vec<_>, _) =
+                        std::iter::zip(batch.schema_ref().fields(), batch.columns())
+                            .enumerate()
+                            .map(|(i, (field, array))| {
+                                if lambda.used_column_indices().contains(&i) {
+                                    (Arc::clone(field), Arc::clone(array))
+                                } else {
+                                    let null_field =
+                                        null_field.get_or_insert_with(|| {
+                                            Arc::new(Field::new(
+                                                field.name(),
+                                                DataType::Null,
+                                                true,
+                                            ))
+                                        });
+
+                                    let null_array =
+                                        null_array.get_or_insert_with(|| {
+                                            Arc::new(NullArray::new(batch.num_rows()))
+                                        });
+
+                                    (Arc::clone(null_field), Arc::clone(null_array) as _)
+                                }
+                            })
+                            .collect();
+
+                    let batch = RecordBatch::try_new_with_options(
                         Arc::new(Schema::new(fields)),
                         columns,
-                    &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
-                )?;
+                        &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
+                    )?;
 
                     Ok(ValueOrLambda::Lambda(LambdaArgument::new(
                         params,
@@ -369,8 +389,7 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
                         && matches!(
                             value.data_type(),
                             DataType::List(_) | DataType::LargeList(_)
-                        )
-                    {
+                        ) {
                         let arr = value.into_array(batch.num_rows())?;
                         if arr.null_count() == 0 {
                             ColumnarValue::Array(arr)
