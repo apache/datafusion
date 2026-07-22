@@ -59,7 +59,6 @@ use datafusion_functions_table::generate_series::{
     Empty, GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, TimestampValue,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
-use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
 use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
 use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
@@ -865,8 +864,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::SortMergeJoin(_) => {
                 SortMergeJoinExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::AsyncFunc(async_func) => {
-                self.try_into_async_func_physical_plan(async_func, ctx, proto_converter)
+            PhysicalPlanType::AsyncFunc(_) => {
+                AsyncFuncExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Buffer(_) => {
                 BufferExec::try_from_proto(self.node(), &decode_ctx)
@@ -1072,14 +1071,6 @@ pub trait PhysicalPlanNodeExt: Sized {
                 protobuf::PhysicalPlanNode::try_from_lazy_memory_exec(exec)?
         {
             return Ok(node);
-        }
-
-        if let Some(exec) = plan.downcast_ref::<AsyncFuncExec>() {
-            return protobuf::PhysicalPlanNode::try_from_async_func_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
         }
 
         if let Some(exec) = plan.downcast_ref::<ScalarSubqueryExec>() {
@@ -2657,41 +2648,27 @@ pub trait PhysicalPlanNodeExt: Sized {
         CooperativeExec::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `AsyncFuncExec` deserializes itself via `AsyncFuncExec::try_from_proto`"
+    )]
     fn try_into_async_func_physical_plan(
         &self,
         async_func: &protobuf::AsyncFuncExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&async_func.input, ctx, proto_converter)?;
-
-        if async_func.async_exprs.len() != async_func.async_expr_names.len() {
-            return internal_err!(
-                "AsyncFuncExecNode async_exprs length does not match async_expr_names"
-            );
-        }
-
-        let async_exprs = async_func
-            .async_exprs
-            .iter()
-            .zip(async_func.async_expr_names.iter())
-            .map(|(expr, name)| {
-                let physical_expr = proto_converter.proto_to_physical_expr(
-                    expr,
-                    input.schema().as_ref(),
-                    ctx,
-                )?;
-
-                Ok(Arc::new(AsyncFuncExpr::try_new(
-                    name.clone(),
-                    physical_expr,
-                    input.schema().as_ref(),
-                )?))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(Arc::new(AsyncFuncExec::try_new(async_exprs, input)?))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::AsyncFunc(Box::new(
+                async_func.clone(),
+            ))),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        AsyncFuncExec::try_from_proto(&node, &decode_ctx)
     }
 
     #[deprecated(
@@ -4069,35 +4046,22 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(None)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `AsyncFuncExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_async_func_exec(
         exec: &AsyncFuncExec,
-        codec: &dyn PhysicalExtensionCodec,
+        extension_codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            Arc::clone(exec.input()),
-            codec,
+        let encoder = ConverterPlanEncoder {
+            codec: extension_codec,
             proto_converter,
-        )?;
-
-        let mut async_exprs = vec![];
-        let mut async_expr_names = vec![];
-
-        for async_expr in exec.async_exprs() {
-            async_exprs
-                .push(proto_converter.physical_expr_to_proto(&async_expr.func, codec)?);
-            async_expr_names.push(async_expr.name.clone())
-        }
-
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::AsyncFunc(Box::new(
-                protobuf::AsyncFuncExecNode {
-                    input: Some(Box::new(input)),
-                    async_exprs,
-                    async_expr_names,
-                },
-            ))),
-        })
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?
+            .ok_or_else(|| internal_datafusion_err!("AsyncFuncExec is not serializable"))
     }
 
     #[deprecated(
