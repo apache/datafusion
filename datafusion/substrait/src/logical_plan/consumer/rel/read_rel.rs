@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::from_substrait_literal;
 use crate::logical_plan::consumer::from_substrait_named_struct;
 use crate::logical_plan::consumer::utils::{
     ensure_field_compatibility, ensure_schema_compatibility, rename_expressions,
 };
+use crate::logical_plan::consumer::{ExtensionTableContext, SubstraitConsumer};
 use datafusion::arrow::datatypes::{Field, Schema};
 use datafusion::common::{
     Column, DFSchema, DFSchemaRef, TableReference, not_impl_err, plan_datafusion_err,
@@ -259,6 +259,25 @@ pub async fn from_read_rel(
             read_with_schema(
                 consumer,
                 table_reference,
+                substrait_schema,
+                &read.projection,
+                &read.filter,
+            )
+            .await
+        }
+        Some(ReadType::ExtensionTable(extension_table)) => {
+            let plan = consumer
+                .resolve_extension_table(ExtensionTableContext::new(
+                    extension_table,
+                    &substrait_schema,
+                    read.best_effort_filter.as_deref(),
+                    read.advanced_extension.as_ref(),
+                ))
+                .await?;
+
+            apply_read_rel_filter_and_projection(
+                consumer,
+                plan,
                 substrait_schema,
                 &read.projection,
                 &read.filter,
@@ -805,14 +824,33 @@ mod tests {
     use datafusion::common::ScalarValue;
     use datafusion::datasource::MemTable;
     use datafusion::execution::FunctionRegistry;
-    use datafusion::logical_expr::Projection;
+    use datafusion::logical_expr::{Projection, TableScan, TableScanBuilder};
     use datafusion::prelude::SessionContext;
+    use pbjson_types::Any as ProtoAny;
     use std::ops::Deref;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use substrait::proto::expression::literal::{LiteralType, Struct as LiteralStruct};
     use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
     use substrait::proto::expression::nested::Struct as ExpressionStruct;
     use substrait::proto::expression::{Literal, RexType};
-    use substrait::proto::{NamedStruct, Type, read_rel, r#type};
+    use substrait::proto::rel::RelType;
+    use substrait::proto::rel_common::EmitKind;
+    use substrait::proto::{
+        NamedStruct, Rel, RelCommon, Type, extensions::AdvancedExtension, read_rel,
+        rel_common, r#type,
+    };
+
+    struct ExtensionTableConsumer {
+        called: AtomicBool,
+    }
+
+    struct ReorderedExtensionTableConsumer;
+    struct IncompatibleExtensionTableConsumer;
+    struct NullableExtensionTableConsumer;
+    struct OneRowExtensionTableConsumer;
+    struct ProjectedTableScanExtensionTableConsumer;
+    struct DuplicateNameTableScanExtensionTableConsumer;
+    struct DuplicateNameGenericExtensionTableConsumer;
     struct TableConsumer {
         table: Arc<dyn TableProvider>,
     }
@@ -859,6 +897,376 @@ mod tests {
 
         fn get_function_registry(&self) -> &impl FunctionRegistry {
             TEST_SESSION_STATE.deref()
+        }
+    }
+
+    #[async_trait]
+    impl SubstraitConsumer for ExtensionTableConsumer {
+        async fn resolve_table_ref(
+            &self,
+            _table_ref: &TableReference,
+        ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
+            Ok(None)
+        }
+
+        fn get_extensions(&self) -> &Extensions {
+            TEST_EXTENSIONS.deref()
+        }
+
+        fn get_function_registry(&self) -> &impl FunctionRegistry {
+            TEST_SESSION_STATE.deref()
+        }
+
+        async fn resolve_extension_table(
+            &self,
+            context: ExtensionTableContext<'_>,
+        ) -> datafusion::common::Result<LogicalPlan> {
+            self.called.store(true, Ordering::SeqCst);
+
+            let detail = context.extension_table.detail.as_ref().unwrap();
+            assert_eq!(detail.type_url, "type.example/custom");
+            assert_eq!(detail.value.as_ref(), &[25, 100]);
+
+            if let Some(filter) = context.best_effort_filter {
+                assert_eq!(filter, &true_filter());
+            }
+            if let Some(advanced_extension) = context.advanced_extension {
+                assert_eq!(
+                    advanced_extension.optimization[0].type_url,
+                    "type.example/optimization"
+                );
+                assert_eq!(
+                    advanced_extension.enhancement.as_ref().unwrap().type_url,
+                    "type.example/enhancement"
+                );
+            }
+
+            Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: DFSchemaRef::new(context.base_schema.clone()),
+            }))
+        }
+    }
+
+    #[async_trait]
+    impl SubstraitConsumer for ReorderedExtensionTableConsumer {
+        async fn resolve_table_ref(
+            &self,
+            _table_ref: &TableReference,
+        ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
+            Ok(None)
+        }
+
+        fn get_extensions(&self) -> &Extensions {
+            TEST_EXTENSIONS.deref()
+        }
+
+        fn get_function_registry(&self) -> &impl FunctionRegistry {
+            TEST_SESSION_STATE.deref()
+        }
+
+        async fn resolve_extension_table(
+            &self,
+            _context: ExtensionTableContext<'_>,
+        ) -> datafusion::common::Result<LogicalPlan> {
+            let schema = DFSchema::new_with_metadata(
+                vec![
+                    (None, Arc::new(Field::new("extra", DataType::Boolean, true))),
+                    (None, Arc::new(Field::new("b", DataType::Boolean, true))),
+                    (None, Arc::new(Field::new("a", DataType::Boolean, true))),
+                ],
+                Default::default(),
+            )?;
+            Ok(LogicalPlan::Values(Values {
+                schema: DFSchemaRef::new(schema),
+                values: vec![
+                    vec![
+                        df_bool_expression(false),
+                        df_bool_expression(false),
+                        df_bool_expression(true),
+                    ],
+                    vec![
+                        df_bool_expression(false),
+                        df_bool_expression(true),
+                        df_bool_expression(false),
+                    ],
+                ],
+            }))
+        }
+    }
+
+    #[async_trait]
+    impl SubstraitConsumer for IncompatibleExtensionTableConsumer {
+        async fn resolve_table_ref(
+            &self,
+            _table_ref: &TableReference,
+        ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
+            Ok(None)
+        }
+
+        fn get_extensions(&self) -> &Extensions {
+            TEST_EXTENSIONS.deref()
+        }
+
+        fn get_function_registry(&self) -> &impl FunctionRegistry {
+            TEST_SESSION_STATE.deref()
+        }
+
+        async fn resolve_extension_table(
+            &self,
+            _context: ExtensionTableContext<'_>,
+        ) -> datafusion::common::Result<LogicalPlan> {
+            let schema = DFSchema::new_with_metadata(
+                vec![(None, Arc::new(Field::new("a", DataType::Boolean, true)))],
+                Default::default(),
+            )?;
+            Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: DFSchemaRef::new(schema),
+            }))
+        }
+    }
+
+    #[async_trait]
+    impl SubstraitConsumer for NullableExtensionTableConsumer {
+        async fn resolve_table_ref(
+            &self,
+            _table_ref: &TableReference,
+        ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
+            Ok(None)
+        }
+
+        fn get_extensions(&self) -> &Extensions {
+            TEST_EXTENSIONS.deref()
+        }
+
+        fn get_function_registry(&self) -> &impl FunctionRegistry {
+            TEST_SESSION_STATE.deref()
+        }
+
+        async fn resolve_extension_table(
+            &self,
+            _context: ExtensionTableContext<'_>,
+        ) -> datafusion::common::Result<LogicalPlan> {
+            let schema = DFSchema::new_with_metadata(
+                vec![(None, Arc::new(Field::new("a", DataType::Boolean, true)))],
+                Default::default(),
+            )?;
+            Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: DFSchemaRef::new(schema),
+            }))
+        }
+    }
+
+    #[async_trait]
+    impl SubstraitConsumer for OneRowExtensionTableConsumer {
+        async fn resolve_table_ref(
+            &self,
+            _table_ref: &TableReference,
+        ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
+            Ok(None)
+        }
+
+        fn get_extensions(&self) -> &Extensions {
+            TEST_EXTENSIONS.deref()
+        }
+
+        fn get_function_registry(&self) -> &impl FunctionRegistry {
+            TEST_SESSION_STATE.deref()
+        }
+
+        async fn resolve_extension_table(
+            &self,
+            context: ExtensionTableContext<'_>,
+        ) -> datafusion::common::Result<LogicalPlan> {
+            Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: true,
+                schema: DFSchemaRef::new(context.base_schema.clone()),
+            }))
+        }
+    }
+
+    #[async_trait]
+    impl SubstraitConsumer for ProjectedTableScanExtensionTableConsumer {
+        async fn resolve_table_ref(
+            &self,
+            _table_ref: &TableReference,
+        ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
+            Ok(None)
+        }
+
+        fn get_extensions(&self) -> &Extensions {
+            TEST_EXTENSIONS.deref()
+        }
+
+        fn get_function_registry(&self) -> &impl FunctionRegistry {
+            TEST_SESSION_STATE.deref()
+        }
+
+        async fn resolve_extension_table(
+            &self,
+            _context: ExtensionTableContext<'_>,
+        ) -> datafusion::common::Result<LogicalPlan> {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Boolean, true),
+                Field::new("extra", DataType::Boolean, true),
+                Field::new("b", DataType::Boolean, true),
+            ]));
+            let columns: Vec<ArrayRef> = vec![
+                Arc::new(BooleanArray::from(vec![true, false])),
+                Arc::new(BooleanArray::from(vec![false, false])),
+                Arc::new(BooleanArray::from(vec![false, true])),
+            ];
+            let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
+            let table: Arc<dyn TableProvider> =
+                Arc::new(MemTable::try_new(schema, vec![vec![batch]])?);
+            let scan = TableScanBuilder::new(
+                "extension_table_source",
+                provider_as_source(table),
+            )
+            .with_projection(Some(vec![0, 2]))
+            .build()?;
+
+            Ok(LogicalPlan::TableScan(scan))
+        }
+    }
+
+    #[async_trait]
+    impl SubstraitConsumer for DuplicateNameTableScanExtensionTableConsumer {
+        async fn resolve_table_ref(
+            &self,
+            _table_ref: &TableReference,
+        ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
+            Ok(None)
+        }
+
+        fn get_extensions(&self) -> &Extensions {
+            TEST_EXTENSIONS.deref()
+        }
+
+        fn get_function_registry(&self) -> &impl FunctionRegistry {
+            TEST_SESSION_STATE.deref()
+        }
+
+        async fn resolve_extension_table(
+            &self,
+            _context: ExtensionTableContext<'_>,
+        ) -> datafusion::common::Result<LogicalPlan> {
+            let source_schema = Arc::new(Schema::new(vec![
+                Field::new("a_0", DataType::Boolean, true),
+                Field::new("a_1", DataType::Boolean, true),
+            ]));
+            let projected_schema = Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Boolean, true),
+                Field::new("a", DataType::Boolean, true),
+            ]));
+            let columns: Vec<ArrayRef> = vec![
+                Arc::new(BooleanArray::from(vec![true, true])),
+                Arc::new(BooleanArray::from(vec![false, true])),
+            ];
+            let batch = RecordBatch::try_new(Arc::clone(&source_schema), columns)?;
+            let table: Arc<dyn TableProvider> =
+                Arc::new(MemTable::try_new(source_schema, vec![vec![batch]])?);
+            let scan = TableScan {
+                table_name: TableReference::bare("duplicate_name_extension_table"),
+                source: provider_as_source(table),
+                projection: None,
+                projected_schema: DFSchemaRef::new(DFSchema::try_from(projected_schema)?),
+                filters: vec![],
+                fetch: None,
+                statistics_requests: Default::default(),
+            };
+
+            Ok(LogicalPlan::TableScan(scan))
+        }
+    }
+
+    #[async_trait]
+    impl SubstraitConsumer for DuplicateNameGenericExtensionTableConsumer {
+        async fn resolve_table_ref(
+            &self,
+            _table_ref: &TableReference,
+        ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
+            Ok(None)
+        }
+
+        fn get_extensions(&self) -> &Extensions {
+            TEST_EXTENSIONS.deref()
+        }
+
+        fn get_function_registry(&self) -> &impl FunctionRegistry {
+            TEST_SESSION_STATE.deref()
+        }
+
+        async fn resolve_extension_table(
+            &self,
+            context: ExtensionTableContext<'_>,
+        ) -> datafusion::common::Result<LogicalPlan> {
+            let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: DFSchemaRef::new(context.base_schema.clone()),
+            });
+
+            LogicalPlanBuilder::from(plan)
+                .filter(df_bool_expression(true))?
+                .build()
+        }
+    }
+
+    fn extension_table_read(detail: Option<ProtoAny>) -> ReadRel {
+        extension_table_read_with_names(detail, &["value"])
+    }
+
+    fn extension_table_read_with_names(
+        detail: Option<ProtoAny>,
+        names: &[&str],
+    ) -> ReadRel {
+        let names = names
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect::<Vec<_>>();
+        let field_count = names.len();
+
+        ReadRel {
+            base_schema: Some(NamedStruct {
+                names,
+                r#struct: Some(r#type::Struct {
+                    types: (0..field_count).map(|_| nullable_i64()).collect(),
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                    nullability: r#type::Nullability::Required as i32,
+                }),
+            }),
+            read_type: Some(ReadType::ExtensionTable(read_rel::ExtensionTable {
+                detail,
+            })),
+            ..Default::default()
+        }
+    }
+
+    fn extension_table_read_with_bool_fields(
+        detail: Option<ProtoAny>,
+        names: &[&str],
+    ) -> ReadRel {
+        let names = names
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect::<Vec<_>>();
+        let field_count = names.len();
+
+        ReadRel {
+            base_schema: Some(NamedStruct {
+                names,
+                r#struct: Some(r#type::Struct {
+                    types: (0..field_count).map(|_| nullable_bool()).collect(),
+                    type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                    nullability: r#type::Nullability::Required as i32,
+                }),
+            }),
+            read_type: Some(ReadType::ExtensionTable(read_rel::ExtensionTable {
+                detail,
+            })),
+            ..Default::default()
         }
     }
 
@@ -1195,6 +1603,10 @@ mod tests {
         }
     }
 
+    fn df_bool_expression(value: bool) -> Expr {
+        Expr::Literal(ScalarValue::Boolean(Some(value)), None)
+    }
+
     fn true_filter() -> Expression {
         bool_expression(true)
     }
@@ -1370,6 +1782,26 @@ mod tests {
                     ),
                 },
             ))),
+        }
+    }
+
+    fn extension_detail() -> ProtoAny {
+        ProtoAny {
+            type_url: "type.example/custom".to_string(),
+            value: vec![25, 100].into(),
+        }
+    }
+
+    fn advanced_extension() -> AdvancedExtension {
+        AdvancedExtension {
+            optimization: vec![ProtoAny {
+                type_url: "type.example/optimization".to_string(),
+                value: vec![1].into(),
+            }],
+            enhancement: Some(ProtoAny {
+                type_url: "type.example/enhancement".to_string(),
+                value: vec![2].into(),
+            }),
         }
     }
 
@@ -1612,6 +2044,338 @@ mod tests {
             &[vec![Some(false), Some(true)], vec![Some(true), Some(false)]],
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn extension_table_read_uses_consumer_handler() {
+        let consumer = ExtensionTableConsumer {
+            called: AtomicBool::new(false),
+        };
+        let mut read = extension_table_read(Some(extension_detail()));
+        read.best_effort_filter = Some(Box::new(true_filter()));
+        read.advanced_extension = Some(advanced_extension());
+
+        let plan = from_read_rel(&consumer, &read).await.unwrap();
+
+        assert!(consumer.called.load(Ordering::SeqCst));
+        assert_eq!(plan.schema().fields().len(), 1);
+        assert_eq!(plan.schema().fields()[0].name(), "value");
+    }
+
+    #[tokio::test]
+    async fn extension_table_read_applies_filter_and_projection() {
+        let consumer = ExtensionTableConsumer {
+            called: AtomicBool::new(false),
+        };
+        let mut read =
+            extension_table_read_with_names(Some(extension_detail()), &["a", "b"]);
+        read.filter = Some(Box::new(true_filter()));
+        read.projection = Some(projection(&[1]));
+
+        let plan = from_read_rel(&consumer, &read).await.unwrap();
+
+        assert!(consumer.called.load(Ordering::SeqCst));
+        assert_eq!(plan.schema().fields().len(), 1);
+        assert_eq!(plan.schema().fields()[0].name(), "b");
+        let LogicalPlan::Projection(projection) = &plan else {
+            panic!("expected Projection, got {plan:?}");
+        };
+        assert_projection_columns(projection, &["b"]);
+        assert!(matches!(projection.input.as_ref(), LogicalPlan::Filter(_)));
+    }
+
+    #[tokio::test]
+    async fn extension_table_read_applies_projection_without_filter() {
+        let consumer = ExtensionTableConsumer {
+            called: AtomicBool::new(false),
+        };
+        let mut read =
+            extension_table_read_with_names(Some(extension_detail()), &["a", "b"]);
+        read.projection = Some(projection(&[1]));
+
+        let plan = from_read_rel(&consumer, &read).await.unwrap();
+
+        assert!(consumer.called.load(Ordering::SeqCst));
+        assert_eq!(plan.schema().fields().len(), 1);
+        assert_eq!(plan.schema().fields()[0].name(), "b");
+        assert_row_count(plan, 0).await;
+    }
+
+    #[tokio::test]
+    async fn extension_table_read_applies_filter_without_projection() {
+        let consumer = ExtensionTableConsumer {
+            called: AtomicBool::new(false),
+        };
+        let mut read =
+            extension_table_read_with_bool_fields(Some(extension_detail()), &["a", "b"]);
+        read.filter = Some(Box::new(field_reference_filter(0)));
+
+        let plan = from_read_rel(&consumer, &read).await.unwrap();
+
+        assert!(consumer.called.load(Ordering::SeqCst));
+        assert_eq!(plan.schema().fields().len(), 2);
+        let LogicalPlan::Filter(filter) = plan else {
+            panic!("expected Filter, got {plan:?}");
+        };
+        let Expr::Column(column) = &filter.predicate else {
+            panic!("expected column filter, got {:?}", filter.predicate);
+        };
+        assert_eq!(column.name, "a");
+    }
+
+    #[tokio::test]
+    async fn extension_table_read_rejects_incompatible_handler_schema() {
+        let consumer = IncompatibleExtensionTableConsumer;
+        let read =
+            extension_table_read_with_bool_fields(Some(extension_detail()), &["a", "b"]);
+
+        let err = from_read_rel(&consumer, &read).await.unwrap_err();
+
+        assert!(err.to_string().contains("No field named b"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn extension_table_read_rejects_nullable_handler_field_for_required_schema() {
+        let consumer = NullableExtensionTableConsumer;
+        let mut read =
+            extension_table_read_with_bool_fields(Some(extension_detail()), &["a"]);
+        read.base_schema
+            .as_mut()
+            .unwrap()
+            .r#struct
+            .as_mut()
+            .unwrap()
+            .types[0] = required_bool();
+
+        let err = from_read_rel(&consumer, &read).await.unwrap_err();
+
+        assert!(
+            err.to_string().contains(
+                "Field 'a' is nullable in the DataFusion schema but not nullable in the Substrait schema"
+            ),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn extension_table_read_rejects_unsupported_projection_masks() {
+        let consumer = ExtensionTableConsumer {
+            called: AtomicBool::new(false),
+        };
+
+        for (projection, expected) in [
+            (
+                projection(&[-1]),
+                "Invalid ReadRel projection field index: -1",
+            ),
+            (
+                projection(&[1]),
+                "ReadRel projection field index 1 is out of bounds",
+            ),
+            (
+                nested_projection(0),
+                "Nested ReadRel projections are not supported",
+            ),
+        ] {
+            let mut read = extension_table_read(Some(extension_detail()));
+            read.projection = Some(projection);
+
+            let err = from_read_rel(&consumer, &read).await.unwrap_err();
+            assert!(err.to_string().contains(expected), "got: {err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn extension_table_projection_composes_table_scan_projection() {
+        let consumer = ProjectedTableScanExtensionTableConsumer;
+        let mut read =
+            extension_table_read_with_bool_fields(Some(extension_detail()), &["a", "b"]);
+        read.projection = Some(projection(&[1]));
+
+        let plan = from_read_rel(&consumer, &read).await.unwrap();
+
+        let LogicalPlan::TableScan(scan) = &plan else {
+            panic!("expected TableScan, got {plan:?}");
+        };
+        assert_eq!(scan.projection.as_deref(), Some(&[2][..]));
+        assert_eq!(scan.projected_schema.fields().len(), 1);
+        assert_eq!(scan.projected_schema.fields()[0].name(), "b");
+        assert_bool_column(plan, &[Some(false), Some(true)]).await;
+    }
+
+    #[tokio::test]
+    async fn extension_table_empty_projection_preserves_table_scan_row_count() {
+        let consumer = ProjectedTableScanExtensionTableConsumer;
+        let mut read =
+            extension_table_read_with_bool_fields(Some(extension_detail()), &["a", "b"]);
+        read.projection = Some(projection(&[]));
+
+        let plan = from_read_rel(&consumer, &read).await.unwrap();
+
+        assert_eq!(plan.schema().fields().len(), 0);
+        assert_row_count(plan, 2).await;
+    }
+
+    #[tokio::test]
+    async fn extension_table_filter_uses_read_schema_field_order() {
+        let consumer = ReorderedExtensionTableConsumer;
+        let mut read =
+            extension_table_read_with_bool_fields(Some(extension_detail()), &["a", "b"]);
+        read.filter = Some(Box::new(field_reference_filter(0)));
+        read.projection = Some(projection(&[0]));
+
+        let plan = from_read_rel(&consumer, &read).await.unwrap();
+
+        let LogicalPlan::Projection(projection) = &plan else {
+            panic!("expected Projection, got {plan:?}");
+        };
+        assert_eq!(projection.schema.fields().len(), 1);
+        assert_eq!(projection.schema.fields()[0].name(), "a");
+        assert_projection_columns(projection, &["a"]);
+
+        let LogicalPlan::Filter(filter) = projection.input.as_ref() else {
+            panic!("expected Filter, got {:?}", projection.input);
+        };
+        let Expr::Column(column) = &filter.predicate else {
+            panic!("expected column filter, got {:?}", filter.predicate);
+        };
+        assert_eq!(column.name, "a");
+        assert_bool_column(plan, &[Some(true)]).await;
+    }
+
+    #[tokio::test]
+    async fn extension_table_filter_can_reference_projected_away_field() {
+        let consumer = ReorderedExtensionTableConsumer;
+        let mut read =
+            extension_table_read_with_bool_fields(Some(extension_detail()), &["a", "b"]);
+        read.filter = Some(Box::new(field_reference_filter(0)));
+        read.projection = Some(projection(&[1]));
+
+        let plan = from_read_rel(&consumer, &read).await.unwrap();
+
+        let LogicalPlan::Projection(projection) = &plan else {
+            panic!("expected Projection, got {plan:?}");
+        };
+        assert_eq!(projection.schema.fields().len(), 1);
+        assert_eq!(projection.schema.fields()[0].name(), "b");
+        assert_projection_columns(projection, &["b"]);
+
+        let LogicalPlan::Filter(filter) = projection.input.as_ref() else {
+            panic!("expected Filter, got {:?}", projection.input);
+        };
+        let Expr::Column(column) = &filter.predicate else {
+            panic!("expected column filter, got {:?}", filter.predicate);
+        };
+        assert_eq!(column.name, "a");
+        assert_bool_column(plan, &[Some(false)]).await;
+    }
+
+    #[tokio::test]
+    async fn extension_table_filter_rejects_duplicate_table_scan_names() {
+        let consumer = DuplicateNameTableScanExtensionTableConsumer;
+        let mut read =
+            extension_table_read_with_bool_fields(Some(extension_detail()), &["a", "a"]);
+        read.filter = Some(Box::new(field_reference_filter(1)));
+
+        let err = from_read_rel(&consumer, &read).await.unwrap_err();
+
+        assert!(
+            err.to_string().contains(
+                "ReadRel filters over generic plans with duplicate field names are not supported"
+            ),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn extension_table_read_normalizes_reordered_schema_without_projection() {
+        let consumer = ReorderedExtensionTableConsumer;
+        let read =
+            extension_table_read_with_bool_fields(Some(extension_detail()), &["a", "b"]);
+
+        let plan = from_read_rel(&consumer, &read).await.unwrap();
+
+        assert_eq!(plan.schema().fields().len(), 2);
+        assert_eq!(plan.schema().fields()[0].name(), "a");
+        assert_eq!(plan.schema().fields()[1].name(), "b");
+        assert_bool_rows(
+            plan,
+            &[vec![Some(true), Some(false)], vec![Some(false), Some(true)]],
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn extension_table_read_common_emit_applies_after_filter_and_projection() {
+        let consumer = ReorderedExtensionTableConsumer;
+        let mut read =
+            extension_table_read_with_bool_fields(Some(extension_detail()), &["a", "b"]);
+        read.filter = Some(Box::new(field_reference_filter(0)));
+        read.projection = Some(projection(&[1, 0]));
+        read.common = Some(RelCommon {
+            emit_kind: Some(EmitKind::Emit(rel_common::Emit {
+                output_mapping: vec![1],
+            })),
+            hint: None,
+            advanced_extension: None,
+        });
+        let rel = Rel {
+            rel_type: Some(RelType::Read(Box::new(read))),
+        };
+
+        let plan = super::super::from_substrait_rel(&consumer, &rel)
+            .await
+            .unwrap();
+
+        assert_eq!(plan.schema().fields().len(), 1);
+        assert_eq!(plan.schema().fields()[0].name(), "a");
+        assert_bool_column(plan, &[Some(true)]).await;
+    }
+
+    #[tokio::test]
+    async fn extension_table_projection_rejects_generic_plan_with_duplicate_names() {
+        let consumer = DuplicateNameGenericExtensionTableConsumer;
+        let mut read =
+            extension_table_read_with_names(Some(extension_detail()), &["a", "a"]);
+        read.projection = Some(projection(&[1]));
+
+        let err = from_read_rel(&consumer, &read).await.unwrap_err();
+
+        assert!(
+            err.to_string().contains(
+                "ReadRel projections over generic plans with duplicate field names are not supported"
+            ),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn extension_table_read_rejects_duplicate_names_on_name_based_path() {
+        let consumer = IncompatibleExtensionTableConsumer;
+        let read =
+            extension_table_read_with_bool_fields(Some(extension_detail()), &["a", "a"]);
+
+        let err = from_read_rel(&consumer, &read).await.unwrap_err();
+
+        assert!(
+            err.to_string().contains(
+                "ReadRel schemas with duplicate field names must match by position"
+            ),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn extension_table_empty_projection_preserves_generic_plan_row_count() {
+        let consumer = OneRowExtensionTableConsumer;
+        let mut read =
+            extension_table_read_with_bool_fields(Some(extension_detail()), &["a", "b"]);
+        read.projection = Some(projection(&[]));
+
+        let plan = from_read_rel(&consumer, &read).await.unwrap();
+
+        assert_eq!(plan.schema().fields().len(), 0);
+        assert_row_count(plan, 1).await;
     }
 
     #[tokio::test]
@@ -1907,5 +2671,34 @@ mod tests {
             panic!("expected EmptyRelation, got {:?}", filter.input);
         };
         assert!(empty.produce_one_row);
+    }
+
+    #[tokio::test]
+    async fn default_consumer_rejects_extension_table_read() {
+        let consumer = test_consumer();
+        let err =
+            from_read_rel(&consumer, &extension_table_read(Some(extension_detail())))
+                .await
+                .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Missing handler for ExtensionTable: type.example/custom"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn default_consumer_rejects_extension_table_read_without_detail() {
+        let consumer = test_consumer();
+        let err = from_read_rel(&consumer, &extension_table_read(None))
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Missing handler for ExtensionTable"),
+            "got: {err}"
+        );
     }
 }

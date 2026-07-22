@@ -50,6 +50,35 @@ use substrait::proto::{
     FilterRel, JoinRel, ProjectRel, ReadRel, Rel, SetRel, SortRel, r#type,
 };
 
+/// Context passed to [`SubstraitConsumer::resolve_extension_table`].
+#[non_exhaustive]
+pub struct ExtensionTableContext<'a> {
+    /// The typed Substrait extension table read.
+    pub extension_table: &'a proto::read_rel::ExtensionTable,
+    /// The decoded `ReadRel` base schema.
+    pub base_schema: &'a DFSchema,
+    /// A best-effort filter that the extension table resolver may apply.
+    pub best_effort_filter: Option<&'a Expression>,
+    /// Advanced extension metadata from the enclosing `ReadRel`.
+    pub advanced_extension: Option<&'a proto::extensions::AdvancedExtension>,
+}
+
+impl<'a> ExtensionTableContext<'a> {
+    pub(crate) fn new(
+        extension_table: &'a proto::read_rel::ExtensionTable,
+        base_schema: &'a DFSchema,
+        best_effort_filter: Option<&'a Expression>,
+        advanced_extension: Option<&'a proto::extensions::AdvancedExtension>,
+    ) -> Self {
+        Self {
+            extension_table,
+            base_schema,
+            best_effort_filter,
+            advanced_extension,
+        }
+    }
+}
+
 #[async_trait]
 /// This trait is used to consume Substrait plans, converting them into DataFusion Logical Plans.
 /// It can be implemented by users to allow for custom handling of relations, expressions, etc.
@@ -446,8 +475,32 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
 
     // User-Defined Functionality
 
-    // The details of extension relations, and how to handle them, are fully up to users to specify.
+    // The details of extension reads and relations, and how to handle them,
+    // are fully up to users to specify.
     // The following methods allow users to customize the consumer behaviour
+
+    /// Resolve this extension table as a base plan.
+    ///
+    /// Implementations should not apply the `ReadRel` filter, projection, or
+    /// common emit mapping. Those fields are applied by the generic relation
+    /// consumer after this hook returns.
+    /// Implementations are responsible for interpreting the best-effort filter
+    /// and advanced extension fields if they are relevant.
+    /// The returned plan may include extra fields whose names do not duplicate
+    /// `base_schema` fields, but every `base_schema` field must be present with
+    /// a compatible type.
+    async fn resolve_extension_table(
+        &self,
+        context: ExtensionTableContext<'_>,
+    ) -> datafusion::common::Result<LogicalPlan> {
+        if let Some(detail) = context.extension_table.detail.as_ref() {
+            return substrait_err!(
+                "Missing handler for ExtensionTable: {}",
+                detail.type_url
+            );
+        }
+        substrait_err!("Missing handler for ExtensionTable")
+    }
 
     async fn consume_extension_leaf(
         &self,
