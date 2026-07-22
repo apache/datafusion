@@ -647,6 +647,7 @@ impl FileSource for ParquetSource {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
+            bounded_streaming: self.table_parquet_options.global.bounded_streaming,
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             virtual_state,

@@ -238,6 +238,7 @@ impl ParquetOptions {
             pushdown_filters: _,
             reorder_filters: _,
             force_filter_selections: _, // not used for writer props
+            bounded_streaming: _,       // not used for writer props
             allow_single_file_parallelism: _,
             maximum_parallel_row_group_writers: _,
             maximum_buffered_record_batches_per_stream: _,
