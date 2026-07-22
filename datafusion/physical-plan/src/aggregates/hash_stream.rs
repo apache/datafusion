@@ -310,7 +310,12 @@ impl PartialHashAggregateStream {
                 Some(SkipAggregationProbe::new(
                     options.skip_partial_aggregation_probe_rows_threshold,
                     probe_ratio_threshold,
+                    options.skip_partial_aggregation_use_cost_model,
+                    options.skip_partial_aggregation_ab_sampling_rows,
                     skipped_aggregation_rows,
+                    baseline_metrics.elapsed_compute().clone(),
+                    agg.metrics.clone(),
+                    partition,
                 ))
             }
         } else {
@@ -345,7 +350,7 @@ impl PartialHashAggregateStream {
     /// Updates skip aggregation probe state.
     fn update_skip_aggregation_probe(&mut self, input_rows: usize, num_groups: usize) {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
-            probe.update_state(input_rows, num_groups);
+            probe.observe_partial_batch(input_rows, num_groups);
         }
     }
 

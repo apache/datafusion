@@ -560,6 +560,10 @@ impl GroupedHashAggregateStream {
                 options.skip_partial_aggregation_probe_rows_threshold;
             let probe_ratio_threshold =
                 options.skip_partial_aggregation_probe_ratio_threshold;
+            let use_cost_model =
+                options.skip_partial_aggregation_use_cost_model;
+            let ab_sampling_rows =
+                options.skip_partial_aggregation_ab_sampling_rows;
             // A threshold >= 1.0 means the ratio (num_groups / input_rows) can
             // never exceed it, so the feature is effectively disabled.
             if probe_ratio_threshold >= 1.0 {
@@ -571,7 +575,12 @@ impl GroupedHashAggregateStream {
                 Some(SkipAggregationProbe::new(
                     probe_rows_threshold,
                     probe_ratio_threshold,
+                    use_cost_model,
+                    ab_sampling_rows,
                     skipped_aggregation_rows,
+                    baseline_metrics.elapsed_compute().clone(),
+                    agg.metrics.clone(),
+                    partition,
                 ))
             }
         } else {
@@ -1340,7 +1349,7 @@ impl GroupedHashAggregateStream {
             // Skip aggregation probe is not supported if stream has any spills,
             // currently spilling is not supported for Partial aggregation
             assert!(self.spill_state.spills.is_empty());
-            probe.update_state(input_rows, self.group_values.len());
+            probe.observe_partial_batch(input_rows, self.group_values.len());
         };
     }
 

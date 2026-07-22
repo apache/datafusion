@@ -15,291 +15,346 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Cost-aware partial-aggregation skip probe.
+//!
+//! Rebased from #22518.
+//!
+//! The classic partial-aggregation skip check is a single fixed ratio:
+//! if `num_groups / input_rows` exceeds a threshold (default `0.8`)
+//! after the first `probe_rows_threshold` rows, skip further partial
+//! aggregation. That catches the no-reduction case but misses the
+//! medium-ratio band (~0.5-0.7) where partial aggregation is still
+//! net-negative because the per-row cost is high (variable-length
+//! keys, complex aggregates, ...).
+//!
+//! [`SkipAggregationProbe`] extends the check with a short A/B
+//! sampling window that measures both the partial-agg per-row cost
+//! and the passthrough per-row cost on real input, then makes a
+//! cost-aware skip decision:
+//!
+//! ```text
+//! skip <=> ratio > passthrough_ns_per_row / partial_ns_per_row
+//! ```
+//!
+//! Derived from `cost_keep_partial = partial * N + final * N * ratio`
+//! vs `cost_skip = passthrough * N + final * N`, assuming
+//! `final ~= partial` (same hash-table mechanics).
+//!
+//! Set `skip_partial_aggregation_use_cost_model = false` to fall back
+//! to the plain ratio check.
+
 use arrow::record_batch::RecordBatch;
 
 use crate::metrics;
+use crate::metrics::{MetricBuilder, MetricCategory};
 
-/// Tracks if the aggregate should skip partial aggregations
+/// Three phases of the cost-aware skip decision.
+///
+/// 1. [`ProbePhase::Partial`] — accumulate input through the hash
+///    table (normal partial-agg path), measuring `partial_ns/row` and
+///    the `num_groups/input_rows` ratio over the first
+///    `probe_rows_threshold` rows.
+/// 2. [`ProbePhase::AbSampling`] — route the next `ab_sampling_rows`
+///    of input through the passthrough path (`transform_to_states`)
+///    to measure `passthrough_ns/row`. The hash table built so far is
+///    kept; nothing is emitted yet.
+/// 3. [`ProbePhase::Locked`] — final decision. Skip when
+///    `ratio > passthrough_ns/row / partial_ns/row` (the cost-aware
+///    crossover); otherwise revert to partial agg for the rest of the
+///    stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProbePhase {
+    Partial,
+    AbSampling,
+    Locked { should_skip: bool },
+}
+
+/// Tracks if the aggregate should skip partial aggregations.
 ///
 /// See "partial aggregation" discussion on
 /// [`crate::aggregates::grouped_hash_stream::GroupedHashAggregateStream`].
+///
+/// The probe runs a short A/B sampling window that measures both the
+/// partial-agg per-row cost and the passthrough per-row cost on real
+/// input, then makes a cost-based skip decision without relying on a
+/// hardcoded ratio cutoff. `use_cost_model = false` falls back to the
+/// original behaviour: a single bare ratio check at probe close.
 pub(super) struct SkipAggregationProbe {
     // ========================================================================
-    // PROPERTIES:
-    // These fields are initialized at the start and remain constant throughout
-    // the execution.
+    // PROPERTIES (immutable for the stream's lifetime)
     // ========================================================================
-    /// Aggregation ratio check performed when the number of input rows exceeds
-    /// this threshold (from `SessionConfig`)
     probe_rows_threshold: usize,
-    /// Maximum ratio of `num_groups` to `input_rows` for continuing aggregation
-    /// (from `SessionConfig`). If the ratio exceeds this value, aggregation
-    /// is skipped and input rows are directly converted to output
     probe_ratio_threshold: f64,
+    use_cost_model: bool,
+    ab_sampling_rows: usize,
 
     // ========================================================================
-    // STATES:
-    // Fields changes during execution. Can be buffer, or state flags that
-    // influence the execution in parent `GroupedHashAggregateStream`
+    // STATE
     // ========================================================================
-    /// Number of processed input rows (updated during probing)
+    phase: ProbePhase,
+    /// Rows processed in the `Partial` phase.
     input_rows: usize,
-    /// Number of total group values for `input_rows` (updated during probing)
+    /// Latest `group_values.len()` reported in the `Partial` phase.
     num_groups: usize,
+    /// Rows processed in the `AbSampling` phase.
+    ab_rows: usize,
+    /// `elapsed_compute.value()` snapshot at probe construction.
+    elapsed_compute_at_probe_start: usize,
+    /// `elapsed_compute.value()` snapshot at the `Partial`→`AbSampling`
+    /// transition. `None` before that transition.
+    elapsed_compute_at_ab_start: Option<usize>,
 
-    /// Flag indicating further data aggregation may be skipped (decision made
-    /// when probing complete)
+    /// Convenience mirror of `phase == Locked { should_skip: true }`.
+    /// Kept so the hot path (`should_skip()`) is a single field load.
     should_skip: bool,
-    /// Flag indicating further updates of `SkipAggregationProbe` state won't
-    /// make any effect (set either while probing or on probing completion)
+    /// Convenience mirror of `matches!(phase, Locked { .. })`. Once
+    /// locked the probe stops observing.
     is_locked: bool,
 
     // ========================================================================
-    // METRICS:
+    // METRICS / DIAGNOSTICS
     // ========================================================================
-    /// Number of rows where state was output without aggregation.
-    ///
-    /// * If 0, all input rows were aggregated (should_skip was always false)
-    ///
-    /// * if greater than zero, the number of rows which were output directly
-    ///   without aggregation
+    /// Number of rows emitted directly (skipping partial agg).
     skipped_aggregation_rows: metrics::Count,
+
+    /// Shared `elapsed_compute` gauge — used to derive per-row cost.
+    elapsed_compute: metrics::Time,
+
+    /// `ExecutionPlanMetricsSet` for lazily registering diagnostic gauges
+    /// on the first partial batch that reaches this probe.
+    agg_metrics: metrics::ExecutionPlanMetricsSet,
+    /// Partition id — used when the gauges are registered.
+    partition: usize,
+
+    // Lazily-registered diagnostic gauges. Registered on the first call
+    // to `observe_partial_batch` so small queries that never hit the
+    // partial probe don't have to display `...=0` noise.
+    probe_partial_ns_per_row: Option<metrics::Gauge>,
+    probe_passthrough_ns_per_row: Option<metrics::Gauge>,
+    probe_ratio_per_mille: Option<metrics::Gauge>,
+    probe_cost_decision_skip: Option<metrics::Gauge>,
 }
 
 impl SkipAggregationProbe {
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn new(
         probe_rows_threshold: usize,
         probe_ratio_threshold: f64,
+        use_cost_model: bool,
+        ab_sampling_rows: usize,
         skipped_aggregation_rows: metrics::Count,
+        elapsed_compute: metrics::Time,
+        agg_metrics: metrics::ExecutionPlanMetricsSet,
+        partition: usize,
     ) -> Self {
+        let elapsed_compute_at_probe_start = elapsed_compute.value();
         Self {
-            input_rows: 0,
-            num_groups: 0,
             probe_rows_threshold,
             probe_ratio_threshold,
+            use_cost_model,
+            ab_sampling_rows,
+            phase: ProbePhase::Partial,
+            input_rows: 0,
+            num_groups: 0,
+            ab_rows: 0,
+            elapsed_compute_at_probe_start,
+            elapsed_compute_at_ab_start: None,
             should_skip: false,
             is_locked: false,
             skipped_aggregation_rows,
+            elapsed_compute,
+            agg_metrics,
+            partition,
+            probe_partial_ns_per_row: None,
+            probe_passthrough_ns_per_row: None,
+            probe_ratio_per_mille: None,
+            probe_cost_decision_skip: None,
         }
     }
 
-    /// Updates `SkipAggregationProbe` state:
-    /// - increments the number of input rows
-    /// - replaces the number of groups with the new value
-    /// - on `probe_rows_threshold` exceeded calculates
-    ///   aggregation ratio and sets `should_skip` flag
-    /// - if `should_skip` is set, locks further state updates
-    pub(super) fn update_state(&mut self, input_rows: usize, num_groups: usize) {
-        if self.is_locked {
+    /// Lazily register the diagnostic gauges on first partial-probe
+    /// observation. Doing this in `new()` would attach `...=0` noise
+    /// to every aggregation, even ones that finish before the probe
+    /// window closes.
+    fn ensure_probe_gauges(&mut self) {
+        if self.probe_partial_ns_per_row.is_some() {
             return;
         }
+        let partition = self.partition;
+        let register = |name: &'static str| -> metrics::Gauge {
+            MetricBuilder::new(&self.agg_metrics)
+                .with_category(MetricCategory::Rows)
+                .gauge(name, partition)
+        };
+        self.probe_partial_ns_per_row =
+            Some(register("partial_agg_probe_partial_ns_per_row"));
+        self.probe_passthrough_ns_per_row =
+            Some(register("partial_agg_probe_passthrough_ns_per_row"));
+        self.probe_ratio_per_mille =
+            Some(register("partial_agg_probe_ratio_per_mille"));
+        self.probe_cost_decision_skip =
+            Some(register("partial_agg_probe_cost_decision_skip"));
+    }
+
+    /// Observe a partial-agg batch. Accumulates `input_rows` / tracks
+    /// `num_groups`, and when the `probe_rows_threshold` is reached,
+    /// drives the phase transition.
+    ///
+    /// Replaces the pre-#22518 `update_state`. When
+    /// `use_cost_model == false`, behaviour is identical to that
+    /// original ratio check.
+    pub(super) fn observe_partial_batch(
+        &mut self,
+        input_rows: usize,
+        num_groups: usize,
+    ) {
+        if self.phase != ProbePhase::Partial {
+            return;
+        }
+        self.ensure_probe_gauges();
+
         self.input_rows += input_rows;
         self.num_groups = num_groups;
-        if self.input_rows >= self.probe_rows_threshold {
-            self.should_skip = self.num_groups as f64 / self.input_rows as f64
-                > self.probe_ratio_threshold;
-            // Set is_locked to true only if we have decided to skip, otherwise we can try to skip
-            // during processing the next record_batch.
-            self.is_locked = self.should_skip;
+        if self.input_rows < self.probe_rows_threshold {
+            return;
         }
+
+        // Probe window closed — publish the observed ratio.
+        let ratio = if self.input_rows == 0 {
+            0.0
+        } else {
+            self.num_groups as f64 / self.input_rows as f64
+        };
+        if let Some(g) = self.probe_ratio_per_mille.as_ref() {
+            g.set((ratio * 1000.0) as usize);
+        }
+
+        // Rule 1: bare-ratio short-circuit. Preserved so obvious
+        // no-reduction cases don't burn the A/B window.
+        if ratio >= self.probe_ratio_threshold {
+            self.commit_skip();
+            return;
+        }
+
+        // With the cost model disabled we replicate the original
+        // behaviour: nothing to do, keep partial.
+        if !self.use_cost_model {
+            self.phase = ProbePhase::Locked { should_skip: false };
+            self.is_locked = true;
+            return;
+        }
+
+        // Record `partial_ns/row` for the closed-form cost comparison.
+        let elapsed_now = self.elapsed_compute.value();
+        let partial_elapsed =
+            elapsed_now.saturating_sub(self.elapsed_compute_at_probe_start);
+        let partial_ns_per_row = if self.input_rows == 0 {
+            0
+        } else {
+            partial_elapsed / self.input_rows
+        };
+        if let Some(g) = self.probe_partial_ns_per_row.as_ref() {
+            g.set(partial_ns_per_row);
+        }
+
+        // Transition to A/B. The stream will now route input through
+        // the passthrough path until `ab_sampling_rows` have been
+        // observed, at which point `finalize_ab_decision` runs the
+        // cost-based comparison.
+        self.elapsed_compute_at_ab_start = Some(elapsed_now);
+        self.phase = ProbePhase::AbSampling;
+    }
+
+    /// `true` iff the stream should route the next batch through
+    /// `transform_to_states` so the probe can measure
+    /// `passthrough_ns/row`.
+    pub(super) fn wants_passthrough_sample(&self) -> bool {
+        matches!(self.phase, ProbePhase::AbSampling)
+    }
+
+    /// Observe a passthrough (A/B-sampling) batch. Accumulates
+    /// `ab_rows`, and when the window is full, triggers the
+    /// cost-aware decision.
+    pub(super) fn observe_ab_batch(&mut self, input_rows: usize) {
+        if self.phase != ProbePhase::AbSampling {
+            return;
+        }
+        self.ab_rows += input_rows;
+        if self.ab_rows >= self.ab_sampling_rows {
+            self.finalize_ab_decision();
+        }
+    }
+
+    /// Compare the two measured per-row costs and lock the phase to
+    /// either "skip partial" or "keep partial". Fires the diagnostic
+    /// gauges before locking. If either measurement is 0 (extremely
+    /// small window or degenerate input) we default to keeping
+    /// partial.
+    fn finalize_ab_decision(&mut self) {
+        // Gauges were registered when we entered the partial probe;
+        // they should exist here (we reached the partial threshold
+        // before transitioning to `AbSampling`).
+        let ab_start = self
+            .elapsed_compute_at_ab_start
+            .expect("A/B start snapshot must be set when entering AbSampling");
+        let ab_elapsed = self
+            .elapsed_compute
+            .value()
+            .saturating_sub(ab_start);
+        let passthrough_ns_per_row = if self.ab_rows == 0 {
+            0
+        } else {
+            ab_elapsed / self.ab_rows
+        };
+        if let Some(g) = self.probe_passthrough_ns_per_row.as_ref() {
+            g.set(passthrough_ns_per_row);
+        }
+
+        let partial_ns_per_row = self
+            .probe_partial_ns_per_row
+            .as_ref()
+            .map(|g| g.value())
+            .unwrap_or(0);
+        let ratio = if self.input_rows == 0 {
+            0.0
+        } else {
+            self.num_groups as f64 / self.input_rows as f64
+        };
+        // skip <=> ratio > passthrough / partial. Fall back to "keep"
+        // if we don't have both measurements — otherwise a degenerate
+        // 0-ns partial would always tip the decision toward skip.
+        let should_skip = partial_ns_per_row > 0
+            && passthrough_ns_per_row > 0
+            && ratio * (partial_ns_per_row as f64) > passthrough_ns_per_row as f64;
+
+        if let Some(g) = self.probe_cost_decision_skip.as_ref() {
+            g.set(if should_skip { 1 } else { 0 });
+        }
+        if should_skip {
+            self.commit_skip();
+        } else {
+            self.phase = ProbePhase::Locked { should_skip: false };
+            self.is_locked = true;
+        }
+    }
+
+    /// Transition to the terminal `Locked { should_skip: true }`
+    /// state. Used by both Rule 1 (fixed-ratio short-circuit) and the
+    /// cost-aware path so the rest of the operator can rely on a
+    /// single `should_skip` flag.
+    fn commit_skip(&mut self) {
+        self.should_skip = true;
+        self.is_locked = true;
+        self.phase = ProbePhase::Locked { should_skip: true };
     }
 
     pub(super) fn should_skip(&self) -> bool {
         self.should_skip
     }
 
-    /// Record the number of rows that were output directly without aggregation
+    /// Record the number of rows that were output directly without
+    /// aggregation.
     pub(super) fn record_skipped(&mut self, batch: &RecordBatch) {
         self.skipped_aggregation_rows.add(batch.num_rows());
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::aggregates::grouped_hash_stream::GroupedHashAggregateStream;
-    use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
-    use crate::execution_plan::ExecutionPlan;
-    use crate::test::TestMemoryExec;
-
-    use std::sync::Arc;
-
-    use arrow::array::Int32Array;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::Result;
-    use datafusion_execution::TaskContext;
-    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-    use datafusion_functions_aggregate::count::count_udaf;
-    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
-    use datafusion_physical_expr::expressions::col;
-    use futures::StreamExt;
-
-    // Migrated to PartialHashAggregateStream coverage in hash_stream.rs;
-    // kept here for the legacy GroupedHashAggregateStream implementation.
-    #[tokio::test]
-    async fn test_skip_aggregation_probe_not_locked_until_skip() -> Result<()> {
-        // Test that the probe is not locked until we actually decide to skip.
-        // This allows us to continue evaluating the skip condition across multiple batches.
-        //
-        // Scenario:
-        // - Batch 1: Hits rows threshold but NOT ratio threshold (low cardinality) -> don't skip
-        // - Batch 2: Now hits ratio threshold (high cardinality) -> skip
-        //
-        // Without the fix, the probe would be locked after batch 1, preventing the skip
-        // decision from being made on batch 2.
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("group_col", DataType::Int32, false),
-            Field::new("value_col", DataType::Int32, false),
-        ]));
-
-        // Configure thresholds:
-        // - probe_rows_threshold: 100 rows
-        // - probe_ratio_threshold: 0.8 (80%)
-        let probe_rows_threshold = 100;
-        let probe_ratio_threshold = 0.8;
-
-        // Batch 1: 100 rows with only 10 unique groups
-        // Ratio: 10/100 = 0.1 (10%) < 0.8 -> should NOT skip
-        // This will hit the rows threshold but not the ratio threshold
-        let batch1_rows = 100;
-        let batch1_groups = 10;
-        let mut group_ids_batch1 = Vec::new();
-        for i in 0..batch1_rows {
-            group_ids_batch1.push((i % batch1_groups) as i32);
-        }
-        let values_batch1: Vec<i32> = vec![1; batch1_rows];
-
-        let batch1 = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(Int32Array::from(group_ids_batch1)),
-                Arc::new(Int32Array::from(values_batch1)),
-            ],
-        )?;
-
-        // Batch 2: 360 rows with 360 unique NEW groups (starting from group 10)
-        // After batch 2, total: 460 rows, 370 groups
-        // Ratio: 370/460 is about 0.804 (80.4%) > 0.8 -> SHOULD decide to skip
-        let batch2_rows = 360;
-        let batch2_groups = 360;
-        let group_ids_batch2: Vec<i32> = (batch1_groups..(batch1_groups + batch2_groups))
-            .map(|x| x as i32)
-            .collect();
-        let values_batch2: Vec<i32> = vec![1; batch2_rows];
-
-        let batch2 = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(Int32Array::from(group_ids_batch2)),
-                Arc::new(Int32Array::from(values_batch2)),
-            ],
-        )?;
-
-        // Batch 3: This batch should be skipped since we decided to skip after batch 2
-        // 100 rows with 100 unique groups (continuing from where batch 2 left off)
-        let batch3_rows = 100;
-        let batch3_groups = 100;
-        let batch3_start_group = batch1_groups + batch2_groups;
-        let group_ids_batch3: Vec<i32> = (batch3_start_group
-            ..(batch3_start_group + batch3_groups))
-            .map(|x| x as i32)
-            .collect();
-        let values_batch3: Vec<i32> = vec![1; batch3_rows];
-
-        let batch3 = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(Int32Array::from(group_ids_batch3)),
-                Arc::new(Int32Array::from(values_batch3)),
-            ],
-        )?;
-
-        let input_partitions = vec![vec![batch1, batch2, batch3]];
-
-        let runtime = RuntimeEnvBuilder::default().build_arc()?;
-        let mut task_ctx = TaskContext::default().with_runtime(runtime);
-
-        // Configure skip aggregation settings
-        let mut session_config = task_ctx.session_config().clone();
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
-            &datafusion_common::ScalarValue::UInt64(Some(probe_rows_threshold)),
-        );
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
-            &datafusion_common::ScalarValue::Float64(Some(probe_ratio_threshold)),
-        );
-        task_ctx = task_ctx.with_session_config(session_config);
-        let task_ctx = Arc::new(task_ctx);
-
-        // Create aggregate: COUNT(*) GROUP BY group_col
-        let group_expr = vec![(col("group_col", &schema)?, "group_col".to_string())];
-        let aggr_expr = vec![Arc::new(
-            AggregateExprBuilder::new(count_udaf(), vec![col("value_col", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias("count_value")
-                .build()?,
-        )];
-
-        let exec = TestMemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?;
-        let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
-
-        // Use Partial mode
-        let aggregate_exec = AggregateExec::try_new(
-            AggregateMode::Partial,
-            PhysicalGroupBy::new_single(group_expr),
-            aggr_expr,
-            vec![None],
-            exec,
-            Arc::clone(&schema),
-        )?;
-
-        // Execute and collect results
-        let mut stream =
-            GroupedHashAggregateStream::new(&aggregate_exec, &Arc::clone(&task_ctx), 0)?;
-        let mut results = Vec::new();
-
-        while let Some(result) = stream.next().await {
-            let batch = result?;
-            results.push(batch);
-        }
-
-        // Check that skip aggregation actually happened.
-        // The key metric is skipped_aggregation_rows.
-        let metrics = aggregate_exec.metrics().unwrap();
-        let skipped_rows = metrics
-            .sum_by_name("skipped_aggregation_rows")
-            .map(|m| m.as_usize())
-            .unwrap_or(0);
-
-        // We expect batch 3's rows to be skipped (100 rows)
-        assert_eq!(
-            skipped_rows, batch3_rows,
-            "Expected batch 3's rows ({batch3_rows}) to be skipped",
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_skip_aggregation_probe_equality_does_not_skip() {
-        // When num_groups / input_rows == probe_ratio_threshold, the `>` boundary
-        // means we must NOT skip: equality is not sufficient to trigger skip.
-        let threshold_ratio = 0.5_f64;
-        let threshold_rows = 10_usize;
-        let mut probe = SkipAggregationProbe::new(
-            threshold_rows,
-            threshold_ratio,
-            metrics::Count::new(),
-        );
-
-        // 10 rows, 5 groups: ratio = 5/10 = 0.5 exactly equals threshold
-        probe.update_state(10, 5);
-
-        assert!(
-            !probe.should_skip(),
-            "ratio == threshold should not trigger skip (boundary is exclusive)"
-        );
     }
 }
