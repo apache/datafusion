@@ -34,8 +34,8 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, Diagnostic, HashMap, Result, Span, TableReference,
-    internal_err, plan_err,
+    Column, DFSchema, DFSchemaRef, DataFusionError, Diagnostic, HashMap, Result, Span,
+    TableReference, internal_err, plan_datafusion_err, plan_err,
 };
 
 #[cfg(not(feature = "sql"))]
@@ -652,139 +652,85 @@ pub fn find_aggregate_exprs<'a>(exprs: impl IntoIterator<Item = &'a Expr>) -> Ve
     })
 }
 
-/// Either an aggregate function call or a window function call, the two kinds
-/// of expression whose nesting is restricted by [`check_aggregate_nesting`] and
-/// [`check_window_nesting`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FunctionCallKind {
-    Aggregate,
-    Window,
-}
-
-impl FunctionCallKind {
-    fn of(expr: &Expr) -> Option<Self> {
-        match expr {
-            Expr::AggregateFunction(_) => Some(Self::Aggregate),
-            Expr::WindowFunction(_) => Some(Self::Window),
-            _ => None,
-        }
-    }
-}
-
-/// Returns an error if any of `exprs` contains an aggregate or window function
-/// call nested inside an aggregate function call, such as `sum(sum(x))` or
-/// `sum(sum(x) OVER ())`.
+/// Returns an error if any of `exprs` nests aggregate or window function calls
+/// in a way that has no physical equivalent: an aggregate call may not contain
+/// another aggregate call (`sum(sum(x))`) or a window call
+/// (`sum(sum(x) OVER ())`), and a window call may not contain another window
+/// call (`sum(sum(x) OVER ()) OVER ()`). The reverse nesting, an aggregate used
+/// as the argument of a window call (`sum(sum(x)) OVER ()`), is legal: there the
+/// aggregate is evaluated by the `Aggregate` node and the window function is
+/// evaluated on top of its result.
 ///
-/// Such expressions are not valid SQL (PostgreSQL reports `aggregate function
-/// calls cannot be nested` and `aggregate function calls cannot contain window
-/// function calls`) and have no physical equivalent, so they are rejected while
-/// the logical plan is built rather than failing later with an error that does
-/// not point back at the original SQL.
+/// Such expressions are not valid SQL either, so they are rejected while the
+/// logical plan is built rather than failing later with an error that does not
+/// point back at the original SQL.
 ///
-/// The nested call is searched for in the arguments, `FILTER` and `ORDER BY` of
-/// each aggregate function call. Note that the reverse nesting, an aggregate
-/// used as the argument of a *window* function such as `sum(sum(x)) OVER ()`,
-/// is legal and accepted: there the inner aggregate is evaluated by the
-/// `Aggregate` node and the window function is evaluated on top of its result.
-///
-/// Callers do not need to invoke this directly: [`Aggregate::try_new`] enforces
-/// the invariant for every way of building an `Aggregate`.
+/// Callers do not need to invoke this directly: [`Aggregate::try_new`] and
+/// [`Window::try_new`] enforce the invariant for every way of building those
+/// nodes.
 ///
 /// [`Aggregate::try_new`]: crate::logical_plan::Aggregate::try_new
-pub(crate) fn check_aggregate_nesting<'a>(
-    exprs: impl IntoIterator<Item = &'a Expr>,
-) -> Result<()> {
-    check_nesting(
-        exprs,
-        FunctionCallKind::Aggregate,
-        &[FunctionCallKind::Aggregate, FunctionCallKind::Window],
-    )
-}
-
-/// Returns an error if any of `exprs` contains a window function call nested
-/// inside another window function call, such as `sum(sum(x) OVER ()) OVER ()`.
-///
-/// Such expressions are not valid SQL (PostgreSQL reports `window function
-/// calls cannot be nested`) and have no physical equivalent. The nested call is
-/// searched for in the arguments, `PARTITION BY`, `ORDER BY` and `FILTER` of
-/// each window function call.
-///
-/// Callers do not need to invoke this directly: [`Window::try_new`] enforces
-/// the invariant for every way of building a `Window`.
-///
 /// [`Window::try_new`]: crate::logical_plan::Window::try_new
-pub(crate) fn check_window_nesting<'a>(
+pub(crate) fn check_aggregate_and_window_nesting<'a>(
     exprs: impl IntoIterator<Item = &'a Expr>,
-) -> Result<()> {
-    check_nesting(exprs, FunctionCallKind::Window, &[FunctionCallKind::Window])
-}
-
-/// Returns an error if any expression of kind `outer_kind` in `exprs` has an
-/// expression of one of the `illegal_inner_kinds` anywhere below it.
-fn check_nesting<'a>(
-    exprs: impl IntoIterator<Item = &'a Expr>,
-    outer_kind: FunctionCallKind,
-    illegal_inner_kinds: &[FunctionCallKind],
 ) -> Result<()> {
     for expr in exprs {
         expr.apply(|outer| {
-            if FunctionCallKind::of(outer) != Some(outer_kind) {
+            if !matches!(outer, Expr::AggregateFunction(_) | Expr::WindowFunction(_)) {
                 return Ok(TreeNodeRecursion::Continue);
             }
 
-            let mut nested = None;
+            // Look for an illegally nested call in the arguments, `FILTER`,
+            // `ORDER BY` and `PARTITION BY` of this call
+            let mut err = None;
             outer.apply_children(|child| {
-                child.apply(|inner| match FunctionCallKind::of(inner) {
-                    Some(kind) if illegal_inner_kinds.contains(&kind) => {
-                        nested = Some((inner, kind));
+                child.apply(|inner| {
+                    err = illegal_nesting_err(outer, inner);
+                    if err.is_some() {
                         Ok(TreeNodeRecursion::Stop)
+                    } else {
+                        Ok(TreeNodeRecursion::Continue)
                     }
-                    _ => Ok(TreeNodeRecursion::Continue),
                 })
             })?;
 
-            match nested {
-                Some((inner, inner_kind)) => {
-                    nested_call_err(outer, outer_kind, inner, inner_kind)
-                }
-                // Nothing below `outer` can be an `outer_kind` expression, as
-                // that kind is always one of the illegal inner kinds
-                None => Ok(TreeNodeRecursion::Jump),
+            match err {
+                Some(err) => Err(err),
+                None => Ok(TreeNodeRecursion::Continue),
             }
         })?;
     }
     Ok(())
 }
 
-fn nested_call_err(
-    outer: &Expr,
-    outer_kind: FunctionCallKind,
-    inner: &Expr,
-    inner_kind: FunctionCallKind,
-) -> Result<TreeNodeRecursion> {
-    let (message, help) = match (outer_kind, inner_kind) {
-        (FunctionCallKind::Aggregate, FunctionCallKind::Aggregate) => (
+/// The planning error for a call to `inner` nested inside a call to `outer`, or
+/// `None` if that nesting is legal.
+fn illegal_nesting_err(outer: &Expr, inner: &Expr) -> Option<DataFusionError> {
+    // Messages follow PostgreSQL, which rejects the same three cases
+    let (message, help) = match (outer, inner) {
+        (Expr::AggregateFunction(_), Expr::AggregateFunction(_)) => (
             "Aggregate function calls cannot be nested",
             format!(
                 "Compute '{inner}' in an inner query and aggregate its result, or use a window function such as '{outer} OVER ()'"
             ),
         ),
-        (FunctionCallKind::Aggregate, FunctionCallKind::Window) => (
+        (Expr::AggregateFunction(_), Expr::WindowFunction(_)) => (
             "Aggregate function calls cannot contain window function calls",
             format!("Compute '{inner}' in an inner query and aggregate its result"),
         ),
-        (FunctionCallKind::Window, _) => (
+        (Expr::WindowFunction(_), Expr::WindowFunction(_)) => (
             "Window function calls cannot be nested",
             format!("Compute '{inner}' in an inner query and use its result here"),
         ),
+        // Anything else, including an aggregate inside a window call
+        _ => return None,
     };
 
-    let diagnostic =
-        Diagnostic::new_error(message, first_span(inner)).with_help(help, None);
-
-    plan_err!(
-        "{message}: '{inner}' is nested inside '{outer}'";
-        diagnostic = diagnostic
+    Some(
+        plan_datafusion_err!("{message}: '{inner}' is nested inside '{outer}'")
+            .with_diagnostic(
+                Diagnostic::new_error(message, first_span(inner)).with_help(help, None),
+            ),
     )
 }
 
@@ -2081,36 +2027,37 @@ mod tests {
     }
 
     #[test]
-    fn test_check_aggregate_nesting_ok() -> Result<()> {
+    fn test_check_aggregate_and_window_nesting_ok() -> Result<()> {
         use crate::test::function_stub::{count, sum};
 
-        // a plain aggregate, an aggregate wrapped in a scalar expression and a
-        // window function over an aggregate are all legal
         let exprs = [
+            // a plain aggregate, and one wrapped in a scalar expression
             sum(col("a")),
             count(col("a")) + lit(1),
+            // a window function over a column, and over an aggregate
+            sum_over(vec![col("a")]),
             sum_over(vec![sum(col("a"))]),
         ];
 
-        check_aggregate_nesting(exprs.iter())?;
+        check_aggregate_and_window_nesting(exprs.iter())?;
         Ok(())
     }
 
     #[test]
-    fn test_check_aggregate_nesting_err() {
+    fn test_check_aggregate_and_window_nesting_err() {
         use crate::test::function_stub::{count, sum};
         use insta::assert_snapshot;
 
-        // directly nested
-        let err = check_aggregate_nesting([&sum(sum(col("a")))]).unwrap_err();
+        // an aggregate directly inside an aggregate
+        let err = check_aggregate_and_window_nesting([&sum(sum(col("a")))]).unwrap_err();
         assert_snapshot!(
             err.strip_backtrace(),
             @"Error during planning: Aggregate function calls cannot be nested: 'sum(a)' is nested inside 'sum(sum(a))'"
         );
 
         // nested below another expression in the arguments
-        let err =
-            check_aggregate_nesting([&sum(col("a") + count(col("b")))]).unwrap_err();
+        let err = check_aggregate_and_window_nesting([&sum(col("a") + count(col("b")))])
+            .unwrap_err();
         assert_snapshot!(
             err.strip_backtrace(),
             @"Error during planning: Aggregate function calls cannot be nested: 'COUNT(b)' is nested inside 'sum(a + COUNT(b))'"
@@ -2121,7 +2068,7 @@ mod tests {
             .filter(sum(col("b")).gt(lit(0)))
             .build()
             .unwrap();
-        let err = check_aggregate_nesting([&filtered]).unwrap_err();
+        let err = check_aggregate_and_window_nesting([&filtered]).unwrap_err();
         assert_snapshot!(
             err.strip_backtrace(),
             @"Error during planning: Aggregate function calls cannot be nested: 'sum(b)' is nested inside 'sum(a) FILTER (WHERE sum(b) > Int32(0))'"
@@ -2132,41 +2079,25 @@ mod tests {
             .order_by(vec![Sort::new(sum(col("b")), true, false)])
             .build()
             .unwrap();
-        let err = check_aggregate_nesting([&ordered]).unwrap_err();
+        let err = check_aggregate_and_window_nesting([&ordered]).unwrap_err();
         assert_snapshot!(
             err.strip_backtrace(),
             @"Error during planning: Aggregate function calls cannot be nested: 'sum(b)' is nested inside 'sum(a) ORDER BY [sum(b) ASC NULLS LAST]'"
         );
 
-        // a window function nested inside an aggregate
-        let err = check_aggregate_nesting([&sum(sum_over(vec![col("a")]))]).unwrap_err();
+        // a window function inside an aggregate
+        let err = check_aggregate_and_window_nesting([&sum(sum_over(vec![col("a")]))])
+            .unwrap_err();
         assert_snapshot!(
             err.strip_backtrace(),
             @"Error during planning: Aggregate function calls cannot contain window function calls: 'sum(a) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is nested inside 'sum(sum(a) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)'"
         );
-    }
 
-    #[test]
-    fn test_check_window_nesting_ok() -> Result<()> {
-        use crate::test::function_stub::sum;
-
-        // a window function over a column, and a window function over the
-        // result of an aggregate, are both legal
-        let exprs = [
-            sum_over(vec![col("a")]),
-            sum_over(vec![sum(col("a"))]),
-            sum(col("a")),
-        ];
-
-        check_window_nesting(exprs.iter())?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_check_window_nesting_err() {
-        use insta::assert_snapshot;
-
-        let err = check_window_nesting([&sum_over(vec![sum_over(vec![col("a")])])])
+        // a window function inside a window function
+        let err =
+            check_aggregate_and_window_nesting([&sum_over(vec![sum_over(vec![col(
+                "a",
+            )])])])
             .unwrap_err();
         assert_snapshot!(
             err.strip_backtrace(),
