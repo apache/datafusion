@@ -99,5 +99,9 @@ harness = false
 name = "sliding_min_max"
 harness = false
 
+[[bench]]
+name = "max_latency"
+harness = false
+
 [features]
 force_hash_collisions = ["datafusion-common/force_hash_collisions"]
