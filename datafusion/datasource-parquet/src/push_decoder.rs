@@ -125,7 +125,7 @@ pub(crate) enum FetchState {
     /// window. See [`ParquetOptions::bounded_streaming`].
     ///
     /// [`ParquetOptions::bounded_streaming`]: datafusion_common::config::ParquetOptions::bounded_streaming
-    Adaptive(AdaptiveFetcher<Box<dyn AsyncFileReader>>),
+    Adaptive(Box<AdaptiveFetcher<Box<dyn AsyncFileReader>>>),
 }
 
 impl FetchState {
@@ -133,14 +133,12 @@ impl FetchState {
     /// is available to drive streamed request bodies; without one, fall back
     /// to the plain path, which behaves identically to the option being off).
     pub(crate) fn new(reader: Box<dyn AsyncFileReader>, bounded_streaming: bool) -> Self {
-        if bounded_streaming {
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                return Self::Adaptive(AdaptiveFetcher::new(
-                    BoundedStreamingOptions::default(),
-                    handle,
-                    reader,
-                ));
-            }
+        if bounded_streaming && let Ok(handle) = tokio::runtime::Handle::try_current() {
+            return Self::Adaptive(Box::new(AdaptiveFetcher::new(
+                BoundedStreamingOptions::default(),
+                handle,
+                reader,
+            )));
         }
         Self::Plain(reader)
     }
