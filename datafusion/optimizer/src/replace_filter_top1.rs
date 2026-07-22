@@ -62,8 +62,7 @@ use datafusion_expr::{ExprFunctionExt, LogicalPlanBuilder, lit};
 /// - the window function must be `row_number`
 /// - filter predicate must be "top-1" (rn = 1, <= 1, < 2)
 /// - window has a `PARTITION BY` clause
-/// - gated behind the `optimizer.enable_row_number_to_aggregate` config option
-///   (off by default).
+/// - gated behind the `optimizer.enable_row_number_to_aggregate` config option (off by default)
 #[derive(Default, Debug)]
 pub struct ReplaceFilterTop1 {}
 
@@ -88,118 +87,110 @@ impl OptimizerRule for ReplaceFilterTop1 {
             return Ok(Transformed::no(plan));
         }
 
-        match plan {
-            LogicalPlan::Filter(Filter {
-                ref predicate,
-                ref input,
-                ..
-            }) => {
-                let Some(WindowTop1 {
-                    order_by,
-                    partition_by,
-                    rn_col,
-                    input_cols,
-                    child,
-                    projection,
-                }) = has_valid_window_input(input)
-                else {
-                    return Ok(Transformed::no(plan));
-                };
+        let LogicalPlan::Filter(Filter {
+            ref predicate,
+            ref input,
+            ..
+        }) = plan
+        else {
+            return Ok(Transformed::no(plan));
+        };
 
-                // The filter must reference the row_number output as a "top-1"
-                // predicate. When a passthrough projection sits between the
-                // filter and the window, the filter references the projection's
-                // *output* name for that column, so resolve it accordingly.
-                let rn_ref_name = match projection {
-                    None => rn_col.name.clone(),
-                    Some(p) => match rn_passthrough_name(p, &rn_col) {
-                        Some(name) => name,
-                        None => return Ok(Transformed::no(plan)),
-                    },
-                };
-                if !has_valid_predicate(predicate, &rn_ref_name) {
-                    return Ok(Transformed::no(plan));
-                }
+        let Some(WindowTop1 {
+            order_by,
+            partition_by,
+            rn_col,
+            input_cols,
+            child,
+            projection,
+        }) = validate_window_input(input)
+        else {
+            return Ok(Transformed::no(plan));
+        };
 
-                let is_partition = |c: &Column| {
-                    partition_by.iter().any(|e| matches!(e, Expr::Column(p) if p.name == c.name && p.relation == c.relation))
-                };
-
-                // Aggregate over the window's input: group by the partition
-                // keys and take `first_value(col ORDER BY ...)` for every other
-                // input column, aliased back to that column's qualifier+name.
-                // This reproduces every input column by name, so any expression
-                // defined over the window output (partition keys pass through
-                // group-by; the rest via first_value of the top-1 row) can be
-                // re-applied unchanged on top of the aggregate.
-                let first_value =
-                    config.function_registry().unwrap().udaf("first_value")?;
-                let aggr_expr = input_cols
-                    .iter()
-                    .filter(|c| !is_partition(c))
-                    .map(|c| {
-                        first_value
-                            .call(vec![Expr::Column(c.clone())])
-                            .order_by(order_by.to_vec())
-                            .build()
-                            .map(|e| {
-                                e.alias_qualified(c.relation.clone(), c.name.clone())
-                            })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                let aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
-                    Arc::clone(child),
-                    partition_by.to_vec(),
-                    aggr_expr,
-                )?);
-
-                // Restore the Filter's exact output schema on top of the
-                // aggregate. Every surviving row has `rn = 1`, so references to
-                // the row_number column fold to the literal 1.
-                let proj_exprs = match projection {
-                    // Direct `Filter -> Window`: rebuild the window's output
-                    // (input columns + rn) as an identity projection.
-                    None => input
-                        .schema()
-                        .iter()
-                        .map(|(qualifier, field)| {
-                            if qualifier.is_none() && field.name() == &rn_col.name {
-                                lit(1u64).alias(field.name())
-                            } else {
-                                Expr::Column(Column::new(
-                                    qualifier.cloned(),
-                                    field.name(),
-                                ))
-                            }
-                        })
-                        .collect::<Vec<_>>(),
-                    // Passthrough projection: reuse its expressions verbatim,
-                    // swapping the sole rn passthrough for `1` (aliased to the
-                    // projection's output name so the schema is preserved).
-                    Some(p) => p
-                        .expr
-                        .iter()
-                        .zip(p.schema.iter())
-                        .map(|(expr, (qualifier, field))| {
-                            if matches!(strip_alias(expr), Expr::Column(c) if *c == rn_col)
-                            {
-                                lit(1u64)
-                                    .alias_qualified(qualifier.cloned(), field.name())
-                            } else {
-                                expr.clone()
-                            }
-                        })
-                        .collect::<Vec<_>>(),
-                };
-
-                let new_plan = LogicalPlanBuilder::from(aggregate)
-                    .project(proj_exprs)?
-                    .build()?;
-                Ok(Transformed::yes(new_plan))
-            }
-            _ => Ok(Transformed::no(plan)),
+        // The filter must reference the row_number output as a "top-1"
+        // predicate. When a passthrough projection sits between the
+        // filter and the window, the filter references the projection's
+        // *output* name for that column, resolve accordingly
+        let rn_ref_name = match projection {
+            None => rn_col.name.clone(),
+            Some(p) => match rn_passthrough_name(p, &rn_col) {
+                Some(name) => name,
+                None => return Ok(Transformed::no(plan)),
+            },
+        };
+        if !has_valid_predicate(predicate, &rn_ref_name) {
+            return Ok(Transformed::no(plan));
         }
+
+        let is_partition = |c: &Column| {
+            partition_by.iter().any(|e| matches!(e, Expr::Column(p) if p.name == c.name && p.relation == c.relation))
+        };
+
+        // Aggregate over the window's input: group by the partition
+        // keys and take `first_value(col ORDER BY ...)` for every other
+        // input column, aliased back to that column's qualifier+name.
+        // This reproduces every input column by name, so any expression
+        // defined over the window output (partition keys pass through
+        // group-by; the rest via first_value of the top-1 row) can be
+        // re-applied unchanged on top of the aggregate.
+        let first_value = config.function_registry().unwrap().udaf("first_value")?;
+        let aggr_expr = input_cols
+            .iter()
+            .filter(|c| !is_partition(c))
+            .map(|c| {
+                first_value
+                    .call(vec![Expr::Column(c.clone())])
+                    .order_by(order_by.to_vec())
+                    .build()
+                    .map(|e| e.alias_qualified(c.relation.clone(), c.name.clone()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
+            Arc::clone(child),
+            partition_by.to_vec(),
+            aggr_expr,
+        )?);
+
+        // Restore the Filter's exact output schema on top of the
+        // aggregate. Every surviving row has `rn = 1`, so references to
+        // the row_number column fold to the literal 1.
+        let proj_exprs = match projection {
+            // Direct `Filter -> Window`: rebuild the window's output
+            // (input columns + rn) as an identity projection.
+            None => input
+                .schema()
+                .iter()
+                .map(|(qualifier, field)| {
+                    if qualifier.is_none() && field.name() == &rn_col.name {
+                        lit(1u64).alias(field.name())
+                    } else {
+                        Expr::Column(Column::new(qualifier.cloned(), field.name()))
+                    }
+                })
+                .collect::<Vec<_>>(),
+            // Passthrough projection: reuse its expressions verbatim,
+            // swapping the sole rn passthrough for `1` (aliased to the
+            // projection's output name so the schema is preserved).
+            Some(p) => p
+                .expr
+                .iter()
+                .zip(p.schema.iter())
+                .map(|(expr, (qualifier, field))| {
+                    if matches!(strip_alias(expr), Expr::Column(c) if *c == rn_col) {
+                        lit(1u64).alias_qualified(qualifier.cloned(), field.name())
+                    } else {
+                        expr.clone()
+                    }
+                })
+                .collect::<Vec<_>>(),
+        };
+
+        let new_plan = LogicalPlanBuilder::from(aggregate)
+            .project(proj_exprs)?
+            .build()?;
+        Ok(Transformed::yes(new_plan))
     }
 
     fn name(&self) -> &str {
@@ -211,6 +202,7 @@ impl OptimizerRule for ReplaceFilterTop1 {
     }
 }
 
+/// Validating that the filter predicate is `rn_name` == 1 (or equivalent)
 fn has_valid_predicate(predicate: &Expr, rn_name: &str) -> bool {
     let Expr::BinaryExpr(BinaryExpr { left, right, op }) = predicate else {
         return false;
@@ -260,7 +252,7 @@ struct WindowTop1<'a> {
 
 /// Recognize either `Filter -> Window` or `Filter -> Projection -> Window`,
 /// where the window is a single `row_number()` with a non-empty `PARTITION BY`.
-fn has_valid_window_input(input: &Arc<LogicalPlan>) -> Option<WindowTop1<'_>> {
+fn validate_window_input(input: &Arc<LogicalPlan>) -> Option<WindowTop1<'_>> {
     let (projection, window) = match &**input {
         LogicalPlan::Window(w) => (None, w),
         LogicalPlan::Projection(p) => match &*p.input {
@@ -275,31 +267,30 @@ fn has_valid_window_input(input: &Arc<LogicalPlan>) -> Option<WindowTop1<'_>> {
     }
 
     let window_expr = window.window_expr.first()?;
-    match window_expr {
-        Expr::WindowFunction(e) => {
-            if e.params.partition_by.is_empty() {
-                return None;
-            }
+    let Expr::WindowFunction(window_function) = window_expr else {
+        return None;
+    };
 
-            if e.fun.name() != "row_number" {
-                return None;
-            }
-
-            // The row_number output is the single window expression, appended
-            // as the last column of the window's output schema.
-            let rn_col = window.schema.columns().last()?.clone();
-
-            Some(WindowTop1 {
-                order_by: &e.params.order_by,
-                partition_by: &e.params.partition_by,
-                rn_col,
-                input_cols: window.input.schema().columns(),
-                child: &window.input,
-                projection,
-            })
-        }
-        _ => None,
+    if window_function.params.partition_by.is_empty() {
+        return None;
     }
+
+    if window_function.fun.name() != "row_number" {
+        return None;
+    }
+
+    // The row_number output is the single window expression, appended
+    // as the last column of the window's output schema.
+    let rn_col = window.schema.columns().last()?.clone();
+
+    Some(WindowTop1 {
+        order_by: &window_function.params.order_by,
+        partition_by: &window_function.params.partition_by,
+        rn_col,
+        input_cols: window.input.schema().columns(),
+        child: &window.input,
+        projection,
+    })
 }
 
 /// If `projection` is a valid passthrough for the rewrite, return the output
