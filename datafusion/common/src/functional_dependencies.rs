@@ -467,13 +467,22 @@ pub fn aggregate_functional_dependencies(
             // Otherwise, existing mode is preserved:
             *mode
         };
+        // If the determinant covers *every* GROUP BY expression, it is a
+        // non-nullable key of the output even when it was only a nullable key
+        // of the input: grouping collapses  multiple NULL rows from a nullable
+        // key (e.g. a SQL `UNIQUE` constraint).
+        //
+        // However, if determinant covers only some grouping columns, rows differing
+        // in the remaining GROUP BY expressions can still repeat a NULL
+        // determinant, so the input nullability is preserved.
+        let nullable = *nullable && new_source_indices.len() < group_by_expr_names.len();
         // All of the composite indices occur in the GROUP BY expression:
         if new_source_indices.len() == source_indices.len() {
             aggregate_func_dependencies.push(
                 FunctionalDependence::new(
                     new_source_indices,
                     target_indices.clone(),
-                    *nullable,
+                    nullable,
                 )
                 .with_mode(mode),
             );

@@ -109,18 +109,18 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                     let any_source_field_nullable = source_indices
                         .iter()
                         .any(|&idx| schema.field(idx).is_nullable());
+                    // The grouping columns must not contain NULLs because a
+                    // nullable dependency allows multiple rows with NULL in
+                    // the same column (because NULL != NULL). However,
+                    // DISTINCT treats NULLs as equal and collapses them, so
+                    // we can only remove the DISTINCT if we know that no
+                    // source column can actually be NULL.
                     let nullable = dep.nullable && any_source_field_nullable;
                     if !nullable
                         // The dependency mode must be `Single` because a `Multi`
                         // dependence means equal rows may occur multiple times
                         && dep.mode == Dependency::Single
                         && source_indices.len() >= field_count
-                        // The grouping columns must not contain NULLs because a
-                        // nullable dependency allows multiple rows with NULL in
-                        // the same column (because NULL != NULL). However,
-                        // DISTINCT treats NULLs as equal and collapses them, so
-                        // we can only remove the DISTINCT if we know that no
-                        // source column can actually be NULL.
                         && source_indices[..field_count]
                             .iter()
                             .enumerate()
