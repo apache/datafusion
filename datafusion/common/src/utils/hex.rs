@@ -23,6 +23,9 @@
 //! integer, trimming leading zeros. All four take a [`HexCase`] to choose
 //! between lowercase and uppercase digits.
 
+use crate::Result;
+use crate::error::_internal_err;
+
 /// Case of the emitted hex digits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HexCase {
@@ -83,17 +86,12 @@ pub fn encode_bytes_into(bytes: &[u8], case: HexCase, out: &mut Vec<u8>) {
 
 /// Writes the hex encoding of `bytes` into `out`.
 ///
-/// `out` must be exactly `2 * bytes.len()` bytes long. This is for callers
-/// that already own a pre-sized buffer (for example a slice of a larger,
-/// pre-allocated output array) and want to write directly into it rather
-/// than appending to a `Vec`.
+/// This is for callers that already own a pre-sized buffer (for example a
+/// slice of a larger, pre-allocated output array) and want to write directly
+/// into it rather than appending to a `Vec`.
 ///
-/// The length requirement is only checked in debug builds, via
-/// `debug_assert_eq!`. In release builds a mismatched `out` length is not
-/// an error: only `min(bytes.len(), out.len() / 2)` bytes are encoded, so
-/// an `out` that is too short silently drops the remaining input, and an
-/// `out` that is too long is left with unwritten, stale bytes at the end.
-/// Callers are responsible for sizing `out` correctly.
+/// Returns an internal error if `out` is not exactly `2 * bytes.len()` bytes
+/// long, rather than silently encoding only part of the input.
 ///
 /// # Example
 ///
@@ -101,16 +99,24 @@ pub fn encode_bytes_into(bytes: &[u8], case: HexCase, out: &mut Vec<u8>) {
 /// use datafusion_common::utils::hex::{HexCase, encode_bytes_to_slice};
 ///
 /// let mut out = [0u8; 8];
-/// encode_bytes_to_slice(&[0xde, 0xad, 0xbe, 0xef], HexCase::Lower, &mut out);
+/// encode_bytes_to_slice(&[0xde, 0xad, 0xbe, 0xef], HexCase::Lower, &mut out)?;
 /// assert_eq!(&out, b"deadbeef");
+/// # Ok::<(), datafusion_common::DataFusionError>(())
 /// ```
 #[inline(always)]
-pub fn encode_bytes_to_slice(bytes: &[u8], case: HexCase, out: &mut [u8]) {
-    debug_assert_eq!(out.len(), bytes.len() * 2);
+pub fn encode_bytes_to_slice(bytes: &[u8], case: HexCase, out: &mut [u8]) -> Result<()> {
+    let expected = bytes.len() * 2;
+    if out.len() != expected {
+        return _internal_err!(
+            "hex output buffer is {} bytes, expected {expected}",
+            out.len()
+        );
+    }
     let lookup = case.lookup();
     for (&b, chunk) in bytes.iter().zip(out.chunks_exact_mut(2)) {
         chunk.copy_from_slice(&lookup[b as usize]);
     }
+    Ok(())
 }
 
 /// Returns the hex encoding of `bytes` as an owned `String`.
@@ -162,10 +168,7 @@ pub fn encode_u64(v: u64, case: HexCase, buf: &mut [u8; 16]) -> &[u8] {
 /// first digit.
 ///
 /// Split out from [`encode_u64`] so the mutable borrow of `buf` ends before the
-/// returned slice reborrows it. The `v == 0` case returns early; if that early
-/// return instead reborrowed `buf` as `&buf[..]` inline in [`encode_u64`], the
-/// borrow checker would extend that reborrow over the rest of the function
-/// body, conflicting with the mutable writes on the non-zero path below.
+/// returned slice reborrows it.
 #[inline(always)]
 fn write_digits(v: u64, case: HexCase, buf: &mut [u8; 16]) -> usize {
     if v == 0 {
@@ -300,30 +303,55 @@ mod tests {
     }
 
     #[test]
-    fn encode_bytes_to_slice_empty() {
+    fn encode_bytes_to_slice_empty() -> Result<()> {
         let mut out: [u8; 0] = [];
-        encode_bytes_to_slice(&[], HexCase::Lower, &mut out);
+        encode_bytes_to_slice(&[], HexCase::Lower, &mut out)?;
         assert_eq!(out, [] as [u8; 0]);
+        Ok(())
     }
 
     #[test]
-    fn encode_bytes_to_slice_examples() {
+    fn encode_bytes_to_slice_examples() -> Result<()> {
         let mut out = [0u8; 8];
-        encode_bytes_to_slice(&[0xde, 0xad, 0xbe, 0xef], HexCase::Lower, &mut out);
+        encode_bytes_to_slice(&[0xde, 0xad, 0xbe, 0xef], HexCase::Lower, &mut out)?;
         assert_eq!(&out, b"deadbeef");
 
         let mut out = [0u8; 8];
-        encode_bytes_to_slice(&[0xde, 0xad, 0xbe, 0xef], HexCase::Upper, &mut out);
+        encode_bytes_to_slice(&[0xde, 0xad, 0xbe, 0xef], HexCase::Upper, &mut out)?;
         assert_eq!(&out, b"DEADBEEF");
+        Ok(())
     }
 
     #[test]
-    fn encode_bytes_to_slice_agrees_with_encode_bytes() {
+    fn encode_bytes_to_slice_agrees_with_encode_bytes() -> Result<()> {
         let bytes: Vec<u8> = (0..=255u8).collect();
         for case in [HexCase::Lower, HexCase::Upper] {
             let mut out = vec![0u8; bytes.len() * 2];
-            encode_bytes_to_slice(&bytes, case, &mut out);
+            encode_bytes_to_slice(&bytes, case, &mut out)?;
             assert_eq!(String::from_utf8(out).unwrap(), encode_bytes(&bytes, case));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn encode_bytes_to_slice_rejects_wrong_length() {
+        // Too short: the old `debug_assert` let release builds silently drop
+        // the remaining input.
+        let mut short = [0u8; 6];
+        let err =
+            encode_bytes_to_slice(&[0xde, 0xad, 0xbe, 0xef], HexCase::Lower, &mut short)
+                .unwrap_err();
+        assert!(
+            err.message()
+                .contains("hex output buffer is 6 bytes, expected 8"),
+            "unexpected message: {err}"
+        );
+
+        // Too long: would have left stale bytes at the tail.
+        let mut long = [0u8; 10];
+        assert!(
+            encode_bytes_to_slice(&[0xde, 0xad, 0xbe, 0xef], HexCase::Lower, &mut long)
+                .is_err()
+        );
     }
 }

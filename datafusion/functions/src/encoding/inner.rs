@@ -479,7 +479,7 @@ where
     for v in array.iter() {
         if let Some(v) = v {
             let out_len = v.len() * 2;
-            encode_bytes_to_slice(v, HexCase::Lower, &mut values[pos..pos + out_len]);
+            encode_bytes_to_slice(v, HexCase::Lower, &mut values[pos..pos + out_len])?;
             pos += out_len;
         }
         offsets.push(OutputOffset::usize_as(pos));
