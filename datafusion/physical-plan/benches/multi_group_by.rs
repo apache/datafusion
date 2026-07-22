@@ -559,20 +559,22 @@ fn populate_group_values(
     gv
 }
 
-/// The two `emit(EmitTo::First(n))` split-branch cases, keyed on `n` vs the
+/// The `emit(EmitTo::First(n))` split-branch cases, keyed on `n` vs the
 /// accumulated group count `g`. `take_n_offsets`
 /// allocates for whichever side is smaller:
 ///
-/// * `shift_larger`: emit a smaller prefix — `n = g / 4`, shift remaining in place.
-/// * `shift_mid`: emit the half-sized prefix in existing buffer — `n = g / 2`,
-///   allocate and shift the remaining half.
-/// * `shift_smaller`: emit a larger prefix in existing buffer — `n = g - g / 4`,
+/// * `n = g / 4`: emit the smaller prefix, shift remaining in place.
+/// * `n = g / 2`: emit the half-sized prefix, shift remaining in place.
+/// * `n = g / 2 + 1`: emit the just-over-half-sized prefix in existing buffer,
 ///   allocate and shift remaining.
-fn emit_first_cases(num_groups: usize) -> [(&'static str, usize); 3] {
+/// * `n = g - g / 4`: emit the larger prefix in existing buffer,
+///   allocate and shift remaining.
+fn emit_first_cases(num_groups: usize) -> [usize; 4] {
     [
-        ("shift_larger", num_groups / 4),
-        ("shift_midsize", num_groups / 2),
-        ("shift_smaller", num_groups - num_groups / 4),
+        num_groups / 4,
+        num_groups / 2,
+        num_groups / 2 + 1,
+        num_groups - num_groups / 4,
     ]
 }
 
@@ -588,9 +590,9 @@ fn bench_emit_first_small(c: &mut Criterion) {
         let batches =
             generate_bytes_batches(width, num_groups, num_groups, DEFAULT_BATCH_SIZE);
 
-        for (branch, n) in emit_first_cases(num_groups) {
+        for n in emit_first_cases(num_groups) {
             group.bench_with_input(
-                BenchmarkId::new(branch, format!("{}_grp_{num_groups}", width.label())),
+                BenchmarkId::new(format!("grp_{num_groups}_emit_{n}",), width.label()),
                 &batches,
                 |b, batches| {
                     b.iter_batched_ref(
@@ -619,9 +621,9 @@ fn bench_emit_first_large(c: &mut Criterion) {
         let batches =
             generate_bytes_batches(width, num_groups, 1_000_000, DEFAULT_BATCH_SIZE);
 
-        for (branch, n) in emit_first_cases(num_groups) {
+        for n in emit_first_cases(num_groups) {
             group.bench_with_input(
-                BenchmarkId::new(branch, format!("{}_grp_{num_groups}", width.label())),
+                BenchmarkId::new(format!("grp_{num_groups}_emit_{n}",), width.label()),
                 &batches,
                 |b, batches| {
                     b.iter_batched_ref(

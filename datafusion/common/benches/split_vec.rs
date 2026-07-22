@@ -43,21 +43,24 @@ impl OffsetWidth {
     }
 }
 
-/// The three split-branch cases, keyed on `n` vs the number of groups `g`.
+/// The split-branch cases, keyed on `n` vs the number of groups `g`.
 /// `take_n_offsets` allocates for whichever side is smaller (predicate
 /// `n < offsets.len() - n`, where `offsets.len() == g + 1`):
 ///
-/// * `shift_larger` (`n = g/4`): copy the smaller prefix out, shift the larger
+/// * `n = g/4`: copy the smaller prefix out, shift the larger
 ///   remainder in place.
-/// * `shift_midsize` (`n = g/2`): the balanced point; also the in-place-shift
-///   branch, but with source/dest halves disjoint.
-/// * `shift_smaller` (`n = g - g/4`): the other branch — allocate the smaller
+/// * `n = g/2`: the half-point; also the in-place-shift
+///   branch.
+/// * `n = g/2 + 1`: one item beyond the half-point,
+///   to see if it works better on the other side of the fence.
+/// * `n = g - g/4`: the other branch — allocate the smaller
 ///   remainder, return the larger prefix via `mem::replace`.
-fn cases(num_groups: usize) -> [(&'static str, usize); 3] {
+fn cases(num_groups: usize) -> [usize; 4] {
     [
-        ("shift_larger", num_groups / 4),
-        ("shift_midsize", num_groups / 2),
-        ("shift_smaller", num_groups - num_groups / 4),
+        num_groups / 4,
+        num_groups / 2,
+        num_groups / 2 + 1,
+        num_groups - num_groups / 4,
     ]
 }
 
@@ -78,9 +81,9 @@ fn bench_take_n_offsets(
     group.sample_size(sample_size);
 
     for width in [OffsetWidth::I32, OffsetWidth::I64] {
-        for (branch, n) in cases(num_groups) {
+        for n in cases(num_groups) {
             let id =
-                BenchmarkId::new(branch, format!("{}_grp_{num_groups}", width.label()));
+                BenchmarkId::new(format!("grp_{num_groups}_take_{n}"), width.label());
             group.bench_function(id, |b| {
                 // `take_n_offsets` mutates its input, so rebuild a fresh offset
                 // vector per iteration in the untimed setup. Monomorphize per
