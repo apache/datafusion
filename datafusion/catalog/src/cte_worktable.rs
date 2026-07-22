@@ -36,14 +36,16 @@ use crate::{ScanArgs, ScanResult, Session, TableProvider};
 pub struct CteWorkTable {
     /// The name of the CTE work table
     name: String,
-    /// This schema must be shared across both the static and recursive terms of a recursive query
+    /// Schema exposed by recursive self-references while planning the recursive term.
+    ///
+    /// This is a conservative work-table schema, not the final recursive query output
+    /// schema. For example, the SQL planner may mark fields nullable here so recursive
+    /// references do not inherit unsound anchor-term nullability assumptions.
     table_schema: SchemaRef,
 }
 
 impl CteWorkTable {
-    /// construct a new CteWorkTable with the given name and schema
-    /// This schema must match the schema of the recursive term of the query
-    /// Since the scan method will contain an physical plan that assumes this schema
+    /// Construct a new CteWorkTable with the given name and self-reference schema.
     pub fn new(name: &str, table_schema: SchemaRef) -> Self {
         Self {
             name: name.to_owned(),
@@ -56,7 +58,7 @@ impl CteWorkTable {
         &self.name
     }
 
-    /// The schema of the recursive term of the query
+    /// The schema exposed by scans of the recursive self-reference.
     pub fn schema(&self) -> SchemaRef {
         Arc::clone(&self.table_schema)
     }

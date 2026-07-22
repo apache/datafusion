@@ -18,14 +18,15 @@
 use std::sync::Arc;
 
 use arrow::array::{Int32Array, RecordBatch, StringArray};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use async_trait::async_trait;
 use datafusion::prelude::*;
 use datafusion_common::test_util::format_batches;
 use datafusion_common::{Result, assert_batches_eq};
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 
 fn register_table_and_udf() -> Result<SessionContext> {
@@ -109,6 +110,110 @@ async fn test_async_udf_metrics() -> Result<()> {
         });
 
     assert!(!async_func_exec_without_metrics);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_async_udf_preserves_result_field_metadata() -> Result<()> {
+    #[derive(Debug, PartialEq, Eq, Hash, Clone)]
+    struct AsyncExtensionUDF {
+        signature: Signature,
+    }
+
+    impl Default for AsyncExtensionUDF {
+        fn default() -> Self {
+            Self {
+                signature: Signature::exact(vec![DataType::Utf8], Volatility::Volatile),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for AsyncExtensionUDF {
+        fn name(&self) -> &str {
+            "async_extension"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Utf8)
+        }
+
+        fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+            Ok(args.arg_fields[0]
+                .as_ref()
+                .clone()
+                .with_name(self.name())
+                .with_metadata(std::collections::HashMap::from([(
+                    "ARROW:extension:name".to_string(),
+                    "test.async.extension".to_string(),
+                )]))
+                .into())
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            panic!("Call invoke_async_with_args instead")
+        }
+    }
+
+    #[async_trait]
+    impl AsyncScalarUDFImpl for AsyncExtensionUDF {
+        async fn invoke_async_with_args(
+            &self,
+            args: ScalarFunctionArgs,
+        ) -> Result<ColumnarValue> {
+            Ok(args.args[0].clone())
+        }
+    }
+
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("value", DataType::Utf8, false),
+        ])),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec!["one", "two", "three"])),
+        ],
+    )?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("test_table", batch)?;
+    ctx.register_udf(
+        AsyncScalarUDF::new(Arc::new(AsyncExtensionUDF::default())).into_scalar_udf(),
+    );
+
+    let result = ctx
+        .sql("SELECT async_extension(value) AS result FROM test_table")
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(result[0].schema().field(0).name(), "result");
+    assert_eq!(
+        result[0]
+            .schema()
+            .field(0)
+            .metadata()
+            .get("ARROW:extension:name"),
+        Some(&"test.async.extension".to_string())
+    );
+
+    assert_batches_eq!(
+        &[
+            "+--------+",
+            "| result |",
+            "+--------+",
+            "| one    |",
+            "| two    |",
+            "| three  |",
+            "+--------+",
+        ],
+        &result
+    );
 
     Ok(())
 }

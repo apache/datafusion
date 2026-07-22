@@ -41,7 +41,7 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 
 - **2026-04-04** [Video: Generalized Consensus & Native Top-K Joins in ParadeDB](https://www.youtube.com/watch?v=TeFsBVIYBis)
 
-- **2026-03-31** [Blog: Writing Custom Table Providers in Apache DataFusion](https://datafusion.apache.org/blog/2026/03/31/custom-table-providers/)
+- **2026-03-31** [Blog: Writing Custom Table Providers in Apache DataFusion](https://datafusion.apache.org/blog/2026/03/31/writing-table-providers/)
 
 - **2026-03-24** [Podcast: The Data Fusion Secret & Why Custom Query Engines Fail with Nikita Lapkov](https://www.youtube.com/watch?v=HkYF2So6nHQ)
 
@@ -202,7 +202,9 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 
 # 🌎 Community Events
 
+- **2026-09-03** [Boston Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/21541) - [RSVP](https://luma.com/yexgqifv)
 - **2026-07-22** [Denver Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/18428) - [RSVP](https://luma.com/jsu6faie)
+- **2026-06-28** [Shanghai Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/16334) - [RSVP](https://luma.com/7xrhm9rx), [LinkedIn](https://www.linkedin.com/posts/ruihang-xia_we-are-going-to-have-a-apache-datafusion-share-7473348653169160194-NcmY)
 - **2026-05-12** [New York City Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/20030) - [RSVP](https://luma.com/adhshv92)
 - **2026-05-11** [San Francisco Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/21638) - [RSVP](https://luma.com/k3ointcl)
 - **2026-04-23** [Seattle Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/13500) - [RSVP](https://luma.com/hxshbp0m)

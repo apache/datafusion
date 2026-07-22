@@ -17,11 +17,12 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
+use arrow::array::{ArrayRef, OffsetSizeTrait, StringArrayType};
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType;
+use memchr::memmem;
 
-use crate::strings::GenericStringArrayBuilder;
+use crate::strings::{GenericStringArrayBuilder, StringWriter};
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
@@ -128,6 +129,43 @@ impl ScalarUDFImpl for ReplaceFunc {
                 }
             }
 
+            // Fast path: when `from` and `to` are non-null scalars we can
+            // pre-build a substring finder once and reuse it for every haystack
+            // row, mirroring the scalar-argument fast paths in
+            // `strpos`/`translate`/`split_part`.
+            if let (
+                ColumnarValue::Array(haystack),
+                ColumnarValue::Scalar(from),
+                ColumnarValue::Scalar(to),
+            ) = (&converted_args[0], &converted_args[1], &converted_args[2])
+                && let (Some(Some(from)), Some(Some(to))) =
+                    (from.try_as_str(), to.try_as_str())
+            {
+                let result = match coercion_type {
+                    DataType::Utf8 => replace_scalar::<_, i32>(
+                        as_generic_string_array::<i32>(haystack)?,
+                        from,
+                        to,
+                    ),
+                    DataType::LargeUtf8 => replace_scalar::<_, i64>(
+                        as_generic_string_array::<i64>(haystack)?,
+                        from,
+                        to,
+                    ),
+                    DataType::Utf8View => replace_scalar::<_, i32>(
+                        as_string_view_array(haystack)?,
+                        from,
+                        to,
+                    ),
+                    other => {
+                        return exec_err!(
+                            "Unsupported coercion data type {other:?} for function replace"
+                        );
+                    }
+                };
+                return result.map(ColumnarValue::Array);
+            }
+
             match coercion_type {
                 DataType::Utf8 => {
                     make_scalar_function(replace::<i32>, vec![])(&converted_args)
@@ -162,45 +200,7 @@ fn replace_view(args: &[ArrayRef]) -> Result<ArrayRef> {
     let from_array = as_string_view_array(&args[1])?;
     let to_array = as_string_view_array(&args[2])?;
 
-    let len = string_array.len();
-    let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(len, 0);
-    let mut buffer = String::new();
-    let nulls = NullBuffer::union_many([
-        string_array.nulls(),
-        from_array.nulls(),
-        to_array.nulls(),
-    ]);
-
-    // Hoist the nulls.is_some() check out of the loop. LLVM does not always
-    // unswitch this loop on its own (the Utf8View body is large enough to
-    // exceed its cost-benefit threshold).
-    if let Some(nulls_ref) = nulls.as_ref() {
-        for i in 0..len {
-            if nulls_ref.is_null(i) {
-                builder.append_placeholder();
-                continue;
-            }
-            // SAFETY: union of input nulls is non-null at i, so each input is too.
-            let string = unsafe { string_array.value_unchecked(i) };
-            let from = unsafe { from_array.value_unchecked(i) };
-            let to = unsafe { to_array.value_unchecked(i) };
-            buffer.clear();
-            replace_into_string(&mut buffer, string, from, to);
-            builder.append_value(&buffer);
-        }
-    } else {
-        for i in 0..len {
-            // SAFETY: i < len, and no input has a null buffer.
-            let string = unsafe { string_array.value_unchecked(i) };
-            let from = unsafe { from_array.value_unchecked(i) };
-            let to = unsafe { to_array.value_unchecked(i) };
-            buffer.clear();
-            replace_into_string(&mut buffer, string, from, to);
-            builder.append_value(&buffer);
-        }
-    }
-
-    Ok(Arc::new(builder.finish(nulls)?) as ArrayRef)
+    replace_arrays::<_, i32>(string_array, from_array, to_array)
 }
 
 /// Replaces all occurrences in string of substring from with substring to.
@@ -210,86 +210,165 @@ fn replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let from_array = as_generic_string_array::<T>(&args[1])?;
     let to_array = as_generic_string_array::<T>(&args[2])?;
 
+    replace_arrays::<_, T>(string_array, from_array, to_array)
+}
+
+fn replace_arrays<'a, S, O>(
+    string_array: S,
+    from_array: S,
+    to_array: S,
+) -> Result<ArrayRef>
+where
+    S: StringArrayType<'a> + Copy,
+    O: OffsetSizeTrait,
+{
     let len = string_array.len();
-    let mut builder = GenericStringArrayBuilder::<T>::with_capacity(len, 0);
-    let mut buffer = String::new();
     let nulls = NullBuffer::union_many([
         string_array.nulls(),
         from_array.nulls(),
         to_array.nulls(),
     ]);
+    build_replaced::<O>(len, nulls, |builder, i| {
+        // SAFETY: build_replaced only calls this for rows that are non-null in
+        // the union buffer, so every input array is non-null at i.
+        let string = unsafe { string_array.value_unchecked(i) };
+        let from = unsafe { from_array.value_unchecked(i) };
+        let to = unsafe { to_array.value_unchecked(i) };
+        apply_replace(builder, string, from, to, None)
+    })
+}
 
-    // Hoist the nulls.is_some() check out of the loop. LLVM unswitches this
-    // automatically today, but kept explicit so the no-nulls fast path is not
-    // contingent on the optimizer's cost heuristic.
+/// Appends `len` rows to a fresh string builder: a null placeholder for each
+/// null row and `append_row` for each non-null row. The `nulls.is_some()` check
+/// is hoisted out of the loop so the all-non-null case does not depend on LLVM
+/// loop-unswitching heuristics.
+fn build_replaced<O: OffsetSizeTrait>(
+    len: usize,
+    nulls: Option<NullBuffer>,
+    mut append_row: impl FnMut(&mut GenericStringArrayBuilder<O>, usize) -> Result<()>,
+) -> Result<ArrayRef> {
+    let mut builder = GenericStringArrayBuilder::<O>::with_capacity(len, 0);
     if let Some(nulls_ref) = nulls.as_ref() {
         for i in 0..len {
             if nulls_ref.is_null(i) {
-                builder.append_placeholder();
-                continue;
+                builder.try_append_placeholder()?;
+            } else {
+                append_row(&mut builder, i)?;
             }
-            // SAFETY: union of input nulls is non-null at i, so each input is too.
-            let string = unsafe { string_array.value_unchecked(i) };
-            let from = unsafe { from_array.value_unchecked(i) };
-            let to = unsafe { to_array.value_unchecked(i) };
-            buffer.clear();
-            replace_into_string(&mut buffer, string, from, to);
-            builder.append_value(&buffer);
         }
     } else {
         for i in 0..len {
-            // SAFETY: i < len, and no input has a null buffer.
-            let string = unsafe { string_array.value_unchecked(i) };
-            let from = unsafe { from_array.value_unchecked(i) };
-            let to = unsafe { to_array.value_unchecked(i) };
-            buffer.clear();
-            replace_into_string(&mut buffer, string, from, to);
-            builder.append_value(&buffer);
+            append_row(&mut builder, i)?;
         }
     }
-
     Ok(Arc::new(builder.finish(nulls)?) as ArrayRef)
 }
 
-/// Helper function to perform string replacement into a reusable String buffer
 #[inline]
-fn replace_into_string(buffer: &mut String, string: &str, from: &str, to: &str) {
-    if from.is_empty() {
-        // When from is empty, insert 'to' at the beginning, between each character, and at the end
-        // This matches the behavior of str::replace()
-        buffer.push_str(to);
-        for ch in string.chars() {
-            buffer.push(ch);
-            buffer.push_str(to);
-        }
-        return;
-    }
-
-    // Fast path for replacing a single ASCII character with another single ASCII character.
-    // Extends the buffer's underlying Vec<u8> directly, for performance.
-    if let ([from_byte], [to_byte]) = (from.as_bytes(), to.as_bytes())
+fn apply_replace<O: OffsetSizeTrait>(
+    builder: &mut GenericStringArrayBuilder<O>,
+    string: &str,
+    from: &str,
+    to: &str,
+    finder: Option<&memmem::Finder>,
+) -> Result<()> {
+    // Hot path: single ASCII byte → single ASCII byte. An ASCII byte (< 0x80)
+    // cannot appear inside a multi-byte UTF-8 sequence, so any multi-byte
+    // sequences in `string` pass through unchanged and output stays valid
+    // UTF-8.
+    if let (&[from_byte], &[to_byte]) = (from.as_bytes(), to.as_bytes())
         && from_byte.is_ascii()
         && to_byte.is_ascii()
     {
-        // SAFETY: Replacing an ASCII byte with another ASCII byte preserves UTF-8 validity.
-        unsafe {
-            buffer.as_mut_vec().extend(
-                string
-                    .as_bytes()
-                    .iter()
-                    .map(|&b| if b == *from_byte { *to_byte } else { b }),
-            );
-        }
-        return;
+        // SAFETY: see the contract above.
+        return unsafe {
+            builder.try_append_byte_map(string.as_bytes(), |b| {
+                if b == from_byte { to_byte } else { b }
+            })
+        };
     }
 
-    let mut last_end = 0;
-    for (start, _part) in string.match_indices(from) {
-        buffer.push_str(&string[last_end..start]);
-        buffer.push_str(to);
-        last_end = start + from.len();
+    if from.is_empty() {
+        // PostgreSQL returns the input unchanged when `from` is empty (#22253).
+        return builder.try_append_value(string);
     }
-    buffer.push_str(&string[last_end..]);
+
+    builder.try_append_with(|w| replace_into_writer(w, string, from, to, finder))
+}
+
+/// Writes `string` into `w` with every non-overlapping occurrence of `from`
+/// replaced by `to`. When `finder` is `Some`, matches are located with the
+/// pre-built finder (the scalar fast path, where `from` is constant across all
+/// rows); otherwise `str::match_indices` builds a searcher per call.
+///
+/// Both `string` and `from` are valid UTF-8, and UTF-8 is self-synchronizing,
+/// so a byte match of `from` can only start on a char boundary of `string`; the
+/// slices below are therefore always valid.
+#[inline]
+fn replace_into_writer<W: StringWriter>(
+    w: &mut W,
+    string: &str,
+    from: &str,
+    to: &str,
+    finder: Option<&memmem::Finder>,
+) {
+    match finder {
+        Some(finder) => write_replaced(
+            w,
+            string,
+            to,
+            from.len(),
+            finder.find_iter(string.as_bytes()),
+        ),
+        None => write_replaced(
+            w,
+            string,
+            to,
+            from.len(),
+            string.match_indices(from).map(|(start, _)| start),
+        ),
+    }
+}
+
+/// Copies `string` into `w`, replacing the `from_len`-byte substring at each
+/// byte offset yielded by `starts` with `to`. `starts` must be ascending and
+/// non-overlapping, as produced by both `memmem::Finder::find_iter` and
+/// `str::match_indices`.
+#[inline]
+fn write_replaced<W: StringWriter>(
+    w: &mut W,
+    string: &str,
+    to: &str,
+    from_len: usize,
+    starts: impl Iterator<Item = usize>,
+) {
+    let mut last_end = 0;
+    for start in starts {
+        w.write_str(&string[last_end..start]);
+        w.write_str(to);
+        last_end = start + from_len;
+    }
+    w.write_str(&string[last_end..]);
+}
+
+/// Fast path for a `from`/`to` pair that is constant across all rows. The
+/// substring finder is built once and reused for every haystack value, which
+/// avoids the per-row searcher construction incurred by `str::match_indices`.
+fn replace_scalar<'a, S, O>(haystack: S, from: &str, to: &str) -> Result<ArrayRef>
+where
+    S: StringArrayType<'a> + Copy,
+    O: OffsetSizeTrait,
+{
+    // `from` and `to` are non-null scalars, so the output nulls are exactly the
+    // haystack's nulls (matching the null union computed by the general path).
+    let nulls = haystack.nulls().cloned();
+    // Built once and reused for every row.
+    let finder = memmem::Finder::new(from.as_bytes());
+    build_replaced::<O>(haystack.len(), nulls, |builder, i| {
+        // SAFETY: build_replaced only calls this for non-null rows.
+        let string = unsafe { haystack.value_unchecked(i) };
+        apply_replace(builder, string, from, to, Some(&finder))
+    })
 }
 
 #[cfg(test)]
@@ -346,6 +425,105 @@ mod tests {
             StringArray
         );
 
+        test_function!(
+            ReplaceFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("abc")))),
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("")))),
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("x")))),
+            ],
+            Ok(Some("abc")),
+            &str,
+            LargeUtf8,
+            LargeStringArray
+        );
+
         Ok(())
+    }
+
+    /// The scalar-argument fast path must produce output that is bit-identical
+    /// to the general (array-argument) path for every kind of pattern.
+    #[test]
+    fn scalar_fast_path_matches_general() {
+        use arrow::array::{ArrayRef, StringViewArray};
+        use arrow::datatypes::Field;
+        use datafusion_common::config::ConfigOptions;
+        use std::sync::Arc;
+
+        let rows = vec![
+            Some("hello world"),
+            None,
+            Some("aaaa"),
+            Some(""),
+            Some("a.b.c.d"),
+            Some("úñîçödé abcúñ"),
+            Some("mississippi"),
+            Some("  double  spaces  "),
+        ];
+        // Covers byte-map (single ASCII → single ASCII), deletion (empty `to`),
+        // empty `from`, multi-byte `to`, and multi-byte non-ASCII `from`.
+        let cases = [
+            (" ", "_"),
+            ("a", "X"),
+            ("ss", "Z"),
+            ("", "Q"),
+            ("a", "yy"),
+            ("úñ", "A"),
+            (".", ""),
+            ("i", "II"),
+        ];
+
+        let invoke = |haystack: &ArrayRef,
+                      from: ColumnarValue,
+                      to: ColumnarValue|
+         -> ArrayRef {
+            let args = vec![ColumnarValue::Array(Arc::clone(haystack)), from, to];
+            let arg_fields = args
+                .iter()
+                .enumerate()
+                .map(|(i, a)| Field::new(format!("a{i}"), a.data_type(), true).into())
+                .collect();
+            match ReplaceFunc::new()
+                .invoke_with_args(ScalarFunctionArgs {
+                    args,
+                    arg_fields,
+                    number_rows: haystack.len(),
+                    return_field: Field::new("f", Utf8, true).into(),
+                    config_options: Arc::new(ConfigOptions::default()),
+                })
+                .unwrap()
+            {
+                ColumnarValue::Array(a) => a,
+                ColumnarValue::Scalar(s) => s.to_array_of_size(haystack.len()).unwrap(),
+            }
+        };
+
+        for (from, to) in cases {
+            let n = rows.len();
+            for haystack in [
+                Arc::new(StringArray::from(rows.clone())) as ArrayRef,
+                Arc::new(LargeStringArray::from(rows.clone())) as ArrayRef,
+                Arc::new(StringViewArray::from(rows.clone())) as ArrayRef,
+            ] {
+                // scalar `from`/`to` -> new fast path
+                let fast = invoke(
+                    &haystack,
+                    ColumnarValue::Scalar(ScalarValue::Utf8(Some(from.to_string()))),
+                    ColumnarValue::Scalar(ScalarValue::Utf8(Some(to.to_string()))),
+                );
+                // array `from`/`to` -> general path
+                let general = invoke(
+                    &haystack,
+                    ColumnarValue::Array(Arc::new(StringArray::from(vec![from; n]))),
+                    ColumnarValue::Array(Arc::new(StringArray::from(vec![to; n]))),
+                );
+                assert_eq!(
+                    &fast,
+                    &general,
+                    "mismatch for from={from:?} to={to:?} on {:?}",
+                    haystack.data_type()
+                );
+            }
+        }
     }
 }

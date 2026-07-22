@@ -348,6 +348,13 @@ impl Accumulator for VarianceAccumulator {
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let arr = as_float64_array(&values[0])?;
         for value in arr.iter().flatten() {
+            if self.count <= 1 {
+                self.count = 0;
+                self.mean = 0.0;
+                self.m2 = 0.0;
+                continue;
+            }
+
             let new_count = self.count - 1;
             let delta1 = self.mean - value;
             let new_mean = delta1 / new_count as f64 + self.mean;
@@ -521,8 +528,6 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        // Since aggregate filter should be applied in partial stage, in final stage there should be no filter
-        _opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 3, "two arguments to merge_batch");
@@ -573,6 +578,44 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
             Arc::new(Float64Array::new(means.into(), None)),
             Arc::new(Float64Array::new(m2s.into(), None)),
         ])
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        assert_eq!(values.len(), 1, "single argument to convert_to_state");
+        let values = as_float64_array(&values[0])?;
+
+        let len = values.len();
+        let mut counts = Vec::with_capacity(len);
+        let mut means = Vec::with_capacity(len);
+        let mut m2s = Vec::with_capacity(len);
+
+        for row in 0..len {
+            if values.is_valid(row)
+                && opt_filter
+                    .is_none_or(|filter| filter.is_valid(row) && filter.value(row))
+            {
+                counts.push(1);
+                means.push(values.value(row));
+            } else {
+                counts.push(0);
+                means.push(0.0);
+            }
+            m2s.push(0.0);
+        }
+
+        Ok(vec![
+            Arc::new(UInt64Array::new(counts.into(), None)),
+            Arc::new(Float64Array::new(means.into(), None)),
+            Arc::new(Float64Array::new(m2s.into(), None)),
+        ])
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {
@@ -666,12 +709,97 @@ mod tests {
             Arc::new(Float64Array::from(vec![1.0])),
         ];
         let mut acc = VarianceGroupsAccumulator::new(StatsType::Sample);
-        acc.merge_batch(&state_1, &[0], None, 1)?;
-        acc.merge_batch(&state_2, &[0], None, 1)?;
+        acc.merge_batch(&state_1, &[0], 1)?;
+        acc.merge_batch(&state_2, &[0], 1)?;
         let result = acc.evaluate(EmitTo::All)?;
         let result = result.as_any().downcast_ref::<Float64Array>().unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result.value(0), 1.0);
+        Ok(())
+    }
+
+    #[test]
+    fn convert_to_state_roundtrips_through_merge() -> Result<()> {
+        let values = Arc::new(Float64Array::from(vec![
+            Some(1.0),
+            Some(2.0),
+            None,
+            Some(4.0),
+            Some(8.0),
+            Some(16.0),
+            Some(32.0),
+        ])) as ArrayRef;
+        let filter = BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+            Some(true),
+            None,
+            Some(true),
+            Some(true),
+            Some(true),
+        ]);
+        let group_indices = vec![0, 1, 0, 1, 0, 0, 0];
+
+        let mut direct = VarianceGroupsAccumulator::new(StatsType::Sample);
+        direct.update_batch(
+            std::slice::from_ref(&values),
+            &group_indices,
+            Some(&filter),
+            2,
+        )?;
+        let direct = direct.evaluate(EmitTo::All)?;
+
+        let converter = VarianceGroupsAccumulator::new(StatsType::Sample);
+        let state =
+            converter.convert_to_state(std::slice::from_ref(&values), Some(&filter))?;
+        let mut merged = VarianceGroupsAccumulator::new(StatsType::Sample);
+        merged.merge_batch(&state, &group_indices, 2)?;
+        let merged = merged.evaluate(EmitTo::All)?;
+
+        let direct = direct.as_any().downcast_ref::<Float64Array>().unwrap();
+        let merged = merged.as_any().downcast_ref::<Float64Array>().unwrap();
+        assert_eq!(direct.len(), merged.len());
+        for row in 0..direct.len() {
+            assert_eq!(direct.is_null(row), merged.is_null(row));
+            if direct.is_valid(row) {
+                assert!((direct.value(row) - merged.value(row)).abs() < 1e-12);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn convert_to_state_preserves_empty_and_filtered_rows() -> Result<()> {
+        let converter = VarianceGroupsAccumulator::new(StatsType::Sample);
+        let empty_values =
+            Arc::new(Float64Array::from(Vec::<Option<f64>>::new())) as ArrayRef;
+        let state =
+            converter.convert_to_state(std::slice::from_ref(&empty_values), None)?;
+        for state_array in &state {
+            assert_eq!(state_array.len(), 0);
+            assert_eq!(state_array.null_count(), 0);
+        }
+
+        let values =
+            Arc::new(Float64Array::from(vec![Some(1.0), Some(2.0), None])) as ArrayRef;
+        let filter = BooleanArray::from(vec![Some(false), None, Some(false)]);
+        let group_indices = vec![0, 1, 0];
+        let state =
+            converter.convert_to_state(std::slice::from_ref(&values), Some(&filter))?;
+        for state_array in &state {
+            assert_eq!(state_array.len(), values.len());
+            assert_eq!(state_array.null_count(), 0);
+        }
+
+        let counts = state[0].as_any().downcast_ref::<UInt64Array>().unwrap();
+        assert_eq!(counts, &UInt64Array::from(vec![0, 0, 0]));
+
+        let mut merged = VarianceGroupsAccumulator::new(StatsType::Sample);
+        merged.merge_batch(&state, &group_indices, 2)?;
+        let result = merged.evaluate(EmitTo::All)?;
+        let result = result.as_any().downcast_ref::<Float64Array>().unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.null_count(), 2);
         Ok(())
     }
 }

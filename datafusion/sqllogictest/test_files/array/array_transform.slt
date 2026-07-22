@@ -393,16 +393,22 @@ physical_plan
 02)--ProjectionExec: expr=[text@0 as text, list@1 as list, number@2 as number, CASE WHEN number@2 > 30 THEN array_transform(make_array(make_array(list@1)), (list) -> array_transform(list@3, (list) -> array_transform(list@4, (v) -> number@2 + v@5 + array_element(list@4, 1)))) ELSE array_transform(make_array(make_array(list@1)), (list) -> array_transform(list@3, (list) -> array_transform(list@4, (v) -> number@2 + array_element(list@4, 1)))) END as CASE WHEN t.number > Int64(30) THEN array_transform(make_array(make_array(t.list)),(list) -> array_transform(list,(list) -> array_transform(list,(v) -> t.number + v + list[Int64(1)]))) ELSE array_transform(make_array(make_array(t.list)),(list) -> array_transform(list,(list) -> array_transform(list,(v) -> t.number + list[Int64(1)]))) END]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
+# null arg
+query ?
+SELECT array_transform(NULL, x -> x * 2);
+----
+NULL
+
 query error
 select array_transform();
 ----
-DataFusion error: Error during planning: array_transform function requires 1 value arguments, got 0
+DataFusion error: Error during planning: The function 'array_transform' expected 2 argument(s) but received 0
 
 
 query error DataFusion error: Error during planning: array_transform expected a list as first argument, got Int64
 select array_transform(1, v -> v*2);
 
-query error DataFusion error: Error during planning: array_transform expects a value followed by a lambda, got Lambda\(None\) and Value\(Field \{ name: "make_array\(Int64\(1\),Int64\(2\)\)", data_type: List\(Field \{ data_type: Int64, nullable: true \}\), nullable: true \}\)
+query error DataFusion error: Error during planning: The function 'array_transform' expected a value at position 0 but received a lambda
 select array_transform(v -> v*2, [1, 2]);
 
 query error DataFusion error: Error during planning: lambda defined 3 params but UDF support only 1
@@ -411,13 +417,13 @@ SELECT array_transform([1, 2], (e, i, j) -> i);
 query error DataFusion error: Error during planning: lambda parameters names must be unique, got \(v, v\)
 SELECT array_transform([1], (v, v) -> v*2);
 
-query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,12\)\.\.Location\(1,13\)\) \}\), body: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,17\)\.\.Location\(1,18\)\) \}\), syntax: Arrow \}\)
+query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(LambdaFunctionParameter \{ name: Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,12\)\.\.Location\(1,13\)\) \}, data_type: None \}\), body: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,17\)\.\.Location\(1,18\)\) \}\), syntax: Arrow \}\)
 SELECT abs(v -> v);
 
-query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,8\)\.\.Location\(1,9\)\) \}\), body: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,13\)\.\.Location\(1,14\)\) \}\), syntax: Arrow \}\)
+query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(LambdaFunctionParameter \{ name: Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,8\)\.\.Location\(1,9\)\) \}, data_type: None \}\), body: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,13\)\.\.Location\(1,14\)\) \}\), syntax: Arrow \}\)
 SELECT v -> v;
 
-query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,34\)\.\.Location\(1,35\)\) \}\), body: BinaryOp \{ left: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,39\)\.\.Location\(1,40\)\) \}\), op: Plus, right: Value\(ValueWithSpan \{ value: Number\("1", false\), span: Span\(Location\(1,41\)\.\.Location\(1,42\)\) \}\) \}, syntax: Arrow \}\)
+query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(LambdaFunctionParameter \{ name: Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,34\)\.\.Location\(1,35\)\) \}, data_type: None \}\), body: BinaryOp \{ left: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,39\)\.\.Location\(1,40\)\) \}\), op: Plus, right: Value\(ValueWithSpan \{ value: Number\("1", false\), span: Span\(Location\(1,41\)\.\.Location\(1,42\)\) \}\) \}, syntax: Arrow \}\)
 SELECT array_transform([1], v -> v -> v+1);
 
 query error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \) at Line: 1, Column: 30"\)

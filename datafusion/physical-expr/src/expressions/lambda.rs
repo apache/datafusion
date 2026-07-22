@@ -21,6 +21,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::{
+    ScalarFunctionExpr,
     expressions::{Column, LambdaVariable},
     physical_expr::PhysicalExpr,
 };
@@ -61,11 +62,16 @@ impl Hash for LambdaExpr {
 impl LambdaExpr {
     /// Create a new lambda expression with the given parameters and body
     pub fn try_new(params: Vec<String>, body: Arc<dyn PhysicalExpr>) -> Result<Self> {
-        if all_unique(&params) {
-            Ok(Self::new(params, body))
-        } else {
-            plan_err!("lambda params must be unique, got ({})", params.join(", "))
+        if !all_unique(&params) {
+            return plan_err!(
+                "lambda params must be unique, got ({})",
+                params.join(", ")
+            );
         }
+
+        check_async_udf(&body)?;
+
+        Ok(Self::new(params, body))
     }
 
     fn new(params: Vec<String>, body: Arc<dyn PhysicalExpr>) -> Self {
@@ -136,6 +142,27 @@ impl LambdaExpr {
         &self.body
     }
 
+    #[cfg(feature = "proto")]
+    /// Reconstruct a [`LambdaExpr`] from a proto node.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_physical_expr_common::expect_expr_variant;
+        use datafusion_proto_models::protobuf;
+
+        let lambda = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::Lambda,
+            "LambdaExpr",
+        );
+
+        Ok(Arc::new(LambdaExpr::try_new(
+            lambda.params.clone(),
+            ctx.decode_required_expression(lambda.body.as_deref(), "LambdaExpr", "body")?,
+        )?))
+    }
+
     pub(crate) fn projection(&self) -> &[usize] {
         &self.projection
     }
@@ -179,11 +206,31 @@ impl PhysicalExpr for LambdaExpr {
             );
         };
 
+        check_async_udf(body)?;
+
         Ok(Arc::new(Self::new(self.params.clone(), Arc::clone(body))))
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "({}) -> {}", self.params.join(", "), self.body)
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::Lambda(Box::new(
+                protobuf::PhysicalLambdaExprNode {
+                    params: self.params().to_vec(),
+                    body: Some(Box::new(ctx.encode_child(self.body())?)),
+                },
+            ))),
+        }))
     }
 }
 
@@ -208,6 +255,20 @@ fn all_unique(params: &[String]) -> bool {
             params.iter().all(|p| set.insert(p.as_str()))
         }
     }
+}
+
+fn check_async_udf(body: &Arc<dyn PhysicalExpr>) -> Result<()> {
+    if body.exists(|expr| {
+        Ok(expr
+            .downcast_ref::<ScalarFunctionExpr>()
+            .is_some_and(|udf| udf.fun().as_async().is_some()))
+    })? {
+        return plan_err!(
+            "Async functions in lambdas aren't supported, see https://github.com/apache/datafusion/issues/22091"
+        );
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

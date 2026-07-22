@@ -20,6 +20,7 @@
 //! [Information Schema]: https://en.wikipedia.org/wiki/Information_schema
 
 use crate::streaming::StreamingTable;
+use crate::table::TableFunction;
 use crate::{CatalogProviderList, SchemaProvider, TableProvider};
 use arrow::array::builder::{BooleanBuilder, UInt8Builder};
 use arrow::{
@@ -81,14 +82,28 @@ impl InformationSchemaProvider {
     /// Creates a new [`InformationSchemaProvider`] for the provided `catalog_list`
     pub fn new(catalog_list: Arc<dyn CatalogProviderList>) -> Self {
         Self {
-            config: InformationSchemaConfig { catalog_list },
+            config: InformationSchemaConfig {
+                catalog_list,
+                table_functions: HashMap::new(),
+            },
         }
+    }
+
+    /// Attach the session's table (UDTF) functions so that they appear in
+    /// `information_schema.routines` / `SHOW FUNCTIONS`.
+    pub fn with_table_functions(
+        mut self,
+        table_functions: HashMap<String, Arc<TableFunction>>,
+    ) -> Self {
+        self.config.table_functions = table_functions;
+        self
     }
 }
 
 #[derive(Clone, Debug)]
 struct InformationSchemaConfig {
     catalog_list: Arc<dyn CatalogProviderList>,
+    table_functions: HashMap<String, Arc<TableFunction>>,
 }
 
 impl InformationSchemaConfig {
@@ -301,6 +316,26 @@ impl InformationSchemaConfig {
                 )
             }
         }
+
+        // Table functions (UDTFs) don't have scalar signatures; their return
+        // type is always a table, so emit a single row per UDTF with
+        // routine_type = "FUNCTION", function_type = "TABLE" and
+        // data_type = "TABLE".
+        for name in self.table_functions.keys() {
+            builder.add_routine(
+                catalog_name,
+                schema_name,
+                name,
+                "FUNCTION",
+                // No signature is available for UDTFs; report deterministic
+                // = false to stay conservative.
+                false,
+                Some(&"TABLE"),
+                "TABLE",
+                None::<String>,
+                None::<String>,
+            )
+        }
         Ok(())
     }
 
@@ -399,6 +434,14 @@ impl InformationSchemaConfig {
                 );
             }
         }
+
+        // UDTFs deliberately do NOT appear in `information_schema.parameters`.
+        // A same-named scalar UDF (e.g. `generate_series` exists as both a
+        // scalar UDF in functions-nested and a UDTF in functions-table) would
+        // cross-join with a UDTF row keyed only by (name, rid) and produce
+        // spurious `TABLE`-typed variants of every scalar signature in
+        // SHOW FUNCTIONS. `show_functions_to_plan` sources UDTFs directly
+        // from `information_schema.routines` via a UNION branch instead.
 
         Ok(())
     }
@@ -967,18 +1010,34 @@ struct InformationSchemata {
     config: InformationSchemaConfig,
 }
 
+/// The Arrow schema of [`information_schema.schemata`] rows.
+///
+/// Useful for downstream catalog implementations that want to declare a
+/// `TableProvider` for `schemata` before populating any rows via
+/// [`InformationSchemataBuilder`].
+///
+/// Columns and nullability match
+/// <https://www.postgresql.org/docs/current/infoschema-schemata.html>.
+///
+/// [`information_schema.schemata`]: https://www.postgresql.org/docs/current/infoschema-schemata.html
+pub fn schemata_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("catalog_name", DataType::Utf8, false),
+        Field::new("schema_name", DataType::Utf8, false),
+        Field::new("schema_owner", DataType::Utf8, true),
+        Field::new("default_character_set_catalog", DataType::Utf8, true),
+        Field::new("default_character_set_schema", DataType::Utf8, true),
+        Field::new("default_character_set_name", DataType::Utf8, true),
+        Field::new("sql_path", DataType::Utf8, true),
+    ]))
+}
+
 impl InformationSchemata {
     fn new(config: InformationSchemaConfig) -> Self {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("catalog_name", DataType::Utf8, false),
-            Field::new("schema_name", DataType::Utf8, false),
-            Field::new("schema_owner", DataType::Utf8, true),
-            Field::new("default_character_set_catalog", DataType::Utf8, true),
-            Field::new("default_character_set_schema", DataType::Utf8, true),
-            Field::new("default_character_set_name", DataType::Utf8, true),
-            Field::new("sql_path", DataType::Utf8, true),
-        ]));
-        Self { schema, config }
+        Self {
+            schema: schemata_schema(),
+            config,
+        }
     }
 
     fn builder(&self) -> InformationSchemataBuilder {
@@ -995,7 +1054,16 @@ impl InformationSchemata {
     }
 }
 
-struct InformationSchemataBuilder {
+/// Builder that produces [`RecordBatch`] values matching the schema of
+/// `information_schema.schemata` (see [`schemata_schema`]).
+///
+/// Intended for downstream catalog implementations that need to emit
+/// `schemata` rows from their own metadata source rather than going
+/// through DataFusion's `InformationSchemaProvider`, which enumerates
+/// schemas synchronously via `CatalogProviderList` and so is unsuitable
+/// for catalog backends that resolve asynchronously.
+#[derive(Debug)]
+pub struct InformationSchemataBuilder {
     schema: SchemaRef,
     catalog_name: StringBuilder,
     schema_name: StringBuilder,
@@ -1006,8 +1074,32 @@ struct InformationSchemataBuilder {
     sql_path: StringBuilder,
 }
 
+impl Default for InformationSchemataBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InformationSchemataBuilder {
-    fn add_schemata(
+    /// Construct an empty builder.
+    pub fn new() -> Self {
+        Self {
+            schema: schemata_schema(),
+            catalog_name: StringBuilder::new(),
+            schema_name: StringBuilder::new(),
+            schema_owner: StringBuilder::new(),
+            default_character_set_catalog: StringBuilder::new(),
+            default_character_set_schema: StringBuilder::new(),
+            default_character_set_name: StringBuilder::new(),
+            sql_path: StringBuilder::new(),
+        }
+    }
+
+    /// Append one row to the builder. `schema_owner` is the optional SQL
+    /// schema owner; the three `default_character_set_*` columns and
+    /// `sql_path` are written as null (DataFusion does not model those
+    /// concepts; see the PostgreSQL docs link on [`schemata_schema`]).
+    pub fn add_schemata(
         &mut self,
         catalog_name: &str,
         schema_name: &str,
@@ -1019,15 +1111,19 @@ impl InformationSchemataBuilder {
             Some(owner) => self.schema_owner.append_value(owner),
             None => self.schema_owner.append_null(),
         }
-        // refer to https://www.postgresql.org/docs/current/infoschema-schemata.html,
-        // these rows apply to a feature that is not implemented in DataFusion
         self.default_character_set_catalog.append_null();
         self.default_character_set_schema.append_null();
         self.default_character_set_name.append_null();
         self.sql_path.append_null();
     }
 
-    fn finish(&mut self) -> RecordBatch {
+    /// Finalize the builder into a [`RecordBatch`].
+    ///
+    /// Returns an error only if Arrow buffer construction fails, which
+    /// the builder's column-count and type invariants make unreachable
+    /// under normal use. The `Result` return type preserves room to add
+    /// validation in the future without a breaking API change.
+    pub fn finish(&mut self) -> Result<RecordBatch> {
         RecordBatch::try_new(
             Arc::clone(&self.schema),
             vec![
@@ -1040,7 +1136,7 @@ impl InformationSchemataBuilder {
                 Arc::new(self.sql_path.finish()),
             ],
         )
-        .unwrap()
+        .map_err(DataFusionError::from)
     }
 }
 
@@ -1057,7 +1153,7 @@ impl PartitionStream for InformationSchemata {
             // TODO: Stream this
             futures::stream::once(async move {
                 config.make_schemata(&mut builder).await;
-                Ok(builder.finish())
+                builder.finish()
             }),
         ))
     }
@@ -1413,11 +1509,63 @@ impl PartitionStream for InformationSchemaParameters {
 mod tests {
     use super::*;
     use crate::CatalogProvider;
+    use arrow::array::Array;
+
+    #[test]
+    fn schemata_builder_emits_canonical_schema_and_rows() {
+        // Construct via `Default` so the test exercises both `new()` (via
+        // the `Default` impl) and the public column-layout contract.
+        let mut builder = InformationSchemataBuilder::default();
+        builder.add_schemata("cat", "schema_one", Some("alice"));
+        builder.add_schemata("cat", "schema_two", None);
+        let batch = builder.finish().expect("finish should not fail");
+
+        assert_eq!(batch.schema(), schemata_schema());
+        assert_eq!(batch.num_rows(), 2);
+
+        let col = |name: &str| {
+            batch
+                .column_by_name(name)
+                .unwrap_or_else(|| panic!("missing column {name}"))
+        };
+        let string_col = |name: &str| {
+            col(name)
+                .as_any()
+                .downcast_ref::<arrow::array::StringArray>()
+                .unwrap_or_else(|| panic!("{name} should be a StringArray"))
+        };
+
+        let catalog = string_col("catalog_name");
+        assert_eq!(catalog.value(0), "cat");
+        assert_eq!(catalog.value(1), "cat");
+
+        let schema = string_col("schema_name");
+        assert_eq!(schema.value(0), "schema_one");
+        assert_eq!(schema.value(1), "schema_two");
+
+        let owner = string_col("schema_owner");
+        assert_eq!(owner.value(0), "alice");
+        assert!(owner.is_null(1));
+
+        // The three character-set columns and sql_path are unconditionally
+        // null — they exist for SQL-standard column-layout compatibility.
+        for name in [
+            "default_character_set_catalog",
+            "default_character_set_schema",
+            "default_character_set_name",
+            "sql_path",
+        ] {
+            let c = string_col(name);
+            assert!(c.is_null(0), "{name} row 0 should be null");
+            assert!(c.is_null(1), "{name} row 1 should be null");
+        }
+    }
 
     #[tokio::test]
     async fn make_tables_uses_table_type() {
         let config = InformationSchemaConfig {
             catalog_list: Arc::new(Fixture),
+            table_functions: HashMap::new(),
         };
         let mut builder = InformationSchemaTablesBuilder {
             catalog_names: StringBuilder::new(),

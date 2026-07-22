@@ -32,10 +32,11 @@ use crate::logical_expr::{
     Aggregate, EmptyRelation, Join, Projection, Sort, TableScan, Unnest, Values, Window,
 };
 use crate::logical_expr::{
-    Expr, LogicalPlan, Partitioning as LogicalPartitioning, PlanType, Repartition,
-    UserDefinedLogicalNode,
+    Expr, LogicalPlan, PlanType, Repartition, UserDefinedLogicalNode,
 };
-use crate::physical_expr::{create_physical_expr, create_physical_exprs};
+use crate::physical_expr::{
+    create_physical_expr, create_physical_exprs, create_physical_partitioning,
+};
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::explain::ExplainExec;
@@ -52,8 +53,8 @@ use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::unnest::UnnestExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{
-    ExecutionPlan, ExecutionPlanProperties, InputOrderMode, Partitioning, PhysicalExpr,
-    WindowExpr, displayable, windows,
+    ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr, WindowExpr,
+    displayable, windows,
 };
 use crate::schema_equivalence::schema_satisfied_by;
 
@@ -79,21 +80,25 @@ use datafusion_common::{
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::dml::{CopyTo, InsertOp};
-use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
 use datafusion_expr::expr::{
-    AggregateFunction, AggregateFunctionParams, Alias, GroupingSet, NullTreatment,
-    WindowFunction, WindowFunctionParams, physical_name,
+    Alias, GroupingSet, NullTreatment, WindowFunction, WindowFunctionParams,
+    physical_name,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
+use datafusion_expr::physical_planning_context::{
+    PhysicalPlanningContext, ScalarSubqueryResults, SubqueryIndex,
+};
 use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{
     Analyze, BinaryExpr, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension,
     FetchType, Filter, JoinType, Operator, RecursiveQuery, SkipType, StringifiedPlan,
     WindowFrame, WindowFrameBound, WriteOp,
 };
-use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
+use datafusion_physical_expr::aggregate::{
+    AggregateFunctionExpr, LoweredAggregate, LoweredAggregateBuilder,
+};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr, create_physical_sort_exprs,
@@ -132,11 +137,19 @@ pub trait PhysicalPlanner: Send + Sync {
     /// `expr`: the expression to convert
     ///
     /// `input_dfschema`: the logical plan schema for evaluating `expr`
+    ///
+    /// `planning_ctx`: the [`PhysicalPlanningContext`] used to resolve
+    /// `Expr::ScalarSubquery` nodes. During physical planning the planner
+    /// threads the context of the plan currently being converted to a physical
+    /// plan (for example into [`ExtensionPlanner::plan_extension`], which
+    /// should forward it here). Callers creating physical expressions outside
+    /// of a plan should pass `&PhysicalPlanningContext::default()`.
     fn create_physical_expr(
         &self,
         expr: &Expr,
         input_dfschema: &DFSchema,
         session_state: &SessionState,
+        planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Arc<dyn PhysicalExpr>>;
 }
 
@@ -153,6 +166,12 @@ pub trait ExtensionPlanner {
     /// Returns `None` when the planner does not know how to plan the
     /// `node` and wants to delegate the planning to another
     /// [`ExtensionPlanner`].
+    ///
+    /// `planning_ctx` is the [`PhysicalPlanningContext`] of the plan subtree
+    /// currently being converted to a physical plan. Forward it to
+    /// [`PhysicalPlanner::create_physical_expr`] when creating this node's
+    /// physical expressions so that scalar subqueries resolve against the same
+    /// subquery state as the rest of the plan.
     async fn plan_extension(
         &self,
         planner: &dyn PhysicalPlanner,
@@ -160,6 +179,7 @@ pub trait ExtensionPlanner {
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         session_state: &SessionState,
+        planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>>;
 
     /// Create a physical plan for a [`LogicalPlan::TableScan`].
@@ -199,6 +219,7 @@ pub trait ExtensionPlanner {
     ///         _logical_inputs: &[&LogicalPlan],
     ///         _physical_inputs: &[Arc<dyn ExecutionPlan>],
     ///         _session_state: &SessionState,
+    ///         _planning_ctx: &PhysicalPlanningContext,
     ///     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     ///         Ok(None)
     ///     }
@@ -208,6 +229,7 @@ pub trait ExtensionPlanner {
     ///         _planner: &dyn PhysicalPlanner,
     ///         scan: &TableScan,
     ///         _session_state: &SessionState,
+    ///         _planning_ctx: &PhysicalPlanningContext,
     ///     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     ///         // Check if this is your custom table source
     ///         if scan.source.is::<MyCustomTableSource>() {
@@ -232,6 +254,7 @@ pub trait ExtensionPlanner {
         _planner: &dyn PhysicalPlanner,
         _scan: &TableScan,
         _session_state: &SessionState,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         Ok(None)
     }
@@ -292,8 +315,14 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
         expr: &Expr,
         input_dfschema: &DFSchema,
         session_state: &SessionState,
+        planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        create_physical_expr(expr, input_dfschema, session_state.execution_props())
+        create_physical_expr(
+            expr,
+            input_dfschema,
+            session_state.execution_props(),
+            planning_ctx,
+        )
     }
 }
 
@@ -370,13 +399,13 @@ impl DefaultPhysicalPlanner {
         &self,
         logical_schema: &DFSchemaRef,
         physical_plan: &Arc<dyn ExecutionPlan>,
-        context: &str,
+        context_factory: impl FnOnce() -> String,
     ) -> Result<()> {
         if !logical_schema.matches_arrow_schema(&physical_plan.schema()) {
             return plan_err!(
                 "{} created an ExecutionPlan with mismatched schema. \
                     LogicalPlan schema: {:?}, ExecutionPlan schema: {:?}",
-                context,
+                context_factory(),
                 logical_schema,
                 physical_plan.schema()
             );
@@ -414,9 +443,9 @@ impl DefaultPhysicalPlanner {
     /// collected, planned as separate physical plans, and each assigned an
     /// index in a shared [`ScalarSubqueryResults`] container that will hold its
     /// result at execution time. The index map and shared results container are
-    /// registered in [`ExecutionProps`] so that [`create_physical_expr`] can
-    /// convert `Expr::ScalarSubquery` into [`ScalarSubqueryExpr`] nodes that
-    /// read from that container.
+    /// stored in a [`PhysicalPlanningContext`] and passed explicitly to
+    /// [`create_physical_expr`] so it can convert `Expr::ScalarSubquery` into
+    /// [`ScalarSubqueryExpr`] nodes that read from that container.
     ///
     /// The resulting physical plan is wrapped in a [`ScalarSubqueryExec`] node
     /// that executes those subquery plans before any data flows through the
@@ -435,34 +464,45 @@ impl DefaultPhysicalPlanner {
         session_state: &'a SessionState,
     ) -> futures::future::BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         Box::pin(async move {
-            let all_subqueries = Self::collect_scalar_subqueries(logical_plan);
+            // When `enable_physical_uncorrelated_scalar_subquery` is disabled, the
+            // `ScalarSubqueryToJoin` optimizer rule rewrites all uncorrelated
+            // scalar subqueries to joins, so none should reach this point.
+            // Skip collection in that case to avoid creating a no-op
+            // `ScalarSubqueryExec` wrapper.
+            let all_subqueries = if session_state
+                .config_options()
+                .optimizer
+                .enable_physical_uncorrelated_scalar_subquery
+            {
+                Self::collect_scalar_subqueries(logical_plan)
+            } else {
+                Vec::new()
+            };
             let (links, index_map) = self
                 .plan_scalar_subqueries(all_subqueries, session_state)
                 .await?;
 
             if links.is_empty() {
                 return self
-                    .create_initial_plan_inner(logical_plan, session_state)
+                    .create_initial_plan_inner(
+                        logical_plan,
+                        session_state,
+                        &PhysicalPlanningContext::default(),
+                    )
                     .await;
             }
 
-            // Create the shared `ScalarSubqueryResults` container and register
-            // it in `ExecutionProps` so that `create_physical_expr` can resolve
-            // `Expr::ScalarSubquery` into `ScalarSubqueryExpr` nodes. We clone
-            // the `SessionState` so these are available throughout physical
-            // planning without mutating the caller's state.
-            //
-            // Ideally, the subquery state would live in a dedicated planning
-            // context rather than in `ExecutionProps`. It's here because
-            // `create_physical_expr` only receives `&ExecutionProps`.
+            // Build a `PhysicalPlanningContext` that carries the index map and
+            // shared results container into calls that create physical expressions.
+            // The context is threaded explicitly through physical planning rather
+            // than being stashed in `ExecutionProps`, so the planner does not need
+            // a mutable `SessionState` and each recursively planned subtree receives
+            // the correct context.
             let results = ScalarSubqueryResults::new(links.len());
-            let mut owned = session_state.clone();
-            owned.execution_props_mut().subquery_indexes = index_map;
-            owned.execution_props_mut().subquery_results = results.clone();
-            let session_state = Cow::Owned(owned);
+            let planning_ctx = PhysicalPlanningContext::new(index_map, results.clone());
 
             let plan = self
-                .create_initial_plan_inner(logical_plan, &session_state)
+                .create_initial_plan_inner(logical_plan, session_state, &planning_ctx)
                 .await?;
             Ok(Arc::new(ScalarSubqueryExec::new(plan, links, results)))
         })
@@ -474,6 +514,7 @@ impl DefaultPhysicalPlanner {
         &self,
         logical_plan: &LogicalPlan,
         session_state: &SessionState,
+        planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // DFS the tree to flatten it into a Vec.
         // This will allow us to build the Physical Plan from the leaves up
@@ -524,9 +565,9 @@ impl DefaultPhysicalPlanner {
         let max_concurrency = planning_concurrency.min(flat_tree_leaf_indices.len());
 
         // Spawning tasks which will traverse leaf up to the root.
-        let tasks = flat_tree_leaf_indices
-            .into_iter()
-            .map(|index| self.task_helper(index, Arc::clone(&flat_tree), session_state));
+        let tasks = flat_tree_leaf_indices.into_iter().map(|index| {
+            self.task_helper(index, Arc::clone(&flat_tree), session_state, planning_ctx)
+        });
         let mut outputs = futures::stream::iter(tasks)
             .buffer_unordered(max_concurrency)
             .try_collect::<Vec<_>>()
@@ -554,6 +595,7 @@ impl DefaultPhysicalPlanner {
         leaf_starter_index: usize,
         flat_tree: Arc<Vec<LogicalNode<'a>>>,
         session_state: &'a SessionState,
+        planning_ctx: &'a PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // We always start with a leaf, so can ignore status and pass empty children
         let mut node = flat_tree.get(leaf_starter_index).ok_or_else(|| {
@@ -565,6 +607,7 @@ impl DefaultPhysicalPlanner {
             .map_logical_node_to_physical(
                 node.node,
                 session_state,
+                planning_ctx,
                 ChildrenContainer::None,
             )
             .await?;
@@ -582,6 +625,7 @@ impl DefaultPhysicalPlanner {
                         .map_logical_node_to_physical(
                             node.node,
                             session_state,
+                            planning_ctx,
                             ChildrenContainer::One(plan),
                         )
                         .await?;
@@ -618,7 +662,12 @@ impl DefaultPhysicalPlanner {
                     let children = children.into_iter().map(|epc| epc.plan).collect();
                     let children = ChildrenContainer::Multiple(children);
                     plan = self
-                        .map_logical_node_to_physical(node.node, session_state, children)
+                        .map_logical_node_to_physical(
+                            node.node,
+                            session_state,
+                            planning_ctx,
+                            children,
+                        )
                         .await?;
                 }
             }
@@ -633,6 +682,7 @@ impl DefaultPhysicalPlanner {
         &self,
         node: &LogicalPlan,
         session_state: &SessionState,
+        planning_ctx: &PhysicalPlanningContext,
         children: ChildrenContainer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let execution_props = session_state.execution_props();
@@ -645,6 +695,7 @@ impl DefaultPhysicalPlanner {
                     filters,
                     fetch,
                     projected_schema,
+                    statistics_requests,
                     ..
                 } = scan;
 
@@ -654,10 +705,13 @@ impl DefaultPhysicalPlanner {
                     // referred to in the query
                     let filters = unnormalize_cols(filters.iter().cloned());
                     let filters_vec = filters.into_iter().collect::<Vec<_>>();
+                    let stats_requests =
+                        statistics_requests.iter().cloned().collect::<Vec<_>>();
                     let opts = ScanArgs::default()
                         .with_projection(projection.as_deref())
                         .with_filters(Some(&filters_vec))
-                        .with_limit(*fetch);
+                        .with_limit(*fetch)
+                        .with_statistics_requests(&stats_requests);
                     let res = source.scan_with_args(session_state, opts).await?;
                     Arc::clone(res.plan())
                 } else {
@@ -667,8 +721,9 @@ impl DefaultPhysicalPlanner {
                             break;
                         }
 
-                        maybe_plan =
-                            planner.plan_table_scan(self, scan, session_state).await?;
+                        maybe_plan = planner
+                            .plan_table_scan(self, scan, session_state, planning_ctx)
+                            .await?;
                     }
 
                     let plan = match maybe_plan {
@@ -680,9 +735,11 @@ impl DefaultPhysicalPlanner {
                             );
                         }
                     };
-                    let context =
-                        format!("Extension planner for table scan {}", scan.table_name);
-                    self.ensure_schema_matches(projected_schema, &plan, &context)?;
+
+                    self.ensure_schema_matches(projected_schema, &plan, || {
+                        format!("Extension planner for table scan {}", scan.table_name)
+                    })?;
+
                     plan
                 }
             }
@@ -692,7 +749,12 @@ impl DefaultPhysicalPlanner {
                     .map(|row| {
                         row.iter()
                             .map(|expr| {
-                                create_physical_expr(expr, schema, execution_props)
+                                create_physical_expr(
+                                    expr,
+                                    schema,
+                                    execution_props,
+                                    planning_ctx,
+                                )
                             })
                             .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()
                     })
@@ -951,7 +1013,14 @@ impl DefaultPhysicalPlanner {
                 let logical_schema = node.schema();
                 let window_expr = window_expr
                     .iter()
-                    .map(|e| create_window_expr(e, logical_schema, execution_props))
+                    .map(|e| {
+                        create_window_expr(
+                            e,
+                            logical_schema,
+                            execution_props,
+                            planning_ctx,
+                        )
+                    })
                     .collect::<Result<Vec<_>>>()?;
 
                 let can_repartition = session_state.config().target_partitions() > 1
@@ -1057,17 +1126,21 @@ impl DefaultPhysicalPlanner {
                     logical_input_schema,
                     &physical_input_schema,
                     execution_props,
+                    planning_ctx,
                 )?;
 
                 let agg_filter = aggr_expr
                     .iter()
                     .map(|e| {
-                        create_aggregate_expr_and_maybe_filter(
+                        LoweredAggregateBuilder::new(
                             e,
                             logical_input_schema,
                             &physical_input_schema,
                             execution_props,
+                            planning_ctx,
                         )
+                        .build()
+                        .map(lowered_aggregate_to_tuple)
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -1162,6 +1235,7 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::Projection(Projection { input, expr, .. }) => self
                 .create_project_physical_exec_with_props(
                     execution_props,
+                    planning_ctx,
                     children.one()?,
                     input,
                     expr,
@@ -1171,8 +1245,12 @@ impl DefaultPhysicalPlanner {
             }) => {
                 let physical_input = children.one()?;
                 let input_dfschema = input.schema();
-                let runtime_expr =
-                    create_physical_expr(predicate, input_dfschema, execution_props)?;
+                let runtime_expr = create_physical_expr(
+                    predicate,
+                    input_dfschema,
+                    execution_props,
+                    planning_ctx,
+                )?;
 
                 let input_schema = input.schema();
                 let filter = match self.try_plan_async_exprs(
@@ -1230,25 +1308,12 @@ impl DefaultPhysicalPlanner {
             }) => {
                 let physical_input = children.one()?;
                 let input_dfschema = input.as_ref().schema();
-                let physical_partitioning = match partitioning_scheme {
-                    LogicalPartitioning::RoundRobinBatch(n) => {
-                        Partitioning::RoundRobinBatch(*n)
-                    }
-                    LogicalPartitioning::Hash(expr, n) => {
-                        let runtime_expr = expr
-                            .iter()
-                            .map(|e| {
-                                create_physical_expr(e, input_dfschema, execution_props)
-                            })
-                            .collect::<Result<Vec<_>>>()?;
-                        Partitioning::Hash(runtime_expr, *n)
-                    }
-                    LogicalPartitioning::DistributeBy(_) => {
-                        return not_impl_err!(
-                            "Physical plan does not support DistributeBy partitioning"
-                        );
-                    }
-                };
+                let physical_partitioning = create_physical_partitioning(
+                    partitioning_scheme,
+                    input_dfschema,
+                    execution_props,
+                    planning_ctx,
+                )?;
                 Arc::new(RepartitionExec::try_new(
                     physical_input,
                     physical_partitioning,
@@ -1259,8 +1324,12 @@ impl DefaultPhysicalPlanner {
             }) => {
                 let physical_input = children.one()?;
                 let input_dfschema = input.as_ref().schema();
-                let sort_exprs =
-                    create_physical_sort_exprs(expr, input_dfschema, execution_props)?;
+                let sort_exprs = create_physical_sort_exprs(
+                    expr,
+                    input_dfschema,
+                    execution_props,
+                    planning_ctx,
+                )?;
                 let Some(ordering) = LexOrdering::new(sort_exprs) else {
                     return internal_err!(
                         "SortExec requires at least one sort expression"
@@ -1389,6 +1458,7 @@ impl DefaultPhysicalPlanner {
                             LogicalPlan::Projection(Projection { input, expr, .. }),
                         ) => self.create_project_physical_exec_with_props(
                             execution_props,
+                            planning_ctx,
                             physical_left,
                             input,
                             expr,
@@ -1402,6 +1472,7 @@ impl DefaultPhysicalPlanner {
                             LogicalPlan::Projection(Projection { input, expr, .. }),
                         ) => self.create_project_physical_exec_with_props(
                             execution_props,
+                            planning_ctx,
                             physical_right,
                             input,
                             expr,
@@ -1469,9 +1540,18 @@ impl DefaultPhysicalPlanner {
                 let join_on = keys
                     .iter()
                     .map(|(l, r)| {
-                        let l = create_physical_expr(l, left_df_schema, execution_props)?;
-                        let r =
-                            create_physical_expr(r, right_df_schema, execution_props)?;
+                        let l = create_physical_expr(
+                            l,
+                            left_df_schema,
+                            execution_props,
+                            planning_ctx,
+                        )?;
+                        let r = create_physical_expr(
+                            r,
+                            right_df_schema,
+                            execution_props,
+                            planning_ctx,
+                        )?;
                         Ok((l, r))
                     })
                     .collect::<Result<join_utils::JoinOn>>()?;
@@ -1572,6 +1652,7 @@ impl DefaultPhysicalPlanner {
                             expr,
                             &filter_df_schema,
                             execution_props,
+                            planning_ctx,
                         )?;
                         let column_indices = join_utils::JoinFilter::build_column_indices(
                             left_field_indices,
@@ -1692,11 +1773,13 @@ impl DefaultPhysicalPlanner {
                             lhs_logical,
                             left_df_schema,
                             execution_props,
+                            planning_ctx,
                         )?;
                         let on_right = create_physical_expr(
                             rhs_logical,
                             right_df_schema,
                             execution_props,
+                            planning_ctx,
                         )?;
 
                         Arc::new(PiecewiseMergeJoinExec::try_new(
@@ -1768,6 +1851,7 @@ impl DefaultPhysicalPlanner {
                 if let Some((input, expr)) = new_project {
                     self.create_project_physical_exec_with_props(
                         execution_props,
+                        planning_ctx,
                         join,
                         input,
                         expr,
@@ -1777,11 +1861,15 @@ impl DefaultPhysicalPlanner {
                 }
             }
             LogicalPlan::RecursiveQuery(RecursiveQuery {
-                name, is_distinct, ..
+                name,
+                is_distinct,
+                schema,
+                ..
             }) => {
                 let [static_term, recursive_term] = children.two()?;
                 Arc::new(RecursiveQueryExec::try_new(
                     name.clone(),
+                    Arc::clone(schema.inner()),
                     static_term,
                     recursive_term,
                     *is_distinct,
@@ -1806,6 +1894,7 @@ impl DefaultPhysicalPlanner {
                             &logical_input,
                             &children,
                             session_state,
+                            planning_ctx,
                         )
                         .await?;
                 }
@@ -1818,8 +1907,10 @@ impl DefaultPhysicalPlanner {
                     ),
                 }?;
 
-                let context = format!("Extension planner for {node:?}");
-                self.ensure_schema_matches(node.schema(), &plan, &context)?;
+                self.ensure_schema_matches(node.schema(), &plan, || {
+                    format!("Extension planner for {node:?}")
+                })?;
+
                 plan
             }
 
@@ -1866,6 +1957,7 @@ impl DefaultPhysicalPlanner {
         input_dfschema: &DFSchema,
         input_schema: &Schema,
         execution_props: &ExecutionProps,
+        planning_ctx: &PhysicalPlanningContext,
     ) -> Result<PhysicalGroupBy> {
         if group_expr.len() == 1 {
             match &group_expr[0] {
@@ -1875,6 +1967,7 @@ impl DefaultPhysicalPlanner {
                         input_dfschema,
                         input_schema,
                         execution_props,
+                        planning_ctx,
                     )
                 }
                 Expr::GroupingSet(GroupingSet::Cube(exprs)) => create_cube_physical_expr(
@@ -1882,6 +1975,7 @@ impl DefaultPhysicalPlanner {
                     input_dfschema,
                     input_schema,
                     execution_props,
+                    planning_ctx,
                 ),
                 Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
                     create_rollup_physical_expr(
@@ -1889,10 +1983,16 @@ impl DefaultPhysicalPlanner {
                         input_dfschema,
                         input_schema,
                         execution_props,
+                        planning_ctx,
                     )
                 }
                 expr => Ok(PhysicalGroupBy::new_single(vec![tuple_err((
-                    create_physical_expr(expr, input_dfschema, execution_props),
+                    create_physical_expr(
+                        expr,
+                        input_dfschema,
+                        execution_props,
+                        planning_ctx,
+                    ),
                     physical_name(expr),
                 ))?])),
             }
@@ -1906,7 +2006,12 @@ impl DefaultPhysicalPlanner {
                     .iter()
                     .map(|e| {
                         tuple_err((
-                            create_physical_expr(e, input_dfschema, execution_props),
+                            create_physical_expr(
+                                e,
+                                input_dfschema,
+                                execution_props,
+                                planning_ctx,
+                            ),
                             physical_name(e),
                         ))
                     })
@@ -1931,6 +2036,7 @@ fn merge_grouping_set_physical_expr(
     input_dfschema: &DFSchema,
     input_schema: &Schema,
     execution_props: &ExecutionProps,
+    planning_ctx: &PhysicalPlanningContext,
 ) -> Result<PhysicalGroupBy> {
     let num_groups = grouping_sets.len();
     let mut all_exprs: Vec<Expr> = vec![];
@@ -1945,6 +2051,7 @@ fn merge_grouping_set_physical_expr(
                 expr,
                 input_dfschema,
                 execution_props,
+                planning_ctx,
             )?);
 
             null_exprs.push(get_null_physical_expr_pair(
@@ -1952,6 +2059,7 @@ fn merge_grouping_set_physical_expr(
                 input_dfschema,
                 input_schema,
                 execution_props,
+                planning_ctx,
             )?);
         }
     }
@@ -1982,6 +2090,7 @@ fn create_cube_physical_expr(
     input_dfschema: &DFSchema,
     input_schema: &Schema,
     execution_props: &ExecutionProps,
+    planning_ctx: &PhysicalPlanningContext,
 ) -> Result<PhysicalGroupBy> {
     let num_of_exprs = exprs.len();
     let num_groups = num_of_exprs * num_of_exprs;
@@ -1997,12 +2106,14 @@ fn create_cube_physical_expr(
             input_dfschema,
             input_schema,
             execution_props,
+            planning_ctx,
         )?);
 
         all_exprs.push(get_physical_expr_pair(
             expr,
             input_dfschema,
             execution_props,
+            planning_ctx,
         )?)
     }
 
@@ -2028,6 +2139,7 @@ fn create_rollup_physical_expr(
     input_dfschema: &DFSchema,
     input_schema: &Schema,
     execution_props: &ExecutionProps,
+    planning_ctx: &PhysicalPlanningContext,
 ) -> Result<PhysicalGroupBy> {
     let num_of_exprs = exprs.len();
 
@@ -2044,12 +2156,14 @@ fn create_rollup_physical_expr(
             input_dfschema,
             input_schema,
             execution_props,
+            planning_ctx,
         )?);
 
         all_exprs.push(get_physical_expr_pair(
             expr,
             input_dfschema,
             execution_props,
+            planning_ctx,
         )?)
     }
 
@@ -2076,8 +2190,10 @@ fn get_null_physical_expr_pair(
     input_dfschema: &DFSchema,
     input_schema: &Schema,
     execution_props: &ExecutionProps,
+    planning_ctx: &PhysicalPlanningContext,
 ) -> Result<(Arc<dyn PhysicalExpr>, String)> {
-    let physical_expr = create_physical_expr(expr, input_dfschema, execution_props)?;
+    let physical_expr =
+        create_physical_expr(expr, input_dfschema, execution_props, planning_ctx)?;
     let physical_name = physical_name(&expr.clone())?;
 
     let data_type = physical_expr.data_type(input_schema)?;
@@ -2147,8 +2263,10 @@ fn get_physical_expr_pair(
     expr: &Expr,
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
+    planning_ctx: &PhysicalPlanningContext,
 ) -> Result<(Arc<dyn PhysicalExpr>, String)> {
-    let physical_expr = create_physical_expr(expr, input_dfschema, execution_props)?;
+    let physical_expr =
+        create_physical_expr(expr, input_dfschema, execution_props, planning_ctx)?;
     let physical_name = physical_name(expr)?;
     Ok((physical_expr, physical_name))
 }
@@ -2401,11 +2519,14 @@ pub fn is_window_frame_bound_valid(window_frame: &WindowFrame) -> bool {
 }
 
 /// Create a window expression with a name from a logical expression
+///
+/// See [`create_physical_expr`] for details on the `planning_ctx` argument.
 pub fn create_window_expr_with_name(
     e: &Expr,
     name: impl Into<String>,
     logical_schema: &DFSchema,
     execution_props: &ExecutionProps,
+    planning_ctx: &PhysicalPlanningContext,
 ) -> Result<Arc<dyn WindowExpr>> {
     let name = name.into();
     let physical_schema = Arc::clone(logical_schema.inner());
@@ -2424,12 +2545,24 @@ pub fn create_window_expr_with_name(
                         filter,
                     },
             } = window_fun.as_ref();
-            let physical_args =
-                create_physical_exprs(args, logical_schema, execution_props)?;
-            let partition_by =
-                create_physical_exprs(partition_by, logical_schema, execution_props)?;
-            let order_by =
-                create_physical_sort_exprs(order_by, logical_schema, execution_props)?;
+            let physical_args = create_physical_exprs(
+                args,
+                logical_schema,
+                execution_props,
+                planning_ctx,
+            )?;
+            let partition_by = create_physical_exprs(
+                partition_by,
+                logical_schema,
+                execution_props,
+                planning_ctx,
+            )?;
+            let order_by = create_physical_sort_exprs(
+                order_by,
+                logical_schema,
+                execution_props,
+                planning_ctx,
+            )?;
 
             if !is_window_frame_bound_valid(window_frame) {
                 return plan_err!(
@@ -2444,7 +2577,9 @@ pub fn create_window_expr_with_name(
                 == NullTreatment::IgnoreNulls;
             let physical_filter = filter
                 .as_ref()
-                .map(|f| create_physical_expr(f, logical_schema, execution_props))
+                .map(|f| {
+                    create_physical_expr(f, logical_schema, execution_props, planning_ctx)
+                })
                 .transpose()?;
 
             windows::create_window_expr(
@@ -2465,17 +2600,23 @@ pub fn create_window_expr_with_name(
 }
 
 /// Create a window expression from a logical expression or an alias
+///
+/// See [`create_physical_expr`] for details on the `planning_ctx` argument.
 pub fn create_window_expr(
     e: &Expr,
     logical_schema: &DFSchema,
     execution_props: &ExecutionProps,
+    planning_ctx: &PhysicalPlanningContext,
 ) -> Result<Arc<dyn WindowExpr>> {
     // unpack aliased logical expressions, e.g. "sum(col) over () as total"
     let (name, e) = match e {
-        Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
-        _ => (e.schema_name().to_string(), e),
+        Expr::Alias(alias) => (
+            alias.name.clone(),
+            alias.expr.as_ref().clone().unalias_nested().data,
+        ),
+        _ => (e.schema_name().to_string(), e.clone()),
     };
-    create_window_expr_with_name(e, name, logical_schema, execution_props)
+    create_window_expr_with_name(&e, name, logical_schema, execution_props, planning_ctx)
 }
 
 type AggregateExprWithOptionalArgs = (
@@ -2487,88 +2628,48 @@ type AggregateExprWithOptionalArgs = (
 );
 
 /// Create an aggregate expression with a name from a logical expression
+#[deprecated(note = "use LoweredAggregateBuilder")]
 pub fn create_aggregate_expr_with_name_and_maybe_filter(
     e: &Expr,
     name: Option<String>,
-    human_displan: String,
+    human_display: String,
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<AggregateExprWithOptionalArgs> {
-    match e {
-        Expr::AggregateFunction(AggregateFunction {
-            func,
-            params:
-                AggregateFunctionParams {
-                    args,
-                    distinct,
-                    filter,
-                    order_by,
-                    null_treatment,
-                },
-        }) => {
-            let name = if let Some(name) = name {
-                name
-            } else {
-                physical_name(e)?
-            };
+    let planning_ctx = PhysicalPlanningContext::default();
+    let mut builder = LoweredAggregateBuilder::new(
+        e,
+        logical_input_schema,
+        physical_input_schema,
+        execution_props,
+        &planning_ctx,
+    )
+    .with_human_display(human_display);
 
-            let physical_args =
-                create_physical_exprs(args, logical_input_schema, execution_props)?;
-            let filter = match filter {
-                Some(e) => Some(create_physical_expr(
-                    e,
-                    logical_input_schema,
-                    execution_props,
-                )?),
-                None => None,
-            };
-
-            let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
-                == NullTreatment::IgnoreNulls;
-
-            let (agg_expr, filter, order_bys) = {
-                let order_bys = create_physical_sort_exprs(
-                    order_by,
-                    logical_input_schema,
-                    execution_props,
-                )?;
-
-                let agg_expr =
-                    AggregateExprBuilder::new(func.to_owned(), physical_args.to_vec())
-                        .order_by(order_bys.clone())
-                        .schema(Arc::new(physical_input_schema.to_owned()))
-                        .alias(name)
-                        .human_display(human_displan)
-                        .with_ignore_nulls(ignore_nulls)
-                        .with_distinct(*distinct)
-                        .build()
-                        .map(Arc::new)?;
-
-                (agg_expr, filter, order_bys)
-            };
-
-            Ok((agg_expr, filter, order_bys))
-        }
-        other => internal_err!("Invalid aggregate expression '{other:?}'"),
+    if let Some(name) = name {
+        builder = builder.with_name(name);
     }
+
+    builder.build().map(lowered_aggregate_to_tuple)
 }
 
 /// Create an aggregate expression from a logical expression or an alias
+#[deprecated(note = "use LoweredAggregateBuilder")]
 pub fn create_aggregate_expr_and_maybe_filter(
     e: &Expr,
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<AggregateExprWithOptionalArgs> {
-    // Unpack (potentially nested) aliased logical expressions, e.g. "sum(col) as total"
-    // Some functions like `count_all()` create internal aliases,
-    // Unwrap all alias layers to get to the underlying aggregate function
+    // Preserve the pre-builder behavior for callers that still use this helper:
+    // use a single display string and do not attach a separate display alias.
     let (name, human_display, e) = match e {
-        Expr::Alias(Alias { name, .. }) => {
-            let unaliased = e.clone().unalias_nested().data;
-            (Some(name.clone()), e.human_display().to_string(), unaliased)
-        }
+        Expr::Alias(alias) => (
+            Some(alias.name.clone()),
+            e.human_display().to_string(),
+            e.clone(),
+        ),
         Expr::AggregateFunction(_) => (
             Some(e.schema_name().to_string()),
             e.human_display().to_string(),
@@ -2577,14 +2678,27 @@ pub fn create_aggregate_expr_and_maybe_filter(
         _ => (None, String::default(), e.clone()),
     };
 
-    create_aggregate_expr_with_name_and_maybe_filter(
+    let planning_ctx = PhysicalPlanningContext::default();
+    let mut builder = LoweredAggregateBuilder::new(
         &e,
-        name,
-        human_display,
         logical_input_schema,
         physical_input_schema,
         execution_props,
+        &planning_ctx,
     )
+    .with_human_display(human_display);
+
+    if let Some(name) = name {
+        builder = builder.with_name(name);
+    }
+
+    builder.build().map(lowered_aggregate_to_tuple)
+}
+
+fn lowered_aggregate_to_tuple(
+    lowered: LoweredAggregate,
+) -> AggregateExprWithOptionalArgs {
+    (lowered.aggregate, lowered.filter, lowered.order_bys)
 }
 
 impl DefaultPhysicalPlanner {
@@ -2617,6 +2731,8 @@ impl DefaultPhysicalPlanner {
 
         let config = &session_state.config_options().explain;
         let explain_format = &e.explain_format;
+        // Statement-level override wins over session config for show_statistics.
+        let show_statistics = e.show_statistics.unwrap_or(config.show_statistics);
 
         if !e.logical_optimization_succeeded {
             return Ok(Arc::new(ExplainExec::new(
@@ -2689,7 +2805,7 @@ impl DefaultPhysicalPlanner {
                     stringified_plans.push(StringifiedPlan::new(
                         InitialPhysicalPlan,
                         displayable(input.as_ref())
-                            .set_show_statistics(config.show_statistics)
+                            .set_show_statistics(show_statistics)
                             .set_show_schema(config.show_schema)
                             .indent(e.verbose)
                             .to_string(),
@@ -2698,7 +2814,7 @@ impl DefaultPhysicalPlanner {
                     // Show statistics + schema in verbose output even if not
                     // explicitly requested
                     if e.verbose {
-                        if !config.show_statistics {
+                        if !show_statistics {
                             stringified_plans.push(StringifiedPlan::new(
                                 InitialPhysicalPlanWithStats,
                                 displayable(input.as_ref())
@@ -2727,7 +2843,7 @@ impl DefaultPhysicalPlanner {
                             stringified_plans.push(StringifiedPlan::new(
                                 plan_type,
                                 displayable(plan)
-                                    .set_show_statistics(config.show_statistics)
+                                    .set_show_statistics(show_statistics)
                                     .set_show_schema(config.show_schema)
                                     .indent(e.verbose)
                                     .to_string(),
@@ -2740,7 +2856,7 @@ impl DefaultPhysicalPlanner {
                             stringified_plans.push(StringifiedPlan::new(
                                 FinalPhysicalPlan,
                                 displayable(input.as_ref())
-                                    .set_show_statistics(config.show_statistics)
+                                    .set_show_statistics(show_statistics)
                                     .set_show_schema(config.show_schema)
                                     .indent(e.verbose)
                                     .to_string(),
@@ -2749,7 +2865,7 @@ impl DefaultPhysicalPlanner {
                             // Show statistics + schema in verbose output even if not
                             // explicitly requested
                             if e.verbose {
-                                if !config.show_statistics {
+                                if !show_statistics {
                                     stringified_plans.push(StringifiedPlan::new(
                                         FinalPhysicalPlanWithStats,
                                         displayable(input.as_ref())
@@ -2803,25 +2919,29 @@ impl DefaultPhysicalPlanner {
         let input = self.create_physical_plan(&a.input, session_state).await?;
         let schema = Arc::clone(a.schema.inner());
         let show_statistics = session_state.config_options().explain.show_statistics;
-        let analyze_level = session_state.config_options().explain.analyze_level;
+        // Statement-level overrides take precedence over the session config.
+        let analyze_level = a
+            .analyze_level
+            .unwrap_or(session_state.config_options().explain.analyze_level);
         let metric_types = analyze_level.included_types();
-        let analyze_categories = session_state
-            .config_options()
-            .explain
-            .analyze_categories
-            .clone();
+        let analyze_categories = a.analyze_categories.clone().unwrap_or_else(|| {
+            session_state
+                .config_options()
+                .explain
+                .analyze_categories
+                .clone()
+        });
         let metric_categories = match analyze_categories {
             ExplainAnalyzeCategories::All => None,
             ExplainAnalyzeCategories::Only(cats) => Some(cats),
         };
-        Ok(Arc::new(AnalyzeExec::new(
-            a.verbose,
-            show_statistics,
-            metric_types,
-            metric_categories,
-            input,
-            schema,
-        )))
+        Ok(Arc::new(
+            AnalyzeExec::builder(a.verbose, show_statistics, input, schema)
+                .with_metric_types(metric_types)
+                .with_metric_categories(metric_categories)
+                .with_format(a.format.clone())
+                .build(),
+        ))
     }
 
     /// Optimize a physical plan by applying each physical optimizer,
@@ -2959,6 +3079,7 @@ impl DefaultPhysicalPlanner {
     fn create_project_physical_exec_with_props(
         &self,
         execution_props: &ExecutionProps,
+        planning_ctx: &PhysicalPlanningContext,
         input_exec: Arc<dyn ExecutionPlan>,
         input: &Arc<LogicalPlan>,
         expr: &[Expr],
@@ -2996,8 +3117,12 @@ impl DefaultPhysicalPlanner {
                     physical_name(e)
                 };
 
-                let physical_expr =
-                    create_physical_expr(e, input_logical_schema, execution_props);
+                let physical_expr = create_physical_expr(
+                    e,
+                    input_logical_schema,
+                    execution_props,
+                    planning_ctx,
+                );
 
                 tuple_err((physical_expr, physical_name))
             })
@@ -3223,14 +3348,15 @@ impl<'n> TreeNodeVisitor<'n> for InvariantChecker {
 mod tests {
     use std::cmp::Ordering;
     use std::fmt::{self, Debug};
+    use std::mem::size_of_val;
     use std::ops::{BitAnd, Not};
 
     use super::*;
     use crate::datasource::MemTable;
     use crate::datasource::file_format::options::CsvReadOptions;
     use crate::physical_plan::{
-        DisplayAs, DisplayFormatType, PlanProperties, SendableRecordBatchStream,
-        expressions,
+        DisplayAs, DisplayFormatType, Partitioning, PlanProperties,
+        SendableRecordBatchStream, expressions,
     };
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test_util::{scan_empty, scan_empty_with_partitions};
@@ -3238,18 +3364,24 @@ mod tests {
     use crate::execution::session_state::SessionStateBuilder;
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type};
-    use arrow_schema::SchemaRef;
+    use arrow_schema::{FieldRef, SchemaRef};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{
-        DFSchemaRef, TableReference, ToDFSchema as _, assert_batches_eq, assert_contains,
+        DFSchemaRef, ScalarValue, SplitPoint, TableReference, ToDFSchema as _,
+        assert_batches_eq, assert_contains,
     };
     use datafusion_execution::TaskContext;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::builder::subquery_alias;
+    use datafusion_expr::expr::AggregateFunctionParams;
+    use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
     use datafusion_expr::{
-        LogicalPlanBuilder, TableSource, UserDefinedLogicalNodeCore, col, lit,
+        Accumulator, AggregateUDF, AggregateUDFImpl, ExprFunctionExt, LogicalPlanBuilder,
+        Partitioning as LogicalPartitioning, RangePartitioning, Signature, TableSource,
+        UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition, col, lit,
+        scalar_subquery,
     };
-    use datafusion_functions_aggregate::count::count_all;
+    use datafusion_functions_aggregate::count::{count_all, count_udaf};
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -3273,6 +3405,171 @@ mod tests {
         planner
             .create_physical_plan(&logical_plan, &session_state)
             .await
+    }
+
+    async fn aggregate_explain(logical_plan: &LogicalPlan) -> Result<String> {
+        let physical_plan = plan(logical_plan).await?;
+        Ok(displayable(physical_plan.as_ref()).indent(true).to_string())
+    }
+
+    async fn aggregate_explain_for(
+        schema: Schema,
+        aggr_expr: Vec<Expr>,
+    ) -> Result<String> {
+        let logical_plan = scan_empty(None, &schema, None)?
+            .aggregate(Vec::<Expr>::new(), aggr_expr)?
+            .build()?;
+
+        aggregate_explain(&logical_plan).await
+    }
+
+    fn int64_field(name: &str, nullable: bool) -> Field {
+        Field::new(name, DataType::Int64, nullable)
+    }
+
+    #[tokio::test]
+    async fn logical_range_repartition_plans_output_partitioning() -> Result<()> {
+        let batch = RecordBatch::try_from_iter(vec![(
+            "a",
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+        )])?;
+        let table = Arc::new(MemTable::try_new(batch.schema(), vec![vec![batch]])?);
+        let source = Arc::new(DefaultTableSource::new(table));
+        let logical_plan = LogicalPlanBuilder::scan("test", source, None)?
+            .repartition(LogicalPartitioning::Range(RangePartitioning::try_new(
+                vec![col("a").sort(true, true)],
+                vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+            )?))?
+            .build()?;
+
+        let planner = DefaultPhysicalPlanner::default();
+        let physical_plan = planner
+            .create_initial_plan(&logical_plan, &make_session_state())
+            .await?;
+        let repartition = physical_plan
+            .as_ref()
+            .downcast_ref::<RepartitionExec>()
+            .ok_or_else(|| {
+                internal_datafusion_err!(
+                    "expected RepartitionExec, got {}",
+                    physical_plan.name()
+                )
+            })?;
+        let Partitioning::Range(range) = repartition.partitioning() else {
+            return internal_err!(
+                "expected Range target partitioning, got {:?}",
+                repartition.partitioning()
+            );
+        };
+        assert_eq!(range.partition_count(), 2);
+        assert_eq!(physical_plan.output_partitioning().partition_count(), 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_window_expr_unwraps_alias_with_metadata() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion_common::metadata::FieldMetadata;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "column1",
+            DataType::Int64,
+            true,
+        )]));
+        let logical_schema = schema.as_ref().clone().to_dfschema_ref()?;
+        let metadata = FieldMetadata::from(HashMap::from([(
+            "some_key".to_string(),
+            "some_value".to_string(),
+        )]));
+        let expr = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::AggregateUDF(count_udaf()),
+            vec![col("column1")],
+        ))
+        .alias_with_metadata("window_alias", Some(metadata));
+
+        let window_expr = create_window_expr(
+            &expr,
+            &logical_schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+
+        assert_eq!(window_expr.name(), "window_alias");
+        Ok(())
+    }
+
+    #[derive(Debug, Default)]
+    struct NullAccumulator;
+
+    impl Accumulator for NullAccumulator {
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
+            Ok(vec![self.evaluate()?])
+        }
+
+        fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+
+        fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
+            Ok(())
+        }
+
+        fn evaluate(&mut self) -> Result<ScalarValue> {
+            Ok(ScalarValue::Int64(None))
+        }
+
+        fn size(&self) -> usize {
+            size_of_val(self)
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    struct CustomHumanDisplayUdaf {
+        signature: Signature,
+    }
+
+    impl CustomHumanDisplayUdaf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::exact(vec![DataType::Int64], Volatility::Immutable),
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for CustomHumanDisplayUdaf {
+        fn name(&self) -> &str {
+            "custom_human_display_udaf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int64)
+        }
+
+        fn accumulator(
+            &self,
+            _acc_args: AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            Ok(Box::new(NullAccumulator))
+        }
+
+        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+            Ok(vec![
+                Field::new("custom_state", DataType::Int64, true).into(),
+            ])
+        }
+
+        fn human_display(&self, params: &AggregateFunctionParams) -> Result<String> {
+            Ok(format!(
+                "custom_display({})",
+                params.args[0].human_display()
+            ))
+        }
     }
 
     async fn plan_sql(query: &str) -> Result<Arc<dyn ExecutionPlan>> {
@@ -3452,6 +3749,7 @@ mod tests {
             logical_input_schema,
             physical_input_schema,
             session_state.execution_props(),
+            &PhysicalPlanningContext::default(),
         );
 
         insta::assert_debug_snapshot!(cube, @r#"
@@ -3583,6 +3881,7 @@ mod tests {
             logical_input_schema,
             physical_input_schema,
             session_state.execution_props(),
+            &PhysicalPlanningContext::default(),
         );
 
         insta::assert_debug_snapshot!(rollup, @r#"
@@ -3687,6 +3986,7 @@ mod tests {
             &col("a").not(),
             &dfschema,
             &make_session_state(),
+            &PhysicalPlanningContext::default(),
         )?;
         let expected = expressions::not(expressions::col("a", &schema)?)?;
 
@@ -3711,6 +4011,29 @@ mod tests {
         let plan_debug_str = format!("{plan:?}");
         assert!(plan_debug_str.contains("GlobalLimitExec"));
         assert!(plan_debug_str.contains("skip: 3"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scalar_subquery_in_extension_expr_plans() -> Result<()> {
+        let subquery = LogicalPlanBuilder::empty(true)
+            .project(vec![lit(42_i32)])?
+            .build()?;
+        let logical_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoOpExtensionNode {
+                expressions: vec![scalar_subquery(Arc::new(subquery))],
+                ..Default::default()
+            }),
+        });
+        let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
+            ExpressionExtensionPlanner,
+        )]);
+
+        let plan = planner
+            .create_physical_plan(&logical_plan, &make_session_state())
+            .await?;
+
+        assert_contains!(format!("{plan:?}"), "ScalarSubqueryExec");
         Ok(())
     }
 
@@ -4023,6 +4346,114 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_aggregate_explain_shows_quoted_user_alias() -> Result<()> {
+        assert_contains!(
+            aggregate_explain_for(
+                Schema::new(vec![int64_field("column1", false)]),
+                vec![sum(col("column1")).alias("total rows")],
+            )
+            .await?,
+            "AggregateExec: mode=Single, gby=[], aggr=[sum(?table?.column1) as total rows]"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_explain_shows_aliased_filter_expression() -> Result<()> {
+        let expr = sum(col("column1"))
+            .filter(col("column2").lt_eq(lit(0_i64)))
+            .build()?
+            .alias("agg");
+
+        assert_contains!(
+            aggregate_explain_for(
+                Schema::new(vec![
+                    int64_field("column1", false),
+                    int64_field("column2", false),
+                ]),
+                vec![expr],
+            )
+            .await?,
+            "AggregateExec: mode=Single, gby=[], aggr=[sum(?table?.column1) FILTER (WHERE ?table?.column2 <= Int64(0)) as agg]"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_explain_shows_aliased_respect_nulls() -> Result<()> {
+        let expr = datafusion_functions_aggregate::first_last::first_value_udaf()
+            .call(vec![col("column1")])
+            .order_by(vec![col("column2").sort(true, true)])
+            .null_treatment(NullTreatment::RespectNulls)
+            .build()?
+            .alias("agg");
+
+        assert_contains!(
+            aggregate_explain_for(
+                Schema::new(vec![
+                    int64_field("column1", true),
+                    int64_field("column2", false),
+                ]),
+                vec![expr],
+            )
+            .await?,
+            "AggregateExec: mode=Single, gby=[], aggr=[first_value(?table?.column1) RESPECT NULLS ORDER BY [?table?.column2 ASC NULLS FIRST] as agg]"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_explain_shows_count_all() -> Result<()> {
+        let logical_plan = test_csv_scan()
+            .await?
+            .aggregate(Vec::<Expr>::new(), vec![count_all()])?
+            .build()?;
+
+        assert_contains!(
+            aggregate_explain(&logical_plan).await?,
+            "aggr=[count(1) as count(*)]"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_explain_shows_count_all_with_user_alias() -> Result<()> {
+        let logical_plan = test_csv_scan()
+            .await?
+            .aggregate(Vec::<Expr>::new(), vec![count_all().alias("total_rows")])?
+            .build()?;
+
+        assert_contains!(
+            aggregate_explain(&logical_plan).await?,
+            "aggr=[count(1) as total_rows]"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_explain_shows_aliased_custom_human_display() -> Result<()> {
+        assert_contains!(
+            aggregate_explain_for(
+                Schema::new(vec![int64_field("column1", false)]),
+                vec![
+                    AggregateUDF::from(CustomHumanDisplayUdaf::new())
+                        .call(vec![col("column1")])
+                        .alias("agg"),
+                ],
+            )
+            .await?,
+            "AggregateExec: mode=Single, gby=[], aggr=[custom_display(?table?.column1) as agg]"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_explain() {
         let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
 
@@ -4097,6 +4528,7 @@ mod tests {
             stringified_plans,
             schema: schema.to_dfschema_ref().unwrap(),
             logical_optimization_succeeded: false,
+            show_statistics: None,
         };
         let plan = planner
             .handle_explain(&explain, &ctx.state())
@@ -4126,6 +4558,7 @@ mod tests {
             _logical_inputs: &[&LogicalPlan],
             _physical_inputs: &[Arc<dyn ExecutionPlan>],
             _session_state: &SessionState,
+            _planning_ctx: &PhysicalPlanningContext,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
             internal_err!("BOOM")
         }
@@ -4134,6 +4567,7 @@ mod tests {
     #[derive(PartialEq, Eq, Hash)]
     struct NoOpExtensionNode {
         schema: DFSchemaRef,
+        expressions: Vec<Expr>,
     }
 
     impl Default for NoOpExtensionNode {
@@ -4146,6 +4580,7 @@ mod tests {
                     )
                     .unwrap(),
                 ),
+                expressions: vec![],
             }
         }
     }
@@ -4178,7 +4613,7 @@ mod tests {
         }
 
         fn expressions(&self) -> Vec<Expr> {
-            vec![]
+            self.expressions.clone()
         }
 
         fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -4187,10 +4622,13 @@ mod tests {
 
         fn with_exprs_and_inputs(
             &self,
-            _exprs: Vec<Expr>,
+            exprs: Vec<Expr>,
             _inputs: Vec<LogicalPlan>,
         ) -> Result<Self> {
-            unimplemented!("NoOp");
+            Ok(Self {
+                schema: Arc::clone(&self.schema),
+                expressions: exprs,
+            })
         }
 
         fn supports_limit_pushdown(&self) -> bool {
@@ -4252,9 +4690,13 @@ mod tests {
 
         fn with_new_children(
             self: Arc<Self>,
-            _children: Vec<Arc<dyn ExecutionPlan>>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            unimplemented!("NoOpExecutionPlan::with_new_children");
+            if children.is_empty() {
+                Ok(self)
+            } else {
+                exec_err!("NoOpExecutionPlan does not support children")
+            }
         }
 
         fn execute(
@@ -4264,19 +4706,32 @@ mod tests {
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!("NoOpExecutionPlan::execute");
         }
+    }
 
-        fn apply_expressions(
+    struct ExpressionExtensionPlanner;
+
+    #[async_trait]
+    impl ExtensionPlanner for ExpressionExtensionPlanner {
+        async fn plan_extension(
             &self,
-            f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            // Visit expressions in the output ordering from equivalence properties
-            let mut tnr = TreeNodeRecursion::Continue;
-            if let Some(ordering) = self.cache.output_ordering() {
-                for sort_expr in ordering {
-                    tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-                }
+            planner: &dyn PhysicalPlanner,
+            node: &dyn UserDefinedLogicalNode,
+            _logical_inputs: &[&LogicalPlan],
+            _physical_inputs: &[Arc<dyn ExecutionPlan>],
+            session_state: &SessionState,
+            planning_ctx: &PhysicalPlanningContext,
+        ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+            for expr in node.expressions() {
+                planner.create_physical_expr(
+                    &expr,
+                    node.schema(),
+                    session_state,
+                    planning_ctx,
+                )?;
             }
-            Ok(tnr)
+            Ok(Some(Arc::new(NoOpExecutionPlan::new(Arc::clone(
+                node.schema().inner(),
+            )))))
         }
     }
 
@@ -4294,6 +4749,7 @@ mod tests {
             _logical_inputs: &[&LogicalPlan],
             _physical_inputs: &[Arc<dyn ExecutionPlan>],
             _session_state: &SessionState,
+            _planning_ctx: &PhysicalPlanningContext,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
             Ok(Some(Arc::new(NoOpExecutionPlan::new(SchemaRef::new(
                 Schema::new(vec![Field::new("b", DataType::Int32, false)]),
@@ -4417,12 +4873,6 @@ digraph {
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
         }
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
-        }
     }
     impl DisplayAs for OkExtensionNode {
         fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
@@ -4468,12 +4918,6 @@ digraph {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
-        }
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
         }
     }
     impl DisplayAs for InvariantFailsExtensionNode {
@@ -4526,16 +4970,21 @@ digraph {
             .unwrap_err();
         assert!(expected_err.to_string().contains("PhysicalOptimizer rule 'OptimizerRuleWithSchemaCheck' failed. Schema mismatch. Expected original schema"));
 
+        // The recursive `check_invariants` walk only runs under `debug_assertions`
+        // (see `OptimizationInvariantChecker::check`). In release builds the walk is
+        // skipped, so the checker returns `Ok` rather than surfacing the node's error.
+
         // Test: should fail when extension node fails it's own invariant check
         let failing_node: Arc<dyn ExecutionPlan> = Arc::new(InvariantFailsExtensionNode);
-        let expected_err = OptimizationInvariantChecker::new(&rule)
-            .check(&failing_node, &ok_plan.schema())
-            .unwrap_err();
-        assert!(
-            expected_err.to_string().contains(
+        let result = OptimizationInvariantChecker::new(&rule)
+            .check(&failing_node, &ok_plan.schema());
+        if cfg!(debug_assertions) {
+            assert!(result.unwrap_err().to_string().contains(
                 "extension node failed it's user-defined always-invariant check"
-            )
-        );
+            ));
+        } else {
+            assert!(result.is_ok());
+        }
 
         // Test: should fail when descendent extension node fails
         let failing_node: Arc<dyn ExecutionPlan> = Arc::new(InvariantFailsExtensionNode);
@@ -4543,14 +4992,15 @@ digraph {
             Arc::clone(&child).with_new_children(vec![Arc::clone(&failing_node)])?,
             Arc::clone(&child),
         ])?;
-        let expected_err = OptimizationInvariantChecker::new(&rule)
-            .check(&invalid_plan, &ok_plan.schema())
-            .unwrap_err();
-        assert!(
-            expected_err.to_string().contains(
+        let result = OptimizationInvariantChecker::new(&rule)
+            .check(&invalid_plan, &ok_plan.schema());
+        if cfg!(debug_assertions) {
+            assert!(result.unwrap_err().to_string().contains(
                 "extension node failed it's user-defined always-invariant check"
-            )
-        );
+            ));
+        } else {
+            assert!(result.is_ok());
+        }
 
         Ok(())
     }
@@ -4592,12 +5042,6 @@ digraph {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
-        }
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
         }
     }
     impl DisplayAs for ExecutableInvariantFails {
@@ -4751,9 +5195,8 @@ digraph {
     }
 
     #[tokio::test]
-    // When schemas match, planning proceeds past the schema_satisfied_by check.
-    // It then panics on unimplemented error in NoOpExecutionPlan.
-    #[should_panic(expected = "NoOpExecutionPlan")]
+    // When schemas match, planning proceeds past the schema_satisfied_by check
+    // and succeeds.
     async fn test_aggregate_schema_check_passes() {
         let schema =
             Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
@@ -4940,6 +5383,7 @@ digraph {
             _logical_inputs: &[&LogicalPlan],
             _physical_inputs: &[Arc<dyn ExecutionPlan>],
             _session_state: &SessionState,
+            _planning_ctx: &PhysicalPlanningContext,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
             Ok(None)
         }
@@ -4949,6 +5393,7 @@ digraph {
             _planner: &dyn PhysicalPlanner,
             scan: &TableScan,
             _session_state: &SessionState,
+            _planning_ctx: &PhysicalPlanningContext,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
             if scan.source.is::<MockTableSource>() {
                 Ok(Some(Arc::new(EmptyExec::new(Arc::clone(

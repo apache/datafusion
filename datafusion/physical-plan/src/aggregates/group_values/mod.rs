@@ -31,10 +31,10 @@ use datafusion_expr::EmitTo;
 pub mod multi_group_by;
 
 mod row;
+pub use row::GroupValuesRows;
 mod single_group_by;
 use datafusion_physical_expr::binary_map::OutputType;
 use multi_group_by::GroupValuesColumn;
-use row::GroupValuesRows;
 
 pub(crate) use single_group_by::primitive::HashValue;
 
@@ -99,7 +99,9 @@ pub trait GroupValues: Send {
     /// assigned.
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
 
-    /// Returns the number of bytes of memory used by this [`GroupValues`]
+    /// Returns the number of bytes of memory used by this [`GroupValues`].
+    ///
+    /// May be expensive; check the implementation before calling on hot paths.
     fn size(&self) -> usize;
 
     /// Returns true if this [`GroupValues`] is empty
@@ -130,7 +132,7 @@ pub trait GroupValues: Send {
 ///
 /// `GroupColumn`:  crate::aggregates::group_values::multi_group_by::GroupColumn
 /// `GroupValuesColumn`: crate::aggregates::group_values::multi_group_by::GroupValuesColumn
-/// `GroupValuesRows`: crate::aggregates::group_values::row::GroupValuesRows
+/// `GroupValuesRows`: crate::aggregates::group_values::GroupValuesRows
 pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,

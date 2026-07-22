@@ -838,6 +838,40 @@ SELECT extract(millisecond from arrow_cast('23:32:50.123456789'::time, 'Time64(N
 ----
 50123
 
+# date32 and date64
+
+statement ok
+CREATE TABLE source_dt AS
+with t as (values
+  ('1970-01-01'),
+  ('2020-06-02'),
+  ('2026-02-28'),
+  (NULL)
+)
+SELECT
+  arrow_cast(column1, 'Date32') as date32,
+  arrow_cast(column1, 'Date64') as date64,
+FROM t;
+
+query IIIIIIIIII
+SELECT date_part('year', date32), date_part('month', date32), date_part('week', date32), date_part('day', date32), date_part('hour', date32), date_part('minute', date32), date_part('second', date32), date_part('millisecond', date32), date_part('microsecond', date32), date_part('nanosecond', date32) FROM source_dt;
+----
+1970 1 1 1 0 0 0 0 0 0
+2020 6 23 2 0 0 0 0 0 0
+2026 2 9 28 0 0 0 0 0 0
+NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL
+
+query IIIIIIIIII
+SELECT date_part('year', date64), date_part('month', date64), date_part('week', date64), date_part('day', date64), date_part('hour', date64), date_part('minute', date64), date_part('second', date64), date_part('millisecond', date64), date_part('microsecond', date64), date_part('nanosecond', date64) FROM source_dt;
+----
+1970 1 1 1 0 0 0 0 0 0
+2020 6 23 2 0 0 0 0 0 0
+2026 2 9 28 0 0 0 0 0 0
+NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL
+
+statement ok
+drop table source_dt;
+
 # just some floating point stuff happening in the result here
 query I
 SELECT date_part('microsecond', arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
@@ -1240,22 +1274,22 @@ true
 query I
 SELECT date_part('ISODOW', CAST('2000-01-01' AS DATE))
 ----
-5
+6
 
 query I
 SELECT EXTRACT(isodow FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
-1
+2
 
 query I
 SELECT EXTRACT("isodow" FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
-1
+2
 
 query I
 SELECT EXTRACT('isodow' FROM to_timestamp('2020-09-08T12:00:00+00:00'))
 ----
-1
+2
 
 ## Preimage tests
 

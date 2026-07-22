@@ -128,7 +128,7 @@ impl WindowExpr for StandardWindowExpr {
             let mut window_frame_ctx =
                 WindowFrameContext::new(Arc::clone(&self.window_frame), sort_options);
             let mut last_range = Range { start: 0, end: 0 };
-            // We iterate on each row to calculate window frame range and and window function result
+            // We iterate on each row to calculate window frame range and window function result
             for idx in 0..num_rows {
                 let range = window_frame_ctx.calculate_range(
                     order_bys_ref,
@@ -242,7 +242,7 @@ impl WindowExpr for StandardWindowExpr {
                 // fast path when the result only has a single row
                 row_wise_results[0].to_array()?
             } else {
-                ScalarValue::iter_to_array(row_wise_results.into_iter())?
+                ScalarValue::iter_to_array(row_wise_results)?
             };
 
             state.update(&out_col, partition_batch_state)?;

@@ -80,12 +80,12 @@ SELECT * FROM m1;
 query TTT
 DESCRIBE m1;
 ----
-tag_id Dictionary(Int32, Utf8) YES
-f1 Float64 YES
-f2 Utf8 YES
-f3 Utf8 YES
-f4 Float64 YES
-time Timestamp(ns) YES
+tag_id Dictionary(Int32, Utf8) NO
+f1 Float64 NO
+f2 Utf8 NO
+f3 Utf8 NO
+f4 Float64 NO
+time Timestamp(ns) NO
 
 # in list with dictionary input
 query BBB
@@ -154,10 +154,10 @@ passive 1000 1000 2023-12-04T01:30:00
 query TTT
 DESCRIBE m2;
 ----
-type Dictionary(Int32, Utf8) YES
-tag_id Dictionary(Int32, Utf8) YES
-f5 Float64 YES
-time Timestamp(ns) YES
+type Dictionary(Int32, Utf8) NO
+tag_id Dictionary(Int32, Utf8) NO
+f5 Float64 NO
+time Timestamp(ns) NO
 
 query I
 select count(*) from m1 where tag_id = '1000' and time < '2024-01-03T14:46:35+01:00';
@@ -492,10 +492,10 @@ LOCATION 'test_files/scratch/dictionary/dict_hash_10.parquet';
 query TTT
 DESCRIBE dict_hash_10;
 ----
-id Int64 YES
-payload_hash Dictionary(Int32, Utf8) YES
-metric Float64 YES
-ts Timestamp(ns) YES
+id Int64 NO
+payload_hash Dictionary(Int32, Utf8) NO
+metric Float64 NO
+ts Timestamp(ns) NO
 
 query II
 SELECT COUNT(*), COUNT(DISTINCT payload_hash)
@@ -515,3 +515,139 @@ DROP TABLE dict_hash_10;
 
 statement ok
 DROP TABLE dict_hash_src;
+
+statement ok
+CREATE TABLE dict_large_utf8 AS
+SELECT
+  arrow_cast(column1, 'Dictionary(Int32, LargeUtf8)') AS tag,
+  arrow_cast(column2, 'Float64') AS val
+FROM (VALUES ('alpha', 1.0), ('beta', 2.0), ('alpha', 3.0), ('gamma', 4.0), ('beta', 5.0), (NULL, 6.0));
+
+query TRI rowsort
+SELECT tag, SUM(val), COUNT(*) FROM dict_large_utf8 GROUP BY tag;
+----
+NULL 6 1
+alpha 4 2
+beta 7 2
+gamma 4 1
+
+statement ok
+DROP TABLE dict_large_utf8;
+
+# multiple dictionary columns as group keys
+
+statement ok
+CREATE TABLE dict_multi_key AS
+SELECT
+  arrow_cast(column1, 'Dictionary(Int32, Utf8)')  AS region,
+  arrow_cast(column2, 'Dictionary(Int16, Utf8)')  AS status,
+  arrow_cast(column3, 'Dictionary(Int8,  Utf8)')  AS tier,
+  arrow_cast(column4, 'Float64') AS amount
+FROM (
+  VALUES
+    ('us', 'active',   'gold',   100.0),
+    ('eu', 'active',   'silver', 200.0),
+    ('us', 'active',   'gold',   300.0),
+    ('eu', 'inactive', 'gold',   400.0),
+    ('us', 'inactive', 'silver', 500.0),
+    ('eu', 'inactive', 'gold',   600.0),
+    ('us', 'active',   'silver', 150.0),
+    ('eu', 'active',   'silver', 250.0),
+    (NULL, 'active',   'gold',   700.0)
+);
+
+query TTTRI rowsort
+SELECT region, status, tier, SUM(amount), COUNT(*) FROM dict_multi_key GROUP BY region, status, tier;
+----
+NULL active gold 700 1
+eu active silver 450 2
+eu inactive gold 1000 2
+us active gold 400 2
+us active silver 150 1
+us inactive silver 500 1
+
+statement ok
+DROP TABLE dict_multi_key;
+
+# mixed dict (2) and non-dict (2) group keys with nulls spread across all columns
+
+statement ok
+CREATE TABLE dict_mixed_nulls AS
+SELECT
+  arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS region,
+  arrow_cast(column2, 'Dictionary(Int16, Utf8)') AS status,
+  arrow_cast(column3, 'Utf8') AS tier,
+  arrow_cast(column4, 'Int32') AS category,
+  arrow_cast(column5, 'Float64') AS amount
+FROM (
+  VALUES
+    ('us', 'active', 'gold',   1,    100.0),
+    ('us', 'active', 'gold',   1,    200.0),
+    ('eu', 'active', 'silver', 2,    300.0),
+    (NULL, 'active', 'gold',   1,    400.0),
+    ('us',  NULL,    'gold',   1,    500.0),
+    ('us', 'active',  NULL,    1,    600.0),
+    ('us', 'active', 'gold',   NULL, 700.0)
+);
+
+query TTTIRI rowsort
+SELECT region, status, tier, category, SUM(amount), COUNT(*) FROM dict_mixed_nulls GROUP BY region, status, tier, category;
+----
+NULL active gold 1 400 1
+eu active silver 2 300 1
+us NULL gold 1 500 1
+us active NULL 1 600 1
+us active gold 1 300 2
+us active gold NULL 700 1
+
+statement ok
+DROP TABLE dict_mixed_nulls;
+
+##########
+## Aggregation tests: COUNT(DISTINCT) on dictionary columns
+##########
+
+statement ok
+CREATE TABLE dict_count_distinct AS
+SELECT
+  arrow_cast(column1, 'Dictionary(Int64, Utf8)') AS region,
+  arrow_cast(column2, 'Dictionary(Int8, Utf8)') AS sensor
+FROM (
+  VALUES
+    ('north', 's1'), ('north', 's2'), ('north', 's1'), ('north', 's3'),
+    ('south', 's3'), ('south', 's3'), ('south', 's4'),
+    ('east',  's1'),
+    (NULL,    's5'),
+    ('north', NULL)
+);
+
+query TI rowsort
+SELECT region, COUNT(DISTINCT sensor) FROM dict_count_distinct GROUP BY region;
+----
+NULL 1
+east 1
+north 3
+south 2
+
+statement ok
+DROP TABLE dict_count_distinct;
+
+# same dictionary type but value order differs across batches so key ids refer to different strings;
+# grouping must use the logical value, not the raw key id
+query TI rowsort
+WITH
+  first_batch AS (
+    SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS region
+    FROM (VALUES ('west'), ('west'), ('west'), ('east'), (NULL)) AS t(column1)
+  ),
+  second_batch AS (
+    SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS region
+    FROM (VALUES ('east'), ('east'), ('east'), ('west'), (NULL)) AS t(column1)
+  )
+SELECT region, count(*)
+FROM (SELECT region FROM first_batch UNION ALL SELECT region FROM second_batch)
+GROUP BY region;
+----
+NULL 2
+east 4
+west 4

@@ -318,6 +318,12 @@ impl Precision<ScalarValue> {
     }
 }
 
+impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> From<Option<T>> for Precision<T> {
+    fn from(option: Option<T>) -> Self {
+        option.map_or(Precision::Absent, Precision::Exact)
+    }
+}
+
 impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Debug for Precision<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -539,6 +545,10 @@ impl Statistics {
         skip: usize,
         n_partitions: usize,
     ) -> Result<Self> {
+        if fetch.is_none() && skip == 0 {
+            return Ok(self);
+        }
+
         let fetch_val = fetch.unwrap_or(usize::MAX);
 
         // Get the ratio of rows after / rows before on a per-partition basis
@@ -553,10 +563,12 @@ impl Statistics {
                 num_rows: Precision::Inexact(nr),
                 ..
             } => {
-                // Here, the inexact case gives us an upper bound on the number of rows.
+                // Here, the inexact case gives us an estimate of the number of rows.
                 if nr <= skip {
-                    // All input data will be skipped:
-                    Precision::Exact(0)
+                    // All input data will be skipped. Preserve the exactness of
+                    // the input estimate: if the input was inexact, the
+                    // resulting zero is also inexact.
+                    check_num_rows(Some(0), self.num_rows.is_exact().unwrap())
                 } else if nr <= fetch_val && skip == 0 {
                     // If the input does not reach the `fetch` globally, and `skip`
                     // is zero (meaning the input and output are identical), return
@@ -590,18 +602,18 @@ impl Statistics {
                 ..
             } => check_num_rows(fetch.and_then(|v| v.checked_mul(n_partitions)), false),
         };
-        let ratio: f64 = match (num_rows_before, self.num_rows) {
+        let ratio: Option<f64> = match (num_rows_before, self.num_rows) {
             (
                 Precision::Exact(nr_before) | Precision::Inexact(nr_before),
                 Precision::Exact(nr_after) | Precision::Inexact(nr_after),
             ) => {
                 if nr_before == 0 {
-                    0.0
+                    Some(0.0)
                 } else {
-                    nr_after as f64 / nr_before as f64
+                    Some(nr_after as f64 / nr_before as f64)
                 }
             }
-            _ => 0.0,
+            _ => None,
         };
         self.column_statistics = self
             .column_statistics
@@ -609,11 +621,11 @@ impl Statistics {
             .map(|cs| {
                 let mut cs = cs.to_inexact();
                 // Scale byte_size by the row ratio
-                cs.byte_size = match cs.byte_size {
-                    Precision::Exact(n) | Precision::Inexact(n) => {
+                cs.byte_size = match (cs.byte_size, ratio) {
+                    (Precision::Exact(n) | Precision::Inexact(n), Some(ratio)) => {
                         Precision::Inexact((n as f64 * ratio) as usize)
                     }
-                    Precision::Absent => Precision::Absent,
+                    _ => Precision::Absent,
                 };
                 // NDV can never exceed the number of rows
                 if let Some(&rows) = self.num_rows.get_value() {
@@ -635,11 +647,11 @@ impl Statistics {
             Some(sum) => Precision::Inexact(sum),
             None => {
                 // Fall back to scaling original total_byte_size if not all columns have byte_size
-                match &self.total_byte_size {
-                    Precision::Exact(n) | Precision::Inexact(n) => {
+                match (&self.total_byte_size, ratio) {
+                    (Precision::Exact(n) | Precision::Inexact(n), Some(ratio)) => {
                         Precision::Inexact((*n as f64 * ratio) as usize)
                     }
-                    Precision::Absent => Precision::Absent,
+                    _ => Precision::Absent,
                 }
             }
         };
@@ -821,8 +833,8 @@ pub fn estimate_ndv_with_overlap(
     let right_min = right.min_value.get_value()?;
     let right_max = right.max_value.get_value()?;
 
-    let range_left = left_max.distance(left_min)?;
-    let range_right = right_max.distance(right_min)?;
+    let range_left = left_max.distance_u64(left_min)?;
+    let range_right = right_max.distance_u64(right_min)?;
 
     // Constant columns (range == 0) can't use the proportional overlap
     // formula below, so check interval overlap directly instead.
@@ -851,7 +863,7 @@ pub fn estimate_ndv_with_overlap(
         return Some(ndv_left + ndv_right);
     }
 
-    let overlap_range = overlap_max.distance(overlap_min)? as f64;
+    let overlap_range = overlap_max.distance_u64(overlap_min)? as f64;
 
     let overlap_left = overlap_range / range_left as f64;
     let overlap_right = overlap_range / range_right as f64;
@@ -2337,6 +2349,22 @@ mod tests {
     }
 
     #[test]
+    fn test_with_fetch_skip_all_rows_inexact() {
+        // When the input num_rows is Inexact (an upper-bound estimate), an
+        // `nr <= skip` outcome must remain Inexact: the estimate could be
+        // wrong, so we cannot promote 0 to Exact.
+        let original_stats = Statistics {
+            num_rows: Precision::Inexact(0),
+            total_byte_size: Precision::Inexact(0),
+            column_statistics: vec![col_stats_i64(10)],
+        };
+
+        let result = original_stats.clone().with_fetch(None, 0, 1).unwrap();
+
+        assert_eq!(result.num_rows, Precision::Inexact(0));
+    }
+
+    #[test]
     fn test_with_fetch_no_limit() {
         // Test when fetch is None and skip is 0 (no limit applied)
         let original_stats = Statistics {
@@ -2350,6 +2378,38 @@ mod tests {
         // Stats should be unchanged when no fetch and no skip
         assert_eq!(result.num_rows, Precision::Exact(100));
         assert_eq!(result.total_byte_size, Precision::Exact(800));
+    }
+
+    #[test]
+    fn test_with_fetch_no_limit_preserves_absent_num_rows() {
+        let original_stats = Statistics {
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Exact(800),
+            column_statistics: vec![col_stats_i64(10)],
+        };
+
+        let result = original_stats.clone().with_fetch(None, 0, 1).unwrap();
+
+        assert_eq!(result, original_stats);
+    }
+
+    #[test]
+    fn test_with_fetch_absent_num_rows_does_not_zero_byte_size() {
+        let original_stats = Statistics {
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Exact(800),
+            column_statistics: vec![col_stats_i64(10)],
+        };
+
+        let result = original_stats.with_fetch(Some(1), 0, 1).unwrap();
+
+        assert_eq!(result.num_rows, Precision::Inexact(1));
+        assert_eq!(result.total_byte_size, Precision::Absent);
+        assert_eq!(result.column_statistics[0].byte_size, Precision::Absent);
+        assert_eq!(
+            result.column_statistics[0].distinct_count,
+            Precision::Inexact(1)
+        );
     }
 
     #[test]

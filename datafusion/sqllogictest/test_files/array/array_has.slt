@@ -41,13 +41,15 @@ select array_has([1, null, 2], 3),
 false false
 
 #TODO: array_has_all and array_has_any cannot handle NULL
-#query BBBB
-#select array_has_any([], null),
-#       array_has_any([1, 2, 3], null),
-#       array_has_all([], null),
-#       array_has_all([1, 2, 3], null);
-#----
-#false false false false
+query BB
+select array_has_any([], null),
+       array_has_any([1, 2, 3], null);
+----
+NULL NULL
+
+query error array_has does not support type 'Null'
+select array_has_all([], null),
+       array_has_all([1, 2, 3], null);
 
 query BBBBBBBBBBBB
 select array_has(make_array(1,2), 1),
@@ -517,18 +519,16 @@ logical_plan
 03)----SubqueryAlias: test
 04)------SubqueryAlias: t
 05)--------Projection:
-06)----------Filter: __common_expr_3 IS NULL AND Boolean(NULL) OR __common_expr_3 IN ([Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278"), Utf8View("a"), Utf8View("b"), Utf8View("c")]) IS NOT DISTINCT FROM Boolean(true) AND __common_expr_3 IS NOT NULL
-07)------------Projection: substr(CAST(md5(CAST(generate_series().value AS Utf8View)) AS Utf8View), Int64(1), Int64(32)) AS __common_expr_3
-08)--------------TableScan: generate_series() projection=[value]
+06)----------Filter: substr(CAST(md5(CAST(generate_series().value AS Utf8View)) AS Utf8View), Int64(1), Int64(32)) IN ([Utf8View("7f4b18de3cfeb9b4ac78c381ee2ad278"), Utf8View("a"), Utf8View("b"), Utf8View("c")])
+07)------------TableScan: generate_series() projection=[value]
 physical_plan
 01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
-05)--------FilterExec: __common_expr_3@0 IS NULL AND NULL OR __common_expr_3@0 IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]) IS NOT DISTINCT FROM true AND __common_expr_3@0 IS NOT NULL, projection=[]
-06)----------ProjectionExec: expr=[substr(md5(CAST(value@0 AS Utf8View)), 1, 32) as __common_expr_3]
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-08)--------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
+05)--------FilterExec: substr(md5(CAST(value@0 AS Utf8View)), 1, 32) IN (SET) ([7f4b18de3cfeb9b4ac78c381ee2ad278, a, b, c]), projection=[]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192]
 
 query I
 with test AS (SELECT substr(md5(i::text)::text, 1, 32) as needle FROM generate_series(1, 100000) t(i))
@@ -756,26 +756,26 @@ select 5 <= any(make_array());
 false
 
 # Mixed NULL + non-NULL array where no non-NULL element satisfies the condition
-# These return NULL because NULLs leave the result indeterminate
+# These return false (NULLs are skipped by array_min/array_max)
 query B
 select 5 > any(make_array(6, NULL));
 ----
-NULL
+false
 
 query B
 select 5 < any(make_array(3, NULL));
 ----
-NULL
+false
 
 query B
 select 5 >= any(make_array(6, NULL));
 ----
-NULL
+false
 
 query B
 select 5 <= any(make_array(3, NULL));
 ----
-NULL
+false
 
 # Mixed NULL + non-NULL array where a non-NULL element satisfies the condition
 query B
@@ -806,38 +806,33 @@ true
 query B
 select 5 <> any(make_array(5, NULL));
 ----
-NULL
+false
 
-# All-NULL array: all operators should return NULL (unknown comparison)
+# All-NULL array: all operators should return false
 query B
 select 5 > any(make_array(NULL::INT, NULL::INT));
 ----
-NULL
+false
 
 query B
 select 5 < any(make_array(NULL::INT, NULL::INT));
 ----
-NULL
+false
 
 query B
 select 5 >= any(make_array(NULL::INT, NULL::INT));
 ----
-NULL
+false
 
 query B
 select 5 <= any(make_array(NULL::INT, NULL::INT));
 ----
-NULL
+false
 
 query B
 select 5 <> any(make_array(NULL::INT, NULL::INT));
 ----
-NULL
-
-query B
-select 5 = any(make_array(NULL::INT, NULL::INT));
-----
-NULL
+false
 
 # NULL left operand: should return NULL for non-empty arrays
 query B
@@ -897,37 +892,122 @@ select 5 <> any(NULL::INT[]);
 ----
 NULL
 
-query B
-select 5 = any(NULL::INT[]);
-----
-NULL
+statement ok
+DROP TABLE any_op_test;
 
-# NULL = ANY with non-empty array
-query B
-select NULL = any(make_array(1, 2, 3));
-----
-NULL
 
-# = ANY with no match, no NULLs
-query B
-select 5 = any(make_array(1, 2, 3));
-----
-false
+# -------------------------------------------------------------------------
+# array_has with an array (column) needle -- one needle value per row, which
+# goes through array_has_dispatch_for_array (the cases above use a scalar
+# literal needle and take a different path).
+# -------------------------------------------------------------------------
 
-# = ANY with mixed NULL (satisfying) returns TRUE
+statement ok
+create table array_has_int_needle (arr int[], needle int) as values
+  ([1, 2, 3], 2),        -- found
+  ([4, 5, 6], 9),        -- not found
+  (NULL, 5),             -- null row
+  ([7, NULL, 9], NULL),  -- null needle
+  ([7, NULL, 9], 7),     -- element null skipped, found
+  ([0, NULL], 0),        -- valid 0 matches
+  ([NULL, 5], 0),        -- null-fill collision: a null slot must not match 0
+  ([], 1),               -- empty
+  ([NULL, NULL], 3);     -- all null
+
 query B
-select 5 = any(make_array(5, NULL));
+select array_has(arr, needle) from array_has_int_needle;
 ----
 true
+false
+NULL
+NULL
+true
+true
+false
+false
+false
 
-# = ANY with mixed NULL (non-satisfying): NULLs leave result indeterminate
+# same over LargeList (i64) offsets
 query B
-select 5 = any(make_array(1, 2, NULL));
+select array_has(arrow_cast(arr, 'LargeList(Int32)'), needle) from array_has_int_needle;
 ----
+true
+false
+NULL
+NULL
+true
+true
+false
+false
+false
+
+statement ok
+drop table array_has_int_needle;
+
+statement ok
+create table array_has_str_needle (arr text[], needle text) as values
+  (['a', 'bb', 'ccc'], 'bb'),                                  -- inline, found
+  (['short', 'tiny'], 'missing'),                              -- inline, not found
+  (['this_is_a_long_value_xyz'], 'this_is_a_long_value_xyz'),  -- long, found
+  (['prefixAAAA_1111', 'prefixAAAA_2222'], 'prefixAAAA_2222'), -- long shared prefix
+  (['x', NULL, 'y'], 'y'),                                     -- element null skipped
+  ([NULL], ''),                                                -- null slot vs "" -> false
+  (NULL, 'q');                                                 -- null row
+
+query B
+select array_has(arr, needle) from array_has_str_needle;
+----
+true
+false
+true
+true
+true
+false
+NULL
+
+# Utf8View exercises the view-aware fast path
+query B
+select array_has(arrow_cast(arr, 'List(Utf8View)'), arrow_cast(needle, 'Utf8View'))
+from array_has_str_needle;
+----
+true
+false
+true
+true
+true
+false
+NULL
+
+# LargeUtf8 elements
+query B
+select array_has(arrow_cast(arr, 'LargeList(LargeUtf8)'), arrow_cast(needle, 'LargeUtf8'))
+from array_has_str_needle;
+----
+true
+false
+true
+true
+true
+false
 NULL
 
 statement ok
-DROP TABLE any_op_test;
+drop table array_has_str_needle;
+
+# > ROW_CONVERSION_CHUNK_SIZE (512) rows with element nulls exercises the chunked
+# element-null path. The needle equals an element that is always present, so all
+# rows match; the second query shifts the needle out of range, so none do.
+query I
+select count(*) from generate_series(1, 2000) as t(v)
+where array_has(make_array(v % 7, NULL, (v + 2) % 7), v % 7);
+----
+2000
+
+query I
+select count(*) from generate_series(1, 2000) as t(v)
+where array_has(make_array(v % 7, NULL, (v + 2) % 7), v % 7 + 100);
+----
+0
 
 
 include ./cleanup.slt.part

@@ -24,6 +24,7 @@ use crate::function::map::utils::{
 use arrow::array::{Array, ArrayRef, NullBufferBuilder, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::config::MapKeyDedupPolicy;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{
@@ -101,11 +102,16 @@ impl ScalarUDFImpl for MapFromEntries {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(map_from_entries_inner, vec![])(&args.args)
+        let last_value_wins =
+            args.config_options.spark.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
+        make_scalar_function(
+            move |args: &[ArrayRef]| map_from_entries_inner(args, last_value_wins),
+            vec![],
+        )(&args.args)
     }
 }
 
-fn map_from_entries_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn map_from_entries_inner(args: &[ArrayRef], last_value_wins: bool) -> Result<ArrayRef> {
     let [entries] = take_function_args("map_from_entries", args)?;
     let entries_offsets = get_list_offsets(entries)?;
     let entries_values = get_list_values(entries)?;
@@ -148,6 +154,7 @@ fn map_from_entries_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         &entries_offsets,
         None,
         res_nulls.as_ref(),
+        last_value_wins,
     )
 }
 

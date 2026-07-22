@@ -555,7 +555,17 @@ impl Accumulator for SlidingDistinctCountAccumulator {
     }
 
     fn size(&self) -> usize {
+        // Mirrors `DistinctCountAccumulator::full_size`: self + HashMap
+        // bucket array + per-key inner heap + DataType inner heap.
         size_of_val(self)
+            + (size_of::<ScalarValue>() + size_of::<usize>()) * self.counts.capacity()
+            + self
+                .counts
+                .keys()
+                .map(|k| k.size() - size_of_val(k))
+                .sum::<usize>()
+            + self.data_type.size()
+            - size_of_val(&self.data_type)
     }
 }
 
@@ -665,8 +675,6 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        // Since aggregate filter should be applied in partial stage, in final stage there should be no filter
-        _opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "one argument to merge_batch");

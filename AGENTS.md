@@ -37,5 +37,24 @@ When creating a PR, you MUST follow the [PR template](.github/pull_request_templ
 
 ## Testing
 
-See the [Testing Quick Start](docs/source/contributor-guide/testing.md#testing-quick-start)
-for the recommended pre-PR test commands.
+If documentation files changed then run 
+```bash
+./ci/scripts/doc_prettier_check.sh --write --allow-dirty
+```
+
+Otherwise, run extended tests
+```bash
+RUST_BACKTRACE=1 cargo test --profile ci \
+    --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-cli \
+    --workspace --lib --tests --bins \
+    --features avro,json,backtrace,extended_tests,recursive_protection,parquet_encryption
+```
+
+For modified code identify local benchmarks(if any) and run them against `main`. See [Benchmarks](benchmarks/README.md).
+
+## Agent Skills
+
+Repository-specific agent skills live under `.ai/skills/`. Each subdirectory is
+a single skill with a `SKILL.md` (YAML frontmatter + body). Check that
+directory for applicable skills before working on a task; new skills go in
+`.ai/skills/<skill-name>/SKILL.md`.

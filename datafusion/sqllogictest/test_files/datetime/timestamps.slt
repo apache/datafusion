@@ -518,6 +518,35 @@ SELECT COUNT(*) FROM ts_data_secs where ts > to_timestamp_seconds('2020-09-08 12
 ----
 2
 
+# NULL string scalar inputs and all-NULL scalar formats return NULL
+query PP
+SELECT
+  to_timestamp(NULL::VARCHAR, '%Y-%m-%d'),
+  to_timestamp('2020-09-08', NULL::VARCHAR, NULL::VARCHAR)
+----
+NULL NULL
+
+# NULL array formats are skipped for each row; rows with no usable format return NULL
+query IP
+SELECT id, to_timestamp(value, format1, format2)
+FROM (
+  VALUES
+    (1, '2020-09-08', NULL::VARCHAR, '%Y-%m-%d'),
+    (2, '2020-09-08', NULL::VARCHAR, NULL::VARCHAR)
+) AS t(id, value, format1, format2)
+ORDER BY id
+----
+1 2020-09-08T00:00:00
+2 NULL
+
+# to_unixtime uses the same formatted string parsing path
+query II
+SELECT
+  to_unixtime(NULL::VARCHAR, '%Y-%m-%d'),
+  to_unixtime('2020-09-08', NULL::VARCHAR, NULL::VARCHAR)
+----
+NULL NULL
+
 # to_timestamp float inputs
 
 query PPP
@@ -594,6 +623,12 @@ query PPP
 SELECT to_timestamp(arrow_cast(123456789.123456789, 'Decimal128(18,9)')) as c1, cast(arrow_cast(123456789.123456789, 'Decimal128(18,9)') as timestamp) as c2, arrow_cast(123456789.123456789, 'Decimal128(18,9)')::timestamp as c3;
 ----
 1973-11-29T21:33:09.123456784 1970-01-01T00:00:00.123456789 1970-01-01T00:00:00.123456789
+
+# Regression test for https://github.com/apache/datafusion/issues/22213
+query error .*overflows timestamp nanoseconds
+SELECT to_timestamp(
+  arrow_cast('99999999999999999999999999999999999999', 'Decimal128(38,0)')
+);
 
 
 # from_unixtime
@@ -1930,10 +1965,8 @@ SELECT '2000-01-01T00:00:00'::timestamp - '2010-01-01T00:00:00'::timestamp;
 -3653 days 0 hours 0 mins 0.000000000 secs
 
 # Interval - Timestamp => error
-# statement error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) to valid types
-# TODO: This query should raise error
-# query P
-# SELECT i - ts1 from FOO;
+query error Cannot coerce arithmetic expression Interval\(MonthDayNano\) - Timestamp\(ns\) to valid types
+SELECT i - ts1 from FOO;
 
 statement ok
 drop table foo;
@@ -2428,6 +2461,12 @@ SELECT arrow_typeof(date_trunc('hour', TIME '14:30:45'));
 ----
 Time64(ns)
 
+query error DataFusion error: Execution error: Timestamp 9223372036854775807 out of range
+SELECT date_trunc(
+  'hour',
+  arrow_cast(9223372036854775807, 'Timestamp(Second, None)')
+);
+
 # Error for granularities not valid for Time types
 query error date_trunc does not support 'day' granularity for Time types
 SELECT date_trunc('day', TIME '14:30:45');
@@ -2467,6 +2506,51 @@ query B
 SELECT TIMESTAMPTZ '2020-01-01 00:00:00Z' = TIMESTAMP '2020-01-01'
 ----
 true
+
+query BBB
+SELECT
+  arrow_cast(TIMESTAMP '2024-01-01 00:00:00', 'Timestamp(Second, None)') =
+    arrow_cast(TIMESTAMP '2024-01-01 00:00:00.123', 'Timestamp(Millisecond, None)'),
+  arrow_cast(TIMESTAMP '2024-01-01 00:00:00', 'Timestamp(Second, None)') =
+    arrow_cast(TIMESTAMP '2024-01-01 00:00:00.000', 'Timestamp(Millisecond, None)'),
+  arrow_cast(TIMESTAMP '2024-01-01 00:00:00', 'Timestamp(Second, None)') <
+    arrow_cast(TIMESTAMP '2024-01-01 00:00:00.123', 'Timestamp(Millisecond, None)')
+----
+false true true
+
+query ?
+SELECT
+  arrow_cast(TIMESTAMP '2024-01-01 00:00:00.123', 'Timestamp(Millisecond, None)') -
+    arrow_cast(TIMESTAMP '2024-01-01 00:00:00', 'Timestamp(Second, None)')
+----
+0 days 0 hours 0 mins 0.123 secs
+
+query TP
+SELECT arrow_typeof(ts), ts
+FROM (
+  SELECT arrow_cast(TIMESTAMP '2024-01-01 00:00:00', 'Timestamp(Second, None)') AS ts
+  UNION ALL
+  SELECT arrow_cast(TIMESTAMP '2024-01-01 00:00:00.123', 'Timestamp(Millisecond, None)') AS ts
+)
+ORDER BY ts
+----
+Timestamp(ms) 2024-01-01T00:00:00
+Timestamp(ms) 2024-01-01T00:00:00.123
+
+query TP
+SELECT
+  arrow_typeof(
+    coalesce(
+      arrow_cast(NULL, 'Timestamp(Second, None)'),
+      arrow_cast(TIMESTAMP '2024-01-01 00:00:00.123', 'Timestamp(Millisecond, None)')
+    )
+  ),
+  coalesce(
+    arrow_cast(NULL, 'Timestamp(Second, None)'),
+    arrow_cast(TIMESTAMP '2024-01-01 00:00:00.123', 'Timestamp(Millisecond, None)')
+  )
+----
+Timestamp(ms) 2024-01-01T00:00:00.123
 
 # verify timestamp cast with integer input
 query PPPPPP
@@ -4179,17 +4263,17 @@ true
 query ?
 select arrow_cast('2024-06-17T11:00:00', 'Timestamp(Nanosecond, Some("UTC"))') - arrow_cast('2024-06-17T12:00:00', 'Timestamp(Microsecond, Some("UTC"))');
 ----
-0 days -1 hours 0 mins 0.000000 secs
+0 days -1 hours 0 mins 0.000000000 secs
 
 query ?
 select arrow_cast('2024-06-17T13:00:00', 'Timestamp(Nanosecond, Some("+00:00"))') - arrow_cast('2024-06-17T12:00:00', 'Timestamp(Microsecond, Some("UTC"))');
 ----
-0 days 1 hours 0 mins 0.000000 secs
+0 days 1 hours 0 mins 0.000000000 secs
 
 query ?
 select arrow_cast('2024-06-17T13:00:00', 'Timestamp(Nanosecond, Some("UTC"))') - arrow_cast('2024-06-17T12:00:00', 'Timestamp(Microsecond, Some("+00:00"))');
 ----
-0 days 1 hours 0 mins 0.000000 secs
+0 days 1 hours 0 mins 0.000000000 secs
 
 # not supported: coercion across timezones
 query error
@@ -5551,8 +5635,27 @@ SELECT to_timestamp(arrow_cast(-9223372036, 'Int64'));
 1677-09-21T00:12:44
 
 # Overflow error when value exceeds valid range
-query error Arithmetic overflow
+query error converted value exceeds the representable i64 range
 SELECT to_timestamp(arrow_cast(9223372037, 'Int64'));
+
+# TRY_CAST returns NULL for timestamp/date casts that overflow
+query P
+SELECT TRY_CAST(arrow_cast(9223372037, 'Timestamp(s)') AS TIMESTAMP(9));
+----
+NULL
+
+query P
+SELECT TRY_CAST(DATE '3000-01-01' AS TIMESTAMP(9));
+----
+NULL
+
+query P
+SELECT TRY_CAST(ts AS TIMESTAMP(9)) AS ts
+FROM (
+    VALUES (arrow_cast(9223372037, 'Timestamp(s)'))
+) t(ts);
+----
+NULL
 
 # Float truncation behavior
 query P
@@ -5564,6 +5667,13 @@ query P
 SELECT to_timestamp_millis(arrow_cast(-1.9, 'Float64'));
 ----
 1969-12-31T23:59:59.999
+
+# Regression test for https://github.com/apache/datafusion/issues/22214
+query error .*out of range after truncating to year
+SELECT date_trunc(
+  'year',
+  arrow_cast(TIMESTAMP '1677-09-22 00:00:00', 'Timestamp(Nanosecond, None)')
+);
 
 
 ##########

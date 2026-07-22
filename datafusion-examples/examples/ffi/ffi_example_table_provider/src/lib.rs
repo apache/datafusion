@@ -17,9 +17,10 @@
 
 use std::sync::Arc;
 
-use arrow::array::RecordBatch;
+use arrow::array::{RecordBatch, record_batch};
+use arrow::datatypes as arrow_schema;
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion::{common::record_batch, datasource::MemTable};
+use datafusion::datasource::MemTable;
 use datafusion_ffi::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use ffi_module_interface::TableProviderModule;

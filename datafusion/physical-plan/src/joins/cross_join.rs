@@ -31,6 +31,8 @@ use crate::projection::{
     ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
     physical_to_column_exprs,
 };
+use crate::statistics::{ChildStats, StatisticsArgs};
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, PlanProperties, RecordBatchStream,
@@ -41,13 +43,11 @@ use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinType, Result, ScalarValue, assert_eq_or_internal_err, internal_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use async_trait::async_trait;
@@ -186,30 +186,37 @@ impl CrossJoinExec {
     /// operators on the join's children. Check [`super::HashJoinExec::swap_inputs`]
     /// for more details.
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
-        let new_join =
-            CrossJoinExec::new(Arc::clone(&self.right), Arc::clone(&self.left));
+        // Rebuild schema with columns from right to left, preserve existing metadata
+        let new_columns = self
+            .right
+            .schema()
+            .fields
+            .iter()
+            .chain(self.left.schema().fields.iter())
+            .cloned()
+            .collect::<Fields>();
+
+        let new_schema = Arc::new(
+            Schema::new(new_columns).with_metadata(self.schema.metadata.clone()),
+        );
+
+        let new_cache =
+            Self::compute_properties(&self.right, &self.left, Arc::clone(&new_schema))?;
+
+        let new_join = CrossJoinExec {
+            left: Arc::clone(&self.right),
+            right: Arc::clone(&self.left),
+            schema: new_schema,
+            left_fut: Default::default(),
+            metrics: ExecutionPlanMetricsSet::default(),
+            cache: Arc::new(new_cache),
+        };
+
         reorder_output_after_swap(
             Arc::new(new_join),
             &self.left.schema(),
             &self.right.schema(),
         )
-    }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        let left = children.swap_remove(0);
-        let right = children.swap_remove(0);
-
-        Self {
-            left,
-            right,
-            metrics: ExecutionPlanMetricsSet::new(),
-            left_fut: Default::default(),
-            cache: Arc::clone(&self.cache),
-            schema: Arc::clone(&self.schema),
-        }
     }
 }
 
@@ -283,14 +290,6 @@ impl ExecutionPlan for CrossJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // CrossJoin has no join conditions or expressions
-        Ok(TreeNodeRecursion::Continue)
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -300,6 +299,23 @@ impl ExecutionPlan for CrossJoinExec {
             Arc::clone(&children[0]),
             Arc::clone(&children[1]),
         )))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let left = children.swap_remove(0);
+        let right = children.swap_remove(0);
+
+        Ok(Arc::new(Self {
+            left,
+            right,
+            metrics: ExecutionPlanMetricsSet::new(),
+            left_fut: Default::default(),
+            cache: Arc::clone(&self.cache),
+            schema: Arc::clone(&self.schema),
+        }))
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
@@ -315,10 +331,14 @@ impl ExecutionPlan for CrossJoinExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+        crate::InputDistributionRequirements::new(vec![
             Distribution::SinglePartition,
             Distribution::UnspecifiedDistribution,
-        ]
+        ])
     }
 
     fn execute(
@@ -380,11 +400,19 @@ impl ExecutionPlan for CrossJoinExec {
         }
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        // Get the all partitions statistics of the left
-        let left_stats = Arc::unwrap_or_clone(self.left.partition_statistics(None)?);
-        let right_stats =
-            Arc::unwrap_or_clone(self.right.partition_statistics(partition)?);
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        // Left side is always broadcast, so it always needs overall stats.
+        // Right side is partitioned, so it needs per-partition stats.
+        vec![ChildStats::At(None), ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let left_stats = input_stats[0].as_ref().clone();
+        let right_stats = input_stats[1].as_ref().clone();
 
         Ok(Arc::new(stats_cartesian_product(left_stats, right_stats)))
     }
@@ -439,13 +467,14 @@ fn stats_cartesian_product(
     let left_row_count = left_stats.num_rows;
     let right_row_count = right_stats.num_rows;
 
-    // calculate global stats
+    // Calculate global stats
     let num_rows = left_row_count.multiply(&right_row_count);
-    // the result size is two times a*b because you have the columns of both left and right
-    let total_byte_size = left_stats
-        .total_byte_size
-        .multiply(&right_stats.total_byte_size)
-        .multiply(&Precision::Exact(2));
+
+    // Each output row includes every left and right column, so the left side is
+    // repeated once per right row and the right side once per left row.
+    let left_byte_size = left_stats.total_byte_size.multiply(&right_row_count);
+    let right_byte_size = right_stats.total_byte_size.multiply(&left_row_count);
+    let total_byte_size = left_byte_size.add(&right_byte_size);
 
     let left_col_stats = left_stats.column_statistics;
     let right_col_stats = right_stats.column_statistics;
@@ -503,7 +532,7 @@ fn stats_cartesian_product(
     }
 }
 
-/// A stream that issues [RecordBatch]es as they arrive from the right  of the join.
+/// A stream that issues [RecordBatch]es as they arrive from the right of the join.
 struct CrossJoinStream<T> {
     /// Input schema
     schema: Arc<Schema>,
@@ -645,7 +674,12 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
         let right_data = match ready!(self.right.poll_next_unpin(cx)) {
             Some(Ok(right_data)) => right_data,
             Some(Err(e)) => return Poll::Ready(Err(e)),
-            None => return Poll::Ready(Ok(StatefulStreamResult::Ready(None))),
+            None => {
+                // Release the right (probe) input pipeline's resources.
+                let right_schema = self.right.schema();
+                self.right = Box::pin(EmptyRecordBatchStream::new(right_schema));
+                return Poll::Ready(Ok(StatefulStreamResult::Ready(None)));
+            }
         };
         self.join_metrics.input_batches.add(1);
         self.join_metrics.input_rows.add(right_data.num_rows());
@@ -691,7 +725,9 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
 mod tests {
     use super::*;
     use crate::common;
-    use crate::test::{assert_join_metrics, build_table_scan_i32};
+    use crate::test::{TestMemoryExec, assert_join_metrics, build_table_scan_i32};
+    use arrow_schema::{DataType, Field};
+    use std::collections::HashMap;
 
     use datafusion_common::{assert_contains, test_util::batches_to_sort_string};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -759,7 +795,9 @@ mod tests {
 
         let expected = Statistics {
             num_rows: Precision::Exact(left_row_count * right_row_count),
-            total_byte_size: Precision::Exact(2 * left_bytes * right_bytes),
+            total_byte_size: Precision::Exact(
+                left_bytes * right_row_count + right_bytes * left_row_count,
+            ),
             column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: Precision::Exact(5),
@@ -980,6 +1018,28 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_swapped_cross_join_schema_on_conflicting_metadata() {
+        let input = |field: &str, meta_value: &str| {
+            let schema = Arc::new(
+                Schema::new(vec![Field::new(field, DataType::Int32, false)])
+                    .with_metadata(HashMap::from([(
+                        String::from("metadata_key"),
+                        String::from(meta_value),
+                    )])),
+            );
+            TestMemoryExec::try_new_exec(&[vec![]], schema, None).unwrap()
+        };
+        // Conflicting metadata on left and right input, right side wins "metadata_key" -> "right value"
+        let join =
+            CrossJoinExec::new(input("a", "left value"), input("b", "right value"));
+
+        let swapped_join = join.swap_inputs().unwrap();
+
+        // The metadata of the cross-join and the swapped cross-join (with projection on top) must be the same
+        assert_eq!(join.schema().metadata(), swapped_join.schema().metadata());
     }
 
     /// Returns the column names on the schema

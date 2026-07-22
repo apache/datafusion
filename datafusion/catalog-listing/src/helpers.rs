@@ -17,13 +17,15 @@
 
 //! Helper functions for the table implementation
 
-use std::mem;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use datafusion_catalog::Session;
-use datafusion_common::{HashMap, Result, ScalarValue, assert_or_internal_err};
-use datafusion_datasource::ListingTableUrl;
+use datafusion_common::{
+    HashMap, Result, ScalarValue, TableReference, assert_or_internal_err,
+};
 use datafusion_datasource::PartitionedFile;
+use datafusion_datasource::{FileExtensions, ListingTableUrl};
 use datafusion_expr::{BinaryExpr, Operator, lit, utils};
 
 use arrow::{
@@ -32,6 +34,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt, TryStreamExt, stream::BoxStream};
 use log::{debug, trace};
@@ -42,6 +45,10 @@ use datafusion_expr::{Expr, Volatility};
 use datafusion_physical_expr::create_physical_expr;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
+use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, utf8_percent_encode};
+
+const PARTITION_VALUE_ENCODE_SET: &AsciiSet =
+    &CONTROLS.add(b' ').add(b'%').add(b'/').add(b'?').add(b'#');
 
 /// Check whether the given expression can be resolved using only the columns `col_names`.
 /// This means that if this function returns true:
@@ -134,41 +141,6 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
 
 /// The maximum number of concurrent listing requests
 const CONCURRENCY_LIMIT: usize = 100;
-
-/// Partition the list of files into `n` groups
-#[deprecated(since = "47.0.0", note = "use `FileGroup::split_files` instead")]
-pub fn split_files(
-    mut partitioned_files: Vec<PartitionedFile>,
-    n: usize,
-) -> Vec<Vec<PartitionedFile>> {
-    if partitioned_files.is_empty() {
-        return vec![];
-    }
-
-    // ObjectStore::list does not guarantee any consistent order and for some
-    // implementations such as LocalFileSystem, it may be inconsistent. Thus
-    // Sort files by path to ensure consistent plans when run more than once.
-    partitioned_files.sort_by(|a, b| a.path().cmp(b.path()));
-
-    // effectively this is div with rounding up instead of truncating
-    let chunk_size = partitioned_files.len().div_ceil(n);
-    let mut chunks = Vec::with_capacity(n);
-    let mut current_chunk = Vec::with_capacity(chunk_size);
-    for file in partitioned_files.drain(..) {
-        current_chunk.push(file);
-        if current_chunk.len() == chunk_size {
-            let full_chunk =
-                mem::replace(&mut current_chunk, Vec::with_capacity(chunk_size));
-            chunks.push(full_chunk);
-        }
-    }
-
-    if !current_chunk.is_empty() {
-        chunks.push(current_chunk)
-    }
-
-    chunks
-}
 
 #[derive(Debug)]
 pub struct Partition {
@@ -267,14 +239,15 @@ fn populate_partition_values<'a>(
         match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
                 (Expr::Column(Column { name, .. }), Expr::Literal(val, _))
-                | (Expr::Literal(val, _), Expr::Column(Column { name, .. })) => {
+                | (Expr::Literal(val, _), Expr::Column(Column { name, .. }))
                     if partition_values
                         .insert(name, PartitionValue::Single(val.to_string()))
-                        .is_some()
-                    {
-                        partition_values.insert(name, PartitionValue::Multi);
-                    }
+                        .is_some() =>
+                {
+                    partition_values.insert(name, PartitionValue::Multi);
                 }
+                (Expr::Column(Column { .. }), Expr::Literal(_, _))
+                | (Expr::Literal(_, _), Expr::Column(Column { .. })) => {}
                 _ => {}
             },
             Operator::And => {
@@ -305,7 +278,16 @@ pub fn evaluate_partition_prefix<'a>(
             Some(PartitionValue::Single(val)) => {
                 // if a partition only has a single literal value, then it can be added to the
                 // prefix
-                parts.push(format!("{p}={val}"));
+                let encoded = encode_partition_value(val);
+                if encoded != val.as_str() {
+                    // The same decoded value can be represented by both raw and
+                    // percent-encoded partition directories. Prefix pruning is
+                    // an optimization, so stop before this partition rather
+                    // than listing only one spelling and potentially skipping
+                    // valid rows.
+                    break;
+                }
+                parts.push(format!("{p}={encoded}"));
             }
             _ => {
                 // break on the first unconstrainted partition to create a common prefix
@@ -322,7 +304,11 @@ pub fn evaluate_partition_prefix<'a>(
     }
 }
 
-fn filter_partitions(
+fn encode_partition_value(value: &str) -> Cow<'_, str> {
+    utf8_percent_encode(value, PARTITION_VALUE_ENCODE_SET).into()
+}
+
+pub fn filter_partitioned_file(
     pf: PartitionedFile,
     filters: &[Expr],
     df_schema: &DFSchema,
@@ -343,7 +329,12 @@ fn filter_partitions(
 
     let filter = utils::conjunction(filters.iter().cloned()).unwrap_or_else(|| lit(true));
     let props = ExecutionProps::new();
-    let expr = create_physical_expr(&filter, df_schema, &props)?;
+    let expr = create_physical_expr(
+        &filter,
+        df_schema,
+        &props,
+        &PhysicalPlanningContext::default(),
+    )?;
 
     // Since we're only operating on a single file, our batch and resulting "array" holds only one
     // value indicating if the input file matches the provided filters
@@ -376,12 +367,13 @@ fn try_into_partitioned_file(
         .into_iter()
         .zip(partition_cols)
         .map(|(parsed, (_, datatype))| {
-            ScalarValue::try_from_string(parsed.to_string(), datatype)
+            ScalarValue::try_from_string(parsed.into_owned(), datatype)
         })
         .collect::<Result<Vec<_>>>()?;
 
     let mut pf: PartitionedFile = object_meta.into();
     pf.partition_values = partition_values;
+    pf.table_reference.clone_from(table_path.get_table_ref());
 
     Ok(Some(pf))
 }
@@ -416,8 +408,15 @@ pub async fn pruned_partition_list<'a>(
             table_path
         );
 
-        // if no partition col => simply list all the files
-        Ok(objects.map_ok(|object_meta| object_meta.into()).boxed())
+        // if no partition col => list all the files
+        Ok(objects
+            .try_filter_map(|object_meta| {
+                futures::future::ready(object_meta_to_partitioned_file(
+                    object_meta,
+                    table_path.get_table_ref(),
+                ))
+            })
+            .boxed())
     } else {
         let df_schema = DFSchema::from_unqualified_fields(
             partition_cols
@@ -436,19 +435,39 @@ pub async fn pruned_partition_list<'a>(
                 ))
             })
             .try_filter_map(move |pf| {
-                futures::future::ready(filter_partitions(pf, filters, &df_schema))
+                futures::future::ready(filter_partitioned_file(pf, filters, &df_schema))
             })
             .boxed())
     }
 }
 
+fn object_meta_to_partitioned_file(
+    object_meta: ObjectMeta,
+    table_ref: &Option<TableReference>,
+) -> Result<Option<PartitionedFile>> {
+    Ok(Some(PartitionedFile {
+        object_meta,
+        arrow_schema: None,
+        partition_values: vec![],
+        range: None,
+        statistics: None,
+        ordering: None,
+        extensions: FileExtensions::new(),
+        metadata_size_hint: None,
+        table_reference: table_ref.clone(),
+    }))
+}
+
 /// Extract the partition values for the given `file_path` (in the given `table_path`)
-/// associated to the partitions defined by `table_partition_cols`
+/// associated to the partitions defined by `table_partition_cols`.
+///
+/// Partition values are percent-decoded to match Hive-style object-store paths
+/// that encode special characters in path segments.
 pub fn parse_partitions_for_path<'a, I>(
     table_path: &ListingTableUrl,
     file_path: &'a Path,
     table_partition_cols: I,
-) -> Option<Vec<&'a str>>
+) -> Option<Vec<Cow<'a, str>>>
 where
     I: IntoIterator<Item = &'a str>,
 {
@@ -457,7 +476,13 @@ where
     let mut part_values = vec![];
     for (part, expected_partition) in subpath.zip(table_partition_cols) {
         match part.split_once('=') {
-            Some((name, val)) if name == expected_partition => part_values.push(val),
+            Some((name, val)) if name == expected_partition => {
+                // Preserve the original value if percent-decoding produces invalid UTF-8.
+                let decoded = percent_decode_str(val)
+                    .decode_utf8()
+                    .unwrap_or(Cow::Borrowed(val));
+                part_values.push(decoded);
+            }
             _ => {
                 debug!(
                     "Ignoring file: file_path='{file_path}', table_path='{table_path}', part='{part}', partition_col='{expected_partition}'",
@@ -533,7 +558,7 @@ mod tests {
     #[test]
     fn test_parse_partitions_for_path() {
         assert_eq!(
-            Some(vec![]),
+            Some(vec![] as Vec<Cow<'_, str>>),
             parse_partitions_for_path(
                 &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
                 &Path::from("bucket/mytable/file.csv"),
@@ -557,15 +582,51 @@ mod tests {
             )
         );
         assert_eq!(
-            Some(vec!["v1"]),
+            Some(vec![Cow::Borrowed("v1")]),
             parse_partitions_for_path(
                 &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
                 &Path::from("bucket/mytable/mypartition=v1/file.csv"),
                 vec!["mypartition"]
             )
         );
+        for (path, column, expected) in [
+            (
+                "bucket/mytable/mypartition=v%2F1/file.csv",
+                "mypartition",
+                "v/1",
+            ),
+            (
+                "bucket/mytable/name=John%20Doe/file.csv",
+                "name",
+                "John Doe",
+            ),
+            (
+                "bucket/mytable/mypartition=test%20dir%2Ffile/file.csv",
+                "mypartition",
+                "test dir/file",
+            ),
+            (
+                "bucket/mytable/mypartition=%C3%A9/file.csv",
+                "mypartition",
+                "é",
+            ),
+            (
+                "bucket/mytable/mypartition=%FF/file.csv",
+                "mypartition",
+                "%FF",
+            ),
+        ] {
+            assert_eq!(
+                Some(vec![Cow::Borrowed(expected)]),
+                parse_partitions_for_path(
+                    &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
+                    &Path::parse(path).unwrap(),
+                    vec![column]
+                )
+            );
+        }
         assert_eq!(
-            Some(vec!["v1"]),
+            Some(vec![Cow::Borrowed("v1")]),
             parse_partitions_for_path(
                 &ListingTableUrl::parse("file:///bucket/mytable/").unwrap(),
                 &Path::from("bucket/mytable/mypartition=v1/file.csv"),
@@ -582,7 +643,7 @@ mod tests {
             )
         );
         assert_eq!(
-            Some(vec!["v1", "v2"]),
+            Some(vec![Cow::Borrowed("v1"), Cow::Borrowed("v2")]),
             parse_partitions_for_path(
                 &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
                 &Path::from("bucket/mytable/mypartition=v1/otherpartition=v2/file.csv"),
@@ -590,7 +651,7 @@ mod tests {
             )
         );
         assert_eq!(
-            Some(vec!["v1"]),
+            Some(vec![Cow::Borrowed("v1")]),
             parse_partitions_for_path(
                 &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
                 &Path::from("bucket/mytable/mypartition=v1/otherpartition=v2/file.csv"),
@@ -619,6 +680,32 @@ mod tests {
         assert_eq!(
             pf.partition_values[0],
             ScalarValue::Utf8(Some("2024-01".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_try_into_partitioned_file_decodes_partition_value() {
+        let table_path = ListingTableUrl::parse("file:///bucket/mytable").unwrap();
+        let partition_cols = vec![("category".to_string(), DataType::Utf8)];
+        let meta = ObjectMeta {
+            location: Path::parse(
+                "bucket/mytable/category=Electronics%2FComputers/data.parquet",
+            )
+            .unwrap(),
+            last_modified: chrono::Utc::now(),
+            size: 100,
+            e_tag: None,
+            version: None,
+        };
+
+        let result =
+            try_into_partitioned_file(meta, &partition_cols, &table_path).unwrap();
+        assert!(result.is_some());
+        let pf = result.unwrap();
+        assert_eq!(pf.partition_values.len(), 1);
+        assert_eq!(
+            pf.partition_values[0],
+            ScalarValue::Utf8(Some("Electronics/Computers".to_string()))
         );
     }
 
@@ -773,6 +860,27 @@ mod tests {
 
         assert_eq!(
             evaluate_partition_prefix(partitions, &[lit("foo").eq(col("a"))]),
+            Some(Path::from("a=foo")),
+        );
+
+        assert_eq!(
+            evaluate_partition_prefix(
+                partitions,
+                &[col("a").eq(lit("Electronics/Computers"))],
+            ),
+            None,
+        );
+
+        assert_eq!(
+            evaluate_partition_prefix(partitions, &[col("a").eq(lit("John Doe"))]),
+            None,
+        );
+
+        assert_eq!(
+            evaluate_partition_prefix(
+                partitions,
+                &[col("a").eq(lit("foo")).and(col("b").eq(lit("John Doe")))],
+            ),
             Some(Path::from("a=foo")),
         );
 

@@ -61,13 +61,14 @@ SELECT
 ----
 11
 
-statement error
-External error: query failed: DataFusion error: Arrow error: Compute error: regexp_instr() requires start to be 1 based
+statement error DataFusion error: Arrow error: Compute error: regexp_instr\(\) requires start to be 1-based
 SELECT regexp_instr('123123123123', '123', 0);
 
-statement error
-External error: query failed: DataFusion error: Arrow error: Compute error: regexp_instr() requires start to be 1 based
+statement error DataFusion error: Arrow error: Compute error: regexp_instr\(\) requires start to be 1-based
 SELECT regexp_instr('123123123123', '123', -3);
+
+statement error DataFusion error: Arrow error: Compute error: N must be 1 or greater
+SELECT regexp_instr('abcabcabc', 'abc', 1, 0);
 
 query I
 SELECT regexp_instr(str, pattern) FROM regexp_test_data;
@@ -189,8 +190,27 @@ NULL
 NULL
 NULL
 
+# The pattern column alternates between two regexes within a single batch, so
+# the compiled regex for 'abc' must be looked up again from the regex cache
+# after 'def' displaced it as the most recently used pattern
+statement ok
+CREATE TABLE t_alternating_pattern(str varchar, pattern varchar) AS VALUES
+  ('abcdef', 'abc'),
+  ('abcdef', 'def'),
+  ('abcdef', 'abc');
+
+query I
+SELECT regexp_instr(str, pattern) FROM t_alternating_pattern;
+----
+1
+4
+1
+
 statement ok
 DROP TABLE t_stringview;
 
 statement ok
 DROP TABLE empty_table;
+
+statement ok
+DROP TABLE t_alternating_pattern;

@@ -18,7 +18,8 @@
 use std::str::from_utf8_unchecked;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, StringBuilder};
+use arrow::array::{Array, ArrayRef, NullBufferBuilder, StringArray, StringBuilder};
+use arrow::buffer::{Buffer, OffsetBuffer};
 use arrow::datatypes::DataType;
 use arrow::{
     array::{as_dictionary_array, as_largestring_array, as_string_array},
@@ -31,11 +32,11 @@ use datafusion_common::utils::take_function_args;
 use datafusion_common::{
     DataFusionError,
     cast::{as_binary_array, as_fixed_size_binary_array, as_int64_array},
-    exec_err,
+    exec_datafusion_err, exec_err,
 };
 use datafusion_expr::{
-    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, EncodingPreservation, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#hex>
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -60,7 +61,8 @@ impl SparkHex {
 
         let string = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
 
-        let binary = Coercion::new_exact(TypeSignatureClass::Binary);
+        let binary = Coercion::new_exact(TypeSignatureClass::Binary)
+            .with_encoding_preservation(EncodingPreservation::dictionary());
 
         let variants = vec![
             // accepts numeric types
@@ -166,32 +168,59 @@ where
     I: Iterator<Item = Option<T>>,
     T: AsRef<[u8]> + 'a,
 {
-    let mut builder = StringBuilder::with_capacity(len, len * 64);
-    let mut buffer = Vec::with_capacity(64);
     let lookup = if lowercase {
         &HEX_LOOKUP_LOWER
     } else {
         &HEX_LOOKUP_UPPER
     };
 
+    // Write hex digits directly into one growing value buffer, tracking offsets
+    // ourselves. Each input byte becomes exactly two output bytes, so there is
+    // no per-row `String`/`StringBuilder` copy — the hex digits are written once
+    // into the final buffer.
+    let mut values: Vec<u8> = Vec::with_capacity(len * 64);
+    let mut offsets: Vec<i32> = Vec::with_capacity(len + 1);
+    offsets.push(0);
+    let mut nulls = NullBufferBuilder::new(len);
+
     for v in iter {
         if let Some(b) = v {
             let bytes = b.as_ref();
-            buffer.clear();
-            buffer.reserve(bytes.len() * 2);
+            let additional = bytes
+                .len()
+                .checked_mul(2)
+                .ok_or_else(|| exec_datafusion_err!("hex output size overflow"))?;
+            values.try_reserve(additional).map_err(|e| {
+                exec_datafusion_err!(
+                    "failed to reserve {additional} bytes for hex output: {e}"
+                )
+            })?;
             for &byte in bytes {
-                buffer.extend_from_slice(&lookup[byte as usize]);
+                values.extend_from_slice(&lookup[byte as usize]);
             }
-            // SAFETY: buffer contains only ASCII hex digits, which are valid UTF-8.
-            unsafe {
-                builder.append_value(from_utf8_unchecked(&buffer));
-            }
+            nulls.append_non_null();
         } else {
-            builder.append_null();
+            nulls.append_null();
         }
+        offsets.push(
+            i32::try_from(values.len()).map_err(|_| {
+                exec_datafusion_err!("hex output exceeds i32 offset range")
+            })?,
+        );
     }
 
-    Ok(Arc::new(builder.finish()))
+    // SAFETY: the value buffer contains only ASCII hex digits (valid UTF-8) and
+    // the offsets are monotonically increasing and end at `values.len()`, so the
+    // array invariants hold. This mirrors the previous `from_utf8_unchecked`
+    // path and avoids a redundant UTF-8 validation pass over the whole buffer.
+    let array = unsafe {
+        StringArray::new_unchecked(
+            OffsetBuffer::new(offsets.into()),
+            Buffer::from_vec(values),
+            nulls.finish(),
+        )
+    };
+    Ok(Arc::new(array))
 }
 
 /// Generic hex encoding for int64 type

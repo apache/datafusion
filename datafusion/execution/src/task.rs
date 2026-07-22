@@ -59,7 +59,7 @@ pub struct TaskContext {
     /// Scalar functions associated with this task context
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     /// Higher order functions associated with this task context
-    higher_order_functions: HashMap<String, Arc<dyn HigherOrderUDF>>,
+    higher_order_functions: HashMap<String, Arc<HigherOrderUDF>>,
     /// Aggregate functions associated with this task context
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Window functions associated with this task context
@@ -98,7 +98,7 @@ impl TaskContext {
         session_id: String,
         session_config: SessionConfig,
         scalar_functions: HashMap<String, Arc<ScalarUDF>>,
-        higher_order_functions: HashMap<String, Arc<dyn HigherOrderUDF>>,
+        higher_order_functions: HashMap<String, Arc<HigherOrderUDF>>,
         aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
         window_functions: HashMap<String, Arc<WindowUDF>>,
         runtime: Arc<RuntimeEnv>,
@@ -144,7 +144,7 @@ impl TaskContext {
         &self.scalar_functions
     }
 
-    pub fn higher_order_functions(&self) -> &HashMap<String, Arc<dyn HigherOrderUDF>> {
+    pub fn higher_order_functions(&self) -> &HashMap<String, Arc<HigherOrderUDF>> {
         &self.higher_order_functions
     }
 
@@ -182,7 +182,7 @@ impl FunctionRegistry for TaskContext {
         })
     }
 
-    fn higher_order_function(&self, name: &str) -> Result<Arc<dyn HigherOrderUDF>> {
+    fn higher_order_function(&self, name: &str) -> Result<Arc<HigherOrderUDF>> {
         let result = self.higher_order_functions.get(name);
 
         result.cloned().ok_or_else(|| {
@@ -236,8 +236,8 @@ impl FunctionRegistry for TaskContext {
 
     fn register_higher_order_function(
         &mut self,
-        function: Arc<dyn HigherOrderUDF>,
-    ) -> Result<Option<Arc<dyn HigherOrderUDF>>> {
+        function: Arc<HigherOrderUDF>,
+    ) -> Result<Option<Arc<HigherOrderUDF>>> {
         function.aliases().iter().for_each(|alias| {
             self.higher_order_functions
                 .insert(alias.clone(), Arc::clone(&function));

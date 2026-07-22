@@ -39,6 +39,7 @@ use crate::joins::piecewise_merge_join::exec::{BufferedSide, BufferedSideReadySt
 use crate::joins::piecewise_merge_join::utils::need_produce_result_in_final;
 use crate::joins::utils::{BuildProbeJoinMetrics, StatefulStreamResult};
 use crate::joins::utils::{JoinKeyComparator, get_final_indices_from_shared_bitmap};
+use crate::stream::EmptyRecordBatchStream;
 
 pub(super) enum PiecewiseMergeJoinStreamState {
     WaitBufferedSide,
@@ -124,7 +125,7 @@ impl RecordBatchStream for ClassicPWMJStream {
 // Classic Joins
 //  1. `WaitBufferedSide` - Load in the buffered side data into memory.
 //  2. `FetchStreamBatch` -  Fetch + sort incoming stream batches. We switch the state to
-//     `Completed` if there are are still remaining partitions to process. It is only switched to
+//     `Completed` if there are still remaining partitions to process. It is only switched to
 //     `ExhaustedStreamBatch` if all partitions have been processed.
 //  3. `ProcessStreamBatch` - Compare stream batch row values against the buffered side data.
 //  4. `ExhaustedStreamBatch` - If the join type is Left or Inner we will return state as
@@ -212,6 +213,9 @@ impl ClassicPWMJStream {
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         match ready!(self.streamed.poll_next_unpin(cx)) {
             None => {
+                // Release the streamed input pipeline's resources.
+                let streamed_schema = self.streamed.schema();
+                self.streamed = Box::pin(EmptyRecordBatchStream::new(streamed_schema));
                 if self
                     .buffered_side
                     .try_as_ready_mut()?

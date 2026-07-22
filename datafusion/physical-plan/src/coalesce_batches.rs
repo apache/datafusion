@@ -24,6 +24,8 @@ use std::task::{Context, Poll};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
 use crate::projection::ProjectionExec;
+use crate::statistics::{ChildStats, StatisticsArgs};
+use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
     check_if_same_properties,
@@ -32,7 +34,6 @@ use crate::{
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 
@@ -116,17 +117,6 @@ impl CoalesceBatchesExec {
             input.boundedness(),
         )
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 #[expect(deprecated)]
@@ -183,13 +173,6 @@ impl ExecutionPlan for CoalesceBatchesExec {
         vec![false]
     }
 
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
@@ -199,6 +182,17 @@ impl ExecutionPlan for CoalesceBatchesExec {
             CoalesceBatchesExec::new(children.swap_remove(0), self.target_batch_size)
                 .with_fetch(self.fetch),
         ))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn execute(
@@ -222,8 +216,16 @@ impl ExecutionPlan for CoalesceBatchesExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let stats = input_stats[0].as_ref().clone();
         Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
     }
 
@@ -288,6 +290,61 @@ impl ExecutionPlan for CoalesceBatchesExec {
             ) as Arc<dyn ExecutionPlan>)
         })
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::CoalesceBatches(
+                    Box::new(protobuf::CoalesceBatchesExecNode {
+                        input: Some(Box::new(input)),
+                        target_batch_size: self.target_batch_size() as u32,
+                        fetch: self.fetch().map(|n| n as u32),
+                    }),
+                ),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+#[expect(deprecated)]
+impl CoalesceBatchesExec {
+    /// Reconstruct a [`CoalesceBatchesExec`] from its protobuf representation.
+    ///
+    /// The exact inverse of [`ExecutionPlan::try_to_proto`]: it takes the whole
+    /// [`PhysicalPlanNode`] so every plan's `try_from_proto` shares one
+    /// signature. The child plan is decoded recursively via the
+    /// [`ExecutionPlanDecodeCtx`].
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    /// [`ExecutionPlanDecodeCtx`]: crate::proto::ExecutionPlanDecodeCtx
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let coalesce_batches = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::CoalesceBatches,
+            "CoalesceBatchesExec",
+        );
+        let input = ctx.decode_required_child(
+            coalesce_batches.input.as_deref(),
+            "CoalesceBatchesExec",
+            "input",
+        )?;
+        Ok(Arc::new(
+            CoalesceBatchesExec::new(input, coalesce_batches.target_batch_size as usize)
+                .with_fetch(coalesce_batches.fetch.map(|f| f as usize)),
+        ))
+    }
 }
 
 /// Stream for [`CoalesceBatchesExec`]. See [`CoalesceBatchesExec`] for more details.
@@ -343,6 +400,8 @@ impl CoalesceBatchesStream {
                 None => {
                     // Input stream is exhausted, finalize any remaining batches
                     self.completed = true;
+                    self.input =
+                        Box::pin(EmptyRecordBatchStream::new(self.coalescer.schema()));
                     self.coalescer.finish()?;
                 }
                 Some(Ok(batch)) => {
@@ -353,6 +412,9 @@ impl CoalesceBatchesStream {
                         PushBatchStatus::LimitReached => {
                             // limit was reached, so stop early
                             self.completed = true;
+                            self.input = Box::pin(EmptyRecordBatchStream::new(
+                                self.coalescer.schema(),
+                            ));
                             self.coalescer.finish()?;
                         }
                     }

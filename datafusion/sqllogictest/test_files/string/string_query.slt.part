@@ -884,10 +884,10 @@ Xiangpeng bar NULL bar NULL datafusion数据融合
 Raphael baraphael NULL datafusionДатbarион NULL datafusionДатаФусион
 under_score under_score NULL un iść core NULL un iść core
 percent percent NULL pan Tadeusz ma iść w kąt NULL pan Tadeusz ma iść w kąt
-(empty) (empty) NULL bar NULL (empty)
-(empty) (empty) NULL bar NULL (empty)
-% % NULL bar NULL (empty)
-_ _ NULL bar NULL (empty)
+(empty) (empty) NULL (empty) NULL (empty)
+(empty) (empty) NULL (empty) NULL (empty)
+% % NULL (empty) NULL (empty)
+_ _ NULL (empty) NULL (empty)
 NULL NULL NULL NULL NULL NULL
 NULL NULL NULL NULL NULL NULL
 
@@ -1860,11 +1860,28 @@ SELECT left(ascii_1, 0), right(ascii_1, 0) FROM test_basic_operator
 NULL NULL
 NULL NULL
 
-# left and right return Utf8View
-query TT
-SELECT arrow_typeof(left(ascii_1, 3)), arrow_typeof(right(ascii_1, 3)) FROM test_basic_operator LIMIT 1
+# left and right preserve the input string type
+query TTTTTT
+SELECT
+  arrow_typeof(left(arrow_cast(ascii_1, 'Utf8'), 3)),
+  arrow_typeof(right(arrow_cast(ascii_1, 'Utf8'), 3)),
+  arrow_typeof(left(arrow_cast(ascii_1, 'LargeUtf8'), 3)),
+  arrow_typeof(right(arrow_cast(ascii_1, 'LargeUtf8'), 3)),
+  arrow_typeof(left(arrow_cast(ascii_1, 'Utf8View'), 3)),
+  arrow_typeof(right(arrow_cast(ascii_1, 'Utf8View'), 3))
+FROM test_basic_operator LIMIT 1
 ----
-Utf8View Utf8View
+Utf8 Utf8 LargeUtf8 LargeUtf8 Utf8View Utf8View
+
+# substr preserves the input string type
+query TTT
+SELECT
+  arrow_typeof(substr(arrow_cast(ascii_1, 'Utf8'), 1, 3)),
+  arrow_typeof(substr(arrow_cast(ascii_1, 'LargeUtf8'), 1, 3)),
+  arrow_typeof(substr(arrow_cast(ascii_1, 'Utf8View'), 1, 3))
+FROM test_basic_operator LIMIT 1
+----
+Utf8 LargeUtf8 Utf8View
 
 # --------------------------------------
 # Test repeat() against array inputs with various null patterns. The scalar

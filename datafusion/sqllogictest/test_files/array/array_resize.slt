@@ -64,6 +64,23 @@ select array_resize(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 5, 4);
 query error
 select array_resize(make_array(1, 2, 3), -5, 2);
 
+# array_resize with a very large size should error instead of panicking (capacity overflow)
+query error DataFusion error: Execution error: array_resize: resulting array of 9223372036854775807 elements exceeds the maximum array size
+select array_resize(make_array(1), 9223372036854775807, 0);
+
+query error DataFusion error: Execution error: array_resize: resulting array of 9223372036854775807 elements exceeds the maximum array size
+select array_resize(arrow_cast(make_array(1), 'LargeList(Int64)'), 9223372036854775807, 0);
+
+# List size above i32::MAX must error via the offset-type guard instead of
+# silently truncating the offsets or attempting a multi-GB allocation
+query error DataFusion error: Execution error: array_resize: resulting array of 3000000000 elements exceeds the maximum array size
+select array_resize(make_array(1), 3000000000, 0);
+
+# Non-primitive element types (e.g. Utf8) fall back to a conservative byte
+# width; a size above that cap must error instead of attempting a huge allocation.
+query error DataFusion error: Execution error: array_resize: resulting array of 600000000000000000 elements exceeds the maximum array size
+select array_resize(arrow_cast(make_array('a'), 'LargeList(Utf8)'), 600000000000000000);
+
 # array_resize scalar function #5
 query ?
 select array_resize(make_array(1.1, 2.2, 3.3), 10, 9.9);
@@ -75,6 +92,12 @@ select array_resize(arrow_cast(make_array(1.1, 2.2, 3.3), 'LargeList(Float64)'),
 ----
 [1.1, 2.2, 3.3, 9.9, 9.9, 9.9, 9.9, 9.9, 9.9, 9.9]
 
+# array_resize null size
+query ??
+select array_resize(make_array(1, 2, 3), NULL), array_resize(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), NULL);
+----
+NULL NULL
+
 # array_resize scalar function #5
 query ?
 select array_resize(column1, column2, column3) from arrays_values;
@@ -84,7 +107,7 @@ select array_resize(column1, column2, column3) from arrays_values;
 [21, 22, 23, NULL, 25, 26, 27, 28, 29, 30, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
 [31, 32, 33, 34, 35, NULL, 37, 38, 39, 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
 NULL
-[]
+NULL
 [51, 52, NULL, 54, 55, 56, 57, 58, 59, 60, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL]
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7]
 
@@ -96,7 +119,7 @@ select array_resize(arrow_cast(column1, 'LargeList(Int64)'), column2, column3) f
 [21, 22, 23, NULL, 25, 26, 27, 28, 29, 30, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
 [31, 32, 33, 34, 35, NULL, 37, 38, 39, 40, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]
 NULL
-[]
+NULL
 [51, 52, NULL, 54, 55, 56, 57, 58, 59, 60, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL]
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7]
 
@@ -139,7 +162,7 @@ select array_resize(column1, column2, column3) from array_resize_values;
 [21, 22, 23, 24, NULL, 26, 27, 28]
 [31, 32, 33, 34, 35, 36, NULL, 38, 39, 40, 4, 4]
 NULL
-[]
+NULL
 [51, 52, 53, 54, 55, NULL, 57, 58, 59, 60, NULL, NULL, NULL]
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 7, 7, 7, 7, 7]
 
@@ -152,7 +175,7 @@ select array_resize(arrow_cast(column1, 'LargeList(Int64)'), column2, column3) f
 [21, 22, 23, 24, NULL, 26, 27, 28]
 [31, 32, 33, 34, 35, 36, NULL, 38, 39, 40, 4, 4]
 NULL
-[]
+NULL
 [51, 52, 53, 54, 55, NULL, 57, 58, 59, 60, NULL, NULL, NULL]
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 7, 7, 7, 7, 7]
 
@@ -165,7 +188,7 @@ select array_resize(column1, column2, 9) from array_resize_values;
 [21, 22, 23, 24, NULL, 26, 27, 28]
 [31, 32, 33, 34, 35, 36, NULL, 38, 39, 40, 9, 9]
 NULL
-[]
+NULL
 [51, 52, 53, 54, 55, NULL, 57, 58, 59, 60, 9, 9, 9]
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 9, 9, 9, 9, 9]
 

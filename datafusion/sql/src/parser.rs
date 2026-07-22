@@ -21,7 +21,8 @@
 //! `CREATE EXTERNAL TABLE`
 
 use datafusion_common::DataFusionError;
-use datafusion_common::config::SqlParserOptions;
+use datafusion_common::config::{ConfigNonZeroUsize, SqlParserOptions};
+use datafusion_common::format::{ExplainFormat, ExplainStatementOptions};
 use datafusion_common::{Diagnostic, Span, sql_err};
 use sqlparser::ast::{ExprWithAlias, Ident, OrderByOptions};
 use sqlparser::tokenizer::TokenWithSpan;
@@ -36,6 +37,7 @@ use sqlparser::{
 };
 use std::collections::VecDeque;
 use std::fmt;
+use std::str::FromStr;
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -55,18 +57,25 @@ fn parse_file_type(s: &str) -> Result<String, DataFusionError> {
 
 /// DataFusion specific `EXPLAIN`
 ///
-/// Syntax:
+/// Supports both the legacy keyword form and, on dialects whose
+/// [`Dialect::supports_explain_with_utility_options`] returns `true`
+/// (PostgreSQL, DuckDB, etc.), the Postgres-style parenthesized option list:
+///
 /// ```sql
+/// -- Legacy keyword form (any dialect)
 /// EXPLAIN <ANALYZE> <VERBOSE> [FORMAT format] statement
+///
+/// -- Postgres-style option form (dialect-gated)
+/// EXPLAIN (option [arg] [, ...]) statement
 /// ```
+///
+/// See [`ExplainStatementOptions`] for the list of supported options in the
+/// parenthesized form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplainStatement {
-    /// `EXPLAIN ANALYZE ..`
-    pub analyze: bool,
-    /// `EXPLAIN .. VERBOSE ..`
-    pub verbose: bool,
-    /// `EXPLAIN .. FORMAT `
-    pub format: Option<String>,
+    /// Normalized options parsed from either the legacy keyword form or the
+    /// parenthesized option list.
+    pub options: ExplainStatementOptions,
     /// The statement to analyze. Note this is a DataFusion [`Statement`] (not a
     /// [`sqlparser::ast::Statement`] so that we can use `EXPLAIN`, `COPY`, and other
     /// DataFusion specific statements
@@ -75,22 +84,47 @@ pub struct ExplainStatement {
 
 impl fmt::Display for ExplainStatement {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self {
-            analyze,
-            verbose,
-            format,
-            statement,
-        } = self;
+        let Self { options, statement } = self;
+
+        // If only the legacy-era fields are set, print the legacy keyword
+        // form so existing round-trip tests continue to pass.
+        let uses_parenthesized = options.analyze_level.is_some()
+            || options.analyze_categories.is_some()
+            || options.show_statistics.is_some();
 
         write!(f, "EXPLAIN ")?;
-        if *analyze {
-            write!(f, "ANALYZE ")?;
-        }
-        if *verbose {
-            write!(f, "VERBOSE ")?;
-        }
-        if let Some(format) = format.as_ref() {
-            write!(f, "FORMAT {format} ")?;
+        if uses_parenthesized {
+            // Emit a parenthesized option list.
+            let mut parts: Vec<String> = Vec::new();
+            if options.analyze {
+                parts.push("ANALYZE".to_string());
+            }
+            if options.verbose {
+                parts.push("VERBOSE".to_string());
+            }
+            if let Some(format) = &options.format {
+                parts.push(format!("FORMAT {format}"));
+            }
+            if let Some(level) = options.analyze_level {
+                parts.push(format!("LEVEL {level}"));
+            }
+            if let Some(cats) = &options.analyze_categories {
+                parts.push(format!("METRICS '{cats}'"));
+            }
+            if let Some(stats) = options.show_statistics {
+                parts.push(format!("COSTS {}", if stats { "ON" } else { "OFF" }));
+            }
+            write!(f, "({}) ", parts.join(", "))?;
+        } else {
+            if options.analyze {
+                write!(f, "ANALYZE ")?;
+            }
+            if options.verbose {
+                write!(f, "VERBOSE ")?;
+            }
+            if let Some(format) = &options.format {
+                write!(f, "FORMAT {format} ")?;
+            }
         }
 
         write!(f, "{statement}")
@@ -197,7 +231,7 @@ pub(crate) type LexOrdering = Vec<OrderByExpr>;
 /// [ PARTITIONED BY (<column_definition list> | <column list>) ]
 /// [ WITH ORDER (<ordered column list>)
 /// [ OPTIONS (<key_value_list>) ]
-/// LOCATION <literal>
+/// LOCATION <literal> | LOCATION (<literal>[, ...])
 ///
 /// <column_definition> := (<column_name> <data_type>, ...)
 ///
@@ -215,8 +249,8 @@ pub struct CreateExternalTable {
     pub columns: Vec<ColumnDef>,
     /// File type (Parquet, NDJSON, CSV, etc)
     pub file_type: String,
-    /// Path to file
-    pub location: String,
+    /// Paths to files
+    pub locations: Vec<String>,
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
     /// Ordered expressions
@@ -255,7 +289,23 @@ impl fmt::Display for CreateExternalTable {
             }
             write!(f, ") ")?;
         }
-        write!(f, "LOCATION {}", self.location)
+        match self.locations.as_slice() {
+            [location] => write!(
+                f,
+                "LOCATION {}",
+                Value::SingleQuotedString(location.clone())
+            ),
+            locations => {
+                write!(f, "LOCATION (")?;
+                for (idx, location) in locations.iter().enumerate() {
+                    if idx > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", Value::SingleQuotedString(location.clone()))?;
+                }
+                write!(f, ")")
+            }
+        }
     }
 }
 
@@ -325,6 +375,10 @@ fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), DataFusionErro
 pub struct DFParser<'a> {
     pub parser: Parser<'a>,
     options: SqlParserOptions,
+    /// Whether the configured dialect supports Postgres-style
+    /// `EXPLAIN (option, ...)` utility-option syntax. Cached here because
+    /// sqlparser's [`Parser::dialect`] field is private.
+    supports_explain_with_utility_options: bool,
 }
 
 /// Same as `sqlparser`
@@ -434,27 +488,38 @@ impl<'a, 'b> DFParserBuilder<'a, 'b> {
                 .with_tokens_with_locations(tokens)
                 .with_recursion_limit(self.recursion_limit),
             options: SqlParserOptions {
-                recursion_limit: self.recursion_limit,
+                recursion_limit: ConfigNonZeroUsize::try_new(self.recursion_limit)?,
                 ..Default::default()
             },
+            supports_explain_with_utility_options: self
+                .dialect
+                .supports_explain_with_utility_options(),
         })
     }
 }
 
+/// Returns true when `tok` is the start of a query / parenthesized query
+/// group. Used to disambiguate `EXPLAIN (SELECT ...)` (a parenthesized query)
+/// from `EXPLAIN (ANALYZE) SELECT ...` (a Postgres-style option list).
+fn token_starts_query(tok: &Token) -> bool {
+    match tok {
+        Token::LParen => true,
+        Token::Word(Word { keyword, .. }) => matches!(
+            keyword,
+            Keyword::SELECT
+                | Keyword::WITH
+                | Keyword::VALUES
+                | Keyword::TABLE
+                | Keyword::INSERT
+                | Keyword::UPDATE
+                | Keyword::DELETE
+                | Keyword::MERGE
+        ),
+        _ => false,
+    }
+}
+
 impl<'a> DFParser<'a> {
-    #[deprecated(since = "46.0.0", note = "DFParserBuilder")]
-    pub fn new(sql: &'a str) -> Result<Self, DataFusionError> {
-        DFParserBuilder::new(sql).build()
-    }
-
-    #[deprecated(since = "46.0.0", note = "DFParserBuilder")]
-    pub fn new_with_dialect(
-        sql: &'a str,
-        dialect: &'a dyn Dialect,
-    ) -> Result<Self, DataFusionError> {
-        DFParserBuilder::new(sql).with_dialect(dialect).build()
-    }
-
     /// Parse a sql string into one or [`Statement`]s using the
     /// [`GenericDialect`].
     pub fn parse_sql(sql: &'a str) -> Result<VecDeque<Statement>, DataFusionError> {
@@ -758,18 +823,46 @@ impl<'a> DFParser<'a> {
     }
 
     /// Parse a SQL `EXPLAIN`
+    ///
+    /// After the `EXPLAIN` keyword, if the dialect supports the Postgres-style
+    /// option list and the next non-whitespace token is `(`, we must
+    /// disambiguate between an option list (`EXPLAIN (ANALYZE) SELECT ...`)
+    /// and a parenthesized query (`EXPLAIN (SELECT ...)` or
+    /// `EXPLAIN (q1 EXCEPT q2) UNION ALL ...`).
     pub fn parse_explain(&mut self) -> Result<Statement, DataFusionError> {
+        if self.supports_explain_with_utility_options
+            && self.parser.peek_token().token == Token::LParen
+            && !token_starts_query(&self.parser.peek_nth_token(1).token)
+        {
+            let raw = self.parser.parse_utility_options()?;
+            let options = ExplainStatementOptions::from_utility_options(&raw)?;
+            let statement = self.parse_statement()?;
+            return Ok(Statement::Explain(ExplainStatement {
+                statement: Box::new(statement),
+                options,
+            }));
+        }
+
+        // Legacy keyword form.
         let analyze = self.parser.parse_keyword(Keyword::ANALYZE);
         let verbose = self.parser.parse_keyword(Keyword::VERBOSE);
-        let format = self.parse_explain_format()?;
+        let format = self
+            .parse_explain_format()?
+            .map(|s| ExplainFormat::from_str(&s))
+            .transpose()?;
 
         let statement = self.parse_statement()?;
 
-        Ok(Statement::Explain(ExplainStatement {
-            statement: Box::new(statement),
+        let options = ExplainStatementOptions {
             analyze,
             verbose,
             format,
+            ..Default::default()
+        };
+
+        Ok(Statement::Explain(ExplainStatement {
+            statement: Box::new(statement),
+            options,
         }))
     }
 
@@ -1020,7 +1113,7 @@ impl<'a> DFParser<'a> {
         #[derive(Default)]
         struct Builder {
             file_type: Option<String>,
-            location: Option<String>,
+            locations: Option<Vec<String>>,
             table_partition_cols: Option<Vec<String>>,
             order_exprs: Vec<LexOrdering>,
             options: Option<Vec<(String, Value)>>,
@@ -1044,8 +1137,8 @@ impl<'a> DFParser<'a> {
                         builder.file_type = Some(self.parse_file_format()?);
                     }
                     Keyword::LOCATION => {
-                        ensure_not_set(&builder.location, "LOCATION")?;
-                        builder.location = Some(self.parser.parse_literal_string()?);
+                        ensure_not_set(&builder.locations, "LOCATION")?;
+                        builder.locations = Some(self.parse_locations()?);
                     }
                     Keyword::WITH => {
                         if self.parser.parse_keyword(Keyword::ORDER) {
@@ -1121,17 +1214,22 @@ impl<'a> DFParser<'a> {
                 "Missing STORED AS clause in CREATE EXTERNAL TABLE statement".into(),
             ));
         }
-        if builder.location.is_none() {
+        if builder.locations.is_none() {
             return sql_err!(ParserError::ParserError(
                 "Missing LOCATION clause in CREATE EXTERNAL TABLE statement".into(),
             ));
+        }
+
+        let locations = builder.locations.unwrap();
+        if locations.is_empty() {
+            return parser_err!("LOCATION requires at least one path");
         }
 
         let create = CreateExternalTable {
             name: table_name,
             columns,
             file_type: builder.file_type.unwrap(),
-            location: builder.location.unwrap(),
+            locations,
             table_partition_cols: builder.table_partition_cols.unwrap_or(vec![]),
             order_exprs: builder.order_exprs,
             if_not_exists,
@@ -1142,6 +1240,29 @@ impl<'a> DFParser<'a> {
             constraints,
         };
         Ok(Statement::CreateExternalTable(create))
+    }
+
+    /// Parses one or more external table locations.
+    fn parse_locations(&mut self) -> Result<Vec<String>, DataFusionError> {
+        if !self.parser.consume_token(&Token::LParen) {
+            return Ok(vec![self.parser.parse_literal_string()?]);
+        }
+
+        let mut locations = vec![];
+        loop {
+            locations.push(self.parser.parse_literal_string()?);
+            let comma = self.parser.consume_token(&Token::Comma);
+            if self.parser.consume_token(&Token::RParen) {
+                // Allow a trailing comma, even though it's not in standard
+                break;
+            } else if !comma {
+                return self.expected(
+                    "',' or ')' after location definition",
+                    &self.parser.peek_token(),
+                );
+            }
+        }
+        Ok(locations)
     }
 
     /// Parses the set of valid formats
@@ -1232,43 +1353,84 @@ mod tests {
         }
     }
 
+    fn make_create_external_table(location: &str) -> CreateExternalTable {
+        make_create_external_table_with_locations(&[location])
+    }
+
+    fn make_create_external_table_with_locations(
+        locations: &[&str],
+    ) -> CreateExternalTable {
+        let locations = locations
+            .iter()
+            .map(|location| location.to_string())
+            .collect::<Vec<_>>();
+
+        CreateExternalTable {
+            name: ObjectName::from(vec![Ident::from("t")]),
+            columns: vec![],
+            file_type: "CSV".to_string(),
+            locations,
+            table_partition_cols: vec![],
+            order_exprs: vec![],
+            if_not_exists: false,
+            or_replace: false,
+            temporary: false,
+            unbounded: false,
+            options: vec![],
+            constraints: vec![],
+        }
+    }
+
     #[test]
     fn create_external_table() -> Result<(), DataFusionError> {
         // positive case
         let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'";
         let display = None;
-        let name = ObjectName::from(vec![Ident::from("t")]);
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: name.clone(),
             columns: vec![make_column_def("c1", DataType::Int(display))],
-            file_type: "CSV".to_string(),
-            location: "foo.csv".into(),
-            table_partition_cols: vec![],
-            order_exprs: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            unbounded: false,
-            options: vec![],
-            constraints: vec![],
+            ..make_create_external_table("foo.csv")
         });
         expect_parse_ok(sql, expected)?;
+
+        // positive case: literal comma remains part of a single path
+        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo,bar.csv'";
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            columns: vec![make_column_def("c1", DataType::Int(display))],
+            ..make_create_external_table("foo,bar.csv")
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // positive case: multiple locations use an explicit list
+        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION ('foo.csv', 'bar.csv')";
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            columns: vec![make_column_def("c1", DataType::Int(display))],
+            ..make_create_external_table_with_locations(&["foo.csv", "bar.csv"])
+        });
+        expect_parse_ok(sql, expected)?;
+
+        assert_eq!(
+            Statement::CreateExternalTable(make_create_external_table("foo.csv"))
+                .to_string(),
+            "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo.csv'"
+        );
+        assert_eq!(
+            Statement::CreateExternalTable(make_create_external_table_with_locations(&[
+                "foo.csv", "bar.csv"
+            ]))
+            .to_string(),
+            "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION ('foo.csv', 'bar.csv')"
+        );
+        assert_eq!(
+            Statement::CreateExternalTable(make_create_external_table("foo'bar.csv"))
+                .to_string(),
+            "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo''bar.csv'"
+        );
 
         // positive case: leading space
         let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'     ";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: name.clone(),
             columns: vec![make_column_def("c1", DataType::Int(None))],
-            file_type: "CSV".to_string(),
-            location: "foo.csv".into(),
-            table_partition_cols: vec![],
-            order_exprs: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            unbounded: false,
-            options: vec![],
-            constraints: vec![],
+            ..make_create_external_table("foo.csv")
         });
         expect_parse_ok(sql, expected)?;
 
@@ -1276,18 +1438,8 @@ mod tests {
         let sql =
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'      ;";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: name.clone(),
             columns: vec![make_column_def("c1", DataType::Int(None))],
-            file_type: "CSV".to_string(),
-            location: "foo.csv".into(),
-            table_partition_cols: vec![],
-            order_exprs: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            unbounded: false,
-            options: vec![],
-            constraints: vec![],
+            ..make_create_external_table("foo.csv")
         });
         expect_parse_ok(sql, expected)?;
 
@@ -1295,21 +1447,12 @@ mod tests {
         let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS (format.delimiter '|')";
         let display = None;
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: name.clone(),
             columns: vec![make_column_def("c1", DataType::Int(display))],
-            file_type: "CSV".to_string(),
-            location: "foo.csv".into(),
-            table_partition_cols: vec![],
-            order_exprs: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            unbounded: false,
             options: vec![(
                 "format.delimiter".into(),
                 Value::SingleQuotedString("|".into()),
             )],
-            constraints: vec![],
+            ..make_create_external_table("foo.csv")
         });
         expect_parse_ok(sql, expected)?;
 
@@ -1317,18 +1460,9 @@ mod tests {
         let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1, p2) LOCATION 'foo.csv'";
         let display = None;
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: name.clone(),
             columns: vec![make_column_def("c1", DataType::Int(display))],
-            file_type: "CSV".to_string(),
-            location: "foo.csv".into(),
             table_partition_cols: vec!["p1".to_string(), "p2".to_string()],
-            order_exprs: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            unbounded: false,
-            options: vec![],
-            constraints: vec![],
+            ..make_create_external_table("foo.csv")
         });
         expect_parse_ok(sql, expected)?;
 
@@ -1343,24 +1477,15 @@ mod tests {
              ('format.compression' 'XZ')", "XZ"),
              ("CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv' OPTIONS
              ('format.compression' 'ZSTD')", "ZSTD"),
-         ];
+        ];
         for (sql, compression) in sqls {
             let expected = Statement::CreateExternalTable(CreateExternalTable {
-                name: name.clone(),
                 columns: vec![make_column_def("c1", DataType::Int(display))],
-                file_type: "CSV".to_string(),
-                location: "foo.csv".into(),
-                table_partition_cols: vec![],
-                order_exprs: vec![],
-                if_not_exists: false,
-                or_replace: false,
-                temporary: false,
-                unbounded: false,
                 options: vec![(
                     "format.compression".into(),
                     Value::SingleQuotedString(compression.into()),
                 )],
-                constraints: vec![],
+                ..make_create_external_table("foo.csv")
             });
             expect_parse_ok(sql, expected)?;
         }
@@ -1368,72 +1493,33 @@ mod tests {
         // positive case: it is ok for parquet files not to have columns specified
         let sql = "CREATE EXTERNAL TABLE t STORED AS PARQUET LOCATION 'foo.parquet'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: name.clone(),
-            columns: vec![],
             file_type: "PARQUET".to_string(),
-            location: "foo.parquet".into(),
-            table_partition_cols: vec![],
-            order_exprs: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            unbounded: false,
-            options: vec![],
-            constraints: vec![],
+            ..make_create_external_table("foo.parquet")
         });
         expect_parse_ok(sql, expected)?;
 
         // positive case: it is ok for parquet files to be other than upper case
         let sql = "CREATE EXTERNAL TABLE t STORED AS parqueT LOCATION 'foo.parquet'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: name.clone(),
-            columns: vec![],
             file_type: "PARQUET".to_string(),
-            location: "foo.parquet".into(),
-            table_partition_cols: vec![],
-            order_exprs: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            unbounded: false,
-            options: vec![],
-            constraints: vec![],
+            ..make_create_external_table("foo.parquet")
         });
         expect_parse_ok(sql, expected)?;
 
         // positive case: it is ok for avro files not to have columns specified
         let sql = "CREATE EXTERNAL TABLE t STORED AS AVRO LOCATION 'foo.avro'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: name.clone(),
-            columns: vec![],
             file_type: "AVRO".to_string(),
-            location: "foo.avro".into(),
-            table_partition_cols: vec![],
-            order_exprs: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            unbounded: false,
-            options: vec![],
-            constraints: vec![],
+            ..make_create_external_table("foo.avro")
         });
         expect_parse_ok(sql, expected)?;
 
         // positive case: it is ok for avro files not to have columns specified
         let sql = "CREATE EXTERNAL TABLE IF NOT EXISTS t STORED AS PARQUET LOCATION 'foo.parquet'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: name.clone(),
-            columns: vec![],
             file_type: "PARQUET".to_string(),
-            location: "foo.parquet".into(),
-            table_partition_cols: vec![],
-            order_exprs: vec![],
             if_not_exists: true,
-            or_replace: false,
-            temporary: false,
-            unbounded: false,
-            options: vec![],
-            constraints: vec![],
+            ..make_create_external_table("foo.parquet")
         });
         expect_parse_ok(sql, expected)?;
 
@@ -1441,39 +1527,21 @@ mod tests {
         let sql =
             "CREATE OR REPLACE EXTERNAL TABLE t STORED AS PARQUET LOCATION 'foo.parquet'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: name.clone(),
-            columns: vec![],
             file_type: "PARQUET".to_string(),
-            location: "foo.parquet".into(),
-            table_partition_cols: vec![],
-            order_exprs: vec![],
-            if_not_exists: false,
             or_replace: true,
-            temporary: false,
-            unbounded: false,
-            options: vec![],
-            constraints: vec![],
+            ..make_create_external_table("foo.parquet")
         });
         expect_parse_ok(sql, expected)?;
 
         // positive case: column definition allowed in 'partition by' clause
         let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int) LOCATION 'foo.csv'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: name.clone(),
             columns: vec![
                 make_column_def("c1", DataType::Int(None)),
                 make_column_def("p1", DataType::Int(None)),
             ],
-            file_type: "CSV".to_string(),
-            location: "foo.csv".into(),
             table_partition_cols: vec!["p1".to_string()],
-            order_exprs: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            unbounded: false,
-            options: vec![],
-            constraints: vec![],
+            ..make_create_external_table("foo.csv")
         });
         expect_parse_ok(sql, expected)?;
 
@@ -1495,39 +1563,21 @@ mod tests {
         let sql =
             "CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1') LOCATION 'blahblah'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: name.clone(),
-            columns: vec![],
             file_type: "X".to_string(),
-            location: "blahblah".into(),
-            table_partition_cols: vec![],
-            order_exprs: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            unbounded: false,
             options: vec![("k1".into(), Value::SingleQuotedString("v1".into()))],
-            constraints: vec![],
+            ..make_create_external_table("blahblah")
         });
         expect_parse_ok(sql, expected)?;
 
         // positive case: additional options (multiple entries) can be specified
         let sql = "CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1', k2 v2) LOCATION 'blahblah'";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: name.clone(),
-            columns: vec![],
             file_type: "X".to_string(),
-            location: "blahblah".into(),
-            table_partition_cols: vec![],
-            order_exprs: vec![],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            unbounded: false,
             options: vec![
                 ("k1".into(), Value::SingleQuotedString("v1".into())),
                 ("k2".into(), Value::SingleQuotedString("v2".into())),
             ],
-            constraints: vec![],
+            ..make_create_external_table("blahblah")
         });
         expect_parse_ok(sql, expected)?;
 
@@ -1554,13 +1604,9 @@ mod tests {
             (Some(true), Some(true)),
             (Some(true), Some(false)),
         ];
-        for (sql, (asc, nulls_first)) in sqls.iter().zip(expected.into_iter()) {
+        for (sql, (asc, nulls_first)) in sqls.iter().zip(expected) {
             let expected = Statement::CreateExternalTable(CreateExternalTable {
-                name: name.clone(),
                 columns: vec![make_column_def("c1", DataType::Int(None))],
-                file_type: "CSV".to_string(),
-                location: "foo.csv".into(),
-                table_partition_cols: vec![],
                 order_exprs: vec![vec![OrderByExpr {
                     expr: Identifier(Ident {
                         value: "c1".to_owned(),
@@ -1570,12 +1616,7 @@ mod tests {
                     options: OrderByOptions { asc, nulls_first },
                     with_fill: None,
                 }]],
-                if_not_exists: false,
-                or_replace: false,
-                temporary: false,
-                unbounded: false,
-                options: vec![],
-                constraints: vec![],
+                ..make_create_external_table("foo.csv")
             });
             expect_parse_ok(sql, expected)?;
         }
@@ -1584,14 +1625,10 @@ mod tests {
         let sql = "CREATE EXTERNAL TABLE t(c1 int, c2 int) STORED AS CSV WITH ORDER (c1 ASC, c2 DESC NULLS FIRST) LOCATION 'foo.csv'";
         let display = None;
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: name.clone(),
             columns: vec![
                 make_column_def("c1", DataType::Int(display)),
                 make_column_def("c2", DataType::Int(display)),
             ],
-            file_type: "CSV".to_string(),
-            location: "foo.csv".into(),
-            table_partition_cols: vec![],
             order_exprs: vec![vec![
                 OrderByExpr {
                     expr: Identifier(Ident {
@@ -1618,12 +1655,7 @@ mod tests {
                     with_fill: None,
                 },
             ]],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            unbounded: false,
-            options: vec![],
-            constraints: vec![],
+            ..make_create_external_table("foo.csv")
         });
         expect_parse_ok(sql, expected)?;
 
@@ -1631,14 +1663,10 @@ mod tests {
         let sql = "CREATE EXTERNAL TABLE t(c1 int, c2 int) STORED AS CSV WITH ORDER (c1 - c2 ASC) LOCATION 'foo.csv'";
         let display = None;
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: name.clone(),
             columns: vec![
                 make_column_def("c1", DataType::Int(display)),
                 make_column_def("c2", DataType::Int(display)),
             ],
-            file_type: "CSV".to_string(),
-            location: "foo.csv".into(),
-            table_partition_cols: vec![],
             order_exprs: vec![vec![OrderByExpr {
                 expr: Expr::BinaryOp {
                     left: Box::new(Identifier(Ident {
@@ -1659,12 +1687,7 @@ mod tests {
                 },
                 with_fill: None,
             }]],
-            if_not_exists: false,
-            or_replace: false,
-            temporary: false,
-            unbounded: false,
-            options: vec![],
-            constraints: vec![],
+            ..make_create_external_table("foo.csv")
         });
         expect_parse_ok(sql, expected)?;
 
@@ -1681,13 +1704,11 @@ mod tests {
                      'TRUNCATE' 'NO',
                      'format.has_header' 'true')";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: name.clone(),
             columns: vec![
                 make_column_def("c1", DataType::Int(None)),
                 make_column_def("c2", DataType::Float(ExactNumberInfo::None)),
             ],
             file_type: "PARQUET".to_string(),
-            location: "foo.parquet".into(),
             table_partition_cols: vec!["c1".into()],
             order_exprs: vec![vec![OrderByExpr {
                 expr: Expr::BinaryOp {
@@ -1710,8 +1731,6 @@ mod tests {
                 with_fill: None,
             }]],
             if_not_exists: true,
-            or_replace: false,
-            temporary: false,
             unbounded: true,
             options: vec![
                 (
@@ -1732,7 +1751,7 @@ mod tests {
                     Value::SingleQuotedString("true".into()),
                 ),
             ],
-            constraints: vec![],
+            ..make_create_external_table("foo.parquet")
         });
         expect_parse_ok(sql, expected)?;
 
@@ -1749,13 +1768,11 @@ mod tests {
                      'TRUNCATE' 'NO',
                      'format.has_header' 'true')";
         let expected = Statement::CreateExternalTable(CreateExternalTable {
-            name: name.clone(),
             columns: vec![
                 make_column_def("c1", DataType::Int(None)),
                 make_column_def("c2", DataType::Float(ExactNumberInfo::None)),
             ],
             file_type: "PARQUET".to_string(),
-            location: "foo.parquet".into(),
             table_partition_cols: vec!["c1".into()],
             order_exprs: vec![vec![OrderByExpr {
                 expr: Expr::BinaryOp {
@@ -1777,9 +1794,7 @@ mod tests {
                 },
                 with_fill: None,
             }]],
-            if_not_exists: false,
             or_replace: true,
-            temporary: false,
             unbounded: true,
             options: vec![
                 (
@@ -1800,7 +1815,7 @@ mod tests {
                     Value::SingleQuotedString("true".into()),
                 ),
             ],
-            constraints: vec![],
+            ..make_create_external_table("foo.parquet")
         });
         expect_parse_ok(sql, expected)?;
 
@@ -1873,9 +1888,14 @@ mod tests {
                 options: vec![],
             });
             let expected = Statement::Explain(ExplainStatement {
-                analyze,
-                verbose,
-                format: None,
+                options: ExplainStatementOptions {
+                    analyze,
+                    verbose,
+                    format: None,
+                    analyze_level: None,
+                    analyze_categories: None,
+                    show_statistics: None,
+                },
                 statement: Box::new(expected_copy),
             });
             assert_eq!(verified_stmt(sql), expected);
@@ -2070,21 +2090,10 @@ mod tests {
                     options: vec![],
                 }),
                 {
-                    let name = ObjectName::from(vec![Ident::from("t")]);
                     let display = None;
                     Statement::CreateExternalTable(CreateExternalTable {
-                        name: name.clone(),
                         columns: vec![make_column_def("c1", DataType::Int(display))],
-                        file_type: "CSV".to_string(),
-                        location: "foo.csv".into(),
-                        table_partition_cols: vec![],
-                        order_exprs: vec![],
-                        if_not_exists: false,
-                        or_replace: false,
-                        temporary: false,
-                        unbounded: false,
-                        options: vec![],
-                        constraints: vec![],
+                        ..make_create_external_table("foo.csv")
                     })
                 },
                 {
@@ -2202,5 +2211,165 @@ mod tests {
             "1234 as foo    bar",
             "Expected: end of expression, found: bar",
         )
+    }
+
+    // ------------------------------------------------------------------
+    // Postgres-style `EXPLAIN (option, ...)` tests
+    // ------------------------------------------------------------------
+
+    fn parse_with_pg(sql: &str) -> Result<Statement, DataFusionError> {
+        let dialect = sqlparser::dialect::PostgreSqlDialect {};
+        let mut statements = DFParser::parse_sql_with_dialect(sql, &dialect)?;
+        assert_eq!(statements.len(), 1, "Expected exactly one statement");
+        Ok(statements.pop_front().unwrap())
+    }
+
+    fn parse_with_generic(sql: &str) -> Result<Statement, DataFusionError> {
+        let mut statements = DFParser::parse_sql(sql)?;
+        assert_eq!(statements.len(), 1, "Expected exactly one statement");
+        Ok(statements.pop_front().unwrap())
+    }
+
+    #[test]
+    fn explain_legacy_keyword_form_postgres_dialect() {
+        // The legacy keyword form still works under PostgreSQL dialect.
+        let stmt = parse_with_pg("EXPLAIN ANALYZE VERBOSE SELECT 1").unwrap();
+        let Statement::Explain(ExplainStatement { options, .. }) = stmt else {
+            panic!("Expected Statement::Explain");
+        };
+        assert!(options.analyze);
+        assert!(options.verbose);
+        assert!(options.format.is_none());
+        assert!(options.analyze_level.is_none());
+    }
+
+    #[test]
+    fn explain_paren_form_on_generic_supports_utility_options() {
+        // sqlparser's GenericDialect also declares
+        // `supports_explain_with_utility_options = true`, so DataFusion's
+        // default parser accepts the parenthesized form too.
+        let stmt = parse_with_generic("EXPLAIN (FORMAT TREE) SELECT 1").unwrap();
+        let Statement::Explain(ExplainStatement { options, .. }) = stmt else {
+            panic!("Expected Statement::Explain");
+        };
+        assert_eq!(options.format, Some(ExplainFormat::Tree));
+    }
+
+    #[test]
+    fn explain_paren_form_on_non_supporting_dialect_is_parse_error() {
+        // Dialects that do NOT declare support for utility options (e.g.
+        // Snowflake) must still error on the parenthesized form — proving
+        // the dialect gate itself works.
+        use sqlparser::dialect::SnowflakeDialect;
+        let dialect = SnowflakeDialect {};
+        let res =
+            DFParser::parse_sql_with_dialect("EXPLAIN (FORMAT TREE) SELECT 1", &dialect);
+        assert!(
+            res.is_err(),
+            "expected parse error under non-supporting dialect"
+        );
+    }
+
+    #[test]
+    fn explain_paren_grouping_query_is_not_mistaken_for_options() {
+        // Historic DataFusion behavior allows parentheses around the
+        // query after EXPLAIN (e.g. `EXPLAIN (SELECT ...)` or
+        // `EXPLAIN (q1 EXCEPT q2) UNION ALL (q3 EXCEPT q4)`). The dialect
+        // gate for Postgres-style options must not swallow these.
+        for sql in [
+            "EXPLAIN (SELECT 1)",
+            "EXPLAIN (WITH t AS (SELECT 1) SELECT * FROM t)",
+            "EXPLAIN (VALUES (1), (2))",
+            "EXPLAIN ((SELECT 1))",
+        ] {
+            let stmt = parse_with_pg(sql).unwrap_or_else(|e| {
+                panic!("{sql} failed under PG dialect: {e}");
+            });
+            let Statement::Explain(ExplainStatement { options, .. }) = stmt else {
+                panic!("Expected Statement::Explain for {sql}");
+            };
+            assert!(!options.analyze, "{sql} should not be ANALYZE");
+            assert!(!options.verbose, "{sql} should not be VERBOSE");
+            assert!(options.format.is_none(), "{sql} should have no FORMAT");
+        }
+    }
+
+    #[test]
+    fn explain_paren_form_analyze_verbose() {
+        let stmt = parse_with_pg("EXPLAIN (ANALYZE, VERBOSE) SELECT 1").unwrap();
+        let Statement::Explain(ExplainStatement { options, .. }) = stmt else {
+            panic!("Expected Statement::Explain");
+        };
+        assert!(options.analyze);
+        assert!(options.verbose);
+    }
+
+    #[test]
+    fn explain_paren_form_format_tree() {
+        let stmt = parse_with_pg("EXPLAIN (FORMAT tree) SELECT 1").unwrap();
+        let Statement::Explain(ExplainStatement { options, .. }) = stmt else {
+            panic!("Expected Statement::Explain");
+        };
+        assert!(!options.analyze);
+        assert_eq!(options.format, Some(ExplainFormat::Tree));
+    }
+
+    #[test]
+    fn explain_paren_form_metrics_level() {
+        use datafusion_common::format::{
+            ExplainAnalyzeCategories, MetricCategory, MetricType,
+        };
+        let stmt =
+            parse_with_pg("EXPLAIN (ANALYZE, METRICS 'rows,bytes', LEVEL dev) SELECT 1")
+                .unwrap();
+        let Statement::Explain(ExplainStatement { options, .. }) = stmt else {
+            panic!("Expected Statement::Explain");
+        };
+        assert!(options.analyze);
+        assert_eq!(options.analyze_level, Some(MetricType::Dev));
+        assert_eq!(
+            options.analyze_categories,
+            Some(ExplainAnalyzeCategories::Only(vec![
+                MetricCategory::Rows,
+                MetricCategory::Bytes,
+            ]))
+        );
+    }
+
+    #[test]
+    fn explain_paren_form_bool_spellings() {
+        let stmt =
+            parse_with_pg("EXPLAIN (ANALYZE ON, VERBOSE OFF, COSTS TRUE) SELECT 1")
+                .unwrap();
+        let Statement::Explain(ExplainStatement { options, .. }) = stmt else {
+            panic!("Expected Statement::Explain");
+        };
+        assert!(options.analyze);
+        assert!(!options.verbose);
+        assert_eq!(options.show_statistics, Some(true));
+    }
+
+    #[test]
+    fn explain_paren_form_buffers_rejected() {
+        let err = parse_with_pg("EXPLAIN (BUFFERS) SELECT 1").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("BUFFERS"),
+            "error should mention BUFFERS: {msg}"
+        );
+        assert!(
+            msg.contains("not supported"),
+            "error should say not supported: {msg}"
+        );
+    }
+
+    #[test]
+    fn explain_paren_form_unknown_option_rejected() {
+        let err = parse_with_pg("EXPLAIN (ASDF) SELECT 1").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown EXPLAIN option"),
+            "error should describe unknown option: {msg}"
+        );
     }
 }
