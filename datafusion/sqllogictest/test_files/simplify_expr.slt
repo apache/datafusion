@@ -146,3 +146,68 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[column1@0 = 1 as opt1, column1@0 = 2 AND column1@0 != 2 as noopt1, column1@0 = 4 as opt2, column1@0 != 5 AND column1@0 = 5 as noopt2]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Cast predicate preimage rewrites for timestamp precision casts
+statement ok
+CREATE TABLE cast_preimage_ts AS
+SELECT
+  arrow_cast(0, 'Timestamp(ns)') AS ts_nano,
+  arrow_cast(0, 'Timestamp(ms)') AS ts_milli;
+
+query TT
+EXPLAIN SELECT * FROM cast_preimage_ts
+WHERE CAST(ts_nano AS TIMESTAMP(3)) > arrow_cast(1000, 'Timestamp(ms)');
+----
+logical_plan
+01)Filter: cast_preimage_ts.ts_nano >= TimestampNanosecond(1001000000, None)
+02)--TableScan: cast_preimage_ts projection=[ts_nano, ts_milli]
+physical_plan
+01)FilterExec: ts_nano@0 >= 1001000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT * FROM cast_preimage_ts
+WHERE CAST(ts_nano AS TIMESTAMP(3)) IS DISTINCT FROM arrow_cast(0, 'Timestamp(ms)');
+----
+logical_plan
+01)Filter: cast_preimage_ts.ts_nano < TimestampNanosecond(-999999, None) OR cast_preimage_ts.ts_nano >= TimestampNanosecond(1000000, None)
+02)--TableScan: cast_preimage_ts projection=[ts_nano, ts_milli]
+physical_plan
+01)FilterExec: ts_nano@0 < -999999 OR ts_nano@0 >= 1000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT * FROM cast_preimage_ts
+WHERE CAST(ts_milli AS TIMESTAMP(9)) >= arrow_cast(123000000, 'Timestamp(ns)');
+----
+logical_plan
+01)Filter: cast_preimage_ts.ts_milli >= TimestampMillisecond(123, None)
+02)--TableScan: cast_preimage_ts projection=[ts_nano, ts_milli]
+physical_plan
+01)FilterExec: ts_milli@1 >= 123
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT * FROM cast_preimage_ts
+WHERE CAST(ts_milli AS TIMESTAMP(9)) >= arrow_cast(123456789, 'Timestamp(ns)');
+----
+logical_plan
+01)Filter: CAST(cast_preimage_ts.ts_milli AS Timestamp(ns)) >= TimestampNanosecond(123456789, None)
+02)--TableScan: cast_preimage_ts projection=[ts_nano, ts_milli]
+physical_plan
+01)FilterExec: CAST(ts_milli@1 AS Timestamp(ns)) >= 123456789
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT * FROM cast_preimage_ts
+WHERE CAST(ts_nano AS TIMESTAMP(3)) = arrow_cast(-1, 'Timestamp(ms)');
+----
+logical_plan
+01)Filter: cast_preimage_ts.ts_nano >= TimestampNanosecond(-1999999, None) AND cast_preimage_ts.ts_nano < TimestampNanosecond(-999999, None)
+02)--TableScan: cast_preimage_ts projection=[ts_nano, ts_milli]
+physical_plan
+01)FilterExec: ts_nano@0 >= -1999999 AND ts_nano@0 < -999999
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE cast_preimage_ts;
