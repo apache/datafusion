@@ -17,7 +17,7 @@
 
 use async_trait::async_trait;
 use datafusion_common::config::{ConfigOptions, TableOptions};
-use datafusion_common::{DFSchema, Result};
+use datafusion_common::{DFSchema, Result, not_impl_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -26,6 +26,7 @@ use datafusion_expr::registry::ExtensionTypeRegistryRef;
 use datafusion_expr::{
     AggregateUDF, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF,
 };
+use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
 
 use crate::CatalogProviderList;
@@ -33,6 +34,22 @@ use parking_lot::{Mutex, RwLock};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
+
+use crate::{PhysicalOptimizerRule, QueryPlanner};
+
+#[derive(Debug)]
+struct UnsupportedQueryPlanner;
+
+#[async_trait]
+impl QueryPlanner for UnsupportedQueryPlanner {
+    async fn create_physical_plan(
+        &self,
+        _logical_plan: &LogicalPlan,
+        _session: &dyn Session,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        not_impl_err!("This session does not expose its query planner")
+    }
+}
 
 /// Interface for accessing [`SessionState`] from the catalog and data source.
 ///
@@ -87,6 +104,35 @@ pub trait Session: Send + Sync {
     /// return the [`ConfigOptions`]
     fn config_options(&self) -> &ConfigOptions {
         self.config().options()
+    }
+
+    /// Return the query planner for this session.
+    ///
+    /// Implementations that do not expose their query planner return a planner
+    /// that reports a `NotImplemented` error when called.
+    fn query_planner(&self) -> Arc<dyn QueryPlanner + Send + Sync> {
+        Arc::new(UnsupportedQueryPlanner)
+    }
+
+    /// Optimize a logical plan.
+    ///
+    /// The default implementation returns the plan unchanged. Sessions that use
+    /// the default query planning implementation should override this method.
+    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
+        Ok(plan.clone())
+    }
+
+    /// Return the physical optimizer rules for this session.
+    ///
+    /// The default implementation returns no rules. Sessions that use the
+    /// default physical planner should override this method.
+    fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
+        &[]
+    }
+
+    /// Return the optional statistics registry used during physical optimization.
+    fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+        None
     }
 
     /// Creates a physical [`ExecutionPlan`] plan from a [`LogicalPlan`].
