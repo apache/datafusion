@@ -323,7 +323,7 @@ impl RecordBatchMemoryMetrics {
         Self::default()
     }
 
-    /// Similar to RecordBatch.record_output, but deduplicating accross batches to avoid
+    /// Similar to RecordBatch.record_output, but deduplicating across batches to avoid
     /// output_size inflation due to shared memory
     pub fn record_output(&mut self, batch: &RecordBatch, bm: &BaselineMetrics) {
         bm.record_output(batch.num_rows());
