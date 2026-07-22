@@ -846,15 +846,22 @@ fn estimate_inner_join_cardinality(
     // With the assumption that the smaller input's domain is generally represented in the bigger
     // input's domain, we can estimate the inner join's cardinality by taking the cartesian product
     // of the two inputs and normalizing it by the selectivity factor.
-    let left_num_rows = left_stats.num_rows.get_value()?;
-    let right_num_rows = right_stats.num_rows.get_value()?;
+    let left_num_rows = *left_stats.num_rows.get_value()?;
+    let right_num_rows = *right_stats.num_rows.get_value()?;
+    // Widen before multiplying so the intermediate Cartesian product does not
+    // overflow when the normalized cardinality is still representable as usize.
+    let cartesian_product = (left_num_rows as u128) * (right_num_rows as u128);
+    let normalized_cardinality =
+        |value: usize| usize::try_from(cartesian_product / value as u128);
     match join_selectivity {
-        Precision::Exact(value) if value > 0 => {
-            Some(Precision::Exact((left_num_rows * right_num_rows) / value))
-        }
-        Precision::Inexact(value) if value > 0 => {
-            Some(Precision::Inexact((left_num_rows * right_num_rows) / value))
-        }
+        Precision::Exact(value) if value > 0 => Some(
+            normalized_cardinality(value)
+                .map(Precision::Exact)
+                .unwrap_or(Precision::Inexact(usize::MAX)),
+        ),
+        Precision::Inexact(value) if value > 0 => Some(Precision::Inexact(
+            normalized_cardinality(value).unwrap_or(usize::MAX),
+        )),
         // Since we don't have any information about the selectivity (which is derived
         // from the number of distinct rows information) we can give up here for now.
         // And let other passes handle this (otherwise we would need to produce an
@@ -3339,6 +3346,46 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_inner_join_cardinality_multiplication_overflow() {
+        let statistics = |num_rows, distinct_count| Statistics {
+            num_rows,
+            total_byte_size: Absent,
+            column_statistics: vec![ColumnStatistics {
+                distinct_count,
+                ..Default::default()
+            }],
+        };
+        let large_row_count = usize::MAX / 2 + 1;
+
+        // The Cartesian product overflows usize, but applying the NDV divisor
+        // produces a representable cardinality.
+        assert_eq!(
+            estimate_inner_join_cardinality(
+                statistics(Inexact(large_row_count), Inexact(1)),
+                statistics(Inexact(3), Inexact(3)),
+            ),
+            Some(Inexact(large_row_count))
+        );
+        assert_eq!(
+            estimate_inner_join_cardinality(
+                statistics(Exact(large_row_count), Exact(1)),
+                statistics(Exact(3), Exact(3)),
+            ),
+            Some(Exact(large_row_count))
+        );
+
+        // If the normalized result itself cannot fit in usize, cap the
+        // estimate and mark it as inexact.
+        assert_eq!(
+            estimate_inner_join_cardinality(
+                statistics(Exact(usize::MAX), Exact(1)),
+                statistics(Exact(2), Exact(1)),
+            ),
+            Some(Inexact(usize::MAX))
+        );
     }
 
     #[test]
