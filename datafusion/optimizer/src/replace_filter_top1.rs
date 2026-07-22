@@ -24,14 +24,10 @@ use std::sync::Arc;
 use datafusion_common::ScalarValue::{self, UInt64};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Column, Result};
-use datafusion_expr::expr_rewriter::normalize_cols;
-use datafusion_expr::utils::expand_wildcard;
 use datafusion_expr::{
-    Aggregate, BinaryExpr, Distinct, DistinctOn, Expr, Filter, LogicalPlan, Operator,
-    Sort, SortExpr, Window, WindowFunctionDefinition,
+    Aggregate, BinaryExpr, Expr, Filter, LogicalPlan, Operator, SortExpr,
 };
-use datafusion_expr::{ExprFunctionExt, Limit, LogicalPlanBuilder, col, lit};
-use datafusion_sql::sqlparser::keywords::Keyword::PARALLEL;
+use datafusion_expr::{ExprFunctionExt, LogicalPlanBuilder, col, lit};
 
 /// Optimizer that replaces logical [[Filter]] with a "top 1" predicate, that has a child  with a logical [[Window]] with a function using `row_number`
 /// to an aggregate
