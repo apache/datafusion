@@ -142,6 +142,27 @@ impl LambdaExpr {
         &self.body
     }
 
+    #[cfg(feature = "proto")]
+    /// Reconstruct a [`LambdaExpr`] from a proto node.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_physical_expr_common::expect_expr_variant;
+        use datafusion_proto_models::protobuf;
+
+        let lambda = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::Lambda,
+            "LambdaExpr",
+        );
+
+        Ok(Arc::new(LambdaExpr::try_new(
+            lambda.params.clone(),
+            ctx.decode_required_expression(lambda.body.as_deref(), "LambdaExpr", "body")?,
+        )?))
+    }
+
     pub(crate) fn projection(&self) -> &[usize] {
         &self.projection
     }
@@ -192,6 +213,24 @@ impl PhysicalExpr for LambdaExpr {
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "({}) -> {}", self.params.join(", "), self.body)
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::Lambda(Box::new(
+                protobuf::PhysicalLambdaExprNode {
+                    params: self.params().to_vec(),
+                    body: Some(Box::new(ctx.encode_child(self.body())?)),
+                },
+            ))),
+        }))
     }
 }
 

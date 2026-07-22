@@ -86,6 +86,10 @@ impl ScalarUDFImpl for SignumFunc {
         }
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
         // Non-decreasing for all real numbers x.
         Ok(input[0].sort_properties)

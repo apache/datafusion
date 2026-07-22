@@ -2383,6 +2383,7 @@ mod tests {
     use arrow_schema::FieldRef;
     use datafusion_common::DataFusionError;
     use datafusion_common::datatype::DataTypeExt;
+    use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
     use std::error::Error;
     use std::path::PathBuf;
 
@@ -2564,7 +2565,7 @@ mod tests {
         let ctx = SessionContext::new_with_state(session_state).enable_url_table();
         let result = plan_and_collect(
             &ctx,
-            format!("select c_name from '{}' limit 3;", &url).as_str(),
+            format!("select c_name from '{url}' limit 3;").as_str(),
         )
         .await?;
 
@@ -2851,6 +2852,7 @@ mod tests {
             _expr: &Expr,
             _input_dfschema: &DFSchema,
             _session_state: &SessionState,
+            _planning_ctx: &PhysicalPlanningContext,
         ) -> Result<Arc<dyn PhysicalExpr>> {
             unimplemented!()
         }

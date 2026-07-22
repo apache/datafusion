@@ -62,6 +62,8 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use tokio::fs::File;
 
+use crate::helper::plan_metrics::{plan_spill_count, plan_spilled_bytes};
+
 #[cfg(test)]
 #[ctor::ctor(unsafe)]
 fn init() {
@@ -546,8 +548,7 @@ async fn test_external_sort_zero_merge_reservation() {
     let _result = collect(stream).await;
 
     // Ensures the query spilled during execution
-    let metrics = physical_plan.metrics().unwrap();
-    let spill_count = metrics.spill_count().unwrap();
+    let spill_count = plan_spill_count(physical_plan.as_ref());
     assert!(spill_count > 0);
 }
 
@@ -603,9 +604,8 @@ async fn test_sort_skewed_batches_spill() {
 
     // The query must actually spill, otherwise it never reaches the merge path
     // this test is meant to cover.
-    let metrics = physical_plan.metrics().unwrap();
     assert!(
-        metrics.spill_count().unwrap() > 0,
+        plan_spill_count(physical_plan.as_ref()) > 0,
         "expected the sort to spill to disk"
     );
 }
@@ -696,8 +696,8 @@ async fn test_disk_spill_limit_not_reached() -> Result<()> {
         .await
         .expect("Query execution failed");
 
-    let spill_count = plan.metrics().unwrap().spill_count().unwrap();
-    let spilled_bytes = plan.metrics().unwrap().spilled_bytes().unwrap();
+    let spill_count = plan_spill_count(plan.as_ref());
+    let spilled_bytes = plan_spilled_bytes(plan.as_ref());
 
     println!("spill count {spill_count}, spill bytes {spilled_bytes}");
     assert!(spill_count > 0);
@@ -732,8 +732,8 @@ async fn test_spill_file_compressed_with_zstd() -> Result<()> {
         .await
         .expect("Query execution failed");
 
-    let spill_count = plan.metrics().unwrap().spill_count().unwrap();
-    let spilled_bytes = plan.metrics().unwrap().spilled_bytes().unwrap();
+    let spill_count = plan_spill_count(plan.as_ref());
+    let spilled_bytes = plan_spilled_bytes(plan.as_ref());
 
     println!("spill count {spill_count}");
     assert!(spill_count > 0);
@@ -768,8 +768,8 @@ async fn test_spill_file_compressed_with_lz4_frame() -> Result<()> {
         .await
         .expect("Query execution failed");
 
-    let spill_count = plan.metrics().unwrap().spill_count().unwrap();
-    let spilled_bytes = plan.metrics().unwrap().spilled_bytes().unwrap();
+    let spill_count = plan_spill_count(plan.as_ref());
+    let spilled_bytes = plan_spilled_bytes(plan.as_ref());
 
     println!("spill count {spill_count}");
     assert!(spill_count > 0);
