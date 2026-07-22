@@ -101,6 +101,75 @@ pub fn plan_to_sql(plan: &LogicalPlan) -> Result<ast::Statement> {
     unparser.plan_to_sql(plan)
 }
 
+/// Aggregate-expression scope for one rendered SELECT block.
+///
+/// When an aggregate's input is itself emitted as a derived subquery (a
+/// projection sits between the aggregate and its relation), the input columns
+/// are only reachable by that derived table's output names. Base-table
+/// qualifiers like `t.col` name a relation that is out of scope above the
+/// boundary, so emitting them produces SQL a strict engine rejects.
+///
+/// Every clause that renders an aggregate expression (SELECT / GROUP BY /
+/// HAVING / QUALIFY / ORDER BY) has to apply the same rule. Detect the
+/// boundary once here and reuse it, so the clauses can't drift apart (which is
+/// how earlier fixes left some clauses correct and others not).
+struct UnparserAggScope<'a> {
+    agg: &'a Aggregate,
+    /// `agg.input` renders as a derived projection, so out-of-scope qualifiers
+    /// must be stripped from expressions in this scope.
+    input_is_derived_projection: bool,
+}
+
+impl<'a> UnparserAggScope<'a> {
+    fn new(agg: &'a Aggregate) -> Self {
+        Self {
+            agg,
+            input_is_derived_projection: Unparser::contains_projection_before_relation(
+                agg.input.as_ref(),
+            ),
+        }
+    }
+
+    /// Prepare a projected column or predicate that still references the
+    /// aggregate by its output columns: unproject it back onto the aggregate
+    /// (and `windows`) expressions, then normalize it for this scope.
+    fn prepare(&self, expr: Expr, windows: Option<&[&Window]>) -> Result<Expr> {
+        self.normalize(unproject_agg_exprs(expr, self.agg, windows)?)
+    }
+
+    /// Normalize an expression that is already in aggregate form (group / aggr
+    /// exprs, or an unprojected sort expr): strip the qualifiers that fall out
+    /// of scope once the input is a derived projection. No-op otherwise.
+    fn normalize(&self, expr: Expr) -> Result<Expr> {
+        if self.input_is_derived_projection {
+            Unparser::strip_column_qualifiers_for_schema(
+                expr,
+                self.agg.input.schema().as_ref(),
+            )
+        } else {
+            Ok(expr)
+        }
+    }
+
+    /// Unproject a sort expression onto its aggregate, then normalize it so
+    /// ORDER BY resolves against the same scope as every other clause in the
+    /// block. Associated fn taking `Option<&Self>` because a sort can appear
+    /// with no aggregate below it, in which case only unprojection applies.
+    fn prepare_sort_expr(
+        scope: Option<&Self>,
+        sort_expr: SortExpr,
+        input: &LogicalPlan,
+    ) -> Result<SortExpr> {
+        let mut sort_expr = unproject_sort_expr(sort_expr, scope.map(|s| s.agg), input)?;
+
+        if let Some(scope) = scope {
+            sort_expr.expr = scope.normalize(sort_expr.expr)?;
+        }
+
+        Ok(sort_expr)
+    }
+}
+
 impl Unparser<'_> {
     pub fn plan_to_sql(&self, plan: &LogicalPlan) -> Result<ast::Statement> {
         let mut plan = normalize_union_schema(plan)?;
@@ -312,17 +381,12 @@ impl Unparser<'_> {
         match (agg, window) {
             (Some(agg), window) => {
                 let window_option = window.as_deref();
-                let agg_input_has_derived_projection =
-                    Self::contains_projection_before_relation(agg.input.as_ref());
+                let unparser_agg_scope = UnparserAggScope::new(agg);
                 let items = exprs
                     .into_iter()
                     .map(|proj_expr| {
-                        let unproj = unproject_agg_exprs(proj_expr, agg, window_option)?;
-                        let unproj = Self::normalize_agg_input_columns(
-                            unproj,
-                            agg,
-                            agg_input_has_derived_projection,
-                        )?;
+                        let unproj =
+                            unparser_agg_scope.prepare(proj_expr, window_option)?;
                         self.select_item_to_sql(&unproj)
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -333,12 +397,7 @@ impl Unparser<'_> {
                         .iter()
                         .cloned()
                         .map(|expr| {
-                            let expr = Self::normalize_agg_input_columns(
-                                expr,
-                                agg,
-                                agg_input_has_derived_projection,
-                            )?;
-                            self.expr_to_sql(&expr)
+                            self.expr_to_sql(&unparser_agg_scope.normalize(expr)?)
                         })
                         .collect::<Result<Vec<_>>>()?,
                     vec![],
@@ -376,18 +435,6 @@ impl Unparser<'_> {
                 select.projection(items);
                 Ok(false)
             }
-        }
-    }
-
-    fn normalize_agg_input_columns(
-        expr: Expr,
-        agg: &Aggregate,
-        input_has_derived_projection: bool,
-    ) -> Result<Expr> {
-        if input_has_derived_projection {
-            Self::strip_column_qualifiers_for_schema(expr, agg.input.schema().as_ref())
-        } else {
-            Ok(expr)
         }
     }
 
@@ -592,6 +639,11 @@ impl Unparser<'_> {
             window_expr
                 .iter()
                 .map(|expr| {
+                    // No scope normalization here. This agg-carrying branch is
+                    // only reached by a manually built plan (a Window with no
+                    // enclosing Projection). SQL always wraps a window function
+                    // in a projection, so real queries render through
+                    // reconstruct_select_statement, which normalizes instead.
                     let expr = if let Some(agg) = agg {
                         unproject_agg_exprs(expr.clone(), agg, None)?
                     } else {
@@ -974,12 +1026,13 @@ impl Unparser<'_> {
                     let sort_exprs: Vec<SortExpr> = if fully_absorbed {
                         let agg =
                             find_agg_node_within_select(plan, select.already_projected());
+                        let unparser_agg_scope = agg.map(UnparserAggScope::new);
                         sort.expr
                             .iter()
                             .map(|sort_expr| {
-                                unproject_sort_expr(
+                                UnparserAggScope::prepare_sort_expr(
+                                    unparser_agg_scope.as_ref(),
                                     sort_expr.clone(),
-                                    agg,
                                     sort.input.as_ref(),
                                 )
                             })
@@ -1028,23 +1081,14 @@ impl Unparser<'_> {
                     let mut unprojected =
                         unproject_window_exprs(filter.predicate.clone(), window)?;
                     if let Some(agg) = agg {
-                        unprojected = unproject_agg_exprs(unprojected, agg, None)?;
-                        unprojected = Self::normalize_agg_input_columns(
-                            unprojected,
-                            agg,
-                            Self::contains_projection_before_relation(agg.input.as_ref()),
-                        )?;
+                        unprojected =
+                            UnparserAggScope::new(agg).prepare(unprojected, None)?;
                     }
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.qualify(Some(filter_expr));
                 } else if let Some(agg) = agg {
-                    let unprojected =
-                        unproject_agg_exprs(filter.predicate.clone(), agg, None)?;
-                    let unprojected = Self::normalize_agg_input_columns(
-                        unprojected,
-                        agg,
-                        Self::contains_projection_before_relation(agg.input.as_ref()),
-                    )?;
+                    let unprojected = UnparserAggScope::new(agg)
+                        .prepare(filter.predicate.clone(), None)?;
                     let filter_expr = self.expr_to_sql(&unprojected)?;
                     select.having(Some(filter_expr));
                 } else {
@@ -1125,12 +1169,17 @@ impl Unparser<'_> {
                 };
 
                 let agg = find_agg_node_within_select(plan, select.already_projected());
+                let scope = agg.map(UnparserAggScope::new);
                 // unproject sort expressions
                 let sort_exprs: Vec<SortExpr> = sort
                     .expr
                     .iter()
                     .map(|sort_expr| {
-                        unproject_sort_expr(sort_expr.clone(), agg, sort.input.as_ref())
+                        UnparserAggScope::prepare_sort_expr(
+                            scope.as_ref(),
+                            sort_expr.clone(),
+                            sort.input.as_ref(),
+                        )
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -1146,8 +1195,7 @@ impl Unparser<'_> {
             LogicalPlan::Aggregate(agg) => {
                 // Aggregation can be already handled in the projection case
                 if !select.already_projected() {
-                    let agg_input_has_derived_projection =
-                        Self::contains_projection_before_relation(agg.input.as_ref());
+                    let unparser_agg_scope = UnparserAggScope::new(agg);
                     // The query returns aggregate and group expressions. If that weren't the case,
                     // the aggregate would have been placed inside a projection, making the check above^ false
                     let exprs: Vec<_> = agg
@@ -1156,12 +1204,7 @@ impl Unparser<'_> {
                         .chain(agg.group_expr.iter())
                         .cloned()
                         .map(|expr| {
-                            let expr = Self::normalize_agg_input_columns(
-                                expr,
-                                agg,
-                                agg_input_has_derived_projection,
-                            )?;
-                            self.select_item_to_sql(&expr)
+                            self.select_item_to_sql(&unparser_agg_scope.normalize(expr)?)
                         })
                         .collect::<Result<Vec<_>>>()?;
                     select.projection(exprs);
@@ -1171,12 +1214,7 @@ impl Unparser<'_> {
                             .iter()
                             .cloned()
                             .map(|expr| {
-                                let expr = Self::normalize_agg_input_columns(
-                                    expr,
-                                    agg,
-                                    agg_input_has_derived_projection,
-                                )?;
-                                self.expr_to_sql(&expr)
+                                self.expr_to_sql(&unparser_agg_scope.normalize(expr)?)
                             })
                             .collect::<Result<Vec<_>>>()?,
                         vec![],
