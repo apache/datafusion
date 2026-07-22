@@ -19,7 +19,7 @@
 //!
 //! For real object stores every `get`/`get_opts` call is one GET, and a
 //! `get_ranges` call becomes one GET per *coalesced* range (ranges within
-//! [`OBJECT_STORE_COALESCE_DEFAULT`] of each other are merged into one
+//! `OBJECT_STORE_COALESCE_DEFAULT` of each other are merged into one
 //! request, following `object_store::coalesce_ranges`). This wrapper models
 //! that: it counts `get_opts` as one request and `get_ranges` as its merged
 //! range count, regardless of how the local filesystem actually serves them.
@@ -185,6 +185,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(clippy::single_range_in_vec_init)]
     fn test_merged_request_count() {
         assert_eq!(merged_request_count(&[]), 0);
         assert_eq!(merged_request_count(&[0..10]), 1);
