@@ -30,7 +30,7 @@ use datafusion_expr::{
 };
 use datafusion_expr::{ExprFunctionExt, LogicalPlanBuilder, lit};
 
-/// Optimizer that replaces logical [[Filter]] with a "topredicate, that has a child  with a logical [[Window]] with a function using `row_number`
+/// Optimizer that replaces logical [[Filter]] with a "top 1" predicate, that has a child with a logical [[Window]] with a function using `row_number`
 /// to an aggregate
 ///
 /// ```text
@@ -108,10 +108,7 @@ impl OptimizerRule for ReplaceFilterTop1 {
             return Ok(Transformed::no(plan));
         };
 
-        // The filter must reference the row_number output as a "top-1"
-        // predicate. When a passthrough projection sits between the
-        // filter and the window, the filter references the projection's
-        // *output* name for that column, resolve accordingly
+        // Resolve the rn name the filter references (projection alias if present)
         let rn_ref_name = match projection {
             None => rn_col.name.clone(),
             Some(p) => match rn_passthrough_name(p, &rn_col) {
@@ -127,13 +124,8 @@ impl OptimizerRule for ReplaceFilterTop1 {
             partition_by.iter().any(|e| matches!(e, Expr::Column(p) if p.name == c.name && p.relation == c.relation))
         };
 
-        // Aggregate over the window's input: group by the partition
-        // keys and take `first_value(col ORDER BY ...)` for every other
-        // input column, aliased back to that column's qualifier+name.
-        // This reproduces every input column by name, so any expression
-        // defined over the window output (partition keys pass through
-        // group-by; the rest via first_value of the top-1 row) can be
-        // re-applied unchanged on top of the aggregate.
+        // Group by the partition keys and take `first_value(col ORDER BY ...)` for every other
+        // input column, aliased back to that column's qualifier+name
         let first_value = config.function_registry().unwrap().udaf("first_value")?;
         let aggr_expr = input_cols
             .iter()
@@ -153,12 +145,8 @@ impl OptimizerRule for ReplaceFilterTop1 {
             aggr_expr,
         )?);
 
-        // Restore the Filter's exact output schema on top of the
-        // aggregate. Every surviving row has `rn = 1`, so references to
-        // the row_number column fold to the literal 1.
+        // Restoring the Filter's exact output schema on top of the aggregate
         let proj_exprs = match projection {
-            // Direct `Filter -> Window`: rebuild the window's output
-            // (input columns + rn) as an identity projection.
             None => input
                 .schema()
                 .iter()
@@ -170,15 +158,12 @@ impl OptimizerRule for ReplaceFilterTop1 {
                     }
                 })
                 .collect::<Vec<_>>(),
-            // Passthrough projection: reuse its expressions verbatim,
-            // swapping the sole rn passthrough for `1` (aliased to the
-            // projection's output name so the schema is preserved).
             Some(p) => p
                 .expr
                 .iter()
                 .zip(p.schema.iter())
                 .map(|(expr, (qualifier, field))| {
-                    if matches!(strip_alias(expr), Expr::Column(c) if *c == rn_col) {
+                    if matches!(unalias(expr), Expr::Column(c) if *c == rn_col) {
                         lit(1u64).alias_qualified(qualifier.cloned(), field.name())
                     } else {
                         expr.clone()
@@ -293,18 +278,12 @@ fn validate_window_input(input: &Arc<LogicalPlan>) -> Option<WindowTop1<'_>> {
     })
 }
 
-/// If `projection` is a valid passthrough for the rewrite, return the output
-/// name under which it exposes the `row_number()` column (`rn_col`).
-///
-/// A projection is a valid passthrough when exactly one output column is a
-/// (possibly aliased) plain reference to `rn_col` and **no other** output
-/// column references `rn_col`. Returns `None` (bail) otherwise, e.g. if the
-/// row_number column is dropped, duplicated, or used inside a computed
-/// expression that we cannot safely fold to the constant `1`.
+/// Return the projection output name for a plain passthrough of `rn_col`
+/// or `None` if unsafe (dropped, duplicated, used inside computed expr that wecan't fold to the constant integer `1`)
 fn rn_passthrough_name(projection: &Projection, rn_col: &Column) -> Option<String> {
     let mut rn_output_name = None;
     for (expr, (_, field)) in projection.expr.iter().zip(projection.schema.iter()) {
-        let is_passthrough = matches!(strip_alias(expr), Expr::Column(c) if c == rn_col);
+        let is_passthrough = matches!(unalias(expr), Expr::Column(c) if c == rn_col);
         if is_passthrough {
             if rn_output_name.is_some() {
                 // rn exposed under more than one output column.
@@ -312,15 +291,15 @@ fn rn_passthrough_name(projection: &Projection, rn_col: &Column) -> Option<Strin
             }
             rn_output_name = Some(field.name().clone());
         } else if expr.column_refs().iter().any(|c| *c == rn_col) {
-            // rn used inside a non-passthrough (e.g. computed) expression.
+            // rn used inside a non-passthrough (like a computed) expression.
             return None;
         }
     }
     rn_output_name
 }
 
-/// Strip any (possibly nested) top-level alias, returning the underlying `Expr`.
-fn strip_alias(mut expr: &Expr) -> &Expr {
+/// Unalias expression reference
+fn unalias(mut expr: &Expr) -> &Expr {
     while let Expr::Alias(alias) = expr {
         expr = alias.expr.as_ref();
     }
