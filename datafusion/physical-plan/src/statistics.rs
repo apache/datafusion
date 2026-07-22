@@ -222,6 +222,26 @@ impl StatisticsContext {
 
         let children = plan.children();
         let requests = plan.child_stats_requests(partition);
+        // Resolved for the built-in `statistics_from_inputs` fallback below.
+        let child_statistics = self.resolve_children(plan, &children, &requests)?;
+
+        let statistics = match self.try_provider_stats(plan, &children, args)? {
+            Some(statistics) => statistics,
+            None => plan.statistics_from_inputs(&child_statistics, args)?,
+        };
+        self.store_statistics(plan, partition, Arc::clone(&statistics));
+        Ok(statistics)
+    }
+
+    /// Resolves each child's core statistics per `requests`: computes the child
+    /// at the requested partition (memoized), or supplies a
+    /// [`Statistics::new_unknown`] placeholder for [`ChildStats::Skip`].
+    fn resolve_children(
+        &self,
+        plan: &dyn ExecutionPlan,
+        children: &[&Arc<dyn ExecutionPlan>],
+        requests: &[ChildStats],
+    ) -> Result<Vec<Arc<Statistics>>> {
         assert_eq_or_internal_err!(
             requests.len(),
             children.len(),
@@ -230,9 +250,9 @@ impl StatisticsContext {
             requests.len(),
             children.len()
         );
-        let child_statistics: Vec<Arc<Statistics>> = children
+        children
             .iter()
-            .zip(&requests)
+            .zip(requests)
             .map(|(child, directive)| match directive {
                 ChildStats::At(p) => self.compute_base(
                     child.as_ref(),
@@ -242,20 +262,7 @@ impl StatisticsContext {
                     Ok(Arc::new(Statistics::new_unknown(child.schema().as_ref())))
                 }
             })
-            .collect::<Result<_>>()?;
-
-        let statistics = match self.try_provider_stats(
-            plan,
-            &children,
-            &requests,
-            &child_statistics,
-            args,
-        )? {
-            Some(statistics) => statistics,
-            None => plan.statistics_from_inputs(&child_statistics, args)?,
-        };
-        self.store_statistics(plan, partition, Arc::clone(&statistics));
-        Ok(statistics)
+            .collect()
     }
 
     /// Runs the provider chain, returning the first `Computed` result's core
@@ -263,32 +270,30 @@ impl StatisticsContext {
     /// or all delegate. A partition-blind provider applies only to overall stats
     /// (its default `compute_statistics_with_args` delegates per partition).
     ///
-    /// Assembles each child's [`ExtendedStatistics`] (statistics plus cached
-    /// extensions) only here, so a walk with no providers pays no extension cost.
+    /// Each provider's child statistics come from its own
+    /// [`child_stats_requests`](crate::operator_statistics::StatisticsProvider::child_stats_requests)
+    /// and are memoized, so a walk with no providers pays nothing.
     fn try_provider_stats(
         &self,
         plan: &dyn ExecutionPlan,
         children: &[&Arc<dyn ExecutionPlan>],
-        requests: &[ChildStats],
-        child_statistics: &[Arc<Statistics>],
         args: &StatisticsArgs,
     ) -> Result<Option<Arc<Statistics>>> {
         let providers = self.registry.providers();
         if providers.is_empty() {
             return Ok(None);
         }
-        let child_extended =
-            self.child_extended_stats(children, requests, child_statistics);
+        let partition = args.partition();
         for provider in providers {
+            let requests = provider.child_stats_requests(plan, partition);
+            let child_statistics = self.resolve_children(plan, children, &requests)?;
+            let child_extended =
+                self.child_extended_stats(children, &requests, &child_statistics);
             if let StatisticsResult::Computed(computed) =
                 provider.compute_statistics_with_args(plan, &child_extended, args)?
             {
                 if !computed.extensions().is_empty() {
-                    self.store_extensions(
-                        plan,
-                        args.partition(),
-                        computed.extensions().clone(),
-                    );
+                    self.store_extensions(plan, partition, computed.extensions().clone());
                 }
                 return Ok(Some(Arc::clone(computed.base_arc())));
             }

@@ -84,7 +84,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{Result, Statistics};
 
 use crate::ExecutionPlan;
-use crate::statistics::{StatisticsArgs, StatisticsContext};
+use crate::statistics::{ChildStats, StatisticsArgs, StatisticsContext};
 
 // ============================================================================
 // ExtendedStatistics: Statistics with type-safe extensions
@@ -280,6 +280,32 @@ pub trait StatisticsProvider: Debug + Send + Sync {
         } else {
             self.compute_statistics(plan, child_stats)
         }
+    }
+
+    /// Which child statistics this provider needs for `plan`, one entry per
+    /// child in `plan.children()` order.
+    ///
+    /// Resolved independently of the operator's own
+    /// [`ExecutionPlan::child_stats_requests`], so a provider can refine an
+    /// operator that itself declares [`ChildStats::Skip`]. Results are memoized
+    /// per `(node, partition)`, so requesting a child already resolved for the
+    /// operator costs nothing.
+    ///
+    /// The default requests each child's overall (`None`) statistics, so
+    /// refining from child statistics works without modifying the operator.
+    /// Override to [`ChildStats::Skip`] a child the provider does not need. A
+    /// provider that computes per-partition statistics (overriding
+    /// [`Self::compute_statistics_with_args`]) must also override this to request
+    /// the matching partition, which the default ignores.
+    fn child_stats_requests(
+        &self,
+        plan: &dyn ExecutionPlan,
+        _partition: Option<usize>,
+    ) -> Vec<ChildStats> {
+        plan.children()
+            .iter()
+            .map(|_| ChildStats::At(None))
+            .collect()
     }
 }
 
@@ -1054,7 +1080,7 @@ mod tests {
     use super::*;
     use crate::filter::FilterExec;
     use crate::projection::ProjectionExec;
-    use crate::statistics::{StatisticsArgs, StatisticsContext};
+    use crate::statistics::{ChildStats, StatisticsArgs, StatisticsContext};
     use crate::{DisplayAs, DisplayFormatType, PlanProperties};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::stats::Precision;
@@ -1264,13 +1290,6 @@ mod tests {
             vec![&self.input]
         }
 
-        fn child_stats_requests(
-            &self,
-            partition: Option<usize>,
-        ) -> Vec<crate::statistics::ChildStats> {
-            vec![crate::statistics::ChildStats::At(partition)]
-        }
-
         fn with_new_children(
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
@@ -1320,6 +1339,47 @@ mod tests {
 
         let stats = compute(&engine, custom.as_ref())?;
         assert!(matches!(stats.base.num_rows, Precision::Exact(1000)));
+        Ok(())
+    }
+
+    /// A provider that overrides `child_stats_requests` to need no children.
+    #[derive(Debug)]
+    struct NoChildStatsProvider;
+
+    impl StatisticsProvider for NoChildStatsProvider {
+        fn child_stats_requests(
+            &self,
+            plan: &dyn ExecutionPlan,
+            _partition: Option<usize>,
+        ) -> Vec<ChildStats> {
+            plan.children().iter().map(|_| ChildStats::Skip).collect()
+        }
+
+        fn compute_statistics(
+            &self,
+            plan: &dyn ExecutionPlan,
+            child_stats: &[ExtendedStatistics],
+        ) -> Result<StatisticsResult> {
+            if plan.downcast_ref::<CustomExec>().is_some() {
+                Ok(StatisticsResult::Computed(child_stats[0].clone()))
+            } else {
+                Ok(StatisticsResult::Delegate)
+            }
+        }
+    }
+
+    #[test]
+    fn test_provider_opts_out_of_child_stats() -> Result<()> {
+        let mut engine = StatisticsRegistry::new();
+        engine.register(Arc::new(NoChildStatsProvider));
+
+        let source = make_source(1000);
+        let custom: Arc<dyn ExecutionPlan> = Arc::new(CustomExec { input: source });
+
+        // The provider requested no children, so it sees the unknown placeholder
+        // rather than the source's row count.
+        let stats = compute(&engine, custom.as_ref())?;
+        assert!(stats.base.num_rows.get_value().is_none());
         Ok(())
     }
 
