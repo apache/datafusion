@@ -21,14 +21,14 @@ use crate::optimizer::{ApplyOrder, ApplyOrder::BottomUp};
 use crate::{OptimizerConfig, OptimizerRule};
 use std::sync::Arc;
 
-use datafusion_common::ScalarValue::UInt64;
+use datafusion_common::ScalarValue::{self, UInt64};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Column, Result};
 use datafusion_expr::expr_rewriter::normalize_cols;
 use datafusion_expr::utils::expand_wildcard;
 use datafusion_expr::{
-    Aggregate, BinaryExpr, Distinct, DistinctOn, Expr, Filter, LogicalPlan, Sort,
-    SortExpr, Window, WindowFunctionDefinition,
+    Aggregate, BinaryExpr, Distinct, DistinctOn, Expr, Filter, LogicalPlan, Operator,
+    Sort, SortExpr, Window, WindowFunctionDefinition,
 };
 use datafusion_expr::{ExprFunctionExt, Limit, LogicalPlanBuilder, col, lit};
 
@@ -113,16 +113,31 @@ impl OptimizerRule for ReplaceFilterTop1 {
 }
 
 fn has_valid_predicate(predicate: &Expr, rn_name: &str) -> bool {
-    let Expr::BinaryExpr(BinaryExpr { left, right, .. }) = predicate else {
+    let Expr::BinaryExpr(BinaryExpr { left, right, op }) = predicate else {
         return false;
     };
-    match (&**left, &**right) {
-        (Expr::Column(Column { name, .. }), Expr::Literal(s, _))
-        | (Expr::Literal(s, _), Expr::Column(Column { name, .. })) => {
-            name.as_str() == rn_name && *s == UInt64(Some(1))
+
+    let (name, op, val) = match (&**left, &**right) {
+        (
+            Expr::Column(Column { name, .. }),
+            Expr::Literal(ScalarValue::UInt64(Some(val)), _),
+        ) => (name, *op, *val),
+        (
+            Expr::Literal(ScalarValue::UInt64(Some(val)), _),
+            Expr::Column(Column { name, .. }),
+        ) => {
+            let Some(op) = op.swap() else { return false };
+            (name, op, *val)
         }
-        _ => false,
-    }
+        _ => return false,
+    };
+
+    name.as_str() == rn_name
+        && match op {
+            Operator::Lt => val == 2,
+            Operator::Eq | Operator::LtEq => val == 1,
+            _ => false,
+        }
 }
 
 fn has_valid_window_input(
@@ -144,7 +159,7 @@ fn has_valid_window_input(
     let window_expr = window.window_expr.first().expect("lol");
     match window_expr {
         Expr::WindowFunction(e) => {
-            if e.params.partition_by.len() == 0 {
+            if e.params.partition_by.is_empty() {
                 return None;
             }
 
@@ -158,7 +173,7 @@ fn has_valid_window_input(
                 window_expr.schema_name().to_string(),
             ));
         }
-        _ => return None,
+        _ => None,
     }
 }
 
