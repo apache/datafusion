@@ -16,11 +16,13 @@
 // under the License.
 
 //! Shared benchmark utilities
+pub mod counting_object_store;
 pub mod latency_object_store;
 mod memory;
 mod options;
 mod run;
 
+pub use counting_object_store::RequestCounts;
 pub use memory::print_memory_stats;
 pub use options::CommonOpt;
 pub use run::{BenchQuery, BenchmarkRun, QueryResult};
