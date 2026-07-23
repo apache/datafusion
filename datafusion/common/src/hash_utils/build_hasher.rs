@@ -58,13 +58,15 @@ where
 
     let required_size = match iter.peek() {
         Some(arr) => arr.as_dyn_array().len(),
-        None => return _internal_err!("with_hashes requires at least one array"),
+        None => {
+            return _internal_err!("with_hashes_with_hasher requires at least one array");
+        }
     };
 
     HASH_BUFFER.try_with(|cell| {
         let mut buffer = cell.try_borrow_mut().map_err(|_| {
             _internal_datafusion_err!(
-                "with_hashes cannot be called reentrantly on the same thread"
+                "with_hashes_with_hasher cannot be called reentrantly on the same thread"
             )
         })?;
 
@@ -83,7 +85,7 @@ where
         Ok(result)
     }).map_err(|_| {
         _internal_datafusion_err!(
-            "with_hashes cannot access thread-local storage during or after thread destruction"
+            "with_hashes_with_hasher cannot access thread-local storage during or after thread destruction"
         )
     })?
 }
@@ -185,14 +187,17 @@ fn hash_null_with_hasher<S: BuildHasher>(
     hashes_buffer: &mut [u64],
     multi_col: bool,
 ) {
+    if hashes_buffer.is_empty() {
+        return;
+    }
+
+    let null_hash = hash_builder.hash_one(1);
     if multi_col {
         hashes_buffer.iter_mut().for_each(|hash| {
-            *hash = combine_hashes(hash_builder.hash_one(1), *hash);
+            *hash = combine_hashes(null_hash, *hash);
         })
     } else {
-        hashes_buffer.iter_mut().for_each(|hash| {
-            *hash = hash_builder.hash_one(1);
-        })
+        hashes_buffer.fill(null_hash);
     }
 }
 
