@@ -776,3 +776,9 @@ async fn plan_extension(
 ```
 
 See [PR #23649](https://github.com/apache/datafusion/pull/23649) for details.
+
+### `MSRV` updated to 1.94.0
+
+The Minimum Supported Rust Version (MSRV) has been updated to [`1.94.0`].
+
+[`1.94.0`]: https://releases.rs/docs/1.94.0/
