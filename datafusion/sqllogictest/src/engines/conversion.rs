@@ -50,7 +50,11 @@ pub(crate) fn f16_to_str(value: f16) -> String {
     } else if value == f16::NEG_INFINITY {
         "-Infinity".to_string()
     } else {
-        big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap(), None)
+        big_decimal_to_str(
+            BigDecimal::from_str(&value.to_string()).unwrap(),
+            None,
+            true,
+        )
     }
 }
 
@@ -64,7 +68,11 @@ pub(crate) fn f32_to_str(value: f32) -> String {
     } else if value == f32::NEG_INFINITY {
         "-Infinity".to_string()
     } else {
-        big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap(), None)
+        big_decimal_to_str(
+            BigDecimal::from_str(&value.to_string()).unwrap(),
+            None,
+            true,
+        )
     }
 }
 
@@ -78,7 +86,11 @@ pub(crate) fn f64_to_str(value: f64) -> String {
     } else if value == f64::NEG_INFINITY {
         "-Infinity".to_string()
     } else {
-        big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap(), None)
+        big_decimal_to_str(
+            BigDecimal::from_str(&value.to_string()).unwrap(),
+            None,
+            true,
+        )
     }
 }
 
@@ -92,7 +104,11 @@ pub(crate) fn spark_f64_to_str(value: f64) -> String {
     } else if value == f64::NEG_INFINITY {
         "-Infinity".to_string()
     } else {
-        big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap(), Some(15))
+        big_decimal_to_str(
+            BigDecimal::from_str(&value.to_string()).unwrap(),
+            Some(15),
+            true,
+        )
     }
 }
 
@@ -105,23 +121,35 @@ pub(crate) fn arrow_decimal_to_str<T: DecimalType>(
     big_decimal_to_str(
         BigDecimal::from_str(&value).unwrap(),
         Some(i64::from(scale)),
+        false,
     )
 }
 
 #[cfg(feature = "postgres")]
 pub(crate) fn decimal_to_str(value: BigDecimal) -> String {
-    big_decimal_to_str(value, None)
+    big_decimal_to_str(value, None, false)
 }
 
 /// Converts a `BigDecimal` to its plain string representation, optionally rounding to a specified number of decimal places.
 ///
 /// If `round_digits` is `None`, the value is rounded to 12 decimal places by default.
+///
+/// If `normalize` is true, trailing 0s are trimmed.
 #[expect(clippy::needless_pass_by_value)]
-pub(crate) fn big_decimal_to_str(value: BigDecimal, round_digits: Option<i64>) -> String {
+pub(crate) fn big_decimal_to_str(
+    value: BigDecimal,
+    round_digits: Option<i64>,
+    normalize: bool,
+) -> String {
     // Round the value to limit the number of decimal places
-    let value = value.round(round_digits.unwrap_or(12)).normalized();
+    let value = value.round(round_digits.unwrap_or(12));
+
     // Format the value to a string
-    value.to_plain_string()
+    if normalize {
+        value.normalized().to_plain_string()
+    } else {
+        value.to_plain_string()
+    }
 }
 
 #[cfg(test)]
@@ -137,7 +165,8 @@ mod tests {
             assert_eq!(
                 big_decimal_to_str(
                     BigDecimal::from_bigint(BigInt::from($integer), $scale),
-                    $round_digits
+                    $round_digits,
+                    true
                 ),
                 $expected
             );

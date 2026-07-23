@@ -3586,7 +3586,7 @@ create table t (c1 decimal(10, 0)) as values (1), (2), (3), (4), (5), (6);
 query RT
 select avg(c1), arrow_typeof(avg(c1)) from t;
 ----
-3.5 Decimal128(14, 4)
+3.5000 Decimal128(14, 4)
 
 statement ok
 drop table t;
@@ -3598,7 +3598,7 @@ create table t (c1 decimal(10, 0)) as values (1), (NULL), (3), (4), (5);
 query RT
 select avg(c1), arrow_typeof(avg(c1)) from t;
 ----
-3.25 Decimal128(14, 4)
+3.2500 Decimal128(14, 4)
 
 statement ok
 drop table t;
@@ -5278,7 +5278,7 @@ INSERT INTO decimals VALUES (123.0001), (124.00);
 query RR
 SELECT MIN(value), MAX(value) FROM decimals;
 ----
-123 124
+123.00 124.00
 
 statement ok
 DROP TABLE decimals;
@@ -5347,7 +5347,7 @@ INSERT INTO decimals_error VALUES (123.00), (arrow_cast(124.001, 'Decimal128(10,
 query RR
 SELECT MIN(value), MAX(value) FROM decimals_error;
 ----
-123 124
+123.00 124.00
 
 statement ok
 DROP TABLE decimals_error;
@@ -6497,7 +6497,7 @@ NULL
 query RT
 select sum(c1), arrow_typeof(sum(c1)) from d_table;
 ----
-100 Decimal128(20, 3)
+100.000 Decimal128(20, 3)
 
 # aggregate sum with decimal
 statement ok
@@ -6506,7 +6506,7 @@ create table t (c decimal(35, 3)) as values (10), (null), (20);
 query RT
 select sum(c), arrow_typeof(sum(c)) from t;
 ----
-30 Decimal128(38, 3)
+30.000 Decimal128(38, 3)
 
 statement ok
 drop table t;
@@ -6585,13 +6585,13 @@ B -1000.045 Decimal128(20, 3)
 query RT
 select avg(c1), arrow_typeof(avg(c1)) from d_table
 ----
-5 Decimal128(14, 7)
+5.0000000 Decimal128(14, 7)
 
 query TRT
 select c2, avg(c1), arrow_typeof(avg(c1)) from d_table GROUP BY c2 ORDER BY c2
 ----
-A 110.0045 Decimal128(14, 7)
-B -100.0045 Decimal128(14, 7)
+A 110.0045000 Decimal128(14, 7)
+B -100.0045000 Decimal128(14, 7)
 
 # aggregate_decimal_count_distinct
 query I
@@ -6763,18 +6763,18 @@ INSERT INTO test_decimal_table VALUES (1, 10.10, 100.1, NULL), (1, 20.20, 200.2,
 query IIRRRRIIRR rowsort
 select c1, count(c2), avg(c2), sum(c2), min(c2), max(c2), count(c3), count(c4), sum(c4), avg(c4) from test_decimal_table group by c1
 ----
-1 2 15.15 30.3 10.1 20.2 2 0 NULL NULL
-2 2 15.15 30.3 10.1 20.2 2 0 NULL NULL
-3 2 10.1 20.2 10.1 10.1 1 0 NULL NULL
+1 2 15.150000 30.30 10.10 20.20 2 0 NULL NULL
+2 2 15.150000 30.30 10.10 20.20 2 0 NULL NULL
+3 2 10.100000 20.20 10.10 10.10 1 0 NULL NULL
 
 # aggregate_decimal_with_group_by_decimal
 query RIRRRRIR rowsort
 select c3, count(c2), avg(c2), sum(c2), min(c2), max(c2), count(c4), sum(c4) from test_decimal_table group by c3
 ----
-100.1 2 10.1 20.2 10.1 10.1 0 NULL
-200.2 1 20.2 20.2 20.2 20.2 0 NULL
-700.1 2 15.15 30.3 10.1 20.2 0 NULL
-NULL 1 10.1 10.1 10.1 10.1 0 NULL
+100.1 2 10.100000 20.20 10.10 10.10 0 NULL
+200.2 1 20.200000 20.20 20.20 20.20 0 NULL
+700.1 2 15.150000 30.30 10.10 20.20 0 NULL
+NULL 1 10.100000 10.10 10.10 10.10 0 NULL
 
 ## Multiple distinct aggregates and dictionaries
 statement ok
@@ -8941,7 +8941,7 @@ create table t_decimal (c decimal(10, 4)) as values (100.00), (125.00), (175.00)
 query RT
 select avg(distinct c), arrow_typeof(avg(distinct c)) from t_decimal;
 ----
-180 Decimal128(14, 8)
+180.00000000 Decimal128(14, 8)
 
 statement ok
 drop table t_decimal;
@@ -8961,7 +8961,7 @@ create table t_decimal256 (c decimal(50, 2)) as values
 query RT
 select avg(distinct c), arrow_typeof(avg(distinct c)) from t_decimal256;
 ----
-180 Decimal256(54, 6)
+180.000000 Decimal256(54, 6)
 
 statement ok
 drop table t_decimal256;
@@ -9118,7 +9118,7 @@ select
 	avg(d)
 from distinct_avg;
 ----
-3 Float64 37.4255 Float64 698.56005 Decimal128(14, 8) 15041.868333 Decimal256(54, 6) 4 56.52525 957.11074444 1272562.81625
+3 Float64 37.4255 Float64 698.56005000 Decimal128(14, 8) 15041.868333 Decimal256(54, 6) 4 56.52525 957.11074444 1272562.816250
 
 query RRRR rowsort
 select
@@ -9129,11 +9129,11 @@ select
 from distinct_avg
 group by b;
 ----
-1 4.09 4222.124 0
-3 NULL 2161.1901 90251.21
-5 1 100.25625 45125.105
-5 100.5 -49.5781 0.333333
-5 44.112 -132.12 NULL
+1 4.09 4222.12400000 0.000000
+3 NULL 2161.19010000 90251.210000
+5 1 100.25625000 45125.105000
+5 100.5 -49.57810000 0.333333
+5 44.112 -132.12000000 NULL
 
 query RRRR
 select

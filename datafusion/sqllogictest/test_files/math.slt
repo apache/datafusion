@@ -730,9 +730,9 @@ NULL
 query R
 SELECT c1*0 FROM test_nullable_decimal WHERE c1 IS NOT NULL;
 ----
-0
-0
-0
+0.00
+0.00
+0.00
 
 query error DataFusion error: Arrow error: Divide by zero error
 SELECT c1/0 FROM test_nullable_decimal WHERE c1 IS NOT NULL;
@@ -755,7 +755,7 @@ Decimal128(10, 2) Decimal128(38, 10) Decimal256(40, 2) Decimal256(76, 10)
 query RRRR rowsort
 SELECT abs(c1), abs(c2), abs(c3), abs(c4) FROM test_nullable_decimal
 ----
-0 0 0 0
+0.00 0.0000000000 0.00 0.0000000000
 99999999.99 9999999999999999999999999999.9999999999 99999999999999999999999999999999999999.99 999999999999999999999999999999999999999999999999999999999999999999.9999999999
 99999999.99 9999999999999999999999999999.9999999999 99999999999999999999999999999999999999.99 999999999999999999999999999999999999999999999999999999999999999999.9999999999
 NULL NULL NULL NULL
@@ -883,7 +883,7 @@ select gcd(15.3::decimal(38, 1), 2.9::decimal(38, 1)), arrow_typeof(gcd(15.3::de
 query RT
 select gcd(15::decimal(30, 2), 3::decimal(38, 5)), arrow_typeof(gcd(15::decimal(30, 2), 3::decimal(38, 5)));
 ----
-3 Decimal128(38, 5)
+3.00000 Decimal128(38, 5)
 
 ## lcm
 
@@ -945,7 +945,7 @@ select lcm(2, 3::decimal(38, 0)), arrow_typeof(lcm(2, 3::decimal(38, 0)));
 query RT
 select lcm(2::decimal(30, 2), 3::decimal(38, 5)), arrow_typeof(lcm(2::decimal(30, 2), 3::decimal(38, 5)));
 ----
-6 Decimal128(38, 5)
+6.00000 Decimal128(38, 5)
 
 
 ## pow/power

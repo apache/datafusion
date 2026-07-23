@@ -2572,8 +2572,8 @@ from (
 group by cntrycode
 order by cntrycode;
 ----
-18 1 30
-29 1 40
+18 1 30.00
+29 1 40.00
 
 # `count(*)` over the same query must agree with the row count above.
 query I
