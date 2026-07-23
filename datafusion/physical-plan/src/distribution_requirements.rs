@@ -98,10 +98,7 @@ impl InputDistributionRequirements {
     pub fn new(per_child: Vec<Distribution>) -> Self {
         let children = per_child
             .into_iter()
-            .map(|distribution| ChildDistributionRequirement {
-                distribution,
-                satisfaction: InputDistributionSatisfaction::Default,
-            })
+            .map(|distribution| ChildDistributionRequirement { distribution })
             .collect();
 
         Self {
@@ -176,8 +173,7 @@ impl InputDistributionRequirements {
             );
         };
 
-        Ok(requirement.satisfaction.satisfaction(
-            child.output_partitioning(),
+        Ok(child.output_partitioning().satisfaction(
             &requirement.distribution,
             child.equivalence_properties(),
             options.allow_subset(),
@@ -206,30 +202,6 @@ impl InputDistributionRequirements {
         }
 
         Ok(co_partitioned.clone())
-    }
-
-    /// TODO: remove this temporary bridge once [`Partitioning::Range`]
-    /// generally satisfies [`Distribution::KeyPartitioned`] through
-    /// [`Partitioning::satisfaction`].
-    /// <https://github.com/apache/datafusion/issues/23266>.
-    ///
-    /// Also allow compatible [`Partitioning::Range`] to satisfy
-    /// [`Distribution::KeyPartitioned`].
-    #[expect(
-        deprecated,
-        reason = "HashPartitioned is accepted during the KeyPartitioned migration"
-    )]
-    pub(crate) fn allow_range_satisfaction_for_key_partitioning(mut self) -> Self {
-        for child in &mut self.children {
-            if matches!(
-                child.distribution,
-                Distribution::HashPartitioned(_) | Distribution::KeyPartitioned(_)
-            ) {
-                child.satisfaction =
-                    InputDistributionSatisfaction::AllowRangeKeyPartitioning;
-            }
-        }
-        self
     }
 
     /// Validate the requirements against a plan's children.
@@ -301,10 +273,8 @@ impl InputDistributionRequirements {
         let first = children[first_idx];
         let first_partitioning = first.output_partitioning();
 
-        if !first_requirement
-            .satisfaction
+        if !first_partitioning
             .satisfaction(
-                first_partitioning,
                 &first_requirement.distribution,
                 first.equivalence_properties(),
                 false,
@@ -317,19 +287,16 @@ impl InputDistributionRequirements {
         for &child_idx in co_partitioned.iter().skip(1) {
             let requirement = &self.children[child_idx];
             let child = children[child_idx];
-            if !requirement
-                .satisfaction
+            if !child
+                .output_partitioning()
                 .satisfaction(
-                    child.output_partitioning(),
                     &requirement.distribution,
                     child.equivalence_properties(),
                     false,
                 )
                 .is_satisfied()
                 || !compatible_co_partitioning_layout(
-                    first_requirement,
                     first_partitioning,
-                    requirement,
                     child.output_partitioning(),
                 )
             {
@@ -345,60 +312,6 @@ impl InputDistributionRequirements {
 #[derive(Debug, Clone)]
 struct ChildDistributionRequirement {
     distribution: Distribution,
-    satisfaction: InputDistributionSatisfaction,
-}
-
-/// TODO: remove this temporary bridge once [`Partitioning::Range`]
-/// generally satisfies [`Distribution::KeyPartitioned`] through
-/// [`Partitioning::satisfaction`].
-/// <https://github.com/apache/datafusion/issues/23266>.
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum InputDistributionSatisfaction {
-    /// Use [`Partitioning::satisfaction`] as-is.
-    #[default]
-    Default,
-    /// Also allow [`Partitioning::Range`] to satisfy
-    /// [`Distribution::KeyPartitioned`].
-    AllowRangeKeyPartitioning,
-}
-
-impl InputDistributionSatisfaction {
-    /// Returns how `partitioning` satisfies `requirement`.
-    #[expect(
-        deprecated,
-        reason = "HashPartitioned is accepted during the KeyPartitioned migration"
-    )]
-    fn satisfaction(
-        self,
-        partitioning: &Partitioning,
-        requirement: &Distribution,
-        eq_properties: &EquivalenceProperties,
-        allow_subset: bool,
-    ) -> PartitioningSatisfaction {
-        let satisfaction =
-            partitioning.satisfaction(requirement, eq_properties, allow_subset);
-        if satisfaction.is_satisfied() {
-            return satisfaction;
-        }
-
-        if !matches!(self, Self::AllowRangeKeyPartitioning) {
-            return PartitioningSatisfaction::NotSatisfied;
-        }
-
-        let (Distribution::HashPartitioned(required_exprs)
-        | Distribution::KeyPartitioned(required_exprs)) = requirement
-        else {
-            return PartitioningSatisfaction::NotSatisfied;
-        };
-
-        range_satisfies_key_partitioning(
-            partitioning,
-            required_exprs,
-            eq_properties,
-            allow_subset,
-        )
-    }
 }
 
 fn validate_child_index(
@@ -421,62 +334,8 @@ fn validate_child_index(
     Ok(())
 }
 
-/// TODO: remove this temporary bridge once [`Partitioning::Range`]
-/// generally satisfies [`Distribution::KeyPartitioned`] through
-/// [`Partitioning::satisfaction`].
-/// <https://github.com/apache/datafusion/issues/23266>.
-fn range_satisfies_key_partitioning(
-    partitioning: &Partitioning,
-    required_exprs: &[Arc<dyn PhysicalExpr>],
-    eq_properties: &EquivalenceProperties,
-    allow_subset: bool,
-) -> PartitioningSatisfaction {
-    let Partitioning::Range(range) = partitioning else {
-        return PartitioningSatisfaction::NotSatisfied;
-    };
-
-    let partition_exprs = range
-        .ordering()
-        .iter()
-        .map(|sort_expr| Arc::clone(&sort_expr.expr))
-        .collect::<Vec<_>>();
-
-    if partition_exprs.is_empty() || required_exprs.is_empty() {
-        return PartitioningSatisfaction::NotSatisfied;
-    }
-
-    let eq_group = eq_properties.eq_group();
-    let normalized_partition_exprs = partition_exprs
-        .iter()
-        .map(|expr| eq_group.normalize_expr(Arc::clone(expr)))
-        .collect::<Vec<_>>();
-    let normalized_required_exprs = required_exprs
-        .iter()
-        .map(|expr| eq_group.normalize_expr(Arc::clone(expr)))
-        .collect::<Vec<_>>();
-
-    if physical_exprs_equal(&normalized_required_exprs, &normalized_partition_exprs) {
-        return PartitioningSatisfaction::Exact;
-    }
-
-    if allow_subset
-        && normalized_partition_exprs.len() < normalized_required_exprs.len()
-        && normalized_partition_exprs.iter().all(|partition_expr| {
-            normalized_required_exprs
-                .iter()
-                .any(|required_expr| partition_expr.eq(required_expr))
-        })
-    {
-        PartitioningSatisfaction::Subset
-    } else {
-        PartitioningSatisfaction::NotSatisfied
-    }
-}
-
 fn compatible_co_partitioning_layout(
-    first: &ChildDistributionRequirement,
     first_partitioning: &Partitioning,
-    other: &ChildDistributionRequirement,
     other_partitioning: &Partitioning,
 ) -> bool {
     if first_partitioning.partition_count() == 1
@@ -491,12 +350,7 @@ fn compatible_co_partitioning_layout(
 
     match (first_partitioning, other_partitioning) {
         (Partitioning::Hash(_, _), Partitioning::Hash(_, _)) => true,
-        (Partitioning::Range(left), Partitioning::Range(right))
-            if first.satisfaction
-                == InputDistributionSatisfaction::AllowRangeKeyPartitioning
-                && other.satisfaction
-                    == InputDistributionSatisfaction::AllowRangeKeyPartitioning =>
-        {
+        (Partitioning::Range(left), Partitioning::Range(right)) => {
             left.split_points() == right.split_points()
                 && left.ordering().len() == right.ordering().len()
                 && left

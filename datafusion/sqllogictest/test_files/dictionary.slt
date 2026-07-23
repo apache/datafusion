@@ -632,4 +632,22 @@ south 2
 statement ok
 DROP TABLE dict_count_distinct;
 
-
+# same dictionary type but value order differs across batches so key ids refer to different strings;
+# grouping must use the logical value, not the raw key id
+query TI rowsort
+WITH
+  first_batch AS (
+    SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS region
+    FROM (VALUES ('west'), ('west'), ('west'), ('east'), (NULL)) AS t(column1)
+  ),
+  second_batch AS (
+    SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS region
+    FROM (VALUES ('east'), ('east'), ('east'), ('west'), (NULL)) AS t(column1)
+  )
+SELECT region, count(*)
+FROM (SELECT region FROM first_batch UNION ALL SELECT region FROM second_batch)
+GROUP BY region;
+----
+NULL 2
+east 4
+west 4

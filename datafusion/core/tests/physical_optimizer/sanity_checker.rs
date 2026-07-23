@@ -30,12 +30,13 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use datafusion::prelude::{CsvReadOptions, SessionContext};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{JoinType, Result, ScalarValue};
+use datafusion_common::{JoinType, NullEquality, Result, ScalarValue};
 use datafusion_physical_expr::expressions::{Literal, col};
 use datafusion_physical_expr::{Partitioning, RangePartitioning, SplitPoint};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
+use datafusion_physical_plan::joins::{StreamJoinPartitionMode, SymmetricHashJoinExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::{ExecutionPlan, displayable};
 
@@ -439,6 +440,103 @@ fn test_partitioned_hash_join_requires_co_partitioned_children() -> Result<()> {
         None,
         &JoinType::Inner,
     )?;
+    assert_sanity_check(&incompatible_join, false);
+
+    Ok(())
+}
+
+#[test]
+fn test_partitioned_right_hash_join_requires_co_partitioned_children() -> Result<()> {
+    let schema = create_test_schema2();
+    let join_on = vec![(col("a", &schema)?, col("a", &schema)?)];
+
+    let compatible_join = hash_join_exec(
+        range_partitioned_exec(&schema, "a", [10])?,
+        range_partitioned_exec(&schema, "a", [10])?,
+        join_on.clone(),
+        None,
+        &JoinType::Right,
+    )?;
+    assert_sanity_check(&compatible_join, true);
+
+    let incompatible_join = hash_join_exec(
+        range_partitioned_exec(&schema, "a", [10])?,
+        range_partitioned_exec(&schema, "a", [20])?,
+        join_on,
+        None,
+        &JoinType::Right,
+    )?;
+    assert_sanity_check(&incompatible_join, false);
+
+    Ok(())
+}
+
+#[test]
+fn test_sort_merge_join_requires_co_partitioned_children() -> Result<()> {
+    let schema = create_test_schema2();
+    let join_on = vec![(col("a", &schema)?, col("a", &schema)?)];
+    let ordering: LexOrdering = [sort_expr("a", &schema)].into();
+
+    let compatible_join = sort_merge_join_exec(
+        sort_exec_with_preserve_partitioning(
+            ordering.clone(),
+            range_partitioned_exec(&schema, "a", [10])?,
+        ),
+        sort_exec_with_preserve_partitioning(
+            ordering.clone(),
+            range_partitioned_exec(&schema, "a", [10])?,
+        ),
+        &join_on,
+        &JoinType::Inner,
+    );
+    assert_sanity_check(&compatible_join, true);
+
+    let incompatible_join = sort_merge_join_exec(
+        sort_exec_with_preserve_partitioning(
+            ordering.clone(),
+            range_partitioned_exec(&schema, "a", [10])?,
+        ),
+        sort_exec_with_preserve_partitioning(
+            ordering,
+            range_partitioned_exec(&schema, "a", [20])?,
+        ),
+        &join_on,
+        &JoinType::Inner,
+    );
+    assert_sanity_check(&incompatible_join, false);
+
+    Ok(())
+}
+
+#[test]
+fn test_symmetric_hash_join_requires_co_partitioned_children() -> Result<()> {
+    let schema = create_test_schema2();
+    let join_on = vec![(col("a", &schema)?, col("a", &schema)?)];
+
+    let compatible_join = Arc::new(SymmetricHashJoinExec::try_new(
+        range_partitioned_exec(&schema, "a", [10])?,
+        range_partitioned_exec(&schema, "a", [10])?,
+        join_on.clone(),
+        None,
+        &JoinType::Inner,
+        NullEquality::NullEqualsNothing,
+        None,
+        None,
+        StreamJoinPartitionMode::Partitioned,
+    )?) as Arc<dyn ExecutionPlan>;
+    assert_sanity_check(&compatible_join, true);
+
+    let incompatible_join = Arc::new(SymmetricHashJoinExec::try_new(
+        range_partitioned_exec(&schema, "a", [10])?,
+        range_partitioned_exec(&schema, "a", [20])?,
+        join_on,
+        None,
+        &JoinType::Inner,
+        NullEquality::NullEqualsNothing,
+        None,
+        None,
+        StreamJoinPartitionMode::Partitioned,
+    )?) as Arc<dyn ExecutionPlan>;
     assert_sanity_check(&incompatible_join, false);
 
     Ok(())
