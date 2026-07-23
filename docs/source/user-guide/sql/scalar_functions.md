@@ -3430,7 +3430,7 @@ any_match(array, predicate)
 
 ### `array_any_value`
 
-Returns the first non-null element in the array. Returns NULL if the array is empty or all elements are NULL.
+Returns the first non-null element in the array. Returns NULL if the array is empty or NULL.
 
 ```sql
 array_any_value(array)

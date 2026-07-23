@@ -970,7 +970,7 @@ where
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Returns the first non-null element in the array. Returns NULL if the array is empty or all elements are NULL.",
+    description = "Returns the first non-null element in the array. Returns NULL if the array is empty or NULL.",
     syntax_example = "array_any_value(array)",
     sql_example = r#"```sql
 > select array_any_value([NULL, 1, 2, 3]);
