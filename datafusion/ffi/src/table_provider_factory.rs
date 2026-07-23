@@ -368,7 +368,7 @@ mod tests {
         let cmd = CreateExternalTable {
             schema: Schema::empty().to_dfschema_ref()?,
             name: TableReference::bare("test_table"),
-            location: "test".to_string(),
+            locations: vec!["test".to_string()],
             file_type: "test".to_string(),
             table_partition_cols: vec![],
             if_not_exists: false,
@@ -406,7 +406,7 @@ mod tests {
         let cmd = CreateExternalTable {
             schema: Schema::empty().to_dfschema_ref()?,
             name: TableReference::bare("cloned_test"),
-            location: "test".to_string(),
+            locations: vec!["test".to_string()],
             file_type: "test".to_string(),
             table_partition_cols: vec![],
             if_not_exists: false,

@@ -51,7 +51,7 @@ use arrow::compute::{
 use arrow::datatypes::SchemaRef;
 use datafusion_common::cast::as_uint64_array;
 use datafusion_common::{JoinType, NullEquality, Result, exec_err, internal_err};
-use datafusion_execution::disk_manager::RefCountedTempFile;
+use datafusion_execution::SpillFile;
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
@@ -221,7 +221,7 @@ pub(super) enum FilterState {
 
 /// A buffered batch that contains contiguous rows with same join key
 ///
-/// `BufferedBatch` can exist as either an in-memory `RecordBatch` or a `RefCountedTempFile` on disk.
+/// `BufferedBatch` can exist as either an in-memory `RecordBatch` or a `SpillFile`.
 #[derive(Debug)]
 pub(super) struct BufferedBatch {
     /// Represents in memory or spilled record batch
@@ -297,14 +297,23 @@ impl BufferedBatch {
 
 // TODO: Spill join arrays (https://github.com/apache/datafusion/pull/17429)
 // Used to represent whether the buffered data is currently in memory or written to disk
-#[derive(Debug)]
 pub(super) enum BufferedBatchState {
     // In memory record batch
     InMemory(RecordBatch),
     // Spilled temp file
-    Spilled(RefCountedTempFile),
+    Spilled(Arc<dyn SpillFile>),
 }
 
+impl Debug for BufferedBatchState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InMemory(batch) => f.debug_tuple("InMemory").field(batch).finish(),
+            Self::Spilled(_) => {
+                write!(f, "Spilled(Custom_Backend)")
+            }
+        }
+    }
+}
 /// Sort-Merge join stream for Inner/Left/Right/Full joins.
 ///
 /// Named "materializing" because it builds explicit `(streamed, buffered)` row
@@ -989,7 +998,7 @@ impl MaterializingSortMergeJoinStream {
                 if self.spill_stream.is_none() {
                     let stream = self
                         .spill_manager
-                        .read_spill_as_stream(spill_file.clone(), None)?;
+                        .read_spill_as_stream(Arc::clone(spill_file), None)?;
                     self.spill_stream = Some(stream);
                 }
 

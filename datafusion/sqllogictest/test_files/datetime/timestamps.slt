@@ -518,6 +518,35 @@ SELECT COUNT(*) FROM ts_data_secs where ts > to_timestamp_seconds('2020-09-08 12
 ----
 2
 
+# NULL string scalar inputs and all-NULL scalar formats return NULL
+query PP
+SELECT
+  to_timestamp(NULL::VARCHAR, '%Y-%m-%d'),
+  to_timestamp('2020-09-08', NULL::VARCHAR, NULL::VARCHAR)
+----
+NULL NULL
+
+# NULL array formats are skipped for each row; rows with no usable format return NULL
+query IP
+SELECT id, to_timestamp(value, format1, format2)
+FROM (
+  VALUES
+    (1, '2020-09-08', NULL::VARCHAR, '%Y-%m-%d'),
+    (2, '2020-09-08', NULL::VARCHAR, NULL::VARCHAR)
+) AS t(id, value, format1, format2)
+ORDER BY id
+----
+1 2020-09-08T00:00:00
+2 NULL
+
+# to_unixtime uses the same formatted string parsing path
+query II
+SELECT
+  to_unixtime(NULL::VARCHAR, '%Y-%m-%d'),
+  to_unixtime('2020-09-08', NULL::VARCHAR, NULL::VARCHAR)
+----
+NULL NULL
+
 # to_timestamp float inputs
 
 query PPP
@@ -1936,10 +1965,8 @@ SELECT '2000-01-01T00:00:00'::timestamp - '2010-01-01T00:00:00'::timestamp;
 -3653 days 0 hours 0 mins 0.000000000 secs
 
 # Interval - Timestamp => error
-# statement error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) to valid types
-# TODO: This query should raise error
-# query P
-# SELECT i - ts1 from FOO;
+query error Cannot coerce arithmetic expression Interval\(MonthDayNano\) - Timestamp\(ns\) to valid types
+SELECT i - ts1 from FOO;
 
 statement ok
 drop table foo;

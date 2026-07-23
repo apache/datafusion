@@ -99,6 +99,10 @@ impl ScalarUDFImpl for PowerFunc {
         Ok(DataType::Float64)
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn aliases(&self) -> &[String] {
         &self.aliases
     }

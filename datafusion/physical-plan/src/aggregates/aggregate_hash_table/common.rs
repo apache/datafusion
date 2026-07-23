@@ -28,14 +28,18 @@ use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 
 use crate::PhysicalExpr;
 use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
+use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
-use crate::aggregates::row_hash::create_group_accumulator;
 use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
 };
 
 /// Marker for raw rows -> partial state aggregation.
 pub(in crate::aggregates) struct PartialMarker;
+/// Marker for raw rows -> final value aggregation.
+pub(in crate::aggregates) struct SingleMarker;
+/// Marker for partial state -> partial state aggregation.
+pub(in crate::aggregates) struct PartialReduceMarker;
 /// Marker for raw rows -> partial state conversion without aggregation.
 pub(in crate::aggregates) struct PartialSkipMarker;
 /// Marker for partial state -> final value aggregation.
@@ -169,6 +173,95 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         })
     }
 
+    /// Aggregates one input batch after selecting the mode-specific accumulator
+    /// operation.
+    ///
+    /// Each aggregation mode chooses a different `aggregate_fn` according to its
+    /// semantics. For example, partial aggregation takes raw inputs, and update them
+    /// into stored partial states, so [`GroupsAccumulator::update_batch`] is used.
+    pub(super) fn aggregate_batch_inner(
+        &mut self,
+        batch: &RecordBatch,
+        aggregate_fn: AggregateBatchFn,
+    ) -> Result<()> {
+        let evaluated_batch = self.evaluate_batch(batch)?;
+        let state = self.state.building_mut();
+
+        let _timer = self.group_by_metrics.aggregation_time.timer();
+        for group_values in &evaluated_batch.grouping_set_args {
+            state
+                .group_values
+                .intern(group_values, &mut state.batch_group_indices)?;
+            let group_indices = &state.batch_group_indices;
+            let total_num_groups = state.group_values.len();
+
+            for (acc, values) in state
+                .accumulators
+                .iter_mut()
+                .zip(evaluated_batch.accumulator_args.iter())
+            {
+                aggregate_fn(acc, values, group_indices, total_num_groups)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Materializes the full output once, then returns it downstream incrementally
+    /// by slicing it into `batch_size` chunks.
+    ///
+    /// Each aggregation mode chooses a different `materialize_accumulator_fn`
+    /// according to its semantics. For example, partial aggregation emits
+    /// partial states to feed the final stage, so it uses [`GroupsAccumulator::state`].
+    ///
+    /// This is a temporary solution until blocked state management is implemented:
+    /// Issue: <https://github.com/apache/datafusion/issues/7065>
+    pub(super) fn next_output_batch_inner(
+        &mut self,
+        materialize_accumulator_fn: MaterializeAccumulatorFn,
+    ) -> Result<Option<RecordBatch>> {
+        let output_schema = Arc::clone(&self.output_schema);
+        let batch_size = self.batch_size;
+
+        let mut output =
+            match std::mem::replace(&mut self.state, AggregateHashTableState::Done) {
+                AggregateHashTableState::Outputting(mut state) => {
+                    if state.group_values.is_empty() {
+                        return Ok(None);
+                    }
+
+                    // Accumulator output consumes internal state. Materialize all
+                    // groups once, then slice the materialized batch on later polls.
+                    let emit_to = EmitTo::All;
+                    let timer = self.group_by_metrics.emitting_time.timer();
+                    let mut columns = state.group_values.emit(emit_to)?;
+                    for acc in state.accumulators.iter_mut() {
+                        columns.extend(materialize_accumulator_fn(acc, emit_to)?);
+                    }
+                    drop(timer);
+
+                    let batch = RecordBatch::try_new(output_schema, columns)?;
+                    debug_assert!(batch.num_rows() > 0);
+                    MaterializedAggregateOutput::new(batch)
+                }
+                AggregateHashTableState::OutputtingMaterialized(output) => output,
+                AggregateHashTableState::Done => return Ok(None),
+                AggregateHashTableState::Building(_) => {
+                    return internal_err!(
+                        "next_output_batch must be called in the outputting state"
+                    );
+                }
+            };
+
+        let batch = output.next_batch(batch_size);
+        if output.is_exhausted() {
+            self.state = AggregateHashTableState::Done;
+        } else {
+            self.state = AggregateHashTableState::OutputtingMaterialized(output);
+        }
+        Ok(batch)
+    }
+
     pub(in crate::aggregates) fn memory_size(&self) -> usize {
         match &self.state {
             AggregateHashTableState::Building(state)
@@ -182,7 +275,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 acc + state.group_values.size()
                     + state.batch_group_indices.allocated_size()
             }
-            AggregateHashTableState::OutputtingMaterializedFinal(output) => {
+            AggregateHashTableState::OutputtingMaterialized(output) => {
                 output.memory_size()
             }
             AggregateHashTableState::Done => 0,
@@ -214,15 +307,6 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     }
 }
 
-pub(super) fn emit_to_for_batch_size(batch_size: usize, group_count: usize) -> EmitTo {
-    debug_assert!(batch_size > 0);
-    if group_count <= batch_size {
-        EmitTo::All
-    } else {
-        EmitTo::First(batch_size)
-    }
-}
-
 /// State and argument information for a single Aggregate
 ///
 /// For example, for `SELECT COUNT(x), SUM(y WHERE z > 10) ...`  there would be two
@@ -245,6 +329,33 @@ pub(super) struct HashAggregateAccumulator {
     /// Accumulator state for all groups for one aggregate expression.
     accumulator: Box<dyn GroupsAccumulator>,
 }
+
+pub(super) type AggregateAccumulator = HashAggregateAccumulator;
+
+/// Function used by [`AggregateHashTable::aggregate_batch_inner`] to update one
+/// accumulator with one evaluated input batch.
+///
+/// Arguments:
+/// * accumulator to update.
+/// * accumulator's evaluated arguments and optional filter.
+/// * one group index per input row, mapping each row to its interned group.
+/// * total number of groups currently interned in that buffer, including newly
+///   interned groups.
+pub(super) type AggregateBatchFn = fn(
+    &mut AggregateAccumulator,
+    &EvaluatedAccumulatorArgs,
+    &[usize],
+    usize,
+) -> Result<()>;
+
+/// Function used by [`AggregateHashTable::next_output_batch_inner`] to
+/// materialize one accumulator's output columns.
+///
+/// Arguments:
+/// * accumulator to materialize.
+/// * group range to emit from the accumulator.
+pub(super) type MaterializeAccumulatorFn =
+    fn(&mut AggregateAccumulator, EmitTo) -> Result<Vec<ArrayRef>>;
 
 /// Evaluated aggregate arguments and filter for one input batch.
 ///
@@ -304,24 +415,25 @@ pub(super) enum AggregateHashTableState {
     Building(AggregateHashTableBuffer),
     /// Emitting results directly from group keys and aggregate state.
     Outputting(AggregateHashTableBuffer),
-    /// Materialize all the output results, and then incrementally output in the `OutputtingMaterializedFinal` state.
+    /// Materialize all the output results, and then incrementally output in the `OutputtingMaterialized` state.
     ///
     /// Note this is a temporary solution until the `GroupValues` issue is solved:
     /// Issue: <https://github.com/apache/datafusion/issues/23178>
-    OutputtingMaterializedFinal(MaterializedFinalOutput),
+    OutputtingMaterialized(MaterializedAggregateOutput),
     Done,
 }
 
-/// Fully evaluated final aggregate output and the next row offset to emit.
+/// Fully evaluated aggregate output and the next row offset to emit.
 ///
-/// Final aggregate evaluation consumes accumulator state, so final output is
-/// materialized once and then sliced to honor `batch_size` across output polls.
-pub(super) struct MaterializedFinalOutput {
+/// Final aggregate evaluation consumes accumulator state, and partial terminal
+/// output should not repeatedly renumber group values with `EmitTo::First`.
+/// Materialize once and then slice to honor `batch_size` across output polls.
+pub(super) struct MaterializedAggregateOutput {
     batch: RecordBatch,
     offset: usize,
 }
 
-impl MaterializedFinalOutput {
+impl MaterializedAggregateOutput {
     pub(super) fn new(batch: RecordBatch) -> Self {
         Self { batch, offset: 0 }
     }
@@ -348,7 +460,7 @@ impl MaterializedFinalOutput {
 }
 
 impl HashAggregateAccumulator {
-    fn new(
+    pub(super) fn new(
         aggregate_expr: Arc<AggregateFunctionExpr>,
         arguments: Vec<Arc<dyn PhysicalExpr>>,
         filter: Option<Arc<dyn PhysicalExpr>>,
@@ -380,7 +492,10 @@ impl HashAggregateAccumulator {
     /// and `x > 0`.
     ///
     /// These arrays can be passed directly to [`GroupsAccumulator`] next.
-    fn evaluate_acc_args(&self, batch: &RecordBatch) -> Result<EvaluatedAccumulatorArgs> {
+    pub(super) fn evaluate_acc_args(
+        &self,
+        batch: &RecordBatch,
+    ) -> Result<EvaluatedAccumulatorArgs> {
         let arguments = self
             .arguments
             .iter()
@@ -401,6 +516,10 @@ impl HashAggregateAccumulator {
             .transpose()?;
 
         Ok(EvaluatedAccumulatorArgs { arguments, filter })
+    }
+
+    pub(super) fn size(&self) -> usize {
+        self.accumulator.size()
     }
 
     pub(super) fn update_batch(
@@ -434,6 +553,13 @@ impl HashAggregateAccumulator {
     /// , and clear the inner buffers)
     pub(super) fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         self.accumulator.evaluate(emit_to)
+    }
+
+    pub(super) fn evaluate_to_columns(
+        &mut self,
+        emit_to: EmitTo,
+    ) -> Result<Vec<ArrayRef>> {
+        Ok(vec![self.evaluate(emit_to)?])
     }
 
     /// Evaluating partial aggregate results according to `EmitTo`, and reset inner
@@ -496,7 +622,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn materialized_final_output_slices_batches_until_exhausted() -> Result<()> {
+    fn materialized_aggregate_output_slices_batches_until_exhausted() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "group_col",
             DataType::Int32,
@@ -506,7 +632,7 @@ mod tests {
             schema,
             vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]))],
         )?;
-        let mut output = MaterializedFinalOutput::new(batch);
+        let mut output = MaterializedAggregateOutput::new(batch);
 
         assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![1, 2]);
         assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![3, 4]);

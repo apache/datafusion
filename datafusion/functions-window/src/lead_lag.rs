@@ -433,8 +433,12 @@ fn evaluate_all_with_ignore_null(
     default_value: &ScalarValue,
     is_lag: bool,
 ) -> Result<ArrayRef, DataFusionError> {
-    let valid_indices: Vec<usize> =
-        array.nulls().unwrap().valid_indices().collect::<Vec<_>>();
+    // Arrays without NULLs do not necessarily have a null bitmap.
+    let Some(nulls) = array.nulls() else {
+        return shift_with_default_value(array, offset, default_value);
+    };
+
+    let valid_indices: Vec<usize> = nulls.valid_indices().collect::<Vec<_>>();
     let direction = !is_lag;
     let new_array_results: Result<Vec<_>, DataFusionError> = (0..array.len())
         .map(|id| {
@@ -837,5 +841,26 @@ mod tests {
             .iter()
             .collect::<Int32Array>(),
         )
+    }
+
+    #[test]
+    fn test_ignore_nulls_without_null_bitmap() -> Result<()> {
+        let input = Int32Array::from(vec![1, 2, 3]);
+        assert!(input.nulls().is_none());
+        let input: ArrayRef = Arc::new(input);
+
+        for (offset, expected) in [
+            (1, Int32Array::from(vec![None, Some(1), Some(2)])),
+            (-1, Int32Array::from(vec![Some(2), Some(3), None])),
+        ] {
+            let actual = evaluate_all_with_ignore_null(
+                &input,
+                offset,
+                &ScalarValue::Int32(None),
+                offset > 0,
+            )?;
+            assert_eq!(expected, *as_int32_array(&actual)?);
+        }
+        Ok(())
     }
 }
