@@ -806,7 +806,7 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
     #[inline]
     pub fn push(&mut self, val: T) {
         self.fifo.push_back(val.clone());
-        while self.deque.back().map_or(false, |back_val| *back_val > val) {
+        while self.deque.back().is_some_and(|back_val| *back_val > val) {
             self.deque.pop_back();
         }
         self.deque.push_back(val);
@@ -819,7 +819,7 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
             if self
                 .deque
                 .front()
-                .map_or(false, |front_val| *front_val == popped)
+                .is_some_and(|front_val| *front_val == popped)
             {
                 self.deque.pop_front();
             }
@@ -907,7 +907,7 @@ impl<T: Clone + PartialOrd> MovingMax<T> {
     #[inline]
     pub fn push(&mut self, val: T) {
         self.fifo.push_back(val.clone());
-        while self.deque.back().map_or(false, |back_val| *back_val < val) {
+        while self.deque.back().is_some_and(|back_val| *back_val < val) {
             self.deque.pop_back();
         }
         self.deque.push_back(val);
@@ -920,7 +920,7 @@ impl<T: Clone + PartialOrd> MovingMax<T> {
             if self
                 .deque
                 .front()
-                .map_or(false, |front_val| *front_val == popped)
+                .is_some_and(|front_val| *front_val == popped)
             {
                 self.deque.pop_front();
             }
