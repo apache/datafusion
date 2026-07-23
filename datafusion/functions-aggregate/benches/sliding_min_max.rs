@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use criterion::{Criterion, criterion_group, criterion_main, BenchmarkId, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use datafusion_common::ScalarValue;
 use rand::Rng;
 use std::collections::VecDeque;
-use datafusion_common::ScalarValue;
 
 // === Old Two-Stack Queue Implementation ===
 #[derive(Debug)]
@@ -109,7 +109,11 @@ impl<T: Clone + PartialOrd> MonotonicMax<T> {
 
     pub fn pop(&mut self) -> Option<T> {
         if let Some(popped) = self.fifo.pop_front() {
-            if self.deque.front().map_or(false, |front_val| *front_val == popped) {
+            if self
+                .deque
+                .front()
+                .map_or(false, |front_val| *front_val == popped)
+            {
                 self.deque.pop_front();
             }
             Some(popped)
@@ -135,25 +139,42 @@ fn generate_random_strings(size: usize) -> Vec<String> {
     (0..size)
         .map(|_| {
             let len = rng.gen_range(10..40);
-            (0..len).map(|_| rng.gen_range(b'a'..=b'z') as char).collect()
+            (0..len)
+                .map(|_| rng.gen_range(b'a'..=b'z') as char)
+                .collect()
         })
         .collect()
 }
 
 fn bench_sliding_max(c: &mut Criterion) {
     let data_size = 50000;
-    
+
     // Generate raw inputs
     let i64_raw = generate_random_i64(data_size);
     let f64_raw = generate_random_f64(data_size);
     let str_raw = generate_random_strings(data_size);
 
     // Map to ScalarValue types
-    let scalar_int_data: Vec<ScalarValue> = i64_raw.iter().map(|&val| ScalarValue::Int64(Some(val))).collect();
-    let scalar_float_data: Vec<ScalarValue> = f64_raw.iter().map(|&val| ScalarValue::Float64(Some(val))).collect();
-    let scalar_timestamp_data: Vec<ScalarValue> = i64_raw.iter().map(|&val| ScalarValue::TimestampNanosecond(Some(val), None)).collect();
-    let scalar_decimal_data: Vec<ScalarValue> = i64_raw.iter().map(|&val| ScalarValue::Decimal128(Some(val as i128), 38, 10)).collect();
-    let scalar_utf8_data: Vec<ScalarValue> = str_raw.iter().map(|val| ScalarValue::Utf8(Some(val.clone()))).collect();
+    let scalar_int_data: Vec<ScalarValue> = i64_raw
+        .iter()
+        .map(|&val| ScalarValue::Int64(Some(val)))
+        .collect();
+    let scalar_float_data: Vec<ScalarValue> = f64_raw
+        .iter()
+        .map(|&val| ScalarValue::Float64(Some(val)))
+        .collect();
+    let scalar_timestamp_data: Vec<ScalarValue> = i64_raw
+        .iter()
+        .map(|&val| ScalarValue::TimestampNanosecond(Some(val), None))
+        .collect();
+    let scalar_decimal_data: Vec<ScalarValue> = i64_raw
+        .iter()
+        .map(|&val| ScalarValue::Decimal128(Some(val as i128), 38, 10))
+        .collect();
+    let scalar_utf8_data: Vec<ScalarValue> = str_raw
+        .iter()
+        .map(|val| ScalarValue::Utf8(Some(val.clone())))
+        .collect();
 
     let datasets = vec![
         ("scalar_int64", scalar_int_data),
@@ -165,7 +186,7 @@ fn bench_sliding_max(c: &mut Criterion) {
 
     for (label, data) in datasets {
         let mut group = c.benchmark_group(format!("sliding_window_max_{}", label));
-        
+
         for window_size in [100, 1000, 5000] {
             group.throughput(Throughput::Elements(data_size as u64));
 

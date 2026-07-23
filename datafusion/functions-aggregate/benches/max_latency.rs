@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::VecDeque;
-use std::time::{Instant, Duration};
 use datafusion_common::ScalarValue;
 use rand::Rng;
+use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 // === Old Two-Stack Queue Implementation ===
 #[derive(Debug)]
@@ -96,7 +96,11 @@ impl<T: Clone + PartialOrd> MonotonicMax<T> {
 
     pub fn pop(&mut self) -> Option<T> {
         if let Some(popped) = self.fifo.pop_front() {
-            if self.deque.front().map_or(false, |front_val| *front_val == popped) {
+            if self
+                .deque
+                .front()
+                .map_or(false, |front_val| *front_val == popped)
+            {
                 self.deque.pop_front();
             }
             Some(popped)
@@ -117,7 +121,9 @@ fn generate_random_strings(size: usize) -> Vec<String> {
     (0..size)
         .map(|_| {
             let len = rng.gen_range(10..40);
-            (0..len).map(|_| rng.gen_range(b'a'..=b'z') as char).collect()
+            (0..len)
+                .map(|_| rng.gen_range(b'a'..=b'z') as char)
+                .collect()
         })
         .collect()
 }
@@ -128,8 +134,14 @@ fn main() {
     let i64_raw = generate_random_i64(dataset_size);
     let str_raw = generate_random_strings(dataset_size);
 
-    let scalar_int_data: Vec<ScalarValue> = i64_raw.iter().map(|&val| ScalarValue::Int64(Some(val))).collect();
-    let scalar_utf8_data: Vec<ScalarValue> = str_raw.iter().map(|val| ScalarValue::Utf8(Some(val.clone()))).collect();
+    let scalar_int_data: Vec<ScalarValue> = i64_raw
+        .iter()
+        .map(|&val| ScalarValue::Int64(Some(val)))
+        .collect();
+    let scalar_utf8_data: Vec<ScalarValue> = str_raw
+        .iter()
+        .map(|val| ScalarValue::Utf8(Some(val.clone())))
+        .collect();
 
     let datasets = vec![
         ("scalar_int64", scalar_int_data),
@@ -170,7 +182,10 @@ fn main() {
                     }
                 }
                 let total_duration = start_total.elapsed();
-                println!("    Two-Stack Queue: Total Time = {:?}, Max Push = {:?}, Max Pop = {:?}", total_duration, max_push_time, max_pop_time);
+                println!(
+                    "    Two-Stack Queue: Total Time = {:?}, Max Push = {:?}, Max Pop = {:?}",
+                    total_duration, max_push_time, max_pop_time
+                );
             }
 
             // Monotonic Deque Max Latency
@@ -198,7 +213,10 @@ fn main() {
                     }
                 }
                 let total_duration = start_total.elapsed();
-                println!("    Monotonic Deque: Total Time = {:?}, Max Push = {:?}, Max Pop = {:?}", total_duration, max_push_time, max_pop_time);
+                println!(
+                    "    Monotonic Deque: Total Time = {:?}, Max Push = {:?}, Max Pop = {:?}",
+                    total_duration, max_push_time, max_pop_time
+                );
             }
         }
     }
