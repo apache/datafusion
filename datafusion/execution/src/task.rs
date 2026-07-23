@@ -52,7 +52,7 @@ use std::{collections::HashMap, sync::Arc};
 pub struct TaskContext {
     /// Session Id
     session_id: String,
-    /// Optional Task Identify
+    /// Optional task identity
     task_id: Option<String>,
     /// Session configuration
     session_config: SessionConfig,
@@ -165,6 +165,12 @@ impl TaskContext {
     /// Update the [`RuntimeEnv`]
     pub fn with_runtime(mut self, runtime: Arc<RuntimeEnv>) -> Self {
         self.runtime = runtime;
+        self
+    }
+
+    /// Update the `task_id`
+    pub fn with_task_id(mut self, task_id: String) -> Self {
+        self.task_id = Some(task_id);
         self
     }
 }
