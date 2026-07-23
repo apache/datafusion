@@ -52,7 +52,9 @@ pub use crate::catalog::{
     CatalogProvider, CatalogProviderList, EmptyCatalogProviderList,
 };
 pub use crate::physical_optimizer::{PhysicalOptimizerContext, PhysicalOptimizerRule};
-pub use crate::planner::{ExtensionPlanner, PhysicalPlanner, QueryPlanner};
+pub use crate::planner::{
+    ExtensionPlanner, PhysicalPlanner, QueryPlanner, UnsupportedQueryPlanner,
+};
 pub use crate::schema::SchemaProvider;
 pub use crate::session::{Session, SessionStore};
 pub use crate::table::{

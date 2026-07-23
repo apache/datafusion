@@ -17,7 +17,7 @@
 
 use async_trait::async_trait;
 use datafusion_common::config::{ConfigOptions, TableOptions};
-use datafusion_common::{DFSchema, Result, not_impl_err};
+use datafusion_common::{DFSchema, Result};
 use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -36,20 +36,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
 use crate::{PhysicalOptimizerRule, QueryPlanner};
-
-#[derive(Debug)]
-struct UnsupportedQueryPlanner;
-
-#[async_trait]
-impl QueryPlanner for UnsupportedQueryPlanner {
-    async fn create_physical_plan(
-        &self,
-        _logical_plan: &LogicalPlan,
-        _session: &dyn Session,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        not_impl_err!("This session does not expose its query planner")
-    }
-}
 
 /// Interface for accessing [`SessionState`] from the catalog and data source.
 ///
@@ -107,12 +93,7 @@ pub trait Session: Send + Sync {
     }
 
     /// Return the query planner for this session.
-    ///
-    /// Implementations that do not expose their query planner return a planner
-    /// that reports a `NotImplemented` error when called.
-    fn query_planner(&self) -> Arc<dyn QueryPlanner + Send + Sync> {
-        Arc::new(UnsupportedQueryPlanner)
-    }
+    fn query_planner(&self) -> Arc<dyn QueryPlanner + Send + Sync>;
 
     /// Optimize a logical plan.
     ///

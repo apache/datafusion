@@ -2189,7 +2189,7 @@ impl From<SessionContext> for SessionStateBuilder {
 }
 
 /// A planner used to add extensions to DataFusion logical and physical plans.
-pub use datafusion_session::QueryPlanner;
+pub use datafusion_session::{QueryPlanner, UnsupportedQueryPlanner};
 
 /// Interface for handling `CREATE FUNCTION` statements and interacting with
 /// [SessionState] to create and register functions ([`ScalarUDF`],

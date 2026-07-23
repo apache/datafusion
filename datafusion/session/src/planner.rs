@@ -22,7 +22,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion_common::{DFSchema, Result};
+use datafusion_common::{DFSchema, Result, not_impl_err};
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{Expr, LogicalPlan, TableScan, UserDefinedLogicalNode};
 use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
@@ -38,6 +38,24 @@ pub trait QueryPlanner: Any + Debug {
         logical_plan: &LogicalPlan,
         session: &dyn Session,
     ) -> Result<Arc<dyn ExecutionPlan>>;
+}
+
+/// A query planner that reports that planning is not implemented.
+///
+/// [`Session`] implementations that do not expose a query planner can return
+/// this planner explicitly.
+#[derive(Debug, Default)]
+pub struct UnsupportedQueryPlanner;
+
+#[async_trait]
+impl QueryPlanner for UnsupportedQueryPlanner {
+    async fn create_physical_plan(
+        &self,
+        _logical_plan: &LogicalPlan,
+        _session: &dyn Session,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        not_impl_err!("This session does not expose its query planner")
+    }
 }
 
 /// Physical query planner that converts a [`LogicalPlan`] to an
