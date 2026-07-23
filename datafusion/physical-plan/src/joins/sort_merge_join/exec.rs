@@ -424,7 +424,6 @@ impl ExecutionPlan for SortMergeJoinExec {
             Distribution::KeyPartitioned(left_expr),
             Distribution::KeyPartitioned(right_expr),
         ])
-        .allow_range_satisfaction_for_key_partitioning()
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
