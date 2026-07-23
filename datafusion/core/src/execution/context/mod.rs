@@ -2186,6 +2186,7 @@ impl From<SessionContext> for SessionStateBuilder {
     }
 }
 
+// Re-export from this module for backwards compatibility.
 /// A planner used to add extensions to DataFusion logical and physical plans.
 pub use datafusion_session::{QueryPlanner, UnsupportedQueryPlanner};
 

@@ -40,6 +40,8 @@ use crate::limit_pushdown_past_window::LimitPushPastWindows;
 use crate::pushdown_sort::PushdownSort;
 use crate::window_topn::WindowTopN;
 use datafusion_common::config::ConfigOptions;
+
+// Re-export from this module for backwards compatibility.
 pub use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule};
 
 /// Simple context wrapping [`ConfigOptions`] for backward compatibility.

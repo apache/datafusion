@@ -119,6 +119,7 @@ use itertools::{Itertools, multiunzip};
 use log::debug;
 use tokio::sync::Mutex;
 
+// Re-export from this module for backwards compatibility.
 pub use datafusion_session::{ExtensionPlanner, PhysicalPlanner};
 
 struct SessionOptimizerContext<'a> {
