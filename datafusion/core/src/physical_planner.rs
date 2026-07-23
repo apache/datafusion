@@ -43,7 +43,8 @@ use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::filter::FilterExecBuilder;
 use crate::physical_plan::joins::utils as join_utils;
 use crate::physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
+    AsOfJoinExec, AsOfMatchExpr, CrossJoinExec, HashJoinExec, NestedLoopJoinExec,
+    PartitionMode, SortMergeJoinExec,
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::{ProjectionExec, ProjectionExpr};
@@ -93,8 +94,8 @@ use datafusion_expr::physical_planning_context::{
 use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{
     Analyze, BinaryExpr, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension,
-    FetchType, Filter, JoinType, Operator, RecursiveQuery, SkipType, StringifiedPlan,
-    WindowFrame, WindowFrameBound, WriteOp,
+    FetchType, Filter, JoinConstraint, JoinType, Operator, RecursiveQuery, SkipType,
+    StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{
     AggregateFunctionExpr, LoweredAggregate, LoweredAggregateBuilder,
@@ -1860,6 +1861,67 @@ impl DefaultPhysicalPlanner {
                     join
                 }
             }
+            LogicalPlan::AsOfJoin(join) => {
+                let [physical_left, physical_right] = children.two()?;
+                let join_on = join
+                    .on
+                    .iter()
+                    .map(|(left, right)| {
+                        Ok((
+                            create_physical_expr(
+                                left,
+                                join.left.schema(),
+                                execution_props,
+                                planning_ctx,
+                            )?,
+                            create_physical_expr(
+                                right,
+                                join.right.schema(),
+                                execution_props,
+                                planning_ctx,
+                            )?,
+                        ))
+                    })
+                    .collect::<Result<join_utils::JoinOn>>()?;
+                let match_condition = AsOfMatchExpr::new(
+                    create_physical_expr(
+                        &join.match_condition.left,
+                        join.left.schema(),
+                        execution_props,
+                        planning_ctx,
+                    )?,
+                    join.match_condition.op,
+                    create_physical_expr(
+                        &join.match_condition.right,
+                        join.right.schema(),
+                        execution_props,
+                        planning_ctx,
+                    )?,
+                );
+                let omitted_right = if join.join_constraint == JoinConstraint::Using {
+                    join.on
+                        .iter()
+                        .map(|(_, right)| {
+                            let column = right.get_as_join_column().ok_or_else(|| {
+                                internal_datafusion_err!("ASOF USING key is not a column")
+                            })?;
+                            join.right.schema().index_of_column(column)
+                        })
+                        .collect::<Result<HashSet<_>>>()?
+                } else {
+                    HashSet::new()
+                };
+                let right_output_indices = (0..join.right.schema().fields().len())
+                    .filter(|index| !omitted_right.contains(index))
+                    .collect();
+                Arc::new(AsOfJoinExec::try_new(
+                    physical_left,
+                    physical_right,
+                    join_on,
+                    match_condition,
+                    right_output_indices,
+                )?)
+            }
             LogicalPlan::RecursiveQuery(RecursiveQuery {
                 name,
                 is_distinct,
@@ -2359,6 +2421,7 @@ fn extract_dml_filters(
             | LogicalPlan::Sort(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::Join(_)
+            | LogicalPlan::AsOfJoin(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Window(_)

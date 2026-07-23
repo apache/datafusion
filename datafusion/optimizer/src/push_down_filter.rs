@@ -1104,6 +1104,35 @@ impl OptimizerRule for PushDownFilter {
                 result.map_data(|plan| Ok(with_filters(keep_predicates, plan)))
             }
             LogicalPlan::Join(join) => push_down_join(join, Some(filter.predicate)),
+            LogicalPlan::AsOfJoin(mut join) => {
+                let (push, keep): (Vec<_>, Vec<_>) =
+                    split_conjunction_owned(filter.predicate)
+                        .into_iter()
+                        .partition(|predicate| {
+                            !predicate.is_volatile()
+                                && predicate.column_refs().iter().all(|column| {
+                                    join.left.schema().is_column_from_schema(column)
+                                })
+                        });
+                if push.is_empty() {
+                    let Some(predicate) = conjunction(keep) else {
+                        return internal_err!("ASOF join filter predicates are empty");
+                    };
+                    filter.predicate = predicate;
+                    filter.input = Arc::new(LogicalPlan::AsOfJoin(join));
+                    Ok(Transformed::no(LogicalPlan::Filter(filter)))
+                } else {
+                    let Some(predicate) = conjunction(push) else {
+                        return internal_err!("ASOF join push-down predicates are empty");
+                    };
+                    join.left =
+                        Arc::new(LogicalPlan::Filter(Filter::new(predicate, join.left)));
+                    Ok(Transformed::yes(with_filters(
+                        keep,
+                        LogicalPlan::AsOfJoin(join),
+                    )))
+                }
+            }
             LogicalPlan::TableScan(mut scan) => {
                 let filter_predicates = split_conjunction(&filter.predicate);
                 // Filters containing scalar subqueries cannot be pushed to
