@@ -1376,6 +1376,7 @@ mod tests {
     use crate::test;
     use crate::test::exec::StatisticsExec;
     use arrow::datatypes::{Field, Schema, UnionFields, UnionMode};
+    use datafusion_common::assert_batches_eq;
 
     #[tokio::test]
     async fn collect_columns_predicates() -> Result<()> {
@@ -2202,6 +2203,44 @@ mod tests {
         assert_eq!(output_schema.fields().len(), 2);
         assert_eq!(output_schema.field(0).name(), "a");
         assert_eq!(output_schema.field(1).name(), "c");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_with_projection_and_fetch() -> Result<()> {
+        let a = vec![5, 11, 12, 13];
+        let b = vec![10, 20, 30, 40];
+        let c = vec![50, 110, 120, 130];
+        let input = test::build_table_scan_i32(("a", &a), ("b", &b), ("c", &c));
+
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        ));
+
+        let filter = FilterExecBuilder::new(predicate, input)
+            .apply_projection(Some(vec![0, 2]))?
+            .with_fetch(Some(2))
+            .build()?;
+
+        let batches = crate::execution_plan::collect(
+            Arc::new(filter),
+            Arc::new(TaskContext::default()),
+        )
+        .await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| a  | c   |",
+                "+----+-----+",
+                "| 11 | 110 |",
+                "| 12 | 120 |",
+                "+----+-----+",
+            ],
+            &batches
+        );
 
         Ok(())
     }

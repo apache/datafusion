@@ -122,6 +122,17 @@ impl LimitedBatchCoalescer {
     }
 
     /// Pushes the next [`RecordBatch`] into the coalescer after applying `filter`.
+    ///
+    /// Only non-null `true` values count toward `fetch`. When the limit is reached,
+    /// the filter is truncated after the final selected row.
+    ///
+    /// # Returns
+    /// Returns [`PushBatchStatus::LimitReached`] when `fetch` is reached and
+    /// [`PushBatchStatus::Continue`] otherwise.
+    ///
+    /// # Errors
+    /// Returns an error if called after [`Self::finish`], if `filter` is longer
+    /// than the batch, or if the internal filtered push operation fails.
     pub fn push_batch_with_filter(
         &mut self,
         batch: RecordBatch,
@@ -344,6 +355,18 @@ mod tests {
             .downcast_ref::<UInt32Array>()
             .unwrap();
         assert_eq!(output, &UInt32Array::from(vec![0, 6, 8]));
+
+        let oversized_batch = uint32_batch(0..5);
+        let oversized_filter = BooleanArray::from(vec![true; 6]);
+        let mut coalescer =
+            LimitedBatchCoalescer::new(oversized_batch.schema(), 20, Some(3));
+        let error = coalescer
+            .push_batch_with_filter(oversized_batch, &oversized_filter)
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Arrow error: Invalid argument error: Filter predicate of length 6 is larger than target array of length 5"
+        );
     }
 
     /// Test for [`LimitedBatchCoalescer`]
