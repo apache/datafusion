@@ -110,8 +110,6 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metric
 /// This is intentionally kept simple and closely maps to
 /// `GroupedHashAggregateStream` to finish the refactor sooner.
 ///
-/// More applicable optimizations are left to future work.
-///
 /// See issue for details: <https://github.com/apache/datafusion/issues/22710>
 ///
 pub(crate) struct OrderedPartialAggregateStream {
