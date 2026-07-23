@@ -57,20 +57,30 @@ pub struct StructFieldMapping {
     pub fields: Vec<(Vec<ScalarValue>, usize)>,
 }
 
-/// Describes how a scalar UDF transforms range partitioning boundaries.
+/// Describes how a scalar UDF can transform range partitioning boundaries.
 ///
-/// Implementations identify the input argument whose ranges are transformed
-/// and map boundaries from that input to the UDF output. The physical
-/// partitioning machinery applies the remaining safety checks, such as sort
-/// direction, nullability, and boundary alignment.
+/// For example, data may be range partitioned on column `timestamp`
+/// at split points 600, 1200, 1800 etc. Applying a projection such as
+/// `date_bin(timestamp, 30 seconds) as date_bin_timestamp` should
+/// preserve range partitioning on the projected column `date_bin_timestamp`.
+///
+/// Implementations of [`RangePartitioningTransform`]
+/// need to do the following:
+/// (a) identify the function argument which is being transformed
+/// (b) map values from input to the UDF output
+///
+/// The physical partitioning machinery the remaining work and safety checks.
+/// For example, the mapped range partition boundaries must be sorted, distinct,
+/// and non null.
 pub trait RangePartitioningTransform: Debug + Send + Sync {
-    /// Index of the input argument whose range partitioning is transformed.
+    /// Index of the function argument which is being mapped.
     fn source_index(&self) -> usize;
 
-    /// Maps a source range boundary to the corresponding output boundary.
+    /// Maps a source value to the corresponding output value. Will be called
+    /// using range partition split points.
     ///
-    /// Returns `None` when the boundary cannot be mapped safely.
-    fn map_boundary(&self, boundary: &ScalarValue) -> Option<ScalarValue>;
+    /// Returns `None` when the boundary value cannot be mapped safely.
+    fn map_boundary_value(&self, value: &ScalarValue) -> Option<ScalarValue>;
 }
 
 /// Logical representation of a Scalar User Defined Function.

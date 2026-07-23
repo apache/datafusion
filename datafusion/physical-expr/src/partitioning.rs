@@ -349,7 +349,7 @@ impl FunctionRangePartitioningExpr {
     }
 
     fn project_boundary(&self, value: &ScalarValue) -> Option<ScalarValue> {
-        let projected = self.transform.map_boundary(value)?;
+        let projected = self.transform.map_boundary_value(value)?;
         (projected == *value).then_some(projected)
     }
 }

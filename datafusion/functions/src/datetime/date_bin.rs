@@ -128,10 +128,10 @@ impl RangePartitioningTransform for DateBinRangePartitioningTransform {
         1
     }
 
-    fn map_boundary(&self, boundary: &ScalarValue) -> Option<ScalarValue> {
+    fn map_boundary_value(&self, value: &ScalarValue) -> Option<ScalarValue> {
         let result = date_bin_impl(
             &ColumnarValue::Scalar(self.stride.clone()),
-            &ColumnarValue::Scalar(boundary.clone()),
+            &ColumnarValue::Scalar(value.clone()),
             &ColumnarValue::Scalar(self.origin.clone()),
         )
         .ok()?;
@@ -940,7 +940,7 @@ mod tests {
 
         assert_eq!(transform.source_index(), 1);
         assert_eq!(
-            transform.map_boundary(&ScalarValue::TimestampNanosecond(
+            transform.map_boundary_value(&ScalarValue::TimestampNanosecond(
                 Some(3_600_000_000_000),
                 None,
             )),
@@ -950,7 +950,7 @@ mod tests {
             ))
         );
         assert_eq!(
-            transform.map_boundary(&ScalarValue::TimestampNanosecond(
+            transform.map_boundary_value(&ScalarValue::TimestampNanosecond(
                 Some(5_400_000_000_000),
                 None,
             )),
