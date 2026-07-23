@@ -575,9 +575,9 @@ impl OrderedFinalAggregateStream {
 
         // Spilling shrinks the aggregate table and releases its accumulated
         // memory. Update the reservation accordingly.
-        if self.reservation.try_resize(table.memory_size()).is_err() {
-            // Fold spill error and reservation error into one
-            result = internal_err!("Reservation after spilling should succeed")
+        if let Err(e) = self.reservation.try_resize(table.memory_size()) {
+            result =
+                Err(e.context("Decreasing allocation after spilling should succeed"));
         }
 
         timer.done();
