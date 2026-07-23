@@ -1603,10 +1603,11 @@ SELECT
   sha224(arrow_cast(column1, 'Binary')) = sha224('tom'),
   sha224(arrow_cast(column1, 'LargeBinary')) = sha224('tom'),
   sha224(arrow_cast(column1, 'BinaryView')) = sha224('tom')
-FROM (VALUES ('tom'), (NULL)) AS t(column1);
+FROM (VALUES ('tom'), (NULL), ('mot')) AS t(column1);
 ----
 true true true true true true
 NULL NULL NULL NULL NULL NULL
+false false false false false false
 
 # invalid argument count and type
 query error DataFusion error:
@@ -1687,10 +1688,11 @@ SELECT
   sha384(arrow_cast(column1, 'Binary')) = sha384('tom'),
   sha384(arrow_cast(column1, 'LargeBinary')) = sha384('tom'),
   sha384(arrow_cast(column1, 'BinaryView')) = sha384('tom')
-FROM (VALUES ('tom'), (NULL)) AS t(column1);
+FROM (VALUES ('tom'), (NULL), ('mot')) AS t(column1);
 ----
 true true true true true true
 NULL NULL NULL NULL NULL NULL
+false false false false false false
 
 # invalid argument count and type
 query error DataFusion error:
@@ -1741,10 +1743,11 @@ SELECT
   sha512(arrow_cast(column1, 'Binary')) = sha512('tom'),
   sha512(arrow_cast(column1, 'LargeBinary')) = sha512('tom'),
   sha512(arrow_cast(column1, 'BinaryView')) = sha512('tom')
-FROM (VALUES ('tom'), (NULL)) AS t(column1);
+FROM (VALUES ('tom'), (NULL), ('mot')) AS t(column1);
 ----
 true true true true true true
 NULL NULL NULL NULL NULL NULL
+false false false false false false
 
 # invalid argument count and type
 query error DataFusion error:
