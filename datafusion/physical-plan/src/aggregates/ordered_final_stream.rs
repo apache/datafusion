@@ -70,8 +70,11 @@ pub(crate) struct OrderedFinalAggregateStream {
 }
 
 /// Spill configuration and accumulated runs for partially ordered final
-/// aggregation. Each file is one fully group-key-sorted intermediate-state run;
-/// all runs are replayed together after the original input is exhausted.
+/// aggregation.
+///
+/// Each spill event drains all currently buffered groups, sorts their intermediate
+/// states by the full group key, and writes them to one spill file. All files are
+/// merged and replayed after the original input ends.
 struct OrderedFinalSpillContext {
     /// Aggregate configuration
     agg: AggregateExec,
