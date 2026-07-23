@@ -186,8 +186,32 @@ impl CrossJoinExec {
     /// operators on the join's children. Check [`super::HashJoinExec::swap_inputs`]
     /// for more details.
     pub fn swap_inputs(&self) -> Result<Arc<dyn ExecutionPlan>> {
-        let new_join =
-            CrossJoinExec::new(Arc::clone(&self.right), Arc::clone(&self.left));
+        // Rebuild schema with columns from right to left, preserve existing metadata
+        let new_columns = self
+            .right
+            .schema()
+            .fields
+            .iter()
+            .chain(self.left.schema().fields.iter())
+            .cloned()
+            .collect::<Fields>();
+
+        let new_schema = Arc::new(
+            Schema::new(new_columns).with_metadata(self.schema.metadata.clone()),
+        );
+
+        let new_cache =
+            Self::compute_properties(&self.right, &self.left, Arc::clone(&new_schema))?;
+
+        let new_join = CrossJoinExec {
+            left: Arc::clone(&self.right),
+            right: Arc::clone(&self.left),
+            schema: new_schema,
+            left_fut: Default::default(),
+            metrics: ExecutionPlanMetricsSet::default(),
+            cache: Arc::new(new_cache),
+        };
+
         reorder_output_after_swap(
             Arc::new(new_join),
             &self.left.schema(),
@@ -701,7 +725,9 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
 mod tests {
     use super::*;
     use crate::common;
-    use crate::test::{assert_join_metrics, build_table_scan_i32};
+    use crate::test::{TestMemoryExec, assert_join_metrics, build_table_scan_i32};
+    use arrow_schema::{DataType, Field};
+    use std::collections::HashMap;
 
     use datafusion_common::{assert_contains, test_util::batches_to_sort_string};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -992,6 +1018,28 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_swapped_cross_join_schema_on_conflicting_metadata() {
+        let input = |field: &str, meta_value: &str| {
+            let schema = Arc::new(
+                Schema::new(vec![Field::new(field, DataType::Int32, false)])
+                    .with_metadata(HashMap::from([(
+                        String::from("metadata_key"),
+                        String::from(meta_value),
+                    )])),
+            );
+            TestMemoryExec::try_new_exec(&[vec![]], schema, None).unwrap()
+        };
+        // Conflicting metadata on left and right input, right side wins "metadata_key" -> "right value"
+        let join =
+            CrossJoinExec::new(input("a", "left value"), input("b", "right value"));
+
+        let swapped_join = join.swap_inputs().unwrap();
+
+        // The metadata of the cross-join and the swapped cross-join (with projection on top) must be the same
+        assert_eq!(join.schema().metadata(), swapped_join.schema().metadata());
     }
 
     /// Returns the column names on the schema

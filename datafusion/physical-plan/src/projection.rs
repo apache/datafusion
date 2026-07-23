@@ -500,6 +500,71 @@ impl ExecutionPlan for ProjectionExec {
                     .ok()
             })
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        let expr = ctx.encode_expressions(self.expr().iter().map(|p| &p.expr))?;
+        let expr_name = self.expr().iter().map(|p| p.alias.clone()).collect();
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Projection(Box::new(
+                    protobuf::ProjectionExecNode {
+                        input: Some(Box::new(input)),
+                        expr,
+                        expr_name,
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl ProjectionExec {
+    /// Reconstruct a [`ProjectionExec`] from its protobuf representation.
+    ///
+    /// The exact inverse of [`ExecutionPlan::try_to_proto`]: it takes the whole
+    /// [`PhysicalPlanNode`] so every plan's `try_from_proto` shares one
+    /// signature. Child plans and expressions are decoded recursively via the
+    /// [`ExecutionPlanDecodeCtx`].
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    /// [`ExecutionPlanDecodeCtx`]: crate::proto::ExecutionPlanDecodeCtx
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let projection = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Projection,
+            "ProjectionExec",
+        );
+        let input = ctx.decode_required_child(
+            projection.input.as_deref(),
+            "ProjectionExec",
+            "input",
+        )?;
+        let input_schema = input.schema();
+        let exprs = projection
+            .expr
+            .iter()
+            .zip(projection.expr_name.iter())
+            .map(|(expr, name)| {
+                Ok(ProjectionExpr {
+                    expr: ctx.decode_expr(expr, input_schema.as_ref())?,
+                    alias: name.to_string(),
+                })
+            })
+            .collect::<Result<Vec<ProjectionExpr>>>()?;
+        Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
+    }
 }
 
 impl ProjectionStream {

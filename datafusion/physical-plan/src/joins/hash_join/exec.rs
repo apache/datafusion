@@ -1293,7 +1293,9 @@ impl ExecutionPlan for HashJoinExec {
             ]),
         };
 
-        if self.mode == PartitionMode::Partitioned && self.join_type == JoinType::Inner {
+        if self.mode == PartitionMode::Partitioned {
+            // Compatible Range inputs co-locate equal join keys, which
+            // satisfies the co-partitioned requirement for hash joins.
             requirements.allow_range_satisfaction_for_key_partitioning()
         } else {
             requirements
