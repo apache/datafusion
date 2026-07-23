@@ -90,12 +90,15 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
     }
 
     // https://github.com/apache/datafusion/issues/23127
-    fn check_key_overflow(num_inner_slots: usize) -> Result<()> {
-        if !Self::key_type_fits(num_inner_slots) {
+    // Null groups emit a null key, not a key index into the values array, so the
+    // null inner slot does not consume a key index.
+    fn check_key_overflow(&self) -> Result<()> {
+        let non_null_slots = self.inner.len() - self.null_inner_slot.is_some() as usize;
+        if !Self::key_type_fits(non_null_slots) {
             return exec_err!(
                 "Dictionary key type {:?} cannot represent {} distinct values",
                 K::DATA_TYPE,
-                num_inner_slots
+                non_null_slots
             );
         }
         Ok(())
@@ -217,12 +220,13 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
             }
             Some(val_idx) => {
                 let dict_values = dict.values();
-                self.hash_values(dict_values);
-                self.find_or_insert_value(dict_values, val_idx, self.val_hashes[val_idx])?
+                let single = dict_values.slice(val_idx, 1);
+                self.hash_values(&single);
+                self.find_or_insert_value(dict_values, val_idx, self.val_hashes[0])?
             }
         };
         self.group_to_inner.push(inner_slot);
-        Self::check_key_overflow(self.inner.len())
+        self.check_key_overflow()
     }
 
     fn vectorized_equal_to(
@@ -341,7 +345,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
             }
         }
 
-        Self::check_key_overflow(self.inner.len())
+        self.check_key_overflow()
     }
 
     fn len(&self) -> usize {
@@ -410,7 +414,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
         }
 
         self.group_to_inner = remaining.iter().map(|&old| old_to_new[old]).collect();
-        Self::check_key_overflow(self.inner.len()).expect("key overflow in take_n");
+        self.check_key_overflow().expect("key overflow in take_n");
 
         emitted
     }
@@ -551,6 +555,42 @@ mod tests {
         col.vectorized_append(&full, &(0..256).collect::<Vec<_>>())
             .unwrap();
 
+        let extra: ArrayRef = Arc::new(DictionaryArray::<UInt8Type>::new(
+            UInt8Array::from(vec![Some(0u8)]),
+            Arc::new(StringArray::from(vec![Some("overflow")])),
+        ));
+        assert!(col.append_val(&extra, 0).is_err());
+    }
+
+    // A null value alongside 256 non-null values must not itself trigger an
+    // overflow: null groups emit a null key, not a key index. Adding a 257th
+    // non-null value after the null should be what triggers the error.
+    #[test]
+    fn null_does_not_count_toward_key_overflow() {
+        let field = Field::new("", DataType::Utf8, true);
+        let mut col = DictionaryGroupValuesColumn::<UInt8Type>::new(
+            Box::new(ByteGroupValueBuilder::<i32>::new(OutputType::Utf8)),
+            &field,
+        );
+
+        // Fill all 256 UInt8 key slots (indices 0..=255) with distinct non-null values.
+        let strs: Vec<String> = (0..=255u16).map(|i| i.to_string()).collect();
+        let str_refs: Vec<Option<&str>> = strs.iter().map(|s| Some(s.as_str())).collect();
+        let full: ArrayRef = Arc::new(DictionaryArray::<UInt8Type>::new(
+            UInt8Array::from((0..=255u8).map(Some).collect::<Vec<_>>()),
+            Arc::new(StringArray::from(str_refs)),
+        ));
+        col.vectorized_append(&full, &(0..256).collect::<Vec<_>>())
+            .unwrap();
+
+        // Null does not consume a key index — appending it must succeed.
+        let null_arr: ArrayRef = Arc::new(DictionaryArray::<UInt8Type>::new(
+            UInt8Array::from(vec![None]),
+            Arc::new(StringArray::from(vec![Some("dummy")])),
+        ));
+        col.append_val(&null_arr, 0).unwrap();
+
+        // A 257th distinct non-null value now exceeds UInt8's capacity.
         let extra: ArrayRef = Arc::new(DictionaryArray::<UInt8Type>::new(
             UInt8Array::from(vec![Some(0u8)]),
             Arc::new(StringArray::from(vec![Some("overflow")])),
