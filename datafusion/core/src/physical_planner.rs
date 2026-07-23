@@ -27,10 +27,6 @@ use crate::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use crate::datasource::{DefaultTableSource, source_as_provider};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
-#[cfg(test)]
-use crate::execution::context::SessionState;
-#[cfg(test)]
-use crate::logical_expr::UserDefinedLogicalNode;
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_expr::{
     Aggregate, EmptyRelation, Join, Projection, Sort, TableScan, Unnest, Values, Window,
@@ -3236,7 +3232,9 @@ mod tests {
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test_util::{scan_empty, scan_empty_with_partitions};
 
+    use crate::execution::context::SessionState;
     use crate::execution::session_state::SessionStateBuilder;
+    use crate::logical_expr::UserDefinedLogicalNode;
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type};
     use arrow_schema::{FieldRef, SchemaRef};

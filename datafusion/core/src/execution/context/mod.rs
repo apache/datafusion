@@ -99,8 +99,6 @@ use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_optimizer::{Analyzer, OptimizerContext};
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
-#[cfg(test)]
-use datafusion_session::Session;
 use datafusion_session::SessionStore;
 
 use async_trait::async_trait;
@@ -2389,6 +2387,7 @@ mod tests {
     use crate::physical_planner::PhysicalPlanner;
     use async_trait::async_trait;
     use datafusion_expr::planner::TypePlanner;
+    use datafusion_session::Session;
     use sqlparser::ast;
     use tempfile::TempDir;
 
