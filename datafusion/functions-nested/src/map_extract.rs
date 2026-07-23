@@ -105,6 +105,11 @@ impl ScalarUDFImpl for MapExtract {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         let [map_type, _] = take_function_args(self.name(), arg_types)?;
+
+        if map_type.is_null() {
+            return Ok(DataType::Null);
+        }
+
         let map_fields = get_map_entry_field(map_type)?;
         Ok(DataType::List(Arc::new(Field::new_list_field(
             map_fields.last().unwrap().data_type().clone(),
@@ -122,6 +127,10 @@ impl ScalarUDFImpl for MapExtract {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let [map_type, _] = take_function_args(self.name(), arg_types)?;
+
+        if map_type.is_null() {
+            return Ok(arg_types.to_vec());
+        }
 
         let field = get_map_entry_field(map_type)?;
         Ok(vec![
@@ -161,10 +170,10 @@ fn general_map_extract_inner(
 
         match value_index {
             Some(index) => {
-                mutable.extend(0, start + index, start + index + 1);
+                mutable.try_extend(0, start + index, start + index + 1)?;
             }
             None => {
-                mutable.extend_nulls(1);
+                mutable.try_extend_nulls(1)?;
             }
         }
         offsets.push(offsets[row_index] + 1);
@@ -185,6 +194,7 @@ fn map_extract_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let map_array = match map_arg.data_type() {
         DataType::Map(_, _) => as_map_array(&map_arg)?,
+        DataType::Null => return Ok(Arc::clone(map_arg)),
         _ => return exec_err!("The first argument in map_extract must be a map"),
     };
 

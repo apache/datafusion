@@ -47,13 +47,13 @@ use crate::joins::utils::{
     matchable_join_keys, symmetric_join_output_partitioning, update_hash,
 };
 use crate::projection::{
-    ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
-    physical_to_column_exprs, update_join_filter, update_join_on,
+    JoinData, ProjectionExec, try_pushdown_through_join_with_column_indices,
 };
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    InputDistributionRequirements, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream,
     joins::StreamJoinPartitionMode,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
@@ -360,20 +360,6 @@ impl SymmetricHashJoinExec {
         }
         Ok(false)
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        let left = children.swap_remove(0);
-        let right = children.swap_remove(0);
-        Self {
-            left,
-            right,
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for SymmetricHashJoinExec {
@@ -426,6 +412,10 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
         match self.mode {
             StreamJoinPartitionMode::Partitioned => {
                 let (left_expr, right_expr) = self
@@ -433,13 +423,16 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                     .iter()
                     .map(|(l, r)| (Arc::clone(l) as _, Arc::clone(r) as _))
                     .unzip();
-                vec![
-                    Distribution::HashPartitioned(left_expr),
-                    Distribution::HashPartitioned(right_expr),
-                ]
+                InputDistributionRequirements::co_partitioned(vec![
+                    Distribution::KeyPartitioned(left_expr),
+                    Distribution::KeyPartitioned(right_expr),
+                ])
             }
             StreamJoinPartitionMode::SinglePartition => {
-                vec![Distribution::SinglePartition, Distribution::SinglePartition]
+                InputDistributionRequirements::new(vec![
+                    Distribution::SinglePartition,
+                    Distribution::SinglePartition,
+                ])
             }
         }
     }
@@ -475,6 +468,20 @@ impl ExecutionPlan for SymmetricHashJoinExec {
             self.right_sort_exprs.clone(),
             self.mode,
         )?))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let left = children.swap_remove(0);
+        let right = children.swap_remove(0);
+        Ok(Arc::new(Self {
+            left,
+            right,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -589,69 +596,36 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        // Convert projected PhysicalExpr's to columns. If not possible, we cannot proceed.
-        let Some(projection_as_columns) = physical_to_column_exprs(projection.expr())
-        else {
-            return Ok(None);
-        };
-
-        let (far_right_left_col_ind, far_left_right_col_ind) = join_table_borders(
-            self.left().schema().fields().len(),
-            &projection_as_columns,
-        );
-
-        if !join_allows_pushdown(
-            &projection_as_columns,
-            &self.schema(),
-            far_right_left_col_ind,
-            far_left_right_col_ind,
-        ) {
-            return Ok(None);
-        }
-
-        let Some(new_on) = update_join_on(
-            &projection_as_columns[0..=far_right_left_col_ind as _],
-            &projection_as_columns[far_left_right_col_ind as _..],
-            self.on(),
-            self.left().schema().fields().len(),
-        ) else {
-            return Ok(None);
-        };
-
-        let new_filter = if let Some(filter) = self.filter() {
-            match update_join_filter(
-                &projection_as_columns[0..=far_right_left_col_ind as _],
-                &projection_as_columns[far_left_right_col_ind as _..],
-                filter,
-                self.left().schema().fields().len(),
-            ) {
-                Some(updated_filter) => Some(updated_filter),
-                None => return Ok(None),
-            }
-        } else {
-            None
-        };
-
-        let (new_left, new_right) = new_join_children(
-            &projection_as_columns,
-            far_right_left_col_ind,
-            far_left_right_col_ind,
+        let schema = self.schema();
+        if let Some(JoinData {
+            projected_left_child,
+            projected_right_child,
+            join_filter,
+            join_on,
+        }) = try_pushdown_through_join_with_column_indices(
+            projection,
             self.left(),
             self.right(),
-        )?;
-
-        SymmetricHashJoinExec::try_new(
-            Arc::new(new_left),
-            Arc::new(new_right),
-            new_on,
-            new_filter,
-            self.join_type(),
-            self.null_equality(),
-            self.right().output_ordering().cloned(),
-            self.left().output_ordering().cloned(),
-            self.partition_mode(),
-        )
-        .map(|e| Some(Arc::new(e) as _))
+            self.on(),
+            &schema,
+            self.filter(),
+            self.column_indices.as_slice(),
+        )? {
+            SymmetricHashJoinExec::try_new(
+                Arc::new(projected_left_child),
+                Arc::new(projected_right_child),
+                join_on,
+                join_filter,
+                self.join_type(),
+                self.null_equality(),
+                self.right().output_ordering().cloned(),
+                self.left().output_ordering().cloned(),
+                self.partition_mode(),
+            )
+            .map(|e| Some(Arc::new(e) as _))
+        } else {
+            Ok(None)
+        }
     }
 }
 

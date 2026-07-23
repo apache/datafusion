@@ -60,8 +60,8 @@ use datafusion_datasource_json::file_format::{
 use datafusion_datasource_parquet::file_format::{ParquetFormat, ParquetFormatFactory};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
-    AggregateUDF, DmlStatement, FetchType, HigherOrderUDF, RecursiveQuery, SkipType,
-    TableSource, Unnest, WriteOp,
+    AggregateUDF, DmlStatement, FetchType, HigherOrderUDF, RangePartitioning,
+    RecursiveQuery, SkipType, TableSource, Unnest, WriteOp,
 };
 use datafusion_expr::{
     DistinctOn, DropView, Expr, JoinConstraint, LogicalPlan, LogicalPlanBuilder,
@@ -76,6 +76,7 @@ use datafusion_expr::{
 use datafusion_proto_common::protobuf_common;
 
 use self::to_proto::{serialize_expr, serialize_exprs};
+use crate::logical_plan::to_proto::serialize_range_split_point;
 use crate::logical_plan::to_proto::serialize_sorts;
 use datafusion_catalog::TableProvider;
 use datafusion_catalog::default_table_source::{provider_as_source, source_as_provider};
@@ -745,6 +746,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                     PartitionMethod::RoundRobin(partition_count) => {
                         Partitioning::RoundRobinBatch(*partition_count as usize)
                     }
+                    PartitionMethod::Range(protobuf::RangeRepartition {
+                        sort_expr: pb_sort_expr,
+                        split_point,
+                    }) => Partitioning::Range(RangePartitioning::try_new(
+                        from_proto::parse_sorts(pb_sort_expr, ctx, extension_codec)?,
+                        split_point
+                            .iter()
+                            .map(from_proto::parse_protobuf_range_split_point)
+                            .collect::<Result<Vec<_>, _>>()?,
+                    )?),
                 };
 
                 LogicalPlanBuilder::from(input)
@@ -788,6 +799,17 @@ impl AsLogicalPlan for LogicalPlanNode {
                     column_defaults.insert(col_name.clone(), expr);
                 }
 
+                let locations = if !create_extern_table.locations.is_empty() {
+                    create_extern_table.locations.clone()
+                } else if !create_extern_table.location.is_empty() {
+                    vec![create_extern_table.location.clone()]
+                } else {
+                    return Err(proto_error(
+                        "CreateExternalTableNode requires at least one location",
+                    ));
+                };
+                let location = locations[0].clone();
+
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
                     Box::new(
                         CreateExternalTable::builder(
@@ -795,10 +817,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 create_extern_table.name.as_ref(),
                                 "CreateExternalTable",
                             )?,
-                            create_extern_table.location.clone(),
+                            location,
                             create_extern_table.file_type.clone(),
                             pb_schema.try_into()?,
                         )
+                        .with_locations(locations)
                         .with_partition_cols(
                             create_extern_table.table_partition_cols.clone(),
                         )
@@ -1754,10 +1777,18 @@ impl AsLogicalPlan for LogicalPlanNode {
                     Partitioning::RoundRobinBatch(partition_count) => {
                         PartitionMethod::RoundRobin(*partition_count as u64)
                     }
-                    Partitioning::Range(_) => {
-                        // TODO: Support range repartition protobuf serialization.
-                        // Tracked by https://github.com/apache/datafusion/issues/22787
-                        return not_impl_err!("Range repartition");
+                    Partitioning::Range(range_partitioning) => {
+                        let ordering = range_partitioning.ordering();
+                        let split_point = range_partitioning
+                            .split_points()
+                            .iter()
+                            .map(serialize_range_split_point)
+                            .collect::<Result<Vec<_>, _>>()?;
+
+                        PartitionMethod::Range(protobuf::RangeRepartition {
+                            sort_expr: serialize_sorts(ordering, extension_codec)?,
+                            split_point,
+                        })
                     }
                     Partitioning::DistributeBy(_) => {
                         return not_impl_err!("DistributeBy");
@@ -1785,7 +1816,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Ddl(DdlStatement::CreateExternalTable(ce)) => {
                 let CreateExternalTable {
                     name,
-                    location,
+                    locations,
                     file_type,
                     schema: df_schema,
                     table_partition_cols,
@@ -1813,6 +1844,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     converted_column_defaults
                         .insert(col_name.clone(), serialize_expr(expr, extension_codec)?);
                 }
+                let (legacy_location, proto_locations) = match locations.as_slice() {
+                    [location] => (location.clone(), vec![]),
+                    _ => (String::new(), locations.clone()),
+                };
 
                 Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
@@ -1820,7 +1855,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                             name: Some(protobuf::TableReference::from_proto(
                                 name.clone(),
                             )),
-                            location: location.clone(),
+                            location: legacy_location,
+                            locations: proto_locations,
                             file_type: file_type.clone(),
                             schema: Some(df_schema.try_into()?),
                             table_partition_cols: table_partition_cols.clone(),

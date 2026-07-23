@@ -248,6 +248,8 @@ pub trait GroupsAccumulator: Send + std::any::Any {
     ///
     /// This function is called once per batch, so it should be `O(n)` to
     /// compute, not `O(num_groups)`
+    ///
+    /// May be expensive; check the implementation before calling on hot paths.
     fn size(&self) -> usize;
 }
 

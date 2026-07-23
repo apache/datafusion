@@ -209,6 +209,14 @@ impl ScalarUDF {
         self.inner.aliases()
     }
 
+    /// Returns true if this function always returns NULL when any argument is
+    /// NULL.
+    ///
+    /// See [`ScalarUDFImpl::is_strict`] for more details.
+    pub fn is_strict(&self) -> bool {
+        self.inner.is_strict()
+    }
+
     /// Returns this function's [`Signature`] (what input types are accepted).
     ///
     /// See [`ScalarUDFImpl::signature`] for more details.
@@ -693,6 +701,20 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         true
     }
 
+    /// Returns true if this function always returns NULL when any argument is
+    /// NULL.
+    ///
+    /// Strict functions are NULL-propagating: if any argument evaluates to
+    /// NULL, the function result is guaranteed to be NULL. Optimizer rules can
+    /// use this property when reasoning about expression nullability and
+    /// null-rejecting filters.
+    ///
+    /// Defaults to `false` because user-defined functions may choose to accept
+    /// NULL inputs and produce non-NULL results.
+    fn is_strict(&self) -> bool {
+        false
+    }
+
     /// Invoke the function returning the appropriate result.
     ///
     /// # Performance
@@ -957,8 +979,6 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
 
     /// Returns true if the function preserves lexicographical ordering based on
     /// the input ordering.
-    ///
-    /// For example, `concat(a || b)` preserves lexicographical ordering, but `abs(a)` does not.
     fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
         Ok(false)
     }
@@ -1101,6 +1121,10 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
     fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
         #[expect(deprecated)]
         self.inner.is_nullable(args, schema)
+    }
+
+    fn is_strict(&self) -> bool {
+        self.inner.is_strict()
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

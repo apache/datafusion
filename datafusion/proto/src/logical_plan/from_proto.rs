@@ -20,7 +20,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
-    NullEquality, RecursionUnnestOption, Result, ScalarValue, TableReference,
+    NullEquality, RecursionUnnestOption, Result, ScalarValue, SplitPoint, TableReference,
     UnnestOptions, exec_datafusion_err, internal_err, plan_datafusion_err,
 };
 use datafusion_execution::TaskContext;
@@ -28,7 +28,9 @@ use datafusion_execution::registry::FunctionRegistry;
 use datafusion_expr::dml::{
     InsertOp, MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
 };
-use datafusion_expr::expr::{Alias, NullTreatment, Placeholder, Sort};
+use datafusion_expr::expr::{
+    Alias, Lambda, LambdaVariable, NullTreatment, Placeholder, Sort,
+};
 use datafusion_expr::expr::{Unnest, WildcardOptions};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::{
@@ -718,6 +720,22 @@ pub fn parse_expr(
                 parse_exprs(args, ctx, codec)?,
             )))
         }
+        ExprType::HigherOrderUdfExpr(protobuf::HigherOrderUdfExprNode {
+            fun_name,
+            args,
+            fun_definition,
+        }) => {
+            let hof_fn = match fun_definition {
+                Some(buf) => codec.try_decode_higher_order_function(fun_name, buf)?,
+                None => ctx
+                    .higher_order_function(fun_name.as_str())
+                    .or_else(|_| codec.try_decode_higher_order_function(fun_name, &[]))?,
+            };
+            Ok(Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
+                hof_fn,
+                parse_exprs(args, ctx, codec)?,
+            )))
+        }
         ExprType::AggregateUdfExpr(pb) => {
             let agg_fn = match &pb.fun_definition {
                 Some(buf) => codec.try_decode_udaf(&pb.fun_name, buf)?,
@@ -790,6 +808,16 @@ pub fn parse_expr(
                 codec,
             )?;
             Ok(Expr::ScalarSubquery(subquery))
+        }
+        ExprType::Lambda(lambda) => Ok(Expr::Lambda(Lambda::new(
+            lambda.params.clone(),
+            parse_required_expr(lambda.body.as_deref(), ctx, "body", codec)?,
+        ))),
+        ExprType::LambdaVariable(lambda_variable) => {
+            Ok(Expr::LambdaVariable(LambdaVariable::new(
+                lambda_variable.name.clone(),
+                lambda_variable.field.as_ref().optional()?.map(Arc::new),
+            )))
         }
     }
 }
@@ -898,4 +926,15 @@ fn parse_required_expr(
 
 fn proto_error<S: Into<String>>(message: S) -> Error {
     Error::General(message.into())
+}
+
+pub(super) fn parse_protobuf_range_split_point(
+    split_point: &protobuf::RangeSplitPoint,
+) -> Result<SplitPoint, Error> {
+    let values = split_point
+        .value
+        .iter()
+        .map(ScalarValue::try_from)
+        .collect::<Result<_, Error>>()?;
+    Ok(SplitPoint::new(values))
 }

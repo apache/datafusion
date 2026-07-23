@@ -45,6 +45,7 @@ use datafusion_expr::{
 use datafusion_macros::user_doc;
 
 use crate::first_last::TrivialFirstValueAccumulator;
+use crate::first_last::state::{BytesValueState, ValueState, take_need};
 
 make_udaf_expr_and_func!(
     AnyValue,
@@ -148,7 +149,6 @@ impl AggregateUDFImpl for AnyValue {
         self.doc()
     }
 }
-
 fn create_groups_accumulator(data_type: &DataType) -> Result<Box<dyn GroupsAccumulator>> {
     macro_rules! instantiate_primitive {
         ($t:ty) => {
@@ -202,7 +202,123 @@ fn create_groups_accumulator(data_type: &DataType) -> Result<Box<dyn GroupsAccum
             instantiate_primitive!(Time64NanosecondType)
         }
 
+        DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Utf8View
+        | DataType::Binary
+        | DataType::LargeBinary
+        | DataType::BinaryView => Ok(Box::new(BytesAnyValueGroupsAccumulator::try_new(
+            data_type.clone(),
+        )?) as _),
+
         _ => Ok(Box::new(AnyValueGroupsAccumulator::try_new(data_type)?) as _),
+    }
+}
+
+#[derive(Debug)]
+struct BytesAnyValueGroupsAccumulator {
+    values: BytesValueState,
+    is_set: BooleanBufferBuilder,
+}
+
+impl BytesAnyValueGroupsAccumulator {
+    fn try_new(data_type: DataType) -> Result<Self> {
+        Ok(Self {
+            values: BytesValueState::try_new(data_type)?,
+            is_set: BooleanBufferBuilder::new(0),
+        })
+    }
+
+    fn ensure_groups(&mut self, total_num_groups: usize) {
+        if self.is_set.len() < total_num_groups {
+            self.values.resize(total_num_groups);
+            self.is_set.resize(total_num_groups);
+        }
+    }
+
+    fn take_state(&mut self, emit_to: EmitTo) -> Result<(ArrayRef, BooleanBuffer)> {
+        let values = self.values.take(emit_to)?;
+        let is_set = take_need(&mut self.is_set, emit_to);
+        Ok((values, is_set))
+    }
+}
+
+impl GroupsAccumulator for BytesAnyValueGroupsAccumulator {
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "any_value expects one argument");
+        self.ensure_groups(total_num_groups);
+
+        for (row, &group_index) in group_indices.iter().enumerate() {
+            if opt_filter.is_none_or(|filter| filter.is_valid(row) && filter.value(row))
+                && !self.is_set.get_bit(group_index)
+                && values[0].is_valid(row)
+            {
+                self.values.update(group_index, &values[0], row)?;
+                self.is_set.set_bit(group_index, true);
+            }
+        }
+        Ok(())
+    }
+
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        self.take_state(emit_to).map(|(values, _)| values)
+    }
+
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        let (values, is_set) = self.take_state(emit_to)?;
+        Ok(vec![values, Arc::new(BooleanArray::new(is_set, None))])
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 2, "any_value expects value and is_set state");
+        let is_set = as_boolean_array(&values[1])?;
+        self.ensure_groups(total_num_groups);
+
+        for (row, &group_index) in group_indices.iter().enumerate() {
+            if is_set.is_valid(row)
+                && is_set.value(row)
+                && !self.is_set.get_bit(group_index)
+                && values[0].is_valid(row)
+            {
+                self.values.update(group_index, &values[0], row)?;
+                self.is_set.set_bit(group_index, true);
+            }
+        }
+        Ok(())
+    }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        assert_eq!(values.len(), 1, "any_value expects one argument");
+        let values = &values[0];
+        let is_set = BooleanArray::from_iter((0..values.len()).map(|row| {
+            values.is_valid(row)
+                && opt_filter
+                    .is_none_or(|filter| filter.is_valid(row) && filter.value(row))
+        }));
+        Ok(vec![Arc::clone(values), Arc::new(is_set)])
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self) + self.values.size() + self.is_set.capacity() / 8
     }
 }
 
@@ -478,7 +594,7 @@ impl GroupsAccumulator for AnyValueGroupsAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int64Array, StringArray};
+    use arrow::array::{BinaryViewArray, Int64Array, StringArray, StringViewArray};
 
     #[test]
     fn groups_accumulator_uses_first_non_null_value() -> Result<()> {
@@ -567,6 +683,43 @@ mod tests {
         let result = merged.evaluate(EmitTo::All)?;
         let expected =
             Arc::new(Int64Array::from(vec![Some(10), None, Some(30), None])) as ArrayRef;
+        assert_eq!(&result, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn bytes_groups_accumulator_supports_view_types_and_emit_first() -> Result<()> {
+        let mut strings = create_groups_accumulator(&DataType::Utf8View)?;
+        let values = Arc::new(StringViewArray::from(vec![
+            Some("first"),
+            Some("ignored"),
+            Some("remaining"),
+        ])) as ArrayRef;
+        strings.update_batch(&[values], &[0, 0, 1], None, 2)?;
+
+        let first = strings.evaluate(EmitTo::First(1))?;
+        let expected_first =
+            Arc::new(StringViewArray::from(vec![Some("first")])) as ArrayRef;
+        assert_eq!(&first, &expected_first);
+
+        let remaining = strings.evaluate(EmitTo::All)?;
+        let expected_remaining =
+            Arc::new(StringViewArray::from(vec![Some("remaining")])) as ArrayRef;
+        assert_eq!(&remaining, &expected_remaining);
+
+        let mut binary = create_groups_accumulator(&DataType::BinaryView)?;
+        let values = Arc::new(BinaryViewArray::from(vec![
+            Some(b"a".as_slice()),
+            None,
+            Some(b"b".as_slice()),
+        ])) as ArrayRef;
+        binary.update_batch(&[values], &[0, 1, 1], None, 3)?;
+        let result = binary.evaluate(EmitTo::All)?;
+        let expected = Arc::new(BinaryViewArray::from(vec![
+            Some(b"a".as_slice()),
+            Some(b"b".as_slice()),
+            None,
+        ])) as ArrayRef;
         assert_eq!(&result, &expected);
         Ok(())
     }

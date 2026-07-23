@@ -118,7 +118,7 @@ impl GroupsAccumulator for MinMaxStructAccumulator {
         let mut copy = MutableArrayData::new(min_maxes_refs, true, min_maxes_data.len());
 
         for (i, item) in min_maxes_data.iter().enumerate() {
-            copy.extend(i, 0, item.len());
+            copy.try_extend(i, 0, item.len())?;
         }
         let result = copy.freeze();
         assert_eq!(&self.inner.data_type, result.data_type());

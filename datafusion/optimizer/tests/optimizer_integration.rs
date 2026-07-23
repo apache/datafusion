@@ -74,20 +74,20 @@ fn recursive_cte_with_nested_subquery() -> Result<()> {
 
     assert_snapshot!(
         format!("{plan}"),
-        @r"
+        @"
     SubqueryAlias: numbers
-      Projection: sub.id AS id, sub.level AS level
-        RecursiveQuery: is_distinct=false
+      RecursiveQuery: is_distinct=false
+        Projection: sub.id AS id, sub.level AS level
           SubqueryAlias: sub
             Projection: test.col_int32 AS id, Int64(1) AS level
               TableScan: test projection=[col_int32]
-          Projection: t.col_int32, numbers.level + Int64(1)
-            Inner Join: CAST(t.col_int32 AS Int64) = CAST(numbers.id AS Int64) + Int64(1)
-              SubqueryAlias: t
-                Filter: CAST(test.col_int32 AS Int64) IS NOT NULL
-                  TableScan: test projection=[col_int32]
-              Filter: CAST(numbers.id AS Int64) + Int64(1) IS NOT NULL
-                TableScan: numbers projection=[id, level]
+        Projection: t.col_int32, numbers.level + Int64(1)
+          Inner Join: CAST(t.col_int32 AS Int64) = CAST(numbers.id AS Int64) + Int64(1)
+            SubqueryAlias: t
+              Filter: CAST(test.col_int32 AS Int64) IS NOT NULL
+                TableScan: test projection=[col_int32]
+            Filter: CAST(numbers.id AS Int64) + Int64(1) IS NOT NULL
+              TableScan: numbers projection=[id, level]
     "
     );
 
@@ -275,13 +275,12 @@ fn intersect() -> Result<()> {
     format!("{plan}"),
     @r"
     LeftSemi Join: left.col_int32 = test.col_int32, left.col_utf8 = test.col_utf8
-      Aggregate: groupBy=[[left.col_int32, left.col_utf8]], aggr=[[]]
-        LeftSemi Join: left.col_int32 = right.col_int32, left.col_utf8 = right.col_utf8
-          Aggregate: groupBy=[[left.col_int32, left.col_utf8]], aggr=[[]]
-            SubqueryAlias: left
-              TableScan: test projection=[col_int32, col_utf8]
-          SubqueryAlias: right
+      LeftSemi Join: left.col_int32 = right.col_int32, left.col_utf8 = right.col_utf8
+        Aggregate: groupBy=[[left.col_int32, left.col_utf8]], aggr=[[]]
+          SubqueryAlias: left
             TableScan: test projection=[col_int32, col_utf8]
+        SubqueryAlias: right
+          TableScan: test projection=[col_int32, col_utf8]
       TableScan: test projection=[col_int32, col_utf8]
     "
     );
@@ -795,7 +794,7 @@ fn extension_node_does_not_block_projection_pruning() -> Result<()> {
         Projection: t.a, CAST(t.ts AS Timestamp(ms, "UTC")) AS ts
           Filter: __common_expr_3 > TimestampMillisecond(1000, Some("UTC")) AND __common_expr_3 < TimestampMillisecond(2000, Some("UTC"))
             Projection: CAST(t.ts AS Timestamp(ms, "UTC")) AS __common_expr_3, t.a, t.ts
-              TableScan: t projection=[a, ts], partial_filters=[t.ts > TimestampNanosecond(1000000000, None), t.ts < TimestampNanosecond(2000000000, None), CAST(t.ts AS Timestamp(ms, "UTC")) > TimestampMillisecond(1000, Some("UTC")), CAST(t.ts AS Timestamp(ms, "UTC")) < TimestampMillisecond(2000, Some("UTC"))]
+              TableScan: t projection=[a, ts], partial_filters=[CAST(t.ts AS Timestamp(ms, "UTC")) > TimestampMillisecond(1000, Some("UTC")), CAST(t.ts AS Timestamp(ms, "UTC")) < TimestampMillisecond(2000, Some("UTC"))]
     "#,
     );
 
