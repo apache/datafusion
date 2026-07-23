@@ -850,6 +850,15 @@ SELECT to_hex(0)
 ----
 0
 
+query T
+SELECT to_hex(arrow_cast(a, 'Dictionary(Int32, Int64)'))
+FROM (VALUES (0), (10), (255), (NULL)) AS t(a)
+----
+0
+a
+ff
+NULL
+
 # negative values (two's complement encoding)
 query T
 SELECT to_hex(-1)
@@ -1549,6 +1558,30 @@ query T
 SELECT md5(NULL);
 ----
 NULL
+
+# md5 string and binary array inputs
+query BBBBBB
+SELECT
+  md5(column1) = md5('tom'),
+  md5(arrow_cast(column1, 'LargeUtf8')) = md5('tom'),
+  md5(arrow_cast(column1, 'Utf8View')) = md5('tom'),
+  md5(arrow_cast(column1, 'Binary')) = md5('tom'),
+  md5(arrow_cast(column1, 'LargeBinary')) = md5('tom'),
+  md5(arrow_cast(column1, 'BinaryView')) = md5('tom')
+FROM (VALUES ('tom'), (NULL)) AS t(column1);
+----
+true true true true true true
+NULL NULL NULL NULL NULL NULL
+
+# invalid argument count and type
+query error DataFusion error:
+SELECT md5();
+
+query error DataFusion error:
+SELECT md5('tom', 'extra');
+
+query error DataFusion error:
+SELECT md5(1);
 
 query ?
 SELECT digest('','md5');
