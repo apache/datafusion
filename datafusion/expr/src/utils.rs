@@ -665,9 +665,11 @@ pub fn find_aggregate_exprs<'a>(exprs: impl IntoIterator<Item = &'a Expr>) -> Ve
 /// logical plan is built rather than failing later with an error that does not
 /// point back at the original SQL.
 ///
-/// Callers do not need to invoke this directly: [`Aggregate::try_new`] and
-/// [`Window::try_new`] enforce the invariant for every way of building those
-/// nodes.
+/// [`Aggregate::try_new`] and [`Window::try_new`] call this, so the SQL planner
+/// and the `DataFrame`/`LogicalPlanBuilder` paths are checked without callers
+/// invoking it directly. The lower-level `try_new_with_schema` constructors and
+/// building a `Window` from its public fields bypass the check, so a caller
+/// that constructs those nodes by hand should call this itself.
 ///
 /// [`Aggregate::try_new`]: crate::logical_plan::Aggregate::try_new
 /// [`Window::try_new`]: crate::logical_plan::Window::try_new

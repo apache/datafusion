@@ -9645,6 +9645,10 @@ SELECT sum(sum(column2) OVER ()) OVER () FROM nested_agg_t;
 statement error DataFusion error: Error during planning: Window function calls cannot be nested
 SELECT row_number() OVER (ORDER BY row_number() OVER ()) FROM nested_agg_t;
 
+# ... including a window call nested in `PARTITION BY`
+statement error DataFusion error: Error during planning: Window function calls cannot be nested
+SELECT row_number() OVER (PARTITION BY row_number() OVER ()) FROM nested_agg_t;
+
 # A scalar function applied to an aggregate is legal
 query IR
 SELECT column1, abs(sum(column2)) FROM nested_agg_t GROUP BY column1 ORDER BY column1;
