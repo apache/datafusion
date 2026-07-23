@@ -146,3 +146,36 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[column1@0 = 1 as opt1, column1@0 = 2 AND column1@0 != 2 as noopt1, column1@0 = 4 as opt2, column1@0 != 5 AND column1@0 = 5 as noopt2]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Identity Date cast in a comparison predicate.
+# `cast(d AS date)` where `d` is already Date32 is an identity cast and should
+# fold away, so the predicate compares against the bare column `d`. This enables
+# downstream pruning / filter pushdown that expects a bare-column comparison.
+statement ok
+create table dates(d date) as values (DATE '2024-01-01'), (DATE '2024-01-02');
+
+query TT
+explain select d from dates where cast(d as date) = DATE '2024-01-01';
+----
+logical_plan
+01)Filter: dates.d = Date32("2024-01-01")
+02)--TableScan: dates projection=[d]
+physical_plan
+01)FilterExec: d@0 = 2024-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Identity Date cast inside an `IN` predicate. `IN` goes through a separate
+# validation and rewrite path but relies on the same literal-cast helper, so the
+# identity `cast(d AS date)` should likewise fold to a bare-column comparison.
+query TT
+explain select d from dates where cast(d as date) in (DATE '2024-01-01');
+----
+logical_plan
+01)Filter: dates.d = Date32("2024-01-01")
+02)--TableScan: dates projection=[d]
+physical_plan
+01)FilterExec: d@0 = 2024-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table dates;

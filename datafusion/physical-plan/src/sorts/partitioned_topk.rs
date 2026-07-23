@@ -355,7 +355,6 @@ impl ExecutionPlan for PartitionedTopKExec {
         crate::InputDistributionRequirements::new(vec![Distribution::KeyPartitioned(
             partition_exprs,
         )])
-        .allow_range_satisfaction_for_key_partitioning()
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
