@@ -504,9 +504,10 @@ ORDER BY
     round(sum(cs.total_revenue), 2) DESC
 "#;
 
-// ORDER BY a selected aggregate: the optimizer keeps a top-level Sort, so this
-// covers the direct `Sort` arm (the other sort caller, vs the projection-
-// absorbed one above).
+// ORDER BY a selected aggregate keeps a top-level Sort (the direct `Sort` arm,
+// vs the projection-absorbed one above). It resolves to the select alias, so
+// this covers routing only -- the normalization in that arm isn't reachable
+// from SQL (an unselected aggregate takes the absorbed path above instead).
 const ISSUE_23668_TOP_LEVEL_SORT_QUERY: &str = r#"
 SELECT
     date_part('year', c.signup_date) AS signup_year,
@@ -719,7 +720,8 @@ async fn optimized_duckdb_unparse_order_by_unqualifies_agg_input() -> Result<()>
 }
 
 #[tokio::test]
-async fn optimized_duckdb_unparse_top_level_sort_over_agg_stays_in_scope() -> Result<()> {
+async fn optimized_duckdb_unparse_top_level_sort_over_agg_uses_select_alias() -> Result<()>
+{
     let ctx = issue_23317_context()?;
     assert!(ctx.remove_optimizer_rule(SingleDistinctToGroupBy::new().name()));
 

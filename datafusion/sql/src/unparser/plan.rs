@@ -151,21 +151,15 @@ impl<'a> UnparserAggScope<'a> {
         }
     }
 
-    /// Unproject a sort expression onto its aggregate, then normalize it so
-    /// ORDER BY resolves against the same scope as every other clause in the
-    /// block. Associated fn taking `Option<&Self>` because a sort can appear
-    /// with no aggregate below it, in which case only unprojection applies.
+    /// Unproject a sort expression onto this aggregate, then normalize it so
+    /// ORDER BY uses the same scope as the other clauses.
     fn prepare_sort_expr(
-        scope: Option<&Self>,
+        &self,
         sort_expr: SortExpr,
         input: &LogicalPlan,
     ) -> Result<SortExpr> {
-        let mut sort_expr = unproject_sort_expr(sort_expr, scope.map(|s| s.agg), input)?;
-
-        if let Some(scope) = scope {
-            sort_expr.expr = scope.normalize(sort_expr.expr)?;
-        }
-
+        let mut sort_expr = unproject_sort_expr(sort_expr, Some(self.agg), input)?;
+        sort_expr.expr = self.normalize(sort_expr.expr)?;
         Ok(sort_expr)
     }
 }
@@ -476,6 +470,19 @@ impl Unparser<'_> {
         }
     }
 
+    /// Unproject a sort expression; normalize it when the sort is above an
+    /// aggregate, otherwise just unproject (no scope to normalize against).
+    fn unproject_sort_expr_in_scope(
+        sort_expr: SortExpr,
+        agg: Option<&Aggregate>,
+        input: &LogicalPlan,
+    ) -> Result<SortExpr> {
+        match agg {
+            Some(agg) => UnparserAggScope::new(agg).prepare_sort_expr(sort_expr, input),
+            None => unproject_sort_expr(sort_expr, None, input),
+        }
+    }
+
     fn derive(
         &self,
         plan: &LogicalPlan,
@@ -639,11 +646,9 @@ impl Unparser<'_> {
             window_expr
                 .iter()
                 .map(|expr| {
-                    // No scope normalization here. This agg-carrying branch is
-                    // only reached by a manually built plan (a Window with no
-                    // enclosing Projection). SQL always wraps a window function
-                    // in a projection, so real queries render through
-                    // reconstruct_select_statement, which normalizes instead.
+                    // No normalization: this agg branch is only reachable from a
+                    // hand-built plan. SQL wraps windows in a projection, which
+                    // reconstruct_select_statement handles (and normalizes).
                     let expr = if let Some(agg) = agg {
                         unproject_agg_exprs(expr.clone(), agg, None)?
                     } else {
@@ -1026,13 +1031,12 @@ impl Unparser<'_> {
                     let sort_exprs: Vec<SortExpr> = if fully_absorbed {
                         let agg =
                             find_agg_node_within_select(plan, select.already_projected());
-                        let unparser_agg_scope = agg.map(UnparserAggScope::new);
                         sort.expr
                             .iter()
                             .map(|sort_expr| {
-                                UnparserAggScope::prepare_sort_expr(
-                                    unparser_agg_scope.as_ref(),
+                                Self::unproject_sort_expr_in_scope(
                                     sort_expr.clone(),
+                                    agg,
                                     sort.input.as_ref(),
                                 )
                             })
@@ -1169,15 +1173,14 @@ impl Unparser<'_> {
                 };
 
                 let agg = find_agg_node_within_select(plan, select.already_projected());
-                let scope = agg.map(UnparserAggScope::new);
                 // unproject sort expressions
                 let sort_exprs: Vec<SortExpr> = sort
                     .expr
                     .iter()
                     .map(|sort_expr| {
-                        UnparserAggScope::prepare_sort_expr(
-                            scope.as_ref(),
+                        Self::unproject_sort_expr_in_scope(
                             sort_expr.clone(),
+                            agg,
                             sort.input.as_ref(),
                         )
                     })
