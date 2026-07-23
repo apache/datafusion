@@ -209,6 +209,31 @@ url = "2.5.7"
 uuid = "1.23"
 zstd = { version = "0.13", default-features = false }
 
+# TEMPORARY patch: points at an unreleased arrow-rs branch that adds the
+# dictionary-page decode API this branch's Parquet dictionary row-group
+# pruning depends on (arrow-rs issue #9010 / PR #9011, reimplemented at
+# https://github.com/DarkWanderer/arrow-rs/tree/get-dictionary). Remove
+# once arrow-rs releases a version with this API and the dependency
+# above is bumped to it -- do not merge this patch.
+[patch.crates-io]
+arrow = { git = "https://github.com/DarkWanderer/arrow-rs", branch = "get-dictionary" }
+arrow-arith = { git = "https://github.com/DarkWanderer/arrow-rs", branch = "get-dictionary" }
+arrow-array = { git = "https://github.com/DarkWanderer/arrow-rs", branch = "get-dictionary" }
+arrow-avro = { git = "https://github.com/DarkWanderer/arrow-rs", branch = "get-dictionary" }
+arrow-buffer = { git = "https://github.com/DarkWanderer/arrow-rs", branch = "get-dictionary" }
+arrow-cast = { git = "https://github.com/DarkWanderer/arrow-rs", branch = "get-dictionary" }
+arrow-csv = { git = "https://github.com/DarkWanderer/arrow-rs", branch = "get-dictionary" }
+arrow-data = { git = "https://github.com/DarkWanderer/arrow-rs", branch = "get-dictionary" }
+arrow-flight = { git = "https://github.com/DarkWanderer/arrow-rs", branch = "get-dictionary" }
+arrow-ipc = { git = "https://github.com/DarkWanderer/arrow-rs", branch = "get-dictionary" }
+arrow-json = { git = "https://github.com/DarkWanderer/arrow-rs", branch = "get-dictionary" }
+arrow-ord = { git = "https://github.com/DarkWanderer/arrow-rs", branch = "get-dictionary" }
+arrow-row = { git = "https://github.com/DarkWanderer/arrow-rs", branch = "get-dictionary" }
+arrow-schema = { git = "https://github.com/DarkWanderer/arrow-rs", branch = "get-dictionary" }
+arrow-select = { git = "https://github.com/DarkWanderer/arrow-rs", branch = "get-dictionary" }
+arrow-string = { git = "https://github.com/DarkWanderer/arrow-rs", branch = "get-dictionary" }
+parquet = { git = "https://github.com/DarkWanderer/arrow-rs", branch = "get-dictionary" }
+
 [workspace.lints.clippy]
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
 large_futures = "warn"
