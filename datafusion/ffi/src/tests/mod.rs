@@ -107,6 +107,8 @@ pub struct ForeignLibraryModule {
 
     pub create_empty_exec: extern "C" fn() -> FFI_ExecutionPlan,
 
+    pub create_order_sensitive_exec: extern "C" fn() -> FFI_ExecutionPlan,
+
     pub create_exec_with_statistics: extern "C" fn() -> FFI_ExecutionPlan,
 
     pub create_table_with_statistics:
@@ -158,6 +160,15 @@ pub(crate) extern "C" fn create_empty_exec() -> FFI_ExecutionPlan {
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
 
     let plan = Arc::new(EmptyExec::new(schema));
+    FFI_ExecutionPlan::new(plan, None)
+}
+
+pub(crate) extern "C" fn create_order_sensitive_exec() -> FFI_ExecutionPlan {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+    let child = Arc::new(EmptyExec::new(Arc::clone(&schema))) as _;
+    let plan = Arc::new(EmptyExec::new(schema).with_input_order_preservation(true))
+        .with_new_children(vec![child])
+        .expect("order-sensitive test plan should accept one child");
     FFI_ExecutionPlan::new(plan, None)
 }
 
@@ -259,6 +270,7 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_rank_udwf: create_ffi_rank_func,
         create_extension_options: config::create_extension_options,
         create_empty_exec,
+        create_order_sensitive_exec,
         create_exec_with_statistics,
         create_table_with_statistics,
         create_physical_optimizer_rule:
