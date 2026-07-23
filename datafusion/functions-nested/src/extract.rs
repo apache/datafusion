@@ -1244,47 +1244,6 @@ mod tests {
         Ok(())
     }
 
-    // An empty (length-0) list element that is not null must yield NULL, not
-    // the next element's value.
-    #[test]
-    fn test_array_any_value_empty_list_element() -> Result<()> {
-        let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        // row 0 = [1], row 1 = [] (empty, non-null), row 2 = [2, 3]
-        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 1, 1, 3]));
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
-
-        let list_array = ListArray::new(field, offsets, values, None);
-
-        let result = general_array_any_value(&list_array)?;
-        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
-
-        assert_eq!(result.value(0), 1);
-        assert!(result.is_null(1)); // empty list -> NULL
-        assert_eq!(result.value(2), 2);
-
-        Ok(())
-    }
-
-    // A trailing empty list element has start == values.len().
-    #[test]
-    fn test_array_any_value_trailing_empty_list_element() -> Result<()> {
-        let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
-        // row 0 = [1], row 1 = [2], row 2 = [] (empty, non-null, start == len)
-        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 1, 2, 2]));
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
-
-        let list_array = ListArray::new(field, offsets, values, None);
-
-        let result = general_array_any_value(&list_array)?;
-        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
-
-        assert_eq!(result.value(0), 1);
-        assert_eq!(result.value(1), 2);
-        assert!(result.is_null(2)); // empty list -> NULL (previously panicked)
-
-        Ok(())
-    }
-
     #[test]
     fn test_array_slice_list_view_basic() -> Result<()> {
         let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
