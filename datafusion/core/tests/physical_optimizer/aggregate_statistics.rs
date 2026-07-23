@@ -49,7 +49,9 @@ use datafusion_physical_plan::aggregates::AggregateMode;
 use datafusion_physical_plan::aggregates::PhysicalGroupBy;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::common;
+use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion_physical_plan::displayable;
+use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 
@@ -635,5 +637,139 @@ async fn topk_distinct_preserves_nulls() -> Result<()> {
     assert!(!result[0].column(0).is_null(0));
     assert!(!result[0].column(0).is_null(1));
 
+    Ok(())
+}
+
+/// A two-column Parquet source reporting the given `num_rows` statistic.
+fn parquet_source_with_num_rows(
+    schema: &Arc<Schema>,
+    num_rows: Precision<usize>,
+) -> Arc<dyn ExecutionPlan> {
+    let statistics = Statistics {
+        num_rows,
+        total_byte_size: Precision::Absent,
+        column_statistics: (0..schema.fields().len())
+            .map(|_| ColumnStatistics::default())
+            .collect(),
+    };
+    let config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::parse("test:///").unwrap(),
+        Arc::new(ParquetSource::new(Arc::clone(schema))),
+    )
+    .with_file(PartitionedFile::new("x".to_string(), 100))
+    .with_statistics(statistics)
+    .build();
+    DataSourceExec::from_data_source(config)
+}
+
+/// Build a flagged global Partial+Final `count(*)` aggregate over `source`.
+fn flagged_count_star_agg(
+    source: Arc<dyn ExecutionPlan>,
+    agg: &TestAggregate,
+) -> Result<AggregateExec> {
+    let schema = source.schema();
+    let partial_agg = AggregateExec::try_new(
+        AggregateMode::Partial,
+        PhysicalGroupBy::default(),
+        vec![Arc::new(agg.count_expr(&schema))],
+        vec![None],
+        source,
+        Arc::clone(&schema),
+    )?
+    .with_emit_no_rows_on_empty_input(true);
+
+    AggregateExec::try_new(
+        AggregateMode::Final,
+        PhysicalGroupBy::default(),
+        vec![Arc::new(agg.count_expr(&schema))],
+        vec![None],
+        Arc::new(partial_agg),
+        Arc::clone(&schema),
+    )
+    .map(|final_agg| final_agg.with_emit_no_rows_on_empty_input(true))
+}
+
+#[tokio::test]
+async fn test_flagged_count_exact_nonempty_is_optimized() -> Result<()> {
+    // Exact(3): provably non-empty, so the one-row stats rewrite is safe.
+    let source = mock_data()?;
+    let agg = TestAggregate::new_count_star();
+    let final_agg = flagged_count_star_agg(source, &agg)?;
+    assert_count_optim_success(final_agg, agg).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_flagged_count_exact_empty_becomes_empty_exec() -> Result<()> {
+    // Exact(0): provably empty, so the subtree becomes an EmptyExec.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, true),
+        Field::new("b", DataType::Int32, true),
+    ]));
+    let source = MemorySourceConfig::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+    let agg = TestAggregate::new_count_star();
+    let final_agg = flagged_count_star_agg(source, &agg)?;
+
+    let conf = ConfigOptions::new();
+    let optimized = AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
+    assert!(
+        optimized.is::<EmptyExec>(),
+        "expected EmptyExec, got {}",
+        optimized.name()
+    );
+
+    let task_ctx = Arc::new(TaskContext::default());
+    let result = common::collect(optimized.execute(0, task_ctx)?).await?;
+    let rows: usize = result.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(rows, 0, "EmptyExec must produce zero rows");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_flagged_count_inexact_is_not_optimized() -> Result<()> {
+    // Inexact: may be empty, so the runtime aggregate is kept (it honors the flag).
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, true),
+        Field::new("b", DataType::Int32, true),
+    ]));
+    let source = parquet_source_with_num_rows(&schema, Precision::Inexact(100));
+    let agg = TestAggregate::new_count_star();
+    let final_agg = flagged_count_star_agg(source, &agg)?;
+
+    let conf = ConfigOptions::new();
+    let optimized = AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
+    assert!(
+        optimized.is::<AggregateExec>(),
+        "expected AggregateExec (not optimized), got {}",
+        optimized.name()
+    );
+    Ok(())
+}
+
+#[test]
+fn test_flagged_agg_statistics_num_rows_precision() -> Result<()> {
+    // statistics_inner grades the flagged aggregate's row-count claim by input exactness.
+    let agg = TestAggregate::new_count_star();
+
+    // Exact(3) input -> Exact(1) output rows.
+    let final_agg = flagged_count_star_agg(mock_data()?, &agg)?;
+    let stats = StatisticsContext::new().compute(&final_agg, &StatisticsArgs::new())?;
+    assert_eq!(stats.num_rows, Precision::Exact(1));
+
+    // Exact(0) input -> Exact(0) output rows.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, true),
+        Field::new("b", DataType::Int32, true),
+    ]));
+    let empty = MemorySourceConfig::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+    let final_agg = flagged_count_star_agg(empty, &agg)?;
+    let stats = StatisticsContext::new().compute(&final_agg, &StatisticsArgs::new())?;
+    assert_eq!(stats.num_rows, Precision::Exact(0));
+
+    // Inexact input -> Inexact(1).
+    let source = parquet_source_with_num_rows(&schema, Precision::Inexact(100));
+    let final_agg = flagged_count_star_agg(source, &agg)?;
+    let stats = StatisticsContext::new().compute(&final_agg, &StatisticsArgs::new())?;
+    assert_eq!(stats.num_rows, Precision::Inexact(1));
     Ok(())
 }

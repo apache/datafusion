@@ -65,9 +65,7 @@ impl OptimizerRule for EliminateGroupByConstant {
                     .iter()
                     .partition(|expr| is_redundant_group_expr(expr, &group_by_columns));
 
-                if redundant.is_empty()
-                    || (required.is_empty() && aggregate.aggr_expr.is_empty())
-                {
+                if redundant.is_empty() || required.is_empty() {
                     return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
                 }
 
@@ -221,16 +219,17 @@ mod tests {
     }
 
     #[test]
-    fn test_eliminate_constant() -> Result<()> {
+    fn test_no_eliminate_all_constant_group_exprs() -> Result<()> {
+        // Collapsing an all-constant GROUP BY to a global aggregate breaks
+        // empty-input cardinality (issue #11748); the rule must decline.
         let scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(scan)
             .aggregate(vec![lit("test"), lit(123u32)], vec![count(col("c"))])?
             .build()?;
 
         assert_optimized_plan_equal!(plan, @r#"
-        Projection: Utf8("test"), UInt32(123), count(test.c)
-          Aggregate: groupBy=[[]], aggr=[[count(test.c)]]
-            TableScan: test
+        Aggregate: groupBy=[[Utf8("test"), UInt32(123)]], aggr=[[count(test.c)]]
+          TableScan: test
         "#)
     }
 

@@ -99,7 +99,11 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                     input_agg_exec.input_schema(),
                 )
                 .map(|combined_agg| {
-                    combined_agg.with_limit_options(agg_exec.limit_options())
+                    combined_agg
+                        .with_limit_options(agg_exec.limit_options())
+                        .with_emit_no_rows_on_empty_input(
+                            agg_exec.emit_no_rows_on_empty_input(),
+                        )
                 })
                 .ok()
                 .map(Arc::new)

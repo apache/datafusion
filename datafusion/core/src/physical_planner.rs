@@ -99,7 +99,7 @@ use datafusion_expr::{
 use datafusion_physical_expr::aggregate::{
     AggregateFunctionExpr, LoweredAggregate, LoweredAggregateBuilder,
 };
-use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr::expressions::{Column as PhysicalColumn, Literal};
 use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr, create_physical_sort_exprs,
 };
@@ -1049,6 +1049,7 @@ impl DefaultPhysicalPlanner {
                 input,
                 group_expr,
                 aggr_expr,
+                schema,
                 ..
             }) => {
                 let options = session_state.config().options();
@@ -1121,13 +1122,22 @@ impl DefaultPhysicalPlanner {
                     );
                 }
 
-                let groups = self.create_grouping_physical_expr(
-                    group_expr,
-                    logical_input_schema,
-                    &physical_input_schema,
-                    execution_props,
-                    planning_ctx,
-                )?;
+                // No-aggregate all-constant GROUP BY keeps the grouped path,
+                // mirroring EliminateGroupByConstant's guard.
+                let emit_no_rows_on_empty_input =
+                    is_all_literal_group_by(group_expr) && !aggr_expr.is_empty();
+
+                let groups = if emit_no_rows_on_empty_input {
+                    PhysicalGroupBy::default()
+                } else {
+                    self.create_grouping_physical_expr(
+                        group_expr,
+                        logical_input_schema,
+                        &physical_input_schema,
+                        execution_props,
+                        planning_ctx,
+                    )?
+                };
 
                 let agg_filter = aggr_expr
                     .iter()
@@ -1192,14 +1202,17 @@ impl DefaultPhysicalPlanner {
                     input_exec
                 };
 
-                let initial_aggr = Arc::new(AggregateExec::try_new(
-                    AggregateMode::Partial,
-                    groups.clone(),
-                    aggregates,
-                    filters.clone(),
-                    input_exec,
-                    Arc::clone(&physical_input_schema),
-                )?);
+                let initial_aggr = Arc::new(
+                    AggregateExec::try_new(
+                        AggregateMode::Partial,
+                        groups.clone(),
+                        aggregates,
+                        filters.clone(),
+                        input_exec,
+                        Arc::clone(&physical_input_schema),
+                    )?
+                    .with_emit_no_rows_on_empty_input(emit_no_rows_on_empty_input),
+                );
 
                 let can_repartition = !groups.is_empty()
                     && session_state.config().target_partitions() > 1
@@ -1223,14 +1236,59 @@ impl DefaultPhysicalPlanner {
 
                 let final_grouping_set = initial_aggr.group_expr().as_final();
 
-                Arc::new(AggregateExec::try_new(
-                    next_partition_mode,
-                    final_grouping_set,
-                    updated_aggregates,
-                    filters,
-                    initial_aggr,
-                    Arc::clone(&physical_input_schema),
-                )?)
+                let final_aggr = Arc::new(
+                    AggregateExec::try_new(
+                        next_partition_mode,
+                        final_grouping_set,
+                        updated_aggregates,
+                        filters,
+                        initial_aggr,
+                        Arc::clone(&physical_input_schema),
+                    )?
+                    .with_emit_no_rows_on_empty_input(emit_no_rows_on_empty_input),
+                );
+                if emit_no_rows_on_empty_input {
+                    let final_schema = final_aggr.schema();
+                    let mut projections: Vec<ProjectionExpr> = Vec::with_capacity(
+                        group_expr.len() + final_schema.fields().len(),
+                    );
+                    for (i, gexpr) in group_expr.iter().enumerate() {
+                        let physical_literal = create_physical_expr(
+                            gexpr,
+                            logical_input_schema,
+                            execution_props,
+                            planning_ctx,
+                        )?;
+                        let output_field = schema.field(i);
+                        let literal_type =
+                            physical_literal.data_type(final_schema.as_ref())?;
+
+                        if &literal_type != output_field.data_type() {
+                            return internal_err!(
+                                "GROUP BY constant literal type {literal_type} does not \
+                                   match aggregate output field '{}' type {}",
+                                output_field.name(),
+                                output_field.data_type()
+                            );
+                        }
+                        projections.push(ProjectionExpr {
+                            expr: physical_literal,
+                            alias: output_field.name().to_string(),
+                        });
+                    }
+
+                    for (j, agg_field) in final_schema.fields().iter().enumerate() {
+                        let output_field = schema.field(group_expr.len() + j);
+                        projections.push(ProjectionExpr {
+                            expr: Arc::new(PhysicalColumn::new(agg_field.name(), j)),
+                            alias: output_field.name().to_string(),
+                        });
+                    }
+
+                    Arc::new(ProjectionExec::try_new(projections, final_aggr)?)
+                } else {
+                    final_aggr
+                }
             }
             LogicalPlan::Projection(Projection { input, expr, .. }) => self
                 .create_project_physical_exec_with_props(
@@ -3232,6 +3290,19 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
     }
 }
 
+// All group exprs are (possibly aliased) literals; used to flag the
+// global-aggregate rewrite in the `LogicalPlan::Aggregate` arm.
+fn is_all_literal_group_by(group_expr: &[Expr]) -> bool {
+    fn is_literal(e: &Expr) -> bool {
+        match e {
+            Expr::Alias(a) => is_literal(&a.expr),
+            Expr::Literal(..) => true,
+            _ => false,
+        }
+    }
+    !group_expr.is_empty() && group_expr.iter().all(is_literal)
+}
+
 struct OptimizationInvariantChecker<'a> {
     rule: &'a Arc<dyn PhysicalOptimizerRule + Send + Sync>,
 }
@@ -3425,6 +3496,30 @@ mod tests {
 
     fn int64_field(name: &str, nullable: bool) -> Field {
         Field::new(name, DataType::Int64, nullable)
+    }
+
+    #[tokio::test]
+    async fn test_all_constant_group_by_plans_flagged_global_aggregate() -> Result<()> {
+        let schema = Schema::new(vec![int64_field("c", true)]);
+        let logical_plan = scan_empty(None, &schema, None)?
+            .aggregate(vec![lit(1_i64)], vec![count_all()])?
+            .build()?;
+
+        // create_initial_plan skips physical optimizer passes, so
+        // AggregateStatistics can't collapse the flagged aggregate first.
+        let planner = DefaultPhysicalPlanner::default();
+        let physical_plan = planner
+            .create_initial_plan(&logical_plan, &make_session_state())
+            .await?;
+        let explain = displayable(physical_plan.as_ref()).indent(true).to_string();
+
+        // Flagged global aggregate (empty gby) under a ProjectionExec.
+        assert_contains!(&explain, "emit_no_rows_on_empty_input=true");
+        assert_contains!(&explain, "AggregateExec: mode=");
+        assert_contains!(&explain, ", gby=[]");
+        assert_contains!(&explain, "ProjectionExec");
+
+        Ok(())
     }
 
     #[tokio::test]

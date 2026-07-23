@@ -157,6 +157,9 @@ impl serde::Serialize for AggregateExecNode {
         if self.dynamic_filter.is_some() {
             len += 1;
         }
+        if self.emit_no_rows_on_empty_input {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.AggregateExecNode", len)?;
         if !self.group_expr.is_empty() {
             struct_ser.serialize_field("groupExpr", &self.group_expr)?;
@@ -199,6 +202,9 @@ impl serde::Serialize for AggregateExecNode {
         if let Some(v) = self.dynamic_filter.as_ref() {
             struct_ser.serialize_field("dynamicFilter", v)?;
         }
+        if self.emit_no_rows_on_empty_input {
+            struct_ser.serialize_field("emitNoRowsOnEmptyInput", &self.emit_no_rows_on_empty_input)?;
+        }
         struct_ser.end()
     }
 }
@@ -231,6 +237,8 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
             "hasGroupingSet",
             "dynamic_filter",
             "dynamicFilter",
+            "emit_no_rows_on_empty_input",
+            "emitNoRowsOnEmptyInput",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -248,6 +256,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
             Limit,
             HasGroupingSet,
             DynamicFilter,
+            EmitNoRowsOnEmptyInput,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -282,6 +291,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                             "limit" => Ok(GeneratedField::Limit),
                             "hasGroupingSet" | "has_grouping_set" => Ok(GeneratedField::HasGroupingSet),
                             "dynamicFilter" | "dynamic_filter" => Ok(GeneratedField::DynamicFilter),
+                            "emitNoRowsOnEmptyInput" | "emit_no_rows_on_empty_input" => Ok(GeneratedField::EmitNoRowsOnEmptyInput),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -314,6 +324,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                 let mut limit__ = None;
                 let mut has_grouping_set__ = None;
                 let mut dynamic_filter__ = None;
+                let mut emit_no_rows_on_empty_input__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::GroupExpr => {
@@ -394,6 +405,12 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                             }
                             dynamic_filter__ = map_.next_value()?;
                         }
+                        GeneratedField::EmitNoRowsOnEmptyInput => {
+                            if emit_no_rows_on_empty_input__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("emitNoRowsOnEmptyInput"));
+                            }
+                            emit_no_rows_on_empty_input__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(AggregateExecNode {
@@ -410,6 +427,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                     limit: limit__,
                     has_grouping_set: has_grouping_set__.unwrap_or_default(),
                     dynamic_filter: dynamic_filter__,
+                    emit_no_rows_on_empty_input: emit_no_rows_on_empty_input__.unwrap_or_default(),
                 })
             }
         }

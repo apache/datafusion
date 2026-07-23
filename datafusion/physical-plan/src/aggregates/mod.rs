@@ -864,6 +864,11 @@ pub struct AggregateExec {
     /// it remains `Some(..)` to enable dynamic filtering during aggregate execution;
     /// otherwise, it is cleared to `None`.
     dynamic_filter: Option<Arc<AggrDynFilter>>,
+
+    /// True only when this global aggregate is the physical-planner rewrite of
+    /// a grouping aggregate whose GROUP BY keys were all constants; it must
+    /// emit zero rows on empty input. Never true for a genuine global aggregate.
+    emit_no_rows_on_empty_input: bool,
 }
 
 impl AggregateExec {
@@ -889,6 +894,7 @@ impl AggregateExec {
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
             dynamic_filter: self.dynamic_filter.clone(),
+            emit_no_rows_on_empty_input: self.emit_no_rows_on_empty_input,
         }
     }
 
@@ -909,6 +915,7 @@ impl AggregateExec {
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
             dynamic_filter: self.dynamic_filter.clone(),
+            emit_no_rows_on_empty_input: self.emit_no_rows_on_empty_input,
         }
     }
 
@@ -1044,6 +1051,7 @@ impl AggregateExec {
             input_order_mode,
             cache: Arc::new(cache),
             dynamic_filter: None,
+            emit_no_rows_on_empty_input: false,
         };
 
         exec.init_dynamic_filter();
@@ -1126,6 +1134,17 @@ impl AggregateExec {
             supported_accumulators_info: dyn_filter.supported_accumulators_info.clone(),
         }));
         Ok(self)
+    }
+
+    /// Sets `emit_no_rows_on_empty_input`; see the field doc for the invariant.
+    pub fn with_emit_no_rows_on_empty_input(mut self, value: bool) -> Self {
+        self.emit_no_rows_on_empty_input = value;
+        self
+    }
+
+    /// Whether this global aggregate must emit zero rows on empty input.
+    pub fn emit_no_rows_on_empty_input(&self) -> bool {
+        self.emit_no_rows_on_empty_input
     }
 
     /// Input plan
@@ -1834,6 +1853,9 @@ impl DisplayAs for AggregateExec {
                 if self.input_order_mode != InputOrderMode::Linear {
                     write!(f, ", ordering_mode={:?}", self.input_order_mode)?;
                 }
+                if self.emit_no_rows_on_empty_input {
+                    write!(f, ", emit_no_rows_on_empty_input=true")?;
+                }
             }
             DisplayFormatType::TreeRender => {
                 let format_expr_with_alias =
@@ -1993,6 +2015,7 @@ impl ExecutionPlan for AggregateExec {
         )?;
         me.limit_options = self.limit_options;
         me.dynamic_filter.clone_from(&self.dynamic_filter);
+        me.emit_no_rows_on_empty_input = self.emit_no_rows_on_empty_input;
 
         Ok(Arc::new(me))
     }
@@ -2722,6 +2745,183 @@ mod tests {
     use datafusion_physical_expr::projection::ProjectionExpr;
     use futures::{FutureExt, Stream, StreamExt};
     use insta::{allow_duplicates, assert_snapshot};
+
+    fn v_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, true)]))
+    }
+
+    fn v_batch(schema: &SchemaRef, values: Vec<i64>) -> RecordBatch {
+        RecordBatch::try_new(Arc::clone(schema), vec![Arc::new(Int64Array::from(values))])
+            .unwrap()
+    }
+
+    /// The Int64 count in the single output row.
+    fn count_value(batches: &[RecordBatch]) -> i64 {
+        batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0)
+    }
+
+    /// Build a global (no grouping) Single-mode `count(v)` aggregate over the
+    /// given input batches, optionally flagged and optionally FILTERed.
+    fn global_count_agg(
+        schema: &SchemaRef,
+        batches: Vec<RecordBatch>,
+        filter: Option<Arc<dyn PhysicalExpr>>,
+        emit_no_rows_on_empty_input: bool,
+    ) -> Result<Arc<AggregateExec>> {
+        let count_expr = AggregateExprBuilder::new(count_udaf(), vec![col("v", schema)?])
+            .schema(Arc::clone(schema))
+            .alias("count(v)")
+            .build()
+            .map(Arc::new)?;
+        let input = TestMemoryExec::try_new_exec(&[batches], Arc::clone(schema), None)?;
+        let agg = AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::default(),
+            vec![count_expr],
+            vec![filter],
+            input,
+            Arc::clone(schema),
+        )?
+        .with_emit_no_rows_on_empty_input(emit_no_rows_on_empty_input);
+        Ok(Arc::new(agg))
+    }
+
+    #[tokio::test]
+    async fn flagged_global_agg_empty_input_emits_no_rows() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = v_schema();
+        let agg = global_count_agg(&schema, vec![], None, true)?;
+        let batches = collect(agg.execute(0, task_ctx)?).await?;
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert!(batches.is_empty(), "expected no batches, got {batches:?}");
+        assert_eq!(rows, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unflagged_global_agg_empty_input_emits_one_row() -> Result<()> {
+        // Guards the default: a plain global aggregate still emits one row.
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = v_schema();
+        let agg = global_count_agg(&schema, vec![], None, false)?;
+        let batches = collect(agg.execute(0, task_ctx)?).await?;
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 1);
+        assert_eq!(count_value(&batches), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn flagged_global_agg_nonempty_input_emits_one_row() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = v_schema();
+        let batch = v_batch(&schema, vec![1, 2, 3]);
+        let agg = global_count_agg(&schema, vec![batch], None, true)?;
+        let batches = collect(agg.execute(0, task_ctx)?).await?;
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 1);
+        assert_eq!(count_value(&batches), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn flagged_global_agg_rebuilds_preserve_flag() -> Result<()> {
+        // Hand-written clone-constructors must copy the flag.
+        let schema = v_schema();
+        let agg = global_count_agg(&schema, vec![], None, true)?;
+        assert!(
+            agg.with_new_aggr_exprs(agg.aggr_expr().to_vec())
+                .emit_no_rows_on_empty_input()
+        );
+        assert!(
+            agg.with_new_limit_options(None)
+                .emit_no_rows_on_empty_input()
+        );
+        Ok(())
+    }
+
+    /// Flagged Partial per partition -> CoalescePartitions -> flagged Final.
+    fn flagged_partial_final(
+        schema: &SchemaRef,
+        partitions: Vec<Vec<RecordBatch>>,
+    ) -> Result<Arc<AggregateExec>> {
+        let count_expr = AggregateExprBuilder::new(count_udaf(), vec![col("v", schema)?])
+            .schema(Arc::clone(schema))
+            .alias("count(v)")
+            .build()
+            .map(Arc::new)?;
+        let input = TestMemoryExec::try_new_exec(&partitions, Arc::clone(schema), None)?;
+        let partial = Arc::new(
+            AggregateExec::try_new(
+                AggregateMode::Partial,
+                PhysicalGroupBy::default(),
+                vec![Arc::clone(&count_expr)],
+                vec![None],
+                input,
+                Arc::clone(schema),
+            )?
+            .with_emit_no_rows_on_empty_input(true),
+        );
+        let coalesce = Arc::new(CoalescePartitionsExec::new(partial));
+        AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::default(),
+            vec![count_expr],
+            vec![None],
+            coalesce,
+            Arc::clone(schema),
+        )
+        .map(|f| Arc::new(f.with_emit_no_rows_on_empty_input(true)))
+    }
+
+    #[tokio::test]
+    async fn flagged_partial_final_mixed_empty_partitions() -> Result<()> {
+        // An empty partition's Partial emits nothing; the Final merges the rest.
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = v_schema();
+        let agg = flagged_partial_final(
+            &schema,
+            vec![vec![v_batch(&schema, vec![1, 2, 3])], vec![]],
+        )?;
+        let batches = collect(agg.execute(0, task_ctx)?).await?;
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 1);
+        assert_eq!(count_value(&batches), 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn flagged_partial_final_all_empty_partitions() -> Result<()> {
+        // All Partials silent -> the Final sees zero input rows and emits nothing.
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = v_schema();
+        let agg = flagged_partial_final(&schema, vec![vec![], vec![]])?;
+        let batches = collect(agg.execute(0, task_ctx)?).await?;
+        assert!(batches.is_empty(), "expected no batches, got {batches:?}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn flagged_global_agg_all_filtered_nonempty_emits_one_row() -> Result<()> {
+        // FILTER nuance: raw input rows are counted BEFORE the per-aggregate
+        // FILTER, so a flagged aggregate whose FILTER rejects every row still
+        // emits one row (with count 0) because input rows existed.
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = v_schema();
+        let batch = v_batch(&schema, vec![1, 2, 3]);
+        let filter = lit(false);
+        let agg = global_count_agg(&schema, vec![batch], Some(filter), true)?;
+        let batches = collect(agg.execute(0, task_ctx)?).await?;
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 1);
+        assert_eq!(count_value(&batches), 0);
+        Ok(())
+    }
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
     fn create_test_schema() -> Result<SchemaRef> {

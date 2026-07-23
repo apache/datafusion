@@ -60,10 +60,9 @@ FROM test_table t
 group by 1, 2, 3
 ----
 logical_plan
-01)Projection: Int64(123), Int64(456), Int64(789), count(Int64(1)), avg(t.c12)
-02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), avg(t.c12)]]
-03)----SubqueryAlias: t
-04)------TableScan: test_table projection=[c12]
+01)Aggregate: groupBy=[[Int64(123), Int64(456), Int64(789)]], aggr=[[count(Int64(1)), avg(t.c12)]]
+02)--SubqueryAlias: t
+03)----TableScan: test_table projection=[c12]
 
 query TT
 EXPLAIN 
@@ -72,8 +71,8 @@ FROM test_table t
 GROUP BY 1, 2
 ----
 logical_plan
-01)Projection: Date32("2023-05-04") AS dt, Boolean(true) AS today_filter, count(Int64(1))
-02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+01)Projection: to_date(Utf8("2023-05-04")) AS dt, date_part(Utf8("DAY"),now()) < Int64(1000) AS today_filter, count(Int64(1))
+02)--Aggregate: groupBy=[[Date32("2023-05-04") AS to_date(Utf8("2023-05-04")), Boolean(true) AS date_part(Utf8("DAY"),now()) < Int64(1000)]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: t
 04)------TableScan: test_table projection=[]
 
@@ -90,10 +89,9 @@ FROM test_table t
 GROUP BY 1
 ----
 logical_plan
-01)Projection: Boolean(true) AS NOT date_part(Utf8("MONTH"),now()) BETWEEN Int64(50) AND Int64(60), count(Int64(1))
-02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-03)----SubqueryAlias: t
-04)------TableScan: test_table projection=[]
+01)Aggregate: groupBy=[[Boolean(true) AS NOT date_part(Utf8("MONTH"),now()) BETWEEN Int64(50) AND Int64(60)]], aggr=[[count(Int64(1))]]
+02)--SubqueryAlias: t
+03)----TableScan: test_table projection=[]
 
 query TT
 EXPLAIN 
@@ -117,9 +115,49 @@ logical_plan
 02)--SubqueryAlias: t
 03)----TableScan: test_table projection=[]
 
+# issue #11748: the physical planner recovers the optimization as a flagged
+# global AggregateExec + ProjectionExec (see the logical-plan declines above)
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+query TT
+EXPLAIN
+SELECT 123, count(1), avg(c12)
+FROM test_table t
+GROUP BY 1
+----
+logical_plan
+01)Aggregate: groupBy=[[Int64(123)]], aggr=[[count(Int64(1)), avg(t.c12)]]
+02)--SubqueryAlias: t
+03)----TableScan: test_table projection=[c12]
+physical_plan
+01)ProjectionExec: expr=[123 as Int64(123), count(Int64(1))@0 as count(Int64(1)), avg(t.c12)@1 as avg(t.c12)]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), avg(t.c12)], emit_no_rows_on_empty_input=true
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c12], file_type=csv, has_header=true
+
+# Aliased literal keys unwrap to the same flagged rewrite.
+query TT
+EXPLAIN
+SELECT 123 AS x, count(1)
+FROM test_table t
+GROUP BY 1
+----
+logical_plan
+01)Projection: Int64(123) AS x, count(Int64(1))
+02)--Aggregate: groupBy=[[Int64(123)]], aggr=[[count(Int64(1))]]
+03)----SubqueryAlias: t
+04)------TableScan: test_table projection=[]
+physical_plan
+01)ProjectionExec: expr=[123 as x, count(Int64(1))@0 as count(Int64(1))]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))], emit_no_rows_on_empty_input=true
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, file_type=csv, has_header=true
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
 # Config reset
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;
