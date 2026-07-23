@@ -17,13 +17,8 @@
 
 //! Input distribution requirements for physical execution plans.
 
-use std::sync::Arc;
-
-use datafusion_common::{Result, ScalarValue, internal_err, validate_range_split_points};
-use datafusion_physical_expr::{
-    Distribution, EquivalenceProperties, Partitioning, PartitioningSatisfaction,
-    PhysicalExpr, RangePartitioning, physical_exprs_equal,
-};
+use datafusion_common::{Result, internal_err};
+use datafusion_physical_expr::{Distribution, Partitioning, PartitioningSatisfaction};
 
 use crate::execution_plan::{ExecutionPlan, ExecutionPlanProperties, InvariantLevel};
 
