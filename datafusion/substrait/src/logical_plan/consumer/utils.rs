@@ -322,7 +322,7 @@ pub(super) fn ensure_schema_compatibility(
 ///
 /// If a Substrait field is not nullable, the Substrait plan may be built around assuming it is not
 /// nullable. As such if DataFusion has that field as nullable the plan should be rejected.
-fn ensure_field_compatibility(
+pub(super) fn ensure_field_compatibility(
     datafusion_field: &Field,
     substrait_field: &Field,
 ) -> datafusion::common::Result<()> {

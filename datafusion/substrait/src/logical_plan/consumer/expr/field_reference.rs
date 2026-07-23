@@ -16,7 +16,9 @@
 // under the License.
 
 use crate::logical_plan::consumer::SubstraitConsumer;
-use datafusion::common::{Column, DFSchema, not_impl_err, substrait_err};
+use datafusion::common::{
+    Column, DFSchema, not_impl_err, substrait_datafusion_err, substrait_err,
+};
 use datafusion::logical_expr::Expr;
 use std::sync::Arc;
 use substrait::proto::expression::FieldReference;
@@ -45,11 +47,20 @@ pub(crate) fn from_substrait_field_reference(
                         "Direct reference StructField with child is not supported"
                     );
                 }
-                let field_idx = struct_field.field as usize;
+                let field_idx = field_reference_index(struct_field.field)?;
                 match &field_ref.root_type {
-                    Some(RootType::RootReference(_)) | None => Ok(Expr::Column(
-                        Column::from(input_schema.qualified_field(field_idx)),
-                    )),
+                    Some(RootType::RootReference(_)) | None => {
+                        if field_idx >= input_schema.fields().len() {
+                            return substrait_err!(
+                                "Field reference index {} is out of bounds for input schema with {} fields",
+                                field_idx,
+                                input_schema.fields().len()
+                            );
+                        }
+                        Ok(Expr::Column(Column::from(
+                            input_schema.qualified_field(field_idx),
+                        )))
+                    }
                     Some(RootType::OuterReference(outer_ref)) => {
                         resolve_outer_reference(consumer, outer_ref, field_idx)
                     }
@@ -69,6 +80,11 @@ pub(crate) fn from_substrait_field_reference(
     }
 }
 
+fn field_reference_index(field: i32) -> datafusion::common::Result<usize> {
+    usize::try_from(field)
+        .map_err(|_| substrait_datafusion_err!("Invalid field reference index: {field}"))
+}
+
 fn resolve_outer_reference(
     consumer: &impl SubstraitConsumer,
     outer_ref: &substrait::proto::expression::field_reference::OuterReference,
@@ -81,6 +97,13 @@ fn resolve_outer_reference(
              but no outer schema is available"
         );
     };
+    if field_idx >= outer_schema.fields().len() {
+        return substrait_err!(
+            "OuterReference field index {} is out of bounds for outer schema with {} fields",
+            field_idx,
+            outer_schema.fields().len()
+        );
+    }
     let (qualifier, field) = outer_schema.qualified_field(field_idx);
     let col = Column::from((qualifier, field));
     Ok(Expr::OuterReferenceColumn(Arc::clone(field), col))
@@ -88,7 +111,10 @@ fn resolve_outer_reference(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use datafusion::{
+        arrow::datatypes::{DataType, Field},
         common::{DFSchema, assert_contains},
         prelude::SessionContext,
     };
@@ -152,6 +178,61 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_root_reference_invalid_field_idx() {
+        let extensions = Extensions::default();
+        let session_state = SessionContext::new().state();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &session_state);
+        let input_schema = DFSchema::new_with_metadata(
+            vec![(None, Arc::new(Field::new("a", DataType::Int64, true)))],
+            Default::default(),
+        )
+        .unwrap();
+
+        for (field, expected) in [
+            (-1, "Invalid field reference index: -1"),
+            (
+                1,
+                "Field reference index 1 is out of bounds for input schema with 1 fields",
+            ),
+        ] {
+            let err =
+                from_field_reference(&consumer, &root_field_ref(field), &input_schema)
+                    .await
+                    .unwrap_err();
+
+            assert_contains!(err.to_string(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_outer_reference_invalid_field_idx() {
+        let extensions = Extensions::default();
+        let session_state = SessionContext::new().state();
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &session_state);
+        let outer_schema = Arc::new(
+            DFSchema::new_with_metadata(
+                vec![(None, Arc::new(Field::new("a", DataType::Int64, true)))],
+                Default::default(),
+            )
+            .unwrap(),
+        );
+        consumer.push_outer_schema(outer_schema);
+
+        let err = from_field_reference(
+            &consumer,
+            &outer_field_ref(1, 1),
+            DFSchema::empty_ref(),
+        )
+        .await
+        .unwrap_err();
+
+        assert_contains!(
+            err.to_string(),
+            "OuterReference field index 1 is out of bounds for outer schema with 1 fields"
+        );
+    }
+
     fn lambda_field_ref(field: i32, steps_out: u32) -> FieldReference {
         FieldReference {
             reference_type: Some(field_reference::ReferenceType::DirectReference(
@@ -164,6 +245,34 @@ mod tests {
             root_type: Some(RootType::LambdaParameterReference(
                 LambdaParameterReference { steps_out },
             )),
+        }
+    }
+
+    fn root_field_ref(field: i32) -> FieldReference {
+        FieldReference {
+            reference_type: Some(field_reference::ReferenceType::DirectReference(
+                ReferenceSegment {
+                    reference_type: Some(ReferenceType::StructField(Box::new(
+                        StructField { field, child: None },
+                    ))),
+                },
+            )),
+            root_type: Some(RootType::RootReference(field_reference::RootReference {})),
+        }
+    }
+
+    fn outer_field_ref(field: i32, steps_out: u32) -> FieldReference {
+        FieldReference {
+            reference_type: Some(field_reference::ReferenceType::DirectReference(
+                ReferenceSegment {
+                    reference_type: Some(ReferenceType::StructField(Box::new(
+                        StructField { field, child: None },
+                    ))),
+                },
+            )),
+            root_type: Some(RootType::OuterReference(field_reference::OuterReference {
+                steps_out,
+            })),
         }
     }
 }
