@@ -267,6 +267,23 @@ impl<'a> BinaryTypeCoercer<'a> {
                 ret: Int64,
             });
         }
+        Plus | Minus if is_time_interval_arithmetic(lhs, rhs, self.op) => {
+            // `time ± interval` yields a `time` wrapped within the 24-hour clock,
+            // matching PostgreSQL and DuckDB (e.g. `time '23:30' + interval '2 hours'`
+            // is `01:30:00`). The interval is normalized to `MonthDayNano`; the time
+            // operand keeps its own unit and is also the result type -- mirroring
+            // `timestamp/date + interval`, which preserve their unit and apply the
+            // interval at that resolution. So, like `timestamp(s) + interval
+            // '1 nanosecond'`, `time(s) + interval '1 nanosecond'` is a no-op rather
+            // than widening the type.
+            let (lhs, rhs, ret) = match (lhs, rhs) {
+                (Interval(_), time) => {
+                    (Interval(MonthDayNano), time.clone(), time.clone())
+                }
+                (time, _) => (time.clone(), Interval(MonthDayNano), time.clone()),
+            };
+            return Ok(Signature { lhs, rhs, ret });
+        }
         Plus | Minus | Multiply | Divide | Modulo  =>  {
             if let Ok(ret) = self.get_result(lhs, rhs) {
 
@@ -360,6 +377,23 @@ fn is_date_minus_date(lhs: &DataType, rhs: &DataType) -> bool {
         (lhs, rhs),
         (DataType::Date32, DataType::Date32) | (DataType::Date64, DataType::Date64)
     )
+}
+
+/// Returns true for `time + interval`, `interval + time`, or `time - interval`.
+///
+/// These follow PostgreSQL/DuckDB semantics where the result is a `time` value
+/// wrapped within the 24-hour clock, rather than being widened to an interval.
+fn is_time_interval_arithmetic(lhs: &DataType, rhs: &DataType, op: &Operator) -> bool {
+    use DataType::{Interval, Time32, Time64};
+    match op {
+        Operator::Plus => matches!(
+            (lhs, rhs),
+            (Time32(_) | Time64(_), Interval(_)) | (Interval(_), Time32(_) | Time64(_))
+        ),
+        // `interval - time` is not meaningful, so only `time - interval` is accepted.
+        Operator::Minus => matches!((lhs, rhs), (Time32(_) | Time64(_), Interval(_))),
+        _ => false,
+    }
 }
 
 /// Coercion rules for mathematics operators between decimal and non-decimal types.
