@@ -211,10 +211,10 @@ zstd = { version = "0.13", default-features = false }
 
 # TEMPORARY patch: points at an unreleased arrow-rs branch that adds the
 # dictionary-page decode API this branch's Parquet dictionary row-group
-# pruning depends on (arrow-rs issue #9010 / PR #9011, reimplemented at
-# https://github.com/DarkWanderer/arrow-rs/tree/get-dictionary). Remove
-# once arrow-rs releases a version with this API and the dependency
-# above is bumped to it -- do not merge this patch.
+# pruning depends on (arrow-rs issue #9010 / PR #10420, which supersedes
+# the earlier, now-closed PR #9011). Remove once arrow-rs releases a
+# version with this API and the dependency above is bumped to it -- do
+# not merge this patch.
 [patch.crates-io]
 arrow = { git = "https://github.com/DarkWanderer/arrow-rs", branch = "get-dictionary" }
 arrow-arith = { git = "https://github.com/DarkWanderer/arrow-rs", branch = "get-dictionary" }

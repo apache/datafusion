@@ -1041,29 +1041,30 @@ impl MetricValue {
                 "files_ranges_pruned_statistics" => 4,
                 "row_groups_pruned_statistics" => 5,
                 "row_groups_pruned_bloom_filter" => 6,
-                "page_index_pages_pruned" => 7,
-                "page_index_rows_pruned" => 8,
-                _ => 9,
+                "row_groups_pruned_dictionary" => 7,
+                "page_index_pages_pruned" => 8,
+                "page_index_rows_pruned" => 9,
+                _ => 10,
             },
-            Self::SpillCount(_) => 10,
-            Self::SpilledBytes(_) => 11,
-            Self::SpilledRows(_) => 12,
-            Self::CurrentMemoryUsage(_) => 13,
+            Self::SpillCount(_) => 11,
+            Self::SpilledBytes(_) => 12,
+            Self::SpilledRows(_) => 13,
+            Self::CurrentMemoryUsage(_) => 14,
             Self::Count { name, .. } => match name.as_ref() {
                 // This Parquet page-index metric is a plain Count because it
                 // records pages that skipped page-index evaluation, not a
                 // pruned/matched pair. Keep it grouped with the other
                 // page-index pruning metrics in EXPLAIN output.
-                "page_index_pages_skipped_by_fully_matched" => 8,
-                _ => 14,
+                "page_index_pages_skipped_by_fully_matched" => 9,
+                _ => 15,
             },
-            Self::PeakMemoryUsage { .. } => 13,
-            Self::Gauge { .. } => 15,
-            Self::Time { .. } => 16,
-            Self::Ratio { .. } => 17,
-            Self::StartTimestamp(_) => 18, // show timestamps last
-            Self::EndTimestamp(_) => 19,
-            Self::Custom { .. } => 20,
+            Self::PeakMemoryUsage { .. } => 14,
+            Self::Gauge { .. } => 16,
+            Self::Time { .. } => 17,
+            Self::Ratio { .. } => 18,
+            Self::StartTimestamp(_) => 19, // show timestamps last
+            Self::EndTimestamp(_) => 20,
+            Self::Custom { .. } => 21,
         }
     }
 
