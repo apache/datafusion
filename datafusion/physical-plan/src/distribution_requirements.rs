@@ -19,10 +19,10 @@
 
 use std::sync::Arc;
 
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{Result, ScalarValue, internal_err, validate_range_split_points};
 use datafusion_physical_expr::{
     Distribution, EquivalenceProperties, Partitioning, PartitioningSatisfaction,
-    PhysicalExpr, physical_exprs_equal,
+    PhysicalExpr, RangePartitioning, physical_exprs_equal,
 };
 
 use crate::execution_plan::{ExecutionPlan, ExecutionPlanProperties, InvariantLevel};
