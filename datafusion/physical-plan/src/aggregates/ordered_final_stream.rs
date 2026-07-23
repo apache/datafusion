@@ -174,19 +174,16 @@ impl OrderedFinalSpillContext {
         !self.spills.is_empty()
     }
 
-    /// Sort and spill the aggregated groups. Memory reservation should be cleared
-    /// by the caller of this function.
+    /// Sorts and spills the aggregated groups, or succeeds immediately if the
+    /// table is empty. Memory reservation should be updated by the caller.
     ///
     /// See [`OrderedFinalAggregateStream`] for spilling details.
-    ///
-    /// It must not be called without rows to spill in the aggregate table, otherwise
-    /// it returns `Ok(false)`, and the caller propagates the error.
     fn spill_table(
         &mut self,
         table: &mut OrderedAggregateTable<FinalMarker>,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         let Some(batch) = table.take_state_batch()? else {
-            return Ok(false);
+            return Ok(());
         };
 
         let sorted_iter =
@@ -207,7 +204,7 @@ impl OrderedFinalSpillContext {
             max_record_batch_memory,
         });
 
-        Ok(true)
+        Ok(())
     }
 
     /// Merges every sorted run and finalizes it through the fully ordered path.
@@ -562,6 +559,16 @@ impl OrderedFinalAggregateStream {
             unreachable!("expected spilling state")
         };
 
+        // Sanity check: it's impossible to OOM when the table is empty
+        if table.is_empty() {
+            return ControlFlow::Break((
+                Poll::Ready(Some(internal_err!(
+                    "Ordered final aggregation entered Spilling with an empty table"
+                ))),
+                OrderedFinalAggregateState::Done,
+            ));
+        }
+
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
         let mut result = spill_context.spill_table(&mut table);
@@ -577,16 +584,10 @@ impl OrderedFinalAggregateStream {
 
         match result {
             // Finished spilling the aggregate table, continue aggregating from input
-            Ok(true) => ControlFlow::Continue(OrderedFinalAggregateState::ReadingInput {
+            Ok(()) => ControlFlow::Continue(OrderedFinalAggregateState::ReadingInput {
                 table,
                 spill_context: Some(spill_context),
             }),
-            Ok(false) => ControlFlow::Break((
-                Poll::Ready(Some(internal_err!(
-                    "Ordered final aggregation entered Spilling with an empty table"
-                ))),
-                OrderedFinalAggregateState::Done,
-            )),
             Err(e) => ControlFlow::Break((
                 Poll::Ready(Some(Err(e))),
                 OrderedFinalAggregateState::Done,
@@ -618,7 +619,7 @@ impl OrderedFinalAggregateStream {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
         let replay = match spill_context.spill_table(&mut table) {
-            Ok(_) => {
+            Ok(()) => {
                 let group_by_metrics = table.group_by_metrics();
                 drop(table);
                 match self.reservation.try_resize(0) {
