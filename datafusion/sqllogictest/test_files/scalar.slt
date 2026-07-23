@@ -344,7 +344,7 @@ select
   ceil(arrow_cast(123.00,'Decimal128(10,2)')),
   ceil(arrow_cast(-123.00,'Decimal128(10,2)'));
 ----
-2 -1 123 -123
+2.00 -1.00 123.00 -123.00
 
 # ceil overflow with limited precision
 query error Decimal overflow while applying ceil
@@ -539,7 +539,7 @@ select
   floor(arrow_cast(123.00,'Decimal128(10,2)')),
   floor(arrow_cast(-123.00,'Decimal128(10,2)'));
 ----
-1 -2 123 -123
+1.00 -2.00 123.00 -123.00
 
 # floor overflow with limited precision
 query error Decimal overflow while applying floor
@@ -1083,7 +1083,7 @@ query TR
 select arrow_typeof(round(val, dp)), round(val, dp)
 from (values (cast('999.9' as decimal(4,1)), 0)) as t(val, dp);
 ----
-Decimal128(5, 1) 1000
+Decimal128(5, 1) 1000.0
 
 # round decimal at max precision now works (scale reduction handles overflow)
 query TR
@@ -1104,7 +1104,7 @@ select arrow_typeof(round(cast(500 as decimal(10,-2)), -3)),
        round(cast(400 as decimal(10,-2)), -3),
        round(cast(-500 as decimal(10,-2)), -3);
 ----
-Decimal128(10, -3) 1000 0 -1000
+Decimal128(10, -3) 1000 0000 -1000
 
 # round decimal with negative scale and carry-over
 query TR
@@ -1337,7 +1337,7 @@ from small_floats;
 query RT
 select trunc(arrow_cast(3.1415, 'Decimal128(10,4)')), arrow_typeof(trunc(arrow_cast(3.1415, 'Decimal128(10,4)')));
 ----
-3 Decimal128(10, 4)
+3.0000 Decimal128(10, 4)
 
 # trunc with precision - decimals
 query RRRRR rowsort
@@ -1348,21 +1348,21 @@ select
   trunc(arrow_cast(1.2837284, 'Decimal256(35,7)'), 2),
   trunc(arrow_cast(1.1, 'Decimal128(10,1)'), 0);
 ----
-4.267 1.12 -1.1231 1.28 1
+4.267 1.120000 -1.1231 1.2800000 1.0
 
 # trunc with negative precision should truncate digits left of decimal - decimal types
 query RT
 select trunc(arrow_cast(12345.678, 'Decimal128(10,3)'), -3),
        arrow_typeof(trunc(arrow_cast(12345.678, 'Decimal128(10,3)'), -3));
 ----
-12000 Decimal128(10, 3)
+12000.000 Decimal128(10, 3)
 
 # trunc: coercion with a decimal argument and a non-int64 precision argument
 query RT
 select trunc(arrow_cast(1.2345678, 'Decimal128(20,14)'), arrow_cast(2, 'Int32')),
        arrow_typeof(trunc(arrow_cast(1.2345678, 'Decimal128(20,14)'), arrow_cast(2, 'Int32')));
 ----
-1.23 Decimal128(20, 14)
+1.23000000000000 Decimal128(20, 14)
 
 # trunc with columns and precision - decimal128
 query RRR rowsort
@@ -1372,10 +1372,10 @@ select
   trunc(arrow_cast(c, 'Decimal128(10,4)'), 0) as c0
 from small_floats;
 ----
--1 NULL NULL
-0 0 -1
-0 0 0
-0 0 1
+-1.0000 NULL NULL
+0.0000 0.0000 -1.0000
+0.0000 0.0000 0.0000
+0.0000 0.0000 1.0000
 
 # trunc issue #22512
 query R
