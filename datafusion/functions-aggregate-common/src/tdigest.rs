@@ -632,24 +632,15 @@ impl TDigest {
     /// Construct a [`TDigest`] directly from its constituent parts, validating
     /// the inputs.
     ///
-    /// This is the non-Arrow counterpart to [`Self::from_scalar_state()`].
-    /// [`Self::to_scalar_state()`]/[`Self::from_scalar_state()`] exist so that
-    /// external systems can persist and restore digest state, but they require
-    /// the caller to pack and unpack that state through a [`ScalarValue::List`]
-    /// of [`ScalarValue::Float64`] (which `from_scalar_state` immediately
-    /// downcasts back to an `&[f64]`). `try_from_parts`, together with the
-    /// [`Self::centroids()`] and [`Self::sum()`] accessors (and the existing
+    /// Together with the [`Self::centroids()`], [`Self::sum()`],
     /// [`Self::max_size()`], [`Self::count()`], [`Self::max()`], and
-    /// [`Self::min()`] accessors), exposes that state without requiring the
-    /// caller to round-trip through `ScalarValue`, so a digest can be serialized
-    /// into and restored from a caller's own format.
+    /// [`Self::min()`] accessors, this allows a digest to be serialized into and
+    /// restored from a caller's own format without round-tripping through a
+    /// [`ScalarValue`] list (the non-Arrow counterpart to
+    /// [`Self::from_scalar_state()`]).
     ///
-    /// Unlike [`Self::from_scalar_state()`], which trusts its input because it
-    /// is only ever fed the output of [`Self::to_scalar_state()`] on the
-    /// intra-query hot path, this is the door for *external* persisters: it may
-    /// be handed bytes decoded from a caller's own format, so it validates the
-    /// invariants that later [`Self::estimate_quantile()`] / merge math relies
-    /// on and returns an error instead of producing a silently wrong digest.
+    /// Unlike [`Self::from_scalar_state()`], this validates its inputs, returning
+    /// an error rather than a silently wrong digest when handed corrupt state.
     /// Callers who trust their data can `unwrap()`.
     ///
     /// # Errors
