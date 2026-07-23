@@ -30,8 +30,8 @@ use datafusion_expr::{
 };
 use datafusion_expr::{ExprFunctionExt, LogicalPlanBuilder, lit};
 
-/// Optimizer that replaces logical [[Filter]] with a "top 1" predicate, that has a child with a logical [[Window]] with a function using `row_number`
-/// to an aggregate
+/// Optimizer that replaces a logical `Filter` with a top-1 predicate over a
+/// `row_number()` window with an aggregate.
 ///
 /// ```text
 /// SELECT * FROM (
