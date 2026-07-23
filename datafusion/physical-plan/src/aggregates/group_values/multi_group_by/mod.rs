@@ -1034,25 +1034,11 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
         DataType::Decimal128(_, _) => {
             instantiate_primitive!(v, nullable, Decimal128Type, data_type)
         }
-        DataType::Utf8 => {
-            v.push(Box::new(ByteGroupValueBuilder::<i32>::new(
-                OutputType::Utf8,
-            )));
+        DataType::Utf8 | DataType::LargeUtf8 => {
+            v.push(Box::new(ByteGroupValueBuilder::new(OutputType::Utf8)));
         }
-        DataType::LargeUtf8 => {
-            v.push(Box::new(ByteGroupValueBuilder::<i64>::new(
-                OutputType::Utf8,
-            )));
-        }
-        DataType::Binary => {
-            v.push(Box::new(ByteGroupValueBuilder::<i32>::new(
-                OutputType::Binary,
-            )));
-        }
-        DataType::LargeBinary => {
-            v.push(Box::new(ByteGroupValueBuilder::<i64>::new(
-                OutputType::Binary,
-            )));
+        DataType::Binary | DataType::LargeBinary => {
+            v.push(Box::new(ByteGroupValueBuilder::new(OutputType::Binary)));
         }
         DataType::Utf8View => {
             v.push(Box::new(ByteViewGroupValueBuilder::<StringViewType>::new()));
@@ -1259,7 +1245,9 @@ enum Nulls {
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray, StringViewArray};
+    use arrow::array::{
+        ArrayRef, Int64Array, LargeStringArray, RecordBatch, StringArray, StringViewArray,
+    };
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::{compute::concat_batches, util::pretty::pretty_format_batches};
     use datafusion_common::utils::proxy::HashTableAllocExt;
@@ -1791,10 +1779,12 @@ mod tests {
                 Arc::new(col3) as _,
             ];
 
-            // Expected batch
+            // Expected batch. Note the `Utf8` input column is emitted as
+            // `LargeUtf8`: string group keys are always accumulated with
+            // 64-bit offsets.
             let schema = Arc::new(Schema::new(vec![
                 Field::new("a", DataType::Int64, true),
-                Field::new("b", DataType::Utf8, true),
+                Field::new("b", DataType::LargeUtf8, true),
                 Field::new("c", DataType::Utf8View, true),
             ]));
 
@@ -1820,7 +1810,7 @@ mod tests {
                 Some(34212),
             ]);
 
-            let col2 = StringArray::from(vec![
+            let col2 = LargeStringArray::from(vec![
                 // Repeated rows in batch
                 Some("string1"),
                 None,
