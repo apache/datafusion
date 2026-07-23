@@ -27,6 +27,7 @@
 pub mod access_plan;
 mod bloom_filter;
 mod decoder_projection;
+mod dictionary_filter;
 pub mod file_format;
 pub mod metadata;
 mod metrics;
@@ -49,6 +50,7 @@ mod writer;
 
 pub use access_plan::{ParquetAccessPlan, ParquetRowSelection, RowGroupAccess};
 pub use bloom_filter::BloomFilterStatistics;
+pub use dictionary_filter::{DictionaryStatistics, is_fully_dictionary_encoded};
 pub use file_format::*;
 pub use metrics::ParquetFileMetrics;
 pub use page_filter::PagePruningAccessPlanFilter;

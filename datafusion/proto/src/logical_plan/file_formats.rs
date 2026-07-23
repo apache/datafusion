@@ -436,6 +436,7 @@ mod parquet {
                     parquet_options::EncodingOpt::Encoding(encoding)
                 }),
                 bloom_filter_on_read: global_options.global.bloom_filter_on_read,
+                dictionary_filter_on_read: global_options.global.dictionary_filter_on_read,
                 bloom_filter_on_write: global_options.global.bloom_filter_on_write,
                 bloom_filter_fpp_opt: global_options.global.bloom_filter_fpp.map(|fpp| {
                     parquet_options::BloomFilterFppOpt::BloomFilterFpp(fpp)
@@ -590,6 +591,7 @@ mod parquet {
                     }
                 }),
                 bloom_filter_on_read: proto.bloom_filter_on_read,
+                dictionary_filter_on_read: proto.dictionary_filter_on_read,
                 bloom_filter_on_write: proto.bloom_filter_on_write,
                 bloom_filter_fpp: proto
                     .bloom_filter_fpp_opt
