@@ -20,15 +20,14 @@
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
-//! Session management for DataFusion query execution environment
+//! Session APIs for the DataFusion query execution environment
 //!
-//! This module provides the core session management functionality for DataFusion,
-//! handling both Catalog (Table) and Datasource (File) configurations. It defines
-//! the fundamental interfaces and implementations for maintaining query execution
-//! state and configurations.
+//! This crate defines shared interfaces for session-related APIs and extension
+//! points. Concrete query-engine implementations are provided by higher-level
+//! DataFusion crates.
 //!
 //! Key components:
-//! * [`Session`] - Manages query execution context, including configurations,
+//! * [`Session`] - Describes a query execution context, including configurations,
 //!   catalogs, and runtime state
 //! * [`CatalogProviderList`], [`CatalogProvider`], and [`SchemaProvider`] -
 //!   Describe catalog hierarchies
