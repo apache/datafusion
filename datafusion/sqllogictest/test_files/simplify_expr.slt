@@ -287,6 +287,26 @@ select id from date_unwrap where arrow_cast(d32, 'Date64') >= arrow_cast(1735689
 1
 2
 
+# Reversed operands fold too: with the Date64 literal on the LEFT, logical
+# simplification moves the bare column to the left and swaps the operator
+# (`literal < CAST(col)` becomes `col > literal`).
+query TT
+explain select id from date_unwrap where arrow_cast(-86400000, 'Date64') < arrow_cast(d32, 'Date64');
+----
+logical_plan
+01)Projection: date_unwrap.id
+02)--Filter: date_unwrap.d32 > Date32("1969-12-31")
+03)----TableScan: date_unwrap projection=[id, d32]
+physical_plan
+01)FilterExec: d32@1 > 1969-12-31, projection=[id@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+select id from date_unwrap where arrow_cast(-86400000, 'Date64') < arrow_cast(d32, 'Date64') order by id;
+----
+1
+2
+
 # IN-list widening also folds.
 query TT
 explain select id from date_unwrap where arrow_cast(d32, 'Date64') in (arrow_cast(1735689600000, 'Date64'), arrow_cast(-86400000, 'Date64'));
