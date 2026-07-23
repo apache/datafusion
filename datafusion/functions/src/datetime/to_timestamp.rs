@@ -403,6 +403,24 @@ macro_rules! impl_with_updated_config {
     };
 }
 
+/// Resolve the output timezone for a `to_timestamp_*` call from its argument types.
+///
+/// When the first argument is already timezone-aware, its timezone is preserved.
+//  Converting an already-zoned instant must not silently discard or relabel its zone.
+//  Doing so shifts the wall clock (e.g. `date_part('hour', to_timestamp_millis(zoned_col))` would then read the UTC
+/// hour instead of the local hour). For every other input (naïve timestamps,
+/// integers, floats, decimals, strings) the configured execution timezone is used,
+//  preserving the recently introduced behaviour.
+fn output_timezone(
+    arg_types: &[DataType],
+    execution_tz: &Option<Arc<str>>,
+) -> Option<Arc<str>> {
+    match arg_types.first() {
+        Some(Timestamp(_, Some(tz))) => Some(Arc::clone(tz)),
+        _ => execution_tz.clone(),
+    }
+}
+
 impl ScalarUDFImpl for ToTimestampFunc {
     fn name(&self) -> &str {
         "to_timestamp"
@@ -412,8 +430,11 @@ impl ScalarUDFImpl for ToTimestampFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Timestamp(Nanosecond, self.timezone.clone()))
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(Timestamp(
+            Nanosecond,
+            output_timezone(arg_types, &self.timezone),
+        ))
     }
 
     impl_with_updated_config!();
@@ -439,7 +460,12 @@ impl ScalarUDFImpl for ToTimestampFunc {
             Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => args[0]
                 .cast_to(&Timestamp(Second, None), None)?
                 .cast_to(&Timestamp(Nanosecond, tz), None),
-            Null | Timestamp(_, _) => args[0].cast_to(&Timestamp(Nanosecond, tz), None),
+            Timestamp(_, Some(input_tz)) => {
+                args[0].cast_to(&Timestamp(Nanosecond, Some(input_tz)), None)
+            }
+            Null | Timestamp(_, None) => {
+                args[0].cast_to(&Timestamp(Nanosecond, tz), None)
+            }
             Float16 => match &args[0] {
                 ColumnarValue::Scalar(ScalarValue::Float16(value)) => {
                     let timestamp_nanos =
@@ -519,8 +545,11 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Timestamp(Second, self.timezone.clone()))
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(Timestamp(
+            Second,
+            output_timezone(arg_types, &self.timezone),
+        ))
     }
 
     impl_with_updated_config!();
@@ -543,6 +572,9 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         let tz = self.timezone.clone();
 
         match args[0].data_type() {
+            Timestamp(_, Some(input_tz)) => {
+                args[0].cast_to(&Timestamp(Second, Some(input_tz)), None)
+            }
             Null
             | Int8
             | Int16
@@ -552,7 +584,7 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
             | UInt16
             | UInt32
             | UInt64
-            | Timestamp(_, _)
+            | Timestamp(_, None)
             | Decimal32(_, _)
             | Decimal64(_, _)
             | Decimal128(_, _)
@@ -588,8 +620,11 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Timestamp(Millisecond, self.timezone.clone()))
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(Timestamp(
+            Millisecond,
+            output_timezone(arg_types, &self.timezone),
+        ))
     }
 
     impl_with_updated_config!();
@@ -610,6 +645,9 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
         }
 
         match args[0].data_type() {
+            Timestamp(_, Some(input_tz)) => {
+                args[0].cast_to(&Timestamp(Millisecond, Some(input_tz)), None)
+            }
             Null
             | Int8
             | Int16
@@ -619,7 +657,7 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
             | UInt16
             | UInt32
             | UInt64
-            | Timestamp(_, _)
+            | Timestamp(_, None)
             | Decimal32(_, _)
             | Decimal64(_, _)
             | Decimal128(_, _)
@@ -657,8 +695,11 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Timestamp(Microsecond, self.timezone.clone()))
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(Timestamp(
+            Microsecond,
+            output_timezone(arg_types, &self.timezone),
+        ))
     }
 
     impl_with_updated_config!();
@@ -679,6 +720,9 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
         }
 
         match args[0].data_type() {
+            Timestamp(_, Some(input_tz)) => {
+                args[0].cast_to(&Timestamp(Microsecond, Some(input_tz)), None)
+            }
             Null
             | Int8
             | Int16
@@ -688,7 +732,7 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
             | UInt16
             | UInt32
             | UInt64
-            | Timestamp(_, _)
+            | Timestamp(_, None)
             | Decimal32(_, _)
             | Decimal64(_, _)
             | Decimal128(_, _)
@@ -726,8 +770,11 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Timestamp(Nanosecond, self.timezone.clone()))
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        Ok(Timestamp(
+            Nanosecond,
+            output_timezone(arg_types, &self.timezone),
+        ))
     }
 
     impl_with_updated_config!();
@@ -748,6 +795,9 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
         }
 
         match args[0].data_type() {
+            Timestamp(_, Some(input_tz)) => {
+                args[0].cast_to(&Timestamp(Nanosecond, Some(input_tz)), None)
+            }
             Null
             | Int8
             | Int16
@@ -757,7 +807,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
             | UInt16
             | UInt32
             | UInt64
-            | Timestamp(_, _)
+            | Timestamp(_, None)
             | Decimal32(_, _)
             | Decimal64(_, _)
             | Decimal128(_, _)
@@ -1687,7 +1737,7 @@ mod tests {
             for array in arrays {
                 let rt = udf.return_type(&[array.data_type()]).unwrap();
                 let arg_field = Field::new("arg", array.data_type().clone(), true).into();
-                assert!(matches!(rt, Timestamp(_, None)));
+                assert!(matches!(&rt, Timestamp(_, Some(tz)) if tz.as_ref() == "UTC"));
                 let args = ScalarFunctionArgs {
                     args: vec![array.clone()],
                     arg_fields: vec![arg_field],
@@ -1703,7 +1753,8 @@ mod tests {
                     _ => panic!("Expected a columnar array"),
                 };
                 let ty = array.data_type();
-                assert!(matches!(ty, Timestamp(_, None)));
+                // Fork patch: zone preserved for already-zoned inputs (see above).
+                assert!(matches!(ty, Timestamp(_, Some(tz)) if tz.as_ref() == "UTC"));
             }
         }
 
@@ -1755,6 +1806,45 @@ mod tests {
                 let ty = array.data_type();
                 assert!(matches!(ty, Timestamp(_, None)));
             }
+        }
+    }
+
+    #[test]
+    fn to_timestamp_preserves_non_utc_input_timezone() {
+        let tz: Arc<str> = "+05:00".into();
+
+        for (udf, unit) in udfs_and_timeunit() {
+            // return_type keeps the input zone
+            let input_type = Timestamp(Nanosecond, Some(Arc::clone(&tz)));
+            let rt = udf.return_type(&[input_type]).unwrap();
+            assert_eq!(
+                rt,
+                Timestamp(unit, Some(Arc::clone(&tz))),
+                "{} return_type dropped the input timezone",
+                udf.name()
+            );
+
+            // invoke keeps the input zone at execution time as well
+            let mut builder = TimestampNanosecondArray::builder(1);
+            builder.append_value(0); // 1970-01-01T00:00:00Z
+            let input = Arc::new(builder.finish().with_timezone("+05:00")) as ArrayRef;
+            let arg_field = Field::new("arg", input.data_type().clone(), true).into();
+            let args = ScalarFunctionArgs {
+                args: vec![ColumnarValue::Array(Arc::clone(&input))],
+                arg_fields: vec![arg_field],
+                number_rows: 1,
+                return_field: Field::new("f", rt.clone(), true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
+            };
+            let ColumnarValue::Array(out) = udf.invoke_with_args(args).unwrap() else {
+                panic!("expected array output");
+            };
+            assert_eq!(
+                out.data_type(),
+                &Timestamp(unit, Some(Arc::clone(&tz))),
+                "{} invoke dropped the input timezone",
+                udf.name()
+            );
         }
     }
 
