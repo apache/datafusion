@@ -15,4 +15,5 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// Re-export from this module for backwards compatibility.
 pub use datafusion_session::{CatalogProvider, CatalogProviderList};
