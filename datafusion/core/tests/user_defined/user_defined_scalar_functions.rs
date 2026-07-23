@@ -20,8 +20,8 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch, StringArray,
-    builder::BooleanBuilder, cast::AsArray,
+    Array, ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, RecordBatch,
+    StringArray, builder::BooleanBuilder, cast::AsArray,
 };
 use arrow::array::{Int8Array, UInt64Array, as_string_array, create_array, record_batch};
 use arrow::compute::kernels::numeric::add;
@@ -2085,12 +2085,16 @@ AS t(string, extension)
 async fn test_return_field_args_scalar_argument_types_match_arg_fields() -> Result<()> {
     #[derive(Debug, PartialEq, Eq, Hash)]
     struct TestUdf {
+        name: &'static str,
+        expect_literal: bool,
         signature: Signature,
     }
 
-    impl Default for TestUdf {
-        fn default() -> Self {
+    impl TestUdf {
+        fn new(name: &'static str, expect_literal: bool) -> Self {
             Self {
+                name,
+                expect_literal,
                 signature: Signature::coercible(
                     vec![Coercion::new_implicit(
                         TypeSignatureClass::Native(logical_int16()),
@@ -2105,7 +2109,7 @@ async fn test_return_field_args_scalar_argument_types_match_arg_fields() -> Resu
 
     impl ScalarUDFImpl for TestUdf {
         fn name(&self) -> &str {
-            "test_udf"
+            self.name
         }
 
         fn signature(&self) -> &Signature {
@@ -2120,11 +2124,14 @@ async fn test_return_field_args_scalar_argument_types_match_arg_fields() -> Resu
             assert_eq!(args.arg_fields.len(), 1);
             assert_eq!(args.scalar_arguments.len(), 1);
             assert_eq!(
-                args.arg_fields[0].data_type(),
-                &args.scalar_arguments[0]
-                    .expect("literal argument")
-                    .data_type()
+                args.scalar_arguments[0].is_some(),
+                self.expect_literal,
+                "unexpected scalar argument for {}",
+                self.name
             );
+            if let Some(scalar) = args.scalar_arguments[0] {
+                assert_eq!(args.arg_fields[0].data_type(), &scalar.data_type());
+            }
             Ok(
                 Field::new(self.name(), args.arg_fields[0].data_type().clone(), true)
                     .into(),
@@ -2132,18 +2139,29 @@ async fn test_return_field_args_scalar_argument_types_match_arg_fields() -> Resu
         }
 
         fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-            assert!(matches!(
-                args.args[0],
-                ColumnarValue::Scalar(ScalarValue::Int16(Some(_)))
-            ));
+            assert_eq!(args.args[0].data_type(), DataType::Int16);
             Ok(args.args[0].clone())
         }
     }
 
     let ctx = SessionContext::new();
-    ctx.register_udf(TestUdf::default().into());
+    let coerced_literal_udf: ScalarUDF = TestUdf::new("coerced_literal_udf", true).into();
+    let expression_arg_udf: ScalarUDF = TestUdf::new("expression_arg_udf", false).into();
+    ctx.register_udf(coerced_literal_udf);
+    ctx.register_udf(expression_arg_udf.clone());
 
-    ctx.sql("select test_udf(1)").await?.collect().await?;
+    ctx.sql("select coerced_literal_udf(1), coerced_literal_udf(NULL)")
+        .await?
+        .collect()
+        .await?;
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("a", DataType::Int16, false)])),
+        vec![Arc::new(Int16Array::from(vec![1]))],
+    )?;
+    ctx.read_batch(batch)?
+        .select(vec![expression_arg_udf.call(vec![col("a")])])?
+        .collect()
+        .await?;
 
     Ok(())
 }

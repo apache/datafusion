@@ -745,8 +745,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 Ok(Transformed::yes(Expr::Case(case)))
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
-                let new_expr =
-                    coerce_arguments_for_signature(args, self.schema, func.as_ref())?;
+                let new_expr = coerce_scalar_function_arguments_for_signature(
+                    args,
+                    self.schema,
+                    func.as_ref(),
+                )?;
                 Ok(Transformed::yes(Expr::ScalarFunction(
                     ScalarFunction::new_udf(func, new_expr),
                 )))
@@ -1065,21 +1068,78 @@ fn coerce_arguments_for_signature<F: UDFCoercionExt>(
     schema: &DFSchema,
     func: &F,
 ) -> Result<Vec<Expr>> {
+    let coerced_types = coerced_argument_types(&expressions, schema, func)?;
+
+    expressions
+        .into_iter()
+        .zip(coerced_types)
+        .map(|(expr, data_type)| expr.cast_to(&data_type, schema))
+        .collect()
+}
+
+/// Coerces scalar function arguments while materializing successful implicit
+/// casts of literals. This preserves the literal for subsequent calls to
+/// `return_field_from_args` without treating user-written `Cast` or `TryCast`
+/// expressions as scalar arguments.
+fn coerce_scalar_function_arguments_for_signature<F: UDFCoercionExt>(
+    expressions: Vec<Expr>,
+    schema: &DFSchema,
+    func: &F,
+) -> Result<Vec<Expr>> {
+    let coerced_types = coerced_argument_types(&expressions, schema, func)?;
+
+    expressions
+        .into_iter()
+        .zip(coerced_types)
+        .map(|(expr, data_type)| {
+            coerce_scalar_function_argument(expr, &data_type, schema)
+        })
+        .collect()
+}
+
+fn coerced_argument_types<F: UDFCoercionExt>(
+    expressions: &[Expr],
+    schema: &DFSchema,
+    func: &F,
+) -> Result<Vec<DataType>> {
     let current_fields = expressions
         .iter()
         .map(|e| e.to_field(schema).map(|(_, f)| f))
         .collect::<Result<Vec<_>>>()?;
 
-    let coerced_types = fields_with_udf(&current_fields, func)?
-        .into_iter()
-        .map(|f| f.data_type().clone())
-        .collect::<Vec<_>>();
+    fields_with_udf(&current_fields, func).map(|fields| {
+        fields
+            .into_iter()
+            .map(|field| field.data_type().clone())
+            .collect()
+    })
+}
 
-    expressions
-        .into_iter()
-        .enumerate()
-        .map(|(i, expr)| expr.cast_to(&coerced_types[i], schema))
-        .collect()
+fn coerce_scalar_function_argument(
+    expr: Expr,
+    data_type: &DataType,
+    schema: &DFSchema,
+) -> Result<Expr> {
+    if matches!(&expr, Expr::Cast(_) | Expr::TryCast(_))
+        && expr.get_type(schema)? == *data_type
+    {
+        return Ok(expr);
+    }
+
+    let Expr::Literal(value, metadata) = expr else {
+        return expr.cast_to(data_type, schema);
+    };
+
+    if value.data_type() != *data_type
+        && let Ok(value) = value.cast_to(data_type)
+    {
+        return Ok(Expr::Literal(value, metadata));
+    }
+
+    // A failed value cast remains an expression cast so execution produces the
+    // same error as before. Since it is no longer a literal at the coerced type,
+    // it is reported as `None` in `ReturnFieldArgs::scalar_arguments`.
+    Expr::Literal(value, metadata).cast_to(data_type, schema)
 }
 
 fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {

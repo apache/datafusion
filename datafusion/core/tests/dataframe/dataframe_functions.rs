@@ -217,10 +217,13 @@ async fn test_fn_arrow_cast() -> Result<()> {
 #[tokio::test]
 async fn test_fn_arrow_cast_requires_literal_type_arg() -> Result<()> {
     let ctx = SessionContext::new();
-    let df = ctx
+    let err = match ctx
         .sql("select arrow_cast(1, cast('Utf8' as varchar))")
-        .await?;
-    let err = df.collect().await.unwrap_err();
+        .await
+    {
+        Ok(df) => df.collect().await.unwrap_err(),
+        Err(err) => err,
+    };
 
     assert!(
         err.to_string()
