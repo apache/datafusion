@@ -1520,6 +1520,508 @@ impl<'de> serde::Deserialize<'de> for ArrowScanExecNode {
         deserializer.deserialize_struct("datafusion.ArrowScanExecNode", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for AsOfJoinExecNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.left.is_some() {
+            len += 1;
+        }
+        if self.right.is_some() {
+            len += 1;
+        }
+        if !self.on.is_empty() {
+            len += 1;
+        }
+        if self.left_match_expr.is_some() {
+            len += 1;
+        }
+        if self.right_match_expr.is_some() {
+            len += 1;
+        }
+        if self.match_operator != 0 {
+            len += 1;
+        }
+        if !self.right_output_indices.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.AsOfJoinExecNode", len)?;
+        if let Some(v) = self.left.as_ref() {
+            struct_ser.serialize_field("left", v)?;
+        }
+        if let Some(v) = self.right.as_ref() {
+            struct_ser.serialize_field("right", v)?;
+        }
+        if !self.on.is_empty() {
+            struct_ser.serialize_field("on", &self.on)?;
+        }
+        if let Some(v) = self.left_match_expr.as_ref() {
+            struct_ser.serialize_field("leftMatchExpr", v)?;
+        }
+        if let Some(v) = self.right_match_expr.as_ref() {
+            struct_ser.serialize_field("rightMatchExpr", v)?;
+        }
+        if self.match_operator != 0 {
+            let v = AsOfMatchOperator::try_from(self.match_operator)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.match_operator)))?;
+            struct_ser.serialize_field("matchOperator", &v)?;
+        }
+        if !self.right_output_indices.is_empty() {
+            struct_ser.serialize_field("rightOutputIndices", &self.right_output_indices)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for AsOfJoinExecNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "left",
+            "right",
+            "on",
+            "left_match_expr",
+            "leftMatchExpr",
+            "right_match_expr",
+            "rightMatchExpr",
+            "match_operator",
+            "matchOperator",
+            "right_output_indices",
+            "rightOutputIndices",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Left,
+            Right,
+            On,
+            LeftMatchExpr,
+            RightMatchExpr,
+            MatchOperator,
+            RightOutputIndices,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "left" => Ok(GeneratedField::Left),
+                            "right" => Ok(GeneratedField::Right),
+                            "on" => Ok(GeneratedField::On),
+                            "leftMatchExpr" | "left_match_expr" => Ok(GeneratedField::LeftMatchExpr),
+                            "rightMatchExpr" | "right_match_expr" => Ok(GeneratedField::RightMatchExpr),
+                            "matchOperator" | "match_operator" => Ok(GeneratedField::MatchOperator),
+                            "rightOutputIndices" | "right_output_indices" => Ok(GeneratedField::RightOutputIndices),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = AsOfJoinExecNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.AsOfJoinExecNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<AsOfJoinExecNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut left__ = None;
+                let mut right__ = None;
+                let mut on__ = None;
+                let mut left_match_expr__ = None;
+                let mut right_match_expr__ = None;
+                let mut match_operator__ = None;
+                let mut right_output_indices__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Left => {
+                            if left__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("left"));
+                            }
+                            left__ = map_.next_value()?;
+                        }
+                        GeneratedField::Right => {
+                            if right__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("right"));
+                            }
+                            right__ = map_.next_value()?;
+                        }
+                        GeneratedField::On => {
+                            if on__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("on"));
+                            }
+                            on__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::LeftMatchExpr => {
+                            if left_match_expr__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("leftMatchExpr"));
+                            }
+                            left_match_expr__ = map_.next_value()?;
+                        }
+                        GeneratedField::RightMatchExpr => {
+                            if right_match_expr__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("rightMatchExpr"));
+                            }
+                            right_match_expr__ = map_.next_value()?;
+                        }
+                        GeneratedField::MatchOperator => {
+                            if match_operator__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("matchOperator"));
+                            }
+                            match_operator__ = Some(map_.next_value::<AsOfMatchOperator>()? as i32);
+                        }
+                        GeneratedField::RightOutputIndices => {
+                            if right_output_indices__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("rightOutputIndices"));
+                            }
+                            right_output_indices__ = 
+                                Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
+                                    .into_iter().map(|x| x.0).collect())
+                            ;
+                        }
+                    }
+                }
+                Ok(AsOfJoinExecNode {
+                    left: left__,
+                    right: right__,
+                    on: on__.unwrap_or_default(),
+                    left_match_expr: left_match_expr__,
+                    right_match_expr: right_match_expr__,
+                    match_operator: match_operator__.unwrap_or_default(),
+                    right_output_indices: right_output_indices__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.AsOfJoinExecNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for AsOfJoinNode {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.left.is_some() {
+            len += 1;
+        }
+        if self.right.is_some() {
+            len += 1;
+        }
+        if !self.left_join_key.is_empty() {
+            len += 1;
+        }
+        if !self.right_join_key.is_empty() {
+            len += 1;
+        }
+        if self.left_match_expr.is_some() {
+            len += 1;
+        }
+        if self.right_match_expr.is_some() {
+            len += 1;
+        }
+        if self.match_operator != 0 {
+            len += 1;
+        }
+        if self.join_constraint != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.AsOfJoinNode", len)?;
+        if let Some(v) = self.left.as_ref() {
+            struct_ser.serialize_field("left", v)?;
+        }
+        if let Some(v) = self.right.as_ref() {
+            struct_ser.serialize_field("right", v)?;
+        }
+        if !self.left_join_key.is_empty() {
+            struct_ser.serialize_field("leftJoinKey", &self.left_join_key)?;
+        }
+        if !self.right_join_key.is_empty() {
+            struct_ser.serialize_field("rightJoinKey", &self.right_join_key)?;
+        }
+        if let Some(v) = self.left_match_expr.as_ref() {
+            struct_ser.serialize_field("leftMatchExpr", v)?;
+        }
+        if let Some(v) = self.right_match_expr.as_ref() {
+            struct_ser.serialize_field("rightMatchExpr", v)?;
+        }
+        if self.match_operator != 0 {
+            let v = AsOfMatchOperator::try_from(self.match_operator)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.match_operator)))?;
+            struct_ser.serialize_field("matchOperator", &v)?;
+        }
+        if self.join_constraint != 0 {
+            let v = super::datafusion_common::JoinConstraint::try_from(self.join_constraint)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.join_constraint)))?;
+            struct_ser.serialize_field("joinConstraint", &v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for AsOfJoinNode {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "left",
+            "right",
+            "left_join_key",
+            "leftJoinKey",
+            "right_join_key",
+            "rightJoinKey",
+            "left_match_expr",
+            "leftMatchExpr",
+            "right_match_expr",
+            "rightMatchExpr",
+            "match_operator",
+            "matchOperator",
+            "join_constraint",
+            "joinConstraint",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Left,
+            Right,
+            LeftJoinKey,
+            RightJoinKey,
+            LeftMatchExpr,
+            RightMatchExpr,
+            MatchOperator,
+            JoinConstraint,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "left" => Ok(GeneratedField::Left),
+                            "right" => Ok(GeneratedField::Right),
+                            "leftJoinKey" | "left_join_key" => Ok(GeneratedField::LeftJoinKey),
+                            "rightJoinKey" | "right_join_key" => Ok(GeneratedField::RightJoinKey),
+                            "leftMatchExpr" | "left_match_expr" => Ok(GeneratedField::LeftMatchExpr),
+                            "rightMatchExpr" | "right_match_expr" => Ok(GeneratedField::RightMatchExpr),
+                            "matchOperator" | "match_operator" => Ok(GeneratedField::MatchOperator),
+                            "joinConstraint" | "join_constraint" => Ok(GeneratedField::JoinConstraint),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = AsOfJoinNode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.AsOfJoinNode")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<AsOfJoinNode, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut left__ = None;
+                let mut right__ = None;
+                let mut left_join_key__ = None;
+                let mut right_join_key__ = None;
+                let mut left_match_expr__ = None;
+                let mut right_match_expr__ = None;
+                let mut match_operator__ = None;
+                let mut join_constraint__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Left => {
+                            if left__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("left"));
+                            }
+                            left__ = map_.next_value()?;
+                        }
+                        GeneratedField::Right => {
+                            if right__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("right"));
+                            }
+                            right__ = map_.next_value()?;
+                        }
+                        GeneratedField::LeftJoinKey => {
+                            if left_join_key__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("leftJoinKey"));
+                            }
+                            left_join_key__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::RightJoinKey => {
+                            if right_join_key__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("rightJoinKey"));
+                            }
+                            right_join_key__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::LeftMatchExpr => {
+                            if left_match_expr__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("leftMatchExpr"));
+                            }
+                            left_match_expr__ = map_.next_value()?;
+                        }
+                        GeneratedField::RightMatchExpr => {
+                            if right_match_expr__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("rightMatchExpr"));
+                            }
+                            right_match_expr__ = map_.next_value()?;
+                        }
+                        GeneratedField::MatchOperator => {
+                            if match_operator__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("matchOperator"));
+                            }
+                            match_operator__ = Some(map_.next_value::<AsOfMatchOperator>()? as i32);
+                        }
+                        GeneratedField::JoinConstraint => {
+                            if join_constraint__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("joinConstraint"));
+                            }
+                            join_constraint__ = Some(map_.next_value::<super::datafusion_common::JoinConstraint>()? as i32);
+                        }
+                    }
+                }
+                Ok(AsOfJoinNode {
+                    left: left__,
+                    right: right__,
+                    left_join_key: left_join_key__.unwrap_or_default(),
+                    right_join_key: right_join_key__.unwrap_or_default(),
+                    left_match_expr: left_match_expr__,
+                    right_match_expr: right_match_expr__,
+                    match_operator: match_operator__.unwrap_or_default(),
+                    join_constraint: join_constraint__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.AsOfJoinNode", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for AsOfMatchOperator {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Unspecified => "AS_OF_MATCH_OPERATOR_UNSPECIFIED",
+            Self::Lt => "AS_OF_MATCH_OPERATOR_LT",
+            Self::LtEq => "AS_OF_MATCH_OPERATOR_LT_EQ",
+            Self::Gt => "AS_OF_MATCH_OPERATOR_GT",
+            Self::GtEq => "AS_OF_MATCH_OPERATOR_GT_EQ",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for AsOfMatchOperator {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "AS_OF_MATCH_OPERATOR_UNSPECIFIED",
+            "AS_OF_MATCH_OPERATOR_LT",
+            "AS_OF_MATCH_OPERATOR_LT_EQ",
+            "AS_OF_MATCH_OPERATOR_GT",
+            "AS_OF_MATCH_OPERATOR_GT_EQ",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl serde::de::Visitor<'_> for GeneratedVisitor {
+            type Value = AsOfMatchOperator;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "AS_OF_MATCH_OPERATOR_UNSPECIFIED" => Ok(AsOfMatchOperator::Unspecified),
+                    "AS_OF_MATCH_OPERATOR_LT" => Ok(AsOfMatchOperator::Lt),
+                    "AS_OF_MATCH_OPERATOR_LT_EQ" => Ok(AsOfMatchOperator::LtEq),
+                    "AS_OF_MATCH_OPERATOR_GT" => Ok(AsOfMatchOperator::Gt),
+                    "AS_OF_MATCH_OPERATOR_GT_EQ" => Ok(AsOfMatchOperator::GtEq),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
 impl serde::Serialize for AsyncFuncExecNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -13674,6 +14176,9 @@ impl serde::Serialize for LogicalPlanNode {
                 logical_plan_node::LogicalPlanType::EmptyTableScan(v) => {
                     struct_ser.serialize_field("emptyTableScan", v)?;
                 }
+                logical_plan_node::LogicalPlanType::AsOfJoin(v) => {
+                    struct_ser.serialize_field("asOfJoin", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -13735,6 +14240,8 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
             "dml",
             "empty_table_scan",
             "emptyTableScan",
+            "as_of_join",
+            "asOfJoin",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -13772,6 +14279,7 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
             CteWorkTableScan,
             Dml,
             EmptyTableScan,
+            AsOfJoin,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -13826,6 +14334,7 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
                             "cteWorkTableScan" | "cte_work_table_scan" => Ok(GeneratedField::CteWorkTableScan),
                             "dml" => Ok(GeneratedField::Dml),
                             "emptyTableScan" | "empty_table_scan" => Ok(GeneratedField::EmptyTableScan),
+                            "asOfJoin" | "as_of_join" => Ok(GeneratedField::AsOfJoin),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -14077,6 +14586,13 @@ impl<'de> serde::Deserialize<'de> for LogicalPlanNode {
                                 return Err(serde::de::Error::duplicate_field("emptyTableScan"));
                             }
                             logical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::EmptyTableScan)
+;
+                        }
+                        GeneratedField::AsOfJoin => {
+                            if logical_plan_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("asOfJoin"));
+                            }
+                            logical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_plan_node::LogicalPlanType::AsOfJoin)
 ;
                         }
                     }
@@ -20331,6 +20847,9 @@ impl serde::Serialize for PhysicalPlanNode {
                 physical_plan_node::PhysicalPlanType::ScalarSubquery(v) => {
                     struct_ser.serialize_field("scalarSubquery", v)?;
                 }
+                physical_plan_node::PhysicalPlanType::AsOfJoin(v) => {
+                    struct_ser.serialize_field("asOfJoin", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -20403,6 +20922,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             "arrowScan",
             "scalar_subquery",
             "scalarSubquery",
+            "as_of_join",
+            "asOfJoin",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -20445,6 +20966,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
             Buffer,
             ArrowScan,
             ScalarSubquery,
+            AsOfJoin,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -20504,6 +21026,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                             "buffer" => Ok(GeneratedField::Buffer),
                             "arrowScan" | "arrow_scan" => Ok(GeneratedField::ArrowScan),
                             "scalarSubquery" | "scalar_subquery" => Ok(GeneratedField::ScalarSubquery),
+                            "asOfJoin" | "as_of_join" => Ok(GeneratedField::AsOfJoin),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -20790,6 +21313,13 @@ impl<'de> serde::Deserialize<'de> for PhysicalPlanNode {
                                 return Err(serde::de::Error::duplicate_field("scalarSubquery"));
                             }
                             physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::ScalarSubquery)
+;
+                        }
+                        GeneratedField::AsOfJoin => {
+                            if physical_plan_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("asOfJoin"));
+                            }
+                            physical_plan_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_plan_node::PhysicalPlanType::AsOfJoin)
 ;
                         }
                     }

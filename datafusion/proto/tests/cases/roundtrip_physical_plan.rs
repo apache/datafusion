@@ -72,8 +72,8 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
 use datafusion::physical_plan::joins::{
-    HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
-    StreamJoinPartitionMode, SymmetricHashJoinExec,
+    AsOfJoinExec, AsOfMatchExpr, HashJoinExec, NestedLoopJoinExec, PartitionMode,
+    SortMergeJoinExec, StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
@@ -474,6 +474,39 @@ fn roundtrip_hash_join() -> Result<()> {
                 false,
             )?))?;
         }
+    }
+    Ok(())
+}
+
+#[test]
+fn roundtrip_asof_join() -> Result<()> {
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("symbol", DataType::Utf8, true),
+        Field::new("ts", DataType::Int64, true),
+        Field::new("id", DataType::Int32, false),
+    ]));
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("symbol", DataType::Utf8, true),
+        Field::new("ts", DataType::Int64, true),
+        Field::new("price", DataType::Int32, false),
+    ]));
+    let on = vec![(
+        Arc::new(Column::new("symbol", 0)) as _,
+        Arc::new(Column::new("symbol", 0)) as _,
+    )];
+
+    for op in [Operator::Lt, Operator::LtEq, Operator::Gt, Operator::GtEq] {
+        roundtrip_test(Arc::new(AsOfJoinExec::try_new(
+            Arc::new(EmptyExec::new(Arc::clone(&left_schema))),
+            Arc::new(EmptyExec::new(Arc::clone(&right_schema))),
+            on.clone(),
+            AsOfMatchExpr::new(
+                Arc::new(Column::new("ts", 1)),
+                op,
+                Arc::new(Column::new("ts", 1)),
+            ),
+            vec![2],
+        )?))?;
     }
     Ok(())
 }

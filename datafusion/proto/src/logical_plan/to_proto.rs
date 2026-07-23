@@ -32,8 +32,8 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::{
-    Expr, JoinConstraint, JoinType, SortExpr, TryCast, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, WindowFunctionDefinition, logical_plan::PlanType,
+    Expr, JoinConstraint, JoinType, Operator, SortExpr, TryCast, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, logical_plan::PlanType,
     logical_plan::StringifiedPlan,
 };
 
@@ -778,6 +778,22 @@ impl FromProto<JoinConstraint> for protobuf::JoinConstraint {
         match t {
             JoinConstraint::On => protobuf::JoinConstraint::On,
             JoinConstraint::Using => protobuf::JoinConstraint::Using,
+        }
+    }
+}
+
+impl TryFromProto<Operator> for protobuf::AsOfMatchOperator {
+    type Error = Error;
+
+    fn try_from_proto(value: Operator) -> Result<Self, Self::Error> {
+        match value {
+            Operator::Lt => Ok(Self::Lt),
+            Operator::LtEq => Ok(Self::LtEq),
+            Operator::Gt => Ok(Self::Gt),
+            Operator::GtEq => Ok(Self::GtEq),
+            op => Err(Error::General(format!(
+                "Unsupported ASOF match operator {op}"
+            ))),
         }
     }
 }

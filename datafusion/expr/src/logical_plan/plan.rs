@@ -41,13 +41,15 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
-    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
-    grouping_set_expr_count, grouping_set_to_exprlist, merge_schema, split_conjunction,
+    enumerate_grouping_sets, expr_to_columns, exprlist_to_fields,
+    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
+    merge_schema, split_conjunction,
 };
 use crate::{
     BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, GroupingSet,
     LogicalPlanBuilder, Operator, Prepare, TableProviderFilterPushDown, TableSource,
-    WindowFunctionDefinition, build_join_schema, expr_vec_fmt, requalify_sides_if_needed,
+    WindowFunctionDefinition, build_asof_join_schema, build_join_schema, expr_vec_fmt,
+    requalify_sides_if_needed,
 };
 
 use crate::statistics::StatisticsRequest;
@@ -238,6 +240,9 @@ pub enum LogicalPlan {
     /// Join two logical plans on one or more join columns.
     /// This is used to implement SQL `JOIN`
     Join(Join),
+    /// Match each left row with at most one ordered row from the right input.
+    /// This is used to implement SQL `ASOF JOIN`.
+    AsOfJoin(AsOfJoin),
     /// Repartitions the input based on a partitioning scheme. This is
     /// used to add parallelism and is sometimes referred to as an
     /// "exchange" operator in other systems
@@ -341,6 +346,7 @@ impl LogicalPlan {
             LogicalPlan::Aggregate(Aggregate { schema, .. }) => schema,
             LogicalPlan::Sort(Sort { input, .. }) => input.schema(),
             LogicalPlan::Join(Join { schema, .. }) => schema,
+            LogicalPlan::AsOfJoin(AsOfJoin { schema, .. }) => schema,
             LogicalPlan::Repartition(Repartition { input, .. }) => input.schema(),
             LogicalPlan::Limit(Limit { input, .. }) => input.schema(),
             LogicalPlan::Statement(statement) => statement.schema(),
@@ -369,7 +375,8 @@ impl LogicalPlan {
             | LogicalPlan::Projection(_)
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Unnest(_)
-            | LogicalPlan::Join(_) => self
+            | LogicalPlan::Join(_)
+            | LogicalPlan::AsOfJoin(_) => self
                 .inputs()
                 .iter()
                 .map(|input| input.schema().as_ref())
@@ -459,6 +466,9 @@ impl LogicalPlan {
             LogicalPlan::Aggregate(Aggregate { input, .. }) => vec![input],
             LogicalPlan::Sort(Sort { input, .. }) => vec![input],
             LogicalPlan::Join(Join { left, right, .. }) => vec![left, right],
+            LogicalPlan::AsOfJoin(AsOfJoin { left, right, .. }) => {
+                vec![left, right]
+            }
             LogicalPlan::Limit(Limit { input, .. }) => vec![input],
             LogicalPlan::Subquery(Subquery { subquery, .. }) => vec![subquery],
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => vec![input],
@@ -494,12 +504,20 @@ impl LogicalPlan {
         let mut using_columns: Vec<HashSet<Column>> = vec![];
 
         self.apply_with_subqueries(|plan| {
-            if let LogicalPlan::Join(Join {
-                join_constraint: JoinConstraint::Using,
-                on,
-                ..
-            }) = plan
-            {
+            let on = match plan {
+                LogicalPlan::Join(Join {
+                    join_constraint: JoinConstraint::Using,
+                    on,
+                    ..
+                })
+                | LogicalPlan::AsOfJoin(AsOfJoin {
+                    join_constraint: JoinConstraint::Using,
+                    on,
+                    ..
+                }) => Some(on),
+                _ => None,
+            };
+            if let Some(on) = on {
                 // The join keys in using-join must be columns.
                 let columns =
                     on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
@@ -567,6 +585,7 @@ impl LogicalPlan {
                     right.head_output_expr()
                 }
             },
+            LogicalPlan::AsOfJoin(AsOfJoin { left, .. }) => left.head_output_expr(),
             LogicalPlan::RecursiveQuery(RecursiveQuery { static_term, .. }) => {
                 static_term.head_output_expr()
             }
@@ -690,6 +709,26 @@ impl LogicalPlan {
                     null_aware,
                 }))
             }
+            LogicalPlan::AsOfJoin(AsOfJoin {
+                left,
+                right,
+                on,
+                match_condition,
+                join_constraint,
+                schema: _,
+            }) => Ok(LogicalPlan::AsOfJoin(AsOfJoin::try_new(
+                left,
+                right,
+                on.into_iter()
+                    .map(|(left, right)| (left.unalias(), right.unalias()))
+                    .collect(),
+                AsOfMatch {
+                    left: match_condition.left.unalias(),
+                    op: match_condition.op,
+                    right: match_condition.right.unalias(),
+                },
+                join_constraint,
+            )?)),
             LogicalPlan::Subquery(_) => Ok(self),
             LogicalPlan::SubqueryAlias(SubqueryAlias {
                 input,
@@ -984,6 +1023,45 @@ impl LogicalPlan {
                     null_equality: *null_equality,
                     null_aware: *null_aware,
                 }))
+            }
+            LogicalPlan::AsOfJoin(AsOfJoin {
+                on,
+                match_condition,
+                join_constraint,
+                ..
+            }) => {
+                let (left, right) = self.only_two_inputs(inputs)?;
+                let expected = on.len() * 2 + 2;
+                assert_eq_or_internal_err!(
+                    expected,
+                    expr.len(),
+                    "Invalid number of new ASOF join expressions: expected {}, got {}",
+                    expected,
+                    expr.len()
+                );
+
+                let mut iter = expr.into_iter();
+                let mut new_on = Vec::with_capacity(on.len());
+                for _ in 0..on.len() {
+                    let left = iter.next().expect("expression count checked").unalias();
+                    let right = iter.next().expect("expression count checked").unalias();
+                    new_on.push((left, right));
+                }
+                let match_left = iter.next().expect("expression count checked").unalias();
+                let match_right =
+                    iter.next().expect("expression count checked").unalias();
+
+                Ok(LogicalPlan::AsOfJoin(AsOfJoin::try_new(
+                    Arc::new(left),
+                    Arc::new(right),
+                    new_on,
+                    AsOfMatch {
+                        left: match_left,
+                        op: match_condition.op,
+                        right: match_right,
+                    },
+                    *join_constraint,
+                )?))
             }
             LogicalPlan::Subquery(Subquery {
                 outer_ref_columns,
@@ -1410,6 +1488,7 @@ impl LogicalPlan {
                     right.max_rows()
                 }
             },
+            LogicalPlan::AsOfJoin(AsOfJoin { left, .. }) => left.max_rows(),
             LogicalPlan::Repartition(Repartition { input, .. }) => input.max_rows(),
             LogicalPlan::Union(Union { inputs, .. }) => {
                 inputs.iter().try_fold(0usize, |mut acc, plan| {
@@ -1460,6 +1539,7 @@ impl LogicalPlan {
             LogicalPlan::Window(_) => Ok(None),
             LogicalPlan::Aggregate(_) => Ok(None),
             LogicalPlan::Join(_) => Ok(None),
+            LogicalPlan::AsOfJoin(_) => Ok(None),
             LogicalPlan::Repartition(_) => Ok(None),
             LogicalPlan::Union(_) => Ok(None),
             LogicalPlan::EmptyRelation(_) => Ok(None),
@@ -1498,6 +1578,7 @@ impl LogicalPlan {
             LogicalPlan::Window(_) => Ok(None),
             LogicalPlan::Aggregate(_) => Ok(None),
             LogicalPlan::Join(_) => Ok(None),
+            LogicalPlan::AsOfJoin(_) => Ok(None),
             LogicalPlan::Repartition(_) => Ok(None),
             LogicalPlan::Union(_) => Ok(None),
             LogicalPlan::EmptyRelation(_) => Ok(None),
@@ -2125,6 +2206,25 @@ impl LogicalPlan {
                                 )
                             }
                         }
+                    }
+                    LogicalPlan::AsOfJoin(AsOfJoin {
+                        on,
+                        match_condition,
+                        join_constraint,
+                        ..
+                    }) => {
+                        let equality = on
+                            .iter()
+                            .map(|(left, right)| format!("{left} = {right}"))
+                            .join(", ");
+                        write!(
+                            f,
+                            "AsOf Join: match=[{match_condition}], constraint={join_constraint:?}"
+                        )?;
+                        if !equality.is_empty() {
+                            write!(f, ", on=[{equality}]")?;
+                        }
+                        Ok(())
                     }
                     LogicalPlan::Repartition(Repartition {
                         partitioning_scheme,
@@ -4235,6 +4335,165 @@ pub struct Join {
     ///
     /// This is required for correct NOT IN subquery behavior with three-valued logic.
     pub null_aware: bool,
+}
+
+/// The ordered comparison used by an [`AsOfJoin`].
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct AsOfMatch {
+    /// Expression evaluated against the left input.
+    pub left: Expr,
+    /// One of [`Operator::Lt`], [`Operator::LtEq`], [`Operator::Gt`], or
+    /// [`Operator::GtEq`].
+    pub op: Operator,
+    /// Expression evaluated against the right input.
+    pub right: Expr,
+}
+
+impl AsOfMatch {
+    /// Creates an ordered ASOF match condition.
+    pub fn new(left: Expr, op: Operator, right: Expr) -> Self {
+        Self { left, op, right }
+    }
+}
+
+impl Display for AsOfMatch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {} {}", self.left, self.op, self.right)
+    }
+}
+
+/// Match each left row with at most one ordered row from the right input.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AsOfJoin {
+    /// Left input. Every left row is preserved exactly once.
+    pub left: Arc<LogicalPlan>,
+    /// Right input.
+    pub right: Arc<LogicalPlan>,
+    /// Equality clauses expressed as pairs of left and right expressions.
+    pub on: Vec<(Expr, Expr)>,
+    /// Ordered match condition.
+    pub match_condition: Box<AsOfMatch>,
+    /// Whether equality keys came from `ON` or `USING`.
+    pub join_constraint: JoinConstraint,
+    /// Output schema.
+    pub schema: DFSchemaRef,
+}
+
+impl AsOfJoin {
+    /// Creates an ASOF join and validates its logical contract.
+    pub fn try_new(
+        left: Arc<LogicalPlan>,
+        right: Arc<LogicalPlan>,
+        on: Vec<(Expr, Expr)>,
+        match_condition: AsOfMatch,
+        join_constraint: JoinConstraint,
+    ) -> Result<Self> {
+        if !matches!(
+            match_condition.op,
+            Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
+        ) {
+            return plan_err!(
+                "ASOF MATCH_CONDITION requires <, <=, >, or >=, found {}",
+                match_condition.op
+            );
+        }
+
+        Self::validate_side(&match_condition.left, left.schema(), "left match")?;
+        Self::validate_side(&match_condition.right, right.schema(), "right match")?;
+        if match_condition.left.is_volatile() || match_condition.right.is_volatile() {
+            return plan_err!("ASOF MATCH_CONDITION must be deterministic");
+        }
+
+        let left_type = match_condition.left.get_type(left.schema())?;
+        let right_type = match_condition.right.get_type(right.schema())?;
+        if crate::type_coercion::binary::comparison_coercion(&left_type, &right_type)
+            .is_none()
+        {
+            return plan_err!(
+                "ASOF match expressions have incompatible types {left_type} and {right_type}"
+            );
+        }
+
+        for (left_expr, right_expr) in &on {
+            Self::validate_side(left_expr, left.schema(), "left equality")?;
+            Self::validate_side(right_expr, right.schema(), "right equality")?;
+            if left_expr.is_volatile() || right_expr.is_volatile() {
+                return plan_err!("ASOF equality expressions must be deterministic");
+            }
+            let left_type = left_expr.get_type(left.schema())?;
+            let right_type = right_expr.get_type(right.schema())?;
+            let Some(common_type) = crate::type_coercion::binary::comparison_coercion(
+                &left_type,
+                &right_type,
+            ) else {
+                return plan_err!(
+                    "ASOF equality expressions have incompatible types {left_type} and {right_type}"
+                );
+            };
+            if !crate::utils::can_hash(&common_type) {
+                return plan_err!(
+                    "ASOF equality expressions have unsupported hash type {common_type}"
+                );
+            }
+        }
+
+        if join_constraint == JoinConstraint::Using
+            && on.iter().any(|(left, right)| {
+                left.get_as_join_column().is_none()
+                    || right.get_as_join_column().is_none()
+            })
+        {
+            return plan_err!("ASOF USING keys must be columns");
+        }
+
+        let schema =
+            build_asof_join_schema(left.schema(), right.schema(), &on, join_constraint)?;
+        Ok(Self {
+            left,
+            right,
+            on,
+            match_condition: Box::new(match_condition),
+            join_constraint,
+            schema: Arc::new(schema),
+        })
+    }
+
+    fn validate_side(expr: &Expr, schema: &DFSchema, name: &str) -> Result<()> {
+        let mut columns = HashSet::new();
+        expr_to_columns(expr, &mut columns)?;
+        if columns.is_empty() {
+            return plan_err!("ASOF {name} expression must reference its input");
+        }
+        if let Some(column) = columns
+            .iter()
+            .find(|column| !schema.is_column_from_schema(column))
+        {
+            return plan_err!(
+                "ASOF {name} expression references column {column} outside its input"
+            );
+        }
+        Ok(())
+    }
+}
+
+impl PartialOrd for AsOfJoin {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        (
+            &self.left,
+            &self.right,
+            &self.on,
+            &self.match_condition,
+            &self.join_constraint,
+        )
+            .partial_cmp(&(
+                &other.left,
+                &other.right,
+                &other.on,
+                &other.match_condition,
+                &other.join_constraint,
+            ))
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
+    }
 }
 
 impl Join {

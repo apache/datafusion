@@ -3773,6 +3773,37 @@ async fn roundtrip_join_null_equality() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn roundtrip_asof_join() -> Result<()> {
+    let ctx = SessionContext::new();
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("symbol", DataType::Utf8, true),
+        Field::new("ts", DataType::Int64, true),
+        Field::new("id", DataType::Int32, false),
+    ]));
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("symbol", DataType::Utf8, true),
+        Field::new("ts", DataType::Int64, true),
+        Field::new("price", DataType::Int32, false),
+    ]));
+    ctx.register_table("trades", Arc::new(EmptyTable::new(left_schema)))?;
+    ctx.register_table("prices", Arc::new(EmptyTable::new(right_schema)))?;
+
+    for op in ["<", "<=", ">", ">="] {
+        let plan = ctx
+            .sql(&format!(
+                "SELECT * FROM trades t ASOF JOIN prices p \
+                 MATCH_CONDITION (t.ts {op} p.ts) USING (symbol)"
+            ))
+            .await?
+            .into_optimized_plan()?;
+        let bytes = logical_plan_to_bytes(&plan)?;
+        let round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+        assert_eq!(format!("{plan:?}"), format!("{round_trip:?}"));
+    }
+    Ok(())
+}
+
 // Single column, single split point range partitioning
 #[tokio::test]
 async fn roundtrip_range_partitioning_single_col() -> Result<()> {
