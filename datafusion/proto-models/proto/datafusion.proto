@@ -63,6 +63,7 @@ message LogicalPlanNode {
     CteWorkTableScanNode cte_work_table_scan = 32;
     DmlNode dml = 33;
     EmptyTableScanNode empty_table_scan = 34;
+    AsOfJoinNode as_of_join = 35;
   }
 }
 
@@ -274,6 +275,25 @@ message JoinNode {
   datafusion_common.NullEquality null_equality = 7;
   LogicalExprNode filter = 8;
   bool null_aware = 9;
+}
+
+enum AsOfMatchOperator {
+  AS_OF_MATCH_OPERATOR_UNSPECIFIED = 0;
+  AS_OF_MATCH_OPERATOR_LT = 1;
+  AS_OF_MATCH_OPERATOR_LT_EQ = 2;
+  AS_OF_MATCH_OPERATOR_GT = 3;
+  AS_OF_MATCH_OPERATOR_GT_EQ = 4;
+}
+
+message AsOfJoinNode {
+  LogicalPlanNode left = 1;
+  LogicalPlanNode right = 2;
+  repeated LogicalExprNode left_join_key = 3;
+  repeated LogicalExprNode right_join_key = 4;
+  LogicalExprNode left_match_expr = 5;
+  LogicalExprNode right_match_expr = 6;
+  AsOfMatchOperator match_operator = 7;
+  datafusion_common.JoinConstraint join_constraint = 8;
 }
 
 message DistinctNode {
@@ -881,6 +901,7 @@ message PhysicalPlanNode {
     BufferExecNode buffer = 37;
     ArrowScanExecNode arrow_scan = 38;
     ScalarSubqueryExecNode scalar_subquery = 39;
+    AsOfJoinExecNode as_of_join = 40;
   }
 }
 
@@ -1635,6 +1656,16 @@ message SortMergeJoinExecNode {
   JoinFilter filter = 5;
   repeated SortExprNode sort_options = 6;
   datafusion_common.NullEquality null_equality = 7;
+}
+
+message AsOfJoinExecNode {
+  PhysicalPlanNode left = 1;
+  PhysicalPlanNode right = 2;
+  repeated JoinOn on = 3;
+  PhysicalExprNode left_match_expr = 4;
+  PhysicalExprNode right_match_expr = 5;
+  AsOfMatchOperator match_operator = 6;
+  repeated uint32 right_output_indices = 7;
 }
 
 message AsyncFuncExecNode {

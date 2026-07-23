@@ -74,8 +74,9 @@ use datafusion_common::format::{
 };
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
-    Constraints, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, SplitPoint,
-    TableReference, internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    SplitPoint, TableReference, internal_datafusion_err, internal_err, not_impl_err,
+    plan_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::CopyTo;
@@ -90,7 +91,7 @@ use datafusion_expr::logical_plan::{
     ExplainOption, Extension, UserDefinedLogicalNodeCore,
 };
 use datafusion_expr::{
-    Accumulator, AggregateUDF, ColumnarValue, DmlStatement, ExprFunctionExt,
+    Accumulator, AggregateUDF, AsOfMatch, ColumnarValue, DmlStatement, ExprFunctionExt,
     ExprSchemable, HigherOrderUDF, LimitEffect, Literal, LogicalPlan, LogicalPlanBuilder,
     Operator, PartitionEvaluator, RangePartitioning, Repartition, ScalarUDF, Signature,
     TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
@@ -3770,6 +3771,39 @@ async fn roundtrip_join_null_equality() -> Result<()> {
     let rt = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{join:?}"), format!("{rt:?}"));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_asof_join() -> Result<()> {
+    let ctx = SessionContext::new();
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("symbol", DataType::Utf8, true),
+        Field::new("ts", DataType::Int64, true),
+        Field::new("id", DataType::Int32, false),
+    ]));
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("symbol", DataType::Utf8, true),
+        Field::new("ts", DataType::Int64, true),
+        Field::new("price", DataType::Int32, false),
+    ]));
+    ctx.register_table("trades", Arc::new(EmptyTable::new(left_schema)))?;
+    ctx.register_table("prices", Arc::new(EmptyTable::new(right_schema)))?;
+
+    let left = ctx.table("trades").await?.into_optimized_plan()?;
+    let right = ctx.table("prices").await?.into_optimized_plan()?;
+    for op in [Operator::Lt, Operator::LtEq, Operator::Gt, Operator::GtEq] {
+        let plan = LogicalPlanBuilder::from(left.clone())
+            .asof_join_using(
+                right.clone(),
+                vec![Column::from_name("symbol")],
+                AsOfMatch::new(col("trades.ts"), op, col("prices.ts")),
+            )?
+            .build()?;
+        let bytes = logical_plan_to_bytes(&plan)?;
+        let round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+        assert_eq!(format!("{plan:?}"), format!("{round_trip:?}"));
+    }
     Ok(())
 }
 
