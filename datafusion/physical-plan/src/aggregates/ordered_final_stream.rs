@@ -174,8 +174,10 @@ impl OrderedFinalSpillContext {
         !self.spills.is_empty()
     }
 
-    /// Sorts and spills the aggregated groups, or succeeds immediately if the
-    /// table is empty. Memory reservation should be updated by the caller.
+    /// Sorts and spills the aggregated groups. Memory reservation should be updated
+    /// by the caller.
+    ///
+    /// Individual spill files are ordered by the `group by` keys.
     ///
     /// See [`OrderedFinalAggregateStream`] for spilling details.
     fn spill_table(
