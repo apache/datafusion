@@ -712,9 +712,7 @@ fn illegal_nesting_err(outer: &Expr, inner: &Expr) -> Option<DataFusionError> {
     let (message, help) = match (outer, inner) {
         (Expr::AggregateFunction(_), Expr::AggregateFunction(_)) => (
             "Aggregate function calls cannot be nested",
-            format!(
-                "Compute '{inner}' in an inner query and aggregate its result, or use a window function such as '{outer} OVER ()'"
-            ),
+            format!("Compute '{inner}' in an inner query and aggregate its result"),
         ),
         (Expr::AggregateFunction(_), Expr::WindowFunction(_)) => (
             "Aggregate function calls cannot contain window function calls",

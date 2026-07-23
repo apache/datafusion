@@ -683,7 +683,7 @@ fn test_nested_aggregate() -> Result<()> {
     assert_eq!(diag.span, Some(spans["a"]));
     assert_snapshot!(
         diag.helps[0].message,
-        @"Compute 'sum(person.age)' in an inner query and aggregate its result, or use a window function such as 'sum(sum(person.age)) OVER ()'"
+        @"Compute 'sum(person.age)' in an inner query and aggregate its result"
     );
     Ok(())
 }
