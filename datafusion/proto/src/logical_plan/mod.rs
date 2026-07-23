@@ -2211,6 +2211,9 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::DescribeTable(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for DescribeTable",
             )),
+            LogicalPlan::AsOfJoin(_) => Err(proto_error(
+                "LogicalPlan serde is not yet implemented for AsOfJoin",
+            )),
             LogicalPlan::RecursiveQuery(recursive) => {
                 let static_term = LogicalPlanNode::try_from_logical_plan(
                     recursive.static_term.as_ref(),
