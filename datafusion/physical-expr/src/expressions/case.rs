@@ -2611,6 +2611,31 @@ mod tests {
             &schema,
         );
 
+        // Nested null-preserving wrappers must be unwrapped recursively. `CAST(-foo)`
+        // still collapses `foo IS NOT NULL` to `false`, so the branch is
+        // unreachable-as-null and the `CASE` is not nullable.
+        let cast_negative_foo = cast(
+            expressions::negative(Arc::clone(&foo), &schema)?,
+            &schema,
+            DataType::Int64,
+        )?;
+        assert_not_nullable(
+            when_then_else(&foo_is_not_null, &cast_negative_foo, &lit(0i64))?,
+            &schema,
+        );
+
+        // `TRY_CAST` is intentionally NOT treated as null-preserving: it yields
+        // NULL on a failed cast even for a non-null input, so a guarded `TRY_CAST`
+        // branch is still reachable-as-null and the `CASE` stays nullable. This must
+        // stay consistent with the logical planner (`unwrap_certainly_null_expr` in
+        // `datafusion/expr/src/expr_schema.rs`); unwrapping it on only one side would
+        // reintroduce a logical/physical schema mismatch.
+        let try_cast_foo = try_cast(Arc::clone(&foo), &schema, DataType::Int64)?;
+        assert_nullable(
+            when_then_else(&foo_is_not_null, &try_cast_foo, &lit(0i64))?,
+            &schema,
+        );
+
         assert_not_nullable(
             when_then_else(
                 &binary(
@@ -2738,6 +2763,13 @@ mod tests {
         let not_predicate = expressions::not(Arc::clone(&predicate))?;
         assert_not_nullable(
             when_then_else(&predicate_is_not_null, &not_predicate, &lit(false))?,
+            &boolean_schema,
+        );
+
+        // Nested `NOT` is likewise unwrapped recursively.
+        let not_not_predicate = expressions::not(Arc::clone(&not_predicate))?;
+        assert_not_nullable(
+            when_then_else(&predicate_is_not_null, &not_not_predicate, &lit(false))?,
             &boolean_schema,
         );
 
