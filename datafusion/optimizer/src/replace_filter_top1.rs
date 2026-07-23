@@ -126,7 +126,10 @@ impl OptimizerRule for ReplaceFilterTop1 {
 
         // Group by the partition keys and take `first_value(col ORDER BY ...)` for every other
         // input column, aliased back to that column's qualifier+name
-        let first_value = config.function_registry().unwrap().udaf("first_value")?;
+        let Some(registry) = config.function_registry() else {
+            return Ok(Transformed::no(plan));
+        };
+        let first_value = registry.udaf("first_value")?;
         let aggr_expr = input_cols
             .iter()
             .filter(|c| !is_partition(c))
