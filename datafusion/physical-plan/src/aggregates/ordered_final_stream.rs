@@ -778,10 +778,12 @@ impl Stream for OrderedFinalAggregateStream {
     ///      One sorted run was written; resume reading the original input.
     ///
     /// PreparingMergeInput
+    ///   Spill the final in-memory run and build the input ordered replay stream.
     ///   -> MergingSpills
     ///      The final run was spilled and the ordered replay stream was built.
     ///
     /// MergingSpills
+    ///   Aggregate the merged spill runs and emit final results.
     ///   -> MergingSpills
     ///      Forward one result batch from the fully ordered replay stream that
     ///      consumes the sort-preserving merge.
