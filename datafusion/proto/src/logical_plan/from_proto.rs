@@ -234,6 +234,22 @@ impl FromProto<protobuf::JoinConstraint> for JoinConstraint {
     }
 }
 
+impl TryFromProto<protobuf::AsOfMatchOperator> for Operator {
+    type Error = Error;
+
+    fn try_from_proto(value: protobuf::AsOfMatchOperator) -> Result<Self, Self::Error> {
+        match value {
+            protobuf::AsOfMatchOperator::Lt => Ok(Self::Lt),
+            protobuf::AsOfMatchOperator::LtEq => Ok(Self::LtEq),
+            protobuf::AsOfMatchOperator::Gt => Ok(Self::Gt),
+            protobuf::AsOfMatchOperator::GtEq => Ok(Self::GtEq),
+            protobuf::AsOfMatchOperator::Unspecified => Err(Error::General(
+                "ASOF match operator must be specified".to_string(),
+            )),
+        }
+    }
+}
+
 impl FromProto<protobuf::NullEquality> for NullEquality {
     fn from_proto(t: protobuf::NullEquality) -> Self {
         match t {
