@@ -171,18 +171,12 @@ fn pushdown_sorts_helper(
         // If there are no ordering requirements from the parent, nothing to do
         // unless we have a sort.
         if is_sort(&plan) {
-            // This Sort establishes the ordering consumed by an ancestor. Keep
-            // it and continue optimizing below it using its own requirements.
-            if preserve_input_order {
-                sort_push_down.plan = plan;
-                assign_initial_requirements(&mut sort_push_down);
-                return Ok(Transformed::no(sort_push_down));
-            }
             let Some(sort_ordering) = plan.output_ordering().cloned() else {
                 return internal_err!("SortExec should have output ordering");
             };
-            // The sort is unnecessary, just propagate the stricter fetch and
-            // ordering requirements.
+            // Propagate the Sort as a concrete ordering requirement. This can
+            // safely relocate the Sort through compatible operators without
+            // discarding an ordering consumed by an ancestor.
             let fetch = min_fetch(plan.fetch(), parent_fetch);
             sort_push_down = sort_push_down
                 .children
