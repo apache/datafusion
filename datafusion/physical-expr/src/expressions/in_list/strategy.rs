@@ -146,40 +146,12 @@ where
     T: BranchlessFilterType,
     BranchlessNative<T>: Copy + PartialEq + Send + Sync,
 {
+    // Larger lists use the standard filter. `try_new` checks the limit again.
     if non_null_count > T::MAX_LIST_LEN {
         return Ok(None);
     }
 
-    branchless_filter_for_len::<T>(in_array, non_null_count).map(Some)
-}
-
-fn branchless_filter_for_len<T>(
-    in_array: &ArrayRef,
-    non_null_count: usize,
-) -> Result<StaticFilterRef>
-where
-    T: BranchlessFilterType,
-    BranchlessNative<T>: Copy + PartialEq + Send + Sync,
-{
-    macro_rules! dispatch {
-        ($($n:literal),* $(,)?) => {
-            match non_null_count {
-                $($n => Ok(Arc::new(BranchlessFilter::<T, $n>::try_new(in_array)?)),)*
-                _ => unreachable!("validated branchless list length"),
-            }
-        };
-    }
-
-    match T::MAX_LIST_LEN {
-        4 => dispatch!(0, 1, 2, 3, 4),
-        8 => dispatch!(0, 1, 2, 3, 4, 5, 6, 7, 8),
-        16 => dispatch!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16),
-        32 => dispatch!(
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-            22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
-        ),
-        _ => unreachable!("known branchless max list length"),
-    }
+    Ok(Some(Arc::new(BranchlessFilter::<T>::try_new(in_array)?)))
 }
 
 #[cfg(test)]

@@ -27,7 +27,7 @@ use datafusion_common::{HashSet, Result, exec_datafusion_err};
 use std::hash::{Hash, Hasher};
 use std::mem::size_of;
 
-use super::result::build_in_list_result;
+use super::result::{build_in_list_result, build_result_from_contains};
 use super::static_filter::{StaticFilter, handle_dictionary};
 
 /// Storage for the bits used by [`BitmapFilter`].
@@ -326,19 +326,24 @@ branchless_filter_type!(
     BRANCHLESS_MAX_16B
 );
 
+/// Checks each input value against the `IN`-list values.
+type MembershipCheck<C> = fn(in_list_values: &[C], input_values: &[C]) -> BooleanBuffer;
+
 /// A branchless filter for fixed-width primitive `IN` lists up to
 /// `T::MAX_LIST_LEN` values.
 ///
-/// The filter stores the non-null values in a fixed-size array and checks each
-/// input value with a fixed comparison chain. This avoids hash table work for
-/// short lists where a handful of direct comparisons is cheaper.
-pub(super) struct BranchlessFilter<T: BranchlessFilterType, const N: usize> {
+/// The filter stores the non-null `IN`-list values in a slice and chooses a
+/// comparison function for that length. Keeping the length out of
+/// `BranchlessFilter` avoids generating a full copy of the filter for every
+/// supported length.
+pub(super) struct BranchlessFilter<T: BranchlessFilterType> {
     expected_data_type: DataType,
     null_count: usize,
-    values: [BranchlessNative<T>; N],
+    in_list_values: Box<[BranchlessNative<T>]>,
+    check_values: MembershipCheck<BranchlessNative<T>>,
 }
 
-impl<T, const N: usize> BranchlessFilter<T, N>
+impl<T> BranchlessFilter<T>
 where
     T: BranchlessFilterType,
     BranchlessNative<T>: Copy + PartialEq,
@@ -348,75 +353,44 @@ where
             exec_datafusion_err!("BranchlessFilter: expected {} array", T::DATA_TYPE)
         })?;
         let non_null_count = in_array.len() - in_array.null_count();
-        if non_null_count != N {
+        // `try_new` can be called on its own, so check the limit here too.
+        if non_null_count > T::MAX_LIST_LEN {
             return Err(exec_datafusion_err!(
-                "BranchlessFilter: expected {N} non-null values, got {non_null_count}"
+                "BranchlessFilter: supports at most {} non-null values, got {non_null_count}",
+                T::MAX_LIST_LEN
             ));
         }
 
-        let input_values = branchless_values::<T>(in_array);
-        let mut values = [<T::CompareType as ArrowPrimitiveType>::default_value(); N];
-        let mut i = 0;
+        let all_values = branchless_values::<T>(in_array);
+        let mut in_list_values = Vec::with_capacity(non_null_count);
 
         match in_array.nulls() {
             None => {
-                for &value in input_values.iter() {
-                    values[i] = value;
-                    i += 1;
-                }
+                in_list_values.extend(all_values.iter().copied());
             }
             Some(nulls) => {
                 for row in
                     BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len())
                 {
-                    values[i] = input_values[row];
-                    i += 1;
+                    in_list_values.push(all_values[row]);
                 }
             }
         }
 
-        debug_assert_eq!(i, N);
+        debug_assert_eq!(in_list_values.len(), non_null_count);
+        let in_list_values = in_list_values.into_boxed_slice();
+        let check_values = membership_check_for_len::<T>(in_list_values.len());
+
         Ok(Self {
             expected_data_type: in_array.data_type().clone(),
             null_count: in_array.null_count(),
-            values,
-        })
-    }
-
-    #[inline(always)]
-    fn check(&self, needle: BranchlessNative<T>) -> bool {
-        // `N` is known at compile time, and this small method is always
-        // inlined. In optimized builds, the compiler can turn this into the
-        // same kind of code we would write by hand:
-        // `(value0 == needle) | (value1 == needle) | ...`.
-        //
-        // This simple shape also lets the optimizer use vector instructions
-        // (SIMD) when the caller applies the filter to many input rows.
-        //
-        // Use `|` instead of `||` so every comparison is evaluated. With `||`,
-        // the code would branch as soon as one value matched.
-        self.values
-            .iter()
-            .fold(false, |acc, &v| acc | (v == needle))
-    }
-
-    #[inline]
-    fn contains_slice(
-        &self,
-        values: &[BranchlessNative<T>],
-        nulls: Option<&NullBuffer>,
-        negated: bool,
-    ) -> BooleanArray {
-        build_in_list_result(values.len(), nulls, self.null_count > 0, negated, |i| {
-            // SAFETY: `build_in_list_result` invokes this closure for
-            // indices in `0..values.len()`.
-            let needle = unsafe { *values.get_unchecked(i) };
-            self.check(needle)
+            in_list_values,
+            check_values,
         })
     }
 }
 
-impl<T, const N: usize> StaticFilter for BranchlessFilter<T, N>
+impl<T> StaticFilter for BranchlessFilter<T>
 where
     T: BranchlessFilterType,
     BranchlessNative<T>: Copy + PartialEq + Send + Sync,
@@ -441,9 +415,70 @@ where
         let v = v.as_primitive_opt::<T>().ok_or_else(|| {
             exec_datafusion_err!("BranchlessFilter: expected {} array", T::DATA_TYPE)
         })?;
-        let values = branchless_values::<T>(v);
-        Ok(self.contains_slice(values.as_ref(), v.nulls(), negated))
+        let input_values = branchless_values::<T>(v);
+        let matches =
+            (self.check_values)(self.in_list_values.as_ref(), input_values.as_ref());
+        Ok(build_result_from_contains(
+            v.nulls(),
+            self.null_count > 0,
+            negated,
+            matches,
+        ))
     }
+}
+
+/// Picks the comparison function for `len` non-null `IN`-list values.
+///
+/// A length of zero is used when the list contains only nulls. The comparisons
+/// return false, and the caller then applies the usual SQL null behavior.
+fn membership_check_for_len<T>(len: usize) -> MembershipCheck<BranchlessNative<T>>
+where
+    T: BranchlessFilterType,
+    BranchlessNative<T>: Copy + PartialEq,
+{
+    macro_rules! choose {
+        ($($n:literal),* $(,)?) => {
+            match len {
+                $($n => check_values::<BranchlessNative<T>, $n>,)*
+                _ => unreachable!("list length exceeds the configured limit"),
+            }
+        };
+    }
+
+    // Avoid creating checks for lengths a type does not support.
+    match T::MAX_LIST_LEN {
+        4 => choose!(0, 1, 2, 3, 4),
+        8 => choose!(0, 1, 2, 3, 4, 5, 6, 7, 8),
+        16 => choose!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16),
+        32 => choose!(
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+            22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+        ),
+        _ => unreachable!("list-size limits must be 4, 8, 16, or 32"),
+    }
+}
+
+#[inline]
+fn check_values<C, const N: usize>(
+    in_list_values: &[C],
+    input_values: &[C],
+) -> BooleanBuffer
+where
+    C: Copy + PartialEq,
+{
+    let in_list_values: &[C; N] = in_list_values
+        .try_into()
+        .expect("comparison length matches IN-list values");
+
+    BooleanBuffer::collect_bool(input_values.len(), |i| {
+        // SAFETY: `collect_bool` invokes this closure for indices in
+        // `0..input_values.len()`.
+        let input_value = unsafe { *input_values.get_unchecked(i) };
+        // `|` checks every list value; `||` would stop after the first match.
+        in_list_values
+            .iter()
+            .fold(false, |acc, &value| acc | (value == input_value))
+    })
 }
 
 fn branchless_values<T>(array: &PrimitiveArray<T>) -> ScalarBuffer<BranchlessNative<T>>
@@ -826,7 +861,7 @@ mod tests {
     #[test]
     fn branchless_filter_u8_handles_nulls() -> Result<()> {
         let haystack: ArrayRef = Arc::new(UInt8Array::from(vec![Some(1), None, Some(3)]));
-        let filter = BranchlessFilter::<UInt8Type, 2>::try_new(&haystack)?;
+        let filter = BranchlessFilter::<UInt8Type>::try_new(&haystack)?;
         let needles = UInt8Array::from(vec![Some(1), Some(2), None, Some(3)]);
 
         assert_contains(&filter, &needles, vec![Some(true), None, None, Some(true)])?;
@@ -839,12 +874,25 @@ mod tests {
     }
 
     #[test]
+    fn branchless_filter_all_null_list_preserves_sql_null_semantics() -> Result<()> {
+        let haystack: ArrayRef = Arc::new(UInt8Array::from(vec![None, None]));
+        let filter = BranchlessFilter::<UInt8Type>::try_new(&haystack)?;
+        let needles = UInt8Array::from(vec![Some(1), None]);
+        let expected = BooleanArray::from(vec![None, None]);
+
+        assert_eq!(filter.contains(&needles, false)?, expected);
+        assert_eq!(filter.contains(&needles, true)?, expected);
+
+        Ok(())
+    }
+
+    #[test]
     fn branchless_filter_i8_handles_signed_boundaries_and_slices() -> Result<()> {
         let haystack: ArrayRef = Arc::new(
             Int8Array::from(vec![Some(99), Some(i8::MIN), None, Some(-1), Some(42)])
                 .slice(1, 3),
         );
-        let filter = BranchlessFilter::<Int8Type, 2>::try_new(&haystack)?;
+        let filter = BranchlessFilter::<Int8Type>::try_new(&haystack)?;
         let needles =
             Int8Array::from(vec![Some(7), Some(i8::MIN), Some(-1), None]).slice(1, 3);
 
@@ -877,7 +925,7 @@ mod tests {
             ])
             .slice(1, 3),
         );
-        let filter = BranchlessFilter::<Float16Type, 2>::try_new(&haystack)?;
+        let filter = BranchlessFilter::<Float16Type>::try_new(&haystack)?;
         let needles = Float16Array::from(vec![
             Some(f16::from_f32(0.0)),
             Some(f16::from_f32(-0.0)),
@@ -908,7 +956,7 @@ mod tests {
         let nan_b = f32::from_bits(0x7fc0_0002);
         let haystack: ArrayRef =
             Arc::new(Float32Array::from(vec![Some(-0.0), Some(nan_a)]));
-        let filter = BranchlessFilter::<Float32Type, 2>::try_new(&haystack)?;
+        let filter = BranchlessFilter::<Float32Type>::try_new(&haystack)?;
         let needles =
             Float32Array::from(vec![Some(0.0), Some(-0.0), Some(nan_a), Some(nan_b)]);
 
@@ -921,7 +969,7 @@ mod tests {
         let nan_b = f64::from_bits(0x7ff8_0000_0000_0002);
         let haystack: ArrayRef =
             Arc::new(Float64Array::from(vec![Some(-0.0), Some(nan_a)]));
-        let filter = BranchlessFilter::<Float64Type, 2>::try_new(&haystack)?;
+        let filter = BranchlessFilter::<Float64Type>::try_new(&haystack)?;
         let needles =
             Float64Array::from(vec![Some(0.0), Some(-0.0), Some(nan_a), Some(nan_b)]);
 
@@ -938,7 +986,7 @@ mod tests {
         let haystack: ArrayRef = Arc::new(
             TimestampNanosecondArray::from(vec![Some(1), Some(3)]).with_timezone("UTC"),
         );
-        let filter = BranchlessFilter::<TimestampNanosecondType, 2>::try_new(&haystack)?;
+        let filter = BranchlessFilter::<TimestampNanosecondType>::try_new(&haystack)?;
         let needles = TimestampNanosecondArray::from(vec![Some(1), Some(2), None])
             .with_timezone("UTC");
 
@@ -965,7 +1013,7 @@ mod tests {
             Decimal128Array::from(vec![Some(12345), None, Some(-700), Some(42)])
                 .with_precision_and_scale(10, 2)?,
         );
-        let filter = BranchlessFilter::<Decimal128Type, 3>::try_new(&haystack)?;
+        let filter = BranchlessFilter::<Decimal128Type>::try_new(&haystack)?;
         let needles =
             Decimal128Array::from(vec![Some(12345), Some(999), None, Some(-700)])
                 .with_precision_and_scale(10, 2)?;
@@ -995,7 +1043,7 @@ mod tests {
             Some(two_days),
             Some(three_nanos),
         ]));
-        let filter = BranchlessFilter::<IntervalMonthDayNanoType, 3>::try_new(&haystack)?;
+        let filter = BranchlessFilter::<IntervalMonthDayNanoType>::try_new(&haystack)?;
         let needles = IntervalMonthDayNanoArray::from(vec![
             Some(one_month),
             Some(absent),
