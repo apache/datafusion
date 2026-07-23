@@ -1701,7 +1701,7 @@ impl<'de> serde::Deserialize<'de> for AsOfJoinExecNode {
                             if right_output_indices__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("rightOutputIndices"));
                             }
-                            right_output_indices__ =
+                            right_output_indices__ = 
                                 Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
                                     .into_iter().map(|x| x.0).collect())
                             ;
