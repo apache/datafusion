@@ -27,7 +27,10 @@ use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 
 use crate::PhysicalExpr;
-use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
+use crate::aggregates::group_values::{
+    GroupByMetrics, GroupValues, cast_group_values_to_schema,
+    group_value_emit_batch_size, new_group_values, schema_with_group_values,
+};
 use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
@@ -207,6 +210,72 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         Ok(())
     }
 
+    /// Materializes all partial state once, then returns schema-stable slices.
+    ///
+    /// A materialized dictionary group array may need a wider key type for all
+    /// groups. Each returned partial batch is therefore limited to the planned
+    /// key capacity and re-encoded to the planned schema after slicing. This
+    /// preserves the existing one-time materialization semantics while keeping
+    /// repartition and coalescing schemas stable.
+    pub(super) fn next_partial_output_batch_inner(
+        &mut self,
+        materialize_accumulator_fn: MaterializeAccumulatorFn,
+    ) -> Result<Option<RecordBatch>> {
+        let planned_schema = Arc::clone(&self.output_schema);
+        let configured_batch_size = self.batch_size;
+
+        let mut output =
+            match std::mem::replace(&mut self.state, AggregateHashTableState::Done) {
+                AggregateHashTableState::Outputting(mut state) => {
+                    if state.group_values.is_empty() {
+                        return Ok(None);
+                    }
+
+                    let emit_to = EmitTo::All;
+                    let timer = self.group_by_metrics.emitting_time.timer();
+                    let mut columns = state.group_values.emit(emit_to)?;
+                    let num_group_columns = columns.len();
+                    for acc in state.accumulators.iter_mut() {
+                        columns.extend(materialize_accumulator_fn(acc, emit_to)?);
+                    }
+                    drop(timer);
+
+                    let materialized_schema = schema_with_group_values(
+                        &planned_schema,
+                        &columns[..num_group_columns],
+                    );
+                    let batch = RecordBatch::try_new(materialized_schema, columns)?;
+                    debug_assert!(batch.num_rows() > 0);
+                    let batch_size = group_value_emit_batch_size(
+                        &planned_schema,
+                        num_group_columns,
+                        configured_batch_size,
+                    );
+                    MaterializedAggregateOutput::new_with_output_schema(
+                        batch,
+                        planned_schema,
+                        num_group_columns,
+                        batch_size,
+                    )
+                }
+                AggregateHashTableState::OutputtingMaterialized(output) => output,
+                AggregateHashTableState::Done => return Ok(None),
+                AggregateHashTableState::Building(_) => {
+                    return internal_err!(
+                        "next_output_batch must be called in the outputting state"
+                    );
+                }
+            };
+
+        let batch = output.next_batch()?;
+        if output.is_exhausted() {
+            self.state = AggregateHashTableState::Done;
+        } else {
+            self.state = AggregateHashTableState::OutputtingMaterialized(output);
+        }
+        Ok(batch)
+    }
+
     /// Materializes the full output once, then returns it downstream incrementally
     /// by slicing it into `batch_size` chunks.
     ///
@@ -235,14 +304,19 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                     let emit_to = EmitTo::All;
                     let timer = self.group_by_metrics.emitting_time.timer();
                     let mut columns = state.group_values.emit(emit_to)?;
+                    let num_group_columns = columns.len();
                     for acc in state.accumulators.iter_mut() {
                         columns.extend(materialize_accumulator_fn(acc, emit_to)?);
                     }
                     drop(timer);
 
+                    let output_schema = schema_with_group_values(
+                        &output_schema,
+                        &columns[..num_group_columns],
+                    );
                     let batch = RecordBatch::try_new(output_schema, columns)?;
                     debug_assert!(batch.num_rows() > 0);
-                    MaterializedAggregateOutput::new(batch)
+                    MaterializedAggregateOutput::new(batch, batch_size)
                 }
                 AggregateHashTableState::OutputtingMaterialized(output) => output,
                 AggregateHashTableState::Done => return Ok(None),
@@ -253,7 +327,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 }
             };
 
-        let batch = output.next_batch(batch_size);
+        let batch = output.next_batch()?;
         if output.is_exhausted() {
             self.state = AggregateHashTableState::Done;
         } else {
@@ -415,7 +489,7 @@ pub(super) enum AggregateHashTableState {
     Building(AggregateHashTableBuffer),
     /// Emitting results directly from group keys and aggregate state.
     Outputting(AggregateHashTableBuffer),
-    /// Materialize all the output results, and then incrementally output in the `OutputtingMaterialized` state.
+    /// Materialized output that is being sliced into downstream batches.
     ///
     /// Note this is a temporary solution until the `GroupValues` issue is solved:
     /// Issue: <https://github.com/apache/datafusion/issues/23178>
@@ -425,29 +499,65 @@ pub(super) enum AggregateHashTableState {
 
 /// Fully evaluated aggregate output and the next row offset to emit.
 ///
-/// Final aggregate evaluation consumes accumulator state, and partial terminal
-/// output should not repeatedly renumber group values with `EmitTo::First`.
-/// Materialize once and then slice to honor `batch_size` across output polls.
+/// Partial output can use a narrower target schema than the materialized batch;
+/// final output uses the materialized schema directly.
 pub(super) struct MaterializedAggregateOutput {
     batch: RecordBatch,
+    output_schema: SchemaRef,
+    num_group_columns: usize,
+    batch_size: usize,
     offset: usize,
 }
 
 impl MaterializedAggregateOutput {
-    pub(super) fn new(batch: RecordBatch) -> Self {
-        Self { batch, offset: 0 }
+    pub(super) fn new(batch: RecordBatch, batch_size: usize) -> Self {
+        Self {
+            output_schema: batch.schema(),
+            batch,
+            num_group_columns: 0,
+            batch_size,
+            offset: 0,
+        }
     }
 
-    pub(super) fn next_batch(&mut self, batch_size: usize) -> Option<RecordBatch> {
-        debug_assert!(batch_size > 0);
+    pub(super) fn new_with_output_schema(
+        batch: RecordBatch,
+        output_schema: SchemaRef,
+        num_group_columns: usize,
+        batch_size: usize,
+    ) -> Self {
+        Self {
+            batch,
+            output_schema,
+            num_group_columns,
+            batch_size,
+            offset: 0,
+        }
+    }
+
+    pub(super) fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        debug_assert!(self.batch_size > 0);
         if self.is_exhausted() {
-            return None;
+            return Ok(None);
         }
 
-        let length = batch_size.min(self.batch.num_rows() - self.offset);
+        let length = self.batch_size.min(self.batch.num_rows() - self.offset);
         let batch = self.batch.slice(self.offset, length);
         self.offset += length;
-        Some(batch)
+
+        if batch.schema() == self.output_schema {
+            return Ok(Some(batch));
+        }
+
+        let mut columns = batch.columns().to_vec();
+        cast_group_values_to_schema(
+            &mut columns[..self.num_group_columns],
+            &self.output_schema,
+        )?;
+        Ok(Some(RecordBatch::try_new(
+            Arc::clone(&self.output_schema),
+            columns,
+        )?))
     }
 
     pub(super) fn is_exhausted(&self) -> bool {
@@ -632,12 +742,12 @@ mod tests {
             schema,
             vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]))],
         )?;
-        let mut output = MaterializedAggregateOutput::new(batch);
+        let mut output = MaterializedAggregateOutput::new(batch, 2);
 
-        assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![1, 2]);
-        assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![3, 4]);
-        assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![5]);
-        assert!(output.next_batch(2).is_none());
+        assert_eq!(int32_values(&output.next_batch()?.unwrap(), 0), vec![1, 2]);
+        assert_eq!(int32_values(&output.next_batch()?.unwrap(), 0), vec![3, 4]);
+        assert_eq!(int32_values(&output.next_batch()?.unwrap(), 0), vec![5]);
+        assert!(output.next_batch()?.is_none());
         assert!(output.is_exhausted());
 
         Ok(())

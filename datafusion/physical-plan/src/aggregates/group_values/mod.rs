@@ -23,10 +23,152 @@ use arrow::array::types::{
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use arrow::array::{ArrayRef, downcast_primitive};
-use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
+use arrow::compute::cast;
+use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef, TimeUnit};
 use datafusion_common::Result;
+use std::sync::Arc;
 
 use datafusion_expr::EmitTo;
+
+/// Returns `schema` with its leading group fields updated to the data types
+/// actually emitted by [`GroupValues`]. Dictionary key types may grow at
+/// runtime, while all field names, nullability, and metadata remain unchanged.
+pub(crate) fn schema_with_group_values(
+    schema: &SchemaRef,
+    group_values: &[ArrayRef],
+) -> SchemaRef {
+    if group_values
+        .iter()
+        .zip(schema.fields())
+        .all(|(array, field)| array.data_type() == field.data_type())
+    {
+        return Arc::clone(schema);
+    }
+
+    let fields = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(index, field)| match group_values.get(index) {
+            Some(array) if array.data_type() != field.data_type() => Arc::new(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(array.data_type().clone()),
+            ),
+            _ => Arc::clone(field),
+        })
+        .collect::<Vec<_>>();
+
+    Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
+}
+
+/// Returns the largest partial aggregate batch that can be emitted without
+/// changing any top-level dictionary group key type in `schema`.
+///
+/// Partial aggregate batches cross fixed-schema transport boundaries such as
+/// repartition coalescing. Splitting them at the dictionary key capacity keeps
+/// that transport schema stable; the final aggregate can still combine all
+/// groups and promote its output key type dynamically.
+pub(crate) fn group_value_emit_batch_size(
+    schema: &SchemaRef,
+    num_group_fields: usize,
+    batch_size: usize,
+) -> usize {
+    schema
+        .fields()
+        .iter()
+        .take(num_group_fields)
+        .filter_map(|field| match field.data_type() {
+            DataType::Dictionary(key_type, _) => dictionary_key_capacity(key_type),
+            _ => None,
+        })
+        .fold(batch_size, usize::min)
+        .max(1)
+}
+
+fn dictionary_key_capacity(key_type: &DataType) -> Option<usize> {
+    let capacity = match key_type {
+        DataType::Int8 => 1u64 << 7,
+        DataType::Int16 => 1u64 << 15,
+        DataType::Int32 => 1u64 << 31,
+        DataType::UInt8 => 1u64 << 8,
+        DataType::UInt16 => 1u64 << 16,
+        DataType::UInt32 => 1u64 << 32,
+        DataType::Int64 | DataType::UInt64 => return Some(usize::MAX),
+        _ => return None,
+    };
+    Some(usize::try_from(capacity).unwrap_or(usize::MAX))
+}
+
+/// Casts the leading group-value arrays to the corresponding schema fields.
+/// Dictionary arrays are decoded and re-encoded when their key type changes so
+/// sliced batches receive compact keys starting at zero.
+pub(crate) fn cast_group_values_to_schema(
+    group_values: &mut [ArrayRef],
+    schema: &SchemaRef,
+) -> Result<()> {
+    for (array, field) in group_values.iter_mut().zip(schema.fields()) {
+        if array.data_type() == field.data_type() {
+            continue;
+        }
+
+        *array = match (array.data_type(), field.data_type()) {
+            (DataType::Dictionary(_, _), DataType::Dictionary(_, value_type)) => {
+                let values = cast(array.as_ref(), value_type.as_ref())?;
+                cast(values.as_ref(), field.data_type())?
+            }
+            _ => cast(array.as_ref(), field.data_type())?,
+        };
+    }
+    Ok(())
+}
+
+/// Returns a stable spill schema whose top-level dictionary group keys use
+/// their widest key type. This widening is internal to spill IPC and does not
+/// change planned or non-spill aggregate output schemas.
+pub(crate) fn group_value_spill_schema(
+    schema: &SchemaRef,
+    num_group_fields: usize,
+) -> SchemaRef {
+    let fields = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            if index < num_group_fields {
+                group_value_spill_field(field.as_ref())
+            } else {
+                Arc::clone(field)
+            }
+        })
+        .collect::<Vec<_>>();
+
+    Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
+}
+
+fn group_value_spill_field(field: &Field) -> FieldRef {
+    let data_type = match field.data_type() {
+        DataType::Dictionary(key_type, value_type) => {
+            let key_type = match key_type.as_ref() {
+                DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
+                    DataType::Int64
+                }
+                DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64 => DataType::UInt64,
+                _ => key_type.as_ref().clone(),
+            };
+            DataType::Dictionary(
+                Box::new(key_type),
+                Box::new(value_type.as_ref().clone()),
+            )
+        }
+        _ => field.data_type().clone(),
+    };
+    Arc::new(field.clone().with_data_type(data_type))
+}
 
 pub mod multi_group_by;
 

@@ -169,6 +169,7 @@ impl OrderedFinalAggregateStream {
                     // Some finalized groups can be emitted. Yield them, then
                     // continue aggregating input in the current state.
                     Ok(Some(batch)) => {
+                        self.schema = batch.schema();
                         let next_state =
                             OrderedFinalAggregateState::ReadingInput { table };
                         self.resize_reservation_for_state(&next_state);
@@ -237,6 +238,7 @@ impl OrderedFinalAggregateStream {
 
         match result {
             Ok(Some(batch)) => {
+                self.schema = batch.schema();
                 let next_state = if table.is_empty() {
                     OrderedFinalAggregateState::Done
                 } else {

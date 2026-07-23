@@ -30,7 +30,10 @@ use datafusion_expr::EmitTo;
 
 use crate::InputOrderMode;
 use crate::PhysicalExpr;
-use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_values};
+use crate::aggregates::group_values::{
+    GroupByMetrics, GroupValues, group_value_emit_batch_size, new_group_values,
+    schema_with_group_values,
+};
 use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
@@ -234,7 +237,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             + self.buffer.group_indices.allocated_size()
     }
 
-    /// Returns the [`EmitTo`], clamped to the specified batch size
+    /// Returns the [`EmitTo`], clamped to the specified maximum batch size.
     ///
     /// Returns `(emit_to, should_remove_groups)`, where `emit_to` is the number
     /// of groups to emit from `GroupValues` / accumulators, and
@@ -244,16 +247,18 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         &self,
         group_count: usize,
         emit_to: EmitTo,
+        max_batch_size: usize,
     ) -> (EmitTo, bool) {
         match emit_to {
-            EmitTo::First(n) => (EmitTo::First(n.min(self.batch_size)), true),
-            EmitTo::All if group_count <= self.batch_size => (EmitTo::All, false),
-            EmitTo::All => (EmitTo::First(self.batch_size), false),
+            EmitTo::First(n) => (EmitTo::First(n.min(max_batch_size)), true),
+            EmitTo::All if group_count <= max_batch_size => (EmitTo::All, false),
+            EmitTo::All => (EmitTo::First(max_batch_size), false),
         }
     }
+
     /// Aggregates one evaluated input batch.
     ///
-    /// This common utility is used by ordered partial and ordered final aggregation.
+    /// This common utility is used by ordered partial and final aggregation.
     ///
     /// # Argument: `is_final`
     ///
@@ -308,12 +313,12 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
     /// Emits groups allowed by `GroupOrdering`, leaving only the current
     /// unfinished ordered-key range buffered.
     ///
-    /// This common utility is used by ordered partial and ordered final aggregation.
+    /// This common utility is used by ordered partial and final aggregation.
     ///
     /// # Argument: `is_final`
     ///
-    /// - `true`: output final aggregate values.
-    /// - `false`: output partial accumulator states.
+    /// - `true`: output final aggregate values and permit dictionary key promotion.
+    /// - `false`: output partial accumulator states with the planned schema.
     pub(super) fn next_output_batch_for_mode(
         &mut self,
         is_final: bool,
@@ -325,11 +330,21 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         let Some(emit_to) = self.buffer.group_ordering.emit_to() else {
             return Ok(None);
         };
+        let max_batch_size = if is_final {
+            self.batch_size
+        } else {
+            group_value_emit_batch_size(
+                &self.output_schema,
+                self.buffer.group_by.num_group_exprs(),
+                self.batch_size,
+            )
+        };
         let (emit_to, should_remove_groups) =
-            self.clamp_emit_to(self.buffer.group_values.len(), emit_to);
+            self.clamp_emit_to(self.buffer.group_values.len(), emit_to, max_batch_size);
 
         let timer = self.group_by_metrics.emitting_time.timer();
         let mut output = self.buffer.group_values.emit(emit_to)?;
+        let num_group_columns = output.len();
         if should_remove_groups {
             match emit_to {
                 EmitTo::First(n) => self.buffer.group_ordering.remove_groups(n),
@@ -349,7 +364,12 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         }
         drop(timer);
 
-        let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
+        let output_schema = if is_final {
+            schema_with_group_values(&self.output_schema, &output[..num_group_columns])
+        } else {
+            Arc::clone(&self.output_schema)
+        };
+        let batch = RecordBatch::try_new(output_schema, output)?;
         debug_assert!(batch.num_rows() > 0);
 
         Ok(Some(batch))

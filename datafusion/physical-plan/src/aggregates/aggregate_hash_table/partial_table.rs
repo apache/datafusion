@@ -58,14 +58,15 @@ impl AggregateHashTable<PartialMarker> {
 
     /// Emits the next batch of aggregated group keys and aggregate states.
     ///
-    /// The output batch size is determined by `self.batch_size`.
+    /// The output batch size is bounded by both `self.batch_size` and any
+    /// dictionary group key capacity required to preserve the planned schema.
     ///
     /// Returns `Some(batch)` for each emitted batch, `None` when output is
     /// exhausted, and an internal error if polled in the `Building` state.
     pub(in crate::aggregates) fn next_output_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        self.next_output_batch_inner(HashAggregateAccumulator::state)
+        self.next_partial_output_batch_inner(HashAggregateAccumulator::state)
     }
 
     pub(in crate::aggregates) fn can_skip_aggregation(&self) -> bool {

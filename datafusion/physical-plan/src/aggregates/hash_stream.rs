@@ -899,6 +899,7 @@ impl FinalHashAggregateStream {
 
         match result {
             Ok(Some(batch)) => {
+                self.schema = batch.schema();
                 let _ = self
                     .reservation
                     .try_resize(original_state.hash_table().memory_size());
