@@ -1735,10 +1735,11 @@ SELECT
   digest(column1, 'blake2s') = digest('tom', 'blake2s'),
   digest(column1, 'blake2b') = digest('tom', 'blake2b'),
   digest(column1, 'blake3') = digest('tom', 'blake3')
-FROM (VALUES ('tom'), (NULL)) AS t(column1);
+FROM (VALUES ('tom'), (NULL), ('mot')) AS t(column1);
 ----
 true true true true true true true true
 NULL NULL NULL NULL NULL NULL NULL NULL
+false false false false false false false false
 
 # binary-view, large-utf8, and utf8-view array inputs
 query BBBBBBBB
@@ -1751,19 +1752,21 @@ SELECT
   digest(arrow_cast(column1, 'BinaryView'), 'blake2s') = digest('tom', 'blake2s'),
   digest(arrow_cast(column1, 'BinaryView'), 'blake2b') = digest('tom', 'blake2b'),
   digest(arrow_cast(column1, 'BinaryView'), 'blake3') = digest('tom', 'blake3')
-FROM (VALUES ('tom'), (NULL)) AS t(column1);
+FROM (VALUES ('tom'), (NULL), ('mot')) AS t(column1);
 ----
 true true true true true true true true
 NULL NULL NULL NULL NULL NULL NULL NULL
+false false false false false false false false
 
 query BB
 SELECT
   digest(arrow_cast(column1, 'LargeUtf8'), 'md5') = digest('tom', 'md5'),
   digest(arrow_cast(column1, 'Utf8View'), 'md5') = digest('tom', 'md5')
-FROM (VALUES ('tom'), (NULL)) AS t(column1);
+FROM (VALUES ('tom'), (NULL), ('mot')) AS t(column1);
 ----
 true true
 NULL NULL
+false false
 
 # invalid algorithm, dynamic algorithm, argument count, and argument type
 query error There is no built-in digest algorithm named 'unknown'
