@@ -808,11 +808,11 @@ pub trait PhysicalPlanNodeExt: Sized {
                     ctx,
                     proto_converter,
                 ),
-            PhysicalPlanType::Union(union) => {
-                self.try_into_union_physical_plan(union, ctx, proto_converter)
+            PhysicalPlanType::Union(_) => {
+                UnionExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::Interleave(interleave) => {
-                self.try_into_interleave_physical_plan(interleave, ctx, proto_converter)
+            PhysicalPlanType::Interleave(_) => {
+                InterleaveExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::CrossJoin(_) => {
                 CrossJoinExec::try_from_proto(self.node(), &decode_ctx)
@@ -954,22 +954,6 @@ pub trait PhysicalPlanNodeExt: Sized {
             )?
         {
             return Ok(node);
-        }
-
-        if let Some(union) = plan.downcast_ref::<UnionExec>() {
-            return protobuf::PhysicalPlanNode::try_from_union_exec(
-                union,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(interleave) = plan.downcast_ref::<InterleaveExec>() {
-            return protobuf::PhysicalPlanNode::try_from_interleave_exec(
-                interleave,
-                codec,
-                proto_converter,
-            );
         }
 
         if let Some(exec) = plan.downcast_ref::<WindowAggExec>() {
@@ -1998,30 +1982,46 @@ pub trait PhysicalPlanNodeExt: Sized {
         .map(|e| Arc::new(e) as _)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `UnionExec` deserializes itself via `UnionExec::try_from_proto`"
+    )]
     fn try_into_union_physical_plan(
         &self,
         union: &protobuf::UnionExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
-        for input in &union.inputs {
-            inputs.push(proto_converter.proto_to_execution_plan(input, ctx)?);
-        }
-        UnionExec::try_new(inputs)
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Union(union.clone())),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        UnionExec::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `InterleaveExec` deserializes itself via `InterleaveExec::try_from_proto`"
+    )]
     fn try_into_interleave_physical_plan(
         &self,
         interleave: &protobuf::InterleaveExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
-        for input in &interleave.inputs {
-            inputs.push(proto_converter.proto_to_execution_plan(input, ctx)?);
-        }
-        Ok(Arc::new(InterleaveExec::try_new(inputs)?))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Interleave(interleave.clone())),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        InterleaveExec::try_from_proto(&node, &decode_ctx)
     }
 
     #[deprecated(
@@ -3329,48 +3329,42 @@ pub trait PhysicalPlanNodeExt: Sized {
             .ok_or_else(|| internal_datafusion_err!("SortExec is not serializable"))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `UnionExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_union_exec(
         union: &UnionExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let mut inputs: Vec<protobuf::PhysicalPlanNode> = vec![];
-        for input in union.inputs() {
-            inputs.push(
-                protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-                    input.to_owned(),
-                    codec,
-                    proto_converter,
-                )?,
-            );
-        }
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Union(protobuf::UnionExecNode {
-                inputs,
-            })),
-        })
+        let encoder = ConverterPlanEncoder {
+            codec,
+            proto_converter,
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        union
+            .try_to_proto(&encode_ctx)?
+            .ok_or_else(|| internal_datafusion_err!("UnionExec is not serializable"))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `InterleaveExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_interleave_exec(
         interleave: &InterleaveExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let mut inputs: Vec<protobuf::PhysicalPlanNode> = vec![];
-        for input in interleave.inputs() {
-            inputs.push(
-                protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-                    input.to_owned(),
-                    codec,
-                    proto_converter,
-                )?,
-            );
-        }
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Interleave(
-                protobuf::InterleaveExecNode { inputs },
-            )),
-        })
+        let encoder = ConverterPlanEncoder {
+            codec,
+            proto_converter,
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        interleave
+            .try_to_proto(&encode_ctx)?
+            .ok_or_else(|| internal_datafusion_err!("InterleaveExec is not serializable"))
     }
 
     #[deprecated(
