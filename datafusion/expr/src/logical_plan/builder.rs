@@ -31,10 +31,10 @@ use crate::expr_rewriter::{
     rewrite_sort_cols_by_aggs,
 };
 use crate::logical_plan::{
-    Aggregate, Analyze, Distinct, DistinctOn, EmptyRelation, Explain, Filter, Join,
-    JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
-    Projection, Repartition, Sort, SubqueryAlias, TableScanBuilder, Union, Unnest,
-    Values, Window,
+    Aggregate, Analyze, AsOfJoin, AsOfMatch, Distinct, DistinctOn, EmptyRelation,
+    Explain, Filter, Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning,
+    PlanType, Prepare, Projection, Repartition, Sort, SubqueryAlias, TableScanBuilder,
+    Union, Unnest, Values, Window,
 };
 use crate::select_expr::SelectExpr;
 use crate::utils::{
@@ -1007,6 +1007,68 @@ impl LogicalPlanBuilder {
         )
     }
 
+    /// Apply a left-preserving ASOF join using equality expressions and one
+    /// ordered match condition.
+    pub fn asof_join(
+        self,
+        right: LogicalPlan,
+        on: Vec<(Expr, Expr)>,
+        match_condition: AsOfMatch,
+    ) -> Result<Self> {
+        self.asof_join_with_constraint(right, on, match_condition, JoinConstraint::On)
+    }
+
+    /// Apply a left-preserving ASOF join using `USING` equality keys.
+    pub fn asof_join_using(
+        self,
+        right: LogicalPlan,
+        using_keys: Vec<Column>,
+        match_condition: AsOfMatch,
+    ) -> Result<Self> {
+        let on = using_keys
+            .into_iter()
+            .map(|key| {
+                let left = Self::normalize(&self.plan, key.clone())?;
+                let right = Self::normalize(&right, key)?;
+                Ok((Expr::Column(left), Expr::Column(right)))
+            })
+            .collect::<Result<_>>()?;
+        self.asof_join_with_constraint(right, on, match_condition, JoinConstraint::Using)
+    }
+
+    fn asof_join_with_constraint(
+        self,
+        right: LogicalPlan,
+        on: Vec<(Expr, Expr)>,
+        match_condition: AsOfMatch,
+        join_constraint: JoinConstraint,
+    ) -> Result<Self> {
+        let normalize = |expr, schema: &DFSchema| {
+            normalize_col_with_schemas_and_ambiguity_check(expr, &[&[schema]], &[])
+        };
+        let on = on
+            .into_iter()
+            .map(|(left, right_expr)| {
+                Ok((
+                    normalize(left, self.plan.schema())?,
+                    normalize(right_expr, right.schema())?,
+                ))
+            })
+            .collect::<Result<_>>()?;
+        let match_condition = AsOfMatch {
+            left: normalize(match_condition.left, self.plan.schema())?,
+            op: match_condition.op,
+            right: normalize(match_condition.right, right.schema())?,
+        };
+        Ok(Self::new(LogicalPlan::AsOfJoin(AsOfJoin::try_new(
+            self.plan,
+            Arc::new(right),
+            on,
+            match_condition,
+            join_constraint,
+        )?)))
+    }
+
     pub(crate) fn normalize(plan: &LogicalPlan, column: Column) -> Result<Column> {
         if column.relation.is_some() {
             // column is already normalized
@@ -1774,6 +1836,43 @@ pub fn build_join_schema(
 
     let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
     dfschema.with_functional_dependencies(func_dependencies)
+}
+
+/// Creates the schema for a left-preserving ASOF join.
+///
+/// `ON` emits all left fields followed by nullable right fields. `USING` emits
+/// each equality key once by omitting the corresponding right field.
+pub fn build_asof_join_schema(
+    left: &DFSchema,
+    right: &DFSchema,
+    on: &[(Expr, Expr)],
+    join_constraint: JoinConstraint,
+) -> Result<DFSchema> {
+    let omitted_right_indices = if join_constraint == JoinConstraint::Using {
+        on.iter()
+            .map(|(_, right_expr)| {
+                let column = right_expr.get_as_join_column().ok_or_else(|| {
+                    plan_datafusion_err!("ASOF USING keys must be columns")
+                })?;
+                right.index_of_column(column)
+            })
+            .collect::<Result<HashSet<_>>>()?
+    } else {
+        HashSet::new()
+    };
+
+    let full_schema = build_join_schema(left, right, &JoinType::Left)?;
+    let left_len = left.fields().len();
+    let fields = full_schema
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| {
+            *index < left_len || !omitted_right_indices.contains(&(*index - left_len))
+        })
+        .map(|(_, (qualifier, field))| (qualifier.cloned(), Arc::clone(field)))
+        .collect();
+    DFSchema::new_with_metadata(fields, full_schema.metadata().clone())?
+        .with_functional_dependencies(left.functional_dependencies().clone())
 }
 
 /// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise
