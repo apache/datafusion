@@ -90,7 +90,7 @@ use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::memory::LazyMemoryExec;
 use datafusion_physical_plan::metrics::MetricCategory;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
-use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::proto::{
     ExecutionPlanDecode, ExecutionPlanDecodeCtx, ExecutionPlanEncode,
     ExecutionPlanEncodeCtx,
@@ -1145,28 +1145,21 @@ pub trait PhysicalPlanNodeExt: Sized {
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&projection.input, ctx, proto_converter)?;
-        let exprs = projection
-            .expr
-            .iter()
-            .zip(projection.expr_name.iter())
-            .map(|(expr, name)| {
-                Ok((
-                    proto_converter.proto_to_physical_expr(
-                        expr,
-                        input.schema().as_ref(),
-                        ctx,
-                    )?,
-                    name.to_string(),
-                ))
-            })
-            .collect::<Result<Vec<(Arc<dyn PhysicalExpr>, String)>>>()?;
-        let proj_exprs: Vec<ProjectionExpr> = exprs
-            .into_iter()
-            .map(|(expr, alias)| ProjectionExpr { expr, alias })
-            .collect();
-        Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input)?))
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        // `try_from_proto` takes the enclosing `PhysicalPlanNode`, while this
+        // deprecated method is driven by the `ProjectionExecNode` argument.
+        // Re-wrap the argument so the decoded plan keeps depending on it rather
+        // than on `self`, which a caller may not have kept in sync.
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Projection(Box::new(
+                projection.clone(),
+            ))),
+        };
+        ProjectionExec::try_from_proto(&node, &decode_ctx)
     }
 
     #[deprecated(
@@ -2777,31 +2770,13 @@ pub trait PhysicalPlanNodeExt: Sized {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.input().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-        let expr = exec
-            .expr()
-            .iter()
-            .map(|proj_expr| {
-                proto_converter.physical_expr_to_proto(&proj_expr.expr, codec)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let expr_name = exec
-            .expr()
-            .iter()
-            .map(|proj_expr| proj_expr.alias.clone())
-            .collect();
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Projection(Box::new(
-                protobuf::ProjectionExecNode {
-                    input: Some(Box::new(input)),
-                    expr,
-                    expr_name,
-                },
-            ))),
+        };
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("ProjectionExec::try_to_proto returned None")
         })
     }
 
