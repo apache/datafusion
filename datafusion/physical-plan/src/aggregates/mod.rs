@@ -1934,7 +1934,7 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn input_distribution_requirements(&self) -> InputDistributionRequirements {
-        let requirements = InputDistributionRequirements::new(match &self.mode {
+        InputDistributionRequirements::new(match &self.mode {
             AggregateMode::Partial | AggregateMode::PartialReduce => {
                 vec![Distribution::UnspecifiedDistribution]
             }
@@ -1944,15 +1944,7 @@ impl ExecutionPlan for AggregateExec {
             AggregateMode::Final | AggregateMode::Single => {
                 vec![Distribution::SinglePartition]
             }
-        });
-        match &self.mode {
-            AggregateMode::FinalPartitioned | AggregateMode::SinglePartitioned
-                if !self.group_by.has_grouping_set() =>
-            {
-                requirements.allow_range_satisfaction_for_key_partitioning()
-            }
-            _ => requirements,
-        }
+        })
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
