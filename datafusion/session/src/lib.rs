@@ -32,6 +32,10 @@
 //! * [`CatalogProviderList`], [`CatalogProvider`], and [`SchemaProvider`] -
 //!   Describe catalog hierarchies
 //! * [`TableProvider`] - Provides data for query planning and execution
+//! * [`QueryPlanner`], [`PhysicalPlanner`], and [`ExtensionPlanner`] - Query and
+//!   physical planning contracts
+//! * [`PhysicalOptimizerRule`] and [`PhysicalOptimizerContext`] - Physical
+//!   optimization contracts
 //! * [`SessionStore`] - Handles session persistence and retrieval
 //!
 //! The session system enables:
