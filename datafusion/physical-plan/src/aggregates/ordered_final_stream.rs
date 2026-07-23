@@ -45,11 +45,11 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
 /// Final aggregate stream for `InputOrderMode::Sorted` and
 /// `InputOrderMode::PartiallySorted`.
 ///
-/// See comments at [`super::ordered_partial_stream`] for details.
+/// See comments at [`super::ordered_partial_stream::OrderedPartialAggregateStream`] for details.
 ///
 /// # Spilling
 ///
-/// This section is only for implementation notes, for background, see [`super::ordered_partial_stream`]
+/// This section is only for implementation notes, for background, see [`super::ordered_partial_stream::OrderedPartialAggregateStream`]
 ///
 /// For partially sorted input, spilling works as follows:
 ///
