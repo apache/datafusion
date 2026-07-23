@@ -253,8 +253,11 @@ pub struct EmptyRelationNode {
 pub struct CreateExternalTableNode {
     #[prost(message, optional, tag = "9")]
     pub name: ::core::option::Option<TableReference>,
+    /// deprecated; use repeated locations
     #[prost(string, tag = "2")]
     pub location: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "16")]
+    pub locations: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, tag = "3")]
     pub file_type: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "4")]
@@ -2068,11 +2071,19 @@ pub struct JoinOn {
 pub struct EmptyExecNode {
     #[prost(message, optional, tag = "1")]
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    /// Number of output partitions. Absent (0) means a single partition, so that
+    /// plans encoded before this field existed decode to the previous default.
+    #[prost(uint32, tag = "2")]
+    pub partitions: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PlaceholderRowExecNode {
     #[prost(message, optional, tag = "1")]
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    /// Number of output partitions. Absent (0) means a single partition, so that
+    /// plans encoded before this field existed decode to the previous default.
+    #[prost(uint32, tag = "2")]
+    pub partitions: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProjectionExecNode {

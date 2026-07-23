@@ -65,6 +65,7 @@ pub(crate) fn coerce_single_list_arg(
             DataType::List(Arc::clone(field))
         }
         DataType::LargeListView(field) => DataType::LargeList(Arc::clone(field)),
+        DataType::Null => DataType::new_list(DataType::Null, true),
         _ => return plan_err!("{name} expected a list as first argument, got {list}"),
     };
 
@@ -140,6 +141,7 @@ pub(crate) mod test_utils {
         execution_props::ExecutionProps,
         expr::{HigherOrderFunction, LambdaVariable},
         lambda,
+        physical_planning_context::PhysicalPlanningContext,
     };
     use datafusion_physical_expr::create_physical_expr;
 
@@ -174,6 +176,7 @@ pub(crate) mod test_utils {
             )),
             &schema,
             &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
         )?
         .evaluate(&RecordBatch::try_new(
             Arc::clone(schema.inner()),

@@ -424,7 +424,6 @@ impl ExecutionPlan for SortMergeJoinExec {
             Distribution::KeyPartitioned(left_expr),
             Distribution::KeyPartitioned(right_expr),
         ])
-        .allow_range_satisfaction_for_key_partitioning()
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
@@ -651,5 +650,247 @@ impl ExecutionPlan for SortMergeJoinExec {
             self.sort_options.clone(),
             self.null_equality,
         )?)))
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        let left = ctx.encode_child(self.left())?;
+        let right = ctx.encode_child(self.right())?;
+        let on = self
+            .on()
+            .iter()
+            .map(|(left, right)| {
+                Ok(protobuf::JoinOn {
+                    left: Some(ctx.encode_expr(left)?),
+                    right: Some(ctx.encode_expr(right)?),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let join_type = match self.join_type() {
+            JoinType::Inner => protobuf::JoinType::Inner,
+            JoinType::Left => protobuf::JoinType::Left,
+            JoinType::Right => protobuf::JoinType::Right,
+            JoinType::Full => protobuf::JoinType::Full,
+            JoinType::LeftSemi => protobuf::JoinType::Leftsemi,
+            JoinType::RightSemi => protobuf::JoinType::Rightsemi,
+            JoinType::LeftAnti => protobuf::JoinType::Leftanti,
+            JoinType::RightAnti => protobuf::JoinType::Rightanti,
+            JoinType::LeftMark => protobuf::JoinType::Leftmark,
+            JoinType::RightMark => protobuf::JoinType::Rightmark,
+        };
+        let null_equality = match self.null_equality() {
+            NullEquality::NullEqualsNothing => protobuf::NullEquality::NullEqualsNothing,
+            NullEquality::NullEqualsNull => protobuf::NullEquality::NullEqualsNull,
+        };
+        let filter = self
+            .filter()
+            .as_ref()
+            .map(|filter| -> Result<protobuf::JoinFilter> {
+                let expression = ctx.encode_expr(filter.expression())?;
+                let column_indices = filter
+                    .column_indices()
+                    .iter()
+                    .map(|column_index| {
+                        let side = match column_index.side {
+                            JoinSide::Left => protobuf::JoinSide::LeftSide,
+                            JoinSide::Right => protobuf::JoinSide::RightSide,
+                            JoinSide::None => protobuf::JoinSide::None,
+                        };
+                        protobuf::ColumnIndex {
+                            index: column_index.index as u32,
+                            side: side.into(),
+                        }
+                    })
+                    .collect();
+                Ok(protobuf::JoinFilter {
+                    expression: Some(expression),
+                    column_indices,
+                    schema: Some(filter.schema().as_ref().try_into()?),
+                })
+            })
+            .transpose()?;
+        let sort_options = self
+            .sort_options()
+            .iter()
+            .map(|options| protobuf::SortExprNode {
+                expr: None,
+                asc: !options.descending,
+                nulls_first: options.nulls_first,
+            })
+            .collect();
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::SortMergeJoin(Box::new(
+                    protobuf::SortMergeJoinExecNode {
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
+                        on,
+                        join_type: join_type.into(),
+                        filter,
+                        sort_options,
+                        null_equality: null_equality.into(),
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl SortMergeJoinExec {
+    /// Reconstruct a [`SortMergeJoinExec`] from its protobuf representation.
+    ///
+    /// The exact inverse of [`ExecutionPlan::try_to_proto`].
+    ///
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use crate::joins::utils::ColumnIndex;
+        use arrow::datatypes::Schema;
+        use datafusion_common::internal_datafusion_err;
+        use datafusion_proto_models::protobuf;
+
+        let sort_join = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::SortMergeJoin,
+            "SortMergeJoinExec",
+        );
+        let left = ctx.decode_required_child(
+            sort_join.left.as_deref(),
+            "SortMergeJoinExec",
+            "left",
+        )?;
+        let right = ctx.decode_required_child(
+            sort_join.right.as_deref(),
+            "SortMergeJoinExec",
+            "right",
+        )?;
+        let left_schema = left.schema();
+        let right_schema = right.schema();
+        let on = sort_join
+            .on
+            .iter()
+            .map(|columns| {
+                let left = ctx.decode_required_expr(
+                    columns.left.as_ref(),
+                    left_schema.as_ref(),
+                    "SortMergeJoinExec",
+                    "on.left",
+                )?;
+                let right = ctx.decode_required_expr(
+                    columns.right.as_ref(),
+                    right_schema.as_ref(),
+                    "SortMergeJoinExec",
+                    "on.right",
+                )?;
+                Ok((left, right))
+            })
+            .collect::<Result<JoinOn>>()?;
+
+        let join_type =
+            match protobuf::JoinType::try_from(sort_join.join_type).map_err(|_| {
+                internal_datafusion_err!(
+                    "SortMergeJoinExec: unknown JoinType {}",
+                    sort_join.join_type
+                )
+            })? {
+                protobuf::JoinType::Inner => JoinType::Inner,
+                protobuf::JoinType::Left => JoinType::Left,
+                protobuf::JoinType::Right => JoinType::Right,
+                protobuf::JoinType::Full => JoinType::Full,
+                protobuf::JoinType::Leftsemi => JoinType::LeftSemi,
+                protobuf::JoinType::Rightsemi => JoinType::RightSemi,
+                protobuf::JoinType::Leftanti => JoinType::LeftAnti,
+                protobuf::JoinType::Rightanti => JoinType::RightAnti,
+                protobuf::JoinType::Leftmark => JoinType::LeftMark,
+                protobuf::JoinType::Rightmark => JoinType::RightMark,
+            };
+        let null_equality = match protobuf::NullEquality::try_from(
+            sort_join.null_equality,
+        )
+        .map_err(|_| {
+            internal_datafusion_err!(
+                "SortMergeJoinExec: unknown NullEquality {}",
+                sort_join.null_equality
+            )
+        })? {
+            protobuf::NullEquality::NullEqualsNothing => NullEquality::NullEqualsNothing,
+            protobuf::NullEquality::NullEqualsNull => NullEquality::NullEqualsNull,
+        };
+        let filter = sort_join
+            .filter
+            .as_ref()
+            .map(|filter| -> Result<JoinFilter> {
+                let schema: Schema = filter
+                    .schema
+                    .as_ref()
+                    .ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "SortMergeJoinExec: JoinFilter missing schema"
+                        )
+                    })?
+                    .try_into()?;
+                let expression = ctx.decode_required_expr(
+                    filter.expression.as_ref(),
+                    &schema,
+                    "SortMergeJoinExec",
+                    "filter.expression",
+                )?;
+                let column_indices = filter
+                    .column_indices
+                    .iter()
+                    .map(|column_index| {
+                        let side = protobuf::JoinSide::try_from(column_index.side)
+                            .map_err(|_| {
+                                internal_datafusion_err!(
+                                    "SortMergeJoinExec: unknown JoinSide {}",
+                                    column_index.side
+                                )
+                            })?;
+                        let side = match side {
+                            protobuf::JoinSide::LeftSide => JoinSide::Left,
+                            protobuf::JoinSide::RightSide => JoinSide::Right,
+                            protobuf::JoinSide::None => JoinSide::None,
+                        };
+                        Ok(ColumnIndex {
+                            index: column_index.index as usize,
+                            side,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(JoinFilter::new(
+                    expression,
+                    column_indices,
+                    Arc::new(schema),
+                ))
+            })
+            .transpose()?;
+        let sort_options = sort_join
+            .sort_options
+            .iter()
+            .map(|options| SortOptions {
+                descending: !options.asc,
+                nulls_first: options.nulls_first,
+            })
+            .collect();
+
+        Ok(Arc::new(Self::try_new(
+            left,
+            right,
+            on,
+            filter,
+            join_type,
+            sort_options,
+            null_equality,
+        )?))
     }
 }
