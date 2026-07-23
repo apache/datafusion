@@ -814,8 +814,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::Interleave(interleave) => {
                 self.try_into_interleave_physical_plan(interleave, ctx, proto_converter)
             }
-            PhysicalPlanType::CrossJoin(crossjoin) => {
-                self.try_into_cross_join_physical_plan(crossjoin, ctx, proto_converter)
+            PhysicalPlanType::CrossJoin(_) => {
+                CrossJoinExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Empty(empty) => {
                 self.try_into_empty_physical_plan(empty, ctx, proto_converter)
@@ -832,8 +832,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::Extension(extension) => {
                 self.try_into_extension_physical_plan(extension, ctx, proto_converter)
             }
-            PhysicalPlanType::NestedLoopJoin(join) => {
-                self.try_into_nested_loop_join_physical_plan(join, ctx, proto_converter)
+            PhysicalPlanType::NestedLoopJoin(_) => {
+                NestedLoopJoinExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Analyze(analyze) => {
                 self.try_into_analyze_physical_plan(analyze, ctx, proto_converter)
@@ -928,14 +928,6 @@ pub trait PhysicalPlanNodeExt: Sized {
             );
         }
 
-        if let Some(exec) = plan.downcast_ref::<CrossJoinExec>() {
-            return protobuf::PhysicalPlanNode::try_from_cross_join_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
         if let Some(exec) = plan.downcast_ref::<AggregateExec>() {
             return protobuf::PhysicalPlanNode::try_from_aggregate_exec(
                 exec,
@@ -975,14 +967,6 @@ pub trait PhysicalPlanNodeExt: Sized {
         if let Some(interleave) = plan.downcast_ref::<InterleaveExec>() {
             return protobuf::PhysicalPlanNode::try_from_interleave_exec(
                 interleave,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<NestedLoopJoinExec>() {
-            return protobuf::PhysicalPlanNode::try_from_nested_loop_join_exec(
-                exec,
                 codec,
                 proto_converter,
             );
@@ -2040,17 +2024,27 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(InterleaveExec::try_new(inputs)?))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `CrossJoinExec` deserializes itself via `CrossJoinExec::try_from_proto`"
+    )]
     fn try_into_cross_join_physical_plan(
         &self,
         crossjoin: &protobuf::CrossJoinExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let left: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&crossjoin.left, ctx, proto_converter)?;
-        let right: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&crossjoin.right, ctx, proto_converter)?;
-        Ok(Arc::new(CrossJoinExec::new(left, right)))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::CrossJoin(Box::new(
+                crossjoin.clone(),
+            ))),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        CrossJoinExec::try_from_proto(&node, &decode_ctx)
     }
 
     fn try_into_empty_physical_plan(
@@ -2146,76 +2140,27 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(extension_node)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `NestedLoopJoinExec` deserializes itself via `NestedLoopJoinExec::try_from_proto`"
+    )]
     fn try_into_nested_loop_join_physical_plan(
         &self,
         join: &protobuf::NestedLoopJoinExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let left: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&join.left, ctx, proto_converter)?;
-        let right: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&join.right, ctx, proto_converter)?;
-        let join_type = protobuf::JoinType::try_from(join.join_type).map_err(|_| {
-            proto_error(format!(
-                "Received a NestedLoopJoinExecNode message with unknown JoinType {}",
-                join.join_type
-            ))
-        })?;
-        let filter = join
-                    .filter
-                    .as_ref()
-                    .map(|f| {
-                        let schema = f
-                            .schema
-                            .as_ref()
-                            .ok_or_else(|| proto_error("Missing JoinFilter schema"))?
-                            .try_into()?;
-
-                        let expression = proto_converter
-                            .proto_to_physical_expr(
-                            f.expression.as_ref().ok_or_else(|| {
-                                proto_error("Unexpected empty filter expression")
-                            })?,
-                            &schema,
-                            ctx,
-                        )?;
-                        let column_indices = f.column_indices
-                            .iter()
-                            .map(|i| {
-                                let side = protobuf::JoinSide::try_from(i.side)
-                                    .map_err(|_| proto_error(format!(
-                                        "Received a NestedLoopJoinExecNode message with JoinSide in Filter {}",
-                                        i.side))
-                                    )?;
-
-                                Ok(ColumnIndex {
-                                    index: i.index as usize,
-                                    side: side.into(),
-                                })
-                            })
-                            .collect::<Result<Vec<_>>>()?;
-
-                        Ok(JoinFilter::new(expression, column_indices, Arc::new(schema)))
-                    })
-                    .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
-
-        // See `try_into_hash_join_physical_plan` for the rationale behind the
-        // `[u32::MAX]` sentinel; `NestedLoopJoinExec` has the same `Option<Vec<usize>>`
-        // projection field and shares the proto3 `repeated` ambiguity.
-        let projection = match join.projection.as_slice() {
-            [] => None,
-            [u32::MAX] => Some(Vec::new()),
-            indices => Some(indices.iter().map(|i| *i as usize).collect()),
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::NestedLoopJoin(Box::new(
+                join.clone(),
+            ))),
         };
-
-        Ok(Arc::new(NestedLoopJoinExec::try_new(
-            left,
-            right,
-            filter,
-            &JoinType::from_proto(join_type),
-            projection,
-        )?))
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        NestedLoopJoinExec::try_from_proto(&node, &decode_ctx)
     }
 
     fn try_into_analyze_physical_plan(
@@ -2981,29 +2926,22 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `CrossJoinExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_cross_join_exec(
         exec: &CrossJoinExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let left = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.left().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-        let right = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.right().to_owned(),
-            codec,
-            proto_converter,
-        )?;
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::CrossJoin(Box::new(
-                protobuf::CrossJoinExecNode {
-                    left: Some(Box::new(left)),
-                    right: Some(Box::new(right)),
-                },
-            ))),
-        })
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?
+            .ok_or_else(|| internal_datafusion_err!("CrossJoinExec is not serializable"))
     }
 
     fn try_from_aggregate_exec(
@@ -3454,65 +3392,22 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `NestedLoopJoinExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_nested_loop_join_exec(
         exec: &NestedLoopJoinExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let left = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.left().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-        let right = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.right().to_owned(),
-            codec,
-            proto_converter,
-        )?;
-
-        let join_type = protobuf::JoinType::from_proto(exec.join_type().to_owned());
-        let filter = exec
-            .filter()
-            .as_ref()
-            .map(|f| {
-                let expression =
-                    proto_converter.physical_expr_to_proto(f.expression(), codec)?;
-                let column_indices = f
-                    .column_indices()
-                    .iter()
-                    .map(|i| {
-                        let side: protobuf::JoinSide = i.side.to_owned().into();
-                        protobuf::ColumnIndex {
-                            index: i.index as u32,
-                            side: side.into(),
-                        }
-                    })
-                    .collect();
-                let schema = f.schema().as_ref().try_into()?;
-                Ok(protobuf::JoinFilter {
-                    expression: Some(expression),
-                    column_indices,
-                    schema: Some(schema),
-                })
-            })
-            .map_or(Ok(None), |v: Result<protobuf::JoinFilter>| v.map(Some))?;
-
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::NestedLoopJoin(Box::new(
-                protobuf::NestedLoopJoinExecNode {
-                    left: Some(Box::new(left)),
-                    right: Some(Box::new(right)),
-                    join_type: join_type.into(),
-                    filter,
-                    // `[u32::MAX]` sentinel distinguishes `Some(vec![])` from `None`;
-                    // see `try_from_hash_join_exec`.
-                    projection: match exec.projection().as_ref() {
-                        None => Vec::new(),
-                        Some(v) if v.is_empty() => vec![u32::MAX],
-                        Some(v) => v.iter().map(|x| *x as u32).collect(),
-                    },
-                },
-            ))),
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("NestedLoopJoinExec is not serializable")
         })
     }
 
