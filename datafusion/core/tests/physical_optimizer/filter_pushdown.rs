@@ -55,6 +55,7 @@ use datafusion_physical_plan::{
     coalesce_partitions::CoalescePartitionsExec,
     collect,
     filter::{FilterExec, FilterExecBuilder},
+    joins::{AsOfJoinExec, AsOfMatchExpr},
     projection::ProjectionExec,
     repartition::RepartitionExec,
     sorts::sort::SortExec,
@@ -121,6 +122,47 @@ fn test_pushdown_volatile_functions_not_allowed() {
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     ",
     );
+}
+
+#[test]
+fn test_asof_join_pushes_only_left_filters() {
+    let left = TestScanBuilder::new(schema()).with_support(true).build();
+    let right = TestScanBuilder::new(schema()).with_support(true).build();
+    let join = Arc::new(
+        AsOfJoinExec::try_new(
+            left,
+            right,
+            vec![(col("a", &schema()).unwrap(), col("a", &schema()).unwrap())],
+            AsOfMatchExpr::new(
+                col("b", &schema()).unwrap(),
+                Operator::GtEq,
+                col("b", &schema()).unwrap(),
+            ),
+            vec![0, 1, 2],
+        )
+        .unwrap(),
+    );
+    let left_filter = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("c", 2)),
+        Operator::Gt,
+        Arc::new(Literal::new(ScalarValue::Float64(Some(0.0)))),
+    )) as Arc<dyn PhysicalExpr>;
+    let right_filter = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("c", 5)),
+        Operator::Gt,
+        Arc::new(Literal::new(ScalarValue::Float64(Some(0.0)))),
+    )) as Arc<dyn PhysicalExpr>;
+    let predicate = Arc::new(BinaryExpr::new(left_filter, Operator::And, right_filter));
+    let plan = Arc::new(FilterExec::try_new(predicate, join).unwrap());
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    let optimized = FilterPushdown::new().optimize(plan, &config).unwrap();
+    let formatted = format_plan_for_test(&optimized);
+
+    assert!(formatted.contains("FilterExec: c@5 > 0"), "{formatted}");
+    assert!(formatted.contains("AsOfJoinExec:"), "{formatted}");
+    assert!(formatted.contains("predicate=c@2 > 0"), "{formatted}");
+    assert_eq!(formatted.matches("predicate=").count(), 1, "{formatted}");
 }
 
 /// Show that we can use config options to determine how to do pushdown.

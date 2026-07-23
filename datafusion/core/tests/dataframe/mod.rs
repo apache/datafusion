@@ -58,7 +58,7 @@ use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{ColumnarValue, Volatility};
-use datafusion::prelude::{CsvReadOptions, JoinType, ParquetReadOptions};
+use datafusion::prelude::{AsOfMatch, CsvReadOptions, JoinType, ParquetReadOptions};
 use datafusion::test_util::{
     parquet_test_data, populate_csv_partitions, register_aggregate_csv, test_table,
     test_table_with_cache_factory, test_table_with_name,
@@ -77,10 +77,10 @@ use datafusion_expr::expr::{GroupingSet, NullTreatment, Sort, WindowFunction};
 use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
     CreateMemoryTable, CreateView, DdlStatement, Expr, ExprFunctionExt, ExprSchemable,
-    LogicalPlan, LogicalPlanBuilder, ScalarFunctionImplementation, SortExpr, TableType,
-    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, cast, col,
-    create_udf, exists, in_subquery, lambda, lambda_var, lit, out_ref_col, placeholder,
-    scalar_subquery, when, wildcard,
+    LogicalPlan, LogicalPlanBuilder, Operator, ScalarFunctionImplementation, SortExpr,
+    TableType, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+    cast, col, create_udf, exists, in_subquery, lambda, lambda_var, lit, out_ref_col,
+    placeholder, scalar_subquery, when, wildcard,
 };
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
@@ -1500,6 +1500,50 @@ async fn join() -> Result<()> {
     assert_eq!(100, left_rows.iter().map(|x| x.num_rows()).sum::<usize>());
     assert_eq!(100, right_rows.iter().map(|x| x.num_rows()).sum::<usize>());
     assert_eq!(2008, join_rows.iter().map(|x| x.num_rows()).sum::<usize>());
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_asof() -> Result<()> {
+    let ctx = SessionContext::new();
+    let left = ctx
+        .read_batch(record_batch!(
+            ("symbol", Utf8, ["A", "A", "B"]),
+            ("ts", Int64, [1, 4, 2]),
+            ("trade_id", Int32, [1, 2, 3])
+        )?)?
+        .alias("trades")?;
+    let right = ctx
+        .read_batch(record_batch!(
+            ("symbol", Utf8, ["A", "A", "B"]),
+            ("ts", Int64, [2, 4, 1]),
+            ("price", Int32, [20, 40, 101])
+        )?)?
+        .alias("prices")?;
+
+    let results = left
+        .join_asof(
+            right,
+            vec![(col("symbol"), col("symbol"))],
+            AsOfMatch::new(col("ts"), Operator::GtEq, col("ts")),
+        )?
+        .select(vec![col("trade_id"), col("price")])?
+        .sort(vec![col("trade_id").sort(true, true)])?
+        .collect()
+        .await?;
+
+    assert_batches_eq!(
+        [
+            "+----------+-------+",
+            "| trade_id | price |",
+            "+----------+-------+",
+            "| 1        |       |",
+            "| 2        | 40    |",
+            "| 3        | 101   |",
+            "+----------+-------+",
+        ],
+        &results
+    );
     Ok(())
 }
 
