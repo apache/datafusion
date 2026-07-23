@@ -1814,11 +1814,13 @@ mod tests {
         // Row 1: predicate is false
         // Row 2: predicate is true
         let filter = BooleanArray::new(
-            BooleanBuffer::from(vec![true, false, true]),
+            BooleanBuffer::from(vec![false, true, false, true]),
             Some(NullBuffer::from(BooleanBuffer::from(vec![
-                false, true, true,
+                true, false, true, true,
             ]))),
-        );
+        )
+        .slice(1, 3);
+        assert_eq!(filter.offset(), 1);
 
         group_acc.update_batch(&val_with_orderings, &[0, 0, 1], Some(&filter), 2)?;
 
