@@ -165,7 +165,7 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 [[package]]
 name = "arrow"
 version = "59.1.0"
-source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#6f679b56bb48fb8a7a1d7da97e9984975e9030d8"
+source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#8145bb8ef9dcdddcbe22f90285c9218a5bec9b25"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -187,7 +187,7 @@ dependencies = [
 [[package]]
 name = "arrow-arith"
 version = "59.1.0"
-source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#6f679b56bb48fb8a7a1d7da97e9984975e9030d8"
+source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#8145bb8ef9dcdddcbe22f90285c9218a5bec9b25"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -200,7 +200,7 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "59.1.0"
-source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#6f679b56bb48fb8a7a1d7da97e9984975e9030d8"
+source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#8145bb8ef9dcdddcbe22f90285c9218a5bec9b25"
 dependencies = [
  "ahash",
  "arrow-buffer",
@@ -210,7 +210,6 @@ dependencies = [
  "chrono-tz",
  "half",
  "hashbrown 0.17.1",
- "libc",
  "num-complex",
  "num-integer",
  "num-traits",
@@ -219,7 +218,7 @@ dependencies = [
 [[package]]
 name = "arrow-avro"
 version = "59.1.0"
-source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#6f679b56bb48fb8a7a1d7da97e9984975e9030d8"
+source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#8145bb8ef9dcdddcbe22f90285c9218a5bec9b25"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -242,18 +241,18 @@ dependencies = [
 [[package]]
 name = "arrow-buffer"
 version = "59.1.0"
-source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#6f679b56bb48fb8a7a1d7da97e9984975e9030d8"
+source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#8145bb8ef9dcdddcbe22f90285c9218a5bec9b25"
 dependencies = [
  "bytes",
  "half",
- "num-bigint 0.5.1",
+ "num-bigint",
  "num-traits",
 ]
 
 [[package]]
 name = "arrow-cast"
 version = "59.1.0"
-source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#6f679b56bb48fb8a7a1d7da97e9984975e9030d8"
+source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#8145bb8ef9dcdddcbe22f90285c9218a5bec9b25"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -274,7 +273,7 @@ dependencies = [
 [[package]]
 name = "arrow-csv"
 version = "59.1.0"
-source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#6f679b56bb48fb8a7a1d7da97e9984975e9030d8"
+source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#8145bb8ef9dcdddcbe22f90285c9218a5bec9b25"
 dependencies = [
  "arrow-array",
  "arrow-cast",
@@ -288,7 +287,7 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "59.1.0"
-source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#6f679b56bb48fb8a7a1d7da97e9984975e9030d8"
+source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#8145bb8ef9dcdddcbe22f90285c9218a5bec9b25"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -300,7 +299,7 @@ dependencies = [
 [[package]]
 name = "arrow-flight"
 version = "59.1.0"
-source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#6f679b56bb48fb8a7a1d7da97e9984975e9030d8"
+source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#8145bb8ef9dcdddcbe22f90285c9218a5bec9b25"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -317,6 +316,7 @@ dependencies = [
  "bytes",
  "futures",
  "once_cell",
+ "paste",
  "prost",
  "prost-types",
  "tonic",
@@ -326,7 +326,7 @@ dependencies = [
 [[package]]
 name = "arrow-ipc"
 version = "59.1.0"
-source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#6f679b56bb48fb8a7a1d7da97e9984975e9030d8"
+source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#8145bb8ef9dcdddcbe22f90285c9218a5bec9b25"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -341,7 +341,7 @@ dependencies = [
 [[package]]
 name = "arrow-json"
 version = "59.1.0"
-source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#6f679b56bb48fb8a7a1d7da97e9984975e9030d8"
+source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#8145bb8ef9dcdddcbe22f90285c9218a5bec9b25"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -365,7 +365,7 @@ dependencies = [
 [[package]]
 name = "arrow-ord"
 version = "59.1.0"
-source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#6f679b56bb48fb8a7a1d7da97e9984975e9030d8"
+source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#8145bb8ef9dcdddcbe22f90285c9218a5bec9b25"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -377,7 +377,7 @@ dependencies = [
 [[package]]
 name = "arrow-row"
 version = "59.1.0"
-source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#6f679b56bb48fb8a7a1d7da97e9984975e9030d8"
+source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#8145bb8ef9dcdddcbe22f90285c9218a5bec9b25"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -389,7 +389,7 @@ dependencies = [
 [[package]]
 name = "arrow-schema"
 version = "59.1.0"
-source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#6f679b56bb48fb8a7a1d7da97e9984975e9030d8"
+source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#8145bb8ef9dcdddcbe22f90285c9218a5bec9b25"
 dependencies = [
  "bitflags",
  "serde",
@@ -400,7 +400,7 @@ dependencies = [
 [[package]]
 name = "arrow-select"
 version = "59.1.0"
-source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#6f679b56bb48fb8a7a1d7da97e9984975e9030d8"
+source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#8145bb8ef9dcdddcbe22f90285c9218a5bec9b25"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -413,7 +413,7 @@ dependencies = [
 [[package]]
 name = "arrow-string"
 version = "59.1.0"
-source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#6f679b56bb48fb8a7a1d7da97e9984975e9030d8"
+source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#8145bb8ef9dcdddcbe22f90285c9218a5bec9b25"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -991,7 +991,7 @@ checksum = "4d6867f1565b3aad85681f1015055b087fcfd840d6aeee6eee7f2da317603695"
 dependencies = [
  "autocfg",
  "libm",
- "num-bigint 0.4.6",
+ "num-bigint",
  "num-integer",
  "num-traits",
 ]
@@ -4037,9 +4037,9 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "lz4_flex"
-version = "0.14.0"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
+checksum = "7ef0d4ed8669f8f8826eb00dc878084aa8f253506c4fd5e8f58f5bce72ddb97e"
 dependencies = [
  "twox-hash",
 ]
@@ -4182,7 +4182,7 @@ version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35bd024e8b2ff75562e5f34e7f4905839deb4b22955ef5e73d2fea1b9813cb23"
 dependencies = [
- "num-bigint 0.4.6",
+ "num-bigint",
  "num-complex",
  "num-integer",
  "num-iter",
@@ -4195,16 +4195,6 @@ name = "num-bigint"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a5e44f723f1133c9deac646763579fdb3ac745e418f2a7af9cd0c431da1f20b9"
-dependencies = [
- "num-integer",
- "num-traits",
-]
-
-[[package]]
-name = "num-bigint"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93e7820bc0a80a0238e650327316f929ba18d5be054b647490a3a6a339f3e7c0"
 dependencies = [
  "num-integer",
  "num-traits",
@@ -4251,7 +4241,7 @@ version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
 dependencies = [
- "num-bigint 0.4.6",
+ "num-bigint",
  "num-integer",
  "num-traits",
 ]
@@ -4458,7 +4448,7 @@ dependencies = [
 [[package]]
 name = "parquet"
 version = "59.1.0"
-source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#6f679b56bb48fb8a7a1d7da97e9984975e9030d8"
+source = "git+https://github.com/DarkWanderer/arrow-rs?branch=get-dictionary#8145bb8ef9dcdddcbe22f90285c9218a5bec9b25"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -4476,10 +4466,11 @@ dependencies = [
  "half",
  "hashbrown 0.17.1",
  "lz4_flex",
- "num-bigint 0.5.1",
+ "num-bigint",
  "num-integer",
  "num-traits",
  "object_store",
+ "paste",
  "ring",
  "seq-macro",
  "simdutf8",
@@ -4513,6 +4504,12 @@ dependencies = [
  "structmeta",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "paste"
+version = "1.0.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
 name = "pbjson"
@@ -4837,7 +4834,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03da047801ff44bb6a4d407d4860c05fd70bb81714e6b2f3812603d5b145b042"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "log",
  "multimap",
  "petgraph",
@@ -4856,7 +4853,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
