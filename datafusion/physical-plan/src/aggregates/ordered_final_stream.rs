@@ -359,6 +359,13 @@ impl OrderedFinalAggregateStream {
         self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
     }
 
+    fn break_with_internal_err(message: &str) -> OrderedFinalAggregateStateTransition {
+        ControlFlow::Break((
+            Poll::Ready(Some(internal_err!("{message}"))),
+            OrderedFinalAggregateState::Done,
+        ))
+    }
+
     /// Reserve memory for the current aggregate table.
     fn reservation_size_for_table(
         table: &OrderedAggregateTable<FinalMarker>,
@@ -389,7 +396,9 @@ impl OrderedFinalAggregateStream {
             spill_context,
         } = original_state
         else {
-            unreachable!("expected reading input state")
+            return Self::break_with_internal_err(
+                "Ordered final aggregate stream expected ReadingInput state",
+            );
         };
 
         match self.input.poll_next_unpin(cx) {
@@ -556,7 +565,9 @@ impl OrderedFinalAggregateStream {
             mut spill_context,
         } = original_state
         else {
-            unreachable!("expected spilling state")
+            return Self::break_with_internal_err(
+                "Ordered final aggregate stream expected Spilling state",
+            );
         };
 
         // Sanity check: it's impossible to OOM when the table is empty
@@ -613,7 +624,9 @@ impl OrderedFinalAggregateStream {
             mut spill_context,
         } = original_state
         else {
-            unreachable!("expected preparing merge input state")
+            return Self::break_with_internal_err(
+                "Ordered final aggregate stream expected PreparingMergeInput state",
+            );
         };
 
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
@@ -661,7 +674,9 @@ impl OrderedFinalAggregateStream {
     ) -> OrderedFinalAggregateStateTransition {
         let OrderedFinalAggregateState::MergingSpills { mut stream } = original_state
         else {
-            unreachable!("expected merging spills state")
+            return Self::break_with_internal_err(
+                "Ordered final aggregate stream expected MergingSpills state",
+            );
         };
 
         match stream.poll_next_unpin(cx) {
@@ -694,7 +709,9 @@ impl OrderedFinalAggregateStream {
         original_state: OrderedFinalAggregateState,
     ) -> OrderedFinalAggregateStateTransition {
         let OrderedFinalAggregateState::ProducingOutput { table } = original_state else {
-            unreachable!("expected producing output state")
+            return Self::break_with_internal_err(
+                "Ordered final aggregate stream expected ProducingOutput state",
+            );
         };
 
         let mut table = table;
