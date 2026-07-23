@@ -17,3 +17,6 @@
 
 // Re-export from this module for backwards compatibility.
 pub use datafusion_session::{CatalogProvider, CatalogProviderList};
+// Re-export so users can access this type through `datafusion_catalog` and
+// `datafusion::catalog` without depending directly on `datafusion_session`.
+pub use datafusion_session::EmptyCatalogProviderList;
