@@ -820,7 +820,11 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
     #[inline]
     pub fn pop(&mut self) -> Option<T> {
         if let Some(popped) = self.fifo.pop_front() {
-            if self.deque.front().map_or(false, |front_val| *front_val == popped) {
+            if self
+                .deque
+                .front()
+                .map_or(false, |front_val| *front_val == popped)
+            {
                 self.deque.pop_front();
             }
             Some(popped)
@@ -941,7 +945,11 @@ impl<T: Clone + PartialOrd> MovingMax<T> {
     #[inline]
     pub fn pop(&mut self) -> Option<T> {
         if let Some(popped) = self.fifo.pop_front() {
-            if self.deque.front().map_or(false, |front_val| *front_val == popped) {
+            if self
+                .deque
+                .front()
+                .map_or(false, |front_val| *front_val == popped)
+            {
                 self.deque.pop_front();
             }
             Some(popped)
