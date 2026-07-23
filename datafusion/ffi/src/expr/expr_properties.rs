@@ -54,6 +54,9 @@ impl TryFrom<FFI_ExprProperties> for ExprProperties {
             sort_properties,
             range,
             preserves_lex_ordering: value.preserves_lex_ordering,
+            // Not carried over the FFI boundary (it would break the ABI);
+            // stay conservative.
+            strictly_order_preserving: false,
         })
     }
 }
