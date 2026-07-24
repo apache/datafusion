@@ -18,8 +18,9 @@
 //! [`SessionState`]: information required to run queries in a session
 
 use std::any::Any;
+use std::cmp::Reverse;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -1067,6 +1068,141 @@ pub struct SessionStateBuilder {
     physical_optimizer_rules: Option<Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>>,
 }
 
+/// A function-registry entry (`ScalarUDF`, `AggregateUDF`, `WindowUDF`,
+/// `HigherOrderUDF`), exposing the canonical name and aliases it is registered
+/// under so [`deterministic_registration_order`] can rebuild a faithful order.
+trait AliasedRegistryEntry {
+    fn entry_name(&self) -> &str;
+    fn entry_aliases(&self) -> &[String];
+}
+
+impl AliasedRegistryEntry for ScalarUDF {
+    fn entry_name(&self) -> &str {
+        self.name()
+    }
+    fn entry_aliases(&self) -> &[String] {
+        self.aliases()
+    }
+}
+
+impl AliasedRegistryEntry for AggregateUDF {
+    fn entry_name(&self) -> &str {
+        self.name()
+    }
+    fn entry_aliases(&self) -> &[String] {
+        self.aliases()
+    }
+}
+
+impl AliasedRegistryEntry for WindowUDF {
+    fn entry_name(&self) -> &str {
+        self.name()
+    }
+    fn entry_aliases(&self) -> &[String] {
+        self.aliases()
+    }
+}
+
+impl AliasedRegistryEntry for HigherOrderUDF {
+    fn entry_name(&self) -> &str {
+        self.name()
+    }
+    fn entry_aliases(&self) -> &[String] {
+        self.aliases()
+    }
+}
+
+/// Flatten a function registry into its distinct functions, ordered so that
+/// re-registering them last-writer-wins reproduces `functions` exactly and
+/// deterministically.
+///
+/// Each function is stored under its name and every alias, so
+/// [`HashMap::into_values`] duplicates the `Arc`s in random order and rebuilding
+/// from that can silently drop a user's alias override, differently per run
+/// (#23697). A reproducing order always exists, so we topologically sort under one
+/// rule — a key's owner registers after every other function that also claims that
+/// key — breaking ties by name for a stable result.
+fn deterministic_registration_order<T: AliasedRegistryEntry>(
+    functions: &HashMap<String, Arc<T>>,
+) -> Vec<Arc<T>> {
+    // Distinct functions, by `Arc` identity. Fully displaced ones own no key and
+    // are absent from the map, so they drop out here as they should.
+    let mut nodes: Vec<Arc<T>> = Vec::new();
+    let mut ptr_to_node: HashMap<*const T, usize> = HashMap::new();
+    for udf in functions.values() {
+        if let Entry::Vacant(entry) = ptr_to_node.entry(Arc::as_ptr(udf)) {
+            entry.insert(nodes.len());
+            nodes.push(Arc::clone(udf));
+        }
+    }
+
+    // Smallest owned key per node: a deterministic tie-breaker unique to each node.
+    let mut min_owned_key: Vec<Option<&str>> = vec![None; nodes.len()];
+    for (key, udf) in functions {
+        let slot = &mut min_owned_key[ptr_to_node[&Arc::as_ptr(udf)]];
+        if slot.is_none_or(|current| key.as_str() < current) {
+            *slot = Some(key.as_str());
+        }
+    }
+
+    // Edge `loser -> owner` for every contested key. Aliases must be read here,
+    // not just owned keys: a function that *lost* an alias still constrains order,
+    // and that claim is invisible from the map alone.
+    let mut edges: HashSet<(usize, usize)> = HashSet::new();
+    for (node, udf) in nodes.iter().enumerate() {
+        let claimed = std::iter::once(udf.entry_name())
+            .chain(udf.entry_aliases().iter().map(String::as_str));
+        for key in claimed {
+            if let Some(owner_udf) = functions.get(key) {
+                let owner = ptr_to_node[&Arc::as_ptr(owner_udf)];
+                if owner != node {
+                    edges.insert((node, owner));
+                }
+            }
+        }
+    }
+    let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
+    let mut in_degree: Vec<usize> = vec![0; nodes.len()];
+    for (from, to) in edges {
+        adjacency[from].push(to);
+        in_degree[to] += 1;
+    }
+
+    // Kahn's algorithm, draining ready nodes in (name, owned-key) order; the
+    // trailing index just carries the node and never breaks a tie.
+    let ready_key =
+        |node: usize| Reverse((nodes[node].entry_name(), min_owned_key[node], node));
+    let mut ready: BinaryHeap<Reverse<(&str, Option<&str>, usize)>> = (0..nodes.len())
+        .filter(|&node| in_degree[node] == 0)
+        .map(&ready_key)
+        .collect();
+    let mut ordered: Vec<usize> = Vec::with_capacity(nodes.len());
+    while let Some(Reverse((_, _, node))) = ready.pop() {
+        ordered.push(node);
+        for &next in &adjacency[node] {
+            in_degree[next] -= 1;
+            if in_degree[next] == 0 {
+                ready.push(ready_key(next));
+            }
+        }
+    }
+
+    // A real registry is acyclic; this only keeps the result total should a future
+    // caller pass a cyclic map.
+    if ordered.len() < nodes.len() {
+        let mut leftover: Vec<usize> = (0..nodes.len())
+            .filter(|node| !ordered.contains(node))
+            .collect();
+        leftover.sort_by_key(|&node| (nodes[node].entry_name(), min_owned_key[node]));
+        ordered.extend(leftover);
+    }
+
+    ordered
+        .into_iter()
+        .map(|node| Arc::clone(&nodes[node]))
+        .collect()
+}
+
 impl SessionStateBuilder {
     /// Returns a new empty [`SessionStateBuilder`].
     ///
@@ -1145,14 +1281,20 @@ impl SessionStateBuilder {
             query_planner: Some(existing.query_planner),
             catalog_list: Some(existing.catalog_list),
             table_functions: Some(existing.table_functions),
-            scalar_functions: Some(existing.scalar_functions.into_values().collect_vec()),
-            higher_order_functions: Some(
-                existing.higher_order_functions.into_values().collect_vec(),
-            ),
-            aggregate_functions: Some(
-                existing.aggregate_functions.into_values().collect_vec(),
-            ),
-            window_functions: Some(existing.window_functions.into_values().collect_vec()),
+            // Reproduce the exact registry map on rebuild rather than reverting
+            // alias overrides in HashMap-iteration order (#23697).
+            scalar_functions: Some(deterministic_registration_order(
+                &existing.scalar_functions,
+            )),
+            higher_order_functions: Some(deterministic_registration_order(
+                &existing.higher_order_functions,
+            )),
+            aggregate_functions: Some(deterministic_registration_order(
+                &existing.aggregate_functions,
+            )),
+            window_functions: Some(deterministic_registration_order(
+                &existing.window_functions,
+            )),
             extension_types: Some(existing.extension_types),
             serializer_registry: Some(existing.serializer_registry),
             file_formats: Some(existing.file_formats.into_values().collect_vec()),
@@ -2373,6 +2515,7 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Expr;
     use datafusion_expr::HigherOrderUDF;
+    use datafusion_expr::registry::FunctionRegistry;
     use datafusion_optimizer::Optimizer;
     use datafusion_optimizer::optimizer::OptimizerRule;
     use datafusion_physical_plan::display::DisplayableExecutionPlan;
@@ -2523,6 +2666,96 @@ mod tests {
             SessionStateBuilder::new_from_existing(without_default_state).build();
         assert!(new_state.catalog_list().catalog(&default_catalog).is_none());
         Ok(())
+    }
+
+    /// A no-op scalar UDF registered under `name` and `aliases`, for exercising
+    /// alias overrides in the roundtrip tests below.
+    fn simple_udf(
+        name: &str,
+        aliases: impl IntoIterator<Item = &'static str>,
+    ) -> Arc<ScalarUDF> {
+        let udf = datafusion_expr::create_udf(
+            name,
+            vec![DataType::Utf8],
+            DataType::Utf8,
+            datafusion_expr::Volatility::Immutable,
+            Arc::new(|_| {
+                Ok(datafusion_expr::ColumnarValue::Scalar(
+                    datafusion_common::ScalarValue::Utf8(None),
+                ))
+            }),
+        )
+        .with_aliases(aliases);
+        Arc::new(udf)
+    }
+
+    /// A UDF whose alias overrides another function must survive a
+    /// `new_from_existing` roundtrip on every run. Before #23697 the override
+    /// reverted whenever HashMap iteration re-registered the displaced function
+    /// last; each iteration rebuilds the source state for a fresh map seed so any
+    /// order dependence surfaces.
+    #[test]
+    fn test_from_existing_preserves_alias_override() -> Result<()> {
+        for _ in 0..64 {
+            let mut state = SessionStateBuilder::new().build();
+            // `overridden` owns `to_char`; `override_udf` reclaims it via an alias.
+            state.register_udf(simple_udf("to_char", ["date_format"]))?;
+            state.register_udf(simple_udf("postgres_to_char", ["to_char"]))?;
+
+            let roundtrip = SessionStateBuilder::new_from_existing(state.clone()).build();
+            assert_eq!(state.scalar_functions(), roundtrip.scalar_functions());
+            assert_eq!(
+                roundtrip.scalar_functions()["to_char"].name(),
+                "postgres_to_char"
+            );
+        }
+        Ok(())
+    }
+
+    /// @Jefffrey's counterexample from PR #21262: alias chains defeat any
+    /// name-sorted flattening (`to_character` sorts before `z_to_char` yet must
+    /// register after it), so the roundtrip must reproduce the source registry
+    /// exactly rather than alphabetically.
+    #[test]
+    fn test_from_existing_preserves_alias_chain() -> Result<()> {
+        for _ in 0..64 {
+            let mut state = SessionStateBuilder::new().build();
+            state.register_udf(simple_udf("z_to_char", ["z_date_format"]))?;
+            state.register_udf(simple_udf("to_character", ["z_to_char"]))?;
+
+            let roundtrip = SessionStateBuilder::new_from_existing(state.clone()).build();
+            assert_eq!(state.scalar_functions(), roundtrip.scalar_functions());
+        }
+        Ok(())
+    }
+
+    /// The ordering helper must return a sequence whose last-writer-wins replay
+    /// rebuilds the input map, picking the displaced function before the one that
+    /// stole its key rather than in alphabetical name order.
+    #[test]
+    fn test_deterministic_registration_order_replays_map() {
+        let loser = simple_udf("z_to_char", ["z_date_format"]);
+        let winner = simple_udf("to_character", ["z_to_char"]);
+
+        // The map left by `register_udf(loser)` then `register_udf(winner)`.
+        let map = HashMap::from([
+            ("z_date_format".to_string(), Arc::clone(&loser)),
+            ("z_to_char".to_string(), Arc::clone(&winner)),
+            ("to_character".to_string(), Arc::clone(&winner)),
+        ]);
+
+        let order = super::deterministic_registration_order(&map);
+        assert!(Arc::ptr_eq(&order[0], &loser));
+        assert!(Arc::ptr_eq(&order[1], &winner));
+
+        let mut replay: HashMap<String, Arc<ScalarUDF>> = HashMap::new();
+        for udf in order {
+            for alias in udf.aliases() {
+                replay.insert(alias.clone(), Arc::clone(&udf));
+            }
+            replay.insert(udf.name().to_string(), udf);
+        }
+        assert_eq!(replay, map);
     }
 
     #[test]
