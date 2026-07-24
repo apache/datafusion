@@ -57,17 +57,17 @@ impl JoinSelection {
     }
 }
 
-/// Get statistics for a plan node, using the registry if available.
+/// Get statistics for a plan node, consulting the registry's providers if one
+/// is available.
 fn get_stats(
     plan: &dyn ExecutionPlan,
     registry: Option<&StatisticsRegistry>,
 ) -> Result<Arc<Statistics>> {
-    if let Some(reg) = registry {
-        reg.compute(plan)
-            .map(|s| Arc::<Statistics>::clone(s.base_arc()))
-    } else {
-        StatisticsContext::new().compute(plan, &StatisticsArgs::new())
-    }
+    let ctx = match registry {
+        Some(reg) => StatisticsContext::new_with_registry(reg.clone()),
+        None => StatisticsContext::new(),
+    };
+    ctx.compute(plan, &StatisticsArgs::new())
 }
 
 // TODO: We need some performance test for Right Semi/Right Join swap to Left Semi/Left Join in case that the right side is smaller but not much smaller.
@@ -153,16 +153,7 @@ impl PhysicalOptimizerRule for JoinSelection {
         context: &dyn PhysicalOptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let config = context.config_options();
-        let mut default_registry = None;
-        let registry: Option<&StatisticsRegistry> =
-            if config.optimizer.use_statistics_registry {
-                Some(context.statistics_registry().unwrap_or_else(|| {
-                    default_registry
-                        .insert(StatisticsRegistry::default_with_builtin_providers())
-                }))
-            } else {
-                None
-            };
+        let registry = context.statistics_registry();
         let subrules: Vec<Box<PipelineFixerSubrule>> = vec![
             Box::new(hash_join_convert_symmetric_subrule),
             Box::new(hash_join_swap_subrule),

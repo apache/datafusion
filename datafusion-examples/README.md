@@ -213,6 +213,16 @@ cargo run --example dataframe -- dataframe
 | frontend          | [`sql_ops/frontend.rs`](examples/sql_ops/frontend.rs)                   | Build LogicalPlans from SQL                        |
 | query             | [`sql_ops/query.rs`](examples/sql_ops/query.rs)                         | Query data using SQL                               |
 
+## Statistics Examples
+
+### Group: `statistics`
+
+#### Category: Single Process
+
+| Subcommand   | File Path                                                           | Description                                                             |
+| ------------ | ------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| join_reorder | [`statistics/join_reorder.rs`](examples/statistics/join_reorder.rs) | Supply and refine column statistics via a provider to flip a join order |
+
 ## UDF Examples
 
 ### Group: `udf`

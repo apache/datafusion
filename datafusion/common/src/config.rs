@@ -1568,11 +1568,10 @@ config_namespace! {
         /// query is used.
         pub join_reordering: bool, default = true
 
-        /// When set to true, the physical plan optimizer uses the pluggable
-        /// `StatisticsRegistry` for statistics propagation across operators.
-        /// This enables more accurate cardinality estimates compared to each
-        /// operator's built-in `partition_statistics`.
-        pub use_statistics_registry: bool, default = false
+        /// (Deprecated) Ignored: the physical plan optimizer always consults the
+        /// session's pluggable `StatisticsRegistry` (register providers on the
+        /// `SessionState`; with none it is a no-op).
+        pub use_statistics_registry: bool, warn = "`use_statistics_registry` is deprecated and ignored; the StatisticsRegistry is always consulted, register providers on the SessionState", default = false
 
         /// When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin.
         /// HashJoin can work more efficiently than SortMergeJoin but consumes more memory

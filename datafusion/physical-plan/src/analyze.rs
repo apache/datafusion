@@ -27,6 +27,7 @@ use super::{
 use crate::display::DisplayableExecutionPlan;
 use crate::execution_plan::EvaluationType;
 use crate::metrics::{MetricCategory, MetricType};
+use crate::operator_statistics::StatisticsRegistry;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
@@ -54,6 +55,9 @@ pub struct AnalyzeExec {
     metric_categories: Option<Vec<MetricCategory>>,
     /// Output format for the rendered plan + metrics.
     format: ExplainFormat,
+    /// Registry consulted when rendering displayed statistics, so `EXPLAIN
+    /// ANALYZE` reflects the same provider-refined stats as plain `EXPLAIN`.
+    statistics_registry: StatisticsRegistry,
     /// The input plan (the plan being analyzed)
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// The output schema for RecordBatches of this exec node
@@ -72,6 +76,7 @@ pub struct AnalyzeExecBuilder {
     metric_types: Vec<MetricType>,
     metric_categories: Option<Vec<MetricCategory>>,
     format: ExplainFormat,
+    statistics_registry: StatisticsRegistry,
 }
 
 impl AnalyzeExecBuilder {
@@ -89,6 +94,7 @@ impl AnalyzeExecBuilder {
             metric_types: vec![MetricType::Summary, MetricType::Dev],
             metric_categories: None,
             format: ExplainFormat::Indent,
+            statistics_registry: StatisticsRegistry::new(),
         }
     }
 
@@ -110,6 +116,11 @@ impl AnalyzeExecBuilder {
         self
     }
 
+    pub fn with_statistics_registry(mut self, registry: StatisticsRegistry) -> Self {
+        self.statistics_registry = registry;
+        self
+    }
+
     pub fn build(self) -> AnalyzeExec {
         let cache =
             AnalyzeExec::compute_properties(&self.input, Arc::clone(&self.schema));
@@ -119,6 +130,7 @@ impl AnalyzeExecBuilder {
             metric_types: self.metric_types,
             metric_categories: self.metric_categories,
             format: self.format,
+            statistics_registry: self.statistics_registry,
             input: self.input,
             schema: self.schema,
             cache: Arc::new(cache),
@@ -233,6 +245,7 @@ impl ExecutionPlan for AnalyzeExec {
             .with_metric_types(self.metric_types.clone())
             .with_metric_categories(self.metric_categories.clone())
             .with_format(self.format.clone())
+            .with_statistics_registry(self.statistics_registry.clone())
             .build(),
         ))
     }
@@ -272,6 +285,7 @@ impl ExecutionPlan for AnalyzeExec {
         let metric_types = self.metric_types.clone();
         let metric_categories = self.metric_categories.clone();
         let format = self.format.clone();
+        let statistics_registry = self.statistics_registry.clone();
 
         // future that gathers the results from all the tasks in the
         // JoinSet that computes the overall row count and final
@@ -295,6 +309,7 @@ impl ExecutionPlan for AnalyzeExec {
                 &metric_types,
                 metric_categories.as_deref(),
                 &format,
+                &statistics_registry,
             )
         };
 
@@ -317,6 +332,7 @@ fn create_output_batch(
     metric_types: &[MetricType],
     metric_categories: Option<&[MetricCategory]>,
     format: &ExplainFormat,
+    statistics_registry: &StatisticsRegistry,
 ) -> Result<RecordBatch> {
     let mut type_builder = StringBuilder::with_capacity(1, 1024);
     let mut plan_builder = StringBuilder::with_capacity(1, 1024);
@@ -329,6 +345,7 @@ fn create_output_batch(
                 .set_metric_types(metric_types.to_vec())
                 .set_metric_categories(metric_categories.map(|c| c.to_vec()))
                 .set_show_statistics(show_statistics)
+                .set_statistics_registry(statistics_registry.clone())
                 .indent(verbose)
                 .to_string();
             plan_builder.append_value(annotated_plan);
@@ -341,6 +358,7 @@ fn create_output_batch(
                         .set_metric_types(metric_types.to_vec())
                         .set_metric_categories(metric_categories.map(|c| c.to_vec()))
                         .set_show_statistics(show_statistics)
+                        .set_statistics_registry(statistics_registry.clone())
                         .indent(verbose)
                         .to_string();
                 plan_builder.append_value(annotated_plan);
