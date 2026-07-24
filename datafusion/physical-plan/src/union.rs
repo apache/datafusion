@@ -46,6 +46,7 @@ use crate::projection::{ProjectionExec, make_with_child};
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::ObservedStream;
 
+use arrow::array::RecordBatchOptions;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
@@ -58,10 +59,67 @@ use datafusion_physical_expr::{
     EquivalenceProperties, PhysicalExpr, calculate_union, conjunction,
 };
 
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use itertools::Itertools;
 use log::{debug, trace, warn};
 use tokio::macros::support::thread_rng_n;
+
+/// Wraps a child stream so that every batch it yields is re-stamped with
+/// `schema` instead of the child's own schema.
+///
+/// This is used by [`UnionExec`] when a child's output schema disagrees
+/// with the union's declared output schema -- in practice this only
+/// happens for nullability (the union's schema is nullable wherever *any*
+/// input's field is, but casts are only inserted between inputs when the
+/// *type* differs, not when only nullability does). Re-stamping is safe:
+/// the union's schema can only be *more* permissive than any single
+/// input's (nullability is combined with logical OR, never narrowed), and
+/// the underlying data type is unaffected -- only the `Field::nullable`
+/// flag (and equivalent metadata) changes.
+struct SchemaConformingStream {
+    schema: SchemaRef,
+    inner: SendableRecordBatchStream,
+}
+
+impl SchemaConformingStream {
+    fn new(schema: SchemaRef, inner: SendableRecordBatchStream) -> Self {
+        Self { schema, inner }
+    }
+}
+
+impl RecordBatchStream for SchemaConformingStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
+
+impl Stream for SchemaConformingStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        self.inner.poll_next_unpin(cx).map(|opt| {
+            opt.map(|batch_result| {
+                batch_result.and_then(|batch| {
+                    let options =
+                        RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+                    RecordBatch::try_new_with_options(
+                        Arc::clone(&self.schema),
+                        batch.columns().to_vec(),
+                        &options,
+                    )
+                    .map_err(Into::into)
+                })
+            })
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
 
 /// `UnionExec`: `UNION ALL` execution plan.
 ///
@@ -294,6 +352,21 @@ impl ExecutionPlan for UnionExec {
             if partition < input.output_partitioning().partition_count() {
                 let stream = input.execute(partition, context)?;
                 debug!("Found a Union partition to execute");
+                // An input's schema can disagree with `UnionExec`'s own
+                // (declared) schema -- most commonly a field that is
+                // nullable in the union's schema (because another input's
+                // field is nullable) but not on this particular input's
+                // batches. Re-stamp each batch with the union's schema so
+                // every partition -- regardless of which input it came from
+                // -- reports the same schema, which downstream consumers
+                // that check schema equality across batches (e.g. Arrow's
+                // C Stream FFI / pyarrow) require. See
+                // <https://github.com/apache/datafusion/issues/15394>.
+                let stream = if stream.schema() == self.schema() {
+                    stream
+                } else {
+                    Box::pin(SchemaConformingStream::new(self.schema(), stream))
+                };
                 return Ok(Box::pin(ObservedStream::new(
                     stream,
                     baseline_metrics,
