@@ -29,6 +29,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::internal_err;
+use datafusion_common::stats::Precision;
 use datafusion_common::types::{
     NativeType, logical_float64, logical_int8, logical_int16, logical_int32,
     logical_int64, logical_uint8, logical_uint16, logical_uint32, logical_uint64,
@@ -40,12 +41,13 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, Documentation, Expr, GroupsAccumulator,
-    Operator, ReversedUDAF, SetMonotonicity, Signature, TypeSignature,
+    Operator, ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs, TypeSignature,
     TypeSignatureClass, Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::sum_distinct::DistinctSumAccumulator;
 use datafusion_macros::user_doc;
+use datafusion_physical_expr::expressions::{CastExpr, Column};
 use std::mem::size_of_val;
 
 make_udaf_expr_and_func!(
@@ -410,6 +412,58 @@ impl AggregateUDFImpl for Sum {
         // SUM(arg) + lit * COUNT(arg)
         Ok(Some(sum_agg + (lit.clone() * count_agg)))
     }
+
+    fn value_from_stats(&self, statistics_args: &StatisticsArgs) -> Option<ScalarValue> {
+        if statistics_args.is_distinct {
+            return None;
+        }
+
+        let [expr] = statistics_args.exprs else {
+            return None;
+        };
+
+        let (col_expr, cast_type) = match expr.downcast_ref::<Column>() {
+            Some(col_expr) => (col_expr, None),
+            None => {
+                let cast_expr = expr.downcast_ref::<CastExpr>()?;
+                let col_expr = cast_expr.expr().downcast_ref::<Column>()?;
+                (col_expr, Some(cast_expr.cast_type()))
+            }
+        };
+
+        let col_stats = statistics_args
+            .statistics
+            .column_statistics
+            .get(col_expr.index())?;
+
+        // Replacing SUM with a literal is only valid for exact statistics.
+        // `cast_to_sum_type` also widens small integer stats to the SQL SUM
+        // return type, e.g. Int32 statistics become an Int64 SUM value.
+        let Precision::Exact(val) = col_stats.sum_value.cast_to_sum_type() else {
+            return None;
+        };
+        if val.is_null() {
+            return None;
+        }
+
+        // SUM coercion can introduce a physical CAST around the input column
+        // (`SUM(Int32)` becomes `SUM(CAST(Int32 AS Int64))`). Only use the
+        // column's raw sum stats when the widened stats value matches that
+        // cast target and the aggregate return type.
+        if let Some(cast_type) = cast_type {
+            let value_type = val.data_type();
+            if cast_type != statistics_args.return_type || &value_type != cast_type {
+                return None;
+            }
+            return Some(val);
+        }
+
+        if &val.data_type() == statistics_args.return_type {
+            Some(val)
+        } else {
+            val.cast_to(statistics_args.return_type).ok()
+        }
+    }
 }
 
 /// This accumulator computes SUM incrementally
@@ -665,7 +719,7 @@ impl Accumulator for SlidingDistinctSumAccumulator {
 mod tests {
     use super::*;
     use arrow::{
-        array::Int64Array,
+        array::{Decimal128Array, Int64Array},
         buffer::{NullBuffer, ScalarBuffer},
     };
     use std::sync::Arc;
@@ -708,5 +762,76 @@ mod tests {
         assert_eq!(acc.evaluate()?, ScalarValue::Int64(None));
 
         Ok(())
+    }
+
+    #[test]
+    fn decimal_sum_accumulator_uses_widened_return_type() -> Result<()> {
+        let values: ArrayRef = Arc::new(
+            Decimal128Array::from(vec![Some(99_999), Some(99_999)])
+                .with_precision_and_scale(5, 2)?,
+        );
+        let mut acc = SumAccumulator::<Decimal128Type>::new(DataType::Decimal128(15, 2));
+
+        acc.update_batch(&[values])?;
+
+        assert_eq!(
+            acc.evaluate()?,
+            ScalarValue::Decimal128(Some(199_998), 15, 2)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sum_value_from_stats_widens_small_integer_sum() {
+        let statistics = datafusion_common::Statistics {
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![datafusion_common::ColumnStatistics {
+                sum_value: Precision::Exact(ScalarValue::Int32(Some(10))),
+                ..Default::default()
+            }],
+        };
+        let return_type = DataType::Int64;
+        let expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
+            Arc::new(Column::new("a", 0));
+        let exprs = vec![expr];
+        let statistics_args = StatisticsArgs {
+            statistics: &statistics,
+            return_type: &return_type,
+            is_distinct: false,
+            exprs: &exprs,
+        };
+
+        assert_eq!(
+            Sum::new().value_from_stats(&statistics_args),
+            Some(ScalarValue::Int64(Some(10)))
+        );
+    }
+
+    #[test]
+    fn sum_value_from_stats_casts_decimal_sum_to_return_type() {
+        let statistics = datafusion_common::Statistics {
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![datafusion_common::ColumnStatistics {
+                sum_value: Precision::Exact(ScalarValue::Decimal128(Some(12345), 5, 2)),
+                ..Default::default()
+            }],
+        };
+        let return_type = DataType::Decimal128(15, 2);
+        let expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
+            Arc::new(Column::new("a", 0));
+        let exprs = vec![expr];
+        let statistics_args = StatisticsArgs {
+            statistics: &statistics,
+            return_type: &return_type,
+            is_distinct: false,
+            exprs: &exprs,
+        };
+
+        assert_eq!(
+            Sum::new().value_from_stats(&statistics_args),
+            Some(ScalarValue::Decimal128(Some(12345), 15, 2))
+        );
     }
 }
