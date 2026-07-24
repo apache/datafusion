@@ -31,14 +31,17 @@ rust-version = { workspace = true }
 all-features = true
 
 [features]
-default = []
+default = ["gcs", "http", "s3"]
 backtrace = ["datafusion/backtrace"]
+gcs = ["object_store/gcp"]
+http = ["object_store/http"]
+s3 = ["dep:aws-config", "dep:aws-credential-types", "object_store/aws"]
 
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
-aws-config = "1.8.18"
-aws-credential-types = "1.2.13"
+aws-config = { version = "1.8.18", optional = true }
+aws-credential-types = { version = "1.2.13", optional = true }
 chrono = { workspace = true }
 clap = { version = "4.5.60", features = ["cargo", "derive"] }
 datafusion = { workspace = true, features = [
@@ -61,7 +64,7 @@ env_logger = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
 mimalloc = { version = "0.1", default-features = false }
-object_store = { workspace = true, features = ["aws", "gcp", "http"] }
+object_store = { workspace = true }
 parking_lot = { workspace = true }
 parquet = { workspace = true, default-features = false }
 regex = { workspace = true }

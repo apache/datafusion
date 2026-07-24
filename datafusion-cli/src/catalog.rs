@@ -17,7 +17,11 @@
 
 use std::sync::{Arc, Weak};
 
-use crate::object_storage::{AwsOptions, GcpOptions, get_object_store};
+#[cfg(feature = "s3")]
+use crate::object_storage::AwsOptions;
+#[cfg(feature = "gcs")]
+use crate::object_storage::GcpOptions;
+use crate::object_storage::get_object_store;
 
 use datafusion::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider};
 
@@ -169,11 +173,13 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
                 // Register the store for this URL. Here we don't have access
                 // to any command options so the only choice is to use an empty collection
                 match scheme {
+                    #[cfg(feature = "s3")]
                     "s3" | "oss" | "cos" => {
                         if let Some(table_options) = builder.table_options() {
                             table_options.extensions.insert(AwsOptions::default())
                         }
                     }
+                    #[cfg(feature = "gcs")]
                     "gs" | "gcs" => {
                         if let Some(table_options) = builder.table_options() {
                             table_options.extensions.insert(GcpOptions::default())
