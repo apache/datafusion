@@ -217,8 +217,7 @@ enum OutOfMemoryMode {
 /// aggregator must store the intermediate state for each group.
 ///
 /// If the ratio of the number of groups to the number of input rows exceeds a
-/// threshold, and [`GroupsAccumulator::supports_convert_to_state`] is
-/// supported, this operator will stop applying Partial aggregation and directly
+/// threshold, this operator will stop applying Partial aggregation and directly
 /// pass the input rows to the next aggregation phase.
 ///
 /// [`Accumulator::state`]: datafusion_expr::Accumulator::state
@@ -545,14 +544,9 @@ impl GroupedHashAggregateStream {
         // - aggregation mode is Partial
         // - input is not ordered by GROUP BY expressions,
         //   since Final mode expects unique group values as its input
-        // - all accumulators support input batch to intermediate
-        //   aggregate state conversion
         // - there is only one GROUP BY expressions set
         let skip_aggregation_probe = if agg.mode == AggregateMode::Partial
             && matches!(group_ordering, GroupOrdering::None)
-            && accumulators
-                .iter()
-                .all(|acc| acc.supports_convert_to_state())
             && agg_group_by.is_single()
         {
             let options = &context.session_config().options().execution;

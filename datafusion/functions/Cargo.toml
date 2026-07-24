@@ -165,6 +165,11 @@ required-features = ["string_expressions"]
 
 [[bench]]
 harness = false
+name = "regexp_match"
+required-features = ["regex_expressions"]
+
+[[bench]]
+harness = false
 name = "regx"
 required-features = ["regex_expressions"]
 
@@ -327,6 +332,11 @@ required-features = ["unicode_expressions"]
 
 [[bench]]
 harness = false
+name = "find_in_set_literal"
+required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
 name = "contains"
 required-features = ["string_expressions"]
 
@@ -344,6 +354,15 @@ required-features = ["string_expressions"]
 harness = false
 name = "regexp_count"
 required-features = ["regex_expressions"]
+
+[[bench]]
+harness = false
+name = "regexp_instr"
+required-features = ["regex_expressions"]
+
+[[bench]]
+harness = false
+name = "get_field"
 
 [[bench]]
 harness = false
@@ -384,3 +403,8 @@ required-features = ["math_expressions"]
 harness = false
 name = "round"
 required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
+name = "dictionary_encoding"
+required-features = ["string_expressions"]

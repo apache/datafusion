@@ -41,6 +41,19 @@ NULL
 6
 7
 
+# CASE nullability remains consistent through type coercion
+query I
+SELECT count(endpoint)
+FROM (
+  SELECT CASE
+    WHEN a IS NOT NULL THEN CAST(a AS BIGINT)
+    ELSE CAST(0 AS BIGINT)
+  END AS endpoint
+  FROM foo
+)
+----
+6
+
 # column or explicit null
 query I
 SELECT CASE WHEN a > 2 THEN b ELSE null END FROM foo

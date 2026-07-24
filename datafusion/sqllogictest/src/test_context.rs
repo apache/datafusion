@@ -187,6 +187,10 @@ impl TestContext {
                 info!("Registering table with union column");
                 register_union_table(test_ctx.session_ctx())
             }
+            "aggregate.slt" => {
+                info!("Registering table with union column for approx_distinct");
+                register_approx_distinct_union_table(test_ctx.session_ctx())
+            }
             "dictionary_struct.slt" => {
                 info!("Registering table with dictionary-encoded struct column");
                 register_dictionary_struct_table(test_ctx.session_ctx());
@@ -591,6 +595,43 @@ fn register_union_table(ctx: &SessionContext) {
         RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(union)]).unwrap();
 
     ctx.register_batch("union_table", batch).unwrap();
+}
+
+fn register_approx_distinct_union_table(ctx: &SessionContext) {
+    let union = UnionArray::try_new(
+        UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("i", DataType::Int32, true),
+                Field::new("s", DataType::Utf8, true),
+            ],
+        )
+        .unwrap(),
+        ScalarBuffer::from(vec![0_i8, 0, 1, 1, 0, 0, 1, 0]),
+        Some(ScalarBuffer::from(vec![0, 1, 0, 1, 2, 3, 2, 4])),
+        vec![
+            Arc::new(Int32Array::from(vec![
+                Some(1),
+                Some(1),
+                None,
+                None,
+                Some(5),
+            ])),
+            Arc::new(StringArray::from(vec![Some("x"), Some("y"), None])),
+        ],
+    )
+    .unwrap();
+
+    let schema = Schema::new(vec![
+        Field::new("g", DataType::Int32, false),
+        Field::new("u", union.data_type().clone(), false),
+    ]);
+
+    let g = Arc::new(Int32Array::from(vec![1, 1, 1, 2, 2, 3, 3, 4]));
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![g, Arc::new(union)]).unwrap();
+
+    ctx.register_batch("approx_distinct_union_test", batch)
+        .unwrap();
 }
 
 fn register_dictionary_struct_table(ctx: &SessionContext) {

@@ -156,8 +156,4 @@ where
 
         Ok(vec![Arc::new(values_filtered)])
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
 }

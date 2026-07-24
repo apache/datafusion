@@ -31,8 +31,8 @@
 
 use arrow::datatypes::DataType;
 use arrow::datatypes::Float64Type;
-use datafusion_common::ScalarValue;
 use datafusion_common::cast::as_primitive_array;
+use datafusion_common::{DataFusionError, ScalarValue, exec_err};
 use std::cmp::Ordering;
 use std::mem::{size_of, size_of_val};
 
@@ -146,6 +146,23 @@ impl TDigest {
     #[inline]
     pub fn max_size(&self) -> usize {
         self.max_size
+    }
+
+    /// The sum of all values ingested into this digest.
+    #[inline]
+    pub fn sum(&self) -> f64 {
+        self.sum
+    }
+
+    /// The centroids that make up this digest, ordered by mean.
+    ///
+    /// Together with the [`Self::sum()`], [`Self::max_size()`],
+    /// [`Self::count()`], [`Self::max()`], and [`Self::min()`] accessors this
+    /// exposes the full serialized state of the digest without packing it into
+    /// a [`ScalarValue`] list. See [`Self::try_from_parts()`] for the inverse.
+    #[inline]
+    pub fn centroids(&self) -> &[Centroid] {
+        &self.centroids
     }
 
     /// Size in bytes including `Self`.
@@ -611,6 +628,74 @@ impl TDigest {
             centroids,
         }
     }
+
+    /// Construct a [`TDigest`] directly from its constituent parts, validating
+    /// the inputs.
+    ///
+    /// Together with the [`Self::centroids()`], [`Self::sum()`],
+    /// [`Self::max_size()`], [`Self::count()`], [`Self::max()`], and
+    /// [`Self::min()`] accessors, this allows a digest to be serialized into and
+    /// restored from a caller's own format without round-tripping through a
+    /// [`ScalarValue`] list (the non-Arrow counterpart to
+    /// [`Self::from_scalar_state()`]).
+    ///
+    /// Unlike [`Self::from_scalar_state()`], this validates its inputs, returning
+    /// an error rather than a silently wrong digest when handed corrupt state.
+    /// Callers who trust their data can `unwrap()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - `min` and `max` are both finite but `max < min`;
+    /// - the `centroids` are not sorted in non-decreasing order by mean (the
+    ///   order produced by [`Self::centroids()`]); or
+    /// - any centroid weight is not finite and strictly positive
+    ///   ([`Self::estimate_quantile()`] divides by a centroid's weight, so a
+    ///   zero, negative, or non-finite weight yields silently wrong results).
+    pub fn try_from_parts(
+        max_size: usize,
+        sum: f64,
+        count: f64,
+        max: f64,
+        min: f64,
+        centroids: Vec<Centroid>,
+    ) -> Result<Self, DataFusionError> {
+        if min.is_finite() && max.is_finite() && max.total_cmp(&min).is_lt() {
+            return exec_err!(
+                "invalid TDigest state: max ({max}) is less than min ({min})"
+            );
+        }
+
+        for pair in centroids.windows(2) {
+            if pair[0].cmp_mean(&pair[1]).is_gt() {
+                return exec_err!(
+                    "invalid TDigest state: centroids must be sorted by mean, \
+                     but {} precedes {}",
+                    pair[0].mean(),
+                    pair[1].mean()
+                );
+            }
+        }
+
+        for centroid in &centroids {
+            if !(centroid.weight().is_finite() && centroid.weight() > 0.0) {
+                return exec_err!(
+                    "invalid TDigest state: centroid weight must be finite and \
+                     positive, got {}",
+                    centroid.weight()
+                );
+            }
+        }
+
+        Ok(Self {
+            max_size,
+            sum,
+            count,
+            max,
+            min,
+            centroids,
+        })
+    }
 }
 
 #[cfg(debug_assertions)]
@@ -759,5 +844,148 @@ mod tests {
         let result = t.estimate_quantile(0.99);
         // The result should be approximately equal to the input value
         assert!((result - 15.699999988079073).abs() < 1e-10);
+    }
+
+    // A representative set of digests covering the empty, single-value and
+    // heavily-compressed cases, used to exercise the `try_from_parts`/accessor
+    // external-state contract.
+    fn sample_digests() -> Vec<TDigest> {
+        vec![
+            // Empty: no values ingested, so max/min are NaN and centroids empty.
+            TDigest::new(100),
+            // A single value.
+            TDigest::new(100).merge_unsorted_f64(vec![42.0]),
+            // Many values, forcing compression down to `max_size` centroids.
+            TDigest::new(100).merge_unsorted_f64((1..=10_000).map(f64::from).collect()),
+            // A different shape and `max_size`.
+            TDigest::new(50)
+                .merge_unsorted_f64((1..=5_000).map(|v| f64::from(v).sqrt()).collect()),
+        ]
+    }
+
+    const QUANTILE_GRID: [f64; 9] = [0.0, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1.0];
+
+    // Rebuild a digest purely from its public accessors via `try_from_parts`.
+    fn rebuild_via_parts(t: &TDigest) -> TDigest {
+        TDigest::try_from_parts(
+            t.max_size(),
+            t.sum(),
+            t.count(),
+            t.max(),
+            t.min(),
+            t.centroids().to_vec(),
+        )
+        .expect("digest built from real accessors is valid")
+    }
+
+    #[test]
+    fn test_from_parts_roundtrip() {
+        for t in sample_digests() {
+            let rebuilt = rebuild_via_parts(&t);
+
+            // The serialized state must be identical. `to_scalar_state()`
+            // compares `Float64` by bit pattern, so this also holds for the
+            // empty digest whose max/min are NaN.
+            assert_eq!(rebuilt.to_scalar_state(), t.to_scalar_state());
+
+            // Quantile estimates must be bitwise-equal across the grid.
+            for q in QUANTILE_GRID {
+                assert_eq!(
+                    rebuilt.estimate_quantile(q).to_bits(),
+                    t.estimate_quantile(q).to_bits(),
+                    "quantile {q} diverged after try_from_parts roundtrip"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_from_parts_equals_original() {
+        // For digests without NaN fields, use the strongest available equality:
+        // the derived `PartialEq` on `TDigest`. (The empty digest is excluded
+        // because NaN != NaN under the derived comparison; it is covered by
+        // `test_from_parts_roundtrip` via `to_scalar_state`.)
+        for t in sample_digests().into_iter().filter(|t| t.count() > 0.0) {
+            let rebuilt = rebuild_via_parts(&t);
+            assert_eq!(rebuilt, t);
+        }
+    }
+
+    #[test]
+    fn test_accessors_agree_with_scalar_state() {
+        for t in sample_digests() {
+            let state = t.to_scalar_state();
+
+            // `sum()` matches the sum field packed into the scalar state.
+            assert_eq!(ScalarValue::Float64(Some(t.sum())), state[1]);
+
+            // `centroids()` matches the flat mean/weight pairs in the list.
+            let flattened: Vec<ScalarValue> = t
+                .centroids()
+                .iter()
+                .flat_map(|c| [c.mean(), c.weight()])
+                .map(|v| ScalarValue::Float64(Some(v)))
+                .collect();
+            let expected = ScalarValue::new_list_nullable(&flattened, &DataType::Float64);
+            assert_eq!(ScalarValue::List(expected), state[5]);
+        }
+    }
+
+    #[test]
+    fn test_from_parts_rejects_max_less_than_min() {
+        let err = TDigest::try_from_parts(
+            100,
+            3.0,
+            2.0,
+            1.0, // max
+            5.0, // min > max
+            vec![Centroid::new(1.0, 1.0), Centroid::new(5.0, 1.0)],
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("max") && msg.contains("less than min"),
+            "unexpected error message: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_from_parts_rejects_unsorted_centroids() {
+        let err = TDigest::try_from_parts(
+            100,
+            6.0,
+            3.0,
+            3.0,
+            1.0,
+            // Means out of order: 3.0 precedes 1.0.
+            vec![Centroid::new(3.0, 1.0), Centroid::new(1.0, 1.0)],
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("sorted by mean"),
+            "unexpected error message: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_from_parts_rejects_non_positive_weight() {
+        // A zero weight would divide-by-zero inside `estimate_quantile`.
+        for bad_weight in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let err = TDigest::try_from_parts(
+                100,
+                1.0,
+                bad_weight,
+                1.0,
+                1.0,
+                vec![Centroid::new(1.0, bad_weight)],
+            )
+            .unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("weight must be finite and"),
+                "weight {bad_weight}: unexpected error message: {msg}"
+            );
+        }
     }
 }

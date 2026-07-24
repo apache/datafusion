@@ -1235,12 +1235,10 @@ impl AggregateExec {
             && self.limit_options_supported_by_hash_stream()
     }
 
-    fn should_use_ordered_partial_aggregate_stream(&self, context: &TaskContext) -> bool {
-        // TODO: implement memory-limited path and remove this limitation
-        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
-            return false;
-        }
-
+    fn should_use_ordered_partial_aggregate_stream(
+        &self,
+        _context: &TaskContext,
+    ) -> bool {
         self.mode == AggregateMode::Partial
             && self.input_order_mode != InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
@@ -1291,12 +1289,7 @@ impl AggregateExec {
             && self.group_by.is_single()
     }
 
-    fn should_use_ordered_final_aggregate_stream(&self, context: &TaskContext) -> bool {
-        // TODO: implement memory-limited path and remove this limitation
-        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
-            return false;
-        }
-
+    fn should_use_ordered_final_aggregate_stream(&self, _context: &TaskContext) -> bool {
         matches!(
             self.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
@@ -1934,7 +1927,7 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn input_distribution_requirements(&self) -> InputDistributionRequirements {
-        let requirements = InputDistributionRequirements::new(match &self.mode {
+        InputDistributionRequirements::new(match &self.mode {
             AggregateMode::Partial | AggregateMode::PartialReduce => {
                 vec![Distribution::UnspecifiedDistribution]
             }
@@ -1944,15 +1937,7 @@ impl ExecutionPlan for AggregateExec {
             AggregateMode::Final | AggregateMode::Single => {
                 vec![Distribution::SinglePartition]
             }
-        });
-        match &self.mode {
-            AggregateMode::FinalPartitioned | AggregateMode::SinglePartitioned
-                if !self.group_by.has_grouping_set() =>
-            {
-                requirements.allow_range_satisfaction_for_key_partitioning()
-            }
-            _ => requirements,
-        }
+        })
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
@@ -3930,10 +3915,10 @@ mod tests {
 +----------+-----------+-------------------------+
 ");
 
-        // Ordered streams don't implement memory limits yet.
+        // Ordered partial aggregation supports finite memory.
         let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
         let stream = aggregate.execute_typed(0, &finite_memory_task_ctx)?;
-        assert!(matches!(stream, StreamType::GroupedHash(_)));
+        assert!(matches!(stream, StreamType::OrderedPartialAggregate(_)));
 
         Ok(())
     }
@@ -4007,10 +3992,10 @@ mod tests {
 +-----+--------------+
 ");
 
-        // Ordered streams don't implement memory limits yet.
+        // Ordered final aggregation supports finite memory.
         let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
         let stream = final_aggregate.execute_typed(0, &finite_memory_task_ctx)?;
-        assert!(matches!(stream, StreamType::GroupedHash(_)));
+        assert!(matches!(stream, StreamType::OrderedFinalAggregate(_)));
 
         Ok(())
     }
@@ -7145,6 +7130,22 @@ mod tests {
 
         fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
             Ok(vec![self.emit_counts(emit_to)?])
+        }
+
+        fn convert_to_state(
+            &self,
+            values: &[ArrayRef],
+            opt_filter: Option<&BooleanArray>,
+        ) -> Result<Vec<ArrayRef>> {
+            assert_eq!(values.len(), 1, "one argument to convert_to_state");
+            let counts = match opt_filter {
+                Some(filter) => filter
+                    .iter()
+                    .map(|value| i64::from(value.unwrap_or(false)))
+                    .collect::<Vec<_>>(),
+                None => vec![1; values[0].len()],
+            };
+            Ok(vec![Arc::new(Int64Array::from(counts))])
         }
 
         fn merge_batch(

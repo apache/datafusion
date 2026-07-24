@@ -36,6 +36,7 @@ use datafusion_datasource::memory::{MemSink, MemorySourceConfig};
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr::dml::InsertOp;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{Expr, SortExpr, TableType};
 use datafusion_physical_expr::{
     LexOrdering, PhysicalExpr, create_physical_expr, create_physical_sort_exprs,
@@ -209,8 +210,12 @@ impl TableProvider for MemTable {
             let eqp = state.execution_props();
             let mut file_sort_order = vec![];
             for sort_exprs in sort_order.iter() {
-                let physical_exprs =
-                    create_physical_sort_exprs(sort_exprs, &df_schema, eqp)?;
+                let physical_exprs = create_physical_sort_exprs(
+                    sort_exprs,
+                    &df_schema,
+                    eqp,
+                    &PhysicalPlanningContext::default(),
+                )?;
                 file_sort_order.extend(LexOrdering::new(physical_exprs));
             }
             source = source.try_with_sort_information(file_sort_order)?;
@@ -356,8 +361,12 @@ impl TableProvider for MemTable {
         let physical_assignments: HashMap<String, Arc<dyn PhysicalExpr>> = assignments
             .iter()
             .map(|(name, expr)| {
-                let physical_expr =
-                    create_physical_expr(expr, &df_schema, state.execution_props())?;
+                let physical_expr = create_physical_expr(
+                    expr,
+                    &df_schema,
+                    state.execution_props(),
+                    &PhysicalPlanningContext::default(),
+                )?;
                 Ok((name.clone(), physical_expr))
             })
             .collect::<Result<_>>()?;
@@ -470,8 +479,12 @@ fn evaluate_filters_to_mask(
     let mut combined_mask: Option<BooleanArray> = None;
 
     for filter_expr in filters {
-        let physical_expr =
-            create_physical_expr(filter_expr, df_schema, execution_props)?;
+        let physical_expr = create_physical_expr(
+            filter_expr,
+            df_schema,
+            execution_props,
+            &PhysicalPlanningContext::default(),
+        )?;
 
         let result = physical_expr.evaluate(batch)?;
         let array = result.into_array(batch.num_rows())?;

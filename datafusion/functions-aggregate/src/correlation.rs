@@ -539,11 +539,6 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
             Arc::new(Float64Array::from(sum_yy)),
         ])
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn merge_batch(
         &mut self,
         values: &[ArrayRef],
