@@ -814,11 +814,11 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::CrossJoin(_) => {
                 CrossJoinExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::Empty(empty) => {
-                self.try_into_empty_physical_plan(empty, ctx, proto_converter)
+            PhysicalPlanType::Empty(_) => {
+                EmptyExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::PlaceholderRow(placeholder) => {
-                self.try_into_placeholder_row_physical_plan(placeholder, ctx)
+            PhysicalPlanType::PlaceholderRow(_) => {
+                PlaceholderRowExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Sort(_) => {
                 SortExec::try_from_proto(self.node(), &decode_ctx)
@@ -922,16 +922,6 @@ pub trait PhysicalPlanNodeExt: Sized {
                 exec,
                 codec,
                 proto_converter,
-            );
-        }
-
-        if let Some(empty) = plan.downcast_ref::<EmptyExec>() {
-            return protobuf::PhysicalPlanNode::try_from_empty_exec(empty, codec);
-        }
-
-        if let Some(empty) = plan.downcast_ref::<PlaceholderRowExec>() {
-            return protobuf::PhysicalPlanNode::try_from_placeholder_row_exec(
-                empty, codec,
             );
         }
 
@@ -1934,31 +1924,48 @@ pub trait PhysicalPlanNodeExt: Sized {
         CrossJoinExec::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `EmptyExec` deserializes itself via `EmptyExec::try_from_proto`"
+    )]
     fn try_into_empty_physical_plan(
         &self,
         empty: &protobuf::EmptyExecNode,
-        _ctx: &PhysicalPlanDecodeContext<'_>,
-        _proto_converter: &dyn PhysicalProtoConverterExtension,
+        ctx: &PhysicalPlanDecodeContext<'_>,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let schema = Arc::new(convert_required!(empty.schema)?);
-        // A zero (absent) partition count comes from a plan encoded before the
-        // field existed, which always meant a single partition.
-        let partitions = empty.partitions.max(1) as usize;
-        Ok(Arc::new(EmptyExec::new(schema).with_partitions(partitions)))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Empty(empty.clone())),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        EmptyExec::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `PlaceholderRowExec` deserializes itself via `PlaceholderRowExec::try_from_proto`"
+    )]
     fn try_into_placeholder_row_physical_plan(
         &self,
         placeholder: &protobuf::PlaceholderRowExecNode,
-        _ctx: &PhysicalPlanDecodeContext<'_>,
+        ctx: &PhysicalPlanDecodeContext<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let schema = Arc::new(convert_required!(placeholder.schema)?);
-        // A zero (absent) partition count comes from a plan encoded before the
-        // field existed, which always meant a single partition.
-        let partitions = placeholder.partitions.max(1) as usize;
-        Ok(Arc::new(
-            PlaceholderRowExec::new(schema).with_partitions(partitions),
-        ))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::PlaceholderRow(
+                placeholder.clone(),
+            )),
+        };
+        let proto_converter = DefaultPhysicalProtoConverter {};
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter: &proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        PlaceholderRowExec::try_from_proto(&node, &decode_ctx)
     }
 
     #[deprecated(
@@ -2833,33 +2840,41 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `EmptyExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_empty_exec(
         empty: &EmptyExec,
-        _codec: &dyn PhysicalExtensionCodec,
+        codec: &dyn PhysicalExtensionCodec,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let schema = empty.schema().as_ref().try_into()?;
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Empty(protobuf::EmptyExecNode {
-                schema: Some(schema),
-                partitions: empty.properties().output_partitioning().partition_count()
-                    as u32,
-            })),
+        let proto_converter = DefaultPhysicalProtoConverter {};
+        let encoder = ConverterPlanEncoder {
+            codec,
+            proto_converter: &proto_converter,
+        };
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        empty.try_to_proto(&ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("EmptyExec::try_to_proto returned None")
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `PlaceholderRowExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_placeholder_row_exec(
-        empty: &PlaceholderRowExec,
-        _codec: &dyn PhysicalExtensionCodec,
+        placeholder: &PlaceholderRowExec,
+        codec: &dyn PhysicalExtensionCodec,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let schema = empty.schema().as_ref().try_into()?;
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::PlaceholderRow(
-                protobuf::PlaceholderRowExecNode {
-                    schema: Some(schema),
-                    partitions: empty.properties().output_partitioning().partition_count()
-                        as u32,
-                },
-            )),
+        let proto_converter = DefaultPhysicalProtoConverter {};
+        let encoder = ConverterPlanEncoder {
+            codec,
+            proto_converter: &proto_converter,
+        };
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        placeholder.try_to_proto(&ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("PlaceholderRowExec::try_to_proto returned None")
         })
     }
 
