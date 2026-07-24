@@ -38,10 +38,23 @@ pub(super) fn is_existence_join(join_type: JoinType) -> bool {
     )
 }
 
-// Returns boolean to check if the join type needs to record
-// buffered side matches for classic joins
+// Returns boolean for whether the join is a left existence join that is currently
+// supported by `PiecewiseMergeJoin`. These do not require swapping the inputs: the
+// marked (left) side is already the buffered side, so the classic scan can mark the
+// buffered bitmap and the final indices are emitted from it.
+pub(super) fn is_supported_existence_join(join_type: JoinType) -> bool {
+    matches!(join_type, JoinType::LeftSemi | JoinType::LeftAnti)
+}
+
+// Returns true if the join type produces its output in the final pass over the buffered
+// side (using the visited-indices bitmap) rather than while scanning stream batches:
+// `Left`/`Full` emit unmatched buffered rows, and `LeftSemi`/`LeftAnti` emit the
+// matched/unmatched buffered rows respectively.
 pub(super) fn need_produce_result_in_final(join_type: JoinType) -> bool {
-    matches!(join_type, JoinType::Full | JoinType::Left)
+    matches!(
+        join_type,
+        JoinType::Full | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti
+    )
 }
 
 // Returns boolean for whether or not we need to build the buffered side
