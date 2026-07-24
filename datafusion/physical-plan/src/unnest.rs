@@ -888,14 +888,21 @@ fn build_batch(
 /// l2: [4,5], [], null, [6, 7]
 /// ```
 ///
-/// If `preserve_nulls` is false, the longest length array will be:
+/// With [`datafusion_common::NullHandling::Drop`], the longest length array will be:
 ///
 /// ```ignore
 /// longest_length: [3, 0, 0, 2]
 /// ```
 ///
-/// whereas if `preserve_nulls` is true, the longest length array will be:
+/// With [`datafusion_common::NullHandling::Preserve`] (the default), the longest length array
+/// will be:
 ///
+/// ```ignore
+/// longest_length: [3, 1, 1, 2]
+/// ```
+///
+/// With [`datafusion_common::NullHandling::PreserveAndExpandEmpty`], empty input lists are
+/// also bumped to length 1 so they produce a single `NULL` output row:
 ///
 /// ```ignore
 /// longest_length: [3, 1, 1, 2]
@@ -904,12 +911,16 @@ fn find_longest_length(
     list_arrays: &[ArrayRef],
     options: &UnnestOptions,
 ) -> Result<ArrayRef> {
-    // The length of a NULL list
-    let null_length = if options.preserve_nulls {
+    // The length to substitute for a NULL input list.
+    let null_length = if options.preserve_nulls() {
         Scalar::new(Int64Array::from_value(1, 1))
     } else {
         Scalar::new(Int64Array::from_value(0, 1))
     };
+    let expand_empty = options.expand_empty_as_null();
+    // Reused scalars for the empty-list rewrite when expand_empty is set.
+    let zero = Scalar::new(Int64Array::from_value(0, 1));
+    let one = Scalar::new(Int64Array::from_value(1, 1));
     let list_lengths: Vec<ArrayRef> = list_arrays
         .iter()
         .map(|list_array| {
@@ -918,6 +929,12 @@ fn find_longest_length(
             length_array = cast(&length_array, &DataType::Int64)?;
             length_array =
                 zip(&is_not_null(&length_array)?, &length_array, &null_length)?;
+            if expand_empty {
+                // Bump empty lists (length 0) to length 1 so they
+                // produce a single output row padded with NULL.
+                let is_zero = arrow_ord::cmp::eq(&length_array, &zero)?;
+                length_array = zip(&is_zero, &one, &length_array)?;
+            }
             Ok(length_array)
         })
         .collect::<Result<_>>()?;
@@ -1187,6 +1204,7 @@ mod tests {
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer};
     use arrow::datatypes::{Field, Int32Type};
+    use datafusion_common::NullHandling;
     use datafusion_common::test_util::batches_to_string;
     use insta::assert_snapshot;
 
@@ -1369,12 +1387,375 @@ mod tests {
             list_type_columns.as_ref(),
             &HashSet::default(),
             &UnnestOptions {
-                preserve_nulls: true,
+                null_handling: NullHandling::Preserve,
                 recursions: vec![],
             },
         )?
         .unwrap();
 
+        assert_snapshot!(batches_to_string(&[ret]),
+        @r"
+        +---------------------------------+---------------------------------+---------------------------------+
+        | col1_unnest_placeholder_depth_1 | col1_unnest_placeholder_depth_2 | col2_unnest_placeholder_depth_1 |
+        +---------------------------------+---------------------------------+---------------------------------+
+        | [1, 2, 3]                       | 1                               | a                               |
+        |                                 | 2                               | b                               |
+        | [4, 5]                          | 3                               |                                 |
+        | [1, 2, 3]                       |                                 | a                               |
+        |                                 |                                 | b                               |
+        | [4, 5]                          |                                 |                                 |
+        | [1, 2, 3]                       | 4                               | a                               |
+        |                                 | 5                               | b                               |
+        | [4, 5]                          |                                 |                                 |
+        | [7, 8, 9, 10]                   | 7                               | c                               |
+        |                                 | 8                               | d                               |
+        | [11, 12, 13]                    | 9                               |                                 |
+        |                                 | 10                              |                                 |
+        | [7, 8, 9, 10]                   |                                 | c                               |
+        |                                 |                                 | d                               |
+        | [11, 12, 13]                    |                                 |                                 |
+        | [7, 8, 9, 10]                   | 11                              | c                               |
+        |                                 | 12                              | d                               |
+        | [11, 12, 13]                    | 13                              |                                 |
+        |                                 |                                 | e                               |
+        +---------------------------------+---------------------------------+---------------------------------+
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_batch_preserve_and_expand_empty() -> Result<()> {
+        // c1: [A, B, C], [], NULL, [D], NULL, [NULL, F]   c2: 1, 2, 3, 4, 5, 6
+        // Expected for `NullHandling::PreserveAndExpandEmpty`:
+        //   [A, B, C] -> three rows with c2 = 1, 1, 1
+        //   []        -> one  row  with c2 = 2 and unnested value NULL
+        //   NULL      -> one  row  with c2 = 3 and unnested value NULL
+        //   [D]       -> one  row  with c2 = 4
+        //   NULL      -> one  row  with c2 = 5 and unnested value NULL
+        //   [NULL, F] -> two  rows with c2 = 6, 6
+        let list_array = Arc::new(make_generic_array::<i32>()) as ArrayRef;
+        let other =
+            Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3, 4, 5, 6])) as ArrayRef;
+        let in_schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "c1",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+                true,
+            ),
+            Field::new("c2", DataType::Int32, true),
+        ]));
+        let out_schema = Arc::new(Schema::new(vec![
+            Field::new("c1_unnested", DataType::Utf8, true),
+            Field::new("c2", DataType::Int32, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&in_schema),
+            vec![Arc::clone(&list_array), Arc::clone(&other)],
+        )?;
+        let list_type_columns = vec![ListUnnest {
+            index_in_input_schema: 0,
+            depth: 1,
+        }];
+
+        let ret = build_batch(
+            &batch,
+            &out_schema,
+            &list_type_columns,
+            &HashSet::default(),
+            &UnnestOptions {
+                null_handling: NullHandling::PreserveAndExpandEmpty,
+                recursions: vec![],
+            },
+        )?
+        .unwrap();
+
+        assert_snapshot!(batches_to_string(&[ret]),
+        @r"
+        +-------------+----+
+        | c1_unnested | c2 |
+        +-------------+----+
+        | A           | 1  |
+        | B           | 1  |
+        | C           | 1  |
+        |             | 2  |
+        |             | 3  |
+        | D           | 4  |
+        |             | 5  |
+        |             | 6  |
+        | F           | 6  |
+        +-------------+----+
+        ");
+        Ok(())
+    }
+
+    // PreserveAndExpandEmpty must work for LargeListArray (i64 offsets) too,
+    // not just the i32-offset ListArray exercised above.
+    #[test]
+    fn test_build_batch_preserve_and_expand_empty_largelist() -> Result<()> {
+        let list_array = Arc::new(make_generic_array::<i64>()) as ArrayRef;
+        let other =
+            Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3, 4, 5, 6])) as ArrayRef;
+        let in_schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "c1",
+                DataType::LargeList(Arc::new(Field::new_list_field(
+                    DataType::Utf8,
+                    true,
+                ))),
+                true,
+            ),
+            Field::new("c2", DataType::Int32, true),
+        ]));
+        let out_schema = Arc::new(Schema::new(vec![
+            Field::new("c1_unnested", DataType::Utf8, true),
+            Field::new("c2", DataType::Int32, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&in_schema),
+            vec![Arc::clone(&list_array), Arc::clone(&other)],
+        )?;
+        let list_type_columns = vec![ListUnnest {
+            index_in_input_schema: 0,
+            depth: 1,
+        }];
+
+        let ret = build_batch(
+            &batch,
+            &out_schema,
+            &list_type_columns,
+            &HashSet::default(),
+            &UnnestOptions {
+                null_handling: NullHandling::PreserveAndExpandEmpty,
+                recursions: vec![],
+            },
+        )?
+        .unwrap();
+
+        // Same expected shape as the ListArray case — exercises the LargeList
+        // code path in unnest_list_array.
+        assert_snapshot!(batches_to_string(&[ret]),
+        @r"
+        +-------------+----+
+        | c1_unnested | c2 |
+        +-------------+----+
+        | A           | 1  |
+        | B           | 1  |
+        | C           | 1  |
+        |             | 2  |
+        |             | 3  |
+        | D           | 4  |
+        |             | 5  |
+        |             | 6  |
+        | F           | 6  |
+        +-------------+----+
+        ");
+        Ok(())
+    }
+
+    // When two list columns are unnested together, `find_longest_length`
+    // takes the per-row max. PreserveAndExpandEmpty must bump zeros to ones
+    // in each input column independently, then the row-wise max picks up
+    // the right value.
+    #[test]
+    fn test_build_batch_preserve_and_expand_empty_multi_column() -> Result<()> {
+        // col_a: [1, 2], [],   NULL,  [3]
+        // col_b: ['x'],  ['y'],['z'], NULL
+        let col_a = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![]),
+            None,
+            Some(vec![Some(3)]),
+        ]);
+        let col_b = {
+            let mut b =
+                arrow::array::ListBuilder::new(arrow::array::StringBuilder::new());
+            b.values().append_value("x");
+            b.append(true);
+            b.values().append_value("y");
+            b.append(true);
+            b.values().append_value("z");
+            b.append(true);
+            b.append(false);
+            b.finish()
+        };
+        let id =
+            Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30, 40])) as ArrayRef;
+
+        let in_schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
+                true,
+            ),
+            Field::new(
+                "b",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+                true,
+            ),
+            Field::new("id", DataType::Int32, true),
+        ]));
+        let out_schema = Arc::new(Schema::new(vec![
+            Field::new("a_unnested", DataType::Int32, true),
+            Field::new("b_unnested", DataType::Utf8, true),
+            Field::new("id", DataType::Int32, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&in_schema),
+            vec![
+                Arc::new(col_a) as ArrayRef,
+                Arc::new(col_b) as ArrayRef,
+                Arc::clone(&id),
+            ],
+        )?;
+        let list_type_columns = vec![
+            ListUnnest {
+                index_in_input_schema: 0,
+                depth: 1,
+            },
+            ListUnnest {
+                index_in_input_schema: 1,
+                depth: 1,
+            },
+        ];
+
+        let ret = build_batch(
+            &batch,
+            &out_schema,
+            &list_type_columns,
+            &HashSet::default(),
+            &UnnestOptions {
+                null_handling: NullHandling::PreserveAndExpandEmpty,
+                recursions: vec![],
+            },
+        )?
+        .unwrap();
+
+        // Row 0: longest = max(len([1,2])=2, len(['x'])=1) = 2 → a=[1,2], b=['x',NULL]
+        // Row 1: a=[] bumped to len 1, b=['y'] len 1 → a=[NULL], b=['y']
+        // Row 2: a=NULL bumped to len 1, b=['z'] len 1 → a=[NULL], b=['z']
+        // Row 3: a=[3] len 1, b=NULL bumped to len 1 → a=[3], b=[NULL]
+        assert_snapshot!(batches_to_string(&[ret]),
+        @r"
+        +------------+------------+----+
+        | a_unnested | b_unnested | id |
+        +------------+------------+----+
+        | 1          | x          | 10 |
+        | 2          |            | 10 |
+        |            | y          | 20 |
+        |            | z          | 30 |
+        | 3          |            | 40 |
+        +------------+------------+----+
+        ");
+        Ok(())
+    }
+
+    // PreserveAndExpandEmpty must propagate through recursive depth-2
+    // unnesting: an outer NULL or empty produces one NULL output row at
+    // each level. Adapted from `test_build_batch_list_arr_recursive`.
+    #[test]
+    fn test_build_batch_preserve_and_expand_empty_recursive() -> Result<()> {
+        // col1                             | col2
+        // [[1,2,3],null,[4,5]]             | ['a','b']
+        // [[7,8,9,10], null, [11,12,13]]   | ['c','d']
+        // null                             | ['e']
+        let list_arr1 = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            None,
+            Some(vec![Some(4), Some(5)]),
+            Some(vec![Some(7), Some(8), Some(9), Some(10)]),
+            None,
+            Some(vec![Some(11), Some(12), Some(13)]),
+        ]);
+        let list_arr1_ref = Arc::new(list_arr1) as ArrayRef;
+        let offsets = OffsetBuffer::from_lengths([3, 3, 0]);
+        let mut nulls = NullBufferBuilder::new(3);
+        nulls.append_non_null();
+        nulls.append_non_null();
+        nulls.append_null();
+        let col1_field = Field::new_list_field(
+            DataType::List(Arc::new(Field::new_list_field(
+                list_arr1_ref.data_type().to_owned(),
+                true,
+            ))),
+            true,
+        );
+        let col1 = ListArray::new(
+            Arc::new(Field::new_list_field(
+                list_arr1_ref.data_type().to_owned(),
+                true,
+            )),
+            offsets,
+            list_arr1_ref,
+            nulls.finish(),
+        );
+
+        let list_arr2 = StringArray::from(vec![
+            Some("a"),
+            Some("b"),
+            Some("c"),
+            Some("d"),
+            Some("e"),
+        ]);
+        let offsets = OffsetBuffer::from_lengths([2, 2, 1]);
+        let mut nulls = NullBufferBuilder::new(3);
+        nulls.append_n_non_nulls(3);
+        let col2_field = Field::new(
+            "col2",
+            DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+            true,
+        );
+        let col2 = GenericListArray::<i32>::new(
+            Arc::new(Field::new_list_field(DataType::Utf8, true)),
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(list_arr2),
+            nulls.finish(),
+        );
+        let schema = Arc::new(Schema::new(vec![col1_field, col2_field]));
+        let out_schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "col1_unnest_placeholder_depth_1",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
+                true,
+            ),
+            Field::new("col1_unnest_placeholder_depth_2", DataType::Int32, true),
+            Field::new("col2_unnest_placeholder_depth_1", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(col1) as ArrayRef, Arc::new(col2) as ArrayRef],
+        )?;
+        let list_type_columns = vec![
+            ListUnnest {
+                index_in_input_schema: 0,
+                depth: 1,
+            },
+            ListUnnest {
+                index_in_input_schema: 0,
+                depth: 2,
+            },
+            ListUnnest {
+                index_in_input_schema: 1,
+                depth: 1,
+            },
+        ];
+
+        let ret = build_batch(
+            &batch,
+            &out_schema,
+            &list_type_columns,
+            &HashSet::default(),
+            &UnnestOptions {
+                null_handling: NullHandling::PreserveAndExpandEmpty,
+                recursions: vec![],
+            },
+        )?
+        .unwrap();
+
+        // The third input row (col1 = null, col2 = ['e']) now produces a
+        // NULL row for the depth-1 col1 placeholder *and* the depth-2 one,
+        // instead of being dropped at depth 1 and again at depth 2 the way
+        // it would be under `Drop`. Inner NULLs inside [...null...] sub-
+        // lists are still padded with NULL as before.
         assert_snapshot!(batches_to_string(&[ret]),
         @r"
         +---------------------------------+---------------------------------+---------------------------------+
@@ -1452,11 +1833,11 @@ mod tests {
 
     fn verify_longest_length(
         list_arrays: &[ArrayRef],
-        preserve_nulls: bool,
+        null_handling: NullHandling,
         expected: Vec<i64>,
     ) -> Result<()> {
         let options = UnnestOptions {
-            preserve_nulls,
+            null_handling,
             recursions: vec![],
         };
         let longest_length = find_longest_length(list_arrays, &options)?;
@@ -1476,20 +1857,55 @@ mod tests {
         // Test with single ListArray
         //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
         let list_array = Arc::new(make_generic_array::<i32>()) as ArrayRef;
-        verify_longest_length(&[Arc::clone(&list_array)], false, vec![3, 0, 0, 1, 0, 2])?;
-        verify_longest_length(&[Arc::clone(&list_array)], true, vec![3, 0, 1, 1, 1, 2])?;
+        verify_longest_length(
+            &[Arc::clone(&list_array)],
+            NullHandling::Drop,
+            vec![3, 0, 0, 1, 0, 2],
+        )?;
+        verify_longest_length(
+            &[Arc::clone(&list_array)],
+            NullHandling::Preserve,
+            vec![3, 0, 1, 1, 1, 2],
+        )?;
+        // PreserveAndExpandEmpty also treats empty lists as a NULL row.
+        verify_longest_length(
+            &[Arc::clone(&list_array)],
+            NullHandling::PreserveAndExpandEmpty,
+            vec![3, 1, 1, 1, 1, 2],
+        )?;
 
         // Test with single LargeListArray
         //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
         let list_array = Arc::new(make_generic_array::<i64>()) as ArrayRef;
-        verify_longest_length(&[Arc::clone(&list_array)], false, vec![3, 0, 0, 1, 0, 2])?;
-        verify_longest_length(&[Arc::clone(&list_array)], true, vec![3, 0, 1, 1, 1, 2])?;
+        verify_longest_length(
+            &[Arc::clone(&list_array)],
+            NullHandling::Drop,
+            vec![3, 0, 0, 1, 0, 2],
+        )?;
+        verify_longest_length(
+            &[Arc::clone(&list_array)],
+            NullHandling::Preserve,
+            vec![3, 0, 1, 1, 1, 2],
+        )?;
+        verify_longest_length(
+            &[Arc::clone(&list_array)],
+            NullHandling::PreserveAndExpandEmpty,
+            vec![3, 1, 1, 1, 1, 2],
+        )?;
 
         // Test with single FixedSizeListArray
         //  [A, B], NULL, [C, D], NULL, [NULL, F], [NULL, NULL]
         let list_array = Arc::new(make_fixed_list()) as ArrayRef;
-        verify_longest_length(&[Arc::clone(&list_array)], false, vec![2, 0, 2, 0, 2, 2])?;
-        verify_longest_length(&[Arc::clone(&list_array)], true, vec![2, 1, 2, 1, 2, 2])?;
+        verify_longest_length(
+            &[Arc::clone(&list_array)],
+            NullHandling::Drop,
+            vec![2, 0, 2, 0, 2, 2],
+        )?;
+        verify_longest_length(
+            &[Arc::clone(&list_array)],
+            NullHandling::Preserve,
+            vec![2, 1, 2, 1, 2, 2],
+        )?;
 
         // Test with multiple list arrays
         //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
@@ -1497,8 +1913,17 @@ mod tests {
         let list1 = Arc::new(make_generic_array::<i32>()) as ArrayRef;
         let list2 = Arc::new(make_fixed_list()) as ArrayRef;
         let list_arrays = vec![Arc::clone(&list1), Arc::clone(&list2)];
-        verify_longest_length(&list_arrays, false, vec![3, 0, 2, 1, 2, 2])?;
-        verify_longest_length(&list_arrays, true, vec![3, 1, 2, 1, 2, 2])?;
+        verify_longest_length(&list_arrays, NullHandling::Drop, vec![3, 0, 2, 1, 2, 2])?;
+        verify_longest_length(
+            &list_arrays,
+            NullHandling::Preserve,
+            vec![3, 1, 2, 1, 2, 2],
+        )?;
+        verify_longest_length(
+            &list_arrays,
+            NullHandling::PreserveAndExpandEmpty,
+            vec![3, 1, 2, 1, 2, 2],
+        )?;
 
         Ok(())
     }

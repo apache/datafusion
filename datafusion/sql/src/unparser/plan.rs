@@ -2006,7 +2006,7 @@ impl Unparser<'_> {
 
         let mut flatten = FlattenRelationBuilder::default();
         flatten.input_expr(input_expr);
-        flatten.outer(unnest.options.preserve_nulls);
+        flatten.outer(unnest.options.preserve_nulls());
 
         Ok(Some(flatten))
     }

@@ -4371,6 +4371,7 @@ async fn unnest_column_nulls() -> Result<()> {
 
     let options = UnnestOptions::new().with_preserve_nulls(false);
     let results = df
+        .clone()
         .unnest_columns_with_options(&["list"], options)?
         .collect()
         .await?;
@@ -4384,6 +4385,157 @@ async fn unnest_column_nulls() -> Result<()> {
     | 2    | A  |
     | 3    | D  |
     +------+----+
+    "
+    );
+
+    // Spark `explode_outer` semantics: NULL and empty lists both produce a
+    // single output row containing NULL.
+    let options = UnnestOptions::new()
+        .with_null_handling(datafusion_common::NullHandling::PreserveAndExpandEmpty);
+    let results = df
+        .unnest_columns_with_options(&["list"], options)?
+        .collect()
+        .await?;
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r"
+    +------+----+
+    | list | id |
+    +------+----+
+    | 1    | A  |
+    | 2    | A  |
+    |      | B  |
+    |      | C  |
+    | 3    | D  |
+    +------+----+
+    "
+    );
+
+    Ok(())
+}
+
+/// Spark `explode_outer` on a list-of-struct column. Verifies that
+/// (a) struct elements unnest into flattened sub-columns and
+/// (b) NULL and empty lists both still produce a single output row whose
+///     struct sub-columns are all NULL.
+#[tokio::test]
+async fn unnest_explode_outer_list_of_struct() -> Result<()> {
+    use arrow::array::{Int32Array, StructArray};
+
+    // Per-row sub-list lengths: 2, 1, 0 (empty), 0 (null)
+    let names = StringArray::from(vec!["alice", "bob", "carol"]);
+    let ages = Int32Array::from(vec![30, 40, 50]);
+    let struct_values = StructArray::from(vec![
+        (
+            Arc::new(Field::new("name", DataType::Utf8, true)),
+            Arc::new(names) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("age", DataType::Int32, true)),
+            Arc::new(ages) as ArrayRef,
+        ),
+    ]);
+    let struct_field =
+        Arc::new(Field::new("item", struct_values.data_type().clone(), true));
+    let offsets = arrow::buffer::OffsetBuffer::<i32>::from_lengths([2, 1, 0, 0]);
+    let validity = arrow::buffer::NullBuffer::from(vec![true, true, true, false]);
+    let people = ListArray::new(
+        struct_field,
+        offsets,
+        Arc::new(struct_values),
+        Some(validity),
+    );
+    let group = Int32Array::from(vec![1, 2, 3, 4]);
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("people", Arc::new(people) as ArrayRef),
+        ("group", Arc::new(group) as ArrayRef),
+    ])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("teams", batch)?;
+    let df = ctx.table("teams").await?;
+
+    let options = UnnestOptions::new()
+        .with_null_handling(datafusion_common::NullHandling::PreserveAndExpandEmpty);
+    let results = df
+        // Unnest the list, then expand the resulting struct rows into columns.
+        .unnest_columns_with_options(&["people"], options.clone())?
+        .unnest_columns_with_options(&["people"], options)?
+        .collect()
+        .await?;
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r"
+    +-------------+------------+-------+
+    | people.name | people.age | group |
+    +-------------+------------+-------+
+    | alice       | 30         | 1     |
+    | bob         | 40         | 1     |
+    | carol       | 50         | 2     |
+    |             |            | 3     |
+    |             |            | 4     |
+    +-------------+------------+-------+
+    "
+    );
+
+    Ok(())
+}
+
+/// Spark `explode_outer` semantics applied to a `FixedSizeList` column.
+/// For fixed-size lists, every non-null row has the fixed length, so
+/// "empty" never occurs — `PreserveAndExpandEmpty` should behave identically
+/// to `Preserve` here. The test pins that equivalence so we notice if it
+/// ever diverges.
+#[tokio::test]
+async fn unnest_explode_outer_fixed_size_list() -> Result<()> {
+    let batch = get_fixed_list_batch()?;
+    let ctx = SessionContext::new();
+    ctx.register_batch("shapes", batch)?;
+    let df = ctx.table("shapes").await?;
+
+    let preserve_results = df
+        .clone()
+        .unnest_columns_with_options(
+            &["tags"],
+            UnnestOptions::new().with_preserve_nulls(true),
+        )?
+        .collect()
+        .await?;
+    let explode_outer_results = df
+        .unnest_columns_with_options(
+            &["tags"],
+            UnnestOptions::new().with_null_handling(
+                datafusion_common::NullHandling::PreserveAndExpandEmpty,
+            ),
+        )?
+        .collect()
+        .await?;
+    assert_eq!(
+        batches_to_sort_string(&preserve_results),
+        batches_to_sort_string(&explode_outer_results),
+        "FixedSizeList has no empty case, so PreserveAndExpandEmpty must \
+         match Preserve exactly"
+    );
+
+    // And the snapshot itself, to make the expected shape explicit.
+    assert_snapshot!(
+        batches_to_sort_string(&explode_outer_results),
+        @r"
+    +----------+-------+
+    | shape_id | tags  |
+    +----------+-------+
+    | 1        |       |
+    | 2        | tag21 |
+    | 2        | tag22 |
+    | 3        | tag31 |
+    | 3        | tag32 |
+    | 4        |       |
+    | 5        | tag51 |
+    | 5        | tag52 |
+    | 6        | tag61 |
+    | 6        | tag62 |
+    +----------+-------+
     "
     );
 
