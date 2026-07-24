@@ -2327,6 +2327,39 @@ statement ok
 DROP TABLE approx_distinct_interval_test;
 
 
+# GROUP BY over Decimal256 group keys. Decimal256 columns route through the
+# GroupValuesColumn column-wise fast path (like Decimal128), so a Decimal256 key
+# no longer forces the row-encoded fallback. Equal decimals collapse and a
+# Decimal256 key groups alongside a primitive on the multi-column path. Queries
+# project only the INT counts / keys so the expected output does not depend on
+# decimal Display formatting.
+statement ok
+CREATE TABLE decimal256_group_test AS VALUES
+  (1, arrow_cast(100, 'Decimal256(20, 2)')),
+  (1, arrow_cast(100, 'Decimal256(20, 2)')),
+  (1, arrow_cast(250, 'Decimal256(20, 2)')),
+  (2, arrow_cast(100, 'Decimal256(20, 2)'));
+
+# Single Decimal256 group key: {100.00, 250.00}, with 100.00 appearing three times.
+query I
+SELECT count(*) FROM decimal256_group_test GROUP BY column2 ORDER BY count(*);
+----
+1
+3
+
+# Multi-column GROUP BY: a primitive key and a Decimal256 key on the same path.
+query II
+SELECT column1, count(*)
+FROM decimal256_group_test GROUP BY column1, column2 ORDER BY column1, count(*);
+----
+1 1
+1 2
+2 1
+
+statement ok
+DROP TABLE decimal256_group_test;
+
+
 
 ## This test executes the APPROX_PERCENTILE_CONT aggregation against the test
 ## data, asserting the estimated quantiles are ±5% their actual values.

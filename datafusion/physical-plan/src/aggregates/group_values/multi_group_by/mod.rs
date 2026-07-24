@@ -32,12 +32,12 @@ use crate::aggregates::group_values::multi_group_by::{
 use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
 use arrow::compute::cast;
 use arrow::datatypes::{
-    BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Field, Float32Type,
-    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Schema, SchemaRef,
-    StringViewType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-    Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
-    UInt64Type,
+    BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
+    Field, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Schema,
+    SchemaRef, StringViewType, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt8Type,
+    UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
@@ -936,6 +936,7 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::Float32
             | DataType::Float64
             | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _)
             | DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Binary
@@ -1033,6 +1034,9 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
         },
         DataType::Decimal128(_, _) => {
             instantiate_primitive!(v, nullable, Decimal128Type, data_type)
+        }
+        DataType::Decimal256(_, _) => {
+            instantiate_primitive!(v, nullable, Decimal256Type, data_type)
         }
         DataType::Utf8 => {
             v.push(Box::new(ByteGroupValueBuilder::<i32>::new(
@@ -1259,7 +1263,10 @@ enum Nulls {
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray, StringViewArray};
+    use arrow::array::{
+        Array, ArrayRef, Decimal256Array, Int64Array, RecordBatch, StringArray,
+        StringViewArray,
+    };
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::{compute::concat_batches, util::pretty::pretty_format_batches};
     use datafusion_common::utils::proxy::HashTableAllocExt;
@@ -1295,6 +1302,7 @@ mod tests {
             DataType::Float32,
             DataType::Float64,
             DataType::Decimal128(38, 10),
+            DataType::Decimal256(76, 10),
             DataType::Utf8,
             DataType::LargeUtf8,
             DataType::Utf8View,
@@ -1326,7 +1334,6 @@ mod tests {
 
         let unsupported_cases: Vec<DataType> = vec![
             DataType::Float16,
-            DataType::Decimal256(76, 10),
             // Invalid Time-unit combinations: Time32 is defined only for
             // Second / Millisecond and Time64 only for Microsecond /
             // Nanosecond. The TimeUnit enum allows constructing the other
@@ -1350,6 +1357,51 @@ mod tests {
                 "group_column_supported_type rejected {dt:?} but make_group_column accepted it"
             );
         }
+    }
+
+    /// Decimal256 GROUP BY on the column-wise fast path (mirroring Decimal128):
+    /// dedups (incl. nulls) and preserves the Decimal256 precision/scale output
+    /// type. Uses precision > 38 so it's genuinely Decimal256, not Decimal128.
+    #[test]
+    fn test_group_values_column_decimal256() {
+        use arrow::datatypes::i256;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            DataType::Decimal256(50, 0),
+            true,
+        )]));
+        assert!(supported_schema(&schema));
+        let mut group_values =
+            GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+
+        // Two distinct values and a null with repeats: row 3 repeats row 0,
+        // row 4 repeats the null of row 1.
+        let a = i256::from_i128(100);
+        let b = i256::from_i128(200);
+        let input: ArrayRef = Arc::new(
+            Decimal256Array::from(vec![Some(a), None, Some(b), Some(a), None])
+                .with_precision_and_scale(50, 0)
+                .unwrap(),
+        );
+        let mut groups = Vec::new();
+        group_values.intern(&[input], &mut groups).unwrap();
+        assert_eq!(groups, vec![0, 1, 2, 0, 1]);
+
+        let emitted = group_values.emit(EmitTo::All).unwrap();
+        assert_eq!(emitted.len(), 1);
+        // The emitted key keeps its Decimal256 type (precision + scale), not
+        // the bare i256 native.
+        assert_eq!(emitted[0].data_type(), &DataType::Decimal256(50, 0));
+        let actual = emitted[0]
+            .as_any()
+            .downcast_ref::<Decimal256Array>()
+            .expect("emitted column should be a Decimal256Array");
+        // Three groups in first-seen order: 100, null, 200.
+        assert_eq!(actual.len(), 3);
+        assert_eq!(actual.value(0), a);
+        assert!(actual.is_null(1));
+        assert_eq!(actual.value(2), b);
     }
 
     #[test]
