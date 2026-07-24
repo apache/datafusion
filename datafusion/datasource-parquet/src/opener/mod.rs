@@ -812,6 +812,7 @@ impl ParquetMorselizer {
         let file_pruner = predicate.as_ref().and_then(|p| {
             FilePruner::try_new(
                 Arc::clone(p),
+                self.table_schema.table_schema(),
                 &logical_file_schema,
                 &partitioned_file,
                 predicate_creation_errors.clone(),
@@ -3760,5 +3761,78 @@ mod test {
             let (_batches, rows) = count_batches_and_rows(stream).await;
             assert_eq!(rows, 5);
         }
+    }
+
+    #[tokio::test]
+    async fn test_prune_on_constant_columns() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch = record_batch!((
+            "a",
+            Int32,
+            vec![Some(5), Some(5), Some(5), Some(5), Some(5)]
+        ))
+        .unwrap();
+        let data_size =
+            write_parquet(Arc::clone(&store), "constant.parquet", batch.clone()).await;
+        let schema = batch.schema();
+
+        let file = PartitionedFile::new(
+            "constant.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        )
+        .with_statistics(Arc::new(Statistics {
+            num_rows: Precision::Exact(5),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(5))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(5))))
+                    .with_null_count(Precision::Exact(0)),
+            ],
+        }));
+
+        let make_opener = |predicate| {
+            let metrics = ExecutionPlanMetricsSet::new();
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0])
+                .with_predicate(predicate)
+                .with_metrics(metrics.clone())
+                .build();
+            (morselizer, metrics)
+        };
+
+        // constant expression `a > 100`
+        let expr = col("a").gt(lit(100));
+        let predicate = logical2physical(&expr, &schema);
+        let (opener, metrics) = make_opener(predicate);
+        let stream = open_file(&opener, file).await.unwrap();
+        let (_num_batches, _num_rows) = count_batches_and_rows(stream).await;
+
+        // The bug: `files_ranges_pruned_statistics` pruned count is 0 because
+        // `constant_columns_from_stats` folds the column reference into a literal,
+        // and `FilePruner` cannot prune a constant expression.
+        let pruned = {
+            use datafusion_physical_plan::metrics::MetricValue;
+            metrics
+                .clone_inner()
+                .iter()
+                .filter_map(|m| match m.value() {
+                    MetricValue::PruningMetrics {
+                        name,
+                        pruning_metrics,
+                    } if name.as_ref() == "files_ranges_pruned_statistics" => {
+                        Some(pruning_metrics.pruned())
+                    }
+                    _ => None,
+                })
+                .sum::<usize>()
+        };
+        assert!(
+            pruned > 0,
+            "file with constant column should be pruned at file level, got pruned={pruned}"
+        );
     }
 }
