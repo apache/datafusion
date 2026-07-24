@@ -27,7 +27,7 @@ use async_trait::async_trait;
 use datafusion_catalog::TableFunctionImpl;
 use datafusion_catalog::TableProvider;
 use datafusion_catalog::{Session, TableFunctionArgs};
-use datafusion_common::{Result, ScalarValue, plan_err};
+use datafusion_common::{Result, ScalarValue, plan_datafusion_err, plan_err};
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::expressions::Column;
@@ -80,7 +80,12 @@ pub trait SeriesValue: fmt::Debug + Clone + Send + Sync + 'static {
     fn should_stop(&self, end: Self, step: &Self::StepType, include_end: bool) -> bool;
 
     /// Advance to the next value in the series
-    fn advance(&mut self, step: &Self::StepType) -> Result<()>;
+    ///
+    /// If advancing would overflow the value range, `end` is updated so that
+    /// the series terminates after the current value (matching the behavior
+    /// of PostgreSQL and DuckDB, which return the reachable values instead of
+    /// erroring).
+    fn advance(&mut self, end: &mut Self, step: &Self::StepType) -> Result<()>;
 
     /// Create an Arrow array from a vector of values
     fn create_array(&self, values: Vec<Self::ValueType>) -> Result<ArrayRef>;
@@ -100,8 +105,19 @@ impl SeriesValue for i64 {
         reach_end_int64(*self, end, *step, include_end)
     }
 
-    fn advance(&mut self, step: &Self::StepType) -> Result<()> {
-        *self += step;
+    fn advance(&mut self, end: &mut Self, step: &Self::StepType) -> Result<()> {
+        if let Some(next) = self.checked_add(*step) {
+            *self = next;
+        } else {
+            // Advancing would overflow: clamp `end` so the series stops after
+            // the current (last reachable) value instead of panicking or
+            // wrapping around.
+            *end = if *step > 0 {
+                self.saturating_sub(1)
+            } else {
+                self.saturating_add(1)
+            };
+        }
         Ok(())
     }
 
@@ -155,7 +171,7 @@ impl SeriesValue for TimestampValue {
         }
     }
 
-    fn advance(&mut self, step: &Self::StepType) -> Result<()> {
+    fn advance(&mut self, _end: &mut Self, step: &Self::StepType) -> Result<()> {
         let tz = self
             .parsed_tz
             .unwrap_or_else(|| Tz::from_str("+00:00").unwrap());
@@ -417,7 +433,15 @@ impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
                 .should_stop(self.end.clone(), &self.step, self.include_end)
         {
             buf.push(self.current.to_value_type());
-            self.current.advance(&self.step)?;
+            if self
+                .current
+                .should_stop(self.end.clone(), &self.step, false)
+            {
+                self.current.advance(&mut self.end, &self.step)?;
+                break;
+            }
+
+            self.current.advance(&mut self.end, &self.step)?;
         }
 
         if buf.is_empty() {
@@ -740,8 +764,20 @@ impl GenerateSeriesFuncImpl {
         // Date32 is days since 1970-01-01, so multiply by nanoseconds per day
         const NANOS_PER_DAY: i64 = 24 * 60 * 60 * 1_000_000_000;
 
-        let start_ts = start_date as i64 * NANOS_PER_DAY;
-        let end_ts = end_date as i64 * NANOS_PER_DAY;
+        // Dates outside the nanosecond timestamp range (1677-09-21 to
+        // 2262-04-11) cannot be represented; return an error instead of
+        // panicking (debug) or silently wrapping (release).
+        let date_to_ts_nanos = |date: i32, arg: &str| {
+            (date as i64).checked_mul(NANOS_PER_DAY).ok_or_else(|| {
+                plan_datafusion_err!(
+                    "{arg} for {} is out of range of nanosecond timestamps",
+                    self.name
+                )
+            })
+        };
+
+        let start_ts = date_to_ts_nanos(start_date, "First argument")?;
+        let end_ts = date_to_ts_nanos(end_date, "Second argument")?;
 
         // Validate step interval
         validate_interval_step(step_interval)?;
