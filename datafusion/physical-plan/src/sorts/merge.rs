@@ -223,17 +223,15 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
             assert_eq!(uninitiated_partitions.len(), 0);
 
+            let elapsed_compute = self.metrics.elapsed_compute().clone();
+            let mut timer = elapsed_compute.timer();
+
             // If there are no more uninitiated partitions, set up the loser tree and continue
             // to the next phase.
 
             // Claim the memory for the uninitiated partitions
             drop(uninitiated_partitions);
             self.init_loser_tree();
-
-            // NB timer records time taken on drop, so there are no
-            // calls to `timer.done()` below.
-            let elapsed_compute = self.metrics.elapsed_compute().clone();
-            let mut timer = elapsed_compute.timer();
 
             loop {
                 let stream_idx = self.loser_tree[0];
@@ -269,8 +267,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 self.update_loser_tree();
             }
 
-            drop(timer);
-
             // When `build_record_batch()` hits an i32 offset overflow (e.g.
             // combined string offsets exceed 2 GB), it emits a partial batch
             // and keeps the remaining rows in `self.in_progress.indices`.
@@ -279,7 +275,9 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             // Repeated overflows are fine — each poll emits another partial
             // batch until `in_progress` is fully drained.
             while let Some(batch) = self.emit_in_progress_batch()? {
+                drop(timer);
                 emitter.emit(batch).await;
+                timer = elapsed_compute.timer();
             }
             Ok(())
         })
