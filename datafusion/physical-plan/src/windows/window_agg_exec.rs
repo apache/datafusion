@@ -32,8 +32,9 @@ use crate::windows::{
 };
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics, WindowExpr, check_if_same_properties,
+    ExecutionPlanProperties, InputDistributionRequirements, PhysicalExpr, PlanProperties,
+    RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
+    check_if_same_properties,
 };
 
 use arrow::array::ArrayRef;
@@ -233,12 +234,14 @@ impl ExecutionPlan for WindowAggExec {
         self.input_distribution_requirements().into_per_child()
     }
 
-    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
-        crate::InputDistributionRequirements::new(if self.partition_keys().is_empty() {
-            vec![Distribution::SinglePartition]
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        if self.partition_keys().is_empty() {
+            InputDistributionRequirements::new(vec![Distribution::SinglePartition])
         } else {
-            vec![Distribution::KeyPartitioned(self.partition_keys())]
-        })
+            InputDistributionRequirements::new(vec![Distribution::KeyPartitioned(
+                self.partition_keys(),
+            )])
+        }
     }
 
     fn with_new_children(

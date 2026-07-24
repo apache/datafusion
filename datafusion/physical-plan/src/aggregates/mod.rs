@@ -15,7 +15,132 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Aggregates functionalities
+//! Aggregate functionality
+//!
+//! # Aggregate planning
+//!
+//! DataFusion selects different aggregate implementations (streams) based on the
+//! query shape and configuration. This section provides an overview of the
+//! available stream variants.
+//!
+//! See each stream's documentation for details.
+//!
+//! ## 1. Two-stage hash aggregation
+//!
+//! Two-stage hash aggregation is used for regular parallel execution.
+//!
+//! The input passes through three execution operators to produce the final
+//! aggregation result:
+//!
+//! 1. Partial aggregation reads the input and produces partial states. It
+//!    aggregates independently within each partition, which usually reduces
+//!    cardinality before the later shuffle.
+//! 2. Hash repartitioning on the group keys sends all partial states for each
+//!    group to the same output partition for final aggregation.
+//! 3. Final aggregation reads the partial states, combines them, and emits the
+//!    final results.
+//!
+//! ```text
+//! AggregateExec (final)
+//!   RepartitionExec (hash by group keys)
+//!     AggregateExec (partial)
+//! ```
+//!
+//! See [`PartialHashAggregateStream`] and [`FinalHashAggregateStream`] for details.
+//!
+//! ### Ordering optimization
+//!
+//! When the input is ordered by the group key, an ordered fast path is used. It
+//! uses a similar two-stage hash aggregation with an early-emission optimization.
+//!
+//! ```text
+//! AggregateExec (final, ordered)
+//!   RepartitionExec (hash by group keys, order-preserving)
+//!     AggregateExec (partial, ordered)
+//! ```
+//!
+//! See [`OrderedPartialAggregateStream`] and [`OrderedFinalAggregateStream`] for
+//! details.
+//!
+//! Related configuration:
+//!
+//! - [`datafusion.execution.target_partitions`](datafusion_common::config::ExecutionOptions::target_partitions)
+//! - [`datafusion.optimizer.repartition_aggregations`](datafusion_common::config::OptimizerOptions::repartition_aggregations)
+//! - [`datafusion.optimizer.prefer_existing_sort`](datafusion_common::config::OptimizerOptions::prefer_existing_sort)
+//!
+//! ## 2. Single-stage hash aggregation
+//!
+//! When there is a single partition, or the aggregation input is already
+//! key-partitioned (e.g., a data source has existing range partitioning),
+//! `Single` mode aggregation is used.
+//!
+//! It takes raw input and directly produces the final result.
+//!
+//! ```text
+//! AggregateExec (mode=Single or SinglePartitioned)
+//!   input
+//! ```
+//!
+//! See [`SingleHashAggregateStream`] for details.
+//!
+//! Related configuration:
+//!
+//! - [`datafusion.execution.target_partitions`](datafusion_common::config::ExecutionOptions::target_partitions)
+//! - [`datafusion.optimizer.repartition_aggregations`](datafusion_common::config::OptimizerOptions::repartition_aggregations)
+//!
+//! ## 3. Aggregation without grouping expressions
+//!
+//! A global aggregate maintains one accumulator set per input partition rather
+//! than a hash table of groups. Partial stages compute local states and a final
+//! stage combines them into one output row:
+//!
+//! ```text
+//! AggregateExec (final, no-grouping)
+//!   CoalescePartitionsExec
+//!     AggregateExec (partial, no-grouping)
+//! ```
+//!
+//! Every stage without grouping expressions uses [`AggregateStream`]. This path
+//! is selected before the grouped-stream migration setting is considered.
+//!
+//! ## 4. Grouped TopK aggregation
+//!
+//! When a query only needs the best `N` groups, retaining every group in a hash
+//! table and sorting them afterward does unnecessary work. The optimizer pushes
+//! the sort limit and direction into the aggregate:
+//!
+//! ```text
+//! SortExec (fetch=N)
+//!   AggregateExec (limit=N, order=...)
+//!     input
+//! ```
+//!
+//! [`GroupedTopKAggregateStream`] keeps a bounded priority map for a single group
+//! key. It supports group-by-only queries and compatible `MIN` or `MAX`
+//! aggregates. An unordered group-by-only soft limit instead stays on the normal
+//! hash aggregation path.
+//!
+//! Related configuration:
+//!
+//! - [`datafusion.optimizer.enable_topk_aggregation`](datafusion_common::config::OptimizerOptions::enable_topk_aggregation)
+//! - [`datafusion.optimizer.enable_distinct_aggregation_soft_limit`](datafusion_common::config::OptimizerOptions::enable_distinct_aggregation_soft_limit)
+//!
+//! ## 5. Partial-reduce hash aggregation
+//!
+//! This implementation will not be planned by DataFusion SQL interface, it must be
+//! manually constructed at [`ExecutionPlan`] level.
+//!
+//! This mode is useful in a distributed setting.
+//!
+//! See [`PartialReduceHashAggregateStream`] for details.
+//!
+//! ## 6. Fallback grouped hash aggregation
+//!
+//! [`GroupedHashAggregateStream`] is the legacy implementation for several of the
+//! stream types above. It is being incrementally migrated to separate streams.
+//!
+//! See the issue for details: <https://github.com/apache/datafusion/issues/22710>
+#![expect(rustdoc::private_intra_doc_links)]
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -1035,6 +1160,12 @@ impl AggregateExec {
             ));
         }
 
+        // Select the stream type based on the query shape and configuration.
+        // For an overview, see the `Aggregate planning` section in this file's
+        // documentation.
+        //
+        // # Implementation Note
+        //
         // `GroupedHashAggregateStream` is being incrementally refactored. See the
         // tracking issue for details.
         //
@@ -1104,12 +1235,10 @@ impl AggregateExec {
             && self.limit_options_supported_by_hash_stream()
     }
 
-    fn should_use_ordered_partial_aggregate_stream(&self, context: &TaskContext) -> bool {
-        // TODO: implement memory-limited path and remove this limitation
-        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
-            return false;
-        }
-
+    fn should_use_ordered_partial_aggregate_stream(
+        &self,
+        _context: &TaskContext,
+    ) -> bool {
         self.mode == AggregateMode::Partial
             && self.input_order_mode != InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
@@ -1160,12 +1289,7 @@ impl AggregateExec {
             && self.group_by.is_single()
     }
 
-    fn should_use_ordered_final_aggregate_stream(&self, context: &TaskContext) -> bool {
-        // TODO: implement memory-limited path and remove this limitation
-        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
-            return false;
-        }
-
+    fn should_use_ordered_final_aggregate_stream(&self, _context: &TaskContext) -> bool {
         matches!(
             self.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
@@ -1803,7 +1927,7 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn input_distribution_requirements(&self) -> InputDistributionRequirements {
-        let requirements = InputDistributionRequirements::new(match &self.mode {
+        InputDistributionRequirements::new(match &self.mode {
             AggregateMode::Partial | AggregateMode::PartialReduce => {
                 vec![Distribution::UnspecifiedDistribution]
             }
@@ -1813,15 +1937,7 @@ impl ExecutionPlan for AggregateExec {
             AggregateMode::Final | AggregateMode::Single => {
                 vec![Distribution::SinglePartition]
             }
-        });
-        match &self.mode {
-            AggregateMode::FinalPartitioned | AggregateMode::SinglePartitioned
-                if !self.group_by.has_grouping_set() =>
-            {
-                requirements.allow_range_satisfaction_for_key_partitioning()
-            }
-            _ => requirements,
-        }
+        })
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
@@ -3799,10 +3915,10 @@ mod tests {
 +----------+-----------+-------------------------+
 ");
 
-        // Ordered streams don't implement memory limits yet.
+        // Ordered partial aggregation supports finite memory.
         let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
         let stream = aggregate.execute_typed(0, &finite_memory_task_ctx)?;
-        assert!(matches!(stream, StreamType::GroupedHash(_)));
+        assert!(matches!(stream, StreamType::OrderedPartialAggregate(_)));
 
         Ok(())
     }
@@ -3876,10 +3992,10 @@ mod tests {
 +-----+--------------+
 ");
 
-        // Ordered streams don't implement memory limits yet.
+        // Ordered final aggregation supports finite memory.
         let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
         let stream = final_aggregate.execute_typed(0, &finite_memory_task_ctx)?;
-        assert!(matches!(stream, StreamType::GroupedHash(_)));
+        assert!(matches!(stream, StreamType::OrderedFinalAggregate(_)));
 
         Ok(())
     }

@@ -40,7 +40,7 @@ use crate::metrics::{
 };
 use crate::projection::{
     EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
-    try_pushdown_through_join,
+    try_pushdown_through_join_with_column_indices,
 };
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
@@ -741,23 +741,21 @@ impl ExecutionPlan for NestedLoopJoinExec {
             return Ok(None);
         }
 
-        // TODO: split by `col`/`JoinSide` instead so mark joins can also push down to children.
         let schema = self.schema();
-        if !matches!(self.join_type(), JoinType::LeftMark | JoinType::RightMark)
-            && let Some(JoinData {
-                projected_left_child,
-                projected_right_child,
-                join_filter,
-                ..
-            }) = try_pushdown_through_join(
-                projection,
-                self.left(),
-                self.right(),
-                &[],
-                &schema,
-                self.filter(),
-            )?
-        {
+        if let Some(JoinData {
+            projected_left_child,
+            projected_right_child,
+            join_filter,
+            ..
+        }) = try_pushdown_through_join_with_column_indices(
+            projection,
+            self.left(),
+            self.right(),
+            &[],
+            &schema,
+            self.filter(),
+            self.column_indices.as_slice(),
+        )? {
             Ok(Some(Arc::new(NestedLoopJoinExec::try_new(
                 Arc::new(projected_left_child),
                 Arc::new(projected_right_child),
@@ -769,6 +767,91 @@ impl ExecutionPlan for NestedLoopJoinExec {
         } else {
             try_embed_projection(projection, self)
         }
+    }
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        let left = ctx.encode_child(self.left())?;
+        let right = ctx.encode_child(self.right())?;
+
+        let join_type = crate::joins::proto::join_type_to_proto(*self.join_type());
+
+        let filter = self
+            .filter()
+            .map(|f| crate::joins::proto::join_filter_to_proto(f, ctx))
+            .transpose()?;
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::NestedLoopJoin(Box::new(
+                    protobuf::NestedLoopJoinExecNode {
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
+                        join_type: join_type.into(),
+                        filter,
+                        projection: match self.projection.as_ref() {
+                            None => Vec::new(),
+                            Some(v) if v.is_empty() => vec![u32::MAX],
+                            Some(v) => v.iter().map(|x| *x as u32).collect(),
+                        },
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl NestedLoopJoinExec {
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let join = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::NestedLoopJoin,
+            "NestedLoopJoinExec",
+        );
+
+        let left = ctx.decode_required_child(
+            join.left.as_deref(),
+            "NestedLoopJoinExec",
+            "left",
+        )?;
+        let right = ctx.decode_required_child(
+            join.right.as_deref(),
+            "NestedLoopJoinExec",
+            "right",
+        )?;
+
+        let join_type = crate::joins::proto::join_type_from_proto(
+            join.join_type,
+            "NestedLoopJoinExec",
+        )?;
+
+        let filter = join
+            .filter
+            .as_ref()
+            .map(|f| {
+                crate::joins::proto::join_filter_from_proto(f, ctx, "NestedLoopJoinExec")
+            })
+            .transpose()?;
+
+        let projection = match join.projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Vec::new()),
+            indices => Some(indices.iter().map(|i| *i as usize).collect()),
+        };
+
+        Ok(Arc::new(NestedLoopJoinExec::try_new(
+            left, right, filter, &join_type, projection,
+        )?))
     }
 }
 

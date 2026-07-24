@@ -93,6 +93,20 @@ impl GroupOrdering {
         }
     }
 
+    /// Resets the ordering state while preserving the configured ordering mode.
+    ///
+    /// Ordered partial aggregation uses this after passing intermediate states
+    /// downstream, and ordered final aggregation uses it after spilling a run.
+    /// In both cases the hash table is empty and can start tracking the next
+    /// input batch from a fresh ordering state.
+    pub fn reset(&mut self) {
+        match self {
+            GroupOrdering::None => {}
+            GroupOrdering::Partial(partial) => partial.reset(),
+            GroupOrdering::Full(full) => full.reset(),
+        }
+    }
+
     /// Removes the first `n` groups from the internal state, shifting all
     /// existing indexes down by `n`.
     pub fn remove_groups(&mut self, n: usize) {

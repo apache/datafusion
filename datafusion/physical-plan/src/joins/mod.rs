@@ -34,6 +34,8 @@ mod cross_join;
 mod hash_join;
 mod nested_loop_join;
 mod piecewise_merge_join;
+#[cfg(feature = "proto")]
+mod proto;
 mod sort_merge_join;
 mod stream_join_utils;
 mod symmetric_hash_join;
