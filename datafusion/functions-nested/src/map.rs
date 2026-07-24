@@ -20,8 +20,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayData, ArrayRef, ArrowPrimitiveType, MapArray, OffsetSizeTrait,
-    StructArray, cast::AsArray,
+    Array, ArrayData, ArrayRef, ArrowPrimitiveType, MapArray, StructArray, cast::AsArray,
 };
 use arrow::buffer::Buffer;
 use arrow::datatypes::{
@@ -29,7 +28,6 @@ use arrow::datatypes::{
     SchemaBuilder, ToByteSlice, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 
-use datafusion_common::utils::{fixed_size_list_to_arrays, list_to_arrays};
 use datafusion_common::{
     HashSet, Result, ScalarValue, exec_err, utils::take_function_args,
 };
@@ -213,6 +211,53 @@ fn validate_map_keys(array: &dyn Array) -> Result<()> {
     }
 }
 
+/// Adapts supported outer list representations to one row-oriented interface.
+/// The key outer-list representation selects the accessor for both arrays.
+enum ListArrayRepresentation {
+    List,
+    LargeList,
+    FixedSizeList,
+}
+
+impl ListArrayRepresentation {
+    fn from_data_type(data_type: &DataType) -> Option<Self> {
+        match data_type {
+            DataType::List(_) => Some(Self::List),
+            DataType::LargeList(_) => Some(Self::LargeList),
+            DataType::FixedSizeList(_, _) => Some(Self::FixedSizeList),
+            _ => None,
+        }
+    }
+
+    fn rows<'a>(
+        &self,
+        array: &'a ArrayRef,
+    ) -> Box<dyn Iterator<Item = Option<ArrayRef>> + 'a> {
+        match self {
+            Self::List => Box::new(array.as_list::<i32>().iter()),
+            Self::LargeList => Box::new(array.as_list::<i64>().iter()),
+            Self::FixedSizeList => Box::new(array.as_fixed_size_list().iter()),
+        }
+    }
+
+    fn rows_skipping_nulls(
+        &self,
+        array: &ArrayRef,
+        null_rows: Option<&arrow::buffer::NullBuffer>,
+    ) -> Vec<ArrayRef> {
+        self.rows(array)
+            .enumerate()
+            .filter_map(|(row_index, row)| {
+                if null_rows.is_some_and(|nulls| nulls.is_null(row_index)) {
+                    None
+                } else {
+                    row
+                }
+            })
+            .collect()
+    }
+}
+
 fn validate_map_keys_for_data_type(
     keys: &ArrayRef,
     keys_data_type: &DataType,
@@ -222,27 +267,18 @@ fn validate_map_keys_for_data_type(
         return validate_map_keys(keys.as_ref());
     }
 
-    match keys_data_type {
-        DataType::List(_) => keys
-            .as_list::<i32>()
-            .iter()
-            .flatten()
-            .try_for_each(|row| validate_map_keys(row.as_ref())),
-        DataType::LargeList(_) => keys
-            .as_list::<i64>()
-            .iter()
-            .flatten()
-            .try_for_each(|row| validate_map_keys(row.as_ref())),
-        DataType::FixedSizeList(_, _) => keys
-            .as_fixed_size_list()
-            .iter()
-            .flatten()
-            .try_for_each(|row| validate_map_keys(row.as_ref())),
-        data_type => exec_err!(
+    let Some(list_representation) =
+        ListArrayRepresentation::from_data_type(keys_data_type)
+    else {
+        return exec_err!(
             "Expected list, large_list or fixed_size_list, got {:?}",
-            data_type
-        ),
-    }
+            keys_data_type
+        );
+    };
+    list_representation
+        .rows(keys)
+        .flatten()
+        .try_for_each(|row| validate_map_keys(row.as_ref()))
 }
 
 fn get_first_array_ref(columnar_value: &ColumnarValue) -> Result<ArrayRef> {
@@ -261,7 +297,7 @@ fn make_map_batch_internal(
     keys: &ArrayRef,
     values: &ArrayRef,
     can_evaluate_to_const: bool,
-    data_type: &DataType,
+    key_list_type: &DataType,
 ) -> Result<ColumnarValue> {
     if keys.len() != values.len() {
         return exec_err!("map requires key and value lists to have the same length");
@@ -271,18 +307,7 @@ fn make_map_batch_internal(
     // 1. Not const evaluation (!can_evaluate_to_const) - allows scalar elimination optimization
     // 2. NULL maps present (keys.null_count() > 0) - fast path doesn't handle NULL list elements
     if !can_evaluate_to_const || keys.null_count() > 0 {
-        return match data_type {
-            DataType::LargeList(..) => make_map_array_internal::<i64>(keys, values),
-            DataType::List(..) => make_map_array_internal::<i32>(keys, values),
-            DataType::FixedSizeList(..) => {
-                // FixedSizeList doesn't use OffsetSizeTrait, so handle it separately
-                make_map_array_from_fixed_size_list(keys, values)
-            }
-            _ => exec_err!(
-                "Expected List, LargeList, or FixedSizeList, got {:?}",
-                data_type
-            ),
-        };
+        return make_map_array_internal(keys, values, key_list_type);
     }
 
     let key_field = Arc::new(Field::new("key", keys.data_type().clone(), false));
@@ -492,49 +517,27 @@ fn get_element_type(data_type: &DataType) -> Result<&DataType> {
 /// | +-------+ |      | +-------+ |
 /// +-----------+      +-----------+
 /// ```text
-fn make_map_array_internal<O: OffsetSizeTrait>(
+fn make_map_array_internal(
     keys: &ArrayRef,
     values: &ArrayRef,
+    key_list_type: &DataType,
 ) -> Result<ColumnarValue> {
-    // Save original data types and array length before list_to_arrays transforms them
-    let keys_data_type = keys.data_type().clone();
-    let values_data_type = values.data_type().clone();
-    let original_len = keys.len(); // This is the number of rows in the input
+    let Some(list_representation) =
+        ListArrayRepresentation::from_data_type(key_list_type)
+    else {
+        return exec_err!(
+            "Expected List, LargeList, or FixedSizeList, got {:?}",
+            key_list_type
+        );
+    };
 
-    // Save the nulls bitmap from the original keys array (before list_to_arrays)
-    // This tells us which MAP values are NULL (not which keys within maps are null)
-    let nulls_bitmap = keys.nulls().cloned();
-
-    let keys = list_to_arrays::<O>(keys);
-    let values = list_to_arrays_skipping_null_rows::<O>(values, nulls_bitmap.as_ref());
-
-    build_map_array(
-        &keys,
-        &values,
-        &keys_data_type,
-        &values_data_type,
-        original_len,
-        nulls_bitmap,
-    )
-}
-
-/// Helper function specifically for FixedSizeList inputs
-/// Similar to make_map_array_internal but uses fixed_size_list_to_arrays instead of list_to_arrays
-fn make_map_array_from_fixed_size_list(
-    keys: &ArrayRef,
-    values: &ArrayRef,
-) -> Result<ColumnarValue> {
-    // Save original data types and array length
     let keys_data_type = keys.data_type().clone();
     let values_data_type = values.data_type().clone();
     let original_len = keys.len();
-
-    // Save the nulls bitmap from the original keys array
+    // Key outer nulls define null maps, so omit the corresponding child rows on both sides.
     let nulls_bitmap = keys.nulls().cloned();
-
-    let keys = fixed_size_list_to_arrays(keys);
-    let values =
-        fixed_size_list_to_arrays_skipping_null_rows(values, nulls_bitmap.as_ref());
+    let keys = list_representation.rows_skipping_nulls(keys, nulls_bitmap.as_ref());
+    let values = list_representation.rows_skipping_nulls(values, nulls_bitmap.as_ref());
 
     build_map_array(
         &keys,
@@ -544,41 +547,6 @@ fn make_map_array_from_fixed_size_list(
         original_len,
         nulls_bitmap,
     )
-}
-fn list_to_arrays_skipping_null_rows<O: OffsetSizeTrait>(
-    array: &ArrayRef,
-    null_rows: Option<&arrow::buffer::NullBuffer>,
-) -> Vec<ArrayRef> {
-    array
-        .as_list::<O>()
-        .iter()
-        .enumerate()
-        .filter_map(|(i, row)| {
-            if null_rows.is_some_and(|nulls| nulls.is_null(i)) {
-                None
-            } else {
-                row
-            }
-        })
-        .collect()
-}
-
-fn fixed_size_list_to_arrays_skipping_null_rows(
-    array: &ArrayRef,
-    null_rows: Option<&arrow::buffer::NullBuffer>,
-) -> Vec<ArrayRef> {
-    array
-        .as_fixed_size_list()
-        .iter()
-        .enumerate()
-        .filter_map(|(i, row)| {
-            if null_rows.is_some_and(|nulls| nulls.is_null(i)) {
-                None
-            } else {
-                row
-            }
-        })
-        .collect()
 }
 
 /// Common logic to build a MapArray from decomposed list arrays
@@ -690,6 +658,194 @@ fn build_map_array(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::{
+        FixedSizeListArray, GenericListArray, Int32Array, OffsetSizeTrait,
+    };
+
+    #[derive(Debug, Clone, Copy)]
+    enum ListRepresentation {
+        List,
+        LargeList,
+        FixedSizeList,
+    }
+
+    const LIST_REPRESENTATIONS: [ListRepresentation; 3] = [
+        ListRepresentation::List,
+        ListRepresentation::LargeList,
+        ListRepresentation::FixedSizeList,
+    ];
+
+    type PrimitiveRows = Vec<Option<Vec<Option<i32>>>>;
+
+    fn key_rows(all_null: bool) -> PrimitiveRows {
+        if all_null {
+            vec![None, None, None]
+        } else {
+            vec![
+                Some(vec![Some(1), Some(2)]),
+                None,
+                Some(vec![Some(3), Some(4)]),
+            ]
+        }
+    }
+
+    fn value_rows() -> PrimitiveRows {
+        vec![
+            Some(vec![Some(10), Some(20)]),
+            Some(vec![Some(99), Some(100)]),
+            Some(vec![Some(30), Some(40)]),
+        ]
+    }
+
+    fn variable_list_inputs<O: OffsetSizeTrait>(
+        key_rows: PrimitiveRows,
+        value_rows: PrimitiveRows,
+    ) -> (ArrayRef, ArrayRef) {
+        let keys =
+            GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>(key_rows);
+        let values =
+            GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>(value_rows);
+        (Arc::new(keys), Arc::new(values))
+    }
+
+    fn fixed_size_list_inputs(
+        key_rows: PrimitiveRows,
+        value_rows: PrimitiveRows,
+    ) -> (ArrayRef, ArrayRef) {
+        let keys =
+            FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(key_rows, 2);
+        let values =
+            FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(value_rows, 2);
+        (Arc::new(keys), Arc::new(values))
+    }
+
+    fn map_inputs_from_rows(
+        representation: ListRepresentation,
+        key_rows: PrimitiveRows,
+        value_rows: PrimitiveRows,
+    ) -> (ArrayRef, ArrayRef) {
+        match representation {
+            ListRepresentation::List => variable_list_inputs::<i32>(key_rows, value_rows),
+            ListRepresentation::LargeList => {
+                variable_list_inputs::<i64>(key_rows, value_rows)
+            }
+            ListRepresentation::FixedSizeList => {
+                fixed_size_list_inputs(key_rows, value_rows)
+            }
+        }
+    }
+
+    fn map_inputs(
+        representation: ListRepresentation,
+        all_null: bool,
+    ) -> (ArrayRef, ArrayRef) {
+        map_inputs_from_rows(representation, key_rows(all_null), value_rows())
+    }
+
+    fn sliced_map_inputs(representation: ListRepresentation) -> (ArrayRef, ArrayRef) {
+        let key_rows = vec![
+            Some(vec![Some(99), Some(100)]),
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4)]),
+        ];
+        let value_rows = vec![
+            Some(vec![Some(990), Some(1000)]),
+            Some(vec![Some(10), Some(20)]),
+            Some(vec![Some(99), Some(100)]),
+            Some(vec![Some(30), Some(40)]),
+        ];
+        let (keys, values) = map_inputs_from_rows(representation, key_rows, value_rows);
+        (keys.slice(1, 3), values.slice(1, 3))
+    }
+
+    fn assert_map_output(
+        representation: ListRepresentation,
+        (keys, values): (ArrayRef, ArrayRef),
+        expected_offsets: &[i32],
+        expected_validity: &[bool],
+        expected_keys: &[i32],
+        expected_values: &[i32],
+    ) {
+        let result = make_map_batch(
+            vec![ColumnarValue::Array(keys), ColumnarValue::Array(values)],
+            expected_validity.len(),
+        )
+        .unwrap();
+        let ColumnarValue::Array(result) = result else {
+            panic!("expected array result for {representation:?}");
+        };
+        let map_array = result.as_map();
+        let validity = map_array
+            .nulls()
+            .map(|nulls| nulls.iter().collect::<Vec<_>>())
+            .unwrap_or_else(|| vec![true; map_array.len()]);
+
+        assert_eq!(
+            map_array.len(),
+            expected_validity.len(),
+            "{representation:?}"
+        );
+        assert_eq!(
+            map_array.value_offsets(),
+            expected_offsets,
+            "{representation:?}"
+        );
+        assert_eq!(validity, expected_validity, "{representation:?}");
+        assert_eq!(
+            map_array.keys().as_primitive::<Int32Type>(),
+            &Int32Array::from(expected_keys.to_vec()),
+            "{representation:?}"
+        );
+        assert_eq!(
+            map_array.values().as_primitive::<Int32Type>(),
+            &Int32Array::from(expected_values.to_vec()),
+            "{representation:?}"
+        );
+    }
+
+    #[test]
+    fn test_make_map_null_rows_are_equivalent_across_list_representations() {
+        for representation in LIST_REPRESENTATIONS {
+            assert_map_output(
+                representation,
+                map_inputs(representation, false),
+                &[0, 2, 2, 4],
+                &[true, false, true],
+                &[1, 2, 3, 4],
+                &[10, 20, 30, 40],
+            );
+        }
+    }
+
+    #[test]
+    fn test_make_map_sliced_null_rows_are_equivalent_across_list_representations() {
+        for representation in LIST_REPRESENTATIONS {
+            assert_map_output(
+                representation,
+                sliced_map_inputs(representation),
+                &[0, 2, 2, 4],
+                &[true, false, true],
+                &[1, 2, 3, 4],
+                &[10, 20, 30, 40],
+            );
+        }
+    }
+
+    #[test]
+    fn test_make_map_all_null_rows_are_equivalent_across_list_representations() {
+        for representation in LIST_REPRESENTATIONS {
+            assert_map_output(
+                representation,
+                map_inputs(representation, true),
+                &[0, 0, 0, 0],
+                &[false, false, false],
+                &[],
+                &[],
+            );
+        }
+    }
+
     #[test]
     fn test_make_map_with_null_maps() {
         // Test that NULL map values (entire map is NULL) are correctly handled
