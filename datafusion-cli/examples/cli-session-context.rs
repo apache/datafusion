@@ -94,5 +94,7 @@ pub async fn main() {
         instrumented_registry: Arc::new(InstrumentedObjectStoreRegistry::new()),
     };
 
-    exec_from_repl(&my_ctx, &mut print_options).await.unwrap();
+    exec_from_repl(&my_ctx, &mut print_options, None)
+        .await
+        .unwrap();
 }
