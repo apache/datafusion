@@ -951,9 +951,12 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     fn propagate_constraints(
         &self,
         _interval: &Interval,
-        _inputs: &[&Interval],
+        inputs: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
-        Ok(Some(vec![]))
+        // Conservative default: return inputs unchanged (no narrowing).
+        // The returned vec must have the same length as `inputs` to satisfy
+        // the interval solver contract.
+        Ok(Some(inputs.iter().map(|i| (*i).clone()).collect()))
     }
 
     /// Calculates the [`SortProperties`] of this function based on its children's properties.

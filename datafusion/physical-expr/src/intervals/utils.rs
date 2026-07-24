@@ -22,19 +22,21 @@ use std::sync::Arc;
 use crate::{
     PhysicalExpr,
     expressions::{BinaryExpr, CastExpr, Column, Literal, NegativeExpr},
+    scalar_function::ScalarFunctionExpr,
 };
 
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{Result, ScalarValue, internal_err};
-use datafusion_expr::Operator;
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::{Operator, Volatility};
 
 /// Indicates whether interval arithmetic is supported for the given expression.
 /// Currently, we do not support all [`PhysicalExpr`]s for interval calculations.
 /// We do not support every type of [`Operator`]s either. Over time, this check
 /// will relax as more types of `PhysicalExpr`s and `Operator`s are supported.
-/// Currently, [`CastExpr`], [`NegativeExpr`], [`BinaryExpr`], [`Column`] and [`Literal`] are supported.
+/// Currently, [`CastExpr`], [`NegativeExpr`], [`BinaryExpr`], [`Column`], [`Literal`] and
+/// non-volatile [`ScalarFunctionExpr`]s are supported.
 pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
     if let Some(binary_expr) = expr.downcast_ref::<BinaryExpr>() {
         is_operator_supported(binary_expr.op())
@@ -56,6 +58,17 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
         check_support(cast.expr(), schema)
     } else if let Some(negative) = expr.downcast_ref::<NegativeExpr>() {
         check_support(negative.arg(), schema)
+    } else if let Some(scalar_fn) = expr.downcast_ref::<ScalarFunctionExpr>() {
+        // Stable functions (e.g. `now()`, `current_date()`) are deterministic
+        // within a single query execution, so their bounds are well-defined for
+        // interval analysis — only Volatile functions (e.g. `random()`) must be
+        // excluded.
+        scalar_fn.fun().signature().volatility != Volatility::Volatile
+            && is_datatype_supported(scalar_fn.return_type())
+            && scalar_fn
+                .args()
+                .iter()
+                .all(|arg| check_support(arg, schema))
     } else {
         false
     }
@@ -191,5 +204,212 @@ fn interval_dt_to_duration_ms(dt: &IntervalDayTime) -> Result<i64> {
         internal_err!(
             "The interval cannot have a non-zero day value for duration convertibility"
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expressions::{Column, Literal};
+    use crate::scalar_function::ScalarFunctionExpr;
+    use arrow::datatypes::{Field, Schema};
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{
+        ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    };
+
+    fn f64_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("x", DataType::Float64, false)]))
+    }
+
+    fn utf8_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]))
+    }
+
+    fn col_x() -> Arc<dyn PhysicalExpr> {
+        Arc::new(Column::new("x", 0))
+    }
+
+    fn lit_f64(v: f64) -> Arc<dyn PhysicalExpr> {
+        Arc::new(Literal::new(ScalarValue::Float64(Some(v))))
+    }
+
+    fn scalar_fn_expr(
+        udf: Arc<datafusion_expr::ScalarUDF>,
+        args: Vec<Arc<dyn PhysicalExpr>>,
+        return_type: DataType,
+    ) -> Arc<dyn PhysicalExpr> {
+        let name = udf.name().to_string();
+        Arc::new(ScalarFunctionExpr::new(
+            &name,
+            udf,
+            args,
+            Field::new("result", return_type, true).into(),
+            Arc::new(ConfigOptions::default()),
+        ))
+    }
+
+    /// A minimal UDF whose declared return type is Utf8, used to test that
+    /// check_support rejects functions with unsupported return types without
+    /// relying on an invalid ceil-returns-Utf8 combination.
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct Utf8UDF {
+        signature: Signature,
+    }
+
+    impl Utf8UDF {
+        fn new() -> Self {
+            Self {
+                signature: Signature::uniform(
+                    1,
+                    vec![DataType::Float64],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for Utf8UDF {
+        fn name(&self) -> &str {
+            "utf8_udf"
+        }
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+        fn return_type(&self, _: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Utf8)
+        }
+        fn invoke_with_args(&self, _: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
+        }
+    }
+
+    fn utf8_udf() -> Arc<datafusion_expr::ScalarUDF> {
+        Arc::new(datafusion_expr::ScalarUDF::from(Utf8UDF::new()))
+    }
+
+    #[test]
+    fn test_check_support_scalar_fn_supported_return_type() {
+        // ceil(x) returns Float64 — both return type and child are supported
+        let schema = f64_schema();
+        let expr = scalar_fn_expr(
+            datafusion_functions::math::ceil(),
+            vec![col_x()],
+            DataType::Float64,
+        );
+        assert!(check_support(&expr, &schema));
+    }
+
+    #[test]
+    fn test_check_support_scalar_fn_unsupported_return_type() {
+        // utf8_udf(x) returns Utf8 — not in is_datatype_supported
+        let schema = f64_schema();
+        let expr = scalar_fn_expr(utf8_udf(), vec![col_x()], DataType::Utf8);
+        assert!(!check_support(&expr, &schema));
+    }
+
+    #[test]
+    fn test_check_support_scalar_fn_unsupported_child() {
+        // ceil applied to a Utf8 column — child fails is_datatype_supported
+        let schema = utf8_schema();
+        let col_s = Arc::new(Column::new("s", 0)) as Arc<dyn PhysicalExpr>;
+        let expr = scalar_fn_expr(
+            datafusion_functions::math::ceil(),
+            vec![col_s],
+            DataType::Float64,
+        );
+        assert!(!check_support(&expr, &schema));
+    }
+
+    #[test]
+    fn test_check_support_scalar_fn_in_binary_expr() {
+        // ceil(x) > 5.0 — the main use case: ScalarFunctionExpr inside a BinaryExpr
+        let schema = f64_schema();
+        let ceil_x = scalar_fn_expr(
+            datafusion_functions::math::ceil(),
+            vec![col_x()],
+            DataType::Float64,
+        );
+        let expr: Arc<dyn PhysicalExpr> =
+            Arc::new(BinaryExpr::new(ceil_x, Operator::Gt, lit_f64(5.0)));
+        assert!(check_support(&expr, &schema));
+    }
+
+    #[test]
+    fn test_check_support_scalar_fn_in_binary_expr_unsupported_return() {
+        // utf8_udf(x) > 5.0 where f returns Utf8 — should be false
+        let schema = f64_schema();
+        let fn_expr = scalar_fn_expr(utf8_udf(), vec![col_x()], DataType::Utf8);
+        let expr: Arc<dyn PhysicalExpr> =
+            Arc::new(BinaryExpr::new(fn_expr, Operator::Gt, lit_f64(5.0)));
+        assert!(!check_support(&expr, &schema));
+    }
+
+    /// A Float64-returning UDF parameterised by volatility, used to verify
+    /// that `check_support` accepts Immutable/Stable and rejects Volatile.
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct VolatilityUDF {
+        name: &'static str,
+        signature: Signature,
+    }
+
+    impl VolatilityUDF {
+        fn new(name: &'static str, volatility: Volatility) -> Self {
+            Self {
+                name,
+                signature: Signature::uniform(1, vec![DataType::Float64], volatility),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for VolatilityUDF {
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+        fn return_type(&self, _: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Float64)
+        }
+        fn invoke_with_args(&self, _: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)))
+        }
+    }
+
+    fn volatility_udf(
+        name: &'static str,
+        volatility: Volatility,
+    ) -> Arc<datafusion_expr::ScalarUDF> {
+        Arc::new(datafusion_expr::ScalarUDF::from(VolatilityUDF::new(
+            name, volatility,
+        )))
+    }
+
+    #[test]
+    fn test_check_support_scalar_fn_stable_is_supported() {
+        // Stable functions are deterministic within a query → safe for interval
+        // analysis; check_support must accept them.
+        let schema = f64_schema();
+        let expr = scalar_fn_expr(
+            volatility_udf("stable_udf", Volatility::Stable),
+            vec![col_x()],
+            DataType::Float64,
+        );
+        assert!(check_support(&expr, &schema));
+    }
+
+    #[test]
+    fn test_check_support_scalar_fn_volatile_is_unsupported() {
+        // Volatile functions (e.g. random()) can return different values on each
+        // call → interval analysis is unsound; check_support must reject them.
+        let schema = f64_schema();
+        let expr = scalar_fn_expr(
+            volatility_udf("volatile_udf", Volatility::Volatile),
+            vec![col_x()],
+            DataType::Float64,
+        );
+        assert!(!check_support(&expr, &schema));
     }
 }
