@@ -21,7 +21,6 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use arrow::compute::SortOptions;
 use arrow::datatypes::{IntervalMonthDayNanoType, Schema, SchemaRef};
 use datafusion_catalog::memory::MemorySourceConfig;
 use datafusion_common::config::CsvOptions;
@@ -84,13 +83,13 @@ use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
-    StreamJoinPartitionMode, SymmetricHashJoinExec,
+    SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::memory::LazyMemoryExec;
 use datafusion_physical_plan::metrics::MetricCategory;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
-use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::proto::{
     ExecutionPlanDecode, ExecutionPlanDecodeCtx, ExecutionPlanEncode,
     ExecutionPlanEncodeCtx,
@@ -100,14 +99,12 @@ use datafusion_physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubque
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::{InterleaveExec, UnionExec};
-use datafusion_physical_plan::unnest::{ListUnnest, UnnestExec};
+use datafusion_physical_plan::unnest::UnnestExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion_physical_plan::{ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr};
 use prost::Message;
 use prost::bytes::BufMut;
 
-use self::from_proto::parse_protobuf_partitioning;
-use self::to_proto::serialize_partitioning;
 use crate::common::{byte_to_string, str_to_byte};
 use crate::convert::{FromProto, TryFromProto};
 use crate::convert_required;
@@ -124,10 +121,7 @@ use crate::physical_plan::to_proto::{
 use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
-use crate::protobuf::{
-    self, ListUnnest as ProtoListUnnest, SortMergeJoinExecNode, proto_error,
-    window_agg_exec_node,
-};
+use crate::protobuf::{self, SortMergeJoinExecNode, proto_error, window_agg_exec_node};
 
 pub mod from_proto;
 pub mod to_proto;
@@ -790,14 +784,14 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::Merge(_) => {
                 CoalescePartitionsExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::Repartition(repart) => {
-                self.try_into_repartition_physical_plan(repart, ctx, proto_converter)
+            PhysicalPlanType::Repartition(_) => {
+                RepartitionExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::GlobalLimit(limit) => {
-                self.try_into_global_limit_physical_plan(limit, ctx, proto_converter)
+            PhysicalPlanType::GlobalLimit(_) => {
+                GlobalLimitExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::LocalLimit(limit) => {
-                self.try_into_local_limit_physical_plan(limit, ctx, proto_converter)
+            PhysicalPlanType::LocalLimit(_) => {
+                LocalLimitExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Window(window_agg) => {
                 self.try_into_window_physical_plan(window_agg, ctx, proto_converter)
@@ -808,37 +802,35 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::HashJoin(hashjoin) => {
                 self.try_into_hash_join_physical_plan(hashjoin, ctx, proto_converter)
             }
-            PhysicalPlanType::SymmetricHashJoin(sym_join) => self
-                .try_into_symmetric_hash_join_physical_plan(
-                    sym_join,
-                    ctx,
-                    proto_converter,
-                ),
-            PhysicalPlanType::Union(union) => {
-                self.try_into_union_physical_plan(union, ctx, proto_converter)
+            PhysicalPlanType::SymmetricHashJoin(_) => {
+                SymmetricHashJoinExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::Interleave(interleave) => {
-                self.try_into_interleave_physical_plan(interleave, ctx, proto_converter)
+            PhysicalPlanType::Union(_) => {
+                UnionExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::CrossJoin(crossjoin) => {
-                self.try_into_cross_join_physical_plan(crossjoin, ctx, proto_converter)
+            PhysicalPlanType::Interleave(_) => {
+                InterleaveExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::Empty(empty) => {
-                self.try_into_empty_physical_plan(empty, ctx, proto_converter)
+            PhysicalPlanType::CrossJoin(_) => {
+                CrossJoinExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::PlaceholderRow(placeholder) => {
-                self.try_into_placeholder_row_physical_plan(placeholder, ctx)
+            PhysicalPlanType::Empty(_) => {
+                EmptyExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::Sort(sort) => {
-                self.try_into_sort_physical_plan(sort, ctx, proto_converter)
+            PhysicalPlanType::PlaceholderRow(_) => {
+                PlaceholderRowExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::SortPreservingMerge(sort) => self
-                .try_into_sort_preserving_merge_physical_plan(sort, ctx, proto_converter),
+            PhysicalPlanType::Sort(_) => {
+                SortExec::try_from_proto(self.node(), &decode_ctx)
+            }
+            PhysicalPlanType::SortPreservingMerge(_) => {
+                SortPreservingMergeExec::try_from_proto(self.node(), &decode_ctx)
+            }
             PhysicalPlanType::Extension(extension) => {
                 self.try_into_extension_physical_plan(extension, ctx, proto_converter)
             }
-            PhysicalPlanType::NestedLoopJoin(join) => {
-                self.try_into_nested_loop_join_physical_plan(join, ctx, proto_converter)
+            PhysicalPlanType::NestedLoopJoin(_) => {
+                NestedLoopJoinExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Analyze(analyze) => {
                 self.try_into_analyze_physical_plan(analyze, ctx, proto_converter)
@@ -853,8 +845,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::ParquetSink(sink) => {
                 self.try_into_parquet_sink_physical_plan(sink, ctx, proto_converter)
             }
-            PhysicalPlanType::Unnest(unnest) => {
-                self.try_into_unnest_physical_plan(unnest, ctx, proto_converter)
+            PhysicalPlanType::Unnest(_) => {
+                UnnestExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::Cooperative(_) => {
                 CooperativeExec::try_from_proto(self.node(), &decode_ctx)
@@ -917,40 +909,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             );
         }
 
-        if let Some(limit) = plan.downcast_ref::<GlobalLimitExec>() {
-            return protobuf::PhysicalPlanNode::try_from_global_limit_exec(
-                limit,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(limit) = plan.downcast_ref::<LocalLimitExec>() {
-            return protobuf::PhysicalPlanNode::try_from_local_limit_exec(
-                limit,
-                codec,
-                proto_converter,
-            );
-        }
-
         if let Some(exec) = plan.downcast_ref::<HashJoinExec>() {
             return protobuf::PhysicalPlanNode::try_from_hash_join_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<SymmetricHashJoinExec>() {
-            return protobuf::PhysicalPlanNode::try_from_symmetric_hash_join_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<CrossJoinExec>() {
-            return protobuf::PhysicalPlanNode::try_from_cross_join_exec(
                 exec,
                 codec,
                 proto_converter,
@@ -965,16 +925,6 @@ pub trait PhysicalPlanNodeExt: Sized {
             );
         }
 
-        if let Some(empty) = plan.downcast_ref::<EmptyExec>() {
-            return protobuf::PhysicalPlanNode::try_from_empty_exec(empty, codec);
-        }
-
-        if let Some(empty) = plan.downcast_ref::<PlaceholderRowExec>() {
-            return protobuf::PhysicalPlanNode::try_from_placeholder_row_exec(
-                empty, codec,
-            );
-        }
-
         if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>()
             && let Some(node) = protobuf::PhysicalPlanNode::try_from_data_source_exec(
                 data_source_exec,
@@ -983,54 +933,6 @@ pub trait PhysicalPlanNodeExt: Sized {
             )?
         {
             return Ok(node);
-        }
-
-        if let Some(exec) = plan.downcast_ref::<RepartitionExec>() {
-            return protobuf::PhysicalPlanNode::try_from_repartition_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<SortExec>() {
-            return protobuf::PhysicalPlanNode::try_from_sort_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(union) = plan.downcast_ref::<UnionExec>() {
-            return protobuf::PhysicalPlanNode::try_from_union_exec(
-                union,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(interleave) = plan.downcast_ref::<InterleaveExec>() {
-            return protobuf::PhysicalPlanNode::try_from_interleave_exec(
-                interleave,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<SortPreservingMergeExec>() {
-            return protobuf::PhysicalPlanNode::try_from_sort_preserving_merge_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<NestedLoopJoinExec>() {
-            return protobuf::PhysicalPlanNode::try_from_nested_loop_join_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
         }
 
         if let Some(exec) = plan.downcast_ref::<WindowAggExec>() {
@@ -1057,14 +959,6 @@ pub trait PhysicalPlanNodeExt: Sized {
             )?
         {
             return Ok(node);
-        }
-
-        if let Some(exec) = plan.downcast_ref::<UnnestExec>() {
-            return protobuf::PhysicalPlanNode::try_from_unnest_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
         }
 
         if let Some(exec) = plan.downcast_ref::<LazyMemoryExec>()
@@ -1145,28 +1039,21 @@ pub trait PhysicalPlanNodeExt: Sized {
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&projection.input, ctx, proto_converter)?;
-        let exprs = projection
-            .expr
-            .iter()
-            .zip(projection.expr_name.iter())
-            .map(|(expr, name)| {
-                Ok((
-                    proto_converter.proto_to_physical_expr(
-                        expr,
-                        input.schema().as_ref(),
-                        ctx,
-                    )?,
-                    name.to_string(),
-                ))
-            })
-            .collect::<Result<Vec<(Arc<dyn PhysicalExpr>, String)>>>()?;
-        let proj_exprs: Vec<ProjectionExpr> = exprs
-            .into_iter()
-            .map(|(expr, alias)| ProjectionExpr { expr, alias })
-            .collect();
-        Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input)?))
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        // `try_from_proto` takes the enclosing `PhysicalPlanNode`, while this
+        // deprecated method is driven by the `ProjectionExecNode` argument.
+        // Re-wrap the argument so the decoded plan keeps depending on it rather
+        // than on `self`, which a caller may not have kept in sync.
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Projection(Box::new(
+                projection.clone(),
+            ))),
+        };
+        ProjectionExec::try_from_proto(&node, &decode_ctx)
     }
 
     #[deprecated(
@@ -1482,56 +1369,73 @@ pub trait PhysicalPlanNodeExt: Sized {
         CoalescePartitionsExec::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `RepartitionExec` deserializes itself via `RepartitionExec::try_from_proto`"
+    )]
     fn try_into_repartition_physical_plan(
         &self,
         repart: &protobuf::RepartitionExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&repart.input, ctx, proto_converter)?;
-        let partitioning = parse_protobuf_partitioning(
-            repart.partitioning.as_ref(),
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Repartition(Box::new(
+                repart.clone(),
+            ))),
+        };
+        let decoder = ConverterPlanDecoder {
             ctx,
-            input.schema().as_ref(),
             proto_converter,
-        )?;
-        let mut repart_exec = RepartitionExec::try_new(input, partitioning.unwrap())?;
-        if repart.preserve_order {
-            repart_exec = repart_exec.with_preserve_order();
-        }
-        Ok(Arc::new(repart_exec))
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        RepartitionExec::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `GlobalLimitExec` deserializes itself via `GlobalLimitExec::try_from_proto`"
+    )]
     fn try_into_global_limit_physical_plan(
         &self,
         limit: &protobuf::GlobalLimitExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&limit.input, ctx, proto_converter)?;
-        let fetch = if limit.fetch >= 0 {
-            Some(limit.fetch as usize)
-        } else {
-            None
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::GlobalLimit(Box::new(
+                limit.clone(),
+            ))),
         };
-        Ok(Arc::new(GlobalLimitExec::new(
-            input,
-            limit.skip as usize,
-            fetch,
-        )))
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        GlobalLimitExec::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `LocalLimitExec` deserializes itself via `LocalLimitExec::try_from_proto`"
+    )]
     fn try_into_local_limit_physical_plan(
         &self,
         limit: &protobuf::LocalLimitExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&limit.input, ctx, proto_converter)?;
-        Ok(Arc::new(LocalLimitExec::new(input, limit.fetch as usize)))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::LocalLimit(Box::new(
+                limit.clone(),
+            ))),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        LocalLimitExec::try_from_proto(&node, &decode_ctx)
     }
 
     fn try_into_window_physical_plan(
@@ -1932,321 +1836,180 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(hash_join))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `SymmetricHashJoinExec` deserializes itself via `SymmetricHashJoinExec::try_from_proto`"
+    )]
     fn try_into_symmetric_hash_join_physical_plan(
         &self,
         sym_join: &protobuf::SymmetricHashJoinExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let left = into_physical_plan(&sym_join.left, ctx, proto_converter)?;
-        let right = into_physical_plan(&sym_join.right, ctx, proto_converter)?;
-        let left_schema = left.schema();
-        let right_schema = right.schema();
-        let on = sym_join
-            .on
-            .iter()
-            .map(|col| {
-                let left = proto_converter.proto_to_physical_expr(
-                    &col.left.clone().unwrap(),
-                    left_schema.as_ref(),
-                    ctx,
-                )?;
-                let right = proto_converter.proto_to_physical_expr(
-                    &col.right.clone().unwrap(),
-                    right_schema.as_ref(),
-                    ctx,
-                )?;
-                Ok((left, right))
-            })
-            .collect::<Result<_>>()?;
-        let join_type =
-            protobuf::JoinType::try_from(sym_join.join_type).map_err(|_| {
-                proto_error(format!(
-                    "Received a SymmetricHashJoin message with unknown JoinType {}",
-                    sym_join.join_type
-                ))
-            })?;
-        let null_equality = protobuf::NullEquality::try_from(sym_join.null_equality)
-            .map_err(|_| {
-                proto_error(format!(
-                    "Received a SymmetricHashJoin message with unknown NullEquality {}",
-                    sym_join.null_equality
-                ))
-            })?;
-        let filter = sym_join
-            .filter
-            .as_ref()
-            .map(|f| {
-                let schema = f
-                    .schema
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Missing JoinFilter schema"))?
-                    .try_into()?;
-
-                let expression = proto_converter.proto_to_physical_expr(
-                    f.expression.as_ref().ok_or_else(|| {
-                        proto_error("Unexpected empty filter expression")
-                    })?,
-                    &schema,
-                    ctx,
-                )?;
-                let column_indices = f.column_indices
-                    .iter()
-                    .map(|i| {
-                        let side = protobuf::JoinSide::try_from(i.side)
-                            .map_err(|_| proto_error(format!(
-                                "Received a HashJoinNode message with JoinSide in Filter {}",
-                                i.side))
-                            )?;
-
-                        Ok(ColumnIndex {
-                            index: i.index as usize,
-                            side: side.into(),
-                        })
-                    })
-                    .collect::<Result<_>>()?;
-
-                Ok(JoinFilter::new(expression, column_indices, Arc::new(schema)))
-            })
-            .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
-
-        let left_sort_exprs = parse_physical_sort_exprs(
-            &sym_join.left_sort_exprs,
-            ctx,
-            &left_schema,
-            proto_converter,
-        )?;
-        let left_sort_exprs = LexOrdering::new(left_sort_exprs);
-
-        let right_sort_exprs = parse_physical_sort_exprs(
-            &sym_join.right_sort_exprs,
-            ctx,
-            &right_schema,
-            proto_converter,
-        )?;
-        let right_sort_exprs = LexOrdering::new(right_sort_exprs);
-
-        let partition_mode = protobuf::StreamPartitionMode::try_from(
-            sym_join.partition_mode,
-        )
-        .map_err(|_| {
-            proto_error(format!(
-                "Received a SymmetricHashJoin message with unknown PartitionMode {}",
-                sym_join.partition_mode
-            ))
-        })?;
-        let partition_mode = match partition_mode {
-            protobuf::StreamPartitionMode::SinglePartition => {
-                StreamJoinPartitionMode::SinglePartition
-            }
-            protobuf::StreamPartitionMode::PartitionedExec => {
-                StreamJoinPartitionMode::Partitioned
-            }
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::SymmetricHashJoin(Box::new(
+                sym_join.clone(),
+            ))),
         };
-        SymmetricHashJoinExec::try_new(
-            left,
-            right,
-            on,
-            filter,
-            &JoinType::from_proto(join_type),
-            NullEquality::from_proto(null_equality),
-            left_sort_exprs,
-            right_sort_exprs,
-            partition_mode,
-        )
-        .map(|e| Arc::new(e) as _)
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        SymmetricHashJoinExec::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `UnionExec` deserializes itself via `UnionExec::try_from_proto`"
+    )]
     fn try_into_union_physical_plan(
         &self,
         union: &protobuf::UnionExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
-        for input in &union.inputs {
-            inputs.push(proto_converter.proto_to_execution_plan(input, ctx)?);
-        }
-        UnionExec::try_new(inputs)
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Union(union.clone())),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        UnionExec::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `InterleaveExec` deserializes itself via `InterleaveExec::try_from_proto`"
+    )]
     fn try_into_interleave_physical_plan(
         &self,
         interleave: &protobuf::InterleaveExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
-        for input in &interleave.inputs {
-            inputs.push(proto_converter.proto_to_execution_plan(input, ctx)?);
-        }
-        Ok(Arc::new(InterleaveExec::try_new(inputs)?))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Interleave(interleave.clone())),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        InterleaveExec::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `CrossJoinExec` deserializes itself via `CrossJoinExec::try_from_proto`"
+    )]
     fn try_into_cross_join_physical_plan(
         &self,
         crossjoin: &protobuf::CrossJoinExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let left: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&crossjoin.left, ctx, proto_converter)?;
-        let right: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&crossjoin.right, ctx, proto_converter)?;
-        Ok(Arc::new(CrossJoinExec::new(left, right)))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::CrossJoin(Box::new(
+                crossjoin.clone(),
+            ))),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        CrossJoinExec::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `EmptyExec` deserializes itself via `EmptyExec::try_from_proto`"
+    )]
     fn try_into_empty_physical_plan(
         &self,
         empty: &protobuf::EmptyExecNode,
-        _ctx: &PhysicalPlanDecodeContext<'_>,
-        _proto_converter: &dyn PhysicalProtoConverterExtension,
+        ctx: &PhysicalPlanDecodeContext<'_>,
+        proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let schema = Arc::new(convert_required!(empty.schema)?);
-        // A zero (absent) partition count comes from a plan encoded before the
-        // field existed, which always meant a single partition.
-        let partitions = empty.partitions.max(1) as usize;
-        Ok(Arc::new(EmptyExec::new(schema).with_partitions(partitions)))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Empty(empty.clone())),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        EmptyExec::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `PlaceholderRowExec` deserializes itself via `PlaceholderRowExec::try_from_proto`"
+    )]
     fn try_into_placeholder_row_physical_plan(
         &self,
         placeholder: &protobuf::PlaceholderRowExecNode,
-        _ctx: &PhysicalPlanDecodeContext<'_>,
+        ctx: &PhysicalPlanDecodeContext<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let schema = Arc::new(convert_required!(placeholder.schema)?);
-        // A zero (absent) partition count comes from a plan encoded before the
-        // field existed, which always meant a single partition.
-        let partitions = placeholder.partitions.max(1) as usize;
-        Ok(Arc::new(
-            PlaceholderRowExec::new(schema).with_partitions(partitions),
-        ))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::PlaceholderRow(
+                placeholder.clone(),
+            )),
+        };
+        let proto_converter = DefaultPhysicalProtoConverter {};
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter: &proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        PlaceholderRowExec::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `SortExec` deserializes itself via `SortExec::try_from_proto`"
+    )]
     fn try_into_sort_physical_plan(
         &self,
         sort: &protobuf::SortExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let node = self.node();
-        let input = into_physical_plan(&sort.input, ctx, proto_converter)?;
-        let exprs = sort
-            .expr
-            .iter()
-            .map(|expr| {
-                let expr = expr.expr_type.as_ref().ok_or_else(|| {
-                    proto_error(format!(
-                        "physical_plan::from_proto() Unexpected expr {node:?}"
-                    ))
-                })?;
-                if let ExprType::Sort(sort_expr) = expr {
-                    let expr = sort_expr
-                        .expr
-                        .as_ref()
-                        .ok_or_else(|| {
-                            proto_error(format!(
-                                "physical_plan::from_proto() Unexpected sort expr {node:?}"
-                            ))
-                        })?
-                        .as_ref();
-                    Ok(PhysicalSortExpr {
-                        expr: proto_converter.proto_to_physical_expr(
-                            expr,
-                            input.schema().as_ref(),
-                            ctx,
-                        )?,
-                        options: SortOptions {
-                            descending: !sort_expr.asc,
-                            nulls_first: sort_expr.nulls_first,
-                        },
-                    })
-                } else {
-                    internal_err!(
-                        "physical_plan::from_proto() {node:?}"
-                    )
-                }
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let Some(ordering) = LexOrdering::new(exprs) else {
-            return internal_err!("SortExec requires an ordering");
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Sort(Box::new(sort.clone()))),
         };
-        let fetch = (sort.fetch >= 0).then_some(sort.fetch as _);
-        let new_sort = SortExec::new(ordering, input)
-            .with_fetch(fetch)
-            .with_preserve_partitioning(sort.preserve_partitioning);
-
-        let new_sort = if let Some(dynamic_filter_proto) = &sort.dynamic_filter {
-            let dynamic_filter_expr = proto_converter.proto_to_physical_expr(
-                dynamic_filter_proto,
-                new_sort.input().schema().as_ref(),
-                ctx,
-            )?;
-            let df = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
-                .downcast::<DynamicFilterPhysicalExpr>()
-                .map_err(|_| {
-                    internal_datafusion_err!(
-                        "SortExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
-                    )
-                })?;
-            new_sort.with_dynamic_filter_expr(df)?
-        } else {
-            new_sort
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
         };
-
-        Ok(Arc::new(new_sort))
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        SortExec::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `SortPreservingMergeExec` deserializes itself via `SortPreservingMergeExec::try_from_proto`"
+    )]
     fn try_into_sort_preserving_merge_physical_plan(
         &self,
         sort: &protobuf::SortPreservingMergeExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let node = self.node();
-        let input = into_physical_plan(&sort.input, ctx, proto_converter)?;
-        let exprs = sort
-            .expr
-            .iter()
-            .map(|expr| {
-                let expr = expr.expr_type.as_ref().ok_or_else(|| {
-                    proto_error(format!(
-                        "physical_plan::from_proto() Unexpected expr {node:?}"
-                    ))
-                })?;
-                if let ExprType::Sort(sort_expr) = expr {
-                    let expr = sort_expr
-                        .expr
-                        .as_ref()
-                        .ok_or_else(|| {
-                            proto_error(format!(
-                            "physical_plan::from_proto() Unexpected sort expr {node:?}"
-                        ))
-                        })?
-                        .as_ref();
-                    Ok(PhysicalSortExpr {
-                        expr: proto_converter.proto_to_physical_expr(
-                            expr,
-                            input.schema().as_ref(),
-                            ctx,
-                        )?,
-                        options: SortOptions {
-                            descending: !sort_expr.asc,
-                            nulls_first: sort_expr.nulls_first,
-                        },
-                    })
-                } else {
-                    internal_err!("physical_plan::from_proto() {node:?}")
-                }
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let Some(ordering) = LexOrdering::new(exprs) else {
-            return internal_err!("SortExec requires an ordering");
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::SortPreservingMerge(Box::new(
+                sort.clone(),
+            ))),
         };
-        let fetch = (sort.fetch >= 0).then_some(sort.fetch as _);
-        Ok(Arc::new(
-            SortPreservingMergeExec::new(ordering, input).with_fetch(fetch),
-        ))
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        SortPreservingMergeExec::try_from_proto(&node, &decode_ctx)
     }
 
     fn try_into_extension_physical_plan(
@@ -2271,76 +2034,27 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(extension_node)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `NestedLoopJoinExec` deserializes itself via `NestedLoopJoinExec::try_from_proto`"
+    )]
     fn try_into_nested_loop_join_physical_plan(
         &self,
         join: &protobuf::NestedLoopJoinExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let left: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&join.left, ctx, proto_converter)?;
-        let right: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&join.right, ctx, proto_converter)?;
-        let join_type = protobuf::JoinType::try_from(join.join_type).map_err(|_| {
-            proto_error(format!(
-                "Received a NestedLoopJoinExecNode message with unknown JoinType {}",
-                join.join_type
-            ))
-        })?;
-        let filter = join
-                    .filter
-                    .as_ref()
-                    .map(|f| {
-                        let schema = f
-                            .schema
-                            .as_ref()
-                            .ok_or_else(|| proto_error("Missing JoinFilter schema"))?
-                            .try_into()?;
-
-                        let expression = proto_converter
-                            .proto_to_physical_expr(
-                            f.expression.as_ref().ok_or_else(|| {
-                                proto_error("Unexpected empty filter expression")
-                            })?,
-                            &schema,
-                            ctx,
-                        )?;
-                        let column_indices = f.column_indices
-                            .iter()
-                            .map(|i| {
-                                let side = protobuf::JoinSide::try_from(i.side)
-                                    .map_err(|_| proto_error(format!(
-                                        "Received a NestedLoopJoinExecNode message with JoinSide in Filter {}",
-                                        i.side))
-                                    )?;
-
-                                Ok(ColumnIndex {
-                                    index: i.index as usize,
-                                    side: side.into(),
-                                })
-                            })
-                            .collect::<Result<Vec<_>>>()?;
-
-                        Ok(JoinFilter::new(expression, column_indices, Arc::new(schema)))
-                    })
-                    .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
-
-        // See `try_into_hash_join_physical_plan` for the rationale behind the
-        // `[u32::MAX]` sentinel; `NestedLoopJoinExec` has the same `Option<Vec<usize>>`
-        // projection field and shares the proto3 `repeated` ambiguity.
-        let projection = match join.projection.as_slice() {
-            [] => None,
-            [u32::MAX] => Some(Vec::new()),
-            indices => Some(indices.iter().map(|i| *i as usize).collect()),
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::NestedLoopJoin(Box::new(
+                join.clone(),
+            ))),
         };
-
-        Ok(Arc::new(NestedLoopJoinExec::try_new(
-            left,
-            right,
-            filter,
-            &JoinType::from_proto(join_type),
-            projection,
-        )?))
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        NestedLoopJoinExec::try_from_proto(&node, &decode_ctx)
     }
 
     fn try_into_analyze_physical_plan(
@@ -2504,32 +2218,25 @@ pub trait PhysicalPlanNodeExt: Sized {
         panic!("Trying to use ParquetSink without `parquet` feature enabled");
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `UnnestExec` deserializes itself via `UnnestExec::try_from_proto`"
+    )]
     fn try_into_unnest_physical_plan(
         &self,
         unnest: &protobuf::UnnestExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input = into_physical_plan(&unnest.input, ctx, proto_converter)?;
-
-        Ok(Arc::new(UnnestExec::new(
-            input,
-            unnest
-                .list_type_columns
-                .iter()
-                .map(|c| ListUnnest {
-                    index_in_input_schema: c.index_in_input_schema as _,
-                    depth: c.depth as _,
-                })
-                .collect(),
-            unnest.struct_type_columns.iter().map(|c| *c as _).collect(),
-            Arc::new(convert_required!(unnest.schema)?),
-            unnest
-                .options
-                .as_ref()
-                .map(datafusion_common::UnnestOptions::from_proto)
-                .ok_or_else(|| proto_error("Missing required field in protobuf"))?,
-        )?))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Unnest(Box::new(unnest.clone()))),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        UnnestExec::try_from_proto(&node, &decode_ctx)
     }
 
     fn generate_series_name_to_str(name: protobuf::GenerateSeriesName) -> &'static str {
@@ -2777,31 +2484,13 @@ pub trait PhysicalPlanNodeExt: Sized {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.input().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-        let expr = exec
-            .expr()
-            .iter()
-            .map(|proj_expr| {
-                proto_converter.physical_expr_to_proto(&proj_expr.expr, codec)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let expr_name = exec
-            .expr()
-            .iter()
-            .map(|proj_expr| proj_expr.alias.clone())
-            .collect();
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Projection(Box::new(
-                protobuf::ProjectionExecNode {
-                    input: Some(Box::new(input)),
-                    expr,
-                    expr_name,
-                },
-            ))),
+        };
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("ProjectionExec::try_to_proto returned None")
         })
     }
 
@@ -2858,49 +2547,42 @@ pub trait PhysicalPlanNodeExt: Sized {
             .ok_or_else(|| internal_datafusion_err!("FilterExec is not serializable"))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `GlobalLimitExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_global_limit_exec(
         limit: &GlobalLimitExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            limit.input().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::GlobalLimit(Box::new(
-                protobuf::GlobalLimitExecNode {
-                    input: Some(Box::new(input)),
-                    skip: limit.skip() as u32,
-                    fetch: match limit.fetch() {
-                        Some(n) => n as i64,
-                        _ => -1, // no limit
-                    },
-                },
-            ))),
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        limit.try_to_proto(&encode_ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("GlobalLimitExec is not serializable")
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `LocalLimitExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_local_limit_exec(
         limit: &LocalLimitExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            limit.input().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::LocalLimit(Box::new(
-                protobuf::LocalLimitExecNode {
-                    input: Some(Box::new(input)),
-                    fetch: limit.fetch() as u32,
-                },
-            ))),
-        })
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        limit
+            .try_to_proto(&encode_ctx)?
+            .ok_or_else(|| internal_datafusion_err!("LocalLimitExec is not serializable"))
     }
 
     fn try_from_hash_join_exec(
@@ -2998,124 +2680,22 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `SymmetricHashJoinExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_symmetric_hash_join_exec(
         exec: &SymmetricHashJoinExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let left = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.left().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-        let right = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.right().to_owned(),
-            codec,
-            proto_converter,
-        )?;
-        let on = exec
-            .on()
-            .iter()
-            .map(|tuple| {
-                let l = proto_converter.physical_expr_to_proto(&tuple.0, codec)?;
-                let r = proto_converter.physical_expr_to_proto(&tuple.1, codec)?;
-                Ok::<_, DataFusionError>(protobuf::JoinOn {
-                    left: Some(l),
-                    right: Some(r),
-                })
-            })
-            .collect::<Result<_>>()?;
-        let join_type = protobuf::JoinType::from_proto(exec.join_type().to_owned());
-        let null_equality = protobuf::NullEquality::from_proto(exec.null_equality());
-        let filter = exec
-            .filter()
-            .as_ref()
-            .map(|f| {
-                let expression =
-                    proto_converter.physical_expr_to_proto(f.expression(), codec)?;
-                let column_indices = f
-                    .column_indices()
-                    .iter()
-                    .map(|i| {
-                        let side: protobuf::JoinSide = i.side.to_owned().into();
-                        protobuf::ColumnIndex {
-                            index: i.index as u32,
-                            side: side.into(),
-                        }
-                    })
-                    .collect();
-                let schema = f.schema().as_ref().try_into()?;
-                Ok(protobuf::JoinFilter {
-                    expression: Some(expression),
-                    column_indices,
-                    schema: Some(schema),
-                })
-            })
-            .map_or(Ok(None), |v: Result<protobuf::JoinFilter>| v.map(Some))?;
-
-        let partition_mode = match exec.partition_mode() {
-            StreamJoinPartitionMode::SinglePartition => {
-                protobuf::StreamPartitionMode::SinglePartition
-            }
-            StreamJoinPartitionMode::Partitioned => {
-                protobuf::StreamPartitionMode::PartitionedExec
-            }
         };
-
-        let left_sort_exprs = exec
-            .left_sort_exprs()
-            .map(|exprs| {
-                exprs
-                    .iter()
-                    .map(|expr| {
-                        Ok(protobuf::PhysicalSortExprNode {
-                            expr: Some(Box::new(
-                                proto_converter
-                                    .physical_expr_to_proto(&expr.expr, codec)?,
-                            )),
-                            asc: !expr.options.descending,
-                            nulls_first: expr.options.nulls_first,
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()
-            })
-            .transpose()?
-            .unwrap_or(vec![]);
-
-        let right_sort_exprs = exec
-            .right_sort_exprs()
-            .map(|exprs| {
-                exprs
-                    .iter()
-                    .map(|expr| {
-                        Ok(protobuf::PhysicalSortExprNode {
-                            expr: Some(Box::new(
-                                proto_converter
-                                    .physical_expr_to_proto(&expr.expr, codec)?,
-                            )),
-                            asc: !expr.options.descending,
-                            nulls_first: expr.options.nulls_first,
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()
-            })
-            .transpose()?
-            .unwrap_or(vec![]);
-
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::SymmetricHashJoin(Box::new(
-                protobuf::SymmetricHashJoinExecNode {
-                    left: Some(Box::new(left)),
-                    right: Some(Box::new(right)),
-                    on,
-                    join_type: join_type.into(),
-                    partition_mode: partition_mode.into(),
-                    null_equality: null_equality.into(),
-                    left_sort_exprs,
-                    right_sort_exprs,
-                    filter,
-                },
-            ))),
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("SymmetricHashJoinExec is not serializable")
         })
     }
 
@@ -3138,29 +2718,22 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `CrossJoinExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_cross_join_exec(
         exec: &CrossJoinExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let left = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.left().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-        let right = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.right().to_owned(),
-            codec,
-            proto_converter,
-        )?;
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::CrossJoin(Box::new(
-                protobuf::CrossJoinExecNode {
-                    left: Some(Box::new(left)),
-                    right: Some(Box::new(right)),
-                },
-            ))),
-        })
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?
+            .ok_or_else(|| internal_datafusion_err!("CrossJoinExec is not serializable"))
     }
 
     fn try_from_aggregate_exec(
@@ -3267,33 +2840,41 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `EmptyExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_empty_exec(
         empty: &EmptyExec,
-        _codec: &dyn PhysicalExtensionCodec,
+        codec: &dyn PhysicalExtensionCodec,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let schema = empty.schema().as_ref().try_into()?;
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Empty(protobuf::EmptyExecNode {
-                schema: Some(schema),
-                partitions: empty.properties().output_partitioning().partition_count()
-                    as u32,
-            })),
+        let proto_converter = DefaultPhysicalProtoConverter {};
+        let encoder = ConverterPlanEncoder {
+            codec,
+            proto_converter: &proto_converter,
+        };
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        empty.try_to_proto(&ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("EmptyExec::try_to_proto returned None")
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `PlaceholderRowExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_placeholder_row_exec(
-        empty: &PlaceholderRowExec,
-        _codec: &dyn PhysicalExtensionCodec,
+        placeholder: &PlaceholderRowExec,
+        codec: &dyn PhysicalExtensionCodec,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let schema = empty.schema().as_ref().try_into()?;
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::PlaceholderRow(
-                protobuf::PlaceholderRowExecNode {
-                    schema: Some(schema),
-                    partitions: empty.properties().output_partitioning().partition_count()
-                        as u32,
-                },
-            )),
+        let proto_converter = DefaultPhysicalProtoConverter {};
+        let encoder = ConverterPlanEncoder {
+            codec,
+            proto_converter: &proto_converter,
+        };
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        placeholder.try_to_proto(&ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("PlaceholderRowExec::try_to_proto returned None")
         })
     }
 
@@ -3511,219 +3092,116 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `RepartitionExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_repartition_exec(
         exec: &RepartitionExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.input().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-
-        let pb_partitioning =
-            serialize_partitioning(exec.partitioning(), codec, proto_converter)?;
-
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Repartition(Box::new(
-                protobuf::RepartitionExecNode {
-                    input: Some(Box::new(input)),
-                    partitioning: Some(pb_partitioning),
-                    preserve_order: exec.preserve_order(),
-                },
-            ))),
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("RepartitionExec is not serializable")
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `SortExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_sort_exec(
         exec: &SortExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = proto_converter.execution_plan_to_proto(exec.input(), codec)?;
-        let expr = exec
-            .expr()
-            .iter()
-            .map(|expr| {
-                let sort_expr = Box::new(protobuf::PhysicalSortExprNode {
-                    expr: Some(Box::new(
-                        proto_converter.physical_expr_to_proto(&expr.expr, codec)?,
-                    )),
-                    asc: !expr.options.descending,
-                    nulls_first: expr.options.nulls_first,
-                });
-                Ok(protobuf::PhysicalExprNode {
-                    expr_id: None,
-                    expr_type: Some(ExprType::Sort(sort_expr)),
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let dynamic_filter = exec
-            .dynamic_filter_expr()
-            .map(|df| {
-                let df_expr: Arc<dyn PhysicalExpr> = df as Arc<dyn PhysicalExpr>;
-                proto_converter.physical_expr_to_proto(&df_expr, codec)
-            })
-            .transpose()?;
-
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Sort(Box::new(
-                protobuf::SortExecNode {
-                    input: Some(Box::new(input)),
-                    expr,
-                    fetch: match exec.fetch() {
-                        Some(n) => n as i64,
-                        _ => -1,
-                    },
-                    preserve_partitioning: exec.preserve_partitioning(),
-                    dynamic_filter,
-                },
-            ))),
-        })
+        let encoder = ConverterPlanEncoder {
+            codec,
+            proto_converter,
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?
+            .ok_or_else(|| internal_datafusion_err!("SortExec is not serializable"))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `UnionExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_union_exec(
         union: &UnionExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let mut inputs: Vec<protobuf::PhysicalPlanNode> = vec![];
-        for input in union.inputs() {
-            inputs.push(
-                protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-                    input.to_owned(),
-                    codec,
-                    proto_converter,
-                )?,
-            );
-        }
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Union(protobuf::UnionExecNode {
-                inputs,
-            })),
-        })
+        let encoder = ConverterPlanEncoder {
+            codec,
+            proto_converter,
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        union
+            .try_to_proto(&encode_ctx)?
+            .ok_or_else(|| internal_datafusion_err!("UnionExec is not serializable"))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `InterleaveExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_interleave_exec(
         interleave: &InterleaveExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let mut inputs: Vec<protobuf::PhysicalPlanNode> = vec![];
-        for input in interleave.inputs() {
-            inputs.push(
-                protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-                    input.to_owned(),
-                    codec,
-                    proto_converter,
-                )?,
-            );
-        }
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Interleave(
-                protobuf::InterleaveExecNode { inputs },
-            )),
-        })
+        let encoder = ConverterPlanEncoder {
+            codec,
+            proto_converter,
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        interleave
+            .try_to_proto(&encode_ctx)?
+            .ok_or_else(|| internal_datafusion_err!("InterleaveExec is not serializable"))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `SortPreservingMergeExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_sort_preserving_merge_exec(
         exec: &SortPreservingMergeExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.input().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-        let expr = exec
-            .expr()
-            .iter()
-            .map(|expr| {
-                let sort_expr = Box::new(protobuf::PhysicalSortExprNode {
-                    expr: Some(Box::new(
-                        proto_converter.physical_expr_to_proto(&expr.expr, codec)?,
-                    )),
-                    asc: !expr.options.descending,
-                    nulls_first: expr.options.nulls_first,
-                });
-                Ok(protobuf::PhysicalExprNode {
-                    expr_id: None,
-                    expr_type: Some(ExprType::Sort(sort_expr)),
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::SortPreservingMerge(Box::new(
-                protobuf::SortPreservingMergeExecNode {
-                    input: Some(Box::new(input)),
-                    expr,
-                    fetch: exec.fetch().map(|f| f as i64).unwrap_or(-1),
-                },
-            ))),
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("SortPreservingMergeExec is not serializable")
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `NestedLoopJoinExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_nested_loop_join_exec(
         exec: &NestedLoopJoinExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let left = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.left().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-        let right = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.right().to_owned(),
-            codec,
-            proto_converter,
-        )?;
-
-        let join_type = protobuf::JoinType::from_proto(exec.join_type().to_owned());
-        let filter = exec
-            .filter()
-            .as_ref()
-            .map(|f| {
-                let expression =
-                    proto_converter.physical_expr_to_proto(f.expression(), codec)?;
-                let column_indices = f
-                    .column_indices()
-                    .iter()
-                    .map(|i| {
-                        let side: protobuf::JoinSide = i.side.to_owned().into();
-                        protobuf::ColumnIndex {
-                            index: i.index as u32,
-                            side: side.into(),
-                        }
-                    })
-                    .collect();
-                let schema = f.schema().as_ref().try_into()?;
-                Ok(protobuf::JoinFilter {
-                    expression: Some(expression),
-                    column_indices,
-                    schema: Some(schema),
-                })
-            })
-            .map_or(Ok(None), |v: Result<protobuf::JoinFilter>| v.map(Some))?;
-
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::NestedLoopJoin(Box::new(
-                protobuf::NestedLoopJoinExecNode {
-                    left: Some(Box::new(left)),
-                    right: Some(Box::new(right)),
-                    join_type: join_type.into(),
-                    filter,
-                    // `[u32::MAX]` sentinel distinguishes `Some(vec![])` from `None`;
-                    // see `try_from_hash_join_exec`.
-                    projection: match exec.projection().as_ref() {
-                        None => Vec::new(),
-                        Some(v) if v.is_empty() => vec![u32::MAX],
-                        Some(v) => v.iter().map(|x| *x as u32).collect(),
-                    },
-                },
-            ))),
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("NestedLoopJoinExec is not serializable")
         })
     }
 
@@ -3892,39 +3370,22 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(None)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `UnnestExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_unnest_exec(
         exec: &UnnestExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.input().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Unnest(Box::new(
-                protobuf::UnnestExecNode {
-                    input: Some(Box::new(input)),
-                    schema: Some(exec.schema().try_into()?),
-                    list_type_columns: exec
-                        .list_column_indices()
-                        .iter()
-                        .map(|c| ProtoListUnnest {
-                            index_in_input_schema: c.index_in_input_schema as _,
-                            depth: c.depth as _,
-                        })
-                        .collect(),
-                    struct_type_columns: exec
-                        .struct_column_indices()
-                        .iter()
-                        .map(|c| *c as _)
-                        .collect(),
-                    options: Some(protobuf::UnnestOptions::from_proto(exec.options())),
-                },
-            ))),
-        })
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?
+            .ok_or_else(|| internal_datafusion_err!("UnnestExec is not serializable"))
     }
 
     #[deprecated(

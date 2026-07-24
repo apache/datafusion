@@ -23,7 +23,7 @@ use std::task::{Context, Poll};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
@@ -31,6 +31,7 @@ use futures::stream::{Stream, StreamExt};
 use super::AggregateExec;
 use super::aggregate_hash_table::{OrderedAggregateTable, PartialMarker};
 use crate::aggregates::AggregateMode;
+use crate::aggregates::order::GroupOrdering;
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput, SpillMetrics};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metrics};
@@ -69,6 +70,41 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metric
 /// `k = 100`, it is safe to emit all groups with keys less than 100 because the
 /// input is ordered.
 ///
+/// # Memory Pressure and Spilling
+///
+/// ## Fully ordered case
+///
+/// If the input is ordered by every group key, for example:
+///
+/// - Input order: `a, b`
+/// - `GROUP BY`: `a, b`
+///
+/// Completed groups can be emitted as soon as the next group is observed. Thus,
+/// only the current group remains active after completed groups are emitted, and
+/// memory usage does not grow with the total number of groups.
+///
+/// If a memory reservation nevertheless fails, the stream returns the error
+/// directly, indicating an unexpected behavior.
+///
+/// ## Partially ordered case
+///
+/// If the input is ordered by only a subset of the group keys, for example:
+///
+/// - Input order: `a`
+/// - `GROUP BY`: `a, b`
+///
+/// If one `a` value contains many distinct `b` values, the table may accumulate
+/// enough groups to exceed the memory limit.
+///
+/// - `OrderedPartialAggregateStream`: On reservation failure, it emits all current
+///   intermediate states downstream and resets the table. The final stage can
+///   merge repeated `(a, b)` state rows, so no disk spill is required.
+/// - `OrderedFinalAggregateStream`: It cannot emit incomplete final results. On
+///   reservation failure, it sorts the current intermediate states by the complete
+///   group key and spills them as one run. After the input ends, it spills any
+///   remaining states, performs a sort-preserving merge of all runs, and feeds the
+///   merged input into a fully ordered final aggregate stream.
+///
 /// ## Implementation Note
 ///
 /// This is intentionally kept simple and closely maps to
@@ -76,7 +112,6 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metric
 ///
 /// See issue for details: <https://github.com/apache/datafusion/issues/22710>
 ///
-/// More applicable optimizations are left to future work.
 pub(crate) struct OrderedPartialAggregateStream {
     schema: SchemaRef,
     input: SendableRecordBatchStream,
@@ -131,6 +166,10 @@ impl OrderedPartialAggregateStream {
         )?;
         let reservation =
             MemoryConsumer::new(format!("OrderedPartialAggregateStream[{partition}]"))
+                .with_can_spill(matches!(
+                    table.group_ordering(),
+                    GroupOrdering::Partial(_)
+                ))
                 .register(context.memory_pool());
 
         Ok(Self {
@@ -185,6 +224,28 @@ impl OrderedPartialAggregateStream {
                     ));
                 }
 
+                // Check memory reservation. See function comments for details.
+                match self.resize_or_take_state_batch(&mut table) {
+                    Ok(Some(batch)) => {
+                        self.reduction_factor.add_part(batch.num_rows());
+                        return ControlFlow::Break((
+                            Poll::Ready(Some(Ok(
+                                batch.record_output(&self.baseline_metrics)
+                            ))),
+                            OrderedPartialAggregateState::ReadingInput { table },
+                        ));
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        self.close_input();
+                        self.reservation.free();
+                        return ControlFlow::Break((
+                            Poll::Ready(Some(Err(e))),
+                            OrderedPartialAggregateState::Done,
+                        ));
+                    }
+                }
+
                 let timer = elapsed_compute.timer();
                 let result = table.next_output_batch();
                 timer.done();
@@ -195,9 +256,16 @@ impl OrderedPartialAggregateStream {
                     // current state)
                     Ok(Some(batch)) => {
                         self.reduction_factor.add_part(batch.num_rows());
+                        if let Err(e) = self.reservation.try_resize(table.memory_size()) {
+                            self.close_input();
+                            self.reservation.free();
+                            return ControlFlow::Break((
+                                Poll::Ready(Some(Err(e))),
+                                OrderedPartialAggregateState::Done,
+                            ));
+                        }
                         let next_state =
                             OrderedPartialAggregateState::ReadingInput { table };
-                        self.resize_reservation_for_state(&next_state);
 
                         ControlFlow::Break((
                             Poll::Ready(Some(Ok(
@@ -206,21 +274,10 @@ impl OrderedPartialAggregateStream {
                             next_state,
                         ))
                     }
-                    Ok(None) => {
-                        // Ordered variant don't support memory-limited execution,
-                        // it have to error when OOM
-                        if let Err(e) = self.reservation.try_resize(table.memory_size()) {
-                            return ControlFlow::Break((
-                                Poll::Ready(Some(Err(e))),
-                                OrderedPartialAggregateState::ReadingInput { table },
-                            ));
-                        }
-
-                        // Can't do early emit, continue aggregating.
-                        ControlFlow::Continue(
-                            OrderedPartialAggregateState::ReadingInput { table },
-                        )
-                    }
+                    // Can't do early emit, continue aggregating.
+                    Ok(None) => ControlFlow::Continue(
+                        OrderedPartialAggregateState::ReadingInput { table },
+                    ),
                     Err(e) => ControlFlow::Break((
                         Poll::Ready(Some(Err(e))),
                         OrderedPartialAggregateState::ReadingInput { table },
@@ -240,6 +297,42 @@ impl OrderedPartialAggregateStream {
                 })
             }
         }
+    }
+
+    /// Update the memory reservation, and:
+    /// - If memory reservation succeed, returns `Ok(None)`
+    /// - If memory reservation failed,
+    ///     - If input is partially ordered, materialize all the output, and
+    ///       directly send them to the final aggregation stage.
+    ///       Returns `Ok(Some(batch))`
+    ///     - If input is fully ordered, directly return error. It's not
+    ///       expected to use more than constant memory.
+    ///       Returns `Err(..)`
+    ///
+    /// # Implementation Note
+    /// Incrementally output it after the blocked state management is ready, keep
+    /// it simple for now.
+    ///
+    /// Issue: <https://github.com/apache/datafusion/issues/7065>
+    fn resize_or_take_state_batch(
+        &mut self,
+        table: &mut OrderedAggregateTable<PartialMarker>,
+    ) -> Result<Option<RecordBatch>> {
+        let oom = match self.reservation.try_resize(table.memory_size()) {
+            Ok(()) => return Ok(None),
+            Err(e @ DataFusionError::ResourcesExhausted(_)) => e,
+            Err(e) => return Err(e),
+        };
+
+        if matches!(table.group_ordering(), GroupOrdering::Full(_)) {
+            return Err(oom);
+        }
+
+        let Some(batch) = table.take_state_batch()? else {
+            return Err(oom);
+        };
+        self.reservation.try_resize(table.memory_size())?;
+        Ok(Some(batch))
     }
 
     /// Emits one batch after input is exhausted.
@@ -272,7 +365,9 @@ impl OrderedPartialAggregateStream {
                 } else {
                     OrderedPartialAggregateState::DrainingFinal { table }
                 };
-                self.resize_reservation_for_state(&next_state);
+                if let Err(e) = self.resize_reservation_for_state(&next_state) {
+                    return ControlFlow::Break((Poll::Ready(Some(Err(e))), next_state));
+                }
 
                 ControlFlow::Break((
                     Poll::Ready(Some(Ok(batch.record_output(&self.baseline_metrics)))),
@@ -285,13 +380,18 @@ impl OrderedPartialAggregateStream {
             )),
             Ok(None) => {
                 let next_state = OrderedPartialAggregateState::Done;
-                self.resize_reservation_for_state(&next_state);
+                if let Err(e) = self.resize_reservation_for_state(&next_state) {
+                    return ControlFlow::Break((Poll::Ready(Some(Err(e))), next_state));
+                }
                 ControlFlow::Continue(next_state)
             }
         }
     }
 
-    fn resize_reservation_for_state(&mut self, state: &OrderedPartialAggregateState) {
+    fn resize_reservation_for_state(
+        &mut self,
+        state: &OrderedPartialAggregateState,
+    ) -> Result<()> {
         let new_size = match state {
             OrderedPartialAggregateState::ReadingInput { table }
             | OrderedPartialAggregateState::DrainingFinal { table } => {
@@ -299,7 +399,7 @@ impl OrderedPartialAggregateStream {
             }
             OrderedPartialAggregateState::Done => 0,
         };
-        let _ = self.reservation.try_resize(new_size);
+        self.reservation.try_resize(new_size)
     }
 }
 
