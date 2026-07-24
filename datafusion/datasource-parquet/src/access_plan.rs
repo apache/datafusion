@@ -571,10 +571,79 @@ impl ParquetAccessPlan {
         row_group_meta_data: &[RowGroupMetaData],
     ) -> Result<PreparedAccessPlan> {
         let row_group_indexes = self.row_group_indexes();
+        // Carry `fully_matched` flags in the same order as
+        // `row_group_indexes` so downstream code (per-RG `RowFilter` skip)
+        // can look them up positionally.
+        let fully_matched: Vec<bool> = row_group_indexes
+            .iter()
+            .map(|&idx| self.fully_matched[idx])
+            .collect();
         let row_selection = self.into_overall_row_selection(row_group_meta_data)?;
 
-        PreparedAccessPlan::new(row_group_indexes, row_selection)
+        let (row_group_indexes, fully_matched, row_selection) = strip_empty_row_groups(
+            row_group_indexes,
+            fully_matched,
+            row_selection,
+            row_group_meta_data,
+        );
+
+        PreparedAccessPlan::new(row_group_indexes, fully_matched, row_selection)
     }
+}
+
+/// Strip row groups whose post-pruning `RowSelection` selects zero rows.
+///
+/// arrow-rs's push decoder silently advances past such row groups inside
+/// `try_next_reader`, but the rest of DataFusion (per-RG metadata maps,
+/// the runtime dynamic-pruner, the per-RG `RowFilter` toggle) assumes a
+/// 1:1 correspondence between the prepared plan and the readers the
+/// decoder hands back. Removing these empty entries here keeps that
+/// invariant and lets downstream code consult per-RG state — like
+/// [`PreparedAccessPlan::fully_matched`] — without going out of sync.
+///
+/// The flat `RowSelection` is split per row group with
+/// [`RowSelection::split_off`] (mirroring arrow-rs's own logic) and the
+/// surviving segments are concatenated back into the result selection.
+/// When `row_selection` is `None` (no page-index pruning, no
+/// user-supplied selection) no row group can be empty and the inputs are
+/// returned unchanged.
+fn strip_empty_row_groups(
+    row_group_indexes: Vec<usize>,
+    fully_matched: Vec<bool>,
+    row_selection: Option<RowSelection>,
+    row_group_meta_data: &[RowGroupMetaData],
+) -> (Vec<usize>, Vec<bool>, Option<RowSelection>) {
+    let Some(mut remaining) = row_selection else {
+        return (row_group_indexes, fully_matched, None);
+    };
+
+    let mut kept_indexes = Vec::with_capacity(row_group_indexes.len());
+    let mut kept_fully_matched = Vec::with_capacity(fully_matched.len());
+    let mut kept_selectors: Vec<RowSelector> = Vec::new();
+
+    for (i, &rg_idx) in row_group_indexes.iter().enumerate() {
+        let rg_row_count = row_group_meta_data[rg_idx].num_rows() as usize;
+        // `split_off` cuts off the first `rg_row_count` rows worth of
+        // selection — those are this RG's segment. The returned value is
+        // the segment, `remaining` keeps the rest.
+        let rg_segment = remaining.split_off(rg_row_count);
+        if rg_segment.row_count() > 0 {
+            kept_indexes.push(rg_idx);
+            kept_fully_matched.push(fully_matched[i]);
+            kept_selectors.extend(rg_segment.iter().copied());
+        }
+        // Empty segment ⇒ arrow-rs would have silently skipped this RG
+        // anyway; drop it from our plan so per-RG bookkeeping stays in
+        // sync with the decoder.
+    }
+
+    let result_selection = if kept_selectors.is_empty() {
+        None
+    } else {
+        Some(RowSelection::from(kept_selectors))
+    };
+
+    (kept_indexes, kept_fully_matched, result_selection)
 }
 
 /// Represents a prepared, fully resolved [`ParquetAccessPlan`]
@@ -587,6 +656,11 @@ impl ParquetAccessPlan {
 pub(crate) struct PreparedAccessPlan {
     /// Row group indexes to read
     pub(crate) row_group_indexes: Vec<usize>,
+    /// Per-RG `fully_matched` flag, positionally aligned with
+    /// [`Self::row_group_indexes`]. A `true` entry means stats already
+    /// proved every row of this RG passes the predicate, so the per-row
+    /// `RowFilter` can be skipped for it.
+    pub(crate) fully_matched: Vec<bool>,
     /// Optional row selection for filtering within row groups
     pub(crate) row_selection: Option<RowSelection>,
 }
@@ -595,10 +669,13 @@ impl PreparedAccessPlan {
     /// Create a new prepared access plan
     fn new(
         row_group_indexes: Vec<usize>,
+        fully_matched: Vec<bool>,
         row_selection: Option<RowSelection>,
     ) -> Result<Self> {
+        debug_assert_eq!(row_group_indexes.len(), fully_matched.len());
         Ok(Self {
             row_group_indexes,
+            fully_matched,
             row_selection,
         })
     }
@@ -713,13 +790,18 @@ impl PreparedAccessPlan {
                 }
             };
 
-        // Apply the reordering
+        // Apply the reordering — `fully_matched` must be permuted alongside
+        // `row_group_indexes` so the two stay positionally aligned for the
+        // per-RG `RowFilter` skip path.
         let original_indexes = self.row_group_indexes.clone();
-        self.row_group_indexes = sorted_indices
+        let original_fully_matched = self.fully_matched.clone();
+        let order: Vec<usize> = sorted_indices
             .values()
             .iter()
-            .map(|&i| original_indexes[i as usize])
+            .map(|&i| i as usize)
             .collect();
+        self.row_group_indexes = order.iter().map(|&i| original_indexes[i]).collect();
+        self.fully_matched = order.iter().map(|&i| original_fully_matched[i]).collect();
 
         Ok(self)
     }
@@ -729,8 +811,9 @@ impl PreparedAccessPlan {
         // Get the row group indexes before reversing
         let row_groups_to_scan = self.row_group_indexes.clone();
 
-        // Reverse the row group indexes
+        // Reverse the row group indexes (and the parallel `fully_matched`)
         self.row_group_indexes = self.row_group_indexes.into_iter().rev().collect();
+        self.fully_matched = self.fully_matched.into_iter().rev().collect();
 
         // If we have a row selection, reverse it to match the new row group order
         if let Some(row_selection) = self.row_selection {
@@ -1121,7 +1204,7 @@ mod test {
     #[test]
     fn reorder_by_statistics_sorts_row_groups_asc_by_min() {
         let metadata = parquet_metadata_with_int_mins(&[50, 10, 100]);
-        let plan = PreparedAccessPlan::new(vec![0, 1, 2], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], vec![false; 3], None).unwrap();
 
         let result = plan
             .reorder_by_statistics(
@@ -1140,7 +1223,8 @@ mod test {
     fn reorder_by_statistics_skips_when_row_selection_present() {
         let metadata = parquet_metadata_with_int_mins(&[50, 10]);
         let selection = RowSelection::from(vec![RowSelector::select(100)]);
-        let plan = PreparedAccessPlan::new(vec![0, 1], Some(selection)).unwrap();
+        let plan =
+            PreparedAccessPlan::new(vec![0, 1], vec![false; 2], Some(selection)).unwrap();
 
         let result = plan
             .reorder_by_statistics(
@@ -1157,7 +1241,7 @@ mod test {
     #[test]
     fn reorder_by_statistics_skips_when_at_most_one_row_group() {
         let metadata = parquet_metadata_with_int_mins(&[50]);
-        let plan = PreparedAccessPlan::new(vec![0], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0], vec![false; 1], None).unwrap();
 
         let result = plan
             .reorder_by_statistics(
@@ -1176,7 +1260,7 @@ mod test {
     #[test]
     fn reorder_by_statistics_skips_for_non_column_sort_expr() {
         let metadata = parquet_metadata_with_int_mins(&[50, 10]);
-        let plan = PreparedAccessPlan::new(vec![0, 1], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1], vec![false; 2], None).unwrap();
         let arrow_schema = arrow_schema_a_int();
         let order = LexOrdering::new(vec![PhysicalSortExpr {
             expr: Arc::new(BinaryExpr::new(
@@ -1205,7 +1289,7 @@ mod test {
     #[test]
     fn reorder_by_statistics_skips_when_column_not_in_arrow_schema() {
         let metadata = parquet_metadata_with_int_mins(&[50, 10]);
-        let plan = PreparedAccessPlan::new(vec![0, 1], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1], vec![false; 2], None).unwrap();
         // Arrow schema only has "a"; the sort references "b".
         let arrow_schema = arrow_schema_a_int();
         let order = LexOrdering::new(vec![PhysicalSortExpr {
