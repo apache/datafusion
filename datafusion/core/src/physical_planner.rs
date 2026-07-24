@@ -1678,11 +1678,13 @@ impl DefaultPhysicalPlanner {
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
                     } else if num_range_filters == 1
                         && total_filters == 1
+                        // PWMJ supports classic joins and Left Semi/Anti existence joins.
+                        // Right Semi/Anti and Mark joins are not implemented yet (they
+                        // would require swapping the inputs so the marked side is buffered),
+                        // so exclude them here and let them fall back to NestedLoopJoin.
                         && !matches!(
                             join_type,
-                            JoinType::LeftSemi
-                                | JoinType::RightSemi
-                                | JoinType::LeftAnti
+                            JoinType::RightSemi
                                 | JoinType::RightAnti
                                 | JoinType::LeftMark
                                 | JoinType::RightMark
