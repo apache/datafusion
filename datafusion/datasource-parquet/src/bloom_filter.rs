@@ -98,7 +98,12 @@ impl BloomFilterStatistics {
             | ScalarValue::BinaryView(Some(v))
             | ScalarValue::LargeBinary(Some(v)) => sbbf.check(v),
             ScalarValue::FixedSizeBinary(_size, Some(v)) => sbbf.check(v),
-            ScalarValue::Boolean(Some(v)) => sbbf.check(v),
+            // Parquet Java doesn't update boolean values in a Bloom filter,
+            // which results in a empty filter, for which `sbbf.check()` always returns `false`.
+            // See https://github.com/apache/parquet-java/blob/52c0a5e8c5ff7680cc299ce5aad60acef3a9054d/parquet-column/src/main/java/org/apache/parquet/column/impl/ColumnValueCollector.java#L75
+            // In order to correctly read such files with SBBF, we have to skip the check and return `true`
+            // because values may be present in the data file even if they are not in the filter.
+            ScalarValue::Boolean(Some(_)) => true,
             ScalarValue::Float64(Some(v)) => sbbf.check(v),
             ScalarValue::Float32(Some(v)) => sbbf.check(v),
             ScalarValue::Int64(Some(v)) => sbbf.check(v),
