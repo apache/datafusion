@@ -91,7 +91,7 @@ pub fn encode_bytes_into(bytes: &[u8], case: HexCase, out: &mut Vec<u8>) {
 /// into it rather than appending to a `Vec`.
 ///
 /// Returns an internal error if `out` is not exactly `2 * bytes.len()` bytes
-/// long, rather than silently encoding only part of the input.
+/// long, without filling any of the `out` buffer.
 ///
 /// # Example
 ///
