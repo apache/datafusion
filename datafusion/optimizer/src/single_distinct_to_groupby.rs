@@ -29,7 +29,7 @@ use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{
     Expr, col,
-    expr::AggregateFunction,
+    expr::{AggregateFunction, Alias},
     logical_plan::{Aggregate, LogicalPlan},
 };
 
@@ -62,10 +62,21 @@ impl SingleDistinctToGroupBy {
 }
 
 /// Check whether all aggregate exprs are distinct on a single field.
+///
+/// Aggregate exprs may arrive wrapped in an [`Expr::Alias`] (e.g. the
+/// DataFrame API's `count(col("b")).distinct().alias("n")` produces
+/// `Alias(AggregateFunction)`, whereas the SQL planner hoists the alias into
+/// an outer `Projection` and leaves a bare `AggregateFunction` here). Unwrap
+/// one alias layer, mirroring the `unalias()` idiom used elsewhere in the
+/// optimizer (see `decorrelate.rs`), so both shapes are recognized alike.
 fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
     let mut fields_set = HashSet::new();
     let mut aggregate_count = 0;
     for expr in aggr_expr {
+        let expr = match expr {
+            Expr::Alias(Alias { expr, .. }) => expr.as_ref(),
+            _ => expr,
+        };
         if let Expr::AggregateFunction(AggregateFunction {
             func,
             params:
@@ -179,8 +190,39 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 let mut inner_aggr_exprs = vec![];
                 let outer_aggr_exprs = aggr_expr
                     .into_iter()
-                    .map(|aggr_expr| match aggr_expr {
-                        Expr::AggregateFunction(AggregateFunction {
+                    .map(|aggr_expr| {
+                        // Peel off a single Alias layer (DataFrame API shape,
+                        // see `is_single_distinct_agg` above) so the rewrite
+                        // below sees the same bare AggregateFunction it would
+                        // for the SQL-planner shape. The user-facing alias
+                        // doesn't need to be re-applied here: the final
+                        // `alias_expr` projection built below already
+                        // restores each output's original name (alias or
+                        // not) from `schema.qualified_field(idx)`, the same
+                        // mechanism that preserves auto-generated display
+                        // names like `count(DISTINCT test.b)` for the
+                        // unaliased case.
+                        let agg_fn = match aggr_expr {
+                            Expr::AggregateFunction(agg_fn) => agg_fn,
+                            Expr::Alias(Alias {
+                                expr,
+                                relation,
+                                name,
+                                metadata,
+                            }) => match *expr {
+                                Expr::AggregateFunction(agg_fn) => agg_fn,
+                                other => {
+                                    return Ok(Expr::Alias(Alias {
+                                        expr: Box::new(other),
+                                        relation,
+                                        name,
+                                        metadata,
+                                    }));
+                                }
+                            },
+                            other => return Ok(other),
+                        };
+                        let AggregateFunction {
                             func,
                             params:
                                 AggregateFunctionParams {
@@ -190,54 +232,50 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     order_by,
                                     null_treatment,
                                 },
-                        }) => {
-                            if distinct {
-                                assert_eq_or_internal_err!(
-                                    args.len(),
-                                    1,
-                                    "DISTINCT aggregate should have exactly one argument"
-                                );
-                                let arg = args.swap_remove(0);
+                        } = agg_fn;
+                        if distinct {
+                            assert_eq_or_internal_err!(
+                                args.len(),
+                                1,
+                                "DISTINCT aggregate should have exactly one argument"
+                            );
+                            let arg = args.swap_remove(0);
 
-                                if group_fields_set.insert(arg.schema_name().to_string())
-                                {
-                                    inner_group_exprs
-                                        .push(arg.alias(SINGLE_DISTINCT_ALIAS));
-                                }
-                                Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
-                                    func,
-                                    vec![col(SINGLE_DISTINCT_ALIAS)],
-                                    false, // intentional to remove distinct here
+                            if group_fields_set.insert(arg.schema_name().to_string()) {
+                                inner_group_exprs.push(arg.alias(SINGLE_DISTINCT_ALIAS));
+                            }
+                            Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
+                                func,
+                                vec![col(SINGLE_DISTINCT_ALIAS)],
+                                false, // intentional to remove distinct here
+                                filter,
+                                order_by,
+                                null_treatment,
+                            )))
+                            // if the aggregate function is not distinct, we need to rewrite it like two phase aggregation
+                        } else {
+                            index += 1;
+                            let alias_str = format!("alias{index}");
+                            inner_aggr_exprs.push(
+                                Expr::AggregateFunction(AggregateFunction::new_udf(
+                                    Arc::clone(&func),
+                                    args,
+                                    false,
                                     filter,
                                     order_by,
                                     null_treatment,
-                                )))
-                                // if the aggregate function is not distinct, we need to rewrite it like two phase aggregation
-                            } else {
-                                index += 1;
-                                let alias_str = format!("alias{index}");
-                                inner_aggr_exprs.push(
-                                    Expr::AggregateFunction(AggregateFunction::new_udf(
-                                        Arc::clone(&func),
-                                        args,
-                                        false,
-                                        filter,
-                                        order_by,
-                                        null_treatment,
-                                    ))
-                                    .alias(&alias_str),
-                                );
-                                Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
-                                    func,
-                                    vec![col(&alias_str)],
-                                    false,
-                                    None,
-                                    vec![],
-                                    None,
-                                )))
-                            }
+                                ))
+                                .alias(&alias_str),
+                            );
+                            Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
+                                func,
+                                vec![col(&alias_str)],
+                                false,
+                                None,
+                                vec![],
+                                None,
+                            )))
                         }
-                        _ => Ok(aggr_expr),
                     })
                     .collect::<Result<Vec<_>>>()?;
 
@@ -362,6 +400,38 @@ mod tests {
         )
     }
 
+    // https://github.com/apache/datafusion/issues/23401
+    // DataFrame API shape: `count(col("b")).distinct().alias("n")` places the
+    // alias directly on the aggregate (`Expr::Alias(AggregateFunction)`),
+    // unlike the SQL planner which hoists it into an outer Projection and
+    // leaves a bare `Expr::AggregateFunction` in `aggr_expr`. This must still
+    // be rewritten, and the user-chosen alias must survive in the output.
+    #[test]
+    fn single_distinct_aliased() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let expr = count_udaf()
+            .call(vec![col("b")])
+            .distinct()
+            .build()?
+            .alias("n");
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(Vec::<Expr>::new(), vec![expr])?
+            .build()?;
+
+        // Should work, and the output column stays named `n` (not the
+        // auto-generated `count(DISTINCT test.b)` display name).
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: count(alias1) AS n [n:Int64]
+          Aggregate: groupBy=[[]], aggr=[[count(alias1)]] [count(alias1):Int64]
+            Aggregate: groupBy=[[test.b AS alias1]], aggr=[[]] [alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
     // Currently this optimization is disabled for CUBE/ROLLUP/GROUPING SET
     #[test]
     fn single_distinct_and_grouping_set() -> Result<()> {
@@ -469,6 +539,47 @@ mod tests {
     }
 
     #[test]
+    fn single_distinct_aliased_and_groupby() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![count_distinct(col("b")).alias("n")])?
+            .build()?;
+
+        // Should work: alias preserved alongside a real group-by column.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, count(alias1) AS n [a:UInt32, n:Int64]
+          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1)]] [a:UInt32, count(alias1):Int64]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    // Negative case: an aliased NON-distinct aggregate alone must not be
+    // rewritten (no distinct field to collapse on) — same as the unaliased
+    // shape covered by `not_exist_distinct`.
+    #[test]
+    fn non_distinct_aliased() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![sum(col("c")).alias("s")])?
+            .build()?;
+
+        // Do nothing
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[sum(test.c) AS s]] [a:UInt32, s:UInt64;N]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
     fn two_distinct_and_groupby() -> Result<()> {
         let table_scan = test_table_scan()?;
 
@@ -484,6 +595,32 @@ mod tests {
             plan,
             @r"
         Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b), count(DISTINCT test.c)]] [a:UInt32, count(DISTINCT test.b):Int64, count(DISTINCT test.c):Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    // Negative case: two aliased distinct aggregates on different fields must
+    // not be rewritten (mirrors `two_distinct_and_groupby` but with aliases).
+    #[test]
+    fn two_distinct_aliased_and_groupby() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![
+                    count_distinct(col("b")).alias("cb"),
+                    count_distinct(col("c")).alias("cc"),
+                ],
+            )?
+            .build()?;
+
+        // Do nothing
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b) AS cb, count(DISTINCT test.c) AS cc]] [a:UInt32, cb:Int64, cc:Int64]
           TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
