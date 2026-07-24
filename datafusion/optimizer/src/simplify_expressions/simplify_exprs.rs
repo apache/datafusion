@@ -21,12 +21,12 @@ use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError, Result};
-use datafusion_expr::Expr;
 use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
     columnize_expr, find_aggregate_exprs, grouping_set_to_exprlist, merge_schema,
 };
+use datafusion_expr::{DmlStatement, Expr, WriteOp};
 
 use super::ExprSimplifier;
 use crate::optimizer::ApplyOrder;
@@ -77,7 +77,20 @@ impl SimplifyExpressions {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        let schema = if !plan.inputs().is_empty() {
+        let schema = if let LogicalPlan::Dml(DmlStatement {
+            op: WriteOp::MergeInto(_),
+            table_name,
+            target,
+            ..
+        }) = &plan
+        {
+            let mut schema = merge_schema(&plan.inputs());
+            schema.merge(&DFSchema::try_from_qualified_schema(
+                table_name.clone(),
+                &target.schema(),
+            )?);
+            DFSchemaRef::new(schema)
+        } else if !plan.inputs().is_empty() {
             DFSchemaRef::new(merge_schema(&plan.inputs()))
         } else if let LogicalPlan::TableScan(scan) = &plan {
             // When predicates are pushed into a table scan, there is no input

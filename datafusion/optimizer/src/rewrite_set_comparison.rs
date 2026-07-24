@@ -25,7 +25,7 @@ use datafusion_common::{Column, DFSchema, ExprSchema, Result, ScalarValue, plan_
 use datafusion_expr::expr::{self, Exists, SetComparison, SetQuantifier};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
-use datafusion_expr::{Expr, LogicalPlan, lit};
+use datafusion_expr::{DmlStatement, Expr, LogicalPlan, WriteOp, lit};
 use std::sync::Arc;
 
 use datafusion_expr::utils::merge_schema;
@@ -44,7 +44,19 @@ impl RewriteSetComparison {
     }
 
     fn rewrite_plan(&self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
-        let schema = merge_schema(&plan.inputs());
+        let mut schema = merge_schema(&plan.inputs());
+        if let LogicalPlan::Dml(DmlStatement {
+            op: WriteOp::MergeInto(_),
+            table_name,
+            target,
+            ..
+        }) = &plan
+        {
+            schema.merge(&DFSchema::try_from_qualified_schema(
+                table_name.clone(),
+                &target.schema(),
+            )?);
+        }
         plan.map_expressions(|expr| {
             expr.transform_up(|expr| rewrite_set_comparison(expr, &schema))
         })

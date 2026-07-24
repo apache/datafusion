@@ -208,6 +208,102 @@ async fn ddl_can_not_be_planned_by_session_state() {
     );
 }
 
+async fn merge_into_context() -> SessionContext {
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE target (id INT)").await.unwrap();
+    ctx.sql("CREATE TABLE source (id INT)").await.unwrap();
+    ctx
+}
+
+async fn assert_merge_sql_error(ctx: &SessionContext, sql: &str, expected: &str) {
+    let err = ctx.sql(sql).await.unwrap_err();
+    assert_contains!(err.strip_backtrace(), expected);
+}
+
+async fn assert_merge_physical_error(ctx: &SessionContext, sql: &str, expected: &str) {
+    let err = ctx
+        .sql(sql)
+        .await
+        .unwrap()
+        .create_physical_plan()
+        .await
+        .unwrap_err();
+    assert_contains!(err.strip_backtrace(), expected);
+}
+
+#[tokio::test]
+async fn merge_into_rejects_source_alias_colliding_with_target_name() {
+    // Canonicalizing `t.id` to `target.id` must not collapse it onto a source
+    // that also uses `target` as its qualifier.
+    let ctx = merge_into_context().await;
+
+    for target_ref in ["target", "public.target", "datafusion.public.target"] {
+        assert_merge_sql_error(
+            &ctx,
+            &format!(
+                "MERGE INTO {target_ref} AS t USING source AS target \
+                 ON t.id = target.id WHEN MATCHED THEN DELETE"
+            ),
+            &format!(
+                "MERGE source may not use the target table name '{target_ref}' \
+                 as a qualifier"
+            ),
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn merge_into_rejects_subqueries_correlated_to_target_alias() {
+    let ctx = merge_into_context().await;
+    assert_merge_sql_error(
+        &ctx,
+        "MERGE INTO target AS t USING source AS s \
+         ON EXISTS (SELECT 1 FROM source AS x WHERE x.id = t.id) \
+         WHEN MATCHED THEN DELETE",
+        "MERGE subqueries correlated to target alias 't' are not supported",
+    )
+    .await;
+
+    // Source-correlated and uncorrelated subqueries remain supported through
+    // logical optimization.
+    for sql in [
+        "MERGE INTO target AS t USING source AS s \
+         ON EXISTS (SELECT 1 FROM source AS x WHERE x.id = s.id) \
+         WHEN MATCHED THEN DELETE",
+        "MERGE INTO target AS t USING source AS s \
+         ON t.id = ANY (SELECT id FROM source) \
+         WHEN MATCHED THEN DELETE",
+    ] {
+        assert_merge_physical_error(&ctx, sql, "MERGE INTO not supported for Base table")
+            .await;
+    }
+}
+
+#[tokio::test]
+async fn merge_into_requires_boolean_conditions() {
+    let ctx = merge_into_context().await;
+
+    for (sql, expected) in [
+        (
+            "MERGE INTO target USING source ON 1 WHEN MATCHED THEN DELETE",
+            "MERGE ON condition must be boolean type, but got Int64",
+        ),
+        (
+            "MERGE INTO target USING source ON true \
+             WHEN MATCHED AND 1 THEN DELETE",
+            "MERGE WHEN condition must be boolean type, but got Int64",
+        ),
+        (
+            "MERGE INTO target USING source ON NULL \
+             WHEN MATCHED AND NULL THEN DELETE",
+            "MERGE INTO not supported for Base table",
+        ),
+    ] {
+        assert_merge_physical_error(&ctx, sql, expected).await;
+    }
+}
+
 #[tokio::test]
 async fn invalid_wrapped_negation_fails_during_planning() {
     let ctx = SessionContext::new();
