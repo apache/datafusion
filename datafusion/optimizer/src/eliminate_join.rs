@@ -40,7 +40,9 @@
 //!   and in queries over views that join in lookup tables the query does not
 //!   read. A join filter does not prevent this rewrite: for a left join it
 //!   only decides whether a left row is matched or null-padded, and either
-//!   way the row is emitted.
+//!   way the row is emitted. Symmetrically, a right outer join `L ⟖ R` can be
+//!   replaced by `R` when L's columns are unused and L cannot multiply R's
+//!   rows.
 //!
 //! # Overview
 //!
@@ -63,7 +65,7 @@
 //!
 //! At each join, `rewritten_join_type` combines this context with the side's
 //! functional dependencies to choose `Inner`, `LeftSemi`, or `RightSemi`, or
-//! to eliminate the join entirely in favor of its left input. Most
+//! to eliminate the join entirely in favor of its preserved input. Most
 //! node types just forward the context to their single child via
 //! `rewrite_single_input`; nodes that alter column requirements or
 //! duplicate-sensitivity (projection, aggregate, sort, ...) adjust it first.
@@ -154,9 +156,9 @@ impl LiveColumns {
 }
 
 /// Rewrites an inner join to a semi join when one input only filters the
-/// other, removes a left outer join whose right side is unused and cannot
-/// multiply left rows, and replaces an always-false inner join with an empty
-/// relation.
+/// other, removes an outer join whose non-preserved side is unused and cannot
+/// multiply the preserved side's rows, and replaces an always-false inner join
+/// with an empty relation.
 #[derive(Default, Debug)]
 pub struct EliminateJoin;
 
@@ -421,6 +423,14 @@ fn rewrite_join(
             )?;
             return Ok(Transformed::yes(left.data));
         }
+        JoinRewrite::ReplaceWithRight => {
+            let right = rewrite_subtree(
+                Arc::unwrap_or_clone(join.right),
+                visible_right,
+                duplicate_insensitive,
+            )?;
+            return Ok(Transformed::yes(right.data));
+        }
         JoinRewrite::Join(join_type) => join_type,
     };
 
@@ -510,9 +520,11 @@ enum JoinRewrite {
     Join(JoinType),
     /// The join has no observable effect; replace it with its left input.
     ReplaceWithLeft,
+    /// The join has no observable effect; replace it with its right input.
+    ReplaceWithRight,
 }
 
-/// Chooses a cheaper form for a join: removes a left outer join whose right
+/// Chooses a cheaper form for a join: removes an outer join whose non-preserved
 /// side is redundant, or rewrites an inner join to a semi join when the
 /// removed side has no parent-visible columns and either the parent ignores
 /// duplicate output rows or the removed side is unique on the join keys.
@@ -522,9 +534,9 @@ fn rewritten_join_type(
     visible_right: &LiveColumns,
     duplicate_insensitive: bool,
 ) -> JoinRewrite {
-    // The right side is redundant when nothing above the join references its
-    // columns and it cannot multiply left rows (the ancestors are duplicate-
-    // insensitive, or the right side is unique on the join keys).
+    // A side is redundant when nothing above the join references its columns
+    // and it cannot multiply the other side's rows (the ancestors are
+    // duplicate-insensitive, or the side is unique on the join keys).
     let can_remove_right = visible_right.is_empty()
         && (duplicate_insensitive
             || side_unique_on_join(
@@ -540,6 +552,18 @@ fn rewritten_join_type(
     if join.join_type == JoinType::Left && can_remove_right {
         return JoinRewrite::ReplaceWithLeft;
     }
+    let can_remove_left = visible_left.is_empty()
+        && (duplicate_insensitive
+            || side_unique_on_join(
+                join.left.schema(),
+                join.on.iter().map(|(left, _)| left),
+                join.null_equality,
+            ));
+
+    // Symmetrical rule for RIGHT JOIN removal (same explanation as above for the left-join case)
+    if join.join_type == JoinType::Right && can_remove_left {
+        return JoinRewrite::ReplaceWithRight;
+    }
 
     if join.join_type != JoinType::Inner || join.on.is_empty() {
         return JoinRewrite::Join(join.join_type);
@@ -548,14 +572,6 @@ fn rewritten_join_type(
     if can_remove_right {
         return JoinRewrite::Join(JoinType::LeftSemi);
     }
-
-    let can_remove_left = visible_left.is_empty()
-        && (duplicate_insensitive
-            || side_unique_on_join(
-                join.left.schema(),
-                join.on.iter().map(|(left, _)| left),
-                join.null_equality,
-            ));
     if can_remove_left {
         return JoinRewrite::Join(JoinType::RightSemi);
     }

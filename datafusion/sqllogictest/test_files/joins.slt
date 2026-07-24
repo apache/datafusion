@@ -5610,12 +5610,14 @@ statement ok
 reset datafusion.execution.batch_size;
 
 ##########
-# Eliminate unused LEFT JOINs (`EliminateJoin` rule)
+# Eliminate unused outer joins (`EliminateJoin` rule)
 #
-# A LEFT JOIN whose right side is unreferenced above the join is removed
-# entirely when it cannot duplicate left rows: either the right side is
-# unique on the join keys (e.g. PRIMARY KEY / UNIQUE constraint or
-# GROUP BY), or the join's ancestors are duplicate-insensitive.
+# An outer join whose non-preserved side is unreferenced above the join is
+# removed entirely when it cannot duplicate the preserved side's rows: either
+# the non-preserved side is unique on the join keys (e.g. PRIMARY KEY /
+# UNIQUE constraint or GROUP BY), or the join's ancestors are
+# duplicate-insensitive. Most cases below exercise the LEFT JOIN direction;
+# RIGHT JOIN is symmetric and covered at the end of the section.
 ##########
 
 statement ok
@@ -5850,6 +5852,120 @@ SELECT order_id FROM elim_orders LEFT JOIN elim_users ON true;
 3
 3
 3
+
+# RIGHT JOIN is symmetric: the join is removed when its *left* side is
+# unreferenced above the join and cannot duplicate right rows.
+
+# The left side is unique on the join key (primary key) and unused above the
+# join: the RIGHT JOIN is removed from the plan.
+query TT
+EXPLAIN SELECT order_id, amount FROM elim_users RIGHT JOIN elim_orders ON id = user_id;
+----
+logical_plan TableScan: elim_orders projection=[order_id, amount]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
+
+# All orders are returned, including the one with no matching user.
+query II rowsort
+SELECT order_id, amount FROM elim_users RIGHT JOIN elim_orders ON id = user_id;
+----
+1 100
+2 200
+3 50
+
+# An extra join filter on left-side columns does not block the rewrite: for a
+# right join it only decides whether a right row is matched or null-padded,
+# and either way the row is emitted.
+query TT
+EXPLAIN SELECT order_id FROM elim_users RIGHT JOIN elim_orders ON id = user_id AND name <> 'bob';
+----
+logical_plan TableScan: elim_orders projection=[order_id]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT order_id FROM elim_users RIGHT JOIN elim_orders ON id = user_id AND name <> 'bob';
+----
+1
+2
+3
+
+# count(*) is duplicate-sensitive, but the unique join key guarantees each
+# order appears exactly once, so the join is still removed.
+query TT
+EXPLAIN SELECT count(*) FROM elim_users RIGHT JOIN elim_orders ON id = user_id;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----TableScan: elim_orders projection=[]
+physical_plan
+01)ProjectionExec: expr=[3 as count(*)]
+02)--PlaceholderRowExec
+
+query I
+SELECT count(*) FROM elim_users RIGHT JOIN elim_orders ON id = user_id;
+----
+3
+
+# The left side is not unique on the join key, but a DISTINCT ancestor makes
+# the extra matches unobservable, so the join is removed even without
+# uniqueness on the join key.
+query TT
+EXPLAIN SELECT DISTINCT name FROM elim_orders RIGHT JOIN elim_users ON elim_orders.user_id = elim_users.id;
+----
+logical_plan
+01)Aggregate: groupBy=[[elim_users.name]], aggr=[[]]
+02)--TableScan: elim_users projection=[name]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
+02)--RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query T rowsort
+SELECT DISTINCT name FROM elim_orders RIGHT JOIN elim_users ON elim_orders.user_id = elim_users.id;
+----
+alice
+bob
+dave
+
+# Negative case: the left side is referenced in the SELECT list, so the join
+# must stay.
+query TT
+EXPLAIN SELECT order_id, name FROM elim_users RIGHT JOIN elim_orders ON id = user_id;
+----
+logical_plan
+01)Projection: elim_orders.order_id, elim_users.name
+02)--Right Join: elim_users.id = elim_orders.user_id
+03)----TableScan: elim_users projection=[id, name]
+04)----TableScan: elim_orders projection=[order_id, user_id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Left, on=[(user_id@1, id@0)], projection=[order_id@0, name@3]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Negative case: the left side is not unique on the join key, so a right row
+# may match several left rows; the join must stay.
+query TT
+EXPLAIN SELECT elim_users.id FROM elim_orders RIGHT JOIN elim_users ON elim_orders.user_id = elim_users.id;
+----
+logical_plan
+01)Projection: elim_users.id
+02)--Right Join: elim_orders.user_id = elim_users.id
+03)----TableScan: elim_orders projection=[user_id]
+04)----TableScan: elim_users projection=[id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Right, on=[(user_id@0, id@0)], projection=[id@1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# ... and the duplicates it produces are observable: user 1 has two orders.
+query I rowsort
+SELECT elim_users.id FROM elim_orders RIGHT JOIN elim_users ON elim_orders.user_id = elim_users.id;
+----
+1
+1
+2
+4
 
 statement ok
 DROP TABLE elim_users;
