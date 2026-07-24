@@ -21,6 +21,7 @@ use super::power::PowerFunc;
 
 use crate::utils::calculate_binary_math;
 use arrow::array::{Array, ArrayRef};
+use arrow::compute::cast;
 use arrow::datatypes::{
     DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Float16Type,
     Float32Type, Float64Type,
@@ -97,6 +98,30 @@ impl LogFunc {
                 Volatility::Immutable,
             ),
         }
+    }
+}
+
+/// The float type `log` computes and returns for the given argument types: the
+/// widest float present, so a wider base is never narrowed to a narrower value
+/// (issue #22581). Integer and decimal arguments are coerced to `Float64` by the
+/// signature, and null arguments do not constrain the width. When no concrete
+/// float is present the result is `Float64`.
+fn log_float_type(arg_types: &[DataType]) -> DataType {
+    let mut rank = 0u8;
+    for arg_type in arg_types {
+        let arg_rank = match arg_type {
+            DataType::Float16 => 1,
+            DataType::Float32 => 2,
+            DataType::Null => continue,
+            // Float64 and any coerced integer/decimal argument.
+            _ => 3,
+        };
+        rank = rank.max(arg_rank);
+    }
+    match rank {
+        1 => DataType::Float16,
+        2 => DataType::Float32,
+        _ => DataType::Float64,
     }
 }
 
@@ -195,12 +220,12 @@ impl ScalarUDFImpl for LogFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        // Check last argument (value)
-        match &arg_types.last().ok_or(plan_datafusion_err!("No args"))? {
-            DataType::Float16 => Ok(DataType::Float16),
-            DataType::Float32 => Ok(DataType::Float32),
-            _ => Ok(DataType::Float64),
+        if arg_types.is_empty() {
+            return Err(plan_datafusion_err!("No args"));
         }
+        // Compute in the widest float of all arguments so a wider base is not
+        // narrowed to the value's type (issue #22581).
+        Ok(log_float_type(arg_types))
     }
 
     fn is_strict(&self) -> bool {
@@ -251,26 +276,39 @@ impl ScalarUDFImpl for LogFunc {
         let value = value.to_array(args.number_rows)?;
 
         let output: ArrayRef = match value.data_type() {
-            DataType::Float16 => {
-                calculate_binary_math::<Float16Type, Float16Type, Float16Type, _>(
-                    &value,
-                    &base,
-                    |value, base| Ok(value.log(base)),
-                )?
-            }
-            DataType::Float32 => {
-                calculate_binary_math::<Float32Type, Float32Type, Float32Type, _>(
-                    &value,
-                    &base,
-                    |value, base| Ok(value.log(base)),
-                )?
-            }
-            DataType::Float64 => {
-                calculate_binary_math::<Float64Type, Float64Type, Float64Type, _>(
-                    &value,
-                    &base,
-                    |value, base| Ok(value.log(base)),
-                )?
+            DataType::Float16 | DataType::Float32 | DataType::Float64 => {
+                // Compute in the widest float of base and value so a wider base
+                // is not narrowed to the value's type (issue #22581).
+                let target =
+                    log_float_type(&[base.data_type(), value.data_type().clone()]);
+                let value = if value.data_type() == &target {
+                    value
+                } else {
+                    cast(&value, &target)?
+                };
+                match target {
+                    DataType::Float16 => {
+                        calculate_binary_math::<Float16Type, Float16Type, Float16Type, _>(
+                            &value,
+                            &base,
+                            |value, base| Ok(value.log(base)),
+                        )?
+                    }
+                    DataType::Float32 => {
+                        calculate_binary_math::<Float32Type, Float32Type, Float32Type, _>(
+                            &value,
+                            &base,
+                            |value, base| Ok(value.log(base)),
+                        )?
+                    }
+                    _ => {
+                        calculate_binary_math::<Float64Type, Float64Type, Float64Type, _>(
+                            &value,
+                            &base,
+                            |value, base| Ok(value.log(base)),
+                        )?
+                    }
+                }
             }
             DataType::Decimal32(_, scale) => {
                 calculate_binary_math::<Decimal32Type, Float64Type, Float64Type, _>(
@@ -367,8 +405,11 @@ impl ScalarUDFImpl for LogFunc {
             Expr::Literal(value, _)
                 if value == ScalarValue::new_one(&number_datatype)? =>
             {
+                // The zero must carry the resolved return type, not the base's,
+                // so a wider value does not leave the plan schema inconsistent
+                // (issue #22581).
                 Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_zero(
-                    &info.get_data_type(&base)?,
+                    &return_type,
                 )?)))
             }
             Expr::ScalarFunction(ScalarFunction { func, mut args })
@@ -380,7 +421,7 @@ impl ScalarUDFImpl for LogFunc {
             number => {
                 if number == base {
                     Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_one(
-                        &number_datatype,
+                        &return_type,
                     )?)))
                 } else {
                     let args = match num_args {
@@ -1207,6 +1248,74 @@ mod tests {
             ColumnarValue::Scalar(_) => {
                 panic!("Expected an array value")
             }
+        }
+    }
+
+    #[test]
+    fn test_log_return_type_uses_widest_float() {
+        use DataType::*;
+        let f = LogFunc::new();
+
+        // A wider base must not be narrowed to the value's type (#22581).
+        assert_eq!(f.return_type(&[Float64, Float32]).unwrap(), Float64);
+        assert_eq!(f.return_type(&[Float32, Float64]).unwrap(), Float64);
+        assert_eq!(f.return_type(&[Float32, Float16]).unwrap(), Float32);
+        assert_eq!(f.return_type(&[Float16, Float32]).unwrap(), Float32);
+        // Homogeneous inputs keep their type.
+        assert_eq!(f.return_type(&[Float16, Float16]).unwrap(), Float16);
+        assert_eq!(f.return_type(&[Float32, Float32]).unwrap(), Float32);
+        assert_eq!(f.return_type(&[Float64, Float64]).unwrap(), Float64);
+        assert_eq!(f.return_type(&[Float32]).unwrap(), Float32);
+        // Null does not constrain the width; all-null falls back to Float64.
+        assert_eq!(f.return_type(&[Float32, Null]).unwrap(), Float32);
+        assert_eq!(f.return_type(&[Null, Float32]).unwrap(), Float32);
+        assert_eq!(f.return_type(&[Null, Null]).unwrap(), Float64);
+    }
+
+    #[test]
+    fn test_log_mixed_width_preserves_base_precision() {
+        // Issue #22581: log(Float64 base, Float32 value) narrowed the base to
+        // Float32, losing precision. 16777217 is not representable in f32.
+        let arg_fields = vec![
+            Field::new("a", DataType::Float64, false).into(),
+            Field::new("a", DataType::Float32, false).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(16777217.0))), // base
+                ColumnarValue::Scalar(ScalarValue::Float32(Some(2.0))),        // value
+            ],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = LogFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function log");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float64_array(&arr)
+                    .expect("result should be a Float64Array, not narrowed to Float32");
+                assert_eq!(floats.len(), 1);
+
+                let expected = 2.0_f64.log(16777217.0);
+                assert!(
+                    (floats.value(0) - expected).abs() < 1e-15,
+                    "got {}, expected f64-precision {expected}",
+                    floats.value(0)
+                );
+                // The lossy f32 computation differs in the 8th decimal; the
+                // result must not match it.
+                let lossy = 2.0_f32.log(16777217.0_f32) as f64;
+                assert!(
+                    (floats.value(0) - lossy).abs() > 1e-9,
+                    "result {} still matches the lossy f32 value {lossy}",
+                    floats.value(0)
+                );
+            }
+            ColumnarValue::Scalar(_) => panic!("Expected an array value"),
         }
     }
 }
