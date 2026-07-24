@@ -668,9 +668,6 @@ impl LogicalPlan {
                 null_equality,
                 null_aware,
             }) => {
-                let schema =
-                    build_join_schema(left.schema(), right.schema(), &join_type)?;
-
                 let new_on: Vec<_> = on
                     .into_iter()
                     .map(|equi_expr| {
@@ -678,6 +675,18 @@ impl LogicalPlan {
                         (equi_expr.0.unalias(), equi_expr.1.unalias())
                     })
                     .collect();
+
+                let schema = build_join_schema(
+                    left.schema(),
+                    right.schema(),
+                    &join_type,
+                    Some(Join::get_uniquely_determined_columns(
+                        left.as_ref(),
+                        right.as_ref(),
+                        &new_on,
+                        &filter,
+                    )),
+                )?;
 
                 Ok(LogicalPlan::Join(Join {
                     left,
@@ -945,7 +954,6 @@ impl LogicalPlan {
                 ..
             }) => {
                 let (left, right) = self.only_two_inputs(inputs)?;
-                let schema = build_join_schema(left.schema(), right.schema(), join_type)?;
 
                 let equi_expr_count = on.len() * 2;
                 assert!(expr.len() >= equi_expr_count);
@@ -973,6 +981,18 @@ impl LogicalPlan {
                     // SimplifyExpression rule may add alias to the equi_expr.
                     new_on.push((left.unalias(), right.unalias()));
                 }
+
+                let schema = build_join_schema(
+                    left.schema(),
+                    right.schema(),
+                    join_type,
+                    Some(Join::get_uniquely_determined_columns(
+                        &left,
+                        &right,
+                        &new_on,
+                        &filter_expr,
+                    )),
+                )?;
 
                 Ok(LogicalPlan::Join(Join {
                     left: Arc::new(left),
@@ -4248,6 +4268,76 @@ pub struct Join {
 }
 
 impl Join {
+    /// Returns colums which are unique on each side of the join, or that are identical to a
+    /// column on the other side of the join
+    pub fn get_uniquely_determined_columns(
+        left_plan: &LogicalPlan,
+        right_plan: &LogicalPlan,
+        on: &Vec<(Expr, Expr)>,
+        filter: &Option<Expr>,
+    ) -> (
+        datafusion_common::HashSet<usize>,
+        datafusion_common::HashSet<usize>,
+    ) {
+        let mut left_set = datafusion_common::HashSet::new();
+        let mut right_set = datafusion_common::HashSet::new();
+
+        let eq_exprs = on.into_iter().cloned().chain(
+            filter
+                .iter()
+                .flat_map(|expr| split_conjunction(expr))
+                .filter_map(|expr| match expr {
+                    Expr::BinaryExpr(BinaryExpr {
+                        left,
+                        op: Operator::Eq,
+                        right,
+                    }) => Some((*left.clone(), *right.clone())),
+                    _ => None,
+                }),
+        );
+
+        for (left, right) in eq_exprs {
+            // This is a no-op filter expression
+            if left == right {
+                continue;
+            }
+
+            match (left.as_ref(), right.as_ref()) {
+                (Expr::Column(c1), Expr::Column(c2)) => {
+                    if let Some(left_index) = left_plan.schema().maybe_index_of_column(c1)
+                    {
+                        if let Some(right_index) =
+                            right_plan.schema().maybe_index_of_column(c2)
+                        {
+                            left_set.insert(left_index);
+                            right_set.insert(right_index);
+                        }
+                    } else {
+                        if let Some(left_index) =
+                            left_plan.schema().maybe_index_of_column(c2)
+                        {
+                            let right_index =
+                                right_plan.schema().index_of_column(c1).unwrap();
+                            left_set.insert(left_index);
+                            right_set.insert(right_index);
+                        }
+                    }
+                }
+                (Expr::Column(c), _) | (_, Expr::Column(c)) => {
+                    if let Some(left_index) = left_plan.schema().maybe_index_of_column(c)
+                    {
+                        left_set.insert(left_index);
+                    } else {
+                        right_set.insert(right_plan.schema().index_of_column(c).unwrap());
+                    }
+                }
+                _ => continue,
+            }
+        }
+
+        (left_set, right_set)
+    }
+
     /// Creates a new Join operator with automatically computed schema.
     ///
     /// This constructor computes the schema based on the join type and inputs,
@@ -4278,7 +4368,17 @@ impl Join {
         null_equality: NullEquality,
         null_aware: bool,
     ) -> Result<Self> {
-        let join_schema = build_join_schema(left.schema(), right.schema(), &join_type)?;
+        let join_schema = build_join_schema(
+            left.schema(),
+            right.schema(),
+            &join_type,
+            Some(Self::get_uniquely_determined_columns(
+                left.as_ref(),
+                right.as_ref(),
+                &on,
+                &filter,
+            )),
+        )?;
 
         Ok(Join {
             left,
@@ -4333,6 +4433,12 @@ impl Join {
             left_sch.schema(),
             right_sch.schema(),
             &original_join.join_type,
+            Some(Self::get_uniquely_determined_columns(
+                left.as_ref(),
+                right.as_ref(),
+                &on,
+                &original_join.filter,
+            )),
         )?;
 
         Ok((

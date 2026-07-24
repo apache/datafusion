@@ -1154,8 +1154,18 @@ impl LogicalPlanBuilder {
             .zip(right_keys)
             .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
             .collect();
-        let join_schema =
-            build_join_schema(self.plan.schema(), right.schema(), &join_type)?;
+
+        let join_schema = build_join_schema(
+            self.plan.schema(),
+            right.schema(),
+            &join_type,
+            Some(Join::get_uniquely_determined_columns(
+                self.plan.as_ref(),
+                &right,
+                &on,
+                &filter,
+            )),
+        )?;
 
         // Inner type without join condition is cross join
         if join_type != JoinType::Inner && on.is_empty() && filter.is_none() {
@@ -1672,10 +1682,18 @@ fn mark_field(schema: &DFSchema) -> (Option<TableReference>, Arc<Field>) {
 
 /// Creates a schema for a join operation.
 /// The fields from the left side are first
+///
+/// `uniquely_determined_columns` contains a set of columns on each side of the relation (
+/// self first) which are used in the ON clause of the join in an equality comparison,
+/// which guarantees they are uniquely determined by the source side of the join.
 pub fn build_join_schema(
     left: &DFSchema,
     right: &DFSchema,
     join_type: &JoinType,
+    uniquely_determined_columns: Option<(
+        datafusion_common::HashSet<usize>,
+        datafusion_common::HashSet<usize>,
+    )>,
 ) -> Result<DFSchema> {
     fn nullify_fields<'a>(
         fields: impl Iterator<Item = (Option<&'a TableReference>, &'a Arc<Field>)>,
@@ -1755,6 +1773,7 @@ pub fn build_join_schema(
         right.functional_dependencies(),
         join_type,
         left.fields().len(),
+        uniquely_determined_columns,
     );
 
     let (schema1, schema2) = match join_type {
@@ -2954,13 +2973,13 @@ mod tests {
         )?;
 
         let join_schema =
-            build_join_schema(&left_schema, &right_schema, &JoinType::Left)?;
+            build_join_schema(&left_schema, &right_schema, &JoinType::Left, None)?;
         assert_eq!(
             join_schema.metadata(),
             &HashMap::from([("key".to_string(), "left".to_string())])
         );
         let join_schema =
-            build_join_schema(&left_schema, &right_schema, &JoinType::Right)?;
+            build_join_schema(&left_schema, &right_schema, &JoinType::Right, None)?;
         assert_eq!(
             join_schema.metadata(),
             &HashMap::from([("key".to_string(), "right".to_string())])
@@ -3033,5 +3052,57 @@ mod tests {
                 Some("a:1:1".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn test_join_dependencies() -> Result<()> {
+        let left_schema = DFSchema::new_with_metadata(
+            vec![
+                (None, Arc::new(Field::new("a", DataType::Int32, false))),
+                (None, Arc::new(Field::new("b", DataType::Int32, false))),
+            ],
+            HashMap::new(),
+        )?;
+        let left_table = table_source_with_constraints(
+            left_schema.as_arrow(),
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]),
+        );
+
+        let right_schema = DFSchema::new_with_metadata(
+            vec![
+                (None, Arc::new(Field::new("c", DataType::Int32, false))),
+                (None, Arc::new(Field::new("d", DataType::Int32, false))),
+            ],
+            HashMap::new(),
+        )?;
+        let right_table = table_source_with_constraints(
+            right_schema.as_arrow(),
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]),
+        );
+
+        let plan = LogicalPlanBuilder::scan("A", left_table, Some(vec![0, 1]))?
+            .join_on(
+                LogicalPlanBuilder::scan("B", right_table, Some(vec![0, 1]))?.build()?,
+                JoinType::Left,
+                vec![binary_expr(col("a"), Operator::Eq, col("c"))],
+            )?
+            .project(vec![
+                SelectExpr::Expression(col("a")),
+                SelectExpr::Expression(col("b")),
+                SelectExpr::Expression(col("c")),
+                SelectExpr::Expression(col("d")),
+            ])?
+            .build()?;
+
+        let deps = plan.schema().functional_dependencies();
+
+        assert_eq!(deps.len(), 2);
+        assert_eq!(deps[0].source_indices, vec![0]);
+        assert_eq!(deps[0].target_indices, vec![0, 1, 2, 3]);
+
+        assert_eq!(deps[1].source_indices, vec![2]);
+        assert_eq!(deps[1].target_indices, vec![2, 3, 0, 1]);
+
+        Ok(())
     }
 }
