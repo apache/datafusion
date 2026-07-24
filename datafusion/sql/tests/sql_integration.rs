@@ -1103,17 +1103,108 @@ fn natural_left_join() {
 
 #[test]
 fn natural_right_join() {
+    // The merged key of a NATURAL/USING RIGHT join resolves to the right key
+    // (always present) rather than the NULL-padded left key (SQL:2016 §7.10).
     let sql = "SELECT l_item_id FROM lineitem a NATURAL RIGHT JOIN lineitem b";
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r"
-    Projection: a.l_item_id
+    Projection: b.l_item_id
       Right Join: Using a.l_orderkey = b.l_orderkey, a.l_item_id = b.l_item_id, a.l_description = b.l_description, a.l_extendedprice = b.l_extendedprice, a.price = b.price
         SubqueryAlias: a
           TableScan: lineitem
         SubqueryAlias: b
           TableScan: lineitem
+    "
+    );
+}
+
+#[test]
+fn using_join_full_coalesces_merged_key() {
+    // A FULL JOIN can NULL-pad either side, so the merged key resolves to
+    // COALESCE(left.id, right.id) (SQL:2016 §7.10), not the left key alone.
+    let sql = "SELECT id FROM person a FULL JOIN person b USING (id)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: coalesce(a.id, b.id) AS id
+      Full Join: Using a.id = b.id
+        SubqueryAlias: a
+          TableScan: person
+        SubqueryAlias: b
+          TableScan: person
+    "
+    );
+}
+
+#[test]
+fn using_join_right_resolves_to_right_key() {
+    // A RIGHT JOIN NULL-pads the left key, so the merged key resolves to the
+    // right key (which is always present).
+    let sql = "SELECT id FROM person a RIGHT JOIN person b USING (id)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: b.id
+      Right Join: Using a.id = b.id
+        SubqueryAlias: a
+          TableScan: person
+        SubqueryAlias: b
+          TableScan: person
+    "
+    );
+}
+
+#[test]
+fn using_join_full_preserves_qualified_keys() {
+    // The per-side keys remain individually addressable alongside the merged key.
+    let sql = "SELECT id AS merged, a.id AS a_id, b.id AS b_id \
+               FROM person a FULL JOIN person b USING (id)";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: coalesce(a.id, b.id) AS merged, a.id AS a_id, b.id AS b_id
+      Full Join: Using a.id = b.id
+        SubqueryAlias: a
+          TableScan: person
+        SubqueryAlias: b
+          TableScan: person
+    "
+    );
+}
+
+#[test]
+fn using_join_inner_left_unchanged() {
+    // INNER/LEFT never NULL-pad the left key, so the merged key stays the left
+    // column with no COALESCE wrapper (no behavior change).
+    let inner = logical_plan("SELECT id FROM person a JOIN person b USING (id)").unwrap();
+    assert_snapshot!(
+        inner,
+        @r"
+    Projection: a.id
+      Inner Join: Using a.id = b.id
+        SubqueryAlias: a
+          TableScan: person
+        SubqueryAlias: b
+          TableScan: person
+    "
+    );
+
+    let left =
+        logical_plan("SELECT id FROM person a LEFT JOIN person b USING (id)").unwrap();
+    assert_snapshot!(
+        left,
+        @r"
+    Projection: a.id
+      Left Join: Using a.id = b.id
+        SubqueryAlias: a
+          TableScan: person
+        SubqueryAlias: b
+          TableScan: person
     "
     );
 }
@@ -3657,6 +3748,8 @@ fn mock_session_state() -> MockSessionState {
     MockSessionState::default()
         .with_scalar_function(Arc::new(unicode::character_length().as_ref().clone()))
         .with_scalar_function(Arc::new(string::concat().as_ref().clone()))
+        // `RIGHT`/`FULL` USING/NATURAL joins build a `coalesce(...)` merged key.
+        .with_scalar_function(datafusion_functions::core::coalesce())
         .with_scalar_function(Arc::new(make_udf(
             "nullif",
             vec![DataType::Int32, DataType::Int32],
@@ -5288,7 +5381,9 @@ fn test_using_join_wildcard_schema() {
         ]
     );
 
-    // Multiple joins
+    // Multiple joins. The final `RIGHT JOIN ... USING (c)` can NULL-pad the left
+    // key `t2.c`, so `*` exposes the merged key `coalesce(t2.c, t3.c)` (named `c`,
+    // belonging to neither input) instead of the NULL-padded `t2.c` (SQL:2016 §7.10).
     let sql = "WITH t1 AS (SELECT 1 AS a, 1 AS b),
         t2 AS (SELECT 1 AS a, 2 AS c),
         t3 AS (SELECT 1 AS c, 2 AS d)
@@ -5299,7 +5394,7 @@ fn test_using_join_wildcard_schema() {
         [
             "t1.a".to_string(),
             "t1.b".to_string(),
-            "t2.c".to_string(),
+            "c".to_string(),
             "t3.d".to_string()
         ]
     );
