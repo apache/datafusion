@@ -29,6 +29,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::spill_file::SpillFile;
 use std::borrow::Borrow;
 use std::sync::Arc;
+use arrow_ipc::reader::BufferAllocationStrategy;
 
 /// The `SpillManager` is responsible for the following tasks:
 /// - Reading and writing `RecordBatch`es to raw files based on the provided configurations.
@@ -45,6 +46,8 @@ pub struct SpillManager {
     batch_read_buffer_capacity: usize,
     /// general-purpose compression options
     pub(crate) compression: SpillCompression,
+    buffer_allocation_strategy: BufferAllocationStrategy,
+
 }
 
 impl SpillManager {
@@ -55,7 +58,13 @@ impl SpillManager {
             schema,
             batch_read_buffer_capacity: 2,
             compression: SpillCompression::default(),
+            buffer_allocation_strategy: BufferAllocationStrategy::default(),
         }
+    }
+
+    pub fn with_buffer_allocation_strategy(mut self, buffer_allocation_strategy: BufferAllocationStrategy) -> Self {
+        self.buffer_allocation_strategy = buffer_allocation_strategy;
+        self
     }
 
     pub fn with_batch_read_buffer_capacity(
@@ -189,6 +198,7 @@ impl SpillManager {
             Arc::clone(&self.schema),
             spill_file_path,
             max_record_batch_memory,
+            self.buffer_allocation_strategy,
         )?));
 
         Ok(spawn_buffered(stream, self.batch_read_buffer_capacity))
@@ -204,6 +214,7 @@ impl SpillManager {
             Arc::clone(&self.schema),
             spill_file_path,
             max_record_batch_memory,
+            self.buffer_allocation_strategy
         )?)))
     }
 }

@@ -59,6 +59,7 @@ use crate::{
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
+use arrow_ipc::reader::BufferAllocationStrategy;
 use datafusion_common::config::SpillCompression;
 use datafusion_common::{
     DataFusionError, Result, assert_or_internal_err, internal_datafusion_err,
@@ -277,6 +278,7 @@ impl ExternalSorter {
         sort_in_place_threshold_bytes: usize,
         // Configured via `datafusion.execution.spill_compression`.
         spill_compression: SpillCompression,
+        buffer_allocation_strategy: BufferAllocationStrategy,
         metrics: &ExecutionPlanMetricsSet,
         runtime: Arc<RuntimeEnv>,
     ) -> Result<Self> {
@@ -294,7 +296,8 @@ impl ExternalSorter {
             metrics.spill_metrics.clone(),
             Arc::clone(&schema),
         )
-        .with_compression_type(spill_compression);
+        .with_compression_type(spill_compression)
+          .with_buffer_allocation_strategy(buffer_allocation_strategy);
 
         Ok(Self {
             schema,
@@ -1388,6 +1391,7 @@ impl ExecutionPlan for SortExec {
                     execution_options.sort_spill_reservation_bytes,
                     execution_options.sort_in_place_threshold_bytes,
                     context.session_config().spill_compression(),
+                    context.session_config().buffer_allocation_strategy(),
                     &self.metrics_set,
                     context.runtime_env(),
                 )?;
@@ -3402,6 +3406,7 @@ mod tests {
             sort_spill_reservation_bytes,
             usize::MAX, // sort_in_place_threshold_bytes (high to avoid concat path)
             SpillCompression::Uncompressed,
+            Default::default(),
             &metrics_set,
             Arc::clone(&runtime),
         )?;

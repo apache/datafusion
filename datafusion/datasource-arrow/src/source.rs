@@ -38,6 +38,7 @@ use datafusion_datasource::{TableSchema, as_file_source};
 
 use arrow::buffer::Buffer;
 use arrow::ipc::reader::{FileDecoder, FileReader, StreamReader};
+use arrow_ipc::reader::BufferAllocationStrategy;
 use datafusion_common::error::Result;
 use datafusion_common::exec_datafusion_err;
 use datafusion_datasource::PartitionedFile;
@@ -67,6 +68,7 @@ enum ArrowFormat {
 pub(crate) struct ArrowStreamFileOpener {
     object_store: Arc<dyn ObjectStore>,
     projection: Option<Vec<usize>>,
+    buffer_allocation_strategy: BufferAllocationStrategy,
 }
 
 impl FileOpener for ArrowStreamFileOpener {
@@ -78,6 +80,7 @@ impl FileOpener for ArrowStreamFileOpener {
         }
         let object_store = Arc::clone(&self.object_store);
         let projection = self.projection.clone();
+        let buffer_allocation_strategy = self.buffer_allocation_strategy;
 
         Ok(Box::pin(async move {
             let r = object_store
@@ -87,7 +90,7 @@ impl FileOpener for ArrowStreamFileOpener {
             let stream = match r.payload {
                 #[cfg(not(target_arch = "wasm32"))]
                 GetResultPayload::File(file, _) => futures::stream::iter(
-                    StreamReader::try_new(file.try_clone()?, projection.clone())?,
+                    StreamReader::try_new(file.try_clone()?, projection.clone())?.with_buffer_allocation_strategy(buffer_allocation_strategy),
                 )
                 .map(|r| r.map_err(Into::into))
                 .boxed(),
@@ -97,7 +100,7 @@ impl FileOpener for ArrowStreamFileOpener {
                     futures::stream::iter(StreamReader::try_new(
                         cursor,
                         projection.clone(),
-                    )?)
+                    )?.with_buffer_allocation_strategy(buffer_allocation_strategy))
                     .map(|r| r.map_err(Into::into))
                     .boxed()
                 }
@@ -112,12 +115,14 @@ impl FileOpener for ArrowStreamFileOpener {
 pub(crate) struct ArrowFileOpener {
     object_store: Arc<dyn ObjectStore>,
     projection: Option<Vec<usize>>,
+    buffer_allocation_strategy: BufferAllocationStrategy,
 }
 
 impl FileOpener for ArrowFileOpener {
     fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         let object_store = Arc::clone(&self.object_store);
         let projection = self.projection.clone();
+        let buffer_allocation_strategy = self.buffer_allocation_strategy;
 
         Ok(Box::pin(async move {
             let range = partitioned_file.range.clone();
@@ -129,7 +134,7 @@ impl FileOpener for ArrowFileOpener {
                     let stream = match r.payload {
                         #[cfg(not(target_arch = "wasm32"))]
                         GetResultPayload::File(file, _) => futures::stream::iter(
-                            FileReader::try_new(file.try_clone()?, projection.clone())?,
+                            FileReader::try_new(file.try_clone()?, projection.clone())?.with_buffer_allocation_strategy(buffer_allocation_strategy),
                         )
                         .map(|r| r.map_err(Into::into))
                         .boxed(),
@@ -139,7 +144,7 @@ impl FileOpener for ArrowFileOpener {
                             futures::stream::iter(FileReader::try_new(
                                 cursor,
                                 projection.clone(),
-                            )?)
+                            )?.with_buffer_allocation_strategy(buffer_allocation_strategy))
                             .map(|r| r.map_err(Into::into))
                             .boxed()
                         }
@@ -179,7 +184,7 @@ impl FileOpener for ArrowFileOpener {
                     // build decoder according to footer & projection
                     let schema =
                         arrow_ipc::convert::fb_to_schema(footer.schema().unwrap());
-                    let mut decoder = FileDecoder::new(schema.into(), footer.version());
+                    let mut decoder = FileDecoder::new(schema.into(), footer.version()).with_buffer_allocation_strategy(buffer_allocation_strategy);
                     if let Some(projection) = projection {
                         decoder = decoder.with_projection(projection);
                     }
@@ -261,6 +266,7 @@ pub struct ArrowSource {
     metrics: ExecutionPlanMetricsSet,
     projection: SplitProjection,
     table_schema: TableSchema,
+    buffer_allocation_strategy: BufferAllocationStrategy,
 }
 
 impl ArrowSource {
@@ -272,6 +278,7 @@ impl ArrowSource {
             metrics: ExecutionPlanMetricsSet::new(),
             projection: SplitProjection::unprojected(&table_schema),
             table_schema,
+            buffer_allocation_strategy: Default::default(),
         }
     }
 
@@ -283,7 +290,13 @@ impl ArrowSource {
             metrics: ExecutionPlanMetricsSet::new(),
             projection: SplitProjection::unprojected(&table_schema),
             table_schema,
+            buffer_allocation_strategy: Default::default(),
         }
+    }
+
+    pub fn with_buffer_allocation_strategy(mut self, buffer_allocation_strategy: BufferAllocationStrategy) -> Self {
+        self.buffer_allocation_strategy = buffer_allocation_strategy;
+        self
     }
 }
 
@@ -300,10 +313,12 @@ impl FileSource for ArrowSource {
             ArrowFormat::File => Arc::new(ArrowFileOpener {
                 object_store,
                 projection: Some(split_projection.file_indices.clone()),
+                buffer_allocation_strategy: self.buffer_allocation_strategy,
             }),
             ArrowFormat::Stream => Arc::new(ArrowStreamFileOpener {
                 object_store,
                 projection: Some(split_projection.file_indices.clone()),
+                buffer_allocation_strategy: self.buffer_allocation_strategy,
             }),
         };
         ProjectionOpener::try_new(
@@ -419,6 +434,7 @@ impl ArrowOpener {
             inner: Arc::new(ArrowFileOpener {
                 object_store,
                 projection,
+                buffer_allocation_strategy: Default::default(),
             }),
         }
     }
@@ -431,6 +447,7 @@ impl ArrowOpener {
             inner: Arc::new(ArrowStreamFileOpener {
                 object_store,
                 projection,
+                buffer_allocation_strategy: Default::default(),
             }),
         }
     }
@@ -626,6 +643,7 @@ mod tests {
         let opener = ArrowStreamFileOpener {
             object_store,
             projection: Some(vec![0]), // just the first column
+            buffer_allocation_strategy: Default::default(),
         };
 
         let mut stream = opener.open(partitioned_file)?.await?;
