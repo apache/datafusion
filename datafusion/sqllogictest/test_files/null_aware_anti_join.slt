@@ -70,6 +70,20 @@ query IT rowsort
 SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_with_null);
 ----
 
+# Regression test
+
+statement ok
+set datafusion.optimizer.filter_null_join_keys = true;
+
+# The subquery NULL must reach the join: every row's NOT IN is UNKNOWN or
+# FALSE, so the result stays empty.
+query IT rowsort
+SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_with_null);
+----
+
+statement ok
+reset datafusion.optimizer.filter_null_join_keys;
+
 # Verify the result is empty even though there are rows in outer_table
 # that don't match the non-NULL value (2) in the subquery.
 # This is correct null-aware behavior: if subquery contains NULL, result is unknown.

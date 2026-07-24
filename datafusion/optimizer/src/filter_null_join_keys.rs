@@ -52,6 +52,7 @@ impl OptimizerRule for FilterNullJoinKeys {
         match plan {
             LogicalPlan::Join(mut join)
                 if !join.on.is_empty()
+                    && !join.null_aware
                     && join.null_equality == NullEquality::NullEqualsNothing =>
             {
                 let (left_preserved, right_preserved) =
@@ -358,5 +359,51 @@ mod tests {
         let t1 = table_scan(Some("t1"), &schema, None)?.build()?;
         let t2 = table_scan(Some("t2"), &schema, None)?.build()?;
         Ok((t1, t2))
+    }
+
+    #[test]
+    fn null_aware_left_mark_join_keys_not_filtered() -> Result<()> {
+        let (t1, t2) = test_tables()?;
+        let plan = build_null_aware_plan(t1, t2, JoinType::LeftMark)?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        LeftMark Join: t1.id = t2.optional_id null_aware
+          TableScan: t1
+          TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn null_aware_left_anti_join_keys_not_filtered() -> Result<()> {
+        let (t1, t2) = test_tables()?;
+        let plan = build_null_aware_plan(t1, t2, JoinType::LeftAnti)?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        LeftAnti Join: t1.id = t2.optional_id null_aware
+          TableScan: t1
+          TableScan: t2
+        ")
+    }
+
+    /// A join whose nullable right key would get an `IS NOT NULL` filter if it
+    /// were not null-aware.
+    fn build_null_aware_plan(
+        left_table: LogicalPlan,
+        right_table: LogicalPlan,
+        join_type: JoinType,
+    ) -> Result<LogicalPlan> {
+        LogicalPlanBuilder::from(left_table)
+            .join_detailed_with_options(
+                right_table,
+                join_type,
+                (
+                    vec![Column::from_qualified_name("t1.id")],
+                    vec![Column::from_qualified_name("t2.optional_id")],
+                ),
+                None,
+                NullEquality::NullEqualsNothing,
+                true,
+            )?
+            .build()
     }
 }
