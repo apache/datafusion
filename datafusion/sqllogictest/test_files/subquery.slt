@@ -2599,3 +2599,53 @@ DROP TABLE sq_count_customer;
 
 statement ok
 DROP TABLE sq_count_orders;
+
+# Fuse multiple uncorrelated scalar-aggregate subqueries over the same source
+# (datafusion.optimizer.enable_fuse_scalar_subqueries)
+
+statement ok
+CREATE TABLE fuse_t(a INT, b INT, c INT) AS VALUES (1, 10, 100), (5, 20, 200), (15, 30, 300), (25, 40, 400);
+
+# Baseline result with the rule disabled (default).
+query IR
+SELECT (SELECT count(*) FROM fuse_t WHERE a < 10) AS lo,
+       (SELECT avg(c) FROM fuse_t WHERE a >= 10) AS hi;
+----
+2 350
+
+statement ok
+set datafusion.optimizer.enable_fuse_scalar_subqueries = true;
+
+# Same result with the rule enabled: the two subqueries are fused but the
+# answer is unchanged.
+query IR
+SELECT (SELECT count(*) FROM fuse_t WHERE a < 10) AS lo,
+       (SELECT avg(c) FROM fuse_t WHERE a >= 10) AS hi;
+----
+2 350
+
+# The fused plan scans fuse_t once and computes both aggregates with FILTER
+# clauses.
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT (SELECT count(*) FROM fuse_t WHERE a < 10) AS lo,
+               (SELECT avg(c) FROM fuse_t WHERE a >= 10) AS hi;
+----
+logical_plan
+01)Projection: __datafusion_fused_scalar_agg_0 AS lo, __datafusion_fused_scalar_agg_1 AS hi
+02)--Cross Join:
+03)----EmptyRelation: rows=1
+04)----Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) FILTER (WHERE fuse_t.a < Int32(10)) AS __datafusion_fused_scalar_agg_0, avg(CAST(fuse_t.c AS Float64)) FILTER (WHERE fuse_t.a >= Int32(10)) AS __datafusion_fused_scalar_agg_1]]
+05)------Filter: fuse_t.a < Int32(10) OR fuse_t.a >= Int32(10)
+06)--------TableScan: fuse_t projection=[a, c]
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
+set datafusion.optimizer.enable_fuse_scalar_subqueries = false;
+
+statement ok
+DROP TABLE fuse_t;
