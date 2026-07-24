@@ -17,8 +17,9 @@
 
 use crate::aggregates::group_values::GroupValues;
 use arrow::array::{
-    Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, MapArray,
-    PrimitiveArray, RunArray, StructArray, downcast_run_end_index,
+    Array, ArrayRef, FixedSizeListArray, LargeListArray, LargeListViewArray, ListArray,
+    ListViewArray, MapArray, PrimitiveArray, RunArray, StructArray,
+    downcast_run_end_index,
 };
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, SchemaRef};
@@ -314,6 +315,33 @@ pub(crate) fn encode_array_if_necessary(
             Ok(Arc::new(LargeListArray::try_new(
                 Arc::<arrow::datatypes::Field>::clone(expected_field),
                 list.offsets().clone(),
+                encode_array_if_necessary(list.values(), expected_field.data_type())?,
+                list.nulls().cloned(),
+            )?))
+        }
+        (DataType::ListView(expected_field), &DataType::ListView(_)) => {
+            // arrow-row's `decode_list_view` applies the dictionary-flatten
+            // `corrected_type` to the child, so a `ListView<Dictionary<..>>`
+            // decodes as `ListView<value type>` and the child must be
+            // re-encoded here (same as `List` above, plus the `sizes`
+            // buffer that view-lists carry).
+            let list = array.as_any().downcast_ref::<ListViewArray>().unwrap();
+
+            Ok(Arc::new(ListViewArray::try_new(
+                Arc::<arrow::datatypes::Field>::clone(expected_field),
+                list.offsets().clone(),
+                list.sizes().clone(),
+                encode_array_if_necessary(list.values(), expected_field.data_type())?,
+                list.nulls().cloned(),
+            )?))
+        }
+        (DataType::LargeListView(expected_field), &DataType::LargeListView(_)) => {
+            let list = array.as_any().downcast_ref::<LargeListViewArray>().unwrap();
+
+            Ok(Arc::new(LargeListViewArray::try_new(
+                Arc::<arrow::datatypes::Field>::clone(expected_field),
+                list.offsets().clone(),
+                list.sizes().clone(),
                 encode_array_if_necessary(list.values(), expected_field.data_type())?,
                 list.nulls().cloned(),
             )?))

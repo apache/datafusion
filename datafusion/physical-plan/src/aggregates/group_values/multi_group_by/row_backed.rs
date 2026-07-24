@@ -96,6 +96,16 @@ pub struct RowsGroupColumn {
 /// stays true for every descendant, so a `Dictionary` anywhere below
 /// counts. Above that boundary, encountering a `Dictionary` is fine —
 /// only nested containers propagate the risk.
+///
+/// TODO: this guard works around <https://github.com/apache/arrow-rs/issues/10413>
+/// (`decode_fixed_size_list` panics instead of applying the
+/// dictionary-flatten `corrected_type` step). Fixed upstream by
+/// <https://github.com/apache/arrow-rs/pull/10414> (merged 2026-07-24, not
+/// yet in a release as of arrow 59.1.0). Once DataFusion upgrades to an
+/// arrow release containing that fix, `FixedSizeList<Dictionary>` will
+/// decode like the other list-likes (flattened child, re-encoded by
+/// `encode_array_if_necessary`'s existing `FixedSizeList` arm) — remove
+/// this guard and its `supports_type` rejection at that point.
 fn contains_fsl_with_dictionary(data_type: &DataType) -> bool {
     fn walk(dt: &DataType, inside_fsl: bool) -> bool {
         match dt {
@@ -160,8 +170,12 @@ impl RowsGroupColumn {
     ///
     /// Reject those shapes here so `make_group_column` falls back to
     /// `GroupValuesRows`. The other list-likes (`List`, `LargeList`,
-    /// `ListView`, `LargeListView`, `Map`) do carry the correction and
-    /// round-trip cleanly on the same arrow-row version.
+    /// `ListView`, `LargeListView`, `Map`) do carry the correction, so
+    /// they decode without panicking — but the correction *flattens* any
+    /// dictionary child to its value type, so `build` / `take_n` must
+    /// re-encode the emitted array back to `output_type` via
+    /// `encode_array_if_necessary` (which has a reconstruction arm for
+    /// each of these containers).
     ///
     /// Additionally, `Union` and `RunEndEncoded` are rejected because
     /// they were routed to `GroupValuesRows` before this column existed
@@ -673,6 +687,189 @@ mod tests {
             &outer_dt,
             "LargeList<Dict>: build() must preserve the declared type",
         );
+    }
+
+    /// Build a two-row `ListView<Dict<Int32, Utf8>>` array with rows
+    /// `["a", "b"]` and `["c"]` — the shape from the review reproducer:
+    /// `arrow_cast(a, 'ListView(Dictionary(Int32, Utf8))')`.
+    fn list_view_of_dict_input() -> (DataType, ArrayRef) {
+        use arrow::array::{DictionaryArray, ListViewArray, StringArray};
+        use arrow::buffer::ScalarBuffer;
+
+        let item_field = Arc::new(Field::new("item", dict_utf8(), true));
+        let outer_dt = DataType::ListView(Arc::clone(&item_field));
+
+        let values = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+        let keys = Int32Array::from(vec![0, 1, 2]);
+        let dict = DictionaryArray::<Int32Type>::try_new(keys, values).unwrap();
+        let offsets = ScalarBuffer::<i32>::from(vec![0, 2]);
+        let sizes = ScalarBuffer::<i32>::from(vec![2, 1]);
+        let list = ListViewArray::try_new(
+            Arc::clone(&item_field),
+            offsets,
+            sizes,
+            Arc::new(dict),
+            None,
+        )
+        .unwrap();
+        (outer_dt, Arc::new(list) as ArrayRef)
+    }
+
+    /// `ListView<Dict>`: arrow-row's `decode_list_view` flattens the
+    /// dictionary child (`corrected_type`), so `build` must re-encode
+    /// the emitted array back to the declared type. Regression for the
+    /// review reproducer that failed with
+    /// `expected ListView(Dictionary(Int32, Utf8)) but found ListView(Utf8)`.
+    #[test]
+    fn build_preserves_list_view_of_dictionary_schema() {
+        let (outer_dt, input) = list_view_of_dict_input();
+        if !RowsGroupColumn::supports_type(&outer_dt) {
+            return;
+        }
+
+        let mut col = Box::new(RowsGroupColumn::try_new(outer_dt.clone()).unwrap());
+        col.vectorized_append(&input, &[0, 1]).unwrap();
+        assert_eq!(col.len(), 2);
+
+        let built = col.build();
+        assert_eq!(
+            built.data_type(),
+            &outer_dt,
+            "ListView<Dict>: build() must return the declared type, \
+             not the RowConverter-flattened ListView<Utf8>",
+        );
+        assert_eq!(built.len(), 2);
+    }
+
+    /// Same regression through the `take_n` path (used by
+    /// `EmitTo::First(n)`), including the type of the *remaining*
+    /// values emitted by a subsequent `build`.
+    #[test]
+    fn take_n_preserves_list_view_of_dictionary_schema() {
+        let (outer_dt, input) = list_view_of_dict_input();
+        if !RowsGroupColumn::supports_type(&outer_dt) {
+            return;
+        }
+
+        let mut col = Box::new(RowsGroupColumn::try_new(outer_dt.clone()).unwrap());
+        col.vectorized_append(&input, &[0, 1]).unwrap();
+
+        let taken = col.take_n(1);
+        assert_eq!(
+            taken.data_type(),
+            &outer_dt,
+            "ListView<Dict>: take_n() must return the declared type",
+        );
+        assert_eq!(taken.len(), 1);
+
+        let rest = col.build();
+        assert_eq!(
+            rest.data_type(),
+            &outer_dt,
+            "ListView<Dict>: build() after take_n must also preserve the type",
+        );
+        assert_eq!(rest.len(), 1);
+    }
+
+    /// `LargeListView<Dict>` fails the same way as `ListView<Dict>`
+    /// per the review; cover both `build` and `take_n`.
+    #[test]
+    fn build_and_take_n_preserve_large_list_view_of_dictionary_schema() {
+        use arrow::array::{DictionaryArray, LargeListViewArray, StringArray};
+        use arrow::buffer::ScalarBuffer;
+
+        let item_field = Arc::new(Field::new("item", dict_utf8(), true));
+        let outer_dt = DataType::LargeListView(Arc::clone(&item_field));
+        if !RowsGroupColumn::supports_type(&outer_dt) {
+            return;
+        }
+
+        let values = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+        let keys = Int32Array::from(vec![0, 1, 2]);
+        let dict = DictionaryArray::<Int32Type>::try_new(keys, values).unwrap();
+        let offsets = ScalarBuffer::<i64>::from(vec![0, 2]);
+        let sizes = ScalarBuffer::<i64>::from(vec![2, 1]);
+        let list = LargeListViewArray::try_new(
+            Arc::clone(&item_field),
+            offsets,
+            sizes,
+            Arc::new(dict),
+            None,
+        )
+        .unwrap();
+        let input: ArrayRef = Arc::new(list);
+
+        let mut col = Box::new(RowsGroupColumn::try_new(outer_dt.clone()).unwrap());
+        col.vectorized_append(&input, &[0, 1]).unwrap();
+
+        let taken = col.take_n(1);
+        assert_eq!(
+            taken.data_type(),
+            &outer_dt,
+            "LargeListView<Dict>: take_n() must return the declared type",
+        );
+
+        let rest = col.build();
+        assert_eq!(
+            rest.data_type(),
+            &outer_dt,
+            "LargeListView<Dict>: build() must return the declared type",
+        );
+        assert_eq!(rest.len(), 1);
+    }
+
+    /// Group-identity must survive the dictionary flatten + re-encode
+    /// round trip: appending the same logical list twice (with distinct
+    /// dictionary key mappings) must map to one group, a different list
+    /// to another. Mirrors the review reproducer's GROUP BY semantics
+    /// (2 distinct groups from 3 input rows).
+    #[test]
+    fn list_view_of_dict_groups_by_logical_value() {
+        use arrow::array::{DictionaryArray, ListViewArray, StringArray};
+        use arrow::buffer::ScalarBuffer;
+
+        let item_field = Arc::new(Field::new("item", dict_utf8(), true));
+        let outer_dt = DataType::ListView(Arc::clone(&item_field));
+        if !RowsGroupColumn::supports_type(&outer_dt) {
+            return;
+        }
+
+        // Rows: ["a","b"], ["a","b"], ["c"]  → 2 distinct groups.
+        let values = Arc::new(StringArray::from(vec!["a", "b", "a", "b", "c"]));
+        let keys = Int32Array::from(vec![0, 1, 2, 3, 4]);
+        let dict = DictionaryArray::<Int32Type>::try_new(keys, values).unwrap();
+        let offsets = ScalarBuffer::<i32>::from(vec![0, 2, 4]);
+        let sizes = ScalarBuffer::<i32>::from(vec![2, 2, 1]);
+        let list = ListViewArray::try_new(
+            Arc::clone(&item_field),
+            offsets,
+            sizes,
+            Arc::new(dict),
+            None,
+        )
+        .unwrap();
+        let input: ArrayRef = Arc::new(list);
+
+        let mut col = Box::new(RowsGroupColumn::try_new(outer_dt.clone()).unwrap());
+        // Append row 0 as group 0.
+        col.vectorized_append(&input, &[0]).unwrap();
+        // Row 1 must compare equal to group 0 (same logical value).
+        assert!(
+            col.equal_to(0, &input, 1),
+            "identical logical lists must be equal regardless of dict keys",
+        );
+        // Row 2 must not.
+        assert!(
+            !col.equal_to(0, &input, 2),
+            "different logical lists must not be equal",
+        );
+
+        col.vectorized_append(&input, &[2]).unwrap();
+        assert_eq!(col.len(), 2, "3 input rows → 2 distinct groups");
+
+        let built = col.build();
+        assert_eq!(built.data_type(), &outer_dt);
+        assert_eq!(built.len(), 2);
     }
 
     /// End-to-end regression for `Map<Int32, Dict<Int32, Utf8>>` when
