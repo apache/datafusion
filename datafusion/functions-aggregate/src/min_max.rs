@@ -52,6 +52,7 @@ use datafusion_expr::{
 use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
 use datafusion_macros::user_doc;
 use half::f16;
+use std::collections::VecDeque;
 use std::mem::size_of_val;
 use std::ops::Deref;
 
@@ -756,7 +757,7 @@ impl Accumulator for SlidingMinAccumulator {
 /// ```
 #[derive(Debug)]
 pub struct MovingMin<T> {
-    deque: std::collections::VecDeque<(u64, T)>,
+    deque: VecDeque<(u64, T)>,
     push_seq: u64,
     pop_seq: u64,
 }
@@ -764,7 +765,7 @@ pub struct MovingMin<T> {
 impl<T: Clone + PartialOrd> Default for MovingMin<T> {
     fn default() -> Self {
         Self {
-            deque: std::collections::VecDeque::new(),
+            deque: VecDeque::new(),
             push_seq: 0,
             pop_seq: 0,
         }
@@ -784,7 +785,7 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            deque: std::collections::VecDeque::with_capacity(capacity),
+            deque: VecDeque::with_capacity(capacity),
             push_seq: 0,
             pop_seq: 0,
         }
@@ -859,7 +860,7 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
 /// ```
 #[derive(Debug)]
 pub struct MovingMax<T> {
-    deque: std::collections::VecDeque<(u64, T)>,
+    deque: VecDeque<(u64, T)>,
     push_seq: u64,
     pop_seq: u64,
 }
@@ -867,7 +868,7 @@ pub struct MovingMax<T> {
 impl<T: Clone + PartialOrd> Default for MovingMax<T> {
     fn default() -> Self {
         Self {
-            deque: std::collections::VecDeque::new(),
+            deque: VecDeque::new(),
             push_seq: 0,
             pop_seq: 0,
         }
@@ -886,7 +887,7 @@ impl<T: Clone + PartialOrd> MovingMax<T> {
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            deque: std::collections::VecDeque::with_capacity(capacity),
+            deque: VecDeque::with_capacity(capacity),
             push_seq: 0,
             pop_seq: 0,
         }
