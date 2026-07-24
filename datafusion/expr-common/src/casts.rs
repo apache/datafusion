@@ -98,9 +98,50 @@ fn is_date_type(data_type: &DataType) -> bool {
 /// For example, `CAST(ts AS DATE) = DATE '2024-01-01'` means "any timestamp
 /// during that day", but unwrapping it to `ts = TIMESTAMP '2024-01-01
 /// 00:00:00'` matches only midnight.
+///
+/// An identity cast (`from_type == to_type`, e.g. `Date32 -> Date32`) never
+/// changes comparison semantics and is therefore not lossy. This has to be
+/// handled explicitly because `DataType::is_temporal()` is true for both
+/// `Date32` and `Date64`, so `is_date_type(from) && to.is_temporal()` would
+/// otherwise report an identity `Date -> Date` cast as lossy and block the
+/// rewrite. Note this is deliberately limited to *identical* types: a genuine
+/// `Date32 <-> Date64` cast changes units (days vs milliseconds) and must
+/// still be treated as lossy here.
 fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
+    if from_type == to_type {
+        return false;
+    }
     (is_date_type(from_type) && to_type.is_temporal())
         || (is_date_type(to_type) && from_type.is_temporal())
+}
+
+/// Returns true when casting a timestamp from `from_type` to `to_type` loses
+/// timestamp precision.
+///
+/// This is used by comparison cast unwrapping to avoid rewrites such as
+/// `CAST(ts_ns AS timestamp(ms)) = lit_ms` -> `ts_ns = lit_ns`. The original
+/// predicate can match any nanosecond value in the same millisecond, while the
+/// rewritten predicate only matches the exact millisecond boundary.
+pub fn is_timestamp_precision_narrowing_cast(
+    from_type: &DataType,
+    to_type: &DataType,
+) -> bool {
+    let (DataType::Timestamp(from_unit, _), DataType::Timestamp(to_unit, _)) =
+        (from_type, to_type)
+    else {
+        return false;
+    };
+
+    timestamp_unit_scale(from_unit) > timestamp_unit_scale(to_unit)
+}
+
+fn timestamp_unit_scale(unit: &TimeUnit) -> i128 {
+    match unit {
+        TimeUnit::Second => 1,
+        TimeUnit::Millisecond => MILLISECONDS as i128,
+        TimeUnit::Microsecond => MICROSECONDS as i128,
+        TimeUnit::Nanosecond => NANOSECONDS as i128,
+    }
 }
 
 /// Returns true if unwrap_cast_in_comparison supports this numeric type
@@ -782,6 +823,74 @@ mod tests {
             DataType::Date64,
             ExpectedCast::NoValue,
         );
+    }
+
+    #[test]
+    fn test_try_cast_identity_date_allowed() {
+        // An identity Date cast (e.g. `CAST(date_col AS DATE)` where the column
+        // is already Date32) must fold: it never changes comparison semantics,
+        // so `try_cast_literal_to_type` should return the same value rather than
+        // treating it as a lossy temporal cast.
+        expect_cast(
+            ScalarValue::Date32(Some(19_723)),
+            DataType::Date32,
+            ExpectedCast::Value(ScalarValue::Date32(Some(19_723))),
+        );
+
+        expect_cast(
+            ScalarValue::Date64(Some(1_704_067_200_000)),
+            DataType::Date64,
+            ExpectedCast::Value(ScalarValue::Date64(Some(1_704_067_200_000))),
+        );
+
+        // is_lossy_temporal_cast must classify an identity cast as non-lossy.
+        assert!(!is_lossy_temporal_cast(
+            &DataType::Date32,
+            &DataType::Date32
+        ));
+        assert!(!is_lossy_temporal_cast(
+            &DataType::Date64,
+            &DataType::Date64
+        ));
+    }
+
+    #[test]
+    fn test_try_cast_date32_date64_still_blocked() {
+        // `Date32` counts days and `Date64` counts milliseconds, but
+        // try_cast_numeric_literal uses mul = 1 for both, so a cross cast would
+        // convert units wrongly. The identity short-circuit must NOT open this
+        // up: Date32 <-> Date64 has to stay blocked.
+        assert!(is_lossy_temporal_cast(&DataType::Date32, &DataType::Date64));
+        assert!(is_lossy_temporal_cast(&DataType::Date64, &DataType::Date32));
+
+        expect_cast(
+            ScalarValue::Date32(Some(1)),
+            DataType::Date64,
+            ExpectedCast::NoValue,
+        );
+
+        expect_cast(
+            ScalarValue::Date64(Some(86_400_000)),
+            DataType::Date32,
+            ExpectedCast::NoValue,
+        );
+    }
+
+    #[test]
+    fn test_timestamp_precision_narrowing_cast() {
+        let ts_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        let ts_us = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let ts_ms = DataType::Timestamp(TimeUnit::Millisecond, None);
+        let ts_s = DataType::Timestamp(TimeUnit::Second, None);
+
+        assert!(is_timestamp_precision_narrowing_cast(&ts_ns, &ts_ms));
+        assert!(is_timestamp_precision_narrowing_cast(&ts_us, &ts_s));
+        assert!(!is_timestamp_precision_narrowing_cast(&ts_ms, &ts_ns));
+        assert!(!is_timestamp_precision_narrowing_cast(&ts_ms, &ts_ms));
+        assert!(!is_timestamp_precision_narrowing_cast(
+            &DataType::Int64,
+            &ts_ms
+        ));
     }
 
     #[test]

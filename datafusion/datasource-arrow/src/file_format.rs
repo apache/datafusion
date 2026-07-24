@@ -356,7 +356,7 @@ impl DisplayAs for ArrowFileSink {
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "format: arrow")?;
-                write!(f, "file={}", &self.config.original_url)
+                write!(f, "file={}", self.config.original_url)
             }
         }
     }
@@ -380,7 +380,7 @@ impl DataSink for ArrowFileSink {
 // Custom implementation of inferring schema. Should eventually be moved upstream to arrow-rs.
 // See <https://github.com/apache/arrow-rs/issues/5021>
 
-const ARROW_MAGIC: [u8; 6] = [b'A', b'R', b'R', b'O', b'W', b'1'];
+const ARROW_MAGIC: [u8; 6] = *b"ARROW1";
 const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
 
 async fn infer_stream_schema(
@@ -548,6 +548,7 @@ mod tests {
         AggregateUDF, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF,
     };
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_session::{CatalogProviderList, EmptyCatalogProviderList};
     use object_store::{chunked::ChunkedStore, memory::InMemory};
 
     struct MockSession {
@@ -572,6 +573,10 @@ mod tests {
 
         fn config(&self) -> &SessionConfig {
             &self.config
+        }
+
+        fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
+            Arc::new(EmptyCatalogProviderList)
         }
 
         async fn create_physical_plan(

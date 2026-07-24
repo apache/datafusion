@@ -29,6 +29,7 @@ use crate::common;
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
 use crate::metrics::MetricsSet;
+use crate::statistics::StatisticsArgs;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::streaming::PartitionStream;
 use crate::{DisplayAs, DisplayFormatType, PlanProperties};
@@ -164,8 +165,12 @@ impl ExecutionPlan for TestMemoryExec {
         unimplemented!()
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        if partition.is_some() {
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        if args.partition().is_some() {
             Ok(Arc::new(Statistics::new_unknown(&self.schema)))
         } else {
             Ok(Arc::new(self.statistics_inner()?))

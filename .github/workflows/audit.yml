@@ -43,12 +43,14 @@ jobs:
   security_audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Install cargo-audit
-        uses: taiki-e/install-action@15449e3094499af05d8d964a1c884208e4b8b595  # v2.81.11
+        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9  # v2.84.0
         with:
           tool: cargo-audit
       - name: Run audit check
         # Note: you can ignore specific RUSTSEC issues using the `--ignore` flag ,for example:
         # run: cargo audit --ignore RUSTSEC-2026-0001
-        run: cargo audit
+        # TODO: remove once object_store upgrades to quick-xml >= 0.41.0
+        # https://github.com/apache/datafusion/issues/23297
+        run: cargo audit --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195

@@ -119,10 +119,6 @@ pub struct ListingTableScanNode {
     pub filters: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(message, repeated, tag = "7")]
     pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
-    #[prost(bool, tag = "8")]
-    pub collect_stat: bool,
-    #[prost(uint32, tag = "9")]
-    pub target_partitions: u32,
     #[prost(message, repeated, tag = "13")]
     pub file_sort_order: ::prost::alloc::vec::Vec<SortExprNodeCollection>,
     #[prost(
@@ -214,7 +210,7 @@ pub struct SortNode {
 pub struct RepartitionNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
-    #[prost(oneof = "repartition_node::PartitionMethod", tags = "2, 3")]
+    #[prost(oneof = "repartition_node::PartitionMethod", tags = "2, 3, 4")]
     pub partition_method: ::core::option::Option<repartition_node::PartitionMethod>,
 }
 /// Nested message and enum types in `RepartitionNode`.
@@ -225,7 +221,21 @@ pub mod repartition_node {
         RoundRobin(u64),
         #[prost(message, tag = "3")]
         Hash(super::HashRepartition),
+        #[prost(message, tag = "4")]
+        Range(super::RangeRepartition),
     }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RangeSplitPoint {
+    #[prost(message, repeated, tag = "1")]
+    pub value: ::prost::alloc::vec::Vec<super::datafusion_common::ScalarValue>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RangeRepartition {
+    #[prost(message, repeated, tag = "1")]
+    pub sort_expr: ::prost::alloc::vec::Vec<SortExprNode>,
+    #[prost(message, repeated, tag = "2")]
+    pub split_point: ::prost::alloc::vec::Vec<RangeSplitPoint>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HashRepartition {
@@ -243,8 +253,11 @@ pub struct EmptyRelationNode {
 pub struct CreateExternalTableNode {
     #[prost(message, optional, tag = "9")]
     pub name: ::core::option::Option<TableReference>,
+    /// deprecated; use repeated locations
     #[prost(string, tag = "2")]
     pub location: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "16")]
+    pub locations: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, tag = "3")]
     pub file_type: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "4")]
@@ -453,6 +466,9 @@ pub struct DmlNode {
     pub table_name: ::core::option::Option<TableReference>,
     #[prost(message, optional, boxed, tag = "5")]
     pub target: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+    /// Populated only when dml_type == MERGE_INTO.
+    #[prost(message, optional, boxed, tag = "6")]
+    pub merge_into: ::core::option::Option<::prost::alloc::boxed::Box<MergeIntoOpNode>>,
 }
 /// Nested message and enum types in `DmlNode`.
 pub mod dml_node {
@@ -476,6 +492,7 @@ pub mod dml_node {
         InsertOverwrite = 4,
         InsertReplace = 5,
         Truncate = 6,
+        MergeInto = 7,
     }
     impl Type {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -491,6 +508,7 @@ pub mod dml_node {
                 Self::InsertOverwrite => "INSERT_OVERWRITE",
                 Self::InsertReplace => "INSERT_REPLACE",
                 Self::Truncate => "TRUNCATE",
+                Self::MergeInto => "MERGE_INTO",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -503,11 +521,117 @@ pub mod dml_node {
                 "INSERT_OVERWRITE" => Some(Self::InsertOverwrite),
                 "INSERT_REPLACE" => Some(Self::InsertReplace),
                 "TRUNCATE" => Some(Self::Truncate),
+                "MERGE_INTO" => Some(Self::MergeInto),
                 _ => None,
             }
         }
     }
 }
+/// Carries the ON condition and WHEN clauses of a MERGE INTO operation.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MergeIntoOpNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub on: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+    #[prost(message, repeated, tag = "2")]
+    pub clauses: ::prost::alloc::vec::Vec<MergeIntoClauseNode>,
+}
+/// A single WHEN clause within a MERGE INTO statement.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MergeIntoClauseNode {
+    #[prost(enumeration = "merge_into_clause_node::Kind", tag = "1")]
+    pub kind: i32,
+    /// Optional `AND <expr>` predicate. Absent when the clause has no predicate.
+    #[prost(message, optional, tag = "2")]
+    pub predicate: ::core::option::Option<LogicalExprNode>,
+    #[prost(message, optional, tag = "3")]
+    pub action: ::core::option::Option<MergeIntoActionNode>,
+}
+/// Nested message and enum types in `MergeIntoClauseNode`.
+pub mod merge_into_clause_node {
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash,
+        PartialOrd,
+        Ord,
+        ::prost::Enumeration
+    )]
+    #[repr(i32)]
+    pub enum Kind {
+        Matched = 0,
+        NotMatched = 1,
+        NotMatchedByTarget = 2,
+        NotMatchedBySource = 3,
+    }
+    impl Kind {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Matched => "MATCHED",
+                Self::NotMatched => "NOT_MATCHED",
+                Self::NotMatchedByTarget => "NOT_MATCHED_BY_TARGET",
+                Self::NotMatchedBySource => "NOT_MATCHED_BY_SOURCE",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "MATCHED" => Some(Self::Matched),
+                "NOT_MATCHED" => Some(Self::NotMatched),
+                "NOT_MATCHED_BY_TARGET" => Some(Self::NotMatchedByTarget),
+                "NOT_MATCHED_BY_SOURCE" => Some(Self::NotMatchedBySource),
+                _ => None,
+            }
+        }
+    }
+}
+/// The action for a single WHEN clause.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MergeIntoActionNode {
+    #[prost(oneof = "merge_into_action_node::Action", tags = "1, 2, 3")]
+    pub action: ::core::option::Option<merge_into_action_node::Action>,
+}
+/// Nested message and enum types in `MergeIntoActionNode`.
+pub mod merge_into_action_node {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Action {
+        #[prost(message, tag = "1")]
+        Update(super::MergeUpdateAction),
+        #[prost(message, tag = "2")]
+        Insert(super::MergeInsertAction),
+        #[prost(message, tag = "3")]
+        Delete(super::MergeDeleteAction),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MergeUpdateAction {
+    #[prost(message, repeated, tag = "1")]
+    pub assignments: ::prost::alloc::vec::Vec<MergeAssignment>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MergeAssignment {
+    #[prost(string, tag = "1")]
+    pub column: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub value: ::core::option::Option<LogicalExprNode>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MergeInsertAction {
+    /// May be empty (meaning all columns).
+    #[prost(string, repeated, tag = "1")]
+    pub columns: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// One expression per inserted column.
+    #[prost(message, repeated, tag = "2")]
+    pub values: ::prost::alloc::vec::Vec<LogicalExprNode>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MergeDeleteAction {}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UnnestNode {
     #[prost(message, optional, boxed, tag = "1")]
@@ -600,7 +724,7 @@ pub struct SubqueryAliasNode {
 pub struct LogicalExprNode {
     #[prost(
         oneof = "logical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 13, 14, 15, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 13, 14, 15, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39"
     )]
     pub expr_type: ::core::option::Option<logical_expr_node::ExprType>,
 }
@@ -681,6 +805,12 @@ pub mod logical_expr_node {
         /// Subquery expressions
         #[prost(message, tag = "36")]
         ScalarSubqueryExpr(::prost::alloc::boxed::Box<super::ScalarSubqueryExprNode>),
+        #[prost(message, tag = "37")]
+        HigherOrderUdfExpr(super::HigherOrderUdfExprNode),
+        #[prost(message, tag = "38")]
+        Lambda(::prost::alloc::boxed::Box<super::Lambda>),
+        #[prost(message, tag = "39")]
+        LambdaVariable(super::LambdaVariable),
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -868,6 +998,29 @@ pub struct ScalarUdfExprNode {
     pub args: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(bytes = "vec", optional, tag = "3")]
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HigherOrderUdfExprNode {
+    #[prost(string, tag = "1")]
+    pub fun_name: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "2")]
+    pub args: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    #[prost(bytes = "vec", optional, tag = "3")]
+    pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Lambda {
+    #[prost(string, repeated, tag = "1")]
+    pub params: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub body: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LambdaVariable {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub field: ::core::option::Option<super::datafusion_common::Field>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WindowExprNode {
@@ -1354,7 +1507,7 @@ pub struct PhysicalExprNode {
     pub expr_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1411,6 +1564,12 @@ pub mod physical_expr_node {
         ScalarSubquery(super::PhysicalScalarSubqueryExprNode),
         #[prost(message, tag = "23")]
         DynamicFilter(::prost::alloc::boxed::Box<super::PhysicalDynamicFilterNode>),
+        #[prost(message, tag = "24")]
+        HigherOrderUdf(super::PhysicalHigherOrderUdfNode),
+        #[prost(message, tag = "25")]
+        Lambda(::prost::alloc::boxed::Box<super::PhysicalLambdaExprNode>),
+        #[prost(message, tag = "26")]
+        LambdaVariable(super::PhysicalLambdaVariableExprNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1440,6 +1599,29 @@ pub struct PhysicalScalarUdfNode {
     pub nullable: bool,
     #[prost(string, tag = "6")]
     pub return_field_name: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalHigherOrderUdfNode {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "2")]
+    pub args: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(bytes = "vec", optional, tag = "3")]
+    pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalLambdaExprNode {
+    #[prost(string, repeated, tag = "1")]
+    pub params: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub body: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalLambdaVariableExprNode {
+    #[prost(uint32, tag = "1")]
+    pub index: u32,
+    #[prost(message, optional, tag = "2")]
+    pub field: ::core::option::Option<super::datafusion_common::Field>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalAggregateExprNode {
@@ -1695,6 +1877,8 @@ pub struct FileScanExecConf {
     pub projection_exprs: ::core::option::Option<ProjectionExprs>,
     #[prost(bool, optional, tag = "14")]
     pub partitioned_by_file_group: ::core::option::Option<bool>,
+    #[prost(message, optional, tag = "15")]
+    pub output_partitioning: ::core::option::Option<Partitioning>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetScanExecNode {
@@ -1887,11 +2071,19 @@ pub struct JoinOn {
 pub struct EmptyExecNode {
     #[prost(message, optional, tag = "1")]
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    /// Number of output partitions. Absent (0) means a single partition, so that
+    /// plans encoded before this field existed decode to the previous default.
+    #[prost(uint32, tag = "2")]
+    pub partitions: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PlaceholderRowExecNode {
     #[prost(message, optional, tag = "1")]
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    /// Number of output partitions. Absent (0) means a single partition, so that
+    /// plans encoded before this field existed decode to the previous default.
+    #[prost(uint32, tag = "2")]
+    pub partitions: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProjectionExecNode {

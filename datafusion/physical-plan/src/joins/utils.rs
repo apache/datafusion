@@ -33,7 +33,8 @@ use crate::metrics::{
 };
 use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::{
-    ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning, Statistics,
+    ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    RangePartitioning, Statistics,
 };
 // compatibility
 pub use super::join_filter::JoinFilter;
@@ -68,7 +69,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::utils::normalize_float_zero;
 use datafusion_common::{
     DataFusionError, JoinSide, JoinType, NullEquality, Result, SharedResult,
-    not_impl_err, plan_err,
+    internal_datafusion_err, not_impl_err, plan_err,
 };
 use datafusion_expr::Operator;
 use datafusion_expr::interval_arithmetic::Interval;
@@ -145,12 +146,20 @@ pub fn adjust_right_output_partitioning(
                 .collect::<Result<_>>()?;
             Partitioning::Hash(new_exprs, *size)
         }
-        Partitioning::Range(_) => {
-            // Range partitioning optimizer propagation is tracked in
-            // https://github.com/apache/datafusion/issues/22395
-            return not_impl_err!(
-                "Join output partitioning with range partitioning is not implemented"
-            );
+        Partitioning::Range(range) => {
+            let ordering = add_offset_to_physical_sort_exprs(
+                range.ordering().iter().cloned(),
+                left_columns_len as _,
+            )?;
+            let ordering = LexOrdering::new(ordering).ok_or_else(|| {
+                internal_datafusion_err!(
+                    "Offsetting range partitioning produced an empty ordering"
+                )
+            })?;
+            Partitioning::Range(RangePartitioning::new(
+                ordering,
+                range.split_points().to_vec(),
+            ))
         }
         result => result.clone(),
     };
@@ -837,15 +846,22 @@ fn estimate_inner_join_cardinality(
     // With the assumption that the smaller input's domain is generally represented in the bigger
     // input's domain, we can estimate the inner join's cardinality by taking the cartesian product
     // of the two inputs and normalizing it by the selectivity factor.
-    let left_num_rows = left_stats.num_rows.get_value()?;
-    let right_num_rows = right_stats.num_rows.get_value()?;
+    let left_num_rows = *left_stats.num_rows.get_value()?;
+    let right_num_rows = *right_stats.num_rows.get_value()?;
+    // Widen before multiplying so the intermediate Cartesian product does not
+    // overflow when the normalized cardinality is still representable as usize.
+    let cartesian_product = (left_num_rows as u128) * (right_num_rows as u128);
+    let normalized_cardinality =
+        |value: usize| usize::try_from(cartesian_product / value as u128);
     match join_selectivity {
-        Precision::Exact(value) if value > 0 => {
-            Some(Precision::Exact((left_num_rows * right_num_rows) / value))
-        }
-        Precision::Inexact(value) if value > 0 => {
-            Some(Precision::Inexact((left_num_rows * right_num_rows) / value))
-        }
+        Precision::Exact(value) if value > 0 => Some(
+            normalized_cardinality(value)
+                .map(Precision::Exact)
+                .unwrap_or(Precision::Inexact(usize::MAX)),
+        ),
+        Precision::Inexact(value) if value > 0 => Some(Precision::Inexact(
+            normalized_cardinality(value).unwrap_or(usize::MAX),
+        )),
         // Since we don't have any information about the selectivity (which is derived
         // from the number of distinct rows information) we can give up here for now.
         // And let other passes handle this (otherwise we would need to produce an
@@ -1373,7 +1389,9 @@ pub(crate) fn build_batch_from_indices(
     Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
 }
 
-/// Returns a new [RecordBatch] resulting of a join where the build/left side is empty.
+/// Returns a new [RecordBatch] for a probe batch when no probe row can find a
+/// match: the build-side map is empty, either because the build side has no
+/// rows or because none of its rows has a matchable (non-NULL) join key.
 /// The resulting batch has [Schema] `schema`.
 pub(crate) fn build_batch_empty_build_side(
     schema: &Schema,
@@ -1796,9 +1814,8 @@ impl BuildProbeJoinMetrics {
             .with_category(MetricCategory::Rows)
             .counter("build_input_rows", partition);
 
-        let build_mem_used = MetricBuilder::new(metrics)
-            .with_category(MetricCategory::Bytes)
-            .gauge("build_mem_used", partition);
+        let build_mem_used =
+            MetricBuilder::new(metrics).peak_memory_usage("build_mem_used", partition);
 
         let input_batches = MetricBuilder::new(metrics)
             .with_category(MetricCategory::Rows)
@@ -2104,6 +2121,9 @@ pub fn swap_join_projection(
 /// `fifo_hashmap` sets the order of iteration over `batch` rows while updating hashmap,
 /// which allows to keep either first (if set to true) or last (if set to false) row index
 /// as a chain head for rows with equal hash values.
+///
+/// Under [`NullEquality::NullEqualsNothing`], rows with a NULL in any key
+/// column can never match a probe row, so they are not inserted into the map.
 #[expect(clippy::too_many_arguments)]
 pub fn update_hash(
     on: &[PhysicalExprRef],
@@ -2114,6 +2134,7 @@ pub fn update_hash(
     hashes_buffer: &mut [u64],
     deleted_offset: usize,
     fifo_hashmap: bool,
+    null_equality: NullEquality,
 ) -> Result<()> {
     // evaluate the keys
     let keys_values = evaluate_expressions_to_arrays(on, batch)?;
@@ -2124,10 +2145,14 @@ pub fn update_hash(
     // For usual JoinHashmap, the implementation is void.
     hash_map.extend_zero(batch.num_rows());
 
+    // Unmatchable NULL-key rows are filtered out below.
+    let valid_keys = matchable_join_keys(&keys_values, null_equality);
+
     // Updating JoinHashMap from hash values iterator
     let hash_values_iter = hash_values
         .iter()
         .enumerate()
+        .filter(|(i, _)| valid_keys.as_ref().is_none_or(|nulls| nulls.is_valid(*i)))
         .map(|(i, val)| (i + offset, val));
 
     if fifo_hashmap {
@@ -2137,6 +2162,31 @@ pub fn update_hash(
     }
 
     Ok(())
+}
+
+/// Returns the combined validity of the join key columns `join_key_arrays`: a row
+/// is valid only if every key column is non-NULL at that row.
+///
+/// Returns `None` when no rows need to be filtered: either every row has
+/// fully non-NULL keys, or `null_equality` is
+/// [`NullEquality::NullEqualsNull`], where NULL keys are matchable.
+pub(crate) fn matchable_join_keys(
+    join_key_arrays: &[ArrayRef],
+    null_equality: NullEquality,
+) -> Option<NullBuffer> {
+    match null_equality {
+        NullEquality::NullEqualsNothing => {
+            let logical_nulls: Vec<_> = join_key_arrays
+                .iter()
+                .map(|values| values.logical_nulls())
+                .collect();
+            NullBuffer::union_many(logical_nulls.iter().map(Option::as_ref))
+                // An all-valid array can still have a validity buffer; return
+                // `None` in that case, since there is nothing to filter.
+                .filter(|nulls| nulls.null_count() > 0)
+        }
+        NullEquality::NullEqualsNull => None,
+    }
 }
 
 pub(super) fn equal_rows_arr(
@@ -2436,7 +2486,7 @@ mod tests {
     use arrow::datatypes::{DataType, Fields};
     use arrow::error::{ArrowError, Result as ArrowResult};
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
-    use datafusion_common::{ScalarValue, arrow_datafusion_err, arrow_err};
+    use datafusion_common::{ScalarValue, SplitPoint, arrow_datafusion_err, arrow_err};
     use datafusion_physical_expr::PhysicalSortExpr;
 
     use rstest::rstest;
@@ -2461,6 +2511,83 @@ mod tests {
         let result = get_anti_indices(2..8, &input);
 
         assert_u32_values(&result, &[2, 4, 6, 7]);
+    }
+
+    #[test]
+    fn update_hash_skips_null_keys_for_null_equals_nothing() -> Result<()> {
+        use crate::joins::join_hash_map::JoinHashMapU32;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![
+                Some(1),
+                None,
+                Some(2),
+                None,
+                Some(1),
+            ]))],
+        )?;
+        let on: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("a", 0))];
+        let random_state = RandomState::with_seed(42);
+        let mut hashes_buffer = vec![0; batch.num_rows()];
+        create_hashes([batch.column(0)], &random_state, &mut hashes_buffer)?;
+
+        let matched_build_indices =
+            |map: &JoinHashMapU32, hashes_buffer: &[u64]| -> Vec<u64> {
+                let mut input_indices = vec![];
+                let mut match_indices = vec![];
+                map.get_matched_indices_with_limit_offset(
+                    hashes_buffer,
+                    None,
+                    8192,
+                    (0, None),
+                    &mut input_indices,
+                    &mut match_indices,
+                );
+                match_indices.sort_unstable();
+                match_indices.dedup();
+                match_indices
+            };
+
+        let mut map = JoinHashMapU32::with_capacity(batch.num_rows());
+        update_hash(
+            &on,
+            &batch,
+            &mut map,
+            0,
+            &random_state,
+            &mut hashes_buffer,
+            0,
+            true,
+            NullEquality::NullEqualsNothing,
+        )?;
+        // NULL keys can never match under NullEqualsNothing, so they must not
+        // be inserted into the map. Assert row indices rather than map length:
+        // with forced hash collisions, multiple logical keys can share one
+        // hash table entry.
+        assert_eq!(matched_build_indices(&map, &hashes_buffer), vec![0, 2, 4]);
+
+        let mut map = JoinHashMapU32::with_capacity(batch.num_rows());
+        update_hash(
+            &on,
+            &batch,
+            &mut map,
+            0,
+            &random_state,
+            &mut hashes_buffer,
+            0,
+            true,
+            NullEquality::NullEqualsNull,
+        )?;
+        // Under NullEqualsNull, NULL keys can match, so the build-side NULL
+        // rows must be present in the map.
+        assert_eq!(
+            matched_build_indices(&map, &hashes_buffer),
+            vec![0, 1, 2, 3, 4]
+        );
+
+        Ok(())
     }
 
     #[test]
@@ -2949,6 +3076,46 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_inner_join_cardinality_multiplication_overflow() {
+        let statistics = |num_rows, distinct_count| Statistics {
+            num_rows,
+            total_byte_size: Absent,
+            column_statistics: vec![ColumnStatistics {
+                distinct_count,
+                ..Default::default()
+            }],
+        };
+        let large_row_count = usize::MAX / 2 + 1;
+
+        // The Cartesian product overflows usize, but applying the NDV divisor
+        // produces a representable cardinality.
+        assert_eq!(
+            estimate_inner_join_cardinality(
+                statistics(Inexact(large_row_count), Inexact(1)),
+                statistics(Inexact(3), Inexact(3)),
+            ),
+            Some(Inexact(large_row_count))
+        );
+        assert_eq!(
+            estimate_inner_join_cardinality(
+                statistics(Exact(large_row_count), Exact(1)),
+                statistics(Exact(3), Exact(3)),
+            ),
+            Some(Exact(large_row_count))
+        );
+
+        // If the normalized result itself cannot fit in usize, cap the
+        // estimate and mark it as inexact.
+        assert_eq!(
+            estimate_inner_join_cardinality(
+                statistics(Exact(usize::MAX), Exact(1)),
+                statistics(Exact(2), Exact(1)),
+            ),
+            Some(Inexact(usize::MAX))
+        );
     }
 
     #[test]
@@ -4020,6 +4187,53 @@ mod tests {
         assert_eq!(result.column_statistics[1].distinct_count, Inexact(31));
         assert_eq!(result.column_statistics[1].sum_value, Absent);
         assert_eq!(result.column_statistics[1].byte_size, Inexact(256));
+    }
+
+    #[test]
+    fn test_adjust_right_output_partitioning_preserves_range() -> Result<()> {
+        let split_points = vec![
+            SplitPoint::new(vec![
+                ScalarValue::Int32(Some(10)),
+                ScalarValue::Int32(Some(100)),
+            ]),
+            SplitPoint::new(vec![
+                ScalarValue::Int32(Some(20)),
+                ScalarValue::Int32(Some(50)),
+            ]),
+        ];
+        let range = RangePartitioning::try_new(
+            LexOrdering::new([
+                PhysicalSortExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    SortOptions::new(false, true),
+                ),
+                PhysicalSortExpr::new(
+                    Arc::new(Column::new("b", 2)),
+                    SortOptions::new(true, false),
+                ),
+            ])
+            .unwrap(),
+            split_points.clone(),
+        )?;
+
+        let adjusted = adjust_right_output_partitioning(&Partitioning::Range(range), 3)?;
+        let expected = Partitioning::Range(RangePartitioning::new(
+            LexOrdering::new([
+                PhysicalSortExpr::new(
+                    Arc::new(Column::new("a", 3)),
+                    SortOptions::new(false, true),
+                ),
+                PhysicalSortExpr::new(
+                    Arc::new(Column::new("b", 5)),
+                    SortOptions::new(true, false),
+                ),
+            ])
+            .unwrap(),
+            split_points,
+        ));
+
+        assert_eq!(adjusted, expected);
+        Ok(())
     }
 
     #[test]

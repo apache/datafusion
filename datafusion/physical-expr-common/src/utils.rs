@@ -370,21 +370,21 @@ fn scatter_fallback(
     let mut true_pos = 0;
 
     let mask_array = BooleanArray::new(mask.clone(), None);
-    SlicesIterator::new(&mask_array).for_each(|(start, end)| {
+    for (start, end) in SlicesIterator::new(&mask_array) {
         // the gap needs to be filled with nulls
         if start > filled {
-            mutable.extend_nulls(start - filled);
+            mutable.try_extend_nulls(start - filled)?;
         }
         // fill with truthy values
         let len = end - start;
-        mutable.extend(0, true_pos, true_pos + len);
+        mutable.try_extend(0, true_pos, true_pos + len)?;
         true_pos += len;
         filled = end;
-    });
+    }
 
     // the remaining part is falsy
     if filled < output_len {
-        mutable.extend_nulls(output_len - filled);
+        mutable.try_extend_nulls(output_len - filled)?;
     }
 
     let data = mutable.freeze();

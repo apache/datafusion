@@ -908,6 +908,60 @@ fn test_type_union_coercion_prefers_finer_timestamp_unit() {
     );
 }
 
+/// Tests that `type_union_resolution` unifies Map types by recursing into the
+/// key/value types, so a Map whose value type is Null (e.g. `MAP {'k': NULL}`)
+/// unifies with a concretely-typed Map in a VALUES list.
+/// See <https://github.com/apache/datafusion/issues/23474>.
+#[test]
+fn test_type_union_resolution_map() {
+    fn map_type(value_type: DataType) -> DataType {
+        DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", value_type, true),
+                ])),
+                false,
+            )),
+            false,
+        )
+    }
+
+    // Null value type unifies with a concrete value type, in both orders
+    assert_eq!(
+        type_union_resolution(&[map_type(DataType::Int64), map_type(DataType::Null)]),
+        Some(map_type(DataType::Int64))
+    );
+    assert_eq!(
+        type_union_resolution(&[map_type(DataType::Null), map_type(DataType::Int64)]),
+        Some(map_type(DataType::Int64))
+    );
+
+    // Numeric value types widen following the scalar rules
+    assert_eq!(
+        type_union_resolution(&[
+            map_type(DataType::Int64),
+            map_type(DataType::Null),
+            map_type(DataType::Float64),
+        ]),
+        Some(map_type(DataType::Float64))
+    );
+
+    // Map cannot unify with a non-Map composite type
+    assert_eq!(
+        type_union_resolution(&[
+            map_type(DataType::Int64),
+            DataType::Struct(Fields::from(vec![Field::new(
+                "key",
+                DataType::Utf8,
+                false
+            )])),
+        ]),
+        None
+    );
+}
+
 /// Tests that comparison operators coerce to numeric when comparing
 /// numeric and string types.
 #[test]
@@ -971,7 +1025,8 @@ fn test_string_concat_coercion() -> Result<()> {
         DataType::FixedSizeBinary(4),
         DataType::FixedSizeBinary(16),
         Operator::StringConcat,
-        DataType::Binary
+        DataType::FixedSizeBinary(4),
+        DataType::FixedSizeBinary(16)
     );
     test_coercion_binary_rule!(
         DataType::FixedSizeBinary(4),
@@ -1012,19 +1067,18 @@ fn test_string_concat_coercion() -> Result<()> {
             DataType::Binary,
             DataType::LargeBinary,
             DataType::BinaryView,
-            DataType::FixedSizeBinary(8),
         ] {
-            assert!(
-                BinaryTypeCoercer::new(&binary_dt, &Operator::StringConcat, &string_dt,)
-                    .get_input_types()
-                    .is_err(),
-                "{binary_dt} || {string_dt}"
+            test_coercion_binary_rule!(
+                &binary_dt,
+                &string_dt,
+                Operator::StringConcat,
+                string_dt
             );
-            assert!(
-                BinaryTypeCoercer::new(&string_dt, &Operator::StringConcat, &binary_dt,)
-                    .get_input_types()
-                    .is_err(),
-                "{string_dt} || {binary_dt}"
+            test_coercion_binary_rule!(
+                &string_dt,
+                &binary_dt,
+                Operator::StringConcat,
+                string_dt
             );
         }
     }

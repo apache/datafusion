@@ -113,17 +113,6 @@ impl AsyncFuncExec {
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for AsyncFuncExec {
@@ -180,6 +169,17 @@ impl ExecutionPlan for AsyncFuncExec {
         )?))
     }
 
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -208,7 +208,7 @@ impl ExecutionPlan for AsyncFuncExec {
             input_stream,
             batch_coalescer: LimitedBatchCoalescer::new(
                 Arc::clone(&self.input.schema()),
-                config_options_ref.execution.batch_size,
+                config_options_ref.execution.batch_size.get(),
                 None,
             ),
         };

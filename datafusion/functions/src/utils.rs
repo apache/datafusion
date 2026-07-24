@@ -74,6 +74,28 @@ get_optimal_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
 // `utf8_to_int_type`: returns either a Int32 or Int64 based on the input type size.
 get_optimal_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
 
+/// Transforms the leaf type while preserving supported encoding containers.
+///
+/// Keep encoded type handling centralized here so additional encodings can be
+/// supported without changing each function's return type implementation.
+pub(crate) fn transform_leaf_type_preserving_encoding<F>(
+    arg_type: &DataType,
+    transform: &F,
+) -> Result<DataType>
+where
+    F: Fn(&DataType) -> Result<DataType>,
+{
+    match arg_type {
+        DataType::Dictionary(key_type, value_type) => Ok(DataType::Dictionary(
+            key_type.clone(),
+            Box::new(transform_leaf_type_preserving_encoding(
+                value_type, transform,
+            )?),
+        )),
+        _ => transform(arg_type),
+    }
+}
+
 /// Creates a scalar function implementation for the given function.
 /// * `inner` - the function to be executed
 /// * `hints` - hints to be used when expanding scalars to arrays
@@ -217,8 +239,7 @@ where
             } else {
                 let right = R::Native::try_from(scalar.clone()).map_err(|_| {
                     DataFusionError::NotImplemented(format!(
-                        "Cannot convert scalar value {} to {}",
-                        &scalar, cast_target
+                        "Cannot convert scalar value {scalar} to {cast_target}"
                     ))
                 })?;
                 left.try_unary::<_, O, _>(|lvalue| fun(lvalue, right))?

@@ -97,8 +97,16 @@ impl MinMaxStatistics {
                             .zip(s.column_statistics[i].max_value.get_value().cloned())
                             .ok_or_else(|| plan_datafusion_err!("statistics not found"))
                     } else {
-                        let partition_value = &pv[i - s.column_statistics.len()];
-                        Ok((partition_value.clone(), partition_value.clone()))
+                        if let Some(partition_value) =
+                            pv.get(i - s.column_statistics.len())
+                        {
+                            Ok((partition_value.clone(), partition_value.clone()))
+                        } else {
+                            Err(plan_datafusion_err!(
+                                "statistics not found for partition, expected at most {}",
+                                s.column_statistics.len()
+                            ))
+                        }
                     }
                 })
                 .collect::<Result<Vec<_>>>()?
@@ -541,14 +549,6 @@ pub fn compute_all_files_statistics(
     Ok((file_groups_with_stats, statistics))
 }
 
-#[deprecated(since = "47.0.0", note = "Use Statistics::add")]
-pub fn add_row_stats(
-    file_num_rows: Precision<usize>,
-    num_rows: Precision<usize>,
-) -> Precision<usize> {
-    file_num_rows.add(&num_rows)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -889,5 +889,32 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn min_max_statistics_missing_column_stats_returns_error() {
+        let schema = test_schema();
+        let sort_order =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
+        let files = [
+            file_with_stats("f1.parquet", Statistics::default()),
+            file_with_stats("f2.parquet", Statistics::default()),
+        ];
+
+        let err = match MinMaxStatistics::new_from_files(
+            &sort_order,
+            &schema,
+            None,
+            files.iter(),
+        ) {
+            Ok(_) => panic!("expected missing statistics error"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("statistics not found for partition"),
+            "unexpected error: {err:?}"
+        );
     }
 }
