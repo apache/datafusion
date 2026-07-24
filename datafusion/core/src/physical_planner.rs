@@ -3475,10 +3475,8 @@ mod tests {
 
     #[tokio::test]
     async fn merge_into_provider_receives_combined_logical_schema() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("val", DataType::Int32, true),
-        ]));
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
         let target = Arc::new(CaptureMergeProvider {
             schema: Arc::clone(&schema),
             captured: Mutex::new(None),
@@ -3490,8 +3488,7 @@ mod tests {
 
         ctx.sql(
             "MERGE INTO target AS t USING source AS s ON t.id = s.id \
-             WHEN MATCHED AND t.val IS NULL THEN UPDATE SET val = s.val \
-             WHEN NOT MATCHED THEN INSERT (id, val) VALUES (s.id, s.val)",
+             WHEN MATCHED AND t.id > s.id THEN DELETE",
         )
         .await?
         .create_physical_plan()
@@ -3500,17 +3497,17 @@ mod tests {
         let captured = target.captured.lock().await;
         let (merge_schema, physical_on, clause_count) =
             captured.as_ref().expect("merge_into should be called");
-        assert_eq!(*clause_count, 2);
+        assert_eq!(*clause_count, 1);
         assert_eq!(
             merge_schema.index_of_column(&Column::new(Some("target"), "id"))?,
             0
         );
         assert_eq!(
             merge_schema.index_of_column(&Column::new(Some("s"), "id"))?,
-            2
+            1
         );
         assert_contains!(physical_on, "index: 0");
-        assert_contains!(physical_on, "index: 2");
+        assert_contains!(physical_on, "index: 1");
         Ok(())
     }
 

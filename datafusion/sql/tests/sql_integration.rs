@@ -3601,51 +3601,37 @@ fn select_groupby_orderby_aggregate_on_non_selected_column_original_issue() {
 }
 
 #[test]
-fn plan_merge_into_canonicalizes_target_alias() {
-    // The target alias `t` must be rewritten to the real table name `j1` in the
-    // stored plan, while the source alias `s` is preserved. This keeps the plan
-    // independent of the SQL alias so analyzer passes and proto deserialization
-    // can rebuild the target schema from the table name alone.
-    let sql = "MERGE INTO j1 AS t USING j2 AS s ON t.j1_id = s.j2_id \
-               WHEN MATCHED THEN UPDATE SET j1_string = s.j2_string \
-               WHEN NOT MATCHED THEN INSERT (j1_id, j1_string) VALUES (s.j2_id, s.j2_string)";
-    let plan = logical_plan(sql).unwrap();
+fn plan_merge_into_canonicalizes_qualifiers_and_preserves_quoted_columns() {
+    let plan = logical_plan(
+        "MERGE INTO person_quoted_cols AS t USING j2 AS s ON t.id = s.j2_id \
+         WHEN MATCHED THEN UPDATE SET \"First Name\" = s.j2_string \
+         WHEN NOT MATCHED THEN INSERT (id, \"Age\") VALUES (s.j2_id, 42)",
+    )
+    .unwrap();
     let LogicalPlan::Dml(dml) = &plan else {
         panic!("expected Dml, got {plan:?}");
     };
     let datafusion_expr::WriteOp::MergeInto(merge_op) = &dml.op else {
         panic!("expected MergeInto, got {:?}", dml.op);
     };
-    // `t.j1_id` -> `j1.j1_id`, `s.j2_id` left untouched.
-    assert_eq!(merge_op.on.to_string(), "j1.j1_id = s.j2_id");
-    // Source-side column references remain qualified with the source alias.
-    let exprs: Vec<String> = merge_op.exprs().iter().map(|e| e.to_string()).collect();
-    assert_eq!(
-        exprs,
-        vec![
-            "j1.j1_id = s.j2_id".to_string(),
-            "s.j2_string".to_string(),
-            "s.j2_id".to_string(),
-            "s.j2_string".to_string(),
-        ]
-    );
-}
 
-#[test]
-fn plan_merge_into_rejects_source_alias_colliding_with_target_name() {
-    // Aliasing the source to the target table's real name (`USING j2 AS j1`,
-    // where `j1` is the target) would make canonicalizing the target alias
-    // `t` to `j1` collide with the source qualifier, silently collapsing the
-    // two namespaces. The planner must reject this rather than misresolve.
-    let sql = "MERGE INTO j1 AS t USING j2 AS j1 ON t.j1_id = j1.j2_id \
-               WHEN MATCHED THEN DELETE";
-    let err = logical_plan(sql).unwrap_err();
-    assert!(
-        err.strip_backtrace().contains(
-            "MERGE source may not use the target table name 'j1' as a qualifier"
-        ),
-        "unexpected error: {err}"
-    );
+    assert_eq!(merge_op.on.to_string(), "person_quoted_cols.id = s.j2_id");
+
+    let datafusion_expr::dml::MergeIntoAction::Update(assignments) =
+        &merge_op.clauses[0].action
+    else {
+        panic!("expected UPDATE");
+    };
+    assert_eq!(assignments[0].0, "First Name");
+    assert_eq!(assignments[0].1.to_string(), "s.j2_string");
+
+    let datafusion_expr::dml::MergeIntoAction::Insert { columns, values } =
+        &merge_op.clauses[1].action
+    else {
+        panic!("expected INSERT");
+    };
+    assert_eq!(columns, &["id".to_string(), "Age".to_string()]);
+    assert_eq!(values[0].to_string(), "s.j2_id");
 }
 
 #[rstest]
@@ -3665,18 +3651,6 @@ fn plan_merge_into_rejects_source_alias_colliding_with_target_name() {
      VALUES (j2.j2_id, j2.j2_string) WHERE false",
     "MERGE INSERT WHERE predicates are not supported"
 )]
-fn plan_merge_into_rejects_unsupported_action_predicates(
-    #[case] sql: &str,
-    #[case] expected: &str,
-) {
-    let err = logical_plan(sql).unwrap_err();
-    assert!(
-        err.strip_backtrace().contains(expected),
-        "unexpected error: {err}"
-    );
-}
-
-#[rstest]
 #[case(
     "MERGE INTO j1 USING j2 ON j1.j1_id = j2.j2_id \
      WHEN MATCHED THEN UPDATE SET j1_string = 'a', j1_string = 'b'",
@@ -3713,7 +3687,7 @@ fn plan_merge_into_rejects_unsupported_action_predicates(
     "MERGE INTO j1 AS t(a) USING j2 ON true WHEN MATCHED THEN DELETE",
     "MERGE target alias column lists are not supported"
 )]
-fn plan_merge_into_validates_action_targets_and_structure(
+fn plan_merge_into_rejects_invalid_actions_and_structure(
     #[case] sql: &str,
     #[case] expected: &str,
 ) {
@@ -3722,36 +3696,6 @@ fn plan_merge_into_validates_action_targets_and_structure(
         err.strip_backtrace().contains(expected),
         "unexpected error: {err}"
     );
-}
-
-#[test]
-fn plan_merge_into_preserves_quoted_action_columns() {
-    let plan = logical_plan(
-        "MERGE INTO person_quoted_cols AS t USING j2 AS s ON t.id = s.j2_id \
-         WHEN MATCHED THEN UPDATE SET \"First Name\" = s.j2_string \
-         WHEN NOT MATCHED THEN INSERT (id, \"Age\") VALUES (s.j2_id, 42)",
-    )
-    .unwrap();
-    let LogicalPlan::Dml(dml) = plan else {
-        panic!("expected Dml");
-    };
-    let datafusion_expr::WriteOp::MergeInto(merge_op) = dml.op else {
-        panic!("expected MergeInto");
-    };
-
-    let datafusion_expr::dml::MergeIntoAction::Update(assignments) =
-        &merge_op.clauses[0].action
-    else {
-        panic!("expected UPDATE");
-    };
-    assert_eq!(assignments[0].0, "First Name");
-
-    let datafusion_expr::dml::MergeIntoAction::Insert { columns, .. } =
-        &merge_op.clauses[1].action
-    else {
-        panic!("expected INSERT");
-    };
-    assert_eq!(columns, &["id".to_string(), "Age".to_string()]);
 }
 
 fn logical_plan(sql: &str) -> Result<LogicalPlan> {
