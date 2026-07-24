@@ -355,7 +355,7 @@ impl RunOpt {
 
     async fn register_tables(&self, ctx: &SessionContext) -> Result<()> {
         for table in IMDB_TABLES {
-            let table_provider = { self.get_table(ctx, table).await? };
+            let table_provider = { self.get_table(ctx, table)? };
 
             if self.mem_table {
                 println!("Loading table '{table}' into memory");
@@ -416,7 +416,7 @@ impl RunOpt {
         Ok(result)
     }
 
-    async fn get_table(
+    fn get_table(
         &self,
         ctx: &SessionContext,
         table: &str,

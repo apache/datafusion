@@ -44,7 +44,7 @@ use datafusion::prelude::*;
 /// one might do as part of a higher level storage engine. See
 /// `parquet_index.rs` for an example that uses pruning in the context of an
 /// individual query.
-pub async fn pruning() -> Result<()> {
+pub fn pruning() -> Result<()> {
     // In this example, we'll use the PruningPredicate to determine if
     // the expression `x = 5 AND y = 10` can never be true based on statistics
 
