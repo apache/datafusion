@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::RecordBatch;
+use arrow::array::{Array, BooleanArray, RecordBatch};
 use arrow::compute::BatchCoalescer;
 use arrow::datatypes::SchemaRef;
+use arrow::error::ArrowError;
 use datafusion_common::{Result, assert_or_internal_err};
 
 /// Concatenate multiple [`RecordBatch`]es and apply a limit
@@ -120,6 +121,80 @@ impl LimitedBatchCoalescer {
         Ok(PushBatchStatus::Continue)
     }
 
+    /// Pushes the next [`RecordBatch`] into the coalescer after applying `filter`.
+    ///
+    /// Only non-null `true` values count toward `fetch`. When the limit is reached,
+    /// the filter is truncated after the final selected row.
+    ///
+    /// # Returns
+    /// Returns [`PushBatchStatus::LimitReached`] when `fetch` is reached and
+    /// [`PushBatchStatus::Continue`] otherwise.
+    ///
+    /// # Errors
+    /// Returns an error if called after [`Self::finish`], if `filter` is longer
+    /// than the batch, or if the internal filtered push operation fails.
+    pub fn push_batch_with_filter(
+        &mut self,
+        batch: RecordBatch,
+        filter: &BooleanArray,
+    ) -> Result<PushBatchStatus> {
+        assert_or_internal_err!(
+            !self.finished,
+            "LimitedBatchCoalescer: cannot push batch after finish"
+        );
+        if filter.len() > batch.num_rows() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Filter predicate of length {} is larger than target array of length {}",
+                filter.len(),
+                batch.num_rows()
+            ))
+            .into());
+        }
+
+        let Some(fetch) = self.fetch else {
+            self.inner.push_batch_with_filter(batch, filter)?;
+            return Ok(PushBatchStatus::Continue);
+        };
+
+        if self.total_rows >= fetch {
+            return Ok(PushBatchStatus::LimitReached);
+        }
+
+        let remaining_rows = fetch - self.total_rows;
+        let mut selected_rows = 0;
+        let mut filter_len = None;
+        if filter.null_count() == 0 {
+            for index in filter.values().set_indices() {
+                selected_rows += 1;
+                if selected_rows == remaining_rows {
+                    filter_len = Some(index + 1);
+                    break;
+                }
+            }
+        } else {
+            for (index, value) in filter.iter().enumerate() {
+                if value == Some(true) {
+                    selected_rows += 1;
+                    if selected_rows == remaining_rows {
+                        filter_len = Some(index + 1);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if let Some(filter_len) = filter_len {
+            let filter = filter.slice(0, filter_len);
+            self.inner.push_batch_with_filter(batch, &filter)?;
+            self.total_rows += remaining_rows;
+            Ok(PushBatchStatus::LimitReached)
+        } else {
+            self.inner.push_batch_with_filter(batch, filter)?;
+            self.total_rows += selected_rows;
+            Ok(PushBatchStatus::Continue)
+        }
+    }
+
     /// Return true if there is no data buffered
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
@@ -150,7 +225,8 @@ mod tests {
     use std::ops::Range;
     use std::sync::Arc;
 
-    use arrow::array::UInt32Array;
+    use arrow::array::{BooleanArray, UInt32Array};
+    use arrow::buffer::{BooleanBuffer, NullBuffer};
     use arrow::compute::concat_batches;
     use arrow::datatypes::{DataType, Field, Schema};
 
@@ -223,6 +299,74 @@ mod tests {
             .with_fetch(Some(7))
             .with_expected_output_sizes(vec![7])
             .run()
+    }
+
+    #[test]
+    fn test_coalesce_with_filter_without_fetch() {
+        let batch = uint32_batch(0..6);
+        let filter = BooleanArray::from(vec![true, false, true, false, false, true]);
+        let mut coalescer = LimitedBatchCoalescer::new(batch.schema(), 20, None);
+
+        let status = coalescer.push_batch_with_filter(batch, &filter).unwrap();
+        assert_eq!(status, PushBatchStatus::Continue);
+
+        coalescer.finish().unwrap();
+        let output = coalescer.next_completed_batch().unwrap();
+        let output = output
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .unwrap();
+        assert_eq!(output, &UInt32Array::from(vec![0, 2, 5]));
+    }
+
+    #[test]
+    fn test_coalesce_with_filter_and_fetch() {
+        let first_batch = uint32_batch(0..5);
+        let second_batch = uint32_batch(5..11);
+        let mut coalescer = LimitedBatchCoalescer::new(first_batch.schema(), 20, Some(3));
+
+        let first_filter = BooleanArray::new(
+            BooleanBuffer::from(vec![true, true, false, false, false]),
+            Some(NullBuffer::from(vec![true, false, true, true, true])),
+        );
+        assert_eq!(
+            coalescer
+                .push_batch_with_filter(first_batch, &first_filter)
+                .unwrap(),
+            PushBatchStatus::Continue
+        );
+
+        let second_filter =
+            BooleanArray::from(vec![false, false, true, false, true, true, true])
+                .slice(1, 6);
+        assert_eq!(
+            coalescer
+                .push_batch_with_filter(second_batch, &second_filter)
+                .unwrap(),
+            PushBatchStatus::LimitReached
+        );
+
+        coalescer.finish().unwrap();
+        let output = coalescer.next_completed_batch().unwrap();
+        let output = output
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .unwrap();
+        assert_eq!(output, &UInt32Array::from(vec![0, 6, 8]));
+
+        let oversized_batch = uint32_batch(0..5);
+        let oversized_filter = BooleanArray::from(vec![true; 6]);
+        let mut coalescer =
+            LimitedBatchCoalescer::new(oversized_batch.schema(), 20, Some(3));
+        let error = coalescer
+            .push_batch_with_filter(oversized_batch, &oversized_filter)
+            .unwrap_err();
+        assert_eq!(
+            error.strip_backtrace(),
+            "Arrow error: Invalid argument error: Filter predicate of length 6 is larger than target array of length 5"
+        );
     }
 
     /// Test for [`LimitedBatchCoalescer`]
