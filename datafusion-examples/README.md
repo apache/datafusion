@@ -200,6 +200,16 @@ cargo run --example dataframe -- dataframe
 | pivot_unpivot   | [`relation_planner/pivot_unpivot.rs`](examples/relation_planner/pivot_unpivot.rs)     | Implement PIVOT / UNPIVOT                  |
 | table_sample    | [`relation_planner/table_sample.rs`](examples/relation_planner/table_sample.rs)       | Implement TABLESAMPLE                      |
 
+## Scheduler Examples
+
+### Group: `scheduler`
+
+#### Category: Distributed
+
+| Subcommand           | File Path                                         | Description                                                                                          |
+| -------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| distributed_pipeline | [`scheduler/main.rs`](examples/scheduler/main.rs) | In-process model of stage-based distributed execution (stage splitting, per-task plan serialization) |
+
 ## SQL Ops Examples
 
 ### Group: `sql_ops`
