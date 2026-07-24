@@ -32,12 +32,13 @@ use crate::aggregates::group_values::multi_group_by::{
 use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
 use arrow::compute::cast;
 use arrow::datatypes::{
-    BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Field, Float32Type,
-    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Schema, SchemaRef,
-    StringViewType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-    Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
-    UInt64Type,
+    BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type,
+    DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
+    DurationSecondType, Field, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
+    Int64Type, Schema, SchemaRef, StringViewType, Time32MillisecondType,
+    Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimeUnit,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
@@ -952,6 +953,9 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::Time64(TimeUnit::Microsecond)
             | DataType::Time64(TimeUnit::Nanosecond)
             | DataType::Timestamp(_, _)
+            // All four Duration units are valid Arrow types (unlike Time32 /
+            // Time64), so every unit is handled by the dispatcher below.
+            | DataType::Duration(_)
             | DataType::Utf8View
             | DataType::BinaryView
             | DataType::Boolean
@@ -1029,6 +1033,20 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
             }
             TimeUnit::Nanosecond => {
                 instantiate_primitive!(v, nullable, TimestampNanosecondType, data_type)
+            }
+        },
+        DataType::Duration(t) => match t {
+            TimeUnit::Second => {
+                instantiate_primitive!(v, nullable, DurationSecondType, data_type)
+            }
+            TimeUnit::Millisecond => {
+                instantiate_primitive!(v, nullable, DurationMillisecondType, data_type)
+            }
+            TimeUnit::Microsecond => {
+                instantiate_primitive!(v, nullable, DurationMicrosecondType, data_type)
+            }
+            TimeUnit::Nanosecond => {
+                instantiate_primitive!(v, nullable, DurationNanosecondType, data_type)
             }
         },
         DataType::Decimal128(_, _) => {
@@ -1259,7 +1277,10 @@ enum Nulls {
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray, StringViewArray};
+    use arrow::array::{
+        Array, ArrayRef, DurationMicrosecondArray, Int64Array, RecordBatch, StringArray,
+        StringViewArray,
+    };
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::{compute::concat_batches, util::pretty::pretty_format_batches};
     use datafusion_common::utils::proxy::HashTableAllocExt;
@@ -1309,6 +1330,10 @@ mod tests {
             DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
             DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond),
             DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+            DataType::Duration(arrow::datatypes::TimeUnit::Second),
+            DataType::Duration(arrow::datatypes::TimeUnit::Millisecond),
+            DataType::Duration(arrow::datatypes::TimeUnit::Microsecond),
+            DataType::Duration(arrow::datatypes::TimeUnit::Nanosecond),
         ];
 
         for dt in &supported_cases {
@@ -1350,6 +1375,56 @@ mod tests {
                 "group_column_supported_type rejected {dt:?} but make_group_column accepted it"
             );
         }
+    }
+
+    /// End-to-end coverage for `Duration` group keys: a `Duration` column stays
+    /// on the `GroupValuesColumn` fast path, deduplicates equal durations
+    /// (including nulls), and round-trips with its `Duration` output type
+    /// preserved (not the bare `i64` native). The four units share one builder,
+    /// so a single unit exercises the dispatcher; the fuzz above covers routing
+    /// for every unit.
+    #[test]
+    fn test_group_values_column_duration() {
+        use arrow::datatypes::TimeUnit;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            DataType::Duration(TimeUnit::Microsecond),
+            true,
+        )]));
+        assert!(supported_schema(&schema));
+        let mut group_values =
+            GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+
+        // Two distinct durations and a null with repeats: row 3 repeats row 0,
+        // row 4 repeats the null of row 1.
+        let input: ArrayRef = Arc::new(DurationMicrosecondArray::from(vec![
+            Some(10),
+            None,
+            Some(20),
+            Some(10),
+            None,
+        ]));
+        let mut groups = Vec::new();
+        group_values.intern(&[input], &mut groups).unwrap();
+        assert_eq!(groups, vec![0, 1, 2, 0, 1]);
+
+        let emitted = group_values.emit(EmitTo::All).unwrap();
+        assert_eq!(emitted.len(), 1);
+        // The emitted key keeps its Duration type, not the bare i64 native.
+        assert_eq!(
+            emitted[0].data_type(),
+            &DataType::Duration(TimeUnit::Microsecond)
+        );
+        let actual = emitted[0]
+            .as_any()
+            .downcast_ref::<DurationMicrosecondArray>()
+            .expect("emitted column should be a DurationMicrosecondArray");
+        // Three groups in first-seen order: 10, null, 20.
+        assert_eq!(actual.len(), 3);
+        assert_eq!(actual.value(0), 10);
+        assert!(actual.is_null(1));
+        assert_eq!(actual.value(2), 20);
     }
 
     #[test]
