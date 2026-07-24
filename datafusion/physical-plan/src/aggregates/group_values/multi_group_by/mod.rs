@@ -300,18 +300,23 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     /// `clear_shrink`). Centralising it keeps the post-condition that
     /// `self.group_values` always contains exactly one builder per schema
     /// field outside of those transient drain points.
-    fn build_group_compare_order(schema: &Schema) -> Vec<usize> {
-        let mut order: Vec<usize> = (0..schema.fields().len()).collect();
-        order.sort_by_key(|&i| compare_tier(schema.field(i).data_type()));
-        order
-    }
-
     fn build_group_columns(schema: &Schema) -> Result<Vec<Box<dyn GroupColumn>>> {
         let mut v: Vec<Box<dyn GroupColumn>> = Vec::with_capacity(schema.fields().len());
         for f in schema.fields().iter() {
             v.push(make_group_column(f.as_ref())?);
         }
         Ok(v)
+    }
+
+    /// Returns column indices sorted by cheapest-to-compare tier first.
+    ///
+    /// Uses a stable sort so columns within the same tier retain schema order,
+    /// keeping comparison deterministic and preventing `sort_unstable_by_key`
+    /// from silently breaking that invariant.
+    fn build_group_compare_order(schema: &Schema) -> Vec<usize> {
+        let mut order: Vec<usize> = (0..schema.fields().len()).collect();
+        order.sort_by_key(|&i| compare_tier(schema.field(i).data_type()));
+        order
     }
 
     // ========================================================================
@@ -397,9 +402,9 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                         array_row.equal_to(lhs_row, array, rhs_row)
                     }
 
-                    for (i, group_val) in self.group_values.iter().enumerate() {
+                    for &i in &self.compare_order {
                         if !check_row_equal(
-                            group_val.as_ref(),
+                            self.group_values[i].as_ref(),
                             group_idx_view.value() as usize,
                             &cols[i],
                             row,
@@ -858,8 +863,8 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 
             for &group_idx in group_index_list {
                 let mut check_result = true;
-                for (i, group_val) in self.group_values.iter().enumerate() {
-                    if !check_row_equal(group_val.as_ref(), group_idx, &cols[i], row) {
+                for &i in &self.compare_order {
+                    if !check_row_equal(self.group_values[i].as_ref(), group_idx, &cols[i], row) {
                         check_result = false;
                         break;
                     }
@@ -875,8 +880,8 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             false
         } else {
             let group_idx = group_index_view.value() as usize;
-            for (i, group_val) in self.group_values.iter().enumerate() {
-                if !check_row_equal(group_val.as_ref(), group_idx, &cols[i], row) {
+            for &i in &self.compare_order {
+                if !check_row_equal(self.group_values[i].as_ref(), group_idx, &cols[i], row) {
                     return false;
                 }
             }
@@ -1120,6 +1125,10 @@ fn compare_tier(data_type: &DataType) -> u8 {
         | DataType::LargeBinary
         | DataType::Utf8View
         | DataType::BinaryView => 2,
+        // Unreachable in practice: `try_new` runs `build_group_columns` before
+        // `build_group_compare_order`, and `make_group_column` rejects any type
+        // not listed above. Acts as a catch-all so newly added types sort last
+        // rather than causing a compile error if this match isn't updated.
         _ => 3,
     }
 }
@@ -1994,5 +2003,19 @@ mod tests {
             |(hash, _)| *hash,
             &mut group_values.map_size,
         );
+    }
+
+    #[test]
+    fn compare_order_puts_cheap_columns_first() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("s", DataType::Utf8, false),
+            Field::new("i", DataType::Int64, false),
+            Field::new("v", DataType::Utf8View, false),
+            Field::new("b", DataType::Boolean, false),
+        ]));
+        let order = GroupValuesColumn::<false>::build_group_compare_order(&schema);
+        let pos = |i: usize| order.iter().position(|&x| x == i).unwrap();
+        assert!(pos(1) < pos(0), "int should come before utf8");
+        assert!(pos(3) < pos(2), "bool should come before utf8view");
     }
 }
