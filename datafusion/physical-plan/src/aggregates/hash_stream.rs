@@ -310,7 +310,12 @@ impl PartialHashAggregateStream {
                 Some(SkipAggregationProbe::new(
                     options.skip_partial_aggregation_probe_rows_threshold,
                     probe_ratio_threshold,
+                    options.skip_partial_aggregation_use_cost_model,
+                    options.skip_partial_aggregation_ab_sampling_rows,
                     skipped_aggregation_rows,
+                    baseline_metrics.elapsed_compute().clone(),
+                    agg.metrics.clone(),
+                    partition,
                 ))
             }
         } else {
@@ -345,7 +350,7 @@ impl PartialHashAggregateStream {
     /// Updates skip aggregation probe state.
     fn update_skip_aggregation_probe(&mut self, input_rows: usize, num_groups: usize) {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
-            probe.update_state(input_rows, num_groups);
+            probe.observe_partial_batch(input_rows, num_groups);
         }
     }
 
@@ -1219,6 +1224,18 @@ mod tests {
         session_config = session_config.set(
             "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
             &datafusion_common::ScalarValue::Float64(Some(probe_ratio_threshold)),
+        );
+        // This test asserts the *legacy* not-locked-until-skip behaviour:
+        // batch 1 crosses the row threshold but not the ratio threshold
+        // (so the probe stays unlocked); batch 2 pushes ratio over the
+        // threshold and skip fires. The cost-aware A/B path added by
+        // #22518 transitions to AbSampling as soon as the row threshold
+        // is reached with ratio < 0.8, which breaks that scenario. Turn
+        // the cost model off explicitly so the test continues to exercise
+        // the ratio-only decision.
+        session_config = session_config.set(
+            "datafusion.execution.skip_partial_aggregation_use_cost_model",
+            &datafusion_common::ScalarValue::Boolean(Some(false)),
         );
         task_ctx = task_ctx.with_session_config(session_config);
         let task_ctx = Arc::new(task_ctx);

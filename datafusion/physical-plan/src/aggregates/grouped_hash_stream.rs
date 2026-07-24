@@ -72,6 +72,17 @@ pub(crate) enum ExecutionState {
     ///
     /// See "partial aggregation" discussion on [`GroupedHashAggregateStream`]
     SkippingAggregation,
+    /// Temporary A/B sampling phase used by [`SkipAggregationProbe`] to
+    /// measure passthrough cost on real input before deciding whether
+    /// to skip partial aggregation for the rest of the stream.
+    ///
+    /// Behaves like [`Self::SkippingAggregation`] (rows are converted
+    /// via `transform_to_states` and emitted downstream), but the hash
+    /// table built during the preceding partial-probe window is *not*
+    /// emitted yet — if the probe ultimately decides to keep partial
+    /// agg, the stream transitions back to [`Self::ReadingInput`] and
+    /// the hash table continues to accumulate.
+    AbSampling,
     /// All input has been consumed and all groups have been emitted
     Done,
 }
@@ -560,6 +571,10 @@ impl GroupedHashAggregateStream {
                 options.skip_partial_aggregation_probe_rows_threshold;
             let probe_ratio_threshold =
                 options.skip_partial_aggregation_probe_ratio_threshold;
+            let use_cost_model =
+                options.skip_partial_aggregation_use_cost_model;
+            let ab_sampling_rows =
+                options.skip_partial_aggregation_ab_sampling_rows;
             // A threshold >= 1.0 means the ratio (num_groups / input_rows) can
             // never exceed it, so the feature is effectively disabled.
             if probe_ratio_threshold >= 1.0 {
@@ -571,7 +586,12 @@ impl GroupedHashAggregateStream {
                 Some(SkipAggregationProbe::new(
                     probe_rows_threshold,
                     probe_ratio_threshold,
+                    use_cost_model,
+                    ab_sampling_rows,
                     skipped_aggregation_rows,
+                    baseline_metrics.elapsed_compute().clone(),
+                    agg.metrics.clone(),
+                    partition,
                 ))
             }
         } else {
@@ -708,6 +728,18 @@ impl Stream for GroupedHashAggregateStream {
                                     self.exec_state = new_state;
                                     break 'reading_input;
                                 }
+
+                                // Cost-aware A/B (see #23xxx / #22518): if
+                                // the probe just transitioned to the
+                                // AbSampling phase, route the next few
+                                // batches through the passthrough path so
+                                // the probe can measure
+                                // `passthrough_ns/row`.
+                                if self.probe_wants_passthrough_sample() {
+                                    timer.done();
+                                    self.exec_state = ExecutionState::AbSampling;
+                                    break 'reading_input;
+                                }
                             }
 
                             // If we reach this point, try to update the memory reservation
@@ -769,6 +801,70 @@ impl Stream for GroupedHashAggregateStream {
                             self.input =
                                 Box::pin(EmptyRecordBatchStream::new(input_schema));
                             self.exec_state = ExecutionState::Done;
+                        }
+                    }
+                }
+
+                ExecutionState::AbSampling => {
+                    // Mirror of `SkippingAggregation` — passthrough via
+                    // `transform_to_states` — except that:
+                    //   * the partial hash table is NOT emitted (we may
+                    //     still revert to it),
+                    //   * the probe observes per-row timing via
+                    //     `elapsed_compute`,
+                    //   * after each batch we check whether the probe
+                    //     has finalised: skip (emit hash + switch to
+                    //     `SkippingAggregation`) or keep partial
+                    //     (return to `ReadingInput`).
+                    match ready!(self.input.poll_next_unpin(cx)) {
+                        Some(Ok(batch)) => {
+                            // `mut` + explicit `stop()` so the probe's
+                            // read of `elapsed_compute.value()` below
+                            // sees this batch's contribution.
+                            let mut timer = elapsed_compute.timer();
+                            let input_rows = batch.num_rows();
+                            let states = self.transform_to_states(&batch)?;
+                            timer.stop();
+                            if let Some(probe) = self.skip_aggregation_probe.as_mut() {
+                                probe.observe_ab_batch(input_rows);
+                            }
+                            // After observing, the probe may have
+                            // transitioned out of `AbSampling`.
+                            if self.should_skip_aggregation() {
+                                // Cost model chose skip — emit the
+                                // partial hash table accumulated during
+                                // the probe window, then continue in
+                                // `SkippingAggregation`.
+                                if let Some(emitted) = self.emit(EmitTo::All, false)? {
+                                    self.exec_state =
+                                        ExecutionState::ProducingOutput(emitted);
+                                } else {
+                                    self.exec_state =
+                                        ExecutionState::SkippingAggregation;
+                                }
+                            } else if self
+                                .skip_aggregation_probe
+                                .as_ref()
+                                .is_some_and(|probe| {
+                                    !probe.wants_passthrough_sample()
+                                        && probe.is_locked()
+                                })
+                            {
+                                // Cost model chose keep — fall back to
+                                // the partial-agg path for the rest of
+                                // the stream.
+                                self.exec_state = ExecutionState::ReadingInput;
+                            }
+                            return Poll::Ready(Some(Ok(
+                                states.record_output(&self.baseline_metrics)
+                            )));
+                        }
+                        Some(Err(e)) => return Poll::Ready(Some(Err(e))),
+                        None => {
+                            // Input ended while we were still A/B
+                            // sampling — emit whatever the partial
+                            // hash table has accumulated and finish.
+                            self.set_input_done_and_produce_output()?;
                         }
                     }
                 }
@@ -1340,7 +1436,7 @@ impl GroupedHashAggregateStream {
             // Skip aggregation probe is not supported if stream has any spills,
             // currently spilling is not supported for Partial aggregation
             assert!(self.spill_state.spills.is_empty());
-            probe.update_state(input_rows, self.group_values.len());
+            probe.observe_partial_batch(input_rows, self.group_values.len());
         };
     }
 
@@ -1369,6 +1465,15 @@ impl GroupedHashAggregateStream {
         self.skip_aggregation_probe
             .as_ref()
             .is_some_and(|probe| probe.should_skip())
+    }
+
+    /// Returns true iff the skip-aggregation probe is currently in its
+    /// A/B sampling window and wants the stream to route input through
+    /// the passthrough path so it can measure `passthrough_ns/row`.
+    fn probe_wants_passthrough_sample(&self) -> bool {
+        self.skip_aggregation_probe
+            .as_ref()
+            .is_some_and(|probe| probe.wants_passthrough_sample())
     }
 
     /// Transforms input batch to intermediate aggregate state, without grouping it
