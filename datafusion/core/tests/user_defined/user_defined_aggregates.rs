@@ -888,11 +888,6 @@ impl GroupsAccumulator for TestGroupsAccumulator {
                 as ArrayRef,
         ])
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn size(&self) -> usize {
         size_of::<u64>()
     }

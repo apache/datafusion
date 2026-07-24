@@ -1271,7 +1271,7 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn input_distribution_requirements(&self) -> InputDistributionRequirements {
-        let requirements = match self.mode {
+        match self.mode {
             PartitionMode::Partitioned => {
                 let (left_expr, right_expr) = self
                     .on
@@ -1291,12 +1291,6 @@ impl ExecutionPlan for HashJoinExec {
                 Distribution::UnspecifiedDistribution,
                 Distribution::UnspecifiedDistribution,
             ]),
-        };
-
-        if self.mode == PartitionMode::Partitioned && self.join_type == JoinType::Inner {
-            requirements.allow_range_satisfaction_for_key_partitioning()
-        } else {
-            requirements
         }
     }
 
@@ -1405,6 +1399,7 @@ impl ExecutionPlan for HashJoinExec {
                             filter,
                             on_right,
                             repartition_random_state,
+                            self.null_aware,
                         ))
                     })))
                 })

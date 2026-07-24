@@ -123,7 +123,7 @@ Here are some active projects using DataFusion:
 - [OpenObserve] Distributed cloud native observability platform
 - [ParadeDB](https://github.com/paradedb/paradedb) PostgreSQL for Search & Analytics
 - [Parseable] Log storage and observability platform
-- [Polygon.io](https://polygon.io/) Stock Market API
+- [Massive.com](https://massive.com/) Stock Market API
 - [qv] Quickly view your data
 - [R2 Query Engine](https://blog.cloudflare.com/r2-sql-deep-dive/) Cloudflare's distributed engine for querying data in Iceberg Catalogs
 - [rerun.io](https://rerun.io/) Visualize and query robotics logs and transform them into training data.
@@ -133,6 +133,7 @@ Here are some active projects using DataFusion:
 - [SedonaDB](https://github.com/apache/sedona-db) A single-node analytical database engine with geospatial as a first-class citizen
 - [Sleeper](https://github.com/gchq/sleeper) Serverless, cloud-native, log-structured merge tree based, scalable key-value store
 - [Spice.ai] Building blocks for data-driven AI applications
+- [Supermetal](https://supermetal.io/) is a change data capture (CDC) platform that synchronizes data between databases, data warehouses, and lakehouses
 - [Synnada] Streaming-first framework for data products
 - [VegaFusion] Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
 - [Vortex] An extensible, state of the art columnar file format
