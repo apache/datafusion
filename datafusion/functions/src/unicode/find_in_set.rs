@@ -25,7 +25,7 @@ use arrow_buffer::NullBuffer;
 
 use crate::utils::utf8_to_int_type;
 use datafusion_common::{
-    Result, ScalarValue, exec_err, internal_err, utils::take_function_args,
+    HashMap, Result, ScalarValue, exec_err, internal_err, utils::take_function_args,
 };
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
@@ -316,6 +316,11 @@ where
     Ok(Arc::new(PrimitiveArray::<T>::new(values.into(), nulls)) as ArrayRef)
 }
 
+/// Minimum set length at which a pre-built lookup beats a per-row linear scan.
+/// Below this, the linear scan's small constant factor wins, so short sets are
+/// left untouched to avoid regressing them.
+const FIND_IN_SET_LOOKUP_THRESHOLD: usize = 16;
+
 fn find_in_set_right_literal<'a, T, V>(
     string_array: V,
     str_list: &[&str],
@@ -329,16 +334,34 @@ where
     let nulls = string_array.nulls().cloned();
     let zero = T::Native::from_usize(0).unwrap();
 
+    // The set (`str_list`) is constant across all rows. For a large set, the
+    // per-row `position` linear scan is O(set_len). Building a lookup from each
+    // distinct entry to its 1-based position once turns each row into an O(1)
+    // probe (first occurrence wins, exactly matching `position`). Below the
+    // threshold the linear scan's small constant factor is faster, so the map is
+    // built at most once here rather than per row.
+    let map: Option<HashMap<&str, usize>> =
+        (str_list.len() >= FIND_IN_SET_LOOKUP_THRESHOLD).then(|| {
+            let mut map = HashMap::with_capacity(str_list.len());
+            for (idx, entry) in str_list.iter().enumerate() {
+                map.entry(*entry).or_insert(idx + 1);
+            }
+            map
+        });
+
     let values: Vec<T::Native> = (0..len)
         .map(|i| {
             if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
                 return zero;
             }
             let string = string_array.value(i);
-            let position = str_list
-                .iter()
-                .position(|s| *s == string)
-                .map_or(0, |idx| idx + 1);
+            let position = match &map {
+                Some(map) => map.get(string).copied().unwrap_or(0),
+                None => str_list
+                    .iter()
+                    .position(|s| *s == string)
+                    .map_or(0, |idx| idx + 1),
+            };
             T::Native::from_usize(position).unwrap()
         })
         .collect();
@@ -545,4 +568,46 @@ mod tests {
         ],
         Int32Array::from(vec![None::<i32>; 3])
     );
+
+    // Exercises both the lookup-map path (list length >= threshold) and the
+    // linear-scan path (short list), including a duplicate entry to confirm the
+    // first occurrence wins in both.
+    #[test]
+    fn test_right_literal_lookup_matches_linear() {
+        use super::find_in_set_right_literal;
+        use arrow::datatypes::Int32Type;
+
+        // 40 unique entries plus a duplicate of "item5" appended at index 40, so
+        // the length is well over FIND_IN_SET_LOOKUP_THRESHOLD.
+        let mut long_list: Vec<String> = (0..40).map(|i| format!("item{i}")).collect();
+        long_list.push("item5".to_string());
+        let long_refs: Vec<&str> = long_list.iter().map(|s| s.as_str()).collect();
+        let short_refs = ["a", "b", "c"];
+
+        let strings = StringArray::from(vec![
+            Some("item0"),
+            Some("item39"),
+            Some("item5"),
+            Some("missing"),
+            None,
+            Some("b"),
+        ]);
+
+        let long =
+            find_in_set_right_literal::<Int32Type, _>(&strings, &long_refs).unwrap();
+        let long = long.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(long.value(0), 1);
+        assert_eq!(long.value(1), 40);
+        assert_eq!(long.value(2), 6); // first occurrence of "item5"
+        assert_eq!(long.value(3), 0);
+        assert!(long.is_null(4));
+        assert_eq!(long.value(5), 0);
+
+        let short =
+            find_in_set_right_literal::<Int32Type, _>(&strings, &short_refs).unwrap();
+        let short = short.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(short.value(0), 0);
+        assert!(short.is_null(4));
+        assert_eq!(short.value(5), 2); // "b" at position 2
+    }
 }
