@@ -566,10 +566,6 @@ query error Error during planning: ORDER BY and WITHIN GROUP clauses cannot be u
 SELECT array_agg(a_varchar order by a_varchar) WITHIN GROUP (ORDER BY a_varchar)
 FROM (VALUES ('a'), ('d'), ('c'), ('a')) t(a_varchar);
 
-#######
-# New coverage (everything above this point was moved verbatim from aggregate.slt)
-#######
-
 # test array_agg_distinct with dictionary encoded data
 statement ok
 CREATE TABLE array_agg_distinct_dict_table AS VALUES
