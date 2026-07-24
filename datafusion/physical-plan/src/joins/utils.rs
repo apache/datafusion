@@ -44,7 +44,7 @@ pub use crate::joins::{JoinOn, JoinOnRef};
 use arrow::array::{
     Array, ArrowPrimitiveType, BooleanBufferBuilder, NativeAdapter, PrimitiveArray,
     RecordBatch, RecordBatchOptions, UInt32Array, UInt32Builder, UInt64Array,
-    builder::UInt64Builder, downcast_array, make_array, new_null_array,
+    builder::UInt64Builder, downcast_array, new_null_array,
 };
 use arrow::array::{
     ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
@@ -54,14 +54,12 @@ use arrow::array::{
     TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array,
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer};
-use arrow::compute::kernels::cmp::eq;
-use arrow::compute::{self, FilterBuilder, and, take};
+use arrow::compute::{self, take};
 use arrow::datatypes::{
     ArrowNativeType, Field, Schema, SchemaBuilder, UInt32Type, UInt64Type,
 };
-use arrow_ord::cmp::not_distinct;
 use arrow_ord::ord::{DynComparator, make_comparator};
-use arrow_schema::{ArrowError, DataType, SortOptions, TimeUnit};
+use arrow_schema::{DataType, SortOptions, TimeUnit};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
@@ -71,7 +69,6 @@ use datafusion_common::{
     DataFusionError, JoinSide, JoinType, NullEquality, Result, SharedResult,
     internal_datafusion_err, not_impl_err, plan_err,
 };
-use datafusion_expr::Operator;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
@@ -80,7 +77,6 @@ use datafusion_physical_expr::{
     add_offset_to_physical_sort_exprs,
 };
 
-use datafusion_physical_expr_common::datum::compare_op_for_nested;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::future::{BoxFuture, Shared};
 use futures::{FutureExt, ready};
@@ -2196,78 +2192,30 @@ pub(super) fn equal_rows_arr(
     right_arrays: &[ArrayRef],
     null_equality: NullEquality,
 ) -> Result<(UInt64Array, UInt32Array)> {
-    let mut iter = left_arrays.iter().zip(right_arrays.iter());
-
-    let Some((first_left, first_right)) = iter.next() else {
+    if left_arrays.is_empty() {
         return Ok((Vec::<u64>::new().into(), Vec::<u32>::new().into()));
-    };
-
-    let arr_left = take(first_left.as_ref(), indices_left, None)?;
-    let arr_right = take(first_right.as_ref(), indices_right, None)?;
-
-    let mut equal: BooleanArray = eq_dyn_null(&arr_left, &arr_right, null_equality)?;
-
-    // Use map and try_fold to iterate over the remaining pairs of arrays.
-    // In each iteration, take is used on the pair of arrays and their equality is determined.
-    // The results are then folded (combined) using the and function to get a final equality result.
-    equal = iter
-        .map(|(left, right)| {
-            let arr_left = take(left.as_ref(), indices_left, None)?;
-            let arr_right = take(right.as_ref(), indices_right, None)?;
-            eq_dyn_null(arr_left.as_ref(), arr_right.as_ref(), null_equality)
-        })
-        .try_fold(equal, |acc, equal2| and(&acc, &equal2?))?;
-
-    let filter_builder = FilterBuilder::new(&equal).optimize().build();
-
-    let left_filtered = filter_builder.filter(indices_left)?;
-    let right_filtered = filter_builder.filter(indices_right)?;
-
-    Ok((
-        downcast_array(left_filtered.as_ref()),
-        downcast_array(right_filtered.as_ref()),
-    ))
-}
-
-// version of eq_dyn supporting equality on null arrays
-fn eq_dyn_null(
-    left: &dyn Array,
-    right: &dyn Array,
-    null_equality: NullEquality,
-) -> Result<BooleanArray, ArrowError> {
-    // Nested datatypes cannot use the underlying not_distinct/eq function and must use a special
-    // implementation
-    // <https://github.com/apache/datafusion/issues/10749>
-    if left.data_type().is_nested() {
-        let op = match null_equality {
-            NullEquality::NullEqualsNothing => Operator::Eq,
-            NullEquality::NullEqualsNull => Operator::IsNotDistinctFrom,
-        };
-        return Ok(compare_op_for_nested(op, &left, &right)?);
     }
-    // Arrow's `eq` / `not_distinct` use IEEE 754 totalOrder semantics for
-    // floats, so `-0.0` and `+0.0` would compare unequal. Normalize float
-    // operands first; non-float types dispatch directly to avoid the
-    // `make_array(to_data())` round-trip.
-    if !matches!(
-        left.data_type(),
-        DataType::Float16 | DataType::Float32 | DataType::Float64
-    ) {
-        return match null_equality {
-            NullEquality::NullEqualsNothing => eq(&left, &right),
-            NullEquality::NullEqualsNull => not_distinct(&left, &right),
-        };
+
+    let sort_options = vec![SortOptions::default(); left_arrays.len()];
+    let comparator =
+        JoinKeyComparator::new(left_arrays, right_arrays, &sort_options, null_equality)?;
+
+    let mut left_filtered = Vec::with_capacity(indices_left.len());
+    let mut right_filtered = Vec::with_capacity(indices_right.len());
+
+    for (left, right) in indices_left.values().iter().zip(indices_right.values()) {
+        let left_idx = usize::try_from(*left).map_err(|_| {
+            internal_datafusion_err!("Join index {left} can not be represented as usize")
+        })?;
+        let right_idx = *right as usize;
+
+        if comparator.is_equal(left_idx, right_idx) {
+            left_filtered.push(*left);
+            right_filtered.push(*right);
+        }
     }
-    let left_arr: ArrayRef = make_array(left.to_data());
-    let right_arr: ArrayRef = make_array(right.to_data());
-    let left_norm = normalize_float_zero(&left_arr);
-    let right_norm = normalize_float_zero(&right_arr);
-    let left = left_norm.as_ref();
-    let right = right_norm.as_ref();
-    match null_equality {
-        NullEquality::NullEqualsNothing => eq(&left, &right),
-        NullEquality::NullEqualsNull => not_distinct(&left, &right),
-    }
+
+    Ok((left_filtered.into(), right_filtered.into()))
 }
 
 /// Pre-built comparator for join key columns that eliminates per-row type
@@ -4551,6 +4499,61 @@ mod tests {
         .unwrap();
         assert_eq!(cmp_nl.compare(0, 0), Ordering::Greater);
         assert_eq!(cmp_nl.compare(1, 1), Ordering::Less);
+    }
+
+    #[test]
+    fn test_equal_rows_arr_filters_candidate_pairs() {
+        let left_a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 2, 3]));
+        let left_b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c", "d"]));
+        let right_a: ArrayRef = Arc::new(Int32Array::from(vec![2, 2, 3, 4]));
+        let right_b: ArrayRef = Arc::new(StringArray::from(vec!["b", "d", "d", "a"]));
+
+        let left_indices = UInt64Array::from(vec![0, 1, 2, 3]);
+        let right_indices = UInt32Array::from(vec![0, 0, 1, 2]);
+
+        let (left_filtered, right_filtered) = equal_rows_arr(
+            &left_indices,
+            &right_indices,
+            &[left_a, left_b],
+            &[right_a, right_b],
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
+
+        assert_eq!(left_filtered, UInt64Array::from(vec![1, 3]));
+        assert_eq!(right_filtered, UInt32Array::from(vec![0, 2]));
+    }
+
+    #[test]
+    fn test_equal_rows_arr_respects_null_equality() {
+        let left: ArrayRef =
+            Arc::new(Int32Array::from(vec![Some(1), None, Some(2), None]));
+        let right: ArrayRef =
+            Arc::new(Int32Array::from(vec![None, Some(1), Some(2), None]));
+        let left_indices = UInt64Array::from(vec![0, 1, 2, 3]);
+        let right_indices = UInt32Array::from(vec![1, 0, 2, 3]);
+
+        let (left_filtered, right_filtered) = equal_rows_arr(
+            &left_indices,
+            &right_indices,
+            &[Arc::clone(&left)],
+            &[Arc::clone(&right)],
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
+        assert_eq!(left_filtered, UInt64Array::from(vec![0, 2]));
+        assert_eq!(right_filtered, UInt32Array::from(vec![1, 2]));
+
+        let (left_filtered, right_filtered) = equal_rows_arr(
+            &left_indices,
+            &right_indices,
+            &[left],
+            &[right],
+            NullEquality::NullEqualsNull,
+        )
+        .unwrap();
+        assert_eq!(left_filtered, UInt64Array::from(vec![0, 1, 2, 3]));
+        assert_eq!(right_filtered, UInt32Array::from(vec![1, 0, 2, 3]));
     }
 
     #[test]
