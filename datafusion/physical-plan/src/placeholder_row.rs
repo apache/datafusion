@@ -229,7 +229,8 @@ impl PlaceholderRowExec {
             )
         })?;
         let schema = Arc::new(Schema::try_from(schema)?);
-        // Zero means the field was absent in the previous wire format.
+        // A zero (absent) partition count comes from a plan encoded before the
+        // field existed, which always meant a single partition.
         let partitions = placeholder.partitions.max(1) as usize;
         Ok(Arc::new(
             PlaceholderRowExec::new(schema).with_partitions(partitions),
