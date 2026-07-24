@@ -55,12 +55,12 @@ Infinity
 query R
 SELECT try_sum(x) AS sum_x FROM VALUES (DECIMAL(10,2) '1.23'), (DECIMAL(10,2) '4.77') AS tab(x);
 ----
-6
+6.00
 
 query R
 SELECT try_sum(x) AS sum_x FROM VALUES (DECIMAL(10,2) '1.00'), (NULL), (DECIMAL(10,2) '2.50') AS tab(x);
 ----
-3.5
+3.50
 
 query R
 SELECT try_sum(x) AS sum_x FROM VALUES (DECIMAL(5,0) '90000'), (DECIMAL(5,0) '20000') AS tab(x);
@@ -131,10 +131,10 @@ SELECT try_sum(col) AS sum_x FROM VALUES (CAST(-0.0 AS DOUBLE)), (CAST(0.0 AS DO
 query R
 SELECT try_sum(col) AS sum_x FROM VALUES (CAST(-5.5 AS DECIMAL(10,2))), (CAST(5.5 AS DECIMAL(10,2))) AS tab(col);
 ----
-0
+0.00
 
 # Compare double 0.0 vs decimal 0.00
 query RR
 SELECT 0.0 AS double_zero, CAST(0.0 AS DECIMAL(10,2)) AS decimal_zero;
 ----
-0 0
+0 0.00
