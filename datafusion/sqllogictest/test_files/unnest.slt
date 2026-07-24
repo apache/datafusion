@@ -1463,3 +1463,49 @@ FROM list_struct_table;
 
 statement ok
 DROP TABLE list_struct_table;
+
+## Regresssion: Unnest over an input containing duplicate (unqualified) column names.
+## UnnestExec's input carries two columns that are both physically named
+## "k" (ta.k and tb.k; the qualifiers only exist in the logical plan).
+## The input is ordered on tb.k.
+## Matching passthrough columns by name would attribute that ordering to
+## ta.k, letting the optimizer drop the ORDER BY ta.k sort and return
+## rows in tb.k order instead.
+
+statement ok
+create table ta(k int, l int[]) as values (3, [30]), (1, [10]), (2, [20]);
+
+statement ok
+create table tb(k int) as values (10), (20);
+
+# The SortExec for ORDER BY ta.k must not be optimized away: the input
+# below the unnest is sorted on tb.k, not ta.k.
+query TT
+explain select ta.k, tb.k, unnest(ta.l)
+from (select ta.k, ta.l, tb.k from ta cross join tb order by tb.k limit 100)
+order by ta.k;
+----
+logical_plan
+01)Sort: ta.k ASC NULLS LAST
+02)--Projection: ta.k, tb.k, __unnest_placeholder(ta.l,depth=1) AS UNNEST(ta.l)
+03)----Unnest: lists[__unnest_placeholder(ta.l)|depth=1] structs[]
+04)------Projection: ta.k, tb.k, ta.l AS __unnest_placeholder(ta.l)
+05)--------Sort: tb.k ASC NULLS LAST, fetch=100
+06)----------Cross Join:
+07)------------TableScan: ta projection=[k, l]
+08)------------TableScan: tb projection=[k]
+physical_plan
+01)ProjectionExec: expr=[k@0 as k, k@1 as k, __unnest_placeholder(ta.l,depth=1)@2 as UNNEST(ta.l)]
+02)--SortExec: expr=[k@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----UnnestExec
+04)------ProjectionExec: expr=[k@1 as k, k@0 as k, l@2 as __unnest_placeholder(ta.l)]
+05)--------SortExec: TopK(fetch=100), expr=[k@0 ASC NULLS LAST], preserve_partitioning=[false]
+06)----------CrossJoinExec
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table ta;
+
+statement ok
+drop table tb;

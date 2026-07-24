@@ -18,6 +18,7 @@
 //! Define a plan for unnesting values in columns that contain a list type.
 
 use std::cmp::{self, Ordering};
+use std::iter::repeat_n;
 use std::sync::Arc;
 use std::task::{Poll, ready};
 
@@ -33,9 +34,9 @@ use crate::{
 };
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanBufferBuilder, FixedSizeListArray, Int64Array,
-    LargeListArray, LargeListViewArray, ListArray, ListViewArray, PrimitiveArray, Scalar,
-    StructArray, new_null_array,
+    Array, ArrayRef, AsArray, FixedSizeListArray, Int64Array, LargeListArray,
+    LargeListViewArray, ListArray, ListViewArray, PrimitiveArray, Scalar, StructArray,
+    new_null_array,
 };
 use arrow::compute::kernels::length::length;
 use arrow::compute::kernels::zip::zip;
@@ -113,48 +114,26 @@ impl UnnestExec {
         struct_column_indices: &[usize],
         schema: &SchemaRef,
     ) -> Result<PlanProperties> {
-        // Find out which indices are not unnested, such that they can be copied over from the input plan
+        // Build projection mapping from non-unnested input columns to their positions in the output
         let input_schema = input.schema();
-        let mut unnested_indices = BooleanBufferBuilder::new(input_schema.fields().len());
-        unnested_indices.append_n(input_schema.fields().len(), false);
-        for list_unnest in list_column_indices {
-            unnested_indices.set_bit(list_unnest.index_in_input_schema, true);
-        }
-        for struct_unnest in struct_column_indices {
-            unnested_indices.set_bit(*struct_unnest, true)
-        }
-        let unnested_indices = unnested_indices.finish();
-        let non_unnested_indices: Vec<usize> = (0..input_schema.fields().len())
-            .filter(|idx| !unnested_indices.value(*idx))
-            .collect();
-
-        // Manually build projection mapping from non-unnested input columns to their positions in the output
-        let input_schema = input.schema();
-        let projection_mapping: ProjectionMapping = non_unnested_indices
-            .iter()
-            .map(|&input_idx| {
-                // Find what index the input column has in the output schema
-                let input_field = input_schema.field(input_idx);
-                let output_idx = schema
-                    .fields()
-                    .iter()
-                    .position(|output_field| output_field.name() == input_field.name())
-                    .ok_or_else(|| {
-                        exec_datafusion_err!(
-                            "Non-unnested column '{}' must exist in output schema",
-                            input_field.name()
-                        )
-                    })?;
-
-                let input_col = Arc::new(Column::new(input_field.name(), input_idx))
-                    as Arc<dyn PhysicalExpr>;
-                let target_col = Arc::new(Column::new(input_field.name(), output_idx))
-                    as Arc<dyn PhysicalExpr>;
-                // Use From<Vec<(Arc<dyn PhysicalExpr>, usize)>> for ProjectionTargets
-                let targets = vec![(target_col, output_idx)].into();
-                Ok((input_col, targets))
-            })
-            .collect::<Result<ProjectionMapping>>()?;
+        let projection_mapping: ProjectionMapping = passthrough_columns(
+            &input_schema,
+            schema,
+            list_column_indices,
+            struct_column_indices,
+        )?
+        .into_iter()
+        .map(|(input_idx, output_idx)| {
+            let name = input_schema.field(input_idx).name();
+            let input_col =
+                Arc::new(Column::new(name, input_idx)) as Arc<dyn PhysicalExpr>;
+            let target_col =
+                Arc::new(Column::new(name, output_idx)) as Arc<dyn PhysicalExpr>;
+            // Use From<Vec<(Arc<dyn PhysicalExpr>, usize)>> for ProjectionTargets
+            let targets = vec![(target_col, output_idx)].into();
+            (input_col, targets)
+        })
+        .collect();
 
         // Create the unnest's equivalence properties by copying the input plan's equivalence properties
         // for the unaffected columns. Except for the constraints, which are removed entirely because
@@ -404,6 +383,78 @@ impl UnnestExec {
             options,
         )?))
     }
+}
+
+/// Compute the `(input column index, output column index)` pairs for
+/// columns that are not unnested and thus pass through this node
+/// unchanged.
+///
+/// The output schema is built positionally from the input schema: each
+/// unnested column is replaced in place by its unnested column(s) (one per
+/// [`ListUnnest`] for list columns, one per struct field for struct
+/// columns) while all other columns are carried over as-is. Note that
+/// columns cannot be matched by name: unnesting a list column
+/// yields an output column with the same name as the input column.
+///
+/// Returns an error if the output schema does not line up with the input
+/// schema as described above. Since this runs as part of
+/// [`UnnestExec::new`], such a mismatch is rejected at construction time.
+fn passthrough_columns(
+    input_schema: &SchemaRef,
+    output_schema: &SchemaRef,
+    list_column_indices: &[ListUnnest],
+    struct_column_indices: &[usize],
+) -> Result<Vec<(usize, usize)>> {
+    // Reconstruct the output layout: `output_source[i]` is the input column
+    // that output column `i` passes through from, or `None` if it is
+    // produced by unnesting.
+    let mut output_source: Vec<Option<usize>> = vec![];
+    for (input_idx, field) in input_schema.fields().iter().enumerate() {
+        let list_unnest_count = list_column_indices
+            .iter()
+            .filter(|unnest| unnest.index_in_input_schema == input_idx)
+            .count();
+        if list_unnest_count > 0 {
+            // input column is list unnested - None for each new output field produced
+            output_source.extend(repeat_n(None, list_unnest_count));
+        } else if struct_column_indices.contains(&input_idx) {
+            // input column is struct unnested - None for each new output field produced
+            let DataType::Struct(fields) = field.data_type() else {
+                return exec_err!(
+                    "expecting unnested column '{}' to be a struct, got {}",
+                    field.name(),
+                    field.data_type()
+                );
+            };
+            output_source.extend(repeat_n(None, fields.len()));
+        } else {
+            // input column is output column
+            output_source.push(Some(input_idx));
+        }
+    }
+
+    if output_source.len() != output_schema.fields().len() {
+        return exec_err!(
+            "Unnest output schema has {} columns, expected {}",
+            output_schema.fields().len(),
+            output_source.len()
+        );
+    }
+
+    let mut passthrough_columns = vec![];
+    for (output_idx, source) in output_source.into_iter().enumerate() {
+        let Some(input_idx) = source else { continue };
+        // Passthrough columns keep their name, so double check that the
+        // schemas line up as expected.
+        let name = input_schema.field(input_idx).name();
+        if output_schema.field(output_idx).name() != name {
+            return exec_err!(
+                "Non-unnested column '{name}' must be at index {output_idx} of the unnest output schema"
+            );
+        }
+        passthrough_columns.push((input_idx, output_idx));
+    }
+    Ok(passthrough_columns)
 }
 
 #[derive(Clone, Debug)]

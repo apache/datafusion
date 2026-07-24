@@ -2299,12 +2299,17 @@ fn roundtrip_interleave() -> Result<()> {
 #[test]
 fn roundtrip_unnest() -> Result<()> {
     let fa = Field::new("a", DataType::Int64, true);
-    let fb0 = Field::new_list_field(DataType::Utf8, true);
+    // b: List<List<Utf8>>, unnested at depths 1 and 2, producing one output
+    // column per depth
+    let fb00 = Field::new_list_field(DataType::Utf8, true);
+    let fb0 = Field::new_list_field(DataType::List(Arc::new(fb00.clone())), true);
     let fb = Field::new_list("b", fb0.clone(), false);
     let fc1 = Field::new("c1", DataType::Boolean, false);
     let fc2 = Field::new("c2", DataType::Date64, true);
     let fc = Field::new_struct("c", Fields::from(vec![fc1.clone(), fc2.clone()]), true);
-    let fd0 = Field::new_list_field(DataType::Float32, false);
+    // d: List<List<Float32>>, unnested at depth 2 only
+    let fd00 = Field::new_list_field(DataType::Float32, false);
+    let fd0 = Field::new_list_field(DataType::List(Arc::new(fd00.clone())), false);
     let fd = Field::new_list("d", fd0.clone(), true);
     let fe1 = Field::new("e1", DataType::UInt16, false);
     let fe2 = Field::new("e2", DataType::Duration(TimeUnit::Millisecond), true);
@@ -2313,10 +2318,12 @@ fn roundtrip_unnest() -> Result<()> {
     let fe = Field::new_struct("e", fe_fields, false);
 
     let fb0 = fb0.with_name("b");
-    let fd0 = fd0.with_name("d");
+    let fb00 = fb00.with_name("b");
+    let fd00 = fd00.with_name("d");
     let input_schema = Arc::new(Schema::new(vec![fa.clone(), fb, fc, fd, fe]));
-    let output_schema =
-        Arc::new(Schema::new(vec![fa, fb0, fc1, fc2, fd0, fe1, fe2, fe3]));
+    let output_schema = Arc::new(Schema::new(vec![
+        fa, fb0, fb00, fc1, fc2, fd00, fe1, fe2, fe3,
+    ]));
     let input = Arc::new(EmptyExec::new(input_schema));
     let options = UnnestOptions {
         preserve_nulls: false,
