@@ -20,6 +20,12 @@
 
 pub(crate) mod sort_pushdown;
 
+/// Shared `FileScanConfig` <-> proto conversion, gated on the `proto` feature.
+/// Attaches inherent `to_proto_conf` / `from_proto_conf` / `parse_table_schema_from_proto`
+/// helpers to [`FileScanConfig`] used by every file source's `try_to_proto` hook.
+#[cfg(feature = "proto")]
+mod proto;
+
 use crate::file_groups::FileGroup;
 use crate::{
     PartitionedFile, display::FileGroupsDisplay, file::FileSource,
@@ -1175,6 +1181,18 @@ impl DataSource for FileScanConfig {
 
         Some(Arc::new(SharedWorkSource::from_config(self)) as Arc<dyn Any + Send + Sync>)
     }
+
+    /// Serialize this file scan by delegating to the concrete
+    /// [`FileSource`]'s
+    /// [`try_to_proto`](crate::file::FileSource::try_to_proto) hook, passing
+    /// `self` as the shared spine it needs to emit the base config.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        self.file_source().try_to_proto(self, ctx)
+    }
 }
 
 impl FileScanConfig {
@@ -1566,12 +1584,18 @@ mod tests {
     use datafusion_common::{Result, assert_batches_eq, internal_err};
     use datafusion_execution::TaskContext;
     use datafusion_expr::SortExpr;
+    #[cfg(feature = "proto")]
+    use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
     use datafusion_physical_expr::create_physical_sort_expr;
     use datafusion_physical_expr::expressions::Literal;
     use datafusion_physical_expr::projection::ProjectionExpr;
     use datafusion_physical_expr::projection::ProjectionExprs;
     use datafusion_physical_plan::ExecutionPlan;
     use datafusion_physical_plan::execution_plan::collect;
+    #[cfg(feature = "proto")]
+    use datafusion_physical_plan::proto::{ExecutionPlanEncode, ExecutionPlanEncodeCtx};
+    #[cfg(feature = "proto")]
+    use datafusion_proto_models::protobuf::{PhysicalExprNode, PhysicalPlanNode};
     use futures::FutureExt as _;
     use futures::StreamExt as _;
     use futures::stream;
@@ -1628,6 +1652,108 @@ mod tests {
                 inner: Arc::new(self.clone()) as Arc<dyn FileSource>,
             })
         }
+    }
+
+    #[cfg(feature = "proto")]
+    #[derive(Clone)]
+    struct ProtoHookSource {
+        metrics: ExecutionPlanMetricsSet,
+        table_schema: TableSchema,
+    }
+
+    #[cfg(feature = "proto")]
+    impl ProtoHookSource {
+        fn new(table_schema: TableSchema) -> Self {
+            Self {
+                metrics: ExecutionPlanMetricsSet::new(),
+                table_schema,
+            }
+        }
+    }
+
+    #[cfg(feature = "proto")]
+    impl FileSource for ProtoHookSource {
+        fn create_file_opener(
+            &self,
+            _object_store: Arc<dyn ObjectStore>,
+            _base_config: &FileScanConfig,
+            _partition: usize,
+        ) -> Result<Arc<dyn crate::file_stream::FileOpener>> {
+            internal_err!("not needed for proto delegation test")
+        }
+
+        fn table_schema(&self) -> &TableSchema {
+            &self.table_schema
+        }
+
+        fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
+            Arc::new(self.clone())
+        }
+
+        fn metrics(&self) -> &ExecutionPlanMetricsSet {
+            &self.metrics
+        }
+
+        fn file_type(&self) -> &str {
+            "proto-hook-test"
+        }
+
+        fn try_to_proto(
+            &self,
+            _base: &FileScanConfig,
+            _ctx: &ExecutionPlanEncodeCtx<'_>,
+        ) -> Result<Option<PhysicalPlanNode>> {
+            Ok(Some(PhysicalPlanNode::default()))
+        }
+    }
+
+    #[cfg(feature = "proto")]
+    struct UnusedPlanEncoder;
+
+    #[cfg(feature = "proto")]
+    impl ExecutionPlanEncode for UnusedPlanEncoder {
+        fn encode_plan(
+            &self,
+            _plan: &Arc<dyn ExecutionPlan>,
+        ) -> Result<PhysicalPlanNode> {
+            internal_err!("not needed for proto delegation test")
+        }
+
+        fn encode_expr(&self, _expr: &Arc<dyn PhysicalExpr>) -> Result<PhysicalExprNode> {
+            internal_err!("not needed for proto delegation test")
+        }
+
+        fn encode_udf(&self, _udf: &ScalarUDF) -> Result<Option<Vec<u8>>> {
+            internal_err!("not needed for proto delegation test")
+        }
+
+        fn encode_udaf(&self, _udaf: &AggregateUDF) -> Result<Option<Vec<u8>>> {
+            internal_err!("not needed for proto delegation test")
+        }
+
+        fn encode_udwf(&self, _udwf: &WindowUDF) -> Result<Option<Vec<u8>>> {
+            internal_err!("not needed for proto delegation test")
+        }
+    }
+
+    #[cfg(feature = "proto")]
+    #[test]
+    fn data_source_exec_delegates_proto_to_file_source() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let source = Arc::new(ProtoHookSource::new(TableSchema::from(&schema)));
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+                .build();
+        let exec = DataSourceExec::from_data_source(config);
+        let encoder = UnusedPlanEncoder;
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+
+        assert_eq!(exec.try_to_proto(&ctx)?, Some(PhysicalPlanNode::default()));
+        Ok(())
     }
 
     #[test]

@@ -34,6 +34,7 @@ use datafusion_expr::WindowFrame;
 use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr::{HigherOrderFunctionExpr, ScalarFunctionExpr};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_physical_plan::proto::ExecutionPlanEncodeCtx;
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
 use datafusion_physical_plan::{
@@ -41,13 +42,12 @@ use datafusion_physical_plan::{
 };
 
 use super::{
-    DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
+    ConverterPlanEncoder, DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
     PhysicalProtoConverterExtension, encode_human_display_alias,
 };
 use crate::convert::TryFromProto;
 use crate::protobuf::{
-    self, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
-    physical_aggregate_expr_node, physical_window_expr_node,
+    self, PhysicalSortExprNode, physical_aggregate_expr_node, physical_window_expr_node,
 };
 
 #[expect(clippy::needless_pass_by_value)]
@@ -487,87 +487,11 @@ pub fn serialize_file_scan_config(
     codec: &dyn PhysicalExtensionCodec,
     proto_converter: &dyn PhysicalProtoConverterExtension,
 ) -> Result<protobuf::FileScanExecConf> {
-    let file_groups = conf
-        .file_groups
-        .iter()
-        .map(|p| protobuf::FileGroup::try_from_proto(p.files()))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let mut output_orderings = vec![];
-    for order in &conf.output_ordering {
-        let ordering =
-            serialize_physical_sort_exprs(order.to_vec(), codec, proto_converter)?;
-        output_orderings.push(ordering)
-    }
-    let output_partitioning = conf
-        .output_partitioning
-        .as_ref()
-        .map(|partitioning| serialize_partitioning(partitioning, codec, proto_converter))
-        .transpose()?;
-
-    // Fields must be added to the schema so that they can persist in the protobuf,
-    // and then they are to be removed from the schema in `parse_protobuf_file_scan_config`
-    let mut fields = conf
-        .file_schema()
-        .fields()
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>();
-    fields.extend(conf.table_partition_cols().iter().cloned());
-
-    let schema = Arc::new(
-        Schema::new(fields.clone()).with_metadata(conf.file_schema().metadata.clone()),
-    );
-
-    let projection_exprs = conf
-        .file_source
-        .projection()
-        .as_ref()
-        .map(|projection_exprs| {
-            let projections = projection_exprs.iter().cloned().collect::<Vec<_>>();
-            Ok::<_, DataFusionError>(protobuf::ProjectionExprs {
-                projections: projections
-                    .into_iter()
-                    .map(|expr| {
-                        Ok(protobuf::ProjectionExpr {
-                            alias: expr.alias.to_string(),
-                            expr: Some(
-                                proto_converter
-                                    .physical_expr_to_proto(&expr.expr, codec)?,
-                            ),
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?,
-            })
-        })
-        .transpose()?;
-
-    Ok(protobuf::FileScanExecConf {
-        file_groups,
-        statistics: Some((&conf.statistics()).into()),
-        limit: conf.limit.map(|l| protobuf::ScanLimit { limit: l as u32 }),
-        projection: vec![],
-        schema: Some(schema.as_ref().try_into()?),
-        table_partition_cols: conf
-            .table_partition_cols()
-            .iter()
-            .map(|x| x.name().clone())
-            .collect::<Vec<_>>(),
-        object_store_url: conf.object_store_url.to_string(),
-        output_ordering: output_orderings
-            .into_iter()
-            .map(|e| PhysicalSortExprNodeCollection {
-                physical_sort_expr_nodes: e,
-            })
-            .collect::<Vec<_>>(),
-        constraints: Some(conf.constraints.clone().into()),
-        batch_size: conf.batch_size.map(|s| s as u64),
-        projection_exprs,
-        // Partition grouping is now encoded in `output_partitioning`; this legacy
-        // wire field is left unset (readers rely on `output_partitioning`).
-        partitioned_by_file_group: None,
-        output_partitioning,
-    })
+    let encoder = ConverterPlanEncoder {
+        codec,
+        proto_converter,
+    };
+    conf.to_proto_conf(&ExecutionPlanEncodeCtx::new(&encoder))
 }
 
 pub fn serialize_maybe_filter(
