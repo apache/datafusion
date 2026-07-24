@@ -380,7 +380,8 @@ impl AggregateUDFImpl for Max {
 
 #[derive(Debug)]
 pub struct SlidingMaxAccumulator {
-    max: ScalarValue,
+    /// Typed NULL returned when the window contains no non-null values
+    empty_value: ScalarValue,
     moving_max: MovingMax<ScalarValue>,
 }
 
@@ -388,21 +389,16 @@ impl SlidingMaxAccumulator {
     /// new max accumulator
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
-            max: ScalarValue::try_from(datatype)?,
+            empty_value: ScalarValue::try_from(datatype)?,
             moving_max: MovingMax::<ScalarValue>::new(),
         })
     }
 
-    /// Sets `self.max` to the maximum of the current window, or a typed NULL
-    /// if the window contains no non-null values. NULL values are never pushed
-    /// into `self.moving_max`, so it may be empty even when the window frame
-    /// is not.
-    fn update_max(&mut self) -> Result<()> {
-        self.max = match self.moving_max.max() {
+    fn current_max(&self) -> ScalarValue {
+        match self.moving_max.max() {
             Some(res) => res.clone(),
-            None => ScalarValue::try_from(&self.max.data_type())?,
-        };
-        Ok(())
+            None => self.empty_value.clone(),
+        }
     }
 }
 
@@ -414,7 +410,7 @@ impl Accumulator for SlidingMaxAccumulator {
                 self.moving_max.push(val);
             }
         }
-        self.update_max()
+        Ok(())
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -426,7 +422,7 @@ impl Accumulator for SlidingMaxAccumulator {
         for _ in 0..non_null {
             self.moving_max.pop();
         }
-        self.update_max()
+        Ok(())
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -434,11 +430,11 @@ impl Accumulator for SlidingMaxAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.max.clone()])
+        Ok(vec![self.current_max()])
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(self.max.clone())
+        Ok(self.current_max())
     }
 
     fn supports_retract_batch(&self) -> bool {
@@ -446,7 +442,7 @@ impl Accumulator for SlidingMaxAccumulator {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) - size_of_val(&self.max) + self.max.size()
+        size_of_val(self) - size_of_val(&self.empty_value) + self.empty_value.size()
     }
 }
 
@@ -677,34 +673,30 @@ impl AggregateUDFImpl for Min {
 
 #[derive(Debug)]
 pub struct SlidingMinAccumulator {
-    min: ScalarValue,
+    /// Typed NULL returned when the window contains no non-null values
+    empty_value: ScalarValue,
     moving_min: MovingMin<ScalarValue>,
 }
 
 impl SlidingMinAccumulator {
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
-            min: ScalarValue::try_from(datatype)?,
+            empty_value: ScalarValue::try_from(datatype)?,
             moving_min: MovingMin::<ScalarValue>::new(),
         })
     }
 
-    /// Sets `self.min` to the minimum of the current window, or a typed NULL
-    /// if the window contains no non-null values. NULL values are never pushed
-    /// into `self.moving_min`, so it may be empty even when the window frame
-    /// is not.
-    fn update_min(&mut self) -> Result<()> {
-        self.min = match self.moving_min.min() {
+    fn current_min(&self) -> ScalarValue {
+        match self.moving_min.min() {
             Some(res) => res.clone(),
-            None => ScalarValue::try_from(&self.min.data_type())?,
-        };
-        Ok(())
+            None => self.empty_value.clone(),
+        }
     }
 }
 
 impl Accumulator for SlidingMinAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.min.clone()])
+        Ok(vec![self.current_min()])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -714,7 +706,7 @@ impl Accumulator for SlidingMinAccumulator {
                 self.moving_min.push(val);
             }
         }
-        self.update_min()
+        Ok(())
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -726,7 +718,7 @@ impl Accumulator for SlidingMinAccumulator {
         for _ in 0..non_null {
             self.moving_min.pop();
         }
-        self.update_min()
+        Ok(())
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -734,7 +726,7 @@ impl Accumulator for SlidingMinAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(self.min.clone())
+        Ok(self.current_min())
     }
 
     fn supports_retract_batch(&self) -> bool {
@@ -742,7 +734,7 @@ impl Accumulator for SlidingMinAccumulator {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) - size_of_val(&self.min) + self.min.size()
+        size_of_val(self) - size_of_val(&self.empty_value) + self.empty_value.size()
     }
 }
 
