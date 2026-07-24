@@ -22,7 +22,9 @@ use super::{
     TPCH_QUERY_END_ID, TPCH_QUERY_START_ID, TPCH_TABLES, get_query_sql_for_scale_factor,
     get_tbl_tpch_table_schema, get_tpch_table_schema, table_constraints,
 };
-use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
+use crate::util::{
+    BenchmarkRun, CommonOpt, QueryResult, RequestCounts, print_memory_stats,
+};
 
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
@@ -174,6 +176,7 @@ impl RunOpt {
         let sql = &get_query_sql_for_scale_factor(query_id, scale_factor)?;
 
         for i in 0..self.iterations() {
+            let requests_before = RequestCounts::snapshot();
             let start = Instant::now();
 
             // query 15 is special, with 3 statements. the second statement is the one from which we
@@ -194,12 +197,14 @@ impl RunOpt {
             }
 
             let elapsed = start.elapsed();
+            let requests = RequestCounts::snapshot().since(&requests_before);
             let ms = elapsed.as_secs_f64() * 1000.0;
             millis.push(ms);
             info!("output:\n\n{}\n\n", pretty_format_batches(&result)?);
             let row_count = result.iter().map(|b| b.num_rows()).sum();
             println!(
-                "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
+                "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows ({} GET requests, {} bytes)",
+                requests.get_requests, requests.get_bytes
             );
             query_results.push(QueryResult { elapsed, row_count });
         }
