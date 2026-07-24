@@ -1,0 +1,111 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for the `optimizer.enable_row_number_to_aggregate` rule
+# (ReplaceFilterTop1): a "top-1 per group" ROW_NUMBER() filter is rewritten
+# into a first_value aggregate.
+
+statement ok
+CREATE TABLE t (p INT, o INT, payload VARCHAR) AS VALUES
+  (1, 10, 'a'),
+  (1, 20, 'b'),
+  (2, 5,  'c'),
+  (2, 30, 'd');
+
+# ---------------------------------------------------------------------------
+# Rule disabled (the default): the plan keeps the Window + Filter shape.
+# ---------------------------------------------------------------------------
+
+statement ok
+set datafusion.optimizer.enable_row_number_to_aggregate = false;
+
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY p ORDER BY o DESC) AS rn
+  FROM t
+) WHERE rn = 1;
+----
+logical_plan
+01)Projection: t.p, t.o, t.payload, row_number() PARTITION BY [t.p] ORDER BY [t.o DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+02)--Filter: row_number() PARTITION BY [t.p] ORDER BY [t.o DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = UInt64(1)
+03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [t.p] ORDER BY [t.o DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: t projection=[p, o, payload]
+physical_plan
+01)ProjectionExec: expr=[p@0 as p, o@1 as o, payload@2 as payload, row_number() PARTITION BY [t.p] ORDER BY [t.o DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+02)--FilterExec: row_number() PARTITION BY [t.p] ORDER BY [t.o DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 = 1
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [t.p] ORDER BY [t.o DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [t.p] ORDER BY [t.o DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[p@0 ASC NULLS LAST, o@1 DESC], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# ---------------------------------------------------------------------------
+# Rule enabled: the Filter(row_number() = 1) collapses into an Aggregate.
+# ---------------------------------------------------------------------------
+
+statement ok
+set datafusion.optimizer.enable_row_number_to_aggregate = true;
+
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY p ORDER BY o DESC) AS rn
+  FROM t
+) WHERE rn = 1;
+----
+logical_plan
+01)Projection: t.p, t.o, t.payload, UInt64(1) AS rn
+02)--Aggregate: groupBy=[[t.p]], aggr=[[first_value(t.o) ORDER BY [t.o DESC NULLS FIRST] AS o, first_value(t.payload) ORDER BY [t.o DESC NULLS FIRST] AS payload]]
+03)----TableScan: t projection=[p, o, payload]
+physical_plan
+01)ProjectionExec: expr=[p@0 as p, o@1 as o, payload@2 as payload, 1 as rn]
+02)--AggregateExec: mode=FinalPartitioned, gby=[p@0 as p], aggr=[first_value(t.o) ORDER BY [t.o DESC NULLS FIRST] as o, first_value(t.payload) ORDER BY [t.o DESC NULLS FIRST] as payload]
+03)----RepartitionExec: partitioning=Hash([p@0], 4), input_partitions=1
+04)------AggregateExec: mode=Partial, gby=[p@0 as p], aggr=[first_value(t.o) ORDER BY [t.o DESC NULLS FIRST] as o, first_value(t.payload) ORDER BY [t.o DESC NULLS FIRST] as payload]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Correctness: top-1 per partition by descending o.
+query IITI rowsort
+SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY p ORDER BY o DESC) AS rn
+  FROM t
+) WHERE rn = 1;
+----
+1 20 b 1
+2 30 d 1
+
+# `<= 1` and `< 2` are equivalent "top-1" predicates and rewrite identically.
+query IITI rowsort
+SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY p ORDER BY o DESC) AS rn
+  FROM t
+) WHERE rn <= 1;
+----
+1 20 b 1
+2 30 d 1
+
+query IITI rowsort
+SELECT * FROM (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY p ORDER BY o DESC) AS rn
+  FROM t
+) WHERE rn < 2;
+----
+1 20 b 1
+2 30 d 1
+
+statement ok
+set datafusion.optimizer.enable_row_number_to_aggregate = false;
+
+statement ok
+DROP TABLE t;
