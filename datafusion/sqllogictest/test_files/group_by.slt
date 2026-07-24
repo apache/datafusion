@@ -5674,20 +5674,13 @@ EXPLAIN SELECT DISTINCT u.id
 ----
 logical_plan
 01)Aggregate: groupBy=[[u.id]], aggr=[[]]
-02)--Projection: u.id
-03)----Left Join: u.id = o.user_id
-04)------SubqueryAlias: u
-05)--------TableScan: users_with_pk projection=[id]
-06)------SubqueryAlias: o
-07)--------TableScan: user_orders projection=[user_id]
+02)--SubqueryAlias: u
+03)----TableScan: users_with_pk projection=[id]
 physical_plan
 01)AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[]
-02)--RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=4
+02)--RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
 03)----AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, user_id@0)], projection=[id@0]
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)----------DataSourceExec: partitions=1, partition_sizes=[1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table users_with_pk;
