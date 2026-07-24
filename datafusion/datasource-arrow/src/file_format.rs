@@ -548,7 +548,10 @@ mod tests {
         AggregateUDF, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF,
     };
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-    use datafusion_session::{CatalogProviderList, EmptyCatalogProviderList};
+    use datafusion_session::{
+        CatalogProviderList, EmptyCatalogProviderList, QueryPlanner,
+        UnsupportedQueryPlanner,
+    };
     use object_store::{chunked::ChunkedStore, memory::InMemory};
 
     struct MockSession {
@@ -577,6 +580,10 @@ mod tests {
 
         fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
             Arc::new(EmptyCatalogProviderList)
+        }
+
+        fn query_planner(&self) -> Arc<dyn QueryPlanner + Send + Sync> {
+            Arc::new(UnsupportedQueryPlanner)
         }
 
         async fn create_physical_plan(

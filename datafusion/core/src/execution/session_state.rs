@@ -73,12 +73,10 @@ use datafusion_optimizer::{
 };
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_optimizer::PhysicalOptimizerContext;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
-use datafusion_session::Session;
+use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule, Session};
 #[cfg(feature = "sql")]
 use datafusion_sql::{
     parser::{DFParserBuilder, Statement},
@@ -272,6 +270,22 @@ impl Session for SessionState {
 
     fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
         Arc::clone(self.catalog_list())
+    }
+
+    fn query_planner(&self) -> Arc<dyn QueryPlanner + Send + Sync> {
+        Arc::clone(SessionState::query_planner(self))
+    }
+
+    fn optimize(&self, plan: &LogicalPlan) -> datafusion_common::Result<LogicalPlan> {
+        SessionState::optimize(self, plan)
+    }
+
+    fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
+        SessionState::physical_optimizers(self)
+    }
+
+    fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+        SessionState::statistics_registry(self)
     }
 
     async fn create_physical_plan(
@@ -2322,7 +2336,7 @@ impl QueryPlanner for DefaultQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session_state: &dyn Session,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         let planner = DefaultPhysicalPlanner::default();
         planner

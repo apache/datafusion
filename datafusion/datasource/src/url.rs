@@ -523,7 +523,10 @@ mod tests {
     };
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_plan::ExecutionPlan;
-    use datafusion_session::{CatalogProviderList, EmptyCatalogProviderList};
+    use datafusion_session::{
+        CatalogProviderList, EmptyCatalogProviderList, QueryPlanner,
+        UnsupportedQueryPlanner,
+    };
     use object_store::{
         CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload,
         PutMultipartOptions, PutPayload,
@@ -1194,6 +1197,10 @@ mod tests {
 
         fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
             Arc::new(EmptyCatalogProviderList)
+        }
+
+        fn query_planner(&self) -> Arc<dyn QueryPlanner + Send + Sync> {
+            Arc::new(UnsupportedQueryPlanner)
         }
 
         async fn create_physical_plan(

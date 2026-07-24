@@ -26,14 +26,12 @@ use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use crate::datasource::{DefaultTableSource, source_as_provider};
 use crate::error::{DataFusionError, Result};
-use crate::execution::context::{ExecutionProps, SessionState};
+use crate::execution::context::ExecutionProps;
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_expr::{
     Aggregate, EmptyRelation, Join, Projection, Sort, TableScan, Unnest, Values, Window,
 };
-use crate::logical_expr::{
-    Expr, LogicalPlan, PlanType, Repartition, UserDefinedLogicalNode,
-};
+use crate::logical_expr::{Expr, LogicalPlan, PlanType, Repartition};
 use crate::physical_expr::{
     create_physical_expr, create_physical_exprs, create_physical_partitioning,
 };
@@ -57,6 +55,7 @@ use crate::physical_plan::{
     displayable, windows,
 };
 use crate::schema_equivalence::schema_satisfied_by;
+use datafusion_session::{PhysicalOptimizerContext, Session};
 
 use arrow::array::{RecordBatch, builder::StringBuilder};
 use arrow::compute::SortOptions;
@@ -103,7 +102,6 @@ use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr, create_physical_sort_exprs,
 };
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::joins::PiecewiseMergeJoinExec;
@@ -111,6 +109,7 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion_physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
 use datafusion_physical_plan::unnest::ListUnnest;
+use datafusion_session::PhysicalOptimizerRule;
 
 use async_trait::async_trait;
 use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
@@ -120,162 +119,31 @@ use itertools::{Itertools, multiunzip};
 use log::debug;
 use tokio::sync::Mutex;
 
-/// Physical query planner that converts a `LogicalPlan` to an
-/// `ExecutionPlan` suitable for execution.
-#[async_trait]
-pub trait PhysicalPlanner: Send + Sync {
-    /// Create a physical plan from a logical plan
-    async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-        session_state: &SessionState,
-    ) -> Result<Arc<dyn ExecutionPlan>>;
+// Re-export from this module for backwards compatibility.
+pub use datafusion_session::{ExtensionPlanner, PhysicalPlanner};
 
-    /// Create a physical expression from a logical expression
-    /// suitable for evaluation
-    ///
-    /// `expr`: the expression to convert
-    ///
-    /// `input_dfschema`: the logical plan schema for evaluating `expr`
-    ///
-    /// `planning_ctx`: the [`PhysicalPlanningContext`] used to resolve
-    /// `Expr::ScalarSubquery` nodes. During physical planning the planner
-    /// threads the context of the plan currently being converted to a physical
-    /// plan (for example into [`ExtensionPlanner::plan_extension`], which
-    /// should forward it here). Callers creating physical expressions outside
-    /// of a plan should pass `&PhysicalPlanningContext::default()`.
-    fn create_physical_expr(
-        &self,
-        expr: &Expr,
-        input_dfschema: &DFSchema,
-        session_state: &SessionState,
-        planning_ctx: &PhysicalPlanningContext,
-    ) -> Result<Arc<dyn PhysicalExpr>>;
+struct SessionOptimizerContext<'a> {
+    session: &'a dyn Session,
 }
 
-/// This trait exposes the ability to plan an [`ExecutionPlan`] out of a [`LogicalPlan`].
-#[async_trait]
-pub trait ExtensionPlanner {
-    /// Create a physical plan for a [`UserDefinedLogicalNode`].
-    ///
-    /// `input_dfschema`: the logical plan schema for the inputs to this node
-    ///
-    /// Returns an error when the planner knows how to plan the concrete
-    /// implementation of `node` but errors while doing so.
-    ///
-    /// Returns `None` when the planner does not know how to plan the
-    /// `node` and wants to delegate the planning to another
-    /// [`ExtensionPlanner`].
-    ///
-    /// `planning_ctx` is the [`PhysicalPlanningContext`] of the plan subtree
-    /// currently being converted to a physical plan. Forward it to
-    /// [`PhysicalPlanner::create_physical_expr`] when creating this node's
-    /// physical expressions so that scalar subqueries resolve against the same
-    /// subquery state as the rest of the plan.
-    async fn plan_extension(
-        &self,
-        planner: &dyn PhysicalPlanner,
-        node: &dyn UserDefinedLogicalNode,
-        logical_inputs: &[&LogicalPlan],
-        physical_inputs: &[Arc<dyn ExecutionPlan>],
-        session_state: &SessionState,
-        planning_ctx: &PhysicalPlanningContext,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>>;
+impl PhysicalOptimizerContext for SessionOptimizerContext<'_> {
+    fn config_options(&self) -> &datafusion_common::config::ConfigOptions {
+        self.session.config_options()
+    }
 
-    /// Create a physical plan for a [`LogicalPlan::TableScan`].
-    ///
-    /// This is useful for planning valid [`TableSource`]s that are not [`TableProvider`]s.
-    ///
-    /// Returns:
-    /// * `Ok(Some(plan))` if the planner knows how to plan the `scan`
-    /// * `Ok(None)` if the planner does not know how to plan the `scan` and wants to delegate the planning to another [`ExtensionPlanner`]
-    /// * `Err` if the planner knows how to plan the `scan` but errors while doing so
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use std::sync::Arc;
-    /// use datafusion::physical_plan::ExecutionPlan;
-    /// use datafusion::logical_expr::TableScan;
-    /// use datafusion::execution::context::SessionState;
-    /// use datafusion::error::Result;
-    /// use datafusion_physical_planner::{ExtensionPlanner, PhysicalPlanner};
-    /// use async_trait::async_trait;
-    ///
-    /// // Your custom table source type
-    /// struct MyCustomTableSource { /* ... */ }
-    ///
-    /// // Your custom execution plan
-    /// struct MyCustomExec { /* ... */ }
-    ///
-    /// struct MyExtensionPlanner;
-    ///
-    /// #[async_trait]
-    /// impl ExtensionPlanner for MyExtensionPlanner {
-    ///     async fn plan_extension(
-    ///         &self,
-    ///         _planner: &dyn PhysicalPlanner,
-    ///         _node: &dyn UserDefinedLogicalNode,
-    ///         _logical_inputs: &[&LogicalPlan],
-    ///         _physical_inputs: &[Arc<dyn ExecutionPlan>],
-    ///         _session_state: &SessionState,
-    ///         _planning_ctx: &PhysicalPlanningContext,
-    ///     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    ///         Ok(None)
-    ///     }
-    ///
-    ///     async fn plan_table_scan(
-    ///         &self,
-    ///         _planner: &dyn PhysicalPlanner,
-    ///         scan: &TableScan,
-    ///         _session_state: &SessionState,
-    ///         _planning_ctx: &PhysicalPlanningContext,
-    ///     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-    ///         // Check if this is your custom table source
-    ///         if scan.source.is::<MyCustomTableSource>() {
-    ///             // Create a custom execution plan for your table source
-    ///             let exec = MyCustomExec::new(
-    ///                 scan.table_name.clone(),
-    ///                 Arc::clone(scan.projected_schema.inner()),
-    ///             );
-    ///             Ok(Some(Arc::new(exec)))
-    ///         } else {
-    ///             // Return None to let other extension planners handle it
-    ///             Ok(None)
-    ///         }
-    ///     }
-    /// }
-    /// ```
-    ///
-    /// [`TableSource`]: datafusion_expr::TableSource
-    /// [`TableProvider`]: datafusion_catalog::TableProvider
-    async fn plan_table_scan(
+    fn statistics_registry(
         &self,
-        _planner: &dyn PhysicalPlanner,
-        _scan: &TableScan,
-        _session_state: &SessionState,
-        _planning_ctx: &PhysicalPlanningContext,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        Ok(None)
+    ) -> Option<&datafusion_physical_plan::operator_statistics::StatisticsRegistry> {
+        self.session.statistics_registry()
     }
 }
 
 /// Default single node physical query planner that converts a
 /// `LogicalPlan` to an `ExecutionPlan` suitable for execution.
 ///
-/// This planner will first flatten the `LogicalPlan` tree via a
-/// depth first approach, which allows it to identify the leaves
-/// of the tree.
-///
-/// Tasks are spawned from these leaves and traverse back up the
-/// tree towards the root, converting each `LogicalPlan` node it
-/// reaches into their equivalent `ExecutionPlan` node. When these
-/// tasks reach a common node, they will terminate until the last
-/// task reaches the node which will then continue building up the
-/// tree.
-///
-/// Up to [`planning_concurrency`] tasks are buffered at once to
-/// execute concurrently.
+/// This planner first flattens the `LogicalPlan` tree with a depth-first
+/// traversal. It then builds the physical plan from the leaves to the root.
+/// Up to [`planning_concurrency`] tasks execute concurrently.
 ///
 /// [`planning_concurrency`]: crate::config::ExecutionOptions::planning_concurrency
 #[derive(Default)]
@@ -289,7 +157,7 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session_state: &dyn Session,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(plan) = self
             .handle_explain_or_analyze(logical_plan, session_state)
@@ -314,7 +182,7 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
         &self,
         expr: &Expr,
         input_dfschema: &DFSchema,
-        session_state: &SessionState,
+        session_state: &dyn Session,
         planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         create_physical_expr(
@@ -461,7 +329,7 @@ impl DefaultPhysicalPlanner {
     fn create_initial_plan<'a>(
         &'a self,
         logical_plan: &'a LogicalPlan,
-        session_state: &'a SessionState,
+        session_state: &'a dyn Session,
     ) -> futures::future::BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         Box::pin(async move {
             // When `enable_physical_uncorrelated_scalar_subquery` is disabled, the
@@ -513,7 +381,7 @@ impl DefaultPhysicalPlanner {
     async fn create_initial_plan_inner(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session_state: &dyn Session,
         planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // DFS the tree to flatten it into a Vec.
@@ -594,7 +462,7 @@ impl DefaultPhysicalPlanner {
         &'a self,
         leaf_starter_index: usize,
         flat_tree: Arc<Vec<LogicalNode<'a>>>,
-        session_state: &'a SessionState,
+        session_state: &'a dyn Session,
         planning_ctx: &'a PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // We always start with a leaf, so can ignore status and pass empty children
@@ -681,7 +549,7 @@ impl DefaultPhysicalPlanner {
     async fn map_logical_node_to_physical(
         &self,
         node: &LogicalPlan,
-        session_state: &SessionState,
+        session_state: &dyn Session,
         planning_ctx: &PhysicalPlanningContext,
         children: ChildrenContainer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -2710,7 +2578,7 @@ impl DefaultPhysicalPlanner {
     async fn handle_explain_or_analyze(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session_state: &dyn Session,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let execution_plan = match logical_plan {
             LogicalPlan::Explain(e) => self.handle_explain(e, session_state).await?,
@@ -2724,7 +2592,7 @@ impl DefaultPhysicalPlanner {
     async fn handle_explain(
         &self,
         e: &Explain,
-        session_state: &SessionState,
+        session_state: &dyn Session,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         use PlanType::*;
         let mut stringified_plans = vec![];
@@ -2914,7 +2782,7 @@ impl DefaultPhysicalPlanner {
     async fn handle_analyze(
         &self,
         a: &Analyze,
-        session_state: &SessionState,
+        session_state: &dyn Session,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input = self.create_physical_plan(&a.input, session_state).await?;
         let schema = Arc::clone(a.schema.inner());
@@ -2922,7 +2790,7 @@ impl DefaultPhysicalPlanner {
         // Statement-level overrides take precedence over the session config.
         let analyze_level = a
             .analyze_level
-            .unwrap_or(session_state.config_options().explain.analyze_level);
+            .unwrap_or_else(|| session_state.config_options().explain.analyze_level);
         let metric_types = analyze_level.included_types();
         let analyze_categories = a.analyze_categories.clone().unwrap_or_else(|| {
             session_state
@@ -2950,7 +2818,7 @@ impl DefaultPhysicalPlanner {
     pub fn optimize_physical_plan<F>(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        session_state: &SessionState,
+        session_state: &dyn Session,
         mut observer: F,
     ) -> Result<Arc<dyn ExecutionPlan>>
     where
@@ -2971,10 +2839,13 @@ impl DefaultPhysicalPlanner {
         InvariantChecker(InvariantLevel::Always).check(&plan)?;
 
         let mut new_plan = Arc::clone(&plan);
+        let optimizer_context = SessionOptimizerContext {
+            session: session_state,
+        };
         for optimizer in optimizers {
             let before_schema = new_plan.schema();
             new_plan = optimizer
-                .optimize_with_context(new_plan, session_state)
+                .optimize_with_context(new_plan, &optimizer_context)
                 .map_err(|e| {
                     DataFusionError::Context(optimizer.name().to_string(), Box::new(e))
                 })?;
@@ -3054,7 +2925,7 @@ impl DefaultPhysicalPlanner {
     async fn plan_scalar_subqueries(
         &self,
         subqueries: Vec<Subquery>,
-        session_state: &SessionState,
+        session_state: &dyn Session,
     ) -> Result<(Vec<ScalarSubqueryLink>, DFHashMap<Subquery, SubqueryIndex>)> {
         let mut links = Vec::with_capacity(subqueries.len());
         let mut index_map = DFHashMap::with_capacity(subqueries.len());
@@ -3350,6 +3221,7 @@ mod tests {
     use std::fmt::{self, Debug};
     use std::mem::size_of_val;
     use std::ops::{BitAnd, Not};
+    use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
     use super::*;
     use crate::datasource::MemTable;
@@ -3361,11 +3233,14 @@ mod tests {
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::test_util::{scan_empty, scan_empty_with_partitions};
 
+    use crate::execution::context::SessionState;
     use crate::execution::session_state::SessionStateBuilder;
+    use crate::logical_expr::UserDefinedLogicalNode;
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type};
     use arrow_schema::{FieldRef, SchemaRef};
-    use datafusion_common::config::ConfigOptions;
+    use datafusion_catalog::CatalogProviderList;
+    use datafusion_common::config::{ConfigOptions, TableOptions};
     use datafusion_common::{
         DFSchemaRef, ScalarValue, SplitPoint, TableReference, ToDFSchema as _,
         assert_batches_eq, assert_contains,
@@ -3375,16 +3250,171 @@ mod tests {
     use datafusion_expr::builder::subquery_alias;
     use datafusion_expr::expr::AggregateFunctionParams;
     use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
+    use datafusion_expr::registry::ExtensionTypeRegistryRef;
     use datafusion_expr::{
-        Accumulator, AggregateUDF, AggregateUDFImpl, ExprFunctionExt, LogicalPlanBuilder,
-        Partitioning as LogicalPartitioning, RangePartitioning, Signature, TableSource,
-        UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition, col, lit,
-        scalar_subquery,
+        Accumulator, AggregateUDF, AggregateUDFImpl, ExprFunctionExt, HigherOrderUDF,
+        LogicalPlanBuilder, Partitioning as LogicalPartitioning, RangePartitioning,
+        ScalarUDF, Signature, TableSource, UserDefinedLogicalNodeCore, Volatility,
+        WindowFunctionDefinition, WindowUDF, col, lit, scalar_subquery,
     };
     use datafusion_functions_aggregate::count::{count_all, count_udaf};
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+    use datafusion_session::QueryPlanner;
+
+    #[derive(Debug)]
+    struct ContextCheckingRule {
+        invoked: Arc<AtomicBool>,
+    }
+
+    impl PhysicalOptimizerRule for ContextCheckingRule {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(plan)
+        }
+
+        fn optimize_with_context(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            context: &dyn PhysicalOptimizerContext,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            assert!(context.statistics_registry().is_some());
+            self.invoked.store(true, AtomicOrdering::Relaxed);
+            Ok(plan)
+        }
+
+        fn name(&self) -> &str {
+            "context_checking_rule"
+        }
+
+        fn schema_check(&self) -> bool {
+            true
+        }
+    }
+
+    #[derive(Debug)]
+    struct TestQueryPlanner {
+        invoked: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl QueryPlanner for TestQueryPlanner {
+        async fn create_physical_plan(
+            &self,
+            logical_plan: &LogicalPlan,
+            session: &dyn Session,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.invoked.store(true, AtomicOrdering::Relaxed);
+            DefaultPhysicalPlanner::default()
+                .create_physical_plan(logical_plan, session)
+                .await
+        }
+    }
+
+    struct TestSession {
+        inner: SessionState,
+        query_planner: Arc<dyn QueryPlanner + Send + Sync>,
+    }
+
+    #[async_trait]
+    impl Session for TestSession {
+        fn session_id(&self) -> &str {
+            self.inner.session_id()
+        }
+
+        fn config(&self) -> &SessionConfig {
+            self.inner.config()
+        }
+
+        fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
+            Arc::clone(self.inner.catalog_list())
+        }
+
+        fn query_planner(&self) -> Arc<dyn QueryPlanner + Send + Sync> {
+            Arc::clone(&self.query_planner)
+        }
+
+        fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
+            self.inner.optimize(plan)
+        }
+
+        fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
+            self.inner.physical_optimizers()
+        }
+
+        fn statistics_registry(
+            &self,
+        ) -> Option<&datafusion_physical_plan::operator_statistics::StatisticsRegistry>
+        {
+            self.inner.statistics_registry()
+        }
+
+        async fn create_physical_plan(
+            &self,
+            logical_plan: &LogicalPlan,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            let logical_plan = self.optimize(logical_plan)?;
+            self.query_planner()
+                .create_physical_plan(&logical_plan, self)
+                .await
+        }
+
+        fn create_physical_expr(
+            &self,
+            expr: Expr,
+            df_schema: &DFSchema,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            Session::create_physical_expr(&self.inner, expr, df_schema)
+        }
+
+        fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
+            Session::scalar_functions(&self.inner)
+        }
+
+        fn higher_order_functions(&self) -> &HashMap<String, Arc<HigherOrderUDF>> {
+            Session::higher_order_functions(&self.inner)
+        }
+
+        fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+            Session::aggregate_functions(&self.inner)
+        }
+
+        fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+            Session::window_functions(&self.inner)
+        }
+
+        fn extension_type_registry(&self) -> &ExtensionTypeRegistryRef {
+            Session::extension_type_registry(&self.inner)
+        }
+
+        fn runtime_env(&self) -> &Arc<RuntimeEnv> {
+            self.inner.runtime_env()
+        }
+
+        fn execution_props(&self) -> &ExecutionProps {
+            self.inner.execution_props()
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn table_options(&self) -> &TableOptions {
+            self.inner.table_options()
+        }
+
+        fn table_options_mut(&mut self) -> &mut TableOptions {
+            self.inner.table_options_mut()
+        }
+
+        fn task_ctx(&self) -> Arc<TaskContext> {
+            self.inner.task_ctx()
+        }
+    }
 
     fn make_session_state() -> SessionState {
         let runtime = Arc::new(RuntimeEnv::default());
@@ -3405,6 +3435,35 @@ mod tests {
         planner
             .create_physical_plan(&logical_plan, &session_state)
             .await
+    }
+
+    #[tokio::test]
+    async fn plans_with_non_session_state_implementation() -> Result<()> {
+        let invoked = Arc::new(AtomicBool::new(false));
+        let inner = SessionStateBuilder::new()
+            .with_default_features()
+            .with_physical_optimizer_rules(vec![Arc::new(ContextCheckingRule {
+                invoked: Arc::clone(&invoked),
+            })])
+            .with_statistics_registry(
+                datafusion_physical_plan::operator_statistics::StatisticsRegistry::new(),
+            )
+            .build();
+        let query_planner_invoked = Arc::new(AtomicBool::new(false));
+        let session = TestSession {
+            inner,
+            query_planner: Arc::new(TestQueryPlanner {
+                invoked: Arc::clone(&query_planner_invoked),
+            }),
+        };
+        assert!(session.as_any().downcast_ref::<SessionState>().is_none());
+
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        let physical_plan = session.create_physical_plan(&logical_plan).await?;
+        assert!(physical_plan.is::<EmptyExec>());
+        assert!(query_planner_invoked.load(AtomicOrdering::Relaxed));
+        assert!(invoked.load(AtomicOrdering::Relaxed));
+        Ok(())
     }
 
     async fn aggregate_explain(logical_plan: &LogicalPlan) -> Result<String> {
@@ -4028,9 +4087,16 @@ mod tests {
         let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
             ExpressionExtensionPlanner,
         )]);
+        let session = TestSession {
+            inner: make_session_state(),
+            query_planner: Arc::new(TestQueryPlanner {
+                invoked: Arc::new(AtomicBool::new(false)),
+            }),
+        };
+        assert!(session.as_any().downcast_ref::<SessionState>().is_none());
 
         let plan = planner
-            .create_physical_plan(&logical_plan, &make_session_state())
+            .create_physical_plan(&logical_plan, &session)
             .await?;
 
         assert_contains!(format!("{plan:?}"), "ScalarSubqueryExec");
@@ -4557,7 +4623,7 @@ mod tests {
             _node: &dyn UserDefinedLogicalNode,
             _logical_inputs: &[&LogicalPlan],
             _physical_inputs: &[Arc<dyn ExecutionPlan>],
-            _session_state: &SessionState,
+            _session_state: &dyn Session,
             _planning_ctx: &PhysicalPlanningContext,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
             internal_err!("BOOM")
@@ -4718,7 +4784,7 @@ mod tests {
             node: &dyn UserDefinedLogicalNode,
             _logical_inputs: &[&LogicalPlan],
             _physical_inputs: &[Arc<dyn ExecutionPlan>],
-            session_state: &SessionState,
+            session_state: &dyn Session,
             planning_ctx: &PhysicalPlanningContext,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
             for expr in node.expressions() {
@@ -4748,7 +4814,7 @@ mod tests {
             _node: &dyn UserDefinedLogicalNode,
             _logical_inputs: &[&LogicalPlan],
             _physical_inputs: &[Arc<dyn ExecutionPlan>],
-            _session_state: &SessionState,
+            _session_state: &dyn Session,
             _planning_ctx: &PhysicalPlanningContext,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
             Ok(Some(Arc::new(NoOpExecutionPlan::new(SchemaRef::new(
@@ -5382,7 +5448,7 @@ digraph {
             _node: &dyn UserDefinedLogicalNode,
             _logical_inputs: &[&LogicalPlan],
             _physical_inputs: &[Arc<dyn ExecutionPlan>],
-            _session_state: &SessionState,
+            _session_state: &dyn Session,
             _planning_ctx: &PhysicalPlanningContext,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
             Ok(None)
@@ -5392,7 +5458,7 @@ digraph {
             &self,
             _planner: &dyn PhysicalPlanner,
             scan: &TableScan,
-            _session_state: &SessionState,
+            _session_state: &dyn Session,
             _planning_ctx: &PhysicalPlanningContext,
         ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
             if scan.source.is::<MockTableSource>() {

@@ -26,6 +26,7 @@ use datafusion_expr::registry::ExtensionTypeRegistryRef;
 use datafusion_expr::{
     AggregateUDF, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF,
 };
+use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
 
 use crate::CatalogProviderList;
@@ -33,6 +34,8 @@ use parking_lot::{Mutex, RwLock};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
+
+use crate::{PhysicalOptimizerRule, QueryPlanner};
 
 /// Interface for accessing [`SessionState`] from the catalog and data source.
 ///
@@ -87,6 +90,30 @@ pub trait Session: Send + Sync {
     /// return the [`ConfigOptions`]
     fn config_options(&self) -> &ConfigOptions {
         self.config().options()
+    }
+
+    /// Return the query planner for this session.
+    fn query_planner(&self) -> Arc<dyn QueryPlanner + Send + Sync>;
+
+    /// Optimize a logical plan.
+    ///
+    /// The default implementation returns the plan unchanged. Sessions that use
+    /// the default query planning implementation should override this method.
+    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
+        Ok(plan.clone())
+    }
+
+    /// Return the physical optimizer rules for this session.
+    ///
+    /// The default implementation returns no rules. Sessions that use the
+    /// default physical planner should override this method.
+    fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
+        &[]
+    }
+
+    /// Return the optional statistics registry used during physical optimization.
+    fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+        None
     }
 
     /// Creates a physical [`ExecutionPlan`] plan from a [`LogicalPlan`].

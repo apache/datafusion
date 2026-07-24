@@ -42,7 +42,9 @@ use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::logical_plan::from_proto::parse_expr;
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::protobuf::LogicalExprNode;
-use datafusion_session::{CatalogProviderList, Session};
+use datafusion_session::{
+    CatalogProviderList, QueryPlanner, Session, UnsupportedQueryPlanner,
+};
 use prost::Message;
 
 use stabby::str::Str as SStr;
@@ -573,6 +575,10 @@ impl Session for ForeignSession {
         Arc::clone(&self.catalog_list)
     }
 
+    fn query_planner(&self) -> Arc<dyn QueryPlanner + Send + Sync> {
+        Arc::new(UnsupportedQueryPlanner)
+    }
+
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -730,6 +736,16 @@ mod tests {
         assert!(state.catalog_list().catalog("foreign_registered").is_some());
 
         let logical_plan = LogicalPlan::default();
+        assert_eq!(foreign_session.optimize(&logical_plan)?, logical_plan);
+        assert!(foreign_session.physical_optimizers().is_empty());
+        assert!(foreign_session.statistics_registry().is_none());
+        let planner_error = foreign_session
+            .query_planner()
+            .create_physical_plan(&logical_plan, &foreign_session)
+            .await
+            .unwrap_err();
+        assert!(planner_error.to_string().contains("does not expose"));
+
         let physical_plan = foreign_session.create_physical_plan(&logical_plan).await?;
         assert_eq!(
             format!("{physical_plan:?}"),
