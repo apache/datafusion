@@ -289,12 +289,12 @@ fn cast_fixed_size_list_column(
         },
     };
 
-    Ok(Arc::new(FixedSizeListArray::new(
+    Ok(Arc::new(FixedSizeListArray::try_new(
         Arc::clone(target_inner_field),
         target_list_size,
         cast_values,
         source_list.nulls().cloned(),
-    )))
+    )?))
 }
 
 fn cast_fixed_size_list_values_with_parent_nulls(
@@ -1595,22 +1595,44 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_fixed_size_list_struct_ignores_hidden_child_values_for_null_parent() {
+    fn test_cast_fixed_size_list_returns_error_for_non_nullable_child() {
+        let source_field = Arc::new(Field::new("item", DataType::Int32, true));
+        let target_field = Arc::new(Field::new("item", DataType::Int32, false));
+        let source_col: ArrayRef = Arc::new(FixedSizeListArray::new(
+            source_field,
+            2,
+            Arc::new(Int32Array::from(vec![None, Some(1)])),
+            None,
+        ));
+        let target_type = DataType::FixedSizeList(target_field, 2);
+
+        let error = cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS)
+            .unwrap_err()
+            .to_string();
+        assert_contains!(error, "Found unmasked nulls for non-nullable");
+    }
+
+    #[test]
+    fn test_cast_sliced_fixed_size_list_struct_ignores_hidden_child_values() {
         let source_field =
             arc_field("item", struct_type(vec![field("a", DataType::Utf8)]));
         let target_field =
             arc_field("item", struct_type(vec![field("a", DataType::Int32)]));
         let struct_arr = StructArray::from(vec![(
             arc_field("a", DataType::Utf8),
-            Arc::new(StringArray::from(vec!["not_int", "also_bad", "1", "2"]))
-                as ArrayRef,
+            Arc::new(StringArray::from(vec![
+                "0", "0", "not_int", "also_bad", "1", "2",
+            ])) as ArrayRef,
         )]);
-        let source_col: ArrayRef = Arc::new(FixedSizeListArray::new(
-            source_field,
-            2,
-            Arc::new(struct_arr),
-            Some(NullBuffer::from(vec![false, true])),
-        ));
+        let source_col: ArrayRef = Arc::new(
+            FixedSizeListArray::new(
+                source_field,
+                2,
+                Arc::new(struct_arr),
+                Some(NullBuffer::from(vec![true, false, true])),
+            )
+            .slice(1, 2),
+        );
         let target_type = DataType::FixedSizeList(target_field, 2);
 
         let result =
