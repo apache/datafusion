@@ -294,3 +294,24 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
+
+# TEMPORARY (remove before merge): build against the arrow-rs bounded streaming
+# draft (apache/arrow-rs#10410) until it is released to crates.io.
+[patch.crates-io]
+arrow = { git = "https://github.com/pydantic/arrow-rs", branch = "bounded-column-streaming" }
+arrow-arith = { git = "https://github.com/pydantic/arrow-rs", branch = "bounded-column-streaming" }
+arrow-array = { git = "https://github.com/pydantic/arrow-rs", branch = "bounded-column-streaming" }
+arrow-avro = { git = "https://github.com/pydantic/arrow-rs", branch = "bounded-column-streaming" }
+arrow-buffer = { git = "https://github.com/pydantic/arrow-rs", branch = "bounded-column-streaming" }
+arrow-cast = { git = "https://github.com/pydantic/arrow-rs", branch = "bounded-column-streaming" }
+arrow-csv = { git = "https://github.com/pydantic/arrow-rs", branch = "bounded-column-streaming" }
+arrow-data = { git = "https://github.com/pydantic/arrow-rs", branch = "bounded-column-streaming" }
+arrow-flight = { git = "https://github.com/pydantic/arrow-rs", branch = "bounded-column-streaming" }
+arrow-ipc = { git = "https://github.com/pydantic/arrow-rs", branch = "bounded-column-streaming" }
+arrow-json = { git = "https://github.com/pydantic/arrow-rs", branch = "bounded-column-streaming" }
+arrow-ord = { git = "https://github.com/pydantic/arrow-rs", branch = "bounded-column-streaming" }
+arrow-row = { git = "https://github.com/pydantic/arrow-rs", branch = "bounded-column-streaming" }
+arrow-schema = { git = "https://github.com/pydantic/arrow-rs", branch = "bounded-column-streaming" }
+arrow-select = { git = "https://github.com/pydantic/arrow-rs", branch = "bounded-column-streaming" }
+arrow-string = { git = "https://github.com/pydantic/arrow-rs", branch = "bounded-column-streaming" }
+parquet = { git = "https://github.com/pydantic/arrow-rs", branch = "bounded-column-streaming" }

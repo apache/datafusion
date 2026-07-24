@@ -27,7 +27,7 @@ use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
-    DecoderBuilderConfig, PushDecoderStreamState, RgPlanEntry, RowGroupPruner,
+    DecoderBuilderConfig, FetchState, PushDecoderStreamState, RgPlanEntry, RowGroupPruner,
 };
 use crate::row_filter::RowFilterGenerator;
 use crate::row_group_filter::RowGroupAccessPlanFilter;
@@ -289,6 +289,10 @@ pub(super) struct ParquetMorselizer {
     /// Maximum size of the predicate cache, in bytes. If none, uses
     /// the arrow-rs default.
     pub max_predicate_cache_size: Option<usize>,
+    /// See [`ParquetOptions::bounded_streaming`]
+    ///
+    /// [`ParquetOptions::bounded_streaming`]: datafusion_common::config::ParquetOptions::bounded_streaming
+    pub bounded_streaming: bool,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
     /// Optional sort order used to reorder row groups by their min/max statistics.
@@ -451,6 +455,7 @@ struct PreparedParquetOpen {
     expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
     predicate_creation_errors: Count,
     max_predicate_cache_size: Option<usize>,
+    bounded_streaming: bool,
     reverse_row_groups: bool,
     sort_order_for_reorder: Option<LexOrdering>,
     preserve_order: bool,
@@ -850,6 +855,7 @@ impl ParquetMorselizer {
             expr_adapter_factory: Arc::clone(&self.expr_adapter_factory),
             predicate_creation_errors,
             max_predicate_cache_size: self.max_predicate_cache_size,
+            bounded_streaming: self.bounded_streaming,
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             preserve_order: self.preserve_order,
@@ -1412,6 +1418,7 @@ impl RowGroupsPrunedParquetOpen {
                 arrow_reader_metrics: &arrow_reader_metrics,
                 force_filter_selections: prepared.force_filter_selections,
                 decoder_limit: prepared.limit,
+                bounded_streaming: prepared.bounded_streaming,
             };
 
             let prepared_access_plan = prepare_access_plan(access_plan)?;
@@ -1481,7 +1488,10 @@ impl RowGroupsPrunedParquetOpen {
             decoder: Some(decoder),
             active_reader: None,
             rg_plan,
-            reader: prepared.async_file_reader,
+            reader: FetchState::new(
+                prepared.async_file_reader,
+                prepared.bounded_streaming,
+            ),
             decoder_projection,
             arrow_reader_metrics,
             predicate_cache_inner_records,
@@ -1752,6 +1762,7 @@ mod test {
         enable_row_group_stats_pruning: bool,
         coerce_int96: Option<TimeUnit>,
         max_predicate_cache_size: Option<usize>,
+        bounded_streaming: bool,
         reverse_row_groups: bool,
         preserve_order: bool,
     }
@@ -1860,6 +1871,7 @@ mod test {
                 enable_row_group_stats_pruning: false,
                 coerce_int96: None,
                 max_predicate_cache_size: None,
+                bounded_streaming: false,
                 reverse_row_groups: false,
                 preserve_order: false,
             }
@@ -2037,6 +2049,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: self.max_predicate_cache_size,
+                bounded_streaming: self.bounded_streaming,
                 reverse_row_groups: self.reverse_row_groups,
                 sort_order_for_reorder: None,
                 virtual_state,
