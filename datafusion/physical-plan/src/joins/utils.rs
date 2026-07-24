@@ -313,7 +313,8 @@ pub fn build_join_schema(
         JoinType::LeftSemi | JoinType::LeftAnti => left_fields().unzip(),
         JoinType::LeftMark => {
             let right_field = once((
-                Field::new("mark", DataType::Boolean, false),
+                // Nullable: null-aware `LeftMark` joins use NULL for SQL UNKNOWN.
+                Field::new("mark", DataType::Boolean, true),
                 ColumnIndex {
                     index: 0,
                     side: JoinSide::None,
@@ -324,7 +325,8 @@ pub fn build_join_schema(
         JoinType::RightSemi | JoinType::RightAnti => right_fields().unzip(),
         JoinType::RightMark => {
             let left_field = once((
-                Field::new("mark", DataType::Boolean, false),
+                // Nullable for symmetry with `LeftMark`; never actually NULL.
+                Field::new("mark", DataType::Boolean, true),
                 ColumnIndex {
                     index: 0,
                     side: JoinSide::None,
@@ -1279,6 +1281,7 @@ pub(crate) fn apply_join_filter_to_indices(
                 filter.column_indices(),
                 build_side,
                 join_type,
+                None,
             )?;
             let filter_result = filter
                 .expression()
@@ -1301,6 +1304,7 @@ pub(crate) fn apply_join_filter_to_indices(
             filter.column_indices(),
             build_side,
             join_type,
+            None,
         )?;
 
         filter
@@ -1342,6 +1346,7 @@ pub(crate) fn build_batch_from_indices(
     column_indices: &[ColumnIndex],
     build_side: JoinSide,
     join_type: JoinType,
+    mark_column: Option<&ArrayRef>,
 ) -> Result<RecordBatch> {
     if schema.fields().is_empty() {
         // For RightAnti and RightSemi joins, after `adjust_indices_by_join_type`
@@ -1361,8 +1366,12 @@ pub(crate) fn build_batch_from_indices(
 
     for column_index in column_indices {
         let array = if column_index.side == JoinSide::None {
-            // For mark joins, the mark column is a true if the indices is not null, otherwise it will be false
-            Arc::new(compute::is_not_null(probe_indices)?)
+            // For mark joins, callers can provide a custom mark column. Otherwise,
+            // matched rows are `true` and unmatched rows are `false`.
+            match mark_column {
+                Some(mark_col) => Arc::clone(mark_col),
+                None => Arc::new(compute::is_not_null(probe_indices)?),
+            }
         } else if column_index.side == build_side {
             let array = build_input_buffer.column(column_index.index);
             if array.is_empty() || build_indices.null_count() == build_indices.len() {
@@ -1387,6 +1396,66 @@ pub(crate) fn build_batch_from_indices(
         columns.push(array);
     }
     Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
+}
+
+/// Builds the nullable mark column for a null-aware `LeftMark` join.
+///
+/// This follows the left mark hash join described in Neumann, Leis, and Kemper,
+/// "The Complete Story of Joins (in HyPer)", Section 5.6:
+/// <https://www.cs.cmu.edu/~15721-f24/papers/Story_of_Joins.pdf>
+///
+/// `build_indices` and `probe_indices` are the final aligned indices derived from the
+/// visited bitmap. At this point:
+/// - valid `probe_indices` mean the build row matched at least one probe row, so the mark is `TRUE`
+/// - null `probe_indices` mean the build row was unmatched, so the result depends on SQL
+///   three-valued logic
+///
+/// For the uncorrelated single-key implementation, unmatched rows are classified as follows:
+/// 1. if the build key is `NULL` and the probe side is non-empty, the mark is `NULL`
+/// 2. if the build key is `NULL` and the probe side is empty, the mark is `FALSE`
+/// 3. if the build key is non-null and the probe side contained a `NULL`, the mark is `NULL`
+/// 4. otherwise, the mark is `FALSE`
+///
+/// For correlated scalar `NOT IN`, `null_indices_bitmap` carries the same UNKNOWN
+/// decision per build row, scoped by the correlated equality keys.
+///
+/// This is the helper equivalent of the paper's "null bucket" and `hadNull` handling.
+/// It is intentionally scoped to scalar null-aware mark joins.
+pub(crate) fn build_null_aware_left_mark_column(
+    build_indices: &UInt64Array,
+    probe_indices: &UInt32Array,
+    build_key_column: &dyn Array,
+    null_indices_bitmap: Option<&BooleanBufferBuilder>,
+    probe_side_has_null: bool,
+    probe_side_non_empty: bool,
+) -> ArrayRef {
+    // Whether an unmatched build row's mark is NULL (UNKNOWN) instead of FALSE:
+    // correlated joins precomputed this per row in `null_indices_bitmap`; the
+    // uncorrelated rules are cases 1-4 in the doc above.
+    let unmatched_mark_is_null = |build_idx: usize| match null_indices_bitmap {
+        Some(bitmap) => bitmap.get_bit(build_idx),
+        None if build_key_column.is_null(build_idx) => probe_side_non_empty,
+        None => probe_side_has_null,
+    };
+
+    let marks: BooleanArray = build_indices
+        .iter()
+        .zip(probe_indices.iter())
+        .map(|(build_idx, probe_idx)| {
+            if probe_idx.is_some() {
+                return Some(true);
+            }
+            let build_idx = build_idx
+                .expect("LeftMark final indices should always contain build-side rows")
+                as usize;
+            if unmatched_mark_is_null(build_idx) {
+                None
+            } else {
+                Some(false)
+            }
+        })
+        .collect();
+    Arc::new(marks)
 }
 
 /// Returns a new [RecordBatch] for a probe batch when no probe row can find a
