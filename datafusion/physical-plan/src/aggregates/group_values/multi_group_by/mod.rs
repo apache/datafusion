@@ -864,7 +864,12 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             for &group_idx in group_index_list {
                 let mut check_result = true;
                 for &i in &self.compare_order {
-                    if !check_row_equal(self.group_values[i].as_ref(), group_idx, &cols[i], row) {
+                    if !check_row_equal(
+                        self.group_values[i].as_ref(),
+                        group_idx,
+                        &cols[i],
+                        row,
+                    ) {
                         check_result = false;
                         break;
                     }
@@ -881,7 +886,12 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         } else {
             let group_idx = group_index_view.value() as usize;
             for &i in &self.compare_order {
-                if !check_row_equal(self.group_values[i].as_ref(), group_idx, &cols[i], row) {
+                if !check_row_equal(
+                    self.group_values[i].as_ref(),
+                    group_idx,
+                    &cols[i],
+                    row,
+                ) {
                     return false;
                 }
             }
