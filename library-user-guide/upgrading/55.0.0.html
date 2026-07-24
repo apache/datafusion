@@ -1173,6 +1173,33 @@ not expose a catalog can return the new <code class="docutils literal notranslat
 </div>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/23703">PR #23703</a> for details.</p>
 </section>
+<section id="unused-async-removed-from-several-public-functions">
+<h3>Unused <code class="docutils literal notranslate"><span class="pre">async</span></code> removed from several public functions<a class="headerlink" href="#unused-async-removed-from-several-public-functions" title="Link to this heading">#</a></h3>
+<p>Public functions that were declared <code class="docutils literal notranslate"><span class="pre">async</span></code> but never awaited anything are now
+synchronous:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">CsvFormat::read_to_delimited_chunks_from_stream</span></code> (in
+<code class="docutils literal notranslate"><span class="pre">datafusion_datasource_csv</span></code>, re-exported as
+<code class="docutils literal notranslate"><span class="pre">datafusion::datasource::file_format::csv::CsvFormat</span></code>)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">datafusion_substrait::serializer::deserialize_bytes</span></code>, which now also borrows
+its input as <code class="docutils literal notranslate"><span class="pre">&amp;[u8]</span></code> instead of taking an owned <code class="docutils literal notranslate"><span class="pre">Vec&lt;u8&gt;</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">datafusion::test_util::parquet::TestParquetFile::create_scan</span></code></p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Remove <code class="docutils literal notranslate"><span class="pre">.await</span></code> from call sites; the compiler flags each one, since <code class="docutils literal notranslate"><span class="pre">.await</span></code>
+on a non-future value does not compile:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">stream</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">csv_format</span>
+<span class="w">    </span><span class="p">.</span><span class="n">read_to_delimited_chunks_from_stream</span><span class="p">(</span><span class="n">input</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="k">await</span><span class="p">;</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">deserialize_bytes</span><span class="p">(</span><span class="n">proto_bytes</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+
+<span class="c1">// After</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">stream</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">csv_format</span><span class="p">.</span><span class="n">read_to_delimited_chunks_from_stream</span><span class="p">(</span><span class="n">input</span><span class="p">);</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">deserialize_bytes</span><span class="p">(</span><span class="o">&amp;</span><span class="n">proto_bytes</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
 <section id="msrv-updated-to-1-94-0">
 <h3><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.94.0<a class="headerlink" href="#msrv-updated-to-1-94-0" title="Link to this heading">#</a></h3>
 <p>The Minimum Supported Rust Version (MSRV) has been updated to <a class="reference external" href="https://releases.rs/docs/1.94.0/"><code class="docutils literal notranslate"><span class="pre">1.94.0</span></code></a>.</p>
@@ -1252,6 +1279,7 @@ not expose a catalog can return the new <code class="docutils literal notranslat
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#scalar-subquery-state-moved-to-an-explicit-physicalplanningcontext">Scalar-subquery state moved to an explicit <code class="docutils literal notranslate"><span class="pre">PhysicalPlanningContext</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#catalog-traits-moved-to-datafusion-session">Catalog traits moved to <code class="docutils literal notranslate"><span class="pre">datafusion-session</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#session-gains-a-required-catalog-list-method"><code class="docutils literal notranslate"><span class="pre">Session</span></code> gains a required <code class="docutils literal notranslate"><span class="pre">catalog_list</span></code> method</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#unused-async-removed-from-several-public-functions">Unused <code class="docutils literal notranslate"><span class="pre">async</span></code> removed from several public functions</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#msrv-updated-to-1-94-0"><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.94.0</a></li>
 </ul>
 </li>
