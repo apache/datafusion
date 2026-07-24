@@ -697,45 +697,76 @@ mod tests {
         ]
     }
 
-    fn variable_list_inputs<O: OffsetSizeTrait>(all_null: bool) -> (ArrayRef, ArrayRef) {
-        let keys = GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>(
-            key_rows(all_null),
-        );
+    fn variable_list_inputs<O: OffsetSizeTrait>(
+        key_rows: PrimitiveRows,
+        value_rows: PrimitiveRows,
+    ) -> (ArrayRef, ArrayRef) {
+        let keys =
+            GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>(key_rows);
         let values =
-            GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>(value_rows());
+            GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>(value_rows);
         (Arc::new(keys), Arc::new(values))
     }
 
-    fn fixed_size_list_inputs(all_null: bool) -> (ArrayRef, ArrayRef) {
-        let keys = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
-            key_rows(all_null),
-            2,
-        );
+    fn fixed_size_list_inputs(
+        key_rows: PrimitiveRows,
+        value_rows: PrimitiveRows,
+    ) -> (ArrayRef, ArrayRef) {
+        let keys =
+            FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(key_rows, 2);
         let values =
-            FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(value_rows(), 2);
+            FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(value_rows, 2);
         (Arc::new(keys), Arc::new(values))
+    }
+
+    fn map_inputs_from_rows(
+        representation: ListRepresentation,
+        key_rows: PrimitiveRows,
+        value_rows: PrimitiveRows,
+    ) -> (ArrayRef, ArrayRef) {
+        match representation {
+            ListRepresentation::List => variable_list_inputs::<i32>(key_rows, value_rows),
+            ListRepresentation::LargeList => {
+                variable_list_inputs::<i64>(key_rows, value_rows)
+            }
+            ListRepresentation::FixedSizeList => {
+                fixed_size_list_inputs(key_rows, value_rows)
+            }
+        }
     }
 
     fn map_inputs(
         representation: ListRepresentation,
         all_null: bool,
     ) -> (ArrayRef, ArrayRef) {
-        match representation {
-            ListRepresentation::List => variable_list_inputs::<i32>(all_null),
-            ListRepresentation::LargeList => variable_list_inputs::<i64>(all_null),
-            ListRepresentation::FixedSizeList => fixed_size_list_inputs(all_null),
-        }
+        map_inputs_from_rows(representation, key_rows(all_null), value_rows())
+    }
+
+    fn sliced_map_inputs(representation: ListRepresentation) -> (ArrayRef, ArrayRef) {
+        let key_rows = vec![
+            Some(vec![Some(99), Some(100)]),
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3), Some(4)]),
+        ];
+        let value_rows = vec![
+            Some(vec![Some(990), Some(1000)]),
+            Some(vec![Some(10), Some(20)]),
+            Some(vec![Some(99), Some(100)]),
+            Some(vec![Some(30), Some(40)]),
+        ];
+        let (keys, values) = map_inputs_from_rows(representation, key_rows, value_rows);
+        (keys.slice(1, 3), values.slice(1, 3))
     }
 
     fn assert_map_output(
         representation: ListRepresentation,
-        all_null: bool,
+        (keys, values): (ArrayRef, ArrayRef),
         expected_offsets: &[i32],
         expected_validity: &[bool],
         expected_keys: &[i32],
         expected_values: &[i32],
     ) {
-        let (keys, values) = map_inputs(representation, all_null);
         let result = make_map_batch(
             vec![ColumnarValue::Array(keys), ColumnarValue::Array(values)],
             expected_validity.len(),
@@ -778,7 +809,21 @@ mod tests {
         for representation in LIST_REPRESENTATIONS {
             assert_map_output(
                 representation,
-                false,
+                map_inputs(representation, false),
+                &[0, 2, 2, 4],
+                &[true, false, true],
+                &[1, 2, 3, 4],
+                &[10, 20, 30, 40],
+            );
+        }
+    }
+
+    #[test]
+    fn test_make_map_sliced_null_rows_are_equivalent_across_list_representations() {
+        for representation in LIST_REPRESENTATIONS {
+            assert_map_output(
+                representation,
+                sliced_map_inputs(representation),
                 &[0, 2, 2, 4],
                 &[true, false, true],
                 &[1, 2, 3, 4],
@@ -792,7 +837,7 @@ mod tests {
         for representation in LIST_REPRESENTATIONS {
             assert_map_output(
                 representation,
-                true,
+                map_inputs(representation, true),
                 &[0, 0, 0, 0],
                 &[false, false, false],
                 &[],
