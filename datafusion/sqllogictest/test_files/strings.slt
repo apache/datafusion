@@ -71,25 +71,204 @@ p2
 p2e1
 p2m1e1
 
-# SIMILAR TO
+# SIMILAR TO with `%` wildcard (zero or more characters)
 query T rowsort
-SELECT s FROM test WHERE s SIMILAR TO 'p[12].*';
+SELECT s FROM test WHERE s SIMILAR TO 'p1%';
 ----
 p1
 p1e1
 p1m1e1
-p2
-p2e1
-p2m1e1
 
-# NOT SIMILAR TO
+# SIMILAR TO with `_` wildcard (exactly one character)
 query T rowsort
-SELECT s FROM test WHERE s NOT SIMILAR TO 'p[12].*';
+SELECT s FROM test WHERE s SIMILAR TO 'p_';
 ----
-P1
-P1e1
-P1m1e1
-e1
+p1
+p2
+
+# SIMILAR TO requires full-string match (no implicit substring)
+query T rowsort
+SELECT s FROM test WHERE s SIMILAR TO 'p1';
+----
+p1
+
+# SIMILAR TO treats `. ^ $` as SQL literals (not as regex metachars).
+query B
+SELECT 'a.' SIMILAR TO 'a.';
+----
+true
+
+query B
+SELECT 'ab' SIMILAR TO 'a.';
+----
+false
+
+query B
+SELECT '^x$' SIMILAR TO '^x$';
+----
+true
+
+query B
+SELECT 'x' SIMILAR TO '^x$';
+----
+false
+
+# SIMILAR TO supports the POSIX metacharacters `| * + ? ( ) { } [ ]`.
+query B
+SELECT 'a' SIMILAR TO 'a|b';
+----
+true
+
+query B
+SELECT 'c' SIMILAR TO 'a|b';
+----
+false
+
+query B
+SELECT '' SIMILAR TO 'a*';
+----
+true
+
+query B
+SELECT 'aa' SIMILAR TO 'a*';
+----
+true
+
+query B
+SELECT 'ab' SIMILAR TO 'a*';
+----
+false
+
+query B
+SELECT 'a' SIMILAR TO 'a+';
+----
+true
+
+query B
+SELECT '' SIMILAR TO 'a+';
+----
+false
+
+query B
+SELECT '' SIMILAR TO 'a?';
+----
+true
+
+query B
+SELECT 'a' SIMILAR TO 'a?';
+----
+true
+
+query B
+SELECT 'aa' SIMILAR TO 'a?';
+----
+false
+
+query B
+SELECT 'ab' SIMILAR TO '(ab)';
+----
+true
+
+query B
+SELECT 'a' SIMILAR TO 'a{2}';
+----
+false
+
+query B
+SELECT 'aa' SIMILAR TO 'a{2}';
+----
+true
+
+query B
+SELECT 'a' SIMILAR TO '[ab]';
+----
+true
+
+query B
+SELECT 'c' SIMILAR TO '[ab]';
+----
+false
+
+query B
+SELECT 'c' SIMILAR TO '[^ab]';
+----
+true
+
+query B
+SELECT 'a' SIMILAR TO '[^ab]';
+----
+false
+
+# SIMILAR TO wildcards match newlines.
+query B
+SELECT 'a' || chr(10) || 'b' SIMILAR TO 'a%b';
+----
+true
+
+query B
+SELECT 'a' || chr(10) || 'b' SIMILAR TO 'a_b';
+----
+true
+
+query B
+SELECT 'ab' SIMILAR TO 'a_b';
+----
+false
+
+# SIMILAR TO with a dynamic (column) pattern: wildcards and regex-only
+# metacharacters are translated the same way as for literal patterns.
+statement ok
+CREATE TABLE dynamic_patterns(text TEXT, pattern TEXT) AS VALUES
+  ('abc', 'a%'),
+  ('ab', 'a.'),
+  ('x', '_'),
+  ('hello world', 'hello%');
+
+query T rowsort
+SELECT text FROM dynamic_patterns WHERE text SIMILAR TO pattern;
+----
+abc
+hello world
+x
+
+query T rowsort
+SELECT text FROM dynamic_patterns WHERE text NOT SIMILAR TO pattern;
+----
+ab
+
+statement ok
+DROP TABLE dynamic_patterns;
+
+# SIMILAR TO with a dynamic pattern produced by a function.
+query B
+SELECT 'abc' SIMILAR TO concat('a', '%');
+----
+true
+
+query B
+SELECT 'ab' SIMILAR TO concat('a', '.');
+----
+false
+
+query B
+SELECT 'x' SIMILAR TO lower('X');
+----
+true
+
+query B
+SELECT 'X' SIMILAR TO lower('X');
+----
+false
+
+# SIMILAR TO NULL pattern returns NULL.
+query B
+SELECT 'a' SIMILAR TO NULL;
+----
+NULL
+
+# SIMILAR TO with a non-string pattern is rejected at plan time.
+statement error Invalid pattern in SIMILAR TO expression
+SELECT 'a' SIMILAR TO 1;
 
 # NOT LIKE
 query T rowsort

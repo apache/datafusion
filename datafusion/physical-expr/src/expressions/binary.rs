@@ -18,6 +18,8 @@
 mod kernels;
 
 use crate::PhysicalExpr;
+use crate::expressions::SqlSimilarToPattern;
+use crate::expressions::translate_scalar;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use std::hash::Hash;
 use std::sync::Arc;
@@ -1270,7 +1272,19 @@ pub fn similar_to(
         (true, false) => Operator::RegexNotMatch,
         (true, true) => Operator::RegexNotIMatch,
     };
-    Ok(Arc::new(BinaryExpr::new(expr, binary_op, pattern)))
+
+    let translated_pattern = match pattern.downcast_ref::<crate::expressions::Literal>() {
+        Some(literal) => Arc::new(crate::expressions::Literal::new(translate_scalar(
+            literal.value(),
+        )?)) as Arc<dyn PhysicalExpr>,
+        None => Arc::new(SqlSimilarToPattern::new(pattern)) as Arc<dyn PhysicalExpr>,
+    };
+
+    Ok(Arc::new(BinaryExpr::new(
+        expr,
+        binary_op,
+        translated_pattern,
+    )))
 }
 
 #[cfg(test)]
@@ -4985,25 +4999,17 @@ mod tests {
         Ok(())
     }
 
-    /// Test helper for SIMILAR TO binary operation
     fn apply_similar_to(
         schema: &SchemaRef,
         va: Vec<&str>,
-        vb: Vec<&str>,
+        pattern: &str,
         negated: bool,
         case_insensitive: bool,
         expected: &BooleanArray,
     ) -> Result<()> {
         let a = StringArray::from(va);
-        let b = StringArray::from(vb);
-        let op = similar_to(
-            negated,
-            case_insensitive,
-            col("a", schema)?,
-            col("b", schema)?,
-        )?;
-        let batch =
-            RecordBatch::try_new(Arc::clone(schema), vec![Arc::new(a), Arc::new(b)])?;
+        let op = similar_to(negated, case_insensitive, col("a", schema)?, lit(pattern))?;
+        let batch = RecordBatch::try_new(Arc::clone(schema), vec![Arc::new(a)])?;
         let result = op
             .evaluate(&batch)?
             .into_array(batch.num_rows())
@@ -5015,32 +5021,237 @@ mod tests {
 
     #[test]
     fn test_similar_to() {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Utf8, false),
-            Field::new("b", DataType::Utf8, false),
-        ]));
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
 
+        // `%` matches any sequence; case-sensitive
         let expected = [Some(true), Some(false)].iter().collect();
-        // case-sensitive
         apply_similar_to(
             &schema,
             vec!["hello world", "Hello World"],
-            vec!["hello.*", "hello.*"],
+            "hello%",
             false,
             false,
             &expected,
         )
         .unwrap();
-        // case-insensitive
+
+        // `%` matches any sequence; case-insensitive
+        let expected = [Some(true), Some(false)].iter().collect();
         apply_similar_to(
             &schema,
             vec!["hello world", "bye"],
-            vec!["hello.*", "hello.*"],
+            "hello%",
             false,
             true,
             &expected,
         )
         .unwrap();
+
+        // `_` matches exactly one character
+        let expected = [Some(true), Some(false), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["x", "xy", ""], "_", false, false, &expected)
+            .unwrap();
+
+        // Match must cover the entire string (no implicit substring match)
+        let expected = [Some(false), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["abc", "a"], "a", false, false, &expected)
+            .unwrap();
+
+        // `%` matches zero or more, so the empty string matches.
+        let expected = [Some(true), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["", "anything"], "%", false, false, &expected)
+            .unwrap();
+
+        // `_` requires exactly one character, so the empty string does not
+        // match.
+        let expected = [Some(false), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["", "x"], "_", false, false, &expected).unwrap();
+
+        // `%` at the start of the pattern is still anchored: the string
+        // must end where the trailing literal begins.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["abc", "abd"], "%c", false, false, &expected)
+            .unwrap();
+
+        // `%` and `_` together: `%` matches zero or more (including the
+        // empty string), `_` matches exactly one character.
+        let expected = [Some(true), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["a", "abc"], "a%", false, false, &expected)
+            .unwrap();
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["axb", "abc"], "a_b", false, false, &expected)
+            .unwrap();
+    }
+
+    // Regression: regex metacharacters that are NOT SIMILAR TO metacharacters
+    // (`. ^ $ \`) must be treated as SQL literals. Without escaping, `a.`
+    // would match any `a` followed by any character (`ab`, `a1`, ...).
+    #[test]
+    fn test_similar_to_sql_literal_metachars() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+
+        // `.` is a literal, not the regex "any character" operator.
+        let expected = [Some(true), Some(false), Some(false)].iter().collect();
+        apply_similar_to(
+            &schema,
+            vec!["a.", "ab", "a"],
+            "a.",
+            false,
+            false,
+            &expected,
+        )
+        .unwrap();
+
+        // `^` and `$` are literals and only match the literal `^` and `$`.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["^x$", "x"], r"^x$", false, false, &expected)
+            .unwrap();
+
+        // `\` is a literal backslash (we don't support the ESCAPE clause).
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec![r"a\b", "ab"], r"a\b", false, false, &expected)
+            .unwrap();
+    }
+
+    // SIMILAR TO borrows POSIX metacharacters from regular expressions:
+    // `| * + ? ( ) { } [ ]`. The translator passes them through to the
+    // underlying regex engine.
+    #[test]
+    fn test_similar_to_posix_metachars() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+
+        // `|` alternation.
+        let expected = [Some(true), Some(false), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["a", "c", "b"], "a|b", false, false, &expected)
+            .unwrap();
+
+        // `*` zero or more.
+        let expected = [Some(true), Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["", "aa", "ab"], "a*", false, false, &expected)
+            .unwrap();
+
+        // `+` one or more.
+        let expected = [Some(false), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["", "aa"], "a+", false, false, &expected).unwrap();
+
+        // `?` zero or one.
+        let expected = [Some(true), Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["", "a", "aa"], "a?", false, false, &expected)
+            .unwrap();
+
+        // `()` grouping.
+        let expected = [Some(true), Some(true), Some(false)].iter().collect();
+        apply_similar_to(
+            &schema,
+            vec!["ab", "abc", "ac"],
+            "(ab)c?",
+            false,
+            false,
+            &expected,
+        )
+        .unwrap();
+
+        // `{m}` exact count.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["aaa", "aa"], "a{3}", false, false, &expected)
+            .unwrap();
+
+        // `[...]` character class.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["a", "c"], "[ab]", false, false, &expected)
+            .unwrap();
+
+        // `[^...]` negated character class.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["c", "a"], "[^ab]", false, false, &expected)
+            .unwrap();
+
+        // `[a-z]` range inside a character class.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["m", "1"], "[a-z]", false, false, &expected)
+            .unwrap();
+    }
+
+    // Regression: `%` and `_` must match newlines, matching SQL semantics
+    // where these wildcards match "any character".
+    #[test]
+    fn test_similar_to_wildcards_match_newlines() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+
+        // `%` crosses a newline. (`%` also matches zero characters, so `ab`
+        // matches `a%b` as well.)
+        let expected = [Some(true), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["a\nb", "ab"], "a%b", false, false, &expected)
+            .unwrap();
+
+        // `_` matches a single newline. (`_` requires exactly one character,
+        // so `ab` does not match `a_b`.)
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["a\nb", "ab"], "a_b", false, false, &expected)
+            .unwrap();
+    }
+
+    #[test]
+    fn test_similar_to_non_literal_pattern_errors() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+        // Non-string literal patterns still error.
+        let err = similar_to(false, false, col("a", &schema).unwrap(), lit(1i32))
+            .expect_err("non-string literal pattern should error");
+        assert!(
+            err.to_string()
+                .contains("SIMILAR TO pattern must be a string type, got Int32(1)"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn test_similar_to_dynamic_pattern() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("text", DataType::Utf8, false),
+            Field::new("pattern", DataType::Utf8, false),
+        ]));
+        let text = StringArray::from(vec!["abc", "ab", "x"]);
+        let pattern = StringArray::from(vec!["a%", "a.", "_"]);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(text), Arc::new(pattern)],
+        )
+        .unwrap();
+
+        let op = similar_to(
+            false,
+            false,
+            col("text", &schema).unwrap(),
+            col("pattern", &schema).unwrap(),
+        )
+        .unwrap();
+        let result = op.evaluate(&batch).unwrap();
+        let result_array = result.into_array(batch.num_rows()).unwrap();
+        let result = as_boolean_array(&result_array).unwrap();
+        assert!(result.value(0)); // "abc" ~ ^(?:a(?s:.*))$
+        assert!(!result.value(1)); // "ab"  ~ ^(?:a\.)$
+        assert!(result.value(2)); // "x"   ~ ^(?:a(?s:.))$
+    }
+
+    #[test]
+    fn test_similar_to_null_pattern() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+        let a = StringArray::from(vec!["hello"]);
+        let op = similar_to(
+            false,
+            false,
+            col("a", &schema).unwrap(),
+            lit(ScalarValue::Utf8(None)),
+        )
+        .unwrap();
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(a)]).unwrap();
+        let result = op
+            .evaluate(&batch)
+            .unwrap()
+            .into_array(batch.num_rows())
+            .unwrap();
+        let expected: BooleanArray = [None].iter().collect();
+        assert_eq!(result.as_ref(), &expected);
     }
 
     pub fn binary_expr(
