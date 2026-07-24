@@ -200,16 +200,12 @@ impl ExecutionPlan for CoalesceBatchesExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        Ok(Box::pin(CoalesceBatchesStream {
-            input: self.input.execute(partition, context)?,
-            coalescer: LimitedBatchCoalescer::new(
-                self.input.schema(),
-                self.target_batch_size,
-                self.fetch,
-            ),
-            baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
-            completed: false,
-        }))
+        Ok(Box::pin(CoalesceBatchesStream::new(
+            self.input.execute(partition, context)?,
+            self.target_batch_size,
+            self.fetch,
+            BaselineMetrics::new(&self.metrics, partition),
+        )))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -348,7 +344,7 @@ impl CoalesceBatchesExec {
 }
 
 /// Stream for [`CoalesceBatchesExec`]. See [`CoalesceBatchesExec`] for more details.
-struct CoalesceBatchesStream {
+pub(crate) struct CoalesceBatchesStream {
     /// The input plan
     input: SendableRecordBatchStream,
     /// Buffer for combining batches
@@ -377,6 +373,36 @@ impl Stream for CoalesceBatchesStream {
 }
 
 impl CoalesceBatchesStream {
+    pub(crate) fn new(
+        input: SendableRecordBatchStream,
+        target_batch_size: usize,
+        fetch: Option<usize>,
+        baseline_metrics: BaselineMetrics,
+    ) -> Self {
+        CoalesceBatchesStream {
+            coalescer: LimitedBatchCoalescer::new(
+                input.schema(),
+                target_batch_size,
+                fetch,
+            ),
+            input,
+            baseline_metrics,
+            completed: false,
+        }
+    }
+
+    pub(crate) fn with_biggest_coalesce_batch_size(
+        self,
+        biggest_coalesce_batch_size: Option<usize>,
+    ) -> Self {
+        Self {
+            coalescer: self
+                .coalescer
+                .with_biggest_coalesce_batch_size(biggest_coalesce_batch_size),
+            ..self
+        }
+    }
+
     fn poll_next_inner(
         self: &mut Pin<&mut Self>,
         cx: &mut Context<'_>,

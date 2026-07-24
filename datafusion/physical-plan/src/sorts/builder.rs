@@ -114,6 +114,16 @@ impl BatchBuilder {
         self.indices.push((cursor.batch_idx, row_idx));
     }
 
+    /// Append the next `n` rows from `stream_idx`
+    pub fn push_n_rows(&mut self, stream_idx: usize, n: usize) {
+        let cursor = &mut self.cursors[stream_idx];
+        let row_idx = cursor.row_idx;
+
+        cursor.row_idx += n;
+        self.indices
+            .extend((0..n).map(|i| (cursor.batch_idx, row_idx + i)));
+    }
+
     /// Returns the number of in-progress rows in this [`BatchBuilder`]
     pub fn len(&self) -> usize {
         self.indices.len()
@@ -197,20 +207,22 @@ impl BatchBuilder {
         RecordBatch::try_new(Arc::clone(&self.schema), columns).map_err(Into::into)
     }
 
-    /// Drains the in_progress row indexes, and builds a new RecordBatch from them
+    /// Drains up to `n` in_progress row indexes, and builds a new RecordBatch from them
     ///
     /// Will then drop any batches for which all rows have been yielded to the output.
     /// If an offset overflow occurs (e.g. string/list offsets exceed i32::MAX),
     /// retries with progressively fewer rows until it succeeds.
     ///
     /// Returns `None` if no pending rows
-    pub fn build_record_batch(&mut self) -> Result<Option<RecordBatch>> {
-        if self.is_empty() {
+    pub fn build_record_batch(&mut self, n: usize) -> Result<Option<RecordBatch>> {
+        if self.is_empty() || n == 0 {
             return Ok(None);
         }
 
+        let batch_size = self.indices.len().min(n);
+
         let (rows_to_emit, columns) =
-            retry_interleave(self.indices.len(), self.indices.len(), |rows_to_emit| {
+            retry_interleave(batch_size, batch_size, |rows_to_emit| {
                 self.try_interleave_columns(&self.indices[..rows_to_emit])
             })?;
 
