@@ -215,6 +215,11 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
     /// [`GroupValuesRows`]: crate::aggregates::group_values::GroupValuesRows
     group_values: Vec<Box<dyn GroupColumn>>,
 
+    /// Indices into `group_values` ordered cheapest to most expensive comparison
+    /// cost. Built once in `try_new` from the schema so that `vectorized_equal_to`
+    /// eliminates rows with cheap columns before paying the cost of expensive ones.
+    compare_order: Vec<usize>,
+
     /// reused buffer to store hashes
     hashes_buffer: Vec<u64>,
 
@@ -273,6 +278,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     pub fn try_new(schema: SchemaRef) -> Result<Self> {
         let map = HashTable::with_capacity(0);
         let group_values = Self::build_group_columns(&schema)?;
+        let compare_order = Self::build_group_compare_order(&schema);
         Ok(Self {
             schema,
             map,
@@ -281,6 +287,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             vectorized_operation_buffers: VectorizedOperationBuffers::default(),
             map_size: 0,
             group_values,
+            compare_order,
             hashes_buffer: Default::default(),
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         })
@@ -299,6 +306,17 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             v.push(make_group_column(f.as_ref())?);
         }
         Ok(v)
+    }
+
+    /// Returns column indices sorted by cheapest-to-compare tier first.
+    ///
+    /// Uses a stable sort so columns within the same tier retain schema order,
+    /// keeping comparison deterministic and preventing `sort_unstable_by_key`
+    /// from silently breaking that invariant.
+    fn build_group_compare_order(schema: &Schema) -> Vec<usize> {
+        let mut order: Vec<usize> = (0..schema.fields().len()).collect();
+        order.sort_by_key(|&i| compare_tier(schema.field(i).data_type()));
+        order
     }
 
     // ========================================================================
@@ -384,9 +402,9 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                         array_row.equal_to(lhs_row, array, rhs_row)
                     }
 
-                    for (i, group_val) in self.group_values.iter().enumerate() {
+                    for &i in &self.compare_order {
                         if !check_row_equal(
-                            group_val.as_ref(),
+                            self.group_values[i].as_ref(),
                             group_idx_view.value() as usize,
                             &cols[i],
                             row,
@@ -651,8 +669,8 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         equal_to_results.truncate(0);
         equal_to_results.append_n(n, true);
 
-        for (col_idx, group_col) in self.group_values.iter().enumerate() {
-            group_col.vectorized_equal_to(
+        for &col_idx in &self.compare_order {
+            self.group_values[col_idx].vectorized_equal_to(
                 &self.vectorized_operation_buffers.equal_to_group_indices,
                 &cols[col_idx],
                 &self.vectorized_operation_buffers.equal_to_row_indices,
@@ -845,8 +863,13 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 
             for &group_idx in group_index_list {
                 let mut check_result = true;
-                for (i, group_val) in self.group_values.iter().enumerate() {
-                    if !check_row_equal(group_val.as_ref(), group_idx, &cols[i], row) {
+                for &i in &self.compare_order {
+                    if !check_row_equal(
+                        self.group_values[i].as_ref(),
+                        group_idx,
+                        &cols[i],
+                        row,
+                    ) {
                         check_result = false;
                         break;
                     }
@@ -862,8 +885,13 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             false
         } else {
             let group_idx = group_index_view.value() as usize;
-            for (i, group_val) in self.group_values.iter().enumerate() {
-                if !check_row_equal(group_val.as_ref(), group_idx, &cols[i], row) {
+            for &i in &self.compare_order {
+                if !check_row_equal(
+                    self.group_values[i].as_ref(),
+                    group_idx,
+                    &cols[i],
+                    row,
+                ) {
                     return false;
                 }
             }
@@ -1075,6 +1103,44 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
         "make_group_column must push exactly one builder"
     );
     Ok(v.into_iter().next().unwrap())
+}
+/// Returns a comparison cost tier for `data_type` (1 = cheapest, 3 = most expensive).
+/// Used to order columns in [`GroupValuesColumn::compare_order`] so cheap comparisons
+/// eliminate rows before expensive ones are evaluated.
+/// see <https://github.com/apache/datafusion/issues/23342>
+fn compare_tier(data_type: &DataType) -> u8 {
+    match data_type {
+        // Fixed-width numeric types and booleans: single word comparison.
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Decimal128(_, _)
+        | DataType::Date32
+        | DataType::Date64
+        | DataType::Time32(_)
+        | DataType::Time64(_)
+        | DataType::Timestamp(_, _)
+        | DataType::Boolean => 1,
+        // Variable-length binary and string blobs. pointer chasing
+        DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Binary
+        | DataType::LargeBinary
+        | DataType::Utf8View
+        | DataType::BinaryView => 2,
+        // Unreachable in practice: `try_new` runs `build_group_columns` before
+        // `build_group_compare_order`, and `make_group_column` rejects any type
+        // not listed above. Acts as a catch-all so newly added types sort last
+        // rather than causing a compile error if this match isn't updated.
+        _ => 3,
+    }
 }
 
 impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
@@ -1947,5 +2013,19 @@ mod tests {
             |(hash, _)| *hash,
             &mut group_values.map_size,
         );
+    }
+
+    #[test]
+    fn compare_order_puts_cheap_columns_first() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("s", DataType::Utf8, false),
+            Field::new("i", DataType::Int64, false),
+            Field::new("v", DataType::Utf8View, false),
+            Field::new("b", DataType::Boolean, false),
+        ]));
+        let order = GroupValuesColumn::<false>::build_group_compare_order(&schema);
+        let pos = |i: usize| order.iter().position(|&x| x == i).unwrap();
+        assert!(pos(1) < pos(0), "int should come before utf8");
+        assert!(pos(3) < pos(2), "bool should come before utf8view");
     }
 }
