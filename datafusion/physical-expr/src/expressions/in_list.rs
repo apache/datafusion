@@ -37,6 +37,8 @@ use datafusion_common::{
 use datafusion_expr::{ColumnarValue, expr_vec_fmt};
 
 mod array_static_filter;
+mod byte_view_filter;
+mod frozen_set;
 mod primitive_filter;
 mod result;
 mod static_filter;
@@ -214,7 +216,7 @@ impl InListExpr {
             expr,
             list,
             negated,
-            Some(instantiate_static_filter(array)?),
+            Some(instantiate_static_filter(array, &expr_data_type)?),
         ))
     }
 
@@ -241,7 +243,7 @@ impl InListExpr {
 
         // Try to create a static filter if all list expressions are constants
         let static_filter = match try_evaluate_constant_list(&list, schema)? {
-            Some(in_array) => Some(instantiate_static_filter(in_array)?),
+            Some(in_array) => Some(instantiate_static_filter(in_array, &expr_data_type)?),
             None => None, // Non-constant expressions, fall back to dynamic evaluation
         };
 
@@ -2900,10 +2902,9 @@ mod tests {
 
     #[test]
     fn test_in_list_esoteric_types() -> Result<()> {
-        // Test esoteric/less common types to validate the transform and mapping flow.
-        // These types are reinterpreted to base primitive types (e.g., Timestamp -> UInt64,
-        // Interval -> Decimal128, Float16 -> UInt16). We just need to verify basic
-        // functionality works - no need for comprehensive null handling tests.
+        // Test less common types covered by IN-list evaluation. Some of these
+        // use specialized filters, and others fall back to the generic path;
+        // this keeps the end-to-end behavior covered either way.
 
         // Helper: simple IN test that expects [Some(true), Some(false)]
         let test_type = |data_type: DataType,
@@ -2926,7 +2927,7 @@ mod tests {
             Ok(())
         };
 
-        // Timestamp types (all units map to Int64 -> UInt64)
+        // Timestamp types
         test_type(
             DataType::Timestamp(TimeUnit::Second, None),
             Arc::new(TimestampSecondArray::from(vec![Some(1000), Some(2000)])),
@@ -2960,7 +2961,7 @@ mod tests {
             ],
         )?;
 
-        // Time32 and Time64 (map to Int32 -> UInt32 and Int64 -> UInt64 respectively)
+        // Time32 and Time64
         test_type(
             DataType::Time32(TimeUnit::Second),
             Arc::new(Time32SecondArray::from(vec![Some(3600), Some(7200)])),
@@ -3006,7 +3007,7 @@ mod tests {
             ],
         )?;
 
-        // Duration types (map to Int64 -> UInt64)
+        // Duration types
         test_type(
             DataType::Duration(TimeUnit::Second),
             Arc::new(DurationSecondArray::from(vec![Some(86400), Some(172800)])),
@@ -3052,7 +3053,7 @@ mod tests {
             ],
         )?;
 
-        // Interval types (map to 16-byte Decimal128Type)
+        // Interval types
         test_type(
             DataType::Interval(IntervalUnit::YearMonth),
             Arc::new(IntervalYearMonthArray::from(vec![Some(12), Some(24)])),
@@ -3114,8 +3115,7 @@ mod tests {
             ],
         )?;
 
-        // Decimal256 (maps to Decimal128Type for 16-byte width)
-        // Need to use with_precision_and_scale() to set the metadata
+        // Decimal256. Need to use with_precision_and_scale() to set the metadata.
         let precision = 38;
         let scale = 10;
         test_type(
@@ -3575,6 +3575,23 @@ mod tests {
                 wrap_in_dict(Arc::clone(&utf8_needle)),
                 wrap_in_dict(Arc::clone(&utf8_in)),
             )?
+        );
+
+        // Utf8View in_array, Utf8View and Dict(Utf8View) needles
+        let utf8view_in =
+            Arc::new(StringViewArray::from(vec!["a", "b", "c"])) as ArrayRef;
+        let utf8view_needle =
+            Arc::new(StringViewArray::from(vec!["a", "d", "b"])) as ArrayRef;
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(
+                Arc::clone(&utf8view_needle),
+                Arc::clone(&utf8view_in),
+            )?
+        );
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(wrap_in_dict(utf8view_needle), utf8view_in)?
         );
 
         // Struct in_array, Struct needle: multi-column join

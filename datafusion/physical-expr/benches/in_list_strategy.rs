@@ -35,8 +35,9 @@
 //! |------|-------|-----------------|-------------------|
 //! | Narrow integer cases | UInt8 | small value domain | 4, 16 |
 //! | Narrow integer cases | Int16, Float16 | larger value domain | 4, 64, 256 |
-//! | 32-bit primitive cases | Int32, Float32 | small and large lists | 4, 32, 64, 256 |
-//! | 64-bit primitive cases | Int64, TimestampNs | small and large lists | 4, 16, 32, 128 |
+//! | 32-bit primitive cases | Int32, Float32 | small and large lists | 4, 32, 33, 64, 256, 1024, 10000 |
+//! | 64-bit primitive cases | Int64, TimestampNs | small and large lists | 4, 16, 17, 32, 128, 1024, 10000 |
+//! | 128-bit interval cases | IntervalMonthDayNano | small lists | 4 |
 //! | Utf8 short-string cases | Utf8 | 8-byte strings | 4, 64, 256 |
 //! | Utf8 long-string cases | Utf8 | 24-byte strings | 4, 64, 256 |
 //! | Utf8View short-string cases | Utf8View | 8-byte strings | 4, 16, 64, 256 |
@@ -45,8 +46,9 @@
 //! | Shared-prefix string cases | Utf8, Utf8View | same prefix, different suffix | 16, 32, 64 |
 //! | Fixed-size binary cases | FixedSizeBinary(16) | fixed-width binary values | 4, 64, 256, 10000 |
 
+use arrow::array::types::IntervalMonthDayNano;
 use arrow::array::*;
-use arrow::datatypes::{Field, Int32Type, Schema};
+use arrow::datatypes::{Field, Int32Type, IntervalMonthDayNanoType, Schema};
 use arrow::record_batch::RecordBatch;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
@@ -164,11 +166,11 @@ fn random_string(rng: &mut StdRng, len: usize) -> String {
 fn strings_with_shared_prefix(
     rng: &mut StdRng,
     count: usize,
-    prefix_len: usize,
+    prefix: &str,
+    discriminator: char,
 ) -> Vec<String> {
-    let prefix = random_string(rng, prefix_len);
     (0..count)
-        .map(|_| format!("{}{}", prefix, random_string(rng, 8))) // prefix + random 8-char suffix
+        .map(|_| format!("{prefix}{}{discriminator}", random_string(rng, 7)))
         .collect()
 }
 
@@ -273,12 +275,14 @@ fn bench_string_shared_prefix<A>(
         .wrapping_add(prefix_len as u64 * 0x4444);
     let mut rng = StdRng::seed_from_u64(seed);
 
-    // Generate IN list with a shared prefix.
-    let haystack = strings_with_shared_prefix(&mut rng, list_size, prefix_len);
+    // Use the same prefix and equal-length, disjoint suffixes for both pools so
+    // misses exercise length/prefix collisions rather than immediate rejection.
+    let prefix = random_string(&mut rng, prefix_len);
+    let haystack = strings_with_shared_prefix(&mut rng, list_size, &prefix, 'h');
 
     // Generate non-matching strings with the same prefix to keep misses close
     // to the matching set.
-    let non_match_pool = strings_with_shared_prefix(&mut rng, 100, prefix_len);
+    let non_match_pool = strings_with_shared_prefix(&mut rng, 100, &prefix, 'm');
 
     // Generate array with controlled match rate
     let values: A = (0..ARRAY_SIZE)
@@ -311,6 +315,7 @@ fn bench_string_mixed_lengths<A>(
     name: &str,
     list_size: usize,
     match_rate: f64,
+    inline_rate: f64,
     to_scalar: fn(String) -> ScalarValue,
 ) where
     A: Array + FromIterator<Option<String>> + 'static,
@@ -318,12 +323,21 @@ fn bench_string_mixed_lengths<A>(
     let seed = 0xABCD_EF01_u64.wrapping_add(list_size as u64 * 0x5555);
     let mut rng = StdRng::seed_from_u64(seed);
 
-    // Mixed lengths: some short (<= 12), some long (> 12)
-    let lengths = [4, 8, 12, 16, 20, 24];
+    let inline_lengths = [4, 8, 12];
+    let long_lengths = [16, 20, 24];
+    let inline_count = ((list_size as f64 * inline_rate).round() as usize)
+        .max(1)
+        .min(list_size - 1);
 
     // Generate IN list with mixed lengths
     let haystack: Vec<String> = (0..list_size)
-        .map(|_| {
+        .map(|idx| {
+            let inline = idx < inline_count;
+            let lengths = if inline {
+                &inline_lengths
+            } else {
+                &long_lengths
+            };
             let len = *lengths.choose(&mut rng).unwrap();
             random_string(&mut rng, len)
         })
@@ -335,6 +349,11 @@ fn bench_string_mixed_lengths<A>(
             Some(if !haystack.is_empty() && rng.random_bool(match_rate) {
                 haystack.choose(&mut rng).unwrap().clone()
             } else {
+                let lengths = if rng.random_bool(inline_rate) {
+                    &inline_lengths
+                } else {
+                    &long_lengths
+                };
                 let len = *lengths.choose(&mut rng).unwrap();
                 random_string(&mut rng, len)
             })
@@ -418,7 +437,7 @@ fn bench_narrow_integer(c: &mut Criterion) {
 
 fn bench_primitive(c: &mut Criterion) {
     // Int32: small and larger list sizes
-    for list_size in [4, 32, 64, 256] {
+    for list_size in [4, 32, 33, 64, 256, 1024, 10_000] {
         let list_case = if list_size <= 32 {
             "small_list"
         } else {
@@ -440,7 +459,7 @@ fn bench_primitive(c: &mut Criterion) {
     }
 
     // Int64: small and larger list sizes
-    for list_size in [4, 16, 32, 128] {
+    for list_size in [4, 16, 17, 32, 128, 1024, 10_000] {
         let list_case = if list_size <= 16 {
             "small_list"
         } else {
@@ -528,6 +547,28 @@ fn bench_timestamp_ns(c: &mut Criterion) {
     }
 }
 
+fn bench_interval_month_day_nano(c: &mut Criterion) {
+    for match_pct in MATCH_RATES {
+        bench_numeric::<IntervalMonthDayNano, IntervalMonthDayNanoArray>(
+            c,
+            "interval_month_day_nano",
+            &format!("small_list/list=4/match={match_pct}%"),
+            &NumericBenchConfig::new(
+                4,
+                match_pct as f64 / 100.0,
+                |rng| {
+                    IntervalMonthDayNanoType::make_value(
+                        rng.random_range(-120..=120),
+                        rng.random_range(-31..=31),
+                        rng.random_range(-1_000_000_000..=1_000_000_000),
+                    )
+                },
+                |v| ScalarValue::IntervalMonthDayNano(Some(v)),
+            ),
+        );
+    }
+}
+
 // =============================================================================
 // UTF8 STRING CASE BENCHMARKS
 // =============================================================================
@@ -578,6 +619,7 @@ fn bench_utf8(c: &mut Criterion) {
                 &format!("mixed_len/list={list_size}/match={match_pct}%"),
                 list_size,
                 match_pct as f64 / 100.0,
+                0.5,
                 to_scalar,
             );
         }
@@ -670,6 +712,23 @@ fn bench_utf8view(c: &mut Criterion) {
                 &format!("mixed_len/list={list_size}/match={match_pct}%"),
                 list_size,
                 match_pct as f64 / 100.0,
+                0.5,
+                to_scalar,
+            );
+        }
+    }
+
+    // Strongly skewed mixed lists exercise routing near the all-inline and
+    // all-long boundaries while retaining both representations.
+    for inline_pct in [2, 98] {
+        for match_pct in MATCH_RATES {
+            bench_string_mixed_lengths::<StringViewArray>(
+                c,
+                "utf8view",
+                &format!("mixed_len/inline={inline_pct}%/list=64/match={match_pct}%"),
+                64,
+                match_pct as f64 / 100.0,
+                inline_pct as f64 / 100.0,
                 to_scalar,
             );
         }
@@ -1049,7 +1108,7 @@ fn bench_fixed_size_binary(c: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = Criterion::default();
-    targets = bench_narrow_integer, bench_primitive, bench_f32, bench_timestamp_ns, bench_utf8, bench_utf8view, bench_dictionary, bench_nulls, bench_fixed_size_binary
+    targets = bench_narrow_integer, bench_primitive, bench_f32, bench_timestamp_ns, bench_interval_month_day_nano, bench_utf8, bench_utf8view, bench_dictionary, bench_nulls, bench_fixed_size_binary
 }
 
 criterion_main!(benches);

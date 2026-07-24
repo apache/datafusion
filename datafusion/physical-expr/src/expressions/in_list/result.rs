@@ -58,6 +58,34 @@ where
     build_result_from_contains(needle_nulls, haystack_has_nulls, negated, contains_buf)
 }
 
+/// Builds an IN-list result without evaluating null needle values.
+#[inline]
+pub(crate) fn build_in_list_result_with_null_shortcircuit<C>(
+    len: usize,
+    needle_nulls: Option<&NullBuffer>,
+    haystack_has_nulls: bool,
+    negated: bool,
+    mut contains: C,
+) -> BooleanArray
+where
+    C: FnMut(usize) -> bool,
+{
+    if needle_nulls.is_none_or(|nulls| nulls.null_count() == 0) {
+        return build_in_list_result(
+            len,
+            needle_nulls,
+            haystack_has_nulls,
+            negated,
+            contains,
+        );
+    }
+
+    let needle_nulls = needle_nulls.expect("null count was checked above");
+    build_in_list_result(len, Some(needle_nulls), haystack_has_nulls, negated, |i| {
+        needle_nulls.is_valid(i) && contains(i)
+    })
+}
+
 /// Builds a BooleanArray result from a pre-computed contains buffer.
 ///
 /// This version does not assume contains_buf is pre-masked at null positions.
