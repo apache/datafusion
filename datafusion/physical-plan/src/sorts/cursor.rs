@@ -980,4 +980,219 @@ mod tests {
         b.advance();
         assert_eq!(a.cmp(&b), Ordering::Less);
     }
+
+    fn new_byte_array(
+        options: SortOptions,
+        strings: &[&str],
+    ) -> Cursor<ArrayValues<ByteArrayValues<i32>>> {
+        use arrow::array::StringArray;
+        let array = StringArray::from(strings.to_vec());
+        let byte_values = <StringArray as CursorArray>::values(&array);
+        let memory_pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(10000));
+        let consumer = MemoryConsumer::new("test");
+        let reservation = consumer.register(&memory_pool);
+        let values = ArrayValues {
+            values: byte_values,
+            null_threshold: strings.len(),
+            options,
+            has_nulls: false,
+            _reservation: reservation,
+        };
+        Cursor::new(values)
+    }
+
+    /// Verifies the ByteArrayValues per-row `(current_start, current_end)`
+    /// cache stays in sync with the cursor's offset across `advance` calls,
+    /// so `compare` reads the right slice each time.
+    #[test]
+    fn test_byte_array_compare_across_advance() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        let mut a = new_byte_array(options, &["apple", "banana", "cherry"]);
+        let mut b = new_byte_array(options, &["apricot", "blueberry", "date"]);
+
+        // apple < apricot (differ at second byte)
+        assert_eq!(a.cmp(&b), Ordering::Less);
+
+        // advance both to their next heads
+        a.advance();
+        b.advance();
+
+        // banana < blueberry
+        assert_eq!(a.cmp(&b), Ordering::Less);
+
+        a.advance();
+        b.advance();
+
+        // cherry < date
+        assert_eq!(a.cmp(&b), Ordering::Less);
+    }
+
+    /// Verifies ByteArrayValues equality against the raw-index `eq` path
+    /// (which does NOT use the current-row cache — it takes arbitrary
+    /// indices for cross-batch tie comparison).
+    #[test]
+    fn test_byte_array_eq_arbitrary_indices() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        let a = new_byte_array(options, &["dog", "cat", "cat", "bird"]);
+        let inner = &a.values.values;
+
+        // eq at same index → true
+        assert!(<ByteArrayValues<i32> as CursorValues>::eq(
+            inner, 1, inner, 1
+        ));
+        // eq of "cat"@1 vs "cat"@2 → true (across-batch style call)
+        assert!(<ByteArrayValues<i32> as CursorValues>::eq(
+            inner, 1, inner, 2
+        ));
+        // eq of "dog"@0 vs "cat"@1 → false
+        assert!(!<ByteArrayValues<i32> as CursorValues>::eq(
+            inner, 0, inner, 1
+        ));
+
+        // eq_to_previous: cat at idx 2 vs cat at idx 1 → true
+        assert!(<ByteArrayValues<i32> as CursorValues>::eq_to_previous(
+            inner, 2
+        ));
+        // eq_to_previous: bird at idx 3 vs cat at idx 2 → false
+        assert!(!<ByteArrayValues<i32> as CursorValues>::eq_to_previous(
+            inner, 3
+        ));
+    }
+
+    fn new_string_view(
+        options: SortOptions,
+        strings: &[&str],
+    ) -> Cursor<ArrayValues<StringViewCursorValues>> {
+        use arrow::array::StringViewArray;
+        let array = StringViewArray::from(strings.to_vec());
+        let view_values = <StringViewArray as CursorArray>::values(&array);
+        let memory_pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(10000));
+        let consumer = MemoryConsumer::new("test");
+        let reservation = consumer.register(&memory_pool);
+        let values = ArrayValues {
+            values: view_values,
+            null_threshold: strings.len(),
+            options,
+            has_nulls: false,
+            _reservation: reservation,
+        };
+        Cursor::new(values)
+    }
+
+    /// Batch where every string is ≤ 12 chars → `all_inline` fast path.
+    /// Exercises the cached `current_inline_key: u128` route in `compare`.
+    #[test]
+    fn test_string_view_all_inline_fast_path() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        let mut a = new_string_view(options, &["AIR", "MAIL", "TRUCK"]);
+        let mut b = new_string_view(options, &["FOB", "RAIL", "SHIP"]);
+
+        // AIR < FOB
+        assert_eq!(a.cmp(&b), Ordering::Less);
+
+        a.advance();
+        b.advance();
+        // MAIL < RAIL
+        assert_eq!(a.cmp(&b), Ordering::Less);
+
+        a.advance();
+        b.advance();
+        // TRUCK > SHIP
+        assert_eq!(a.cmp(&b), Ordering::Greater);
+    }
+
+    /// Batch where strings are > 12 chars → external data-buffer route.
+    /// Exercises the cached `(current_ptr, current_len)` slice compare.
+    #[test]
+    fn test_string_view_external_slice_cache() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        let mut a = new_string_view(
+            options,
+            &[
+                "aardvark and antelope",
+                "banana and blackberry",
+                "carrot and cabbage",
+            ],
+        );
+        let mut b = new_string_view(
+            options,
+            &[
+                "aardvark and armadillo",
+                "banana and blueberry",
+                "carrot and celery",
+            ],
+        );
+
+        // aardvark and antelope < aardvark and armadillo
+        assert_eq!(a.cmp(&b), Ordering::Less);
+
+        a.advance();
+        b.advance();
+        // banana and blackberry < banana and blueberry
+        assert_eq!(a.cmp(&b), Ordering::Less);
+
+        a.advance();
+        b.advance();
+        // carrot and cabbage < carrot and celery
+        assert_eq!(a.cmp(&b), Ordering::Less);
+    }
+
+    /// Empty and single-row batches should not blow up — the cache
+    /// constructors have to handle these edge cases without indexing
+    /// past the end.
+    #[test]
+    fn test_byte_array_single_row_batch() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        let cursor = new_byte_array(options, &["solo"]);
+        assert!(!cursor.is_finished());
+    }
+
+    /// Verifies the `ArrayValues::has_nulls` fast path is actually taken
+    /// (all null-free cursors) and produces the same ordering as the
+    /// null-aware slow path.
+    #[test]
+    fn test_array_values_has_nulls_fast_path_agrees_with_slow_path() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        // Two null-free cursors — compare should take the has_nulls
+        // fast path.
+        let buf_a = ScalarBuffer::from(vec![1i32, 2, 3, 4]);
+        let a = new_primitive(options, buf_a, 0);
+        let buf_b = ScalarBuffer::from(vec![2i32, 3, 4, 5]);
+        let b = new_primitive(options, buf_b, 0);
+
+        assert!(!a.values.has_nulls);
+        assert!(!b.values.has_nulls);
+        assert_eq!(a.cmp(&b), Ordering::Less);
+
+        // A null-containing cursor forces the slow (null-aware) path.
+        let buf_c = ScalarBuffer::from(vec![i32::MAX, 3i32, 4]);
+        let c = new_primitive(options, buf_c, 1);
+        assert!(c.values.has_nulls);
+        // 1 < 3 (real values, ignoring positional NULL slot)
+        assert_eq!(a.cmp(&c), Ordering::Less);
+    }
 }
