@@ -32,7 +32,6 @@ use parquet::file::properties::{WriterProperties, WriterVersion};
 use rand::distr::Alphanumeric;
 use rand::distr::uniform::SampleUniform;
 use rand::prelude::*;
-use rand::rng;
 use std::fs::File;
 use std::io::Read;
 use std::ops::Range;
@@ -98,7 +97,7 @@ fn generate_string_dictionary(
     len: usize,
     valid_percent: f64,
 ) -> ArrayRef {
-    let mut rng = rng();
+    let mut rng = StdRng::seed_from_u64(0);
     let strings: Vec<_> = (0..cardinality).map(|x| format!("{prefix}#{x}")).collect();
 
     Arc::new(DictionaryArray::<Int32Type>::from_iter((0..len).map(
@@ -114,7 +113,7 @@ fn generate_strings(
     len: usize,
     valid_percent: f64,
 ) -> ArrayRef {
-    let mut rng = rng();
+    let mut rng = StdRng::seed_from_u64(0);
     Arc::new(StringArray::from_iter((0..len).map(|_| {
         rng.random_bool(valid_percent).then(|| {
             let string_len = rng.random_range(string_length_range.clone());
@@ -134,7 +133,7 @@ where
     T: ArrowPrimitiveType,
     T::Native: SampleUniform,
 {
-    let mut rng = rng();
+    let mut rng = StdRng::seed_from_u64(0);
     Arc::new(PrimitiveArray::<T>::from_iter((0..len).map(|_| {
         rng.random_bool(valid_percent)
             .then(|| rng.random_range(range.clone()))

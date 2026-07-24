@@ -27,7 +27,6 @@ use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{WriterProperties, WriterVersion};
 use rand::distr::Alphanumeric;
 use rand::prelude::*;
-use rand::rng;
 use std::hint::black_box;
 use std::ops::Range;
 use std::path::Path;
@@ -60,7 +59,7 @@ fn schema() -> SchemaRef {
 }
 
 fn generate_strings(len: usize) -> ArrayRef {
-    let mut rng = rng();
+    let mut rng = StdRng::seed_from_u64(0);
     Arc::new(StringArray::from_iter((0..len).map(|_| {
         let string_len = rng.random_range(STRING_LENGTH_RANGE.clone());
         Some(

@@ -39,9 +39,8 @@ use futures::TryStreamExt;
 use object_store::ObjectStore;
 use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::async_writer::ParquetObjectWriter;
-use rand::Rng;
 use rand::distr::Alphanumeric;
-use rand::rngs::ThreadRng;
+use rand::prelude::*;
 use tokio::runtime::Runtime;
 use tokio_util::sync::CancellationToken;
 
@@ -312,12 +311,12 @@ async fn generate_data(
 }
 
 fn random_data(column_type: &DataType, rows: usize) -> Arc<dyn Array> {
-    let mut rng = rand::rng();
+    let mut rng = StdRng::seed_from_u64(0);
     let values = (0..rows).map(|_| random_value(&mut rng, column_type));
     ScalarValue::iter_to_array(values).unwrap()
 }
 
-fn random_value(rng: &mut ThreadRng, column_type: &DataType) -> ScalarValue {
+fn random_value(rng: &mut StdRng, column_type: &DataType) -> ScalarValue {
     match column_type {
         DataType::Float64 => ScalarValue::Float64(Some(rng.random())),
         DataType::Boolean => ScalarValue::Boolean(Some(rng.random())),
