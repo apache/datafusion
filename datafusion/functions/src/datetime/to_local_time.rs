@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ops::Add;
 use std::sync::Arc;
 
+use arrow::array::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
 use arrow::array::timezone::Tz;
 use arrow::array::{ArrayRef, PrimitiveArray};
 use arrow::datatypes::DataType::Timestamp;
@@ -26,7 +26,7 @@ use arrow::datatypes::{
     ArrowTimestampType, DataType, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType,
 };
-use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
+use chrono::{DateTime, MappedLocalTime, Offset, TimeZone, Utc};
 
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{
@@ -337,24 +337,23 @@ pub fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i6
         .fix()
         .local_minus_utc() as i64;
 
-    let adjusted_date_time = date_time.add(
-        // This should not fail under normal circumstances as the
-        // maximum possible offset is 26 hours (93,600 seconds)
-        TimeDelta::try_seconds(offset_seconds)
-            .ok_or_else(|| internal_datafusion_err!("Offset seconds should be less than i64::MAX / 1_000 or greater than -i64::MAX / 1_000"))?,
-    );
+    // Shifting an instant by a whole number of seconds is exact in every
+    // timestamp unit, so the offset is applied directly to the i64 value rather
+    // than round-tripping through chrono's calendar arithmetic. The scaling
+    // cannot overflow: the largest possible offset is 26 hours (93,600 seconds).
+    let offset = offset_seconds
+        * match T::UNIT {
+            Nanosecond => NANOSECONDS,
+            Microsecond => MICROSECONDS,
+            Millisecond => MILLISECONDS,
+            Second => 1,
+        };
 
-    // convert the naive datetime back to i64
-    match T::UNIT {
-        Nanosecond => adjusted_date_time.timestamp_nanos_opt().ok_or_else(||
-            internal_datafusion_err!(
-                "Failed to convert DateTime to timestamp in nanosecond. This error may occur if the date is out of range. The supported date ranges are between 1677-09-21T00:12:43.145224192 and 2262-04-11T23:47:16.854775807"
-            )
-        ),
-        Microsecond => Ok(adjusted_date_time.timestamp_micros()),
-        Millisecond => Ok(adjusted_date_time.timestamp_millis()),
-        Second => Ok(adjusted_date_time.timestamp()),
-    }
+    ts.checked_add(offset).ok_or_else(|| {
+        internal_datafusion_err!(
+            "Failed to adjust timestamp to local time: the adjusted value is out of range"
+        )
+    })
 }
 
 #[cfg(test)]
