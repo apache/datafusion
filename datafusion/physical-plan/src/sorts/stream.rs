@@ -96,19 +96,14 @@ impl FusedStreams {
 /// A pair of `Arc<Rows>` that can be reused
 #[derive(Debug)]
 struct ReusableRows {
-    // inner[stream_idx] holds a two Arcs:
-    // at start of a new poll
-    // .0 is the rows from the previous poll (at start),
-    // .1 is the one that is being written to
-    // at end of a poll, .0 will be swapped with .1,
-    inner: Vec<[Option<Arc<Rows>>; 2]>,
+    inner: Vec<Option<Arc<Rows>>>,
 }
 
 impl ReusableRows {
     // return a Rows for writing,
     // does not clone if the existing rows can be reused
     fn take_next(&mut self, stream_idx: usize) -> Result<Rows> {
-        Arc::try_unwrap(self.inner[stream_idx][1].take().unwrap()).map_err(|_| {
+        Arc::try_unwrap(self.inner[stream_idx].take().unwrap()).map_err(|_| {
             internal_datafusion_err!(
                 "Rows from RowCursorStream is still in use by consumer"
             )
@@ -116,16 +111,13 @@ impl ReusableRows {
     }
     // save the Rows
     fn save(&mut self, stream_idx: usize, rows: &Arc<Rows>) {
-        self.inner[stream_idx][1] = Some(Arc::clone(rows));
-        // swap the current with the previous one, so that the next poll can reuse the Rows from the previous poll
-        let [a, b] = &mut self.inner[stream_idx];
-        mem::swap(a, b);
+        self.inner[stream_idx] = Some(Arc::clone(rows));
     }
 }
 
 /// A [`PartitionedStream`] that wraps a set of [`SendableRecordBatchStream`]
 /// and computes [`RowValues`] based on the provided [`PhysicalSortExpr`]
-/// Note: the stream returns an error if the consumer buffers more than one RowValues (i.e. holds on to two RowValues
+/// Note: the stream returns an error if the consumer buffers even one RowValues (i.e. holds on to one RowValues
 /// from the same partition at the same time).
 #[derive(Debug)]
 pub struct RowCursorStream {
@@ -137,8 +129,9 @@ pub struct RowCursorStream {
     streams: FusedStreams,
     /// Tracks the memory used by `converter`
     reservation: MemoryReservation,
-    /// Allocated rows for each partition, we keep two to allow for buffering one
-    /// in the consumer of the stream
+    /// Reused `Rows` allocation for each partition. The consumer must not
+    /// buffer the `RowValues` returned for a partition, since the old
+    /// `Arc<Rows>` must be dropped before that partition can be polled again.
     rows: ReusableRows,
 }
 
@@ -162,10 +155,7 @@ impl RowCursorStream {
         let mut rows = Vec::with_capacity(streams.len());
         for _ in &streams {
             // Initialize each stream with an empty Rows
-            rows.push([
-                Some(Arc::new(converter.empty_rows(0, 0))),
-                Some(Arc::new(converter.empty_rows(0, 0))),
-            ]);
+            rows.push(Some(Arc::new(converter.empty_rows(0, 0))));
         }
         Ok(Self {
             converter,
