@@ -473,6 +473,42 @@ impl ExecutionPlan for UnionExec {
         // on all children (either pushed down or via FilterExec)
         Ok(propagation)
     }
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let inputs = ctx.encode_children(self.inputs())?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Union(
+                    protobuf::UnionExecNode { inputs },
+                ),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl UnionExec {
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let union = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Union,
+            "UnionExec",
+        );
+        let inputs = union
+            .inputs
+            .iter()
+            .map(|input| ctx.decode_child(input))
+            .collect::<Result<Vec<_>>>()?;
+        UnionExec::try_new(inputs)
+    }
 }
 
 /// Combines multiple input streams by interleaving them.
@@ -682,6 +718,42 @@ impl ExecutionPlan for InterleaveExec {
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false; self.children().len()]
+    }
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let inputs = ctx.encode_children(self.inputs())?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Interleave(
+                    protobuf::InterleaveExecNode { inputs },
+                ),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl InterleaveExec {
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let interleave = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Interleave,
+            "InterleaveExec",
+        );
+        let inputs = interleave
+            .inputs
+            .iter()
+            .map(|input| ctx.decode_child(input))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Arc::new(InterleaveExec::try_new(inputs)?))
     }
 }
 
