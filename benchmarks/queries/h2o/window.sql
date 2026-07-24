@@ -196,3 +196,53 @@ SELECT pk, largest_v2 FROM (
            RANK() OVER (PARTITION BY (id3 % 100000) ORDER BY v2 DESC) AS rk_v2
     FROM large WHERE v2 IS NOT NULL
 ) sub_query WHERE rk_v2 <= 2;
+
+-- Window Top-N (DENSE_RANK top-2 per partition, ~100 partitions)
+-- The DENSE_RANK queries below mirror the RANK cardinality sweep above.
+-- DENSE_RANK semantics keep every row whose ORDER BY value is among the
+-- K distinct-smallest values in the partition, so total kept per partition
+-- is unbounded in rows-per-distinct-value — exercises PartitionedTopKDenseRank's
+-- HashMap-of-groups path.
+SELECT pk, largest_v2 FROM (
+    SELECT (id3 % 100) AS pk, v2 AS largest_v2,
+           DENSE_RANK() OVER (PARTITION BY (id3 % 100) ORDER BY v2 DESC) AS dr_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE dr_v2 <= 2;
+
+-- Window Top-N (DENSE_RANK top-2 per partition, ~1K partitions)
+SELECT pkey, largest_v2 FROM (
+    SELECT (id3 % 1000) AS pkey, v2 AS largest_v2,
+           DENSE_RANK() OVER (PARTITION BY (id3 % 1000) ORDER BY v2 DESC) AS dr_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE dr_v2 <= 2;
+
+-- Window Top-N (DENSE_RANK top-2 per partition, ~1K partitions, heavy ties)
+-- v2 % 10 forces 10 distinct OBY values; most rows share the top-2 distinct
+-- values so appends dominate — exercises the "Case A" append-to-existing-Vec
+-- fast path in PartitionedTopKDenseRank.
+SELECT pkey, largest_v2 FROM (
+    SELECT (id3 % 1000) AS pkey, v2 AS largest_v2,
+           DENSE_RANK() OVER (PARTITION BY (id3 % 1000) ORDER BY (v2 % 10) DESC) AS dr_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE dr_v2 <= 2;
+
+-- Window Top-N (DENSE_RANK top-2 per partition, ~10K partitions, low ties)
+SELECT id2, largest_v2 FROM (
+    SELECT id2, v2 AS largest_v2,
+           DENSE_RANK() OVER (PARTITION BY id2 ORDER BY v2 DESC) AS dr_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE dr_v2 <= 2;
+
+-- Window Top-N (DENSE_RANK top-2 per partition, ~10K partitions, heavy ties)
+SELECT id2, largest_v2 FROM (
+    SELECT id2, v2 AS largest_v2,
+           DENSE_RANK() OVER (PARTITION BY id2 ORDER BY (v2 % 10) DESC) AS dr_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE dr_v2 <= 2;
+
+-- Window Top-N (DENSE_RANK top-2 per partition, ~100K partitions)
+SELECT pk, largest_v2 FROM (
+    SELECT (id3 % 100000) AS pk, v2 AS largest_v2,
+           DENSE_RANK() OVER (PARTITION BY (id3 % 100000) ORDER BY v2 DESC) AS dr_v2
+    FROM large WHERE v2 IS NOT NULL
+) sub_query WHERE dr_v2 <= 2;
