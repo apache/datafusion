@@ -62,7 +62,8 @@
 //!   so a duplicate-sensitive node further above does not matter.
 //!
 //! At each join, `rewritten_join_type` combines this context with the side's
-//! functional dependencies to choose `Inner`, `LeftSemi`, or `RightSemi`. Most
+//! functional dependencies to choose `Inner`, `LeftSemi`, or `RightSemi`, or
+//! to eliminate the join entirely in favor of its left input. Most
 //! node types just forward the context to their single child via
 //! `rewrite_single_input`; nodes that alter column requirements or
 //! duplicate-sensitivity (projection, aggregate, sort, ...) adjust it first.
@@ -406,32 +407,22 @@ fn rewrite_join(
 
     let (visible_left, visible_right) = split_join_output_columns(&join, live);
 
-    // A LEFT JOIN preserves every left row, so when nothing above the join
-    // references the right side's columns and the right side cannot multiply
-    // left rows (the ancestors are duplicate-insensitive, or the right side
-    // is unique on the join keys), the join has no observable effect and can
-    // be replaced by its left input. A join filter cannot prevent this: it
-    // only decides whether a left row is matched or null-padded, and either
-    // way the row is emitted.
-    if join.join_type == JoinType::Left
-        && visible_right.is_empty()
-        && (duplicate_insensitive
-            || side_unique_on_join(
-                join.right.schema(),
-                join.on.iter().map(|(_, right)| right),
-                join.null_equality,
-            ))
-    {
-        let left = rewrite_subtree(
-            Arc::unwrap_or_clone(join.left),
-            visible_left,
-            duplicate_insensitive,
-        )?;
-        return Ok(Transformed::yes(left.data));
-    }
-
-    let rewritten_join_type =
-        rewritten_join_type(&join, &visible_left, &visible_right, duplicate_insensitive);
+    let rewritten_join_type = match rewritten_join_type(
+        &join,
+        &visible_left,
+        &visible_right,
+        duplicate_insensitive,
+    ) {
+        JoinRewrite::ReplaceWithLeft => {
+            let left = rewrite_subtree(
+                Arc::unwrap_or_clone(join.left),
+                visible_left,
+                duplicate_insensitive,
+            )?;
+            return Ok(Transformed::yes(left.data));
+        }
+        JoinRewrite::Join(join_type) => join_type,
+    };
 
     let (mut left_live, mut right_live) = match rewritten_join_type {
         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
@@ -513,40 +504,63 @@ fn child_duplicate_insensitivity(
     }
 }
 
-/// Rewrites an inner join to a semi join when the removed side has no
-/// parent-visible columns and either the parent ignores duplicate output rows or
-/// the removed side is unique on the join keys.
+/// The rewrite chosen for a join by [`rewritten_join_type`].
+enum JoinRewrite {
+    /// Keep the join, with this (possibly rewritten) join type.
+    Join(JoinType),
+    /// The join has no observable effect; replace it with its left input.
+    ReplaceWithLeft,
+}
+
+/// Chooses a cheaper form for a join: removes a left outer join whose right
+/// side is redundant, or rewrites an inner join to a semi join when the
+/// removed side has no parent-visible columns and either the parent ignores
+/// duplicate output rows or the removed side is unique on the join keys.
 fn rewritten_join_type(
     join: &Join,
     visible_left: &LiveColumns,
     visible_right: &LiveColumns,
     duplicate_insensitive: bool,
-) -> JoinType {
+) -> JoinRewrite {
+    // The right side is redundant when nothing above the join references its
+    // columns and it cannot multiply left rows (the ancestors are duplicate-
+    // insensitive, or the right side is unique on the join keys).
+    let can_remove_right = visible_right.is_empty()
+        && (duplicate_insensitive
+            || side_unique_on_join(
+                join.right.schema(),
+                join.on.iter().map(|(_, right)| right),
+                join.null_equality,
+            ));
+
+    // A LEFT JOIN preserves every left row, so with a redundant right side the
+    // join has no observable effect and can be replaced by its left input. A
+    // join filter cannot prevent this: it only decides whether a left row is
+    // matched or null-padded, and either way the row is emitted.
+    if join.join_type == JoinType::Left && can_remove_right {
+        return JoinRewrite::ReplaceWithLeft;
+    }
+
     if join.join_type != JoinType::Inner || join.on.is_empty() {
-        return join.join_type;
+        return JoinRewrite::Join(join.join_type);
     }
 
-    let can_remove_right = duplicate_insensitive
-        || side_unique_on_join(
-            join.right.schema(),
-            join.on.iter().map(|(_, right)| right),
-            join.null_equality,
-        );
-    if visible_right.is_empty() && can_remove_right {
-        return JoinType::LeftSemi;
+    if can_remove_right {
+        return JoinRewrite::Join(JoinType::LeftSemi);
     }
 
-    let can_remove_left = duplicate_insensitive
-        || side_unique_on_join(
-            join.left.schema(),
-            join.on.iter().map(|(left, _)| left),
-            join.null_equality,
-        );
-    if visible_left.is_empty() && can_remove_left {
-        return JoinType::RightSemi;
+    let can_remove_left = visible_left.is_empty()
+        && (duplicate_insensitive
+            || side_unique_on_join(
+                join.left.schema(),
+                join.on.iter().map(|(left, _)| left),
+                join.null_equality,
+            ));
+    if can_remove_left {
+        return JoinRewrite::Join(JoinType::RightSemi);
     }
 
-    JoinType::Inner
+    JoinRewrite::Join(JoinType::Inner)
 }
 
 fn add_join_condition_columns(
