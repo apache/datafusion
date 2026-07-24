@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use crate::ExecutionPlan;
 use crate::ExecutionPlanProperties;
+use crate::Partitioning;
 use crate::joins::Map;
 use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::HASH_JOIN_SEED;
@@ -404,14 +405,13 @@ impl SharedBuildAccumulator {
             ),
         };
 
-        let probe_range_partitioning = if partition_mode == PartitionMode::Partitioned {
-            match right_child.output_partitioning() {
-                crate::Partitioning::Range(range) => Some(range.clone()),
+        let probe_range_partitioning =
+            match (partition_mode, right_child.output_partitioning()) {
+                (PartitionMode::Partitioned, Partitioning::Range(range)) => {
+                    Some(range.clone())
+                }
                 _ => None,
-            }
-        } else {
-            None
-        };
+            };
 
         Self {
             inner: Mutex::new(AccumulatorState {
@@ -691,7 +691,6 @@ impl SharedBuildAccumulator {
                     let else_expr = partition_filters
                         .pop()
                         .expect("Range partitioning always has at least one partition");
-                    let mut when_then_expr = Vec::with_capacity(partition_filters.len());
                     // CASE evaluates in order
                     //
                     // CASE
@@ -700,17 +699,18 @@ impl SharedBuildAccumulator {
                     //   ...
                     //   ELSE Fn
                     // END
-                    for (split_point, then_expr) in range_partitioning
+                    let when_then_expr = range_partitioning
                         .split_points()
                         .iter()
                         .zip(partition_filters)
-                    {
-                        let when_expr = build_lexicographic_filter(
-                            &sort_exprs,
-                            split_point.values(),
-                        )?;
-                        when_then_expr.push((when_expr, then_expr));
-                    }
+                        .map(|(split_point, then_expr)| {
+                            let when_expr = build_lexicographic_filter(
+                                &sort_exprs,
+                                split_point.values(),
+                            )?;
+                            Ok((when_expr, then_expr))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
 
                     Arc::new(CaseExpr::try_new(None, when_then_expr, Some(else_expr))?)
                         as Arc<dyn PhysicalExpr>
