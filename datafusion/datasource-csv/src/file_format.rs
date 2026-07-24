@@ -43,14 +43,19 @@ use datafusion_datasource::file_format::{
     DEFAULT_SCHEMA_INFER_MAX_RECORD, FileFormat, FileFormatFactory,
 };
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
-use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
+use datafusion_datasource::file_sink_config::{
+    FileSink, FileSinkConfig, FileSinkMetrics,
+};
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_datasource::write::BatchSerializer;
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
-use datafusion_datasource::write::orchestration::spawn_writer_tasks_and_join;
+use datafusion_datasource::write::orchestration::{
+    StatelessWriterOptions, spawn_writer_tasks_and_join_with_metrics,
+};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
@@ -741,6 +746,8 @@ pub struct CsvSink {
     /// Config options for writing data
     config: FileSinkConfig,
     writer_options: CsvWriterOptions,
+    /// Metrics for tracking write operations
+    metrics: FileSinkMetrics,
 }
 
 impl Debug for CsvSink {
@@ -771,6 +778,7 @@ impl CsvSink {
         Self {
             config,
             writer_options,
+            metrics: FileSinkMetrics::new(),
         }
     }
 
@@ -800,11 +808,12 @@ impl FileSink for CsvSink {
                 .with_builder(builder)
                 .with_header(header),
         ) as _;
-        spawn_writer_tasks_and_join(
+        spawn_writer_tasks_and_join_with_metrics(
             context,
             serializer,
-            self.writer_options.compression.into(),
-            self.writer_options.compression_level,
+            StatelessWriterOptions::new(self.writer_options.compression.into())
+                .with_compression_level(self.writer_options.compression_level)
+                .with_metrics(&self.metrics),
             object_store,
             demux_task,
             file_stream_rx,
@@ -815,6 +824,10 @@ impl FileSink for CsvSink {
 
 #[async_trait]
 impl DataSink for CsvSink {
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.snapshot())
+    }
+
     fn schema(&self) -> &SchemaRef {
         self.config.output_schema()
     }
