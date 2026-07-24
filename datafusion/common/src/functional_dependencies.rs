@@ -424,7 +424,6 @@ pub fn aggregate_functional_dependencies(
 ) -> FunctionalDependencies {
     let mut aggregate_func_dependencies = vec![];
     let aggr_input_fields = aggr_input_schema.field_names();
-    let aggr_fields = aggr_schema.fields();
     // Association covers the whole table:
     let target_indices = (0..aggr_schema.fields().len()).collect::<Vec<_>>();
     // Get functional dependencies of the schema:
@@ -468,13 +467,22 @@ pub fn aggregate_functional_dependencies(
             // Otherwise, existing mode is preserved:
             *mode
         };
+        // If the determinant covers *every* GROUP BY expression, it is a
+        // non-nullable key of the output even when it was only a nullable key
+        // of the input: grouping collapses  multiple NULL rows from a nullable
+        // key (e.g. a SQL `UNIQUE` constraint).
+        //
+        // However, if determinant covers only some grouping columns, rows differing
+        // in the remaining GROUP BY expressions can still repeat a NULL
+        // determinant, so the input nullability is preserved.
+        let nullable = *nullable && new_source_indices.len() < group_by_expr_names.len();
         // All of the composite indices occur in the GROUP BY expression:
         if new_source_indices.len() == source_indices.len() {
             aggregate_func_dependencies.push(
                 FunctionalDependence::new(
                     new_source_indices,
                     target_indices.clone(),
-                    *nullable,
+                    nullable,
                 )
                 .with_mode(mode),
             );
@@ -486,9 +494,6 @@ pub fn aggregate_functional_dependencies(
     if !group_by_expr_names.is_empty() {
         let count = group_by_expr_names.len();
         let source_indices = (0..count).collect::<Vec<_>>();
-        let nullable = source_indices
-            .iter()
-            .any(|idx| aggr_fields[*idx].is_nullable());
         // If GROUP BY expressions do not already act as a determinant:
         if !aggregate_func_dependencies.iter().any(|item| {
             // If `item.source_indices` is a subset of GROUP BY expressions, we shouldn't add
@@ -498,10 +503,15 @@ pub fn aggregate_functional_dependencies(
             // GROUP BY expressions come here as a prefix.
             item.source_indices.iter().all(|idx| idx < &count)
         }) {
-            // Add a new functional dependency associated with the whole table:
-            // Use nullable property of the GROUP BY expression:
+            // Add a new functional dependency associated with the whole table.
+            //
+            // `nullable` is `false`: a nullable dependence means multiple NULL
+            // keys may coexist (as under a SQL UNIQUE constraint, where NULLs
+            // compare distinct). That cannot happen after grouping: GROUP BY
+            // treats NULLs as equal, so every key combination -- NULL included
+            // -- occurs in exactly one output row, like a primary key.
+            let nullable = false;
             aggregate_func_dependencies.push(
-                // Use nullable property of the GROUP BY expression:
                 FunctionalDependence::new(source_indices, target_indices, nullable)
                     .with_mode(Dependency::Single),
             );
