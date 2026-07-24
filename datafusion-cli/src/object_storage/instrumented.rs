@@ -826,6 +826,13 @@ impl ObjectStoreRegistry for InstrumentedObjectStoreRegistry {
     fn get_store(&self, url: &Url) -> datafusion::common::Result<Arc<dyn ObjectStore>> {
         self.inner.get_store(url)
     }
+
+    fn resolve(
+        &self,
+        url: &Url,
+    ) -> datafusion::common::Result<(Arc<dyn ObjectStore>, Path)> {
+        self.inner.resolve(url)
+    }
 }
 
 #[cfg(test)]

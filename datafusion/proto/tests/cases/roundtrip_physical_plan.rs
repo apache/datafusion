@@ -1275,6 +1275,54 @@ fn roundtrip_parquet_exec_attaches_cached_reader_factory_after_roundtrip() -> Re
 }
 
 #[test]
+fn roundtrip_parquet_exec_preserves_prefixed_object_store_url() -> Result<()> {
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
+    let object_store_url = ObjectStoreUrl::parse("s3://bucket/user/repo")?;
+    let scan_config = FileScanConfigBuilder::new(object_store_url.clone(), file_source)
+        .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+            "/path/to/file.parquet".to_string(),
+            1024,
+        )])])
+        .with_statistics(Statistics {
+            num_rows: Precision::Inexact(100),
+            total_byte_size: Precision::Inexact(1024),
+            column_statistics: Statistics::unknown_column(&file_schema),
+        })
+        .build();
+    let exec_plan = DataSourceExec::from_data_source(scan_config);
+
+    let ctx = SessionContext::new();
+    // Decoding a `ParquetExec` resolves `object_store_url` to attach a cached
+    // reader factory, so the store must be registered at the same identity
+    // the scan config carries (including its path prefix).
+    ctx.runtime_env().register_object_store(
+        object_store_url.as_ref(),
+        Arc::new(object_store::memory::InMemory::new()),
+    );
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let roundtripped =
+        roundtrip_test_and_return(exec_plan, &ctx, &codec, &proto_converter)?;
+
+    let data_source = roundtripped
+        .downcast_ref::<DataSourceExec>()
+        .ok_or_else(|| {
+            internal_datafusion_err!("Expected DataSourceExec after roundtrip")
+        })?;
+    let file_scan = data_source
+        .data_source()
+        .downcast_ref::<FileScanConfig>()
+        .ok_or_else(|| {
+            internal_datafusion_err!("Expected FileScanConfig after roundtrip")
+        })?;
+
+    assert_eq!(file_scan.object_store_url, object_store_url);
+    Ok(())
+}
+
+#[test]
 fn roundtrip_arrow_scan() -> Result<()> {
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));

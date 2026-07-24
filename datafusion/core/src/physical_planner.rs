@@ -789,8 +789,13 @@ impl DefaultPhysicalPlanner {
             }) => {
                 let original_url = output_url.clone();
                 let input_exec = children.one()?;
-                let parsed_url = ListingTableUrl::parse(output_url)?;
-                let object_store_url = parsed_url.object_store();
+                // Resolve through the registry so a store registered under a path
+                // prefix gets store-relative paths; the identity and rebased url
+                // are embedded in the sink config for execution-time resolution.
+                let resolved = ListingTableUrl::parse(output_url)?
+                    .resolve(session_state.runtime_env())?;
+                let object_store_url = resolved.identity;
+                let parsed_url = resolved.table_url;
 
                 let schema = Arc::clone(input.schema().inner());
 

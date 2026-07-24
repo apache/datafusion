@@ -21,6 +21,7 @@ use datafusion_common::{DataFusionError, Result, TableReference};
 use datafusion_execution::cache::cache_manager::CachedFileList;
 use datafusion_execution::cache::cache_manager::TableScopedPath;
 use datafusion_execution::object_store::ObjectStoreUrl;
+use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_session::Session;
 
 use futures::stream::BoxStream;
@@ -32,6 +33,24 @@ use object_store::path::DELIMITER;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use url::Url;
+
+/// The outcome of resolving a [`ListingTableUrl`] against the object store
+/// registry (see [`ListingTableUrl::resolve`]).
+///
+/// A short-lived, local value: use its fields directly, taking only the ones a
+/// given call site needs.
+#[derive(Debug, Clone)]
+pub struct ResolvedTableUrl {
+    /// The object store serving the url.
+    pub store: Arc<dyn ObjectStore>,
+    /// The store's identity (scheme + authority + any registered path prefix).
+    /// Use as the scan/sink key so the store re-resolves at execution time.
+    pub identity: ObjectStoreUrl,
+    /// This url rebased into the store's coordinate space: its
+    /// [`prefix`](ListingTableUrl::prefix) is store-relative, so listing and
+    /// partition parsing operate on paths relative to the store.
+    pub table_url: ListingTableUrl,
+}
 
 /// A parsed URL identifying files for a listing table, see [`ListingTableUrl::parse`]
 /// for more information on the supported expressions
@@ -320,9 +339,53 @@ impl ListingTableUrl {
     }
 
     /// Return the [`ObjectStoreUrl`] for this [`ListingTableUrl`]
+    #[deprecated(
+        since = "55.0.0",
+        note = "Use `resolve()` instead, which returns the resolved object \
+                store and the store-relative path together; this method does \
+                not account for stores registered under a path prefix"
+    )]
     pub fn object_store(&self) -> ObjectStoreUrl {
         let url = &self.url[url::Position::BeforeScheme..url::Position::BeforePath];
         ObjectStoreUrl::parse(url).unwrap()
+    }
+
+    /// Resolves this url against the object store registry in `env`. See
+    /// [`ResolvedTableUrl`].
+    ///
+    /// The returned [`table_url`](ResolvedTableUrl::table_url) is this url rebased
+    /// into the store's coordinate space: its [`prefix`](Self::prefix) is replaced
+    /// by the store-relative path the registry stripped, so listing and partition
+    /// parsing operate on paths relative to the store (avoiding double-prefixing
+    /// for a store rooted at a path prefix). Only `prefix` changes; `url` / `glob`
+    /// / `table_ref` are preserved.
+    pub fn resolve(&self, env: &RuntimeEnv) -> Result<ResolvedTableUrl> {
+        let (store, path) = env.object_store_registry.resolve(&self.url)?;
+
+        // Store identity = `url` with the store-relative `path` stripped off its
+        // tail: scheme + authority + the leading segments the registry consumed,
+        // keeping their original percent-encoding.
+        let segments: Vec<&str> = self
+            .url
+            .path()
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .collect();
+        let kept = segments.len().saturating_sub(path.parts().count());
+        let authority = &self.url[url::Position::BeforeScheme..url::Position::BeforePath];
+        let identity =
+            ObjectStoreUrl::parse(format!("{authority}/{}", segments[..kept].join("/")))?;
+
+        Ok(ResolvedTableUrl {
+            store,
+            identity,
+            table_url: Self {
+                url: self.url.clone(),
+                prefix: path,
+                glob: self.glob.clone(),
+                table_ref: self.table_ref.clone(),
+            },
+        })
     }
 
     /// Returns true if the [`ListingTableUrl`] points to the folder
@@ -515,7 +578,10 @@ mod tests {
     use datafusion_common::config::TableOptions;
     use datafusion_execution::TaskContext;
     use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::runtime_env::RuntimeEnv;
+    use datafusion_execution::object_store::{
+        DefaultObjectStoreRegistry, ObjectStoreRegistry,
+    };
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::registry::ExtensionTypeRegistryRef;
     use datafusion_expr::{
@@ -628,6 +694,73 @@ mod tests {
 
         let path = Path::from("other/bar/partition/foo.parquet");
         assert!(url.strip_prefix(&path).is_none());
+    }
+
+    fn env_with(base: &str) -> Arc<RuntimeEnv> {
+        let registry = DefaultObjectStoreRegistry::new();
+        registry.register_store(
+            &Url::parse(base).unwrap(),
+            Arc::new(object_store::memory::InMemory::new()),
+        );
+        RuntimeEnvBuilder::new()
+            .with_object_store_registry(Arc::new(registry))
+            .build_arc()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_resolve_authority_only_store() {
+        // A store registered by scheme+authority only leaves the prefix unchanged.
+        let env = env_with("s3://bucket");
+        let url = ListingTableUrl::parse("s3://bucket/foo/bar/file.parquet").unwrap();
+        let resolved = url.resolve(&env).unwrap();
+        assert_eq!(resolved.identity.as_str(), "s3://bucket/");
+        assert_eq!(resolved.table_url.prefix().as_ref(), "foo/bar/file.parquet");
+        assert_eq!(resolved.table_url.prefix(), url.prefix());
+    }
+
+    #[test]
+    fn test_resolve_prefixed_store_strips_prefix() {
+        // A store registered under a path prefix: the prefix is stripped from the
+        // rebased url and retained in the store identity (the scan key).
+        let env = env_with("s3://bucket/user/repo");
+        let url =
+            ListingTableUrl::parse("s3://bucket/user/repo/data/file.parquet").unwrap();
+        let resolved = url.resolve(&env).unwrap();
+        assert_eq!(resolved.identity.as_str(), "s3://bucket/user/repo");
+        assert_eq!(resolved.table_url.prefix().as_ref(), "data/file.parquet");
+        assert!(!resolved.table_url.is_collection());
+    }
+
+    #[test]
+    fn test_resolve_prefixed_collection_preserves_trailing_slash() {
+        // A directory url keeps its collection-ness after rebasing.
+        let env = env_with("s3://bucket/user/repo");
+        let url = ListingTableUrl::parse("s3://bucket/user/repo/data/").unwrap();
+        let resolved = url.resolve(&env).unwrap();
+        assert_eq!(resolved.identity.as_str(), "s3://bucket/user/repo");
+        assert_eq!(resolved.table_url.prefix().as_ref(), "data");
+        assert!(resolved.table_url.is_collection());
+    }
+
+    #[test]
+    fn test_resolve_query_at_registered_root() {
+        // Querying exactly the registered prefix yields an empty rebased prefix.
+        let env = env_with("s3://bucket/user/repo");
+        let url = ListingTableUrl::parse("s3://bucket/user/repo/").unwrap();
+        let resolved = url.resolve(&env).unwrap();
+        assert_eq!(resolved.identity.as_str(), "s3://bucket/user/repo");
+        assert_eq!(resolved.table_url.prefix().as_ref(), "");
+    }
+
+    #[test]
+    fn test_resolve_preserves_percent_encoding_in_identity() {
+        // The retained (registered-prefix) segments keep their original encoding.
+        let env = env_with("s3://bucket/us%20er");
+        let url = ListingTableUrl::parse("s3://bucket/us%20er/data.parquet").unwrap();
+        let resolved = url.resolve(&env).unwrap();
+        assert_eq!(resolved.identity.as_str(), "s3://bucket/us%20er");
+        assert_eq!(resolved.table_url.prefix().as_ref(), "data.parquet");
     }
 
     #[test]
@@ -846,8 +979,6 @@ mod tests {
     /// so we sort results before comparison.
     #[tokio::test]
     async fn test_cache_path_equivalence() -> Result<()> {
-        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-
         let store = MockObjectStore {
             in_mem: object_store::memory::InMemory::new(),
             forbidden_paths: vec![],
@@ -952,8 +1083,6 @@ mod tests {
     /// Tests that prefix queries can be served from a cached full-table listing
     #[tokio::test]
     async fn test_cache_serves_partition_from_full_listing() -> Result<()> {
-        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-
         let store = MockObjectStore {
             in_mem: object_store::memory::InMemory::new(),
             forbidden_paths: vec![],
