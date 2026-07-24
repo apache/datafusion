@@ -33,6 +33,7 @@ use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
 };
+use crate::metrics::{BaselineMetrics, RecordBatchMemoryMetrics};
 
 /// Marker for raw rows -> partial state aggregation.
 pub(in crate::aggregates) struct PartialMarker;
@@ -219,6 +220,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     pub(super) fn next_output_batch_inner(
         &mut self,
         materialize_accumulator_fn: MaterializeAccumulatorFn,
+        bm: &BaselineMetrics,
     ) -> Result<Option<RecordBatch>> {
         let output_schema = Arc::clone(&self.output_schema);
         let batch_size = self.batch_size;
@@ -253,7 +255,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 }
             };
 
-        let batch = output.next_batch(batch_size);
+        let batch = output.next_batch(batch_size, bm);
         if output.is_exhausted() {
             self.state = AggregateHashTableState::Done;
         } else {
@@ -431,14 +433,26 @@ pub(super) enum AggregateHashTableState {
 pub(super) struct MaterializedAggregateOutput {
     batch: RecordBatch,
     offset: usize,
+    /// Deduplicates buffer bytes across the slices sliced from `batch`, since
+    /// they share the same underlying buffers and must only be counted once
+    /// in `output_bytes`.
+    record_batch_metrics: RecordBatchMemoryMetrics,
 }
 
 impl MaterializedAggregateOutput {
     pub(super) fn new(batch: RecordBatch) -> Self {
-        Self { batch, offset: 0 }
+        Self {
+            batch,
+            offset: 0,
+            record_batch_metrics: RecordBatchMemoryMetrics::new(),
+        }
     }
 
-    pub(super) fn next_batch(&mut self, batch_size: usize) -> Option<RecordBatch> {
+    pub(super) fn next_batch(
+        &mut self,
+        batch_size: usize,
+        bm: &BaselineMetrics,
+    ) -> Option<RecordBatch> {
         debug_assert!(batch_size > 0);
         if self.is_exhausted() {
             return None;
@@ -447,6 +461,7 @@ impl MaterializedAggregateOutput {
         let length = batch_size.min(self.batch.num_rows() - self.offset);
         let batch = self.batch.slice(self.offset, length);
         self.offset += length;
+        self.record_batch_metrics.record_output(&batch, bm);
         Some(batch)
     }
 
@@ -633,11 +648,22 @@ mod tests {
             vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]))],
         )?;
         let mut output = MaterializedAggregateOutput::new(batch);
+        let metrics_set = crate::metrics::ExecutionPlanMetricsSet::new();
+        let bm = BaselineMetrics::new(&metrics_set, 0);
 
-        assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![1, 2]);
-        assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![3, 4]);
-        assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![5]);
-        assert!(output.next_batch(2).is_none());
+        assert_eq!(
+            int32_values(&output.next_batch(2, &bm).unwrap(), 0),
+            vec![1, 2]
+        );
+        assert_eq!(
+            int32_values(&output.next_batch(2, &bm).unwrap(), 0),
+            vec![3, 4]
+        );
+        assert_eq!(
+            int32_values(&output.next_batch(2, &bm).unwrap(), 0),
+            vec![5]
+        );
+        assert!(output.next_batch(2, &bm).is_none());
         assert!(output.is_exhausted());
 
         Ok(())
