@@ -871,6 +871,18 @@ impl HashJoinExec {
             return false;
         }
 
+        // A null-aware anti join emits a build-side NULL only when the probe
+        // is truly empty. The pushed filter can empty the probe by pruning
+        // every row, which would surface that NULL wrongly. A NOT NULL build
+        // key cannot produce such a NULL, so the filter stays there.
+        if self.null_aware
+            && self.on.iter().any(|(build_key, _)| {
+                build_key.nullable(&self.left.schema()).unwrap_or(true)
+            })
+        {
+            return false;
+        }
+
         // `preserve_file_partitions` can report Hash partitioning for Hive-style
         // file groups, but those partitions are not actually hash-distributed.
         // Partitioned dynamic filters rely on hash routing, so disable them in
@@ -6754,6 +6766,79 @@ mod tests {
         )?;
 
         assert!(!join.allow_join_dynamic_filter_pushdown(session_config.options()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_dynamic_filter_pushdown_rejects_null_aware_nullable_build_key() -> Result<()>
+    {
+        let left = build_table_two_cols(
+            ("a1", &vec![Some(1), None]),
+            ("b1", &vec![Some(1), Some(2)]),
+        );
+        let right = build_table_two_cols(
+            ("a2", &vec![Some(2), Some(3)]),
+            ("b2", &vec![Some(1), Some(2)]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("a2", &right.schema())?) as _,
+        )];
+
+        let mut session_config = SessionConfig::default();
+        session_config
+            .options_mut()
+            .optimizer
+            .enable_join_dynamic_filter_pushdown = true;
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        assert!(!join.allow_join_dynamic_filter_pushdown(session_config.options()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_dynamic_filter_pushdown_allows_null_aware_non_null_build_key() -> Result<()> {
+        // A NOT NULL build key cannot surface a build-side NULL, so the
+        // pushdown must stay enabled.
+        let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![1]));
+        let right = build_table(("a2", &vec![2]), ("b2", &vec![2]), ("c2", &vec![2]));
+        let on = vec![(
+            Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("a2", &right.schema())?) as _,
+        )];
+
+        let mut session_config = SessionConfig::default();
+        session_config
+            .options_mut()
+            .optimizer
+            .enable_join_dynamic_filter_pushdown = true;
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        assert!(join.allow_join_dynamic_filter_pushdown(session_config.options()));
 
         Ok(())
     }
