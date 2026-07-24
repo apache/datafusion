@@ -23,6 +23,7 @@ use std::sync::Arc;
 use crate::fuzz_cases::aggregate_fuzz::assert_spill_count_metric;
 use crate::fuzz_cases::once_exec::OnceExec;
 use arrow::array::UInt64Array;
+use arrow::row::{RowConverter, SortField};
 use arrow::{array::StringArray, compute::SortOptions, record_batch::RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::common::Result;
@@ -45,8 +46,19 @@ use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::metrics::MetricValue;
+use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use futures::StreamExt;
+
+use arrow::array::Int32Array;
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_execution::memory_pool::{
+    MemoryPool, TrackConsumersPool, UnboundedMemoryPool,
+};
+use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
+use datafusion_physical_plan::spill::SpillManager;
+use std::num::NonZeroUsize;
 
 #[tokio::test]
 async fn test_sort_with_limited_memory() -> Result<()> {
@@ -285,6 +297,220 @@ async fn test_sort_with_limited_memory_and_oversized_record_batch() -> Result<()
     assert!(
         output_batches >= number_of_record_batches + 2,
         "output_batches {output_batches} should be greater than number_of_record_batches ({number_of_record_batches}) + 2"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_sort_preserving_merge_peak_memory_with_spilled_input_round_robin()
+-> Result<()> {
+    run_sort_preserving_merge_peak_memory_with_spilled_input(true, false).await
+}
+
+#[tokio::test]
+async fn test_sort_preserving_merge_peak_memory_with_spilled_input_no_round_robin()
+-> Result<()> {
+    run_sort_preserving_merge_peak_memory_with_spilled_input(false, false).await
+}
+
+#[tokio::test]
+async fn test_sort_preserving_merge_peak_memory_with_spilled_input_round_robin_multi_column()
+-> Result<()> {
+    run_sort_preserving_merge_peak_memory_with_spilled_input(true, true).await
+}
+
+#[tokio::test]
+async fn test_sort_preserving_merge_peak_memory_with_spilled_input_no_round_robin_multi_column()
+-> Result<()> {
+    run_sort_preserving_merge_peak_memory_with_spilled_input(false, true).await
+}
+
+/// Intended to measure the maximum number of record batches held in memory by
+/// the SortPreservingMergeStream in a convoluted way by measuring the peak
+/// memory reservation. Relevant for merging spilled streams, where the produced
+/// record batches suffer from the following issue:
+/// https://github.com/apache/arrow-rs/issues/6363
+///
+/// After an IPC roundtrip, all columns in a [`RecordBatch`] share a single
+/// parent buffer. It causes the memory reservation to be inflated, but the
+/// bigger issue is the increase in the peak allocated memory caused by
+/// prev_cursors in SortPreservingMergeExec. The increase is caused by the fact
+/// that the FieldCursor inside prev_cursors holds a reference for the entire
+/// Buffer allocated for the input record batch, preventing it from being
+/// dropped and thus increasing the number of concomitent input record batches
+/// living during the merging phase
+async fn run_sort_preserving_merge_peak_memory_with_spilled_input(
+    round_robin: bool,
+    multi_column_sort: bool,
+) -> Result<()> {
+    let num_batches = 10usize;
+    let num_rows_per_batch = 100usize;
+    // payload is ~100x larger than the sort key (i32 = 4 bytes, string ≈ 400 bytes)
+    let large_string = "x".repeat(400);
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("sort_key", DataType::Int32, false),
+        Field::new("payload", DataType::Utf8, false),
+    ]));
+
+    // Unbounded env used only for spilling the input; the merge runs under its
+    // own pool below.
+    let spill_env = Arc::new(RuntimeEnvBuilder::new().build()?);
+
+    let mut partition_batches: Vec<Vec<RecordBatch>> = Vec::new();
+
+    for stream_idx in 0..2usize {
+        // Each stream covers a non-overlapping key range so both are individually
+        // sorted: stream 0 → [0, 1000), stream 1 → [1000, 2000).
+        let batches: Vec<RecordBatch> = (0..num_batches)
+            .map(|b| {
+                // Interleave streams: stream 0 → even slots [0,200,400,...],
+                // stream 1 → odd slots [100,300,500,...] so the merge
+                // alternates between them on every batch.
+                let base = ((b * 2 + stream_idx) * num_rows_per_batch) as i32;
+                let sort_col: Int32Array =
+                    (base..base + num_rows_per_batch as i32).collect();
+                let payload_col: StringArray =
+                    std::iter::repeat_n(large_string.as_str(), num_rows_per_batch)
+                        .map(Some)
+                        .collect();
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(sort_col), Arc::new(payload_col)],
+                )
+                .unwrap()
+            })
+            .collect();
+
+        // Spill to disk then read back: each RecordBatch is now IPC-backed,
+        // meaning all columns share a single parent buffer.  As a result,
+        // get_buffer_memory_size() on the sort_key column returns the full
+        // parent-buffer capacity (≈ batch size of both columns combined) rather
+        // than just the key data (num_rows * 4 bytes).
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let manager =
+            SpillManager::new(Arc::clone(&spill_env), metrics, Arc::clone(&schema));
+        let spill_file = manager
+            .spill_record_batch_and_finish(&batches, "stream")?
+            .expect("non-empty input should produce a spill file");
+
+        let mut stream = manager.read_spill_as_stream(spill_file, None)?;
+        let mut ipc_batches: Vec<RecordBatch> = Vec::new();
+        while let Some(batch) = stream.next().await {
+            ipc_batches.push(batch?);
+        }
+        partition_batches.push(ipc_batches);
+    }
+
+    let ipc_batch_size = get_record_batch_memory_size(&partition_batches[0][0]);
+
+    // Build a 2-partition plan from the IPC-recovered batches.
+    let input =
+        MemorySourceConfig::try_new_exec(&partition_batches, Arc::clone(&schema), None)?;
+
+    let sort_key_expr = PhysicalSortExpr {
+        expr: col("sort_key", &schema)?,
+        options: SortOptions {
+            descending: false,
+            nulls_first: true,
+        },
+    };
+    // `payload` has the same value in every row, so adding it as a secondary
+    // sort key doesn't change the resulting order — it only forces the merge
+    // onto the row-oriented (`RowValues`/`RowCursorStream`) comparison path
+    // used whenever more than one sort expression is present.
+    let mut sort_exprs = vec![sort_key_expr];
+    if multi_column_sort {
+        sort_exprs.push(PhysicalSortExpr {
+            expr: col("payload", &schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        });
+    }
+
+    // When sorting by more than one column, the merge switches to the
+    // row-oriented `RowValues`/`RowCursorStream` path
+    //
+    // `RowCursorStream` also tracks one *shared* (not per-partition)
+    // reservation sized to `converter.size()` (`stream.rs`:
+    // `self.reservation.try_resize(self.converter.size())`) — the
+    // `RowConverter`'s own fixed internal state, separate from the `Rows`
+    // it produces per batch.
+    let (row_batch_size, converter_size) = if multi_column_sort {
+        let sort_fields = sort_exprs
+            .iter()
+            .map(|s| {
+                let data_type = s.expr.data_type(&schema)?;
+                Ok(SortField::new_with_options(data_type, s.options))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let converter = RowConverter::new(sort_fields)?;
+        let cols = sort_exprs
+            .iter()
+            .map(|s| {
+                s.expr
+                    .evaluate(&partition_batches[0][0])?
+                    .into_array(partition_batches[0][0].num_rows())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let rows = converter.convert_columns(&cols)?;
+        (rows.size(), converter.size())
+    } else {
+        (0, 0)
+    };
+
+    let merge = Arc::new(
+        SortPreservingMergeExec::new(LexOrdering::new(sort_exprs).unwrap(), input)
+            .with_round_robin_repartition(round_robin),
+    );
+
+    // TrackConsumersPool wraps an unbounded pool so the merge never OOMs;
+    // we keep the typed Arc to call .metrics() after the run.
+    let tracking_pool = Arc::new(TrackConsumersPool::new(
+        UnboundedMemoryPool::default(),
+        NonZeroUsize::new(10).unwrap(),
+    ));
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::clone(&tracking_pool) as Arc<dyn MemoryPool>)
+        .build()?;
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(SessionConfig::new().with_batch_size(num_rows_per_batch))
+            .with_runtime(Arc::new(runtime)),
+    );
+
+    let mut output = merge.execute(0, task_ctx)?;
+    let mut total_rows = 0usize;
+    while let Some(batch) = output.next().await {
+        total_rows += batch?.num_rows();
+    }
+    assert_eq!(total_rows, 2 * num_batches * num_rows_per_batch);
+
+    let mut metrics = tracking_pool.metrics();
+    metrics.sort_by_key(|m| std::cmp::Reverse(m.peak));
+    let peak_bytes: usize = metrics.iter().map(|m| m.peak).sum();
+
+    // in the single column case, the cursor takes up an ipc_batch_size worth of memory due to the
+    // IPC roundtrip issue
+    // for the multi-column case, we've calculated row_batch_size above
+    let cursor_unit = if multi_column_sort {
+        row_batch_size
+    } else {
+        ipc_batch_size
+    };
+
+    // BatchBuilder needs to hold 3 Record batches simultaneously to merge two
+    // streams (because a stream can cross a record batch boundary)
+    // there is also one cursor needed per stream
+    let max_peak = 3 * ipc_batch_size + 2 * cursor_unit + converter_size;
+
+    assert!(
+        peak_bytes <= max_peak,
+        "peak reservation {peak_bytes} bytes exceeds max_peak ({max_peak} bytes); \
+         round_robin={round_robin}, multi_column_sort={multi_column_sort}",
     );
 
     Ok(())

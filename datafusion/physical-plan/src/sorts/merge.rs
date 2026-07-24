@@ -126,8 +126,10 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// Current reset count
     current_reset_epoch: usize,
 
-    /// Stores the previous value of each partitions for tracking the poll counts on the same value.
-    prev_cursors: Vec<Option<Cursor<C>>>,
+    /// Stores an owned copy of the last row of each partition's most
+    /// recently exhausted cursor, for tracking the poll counts on the same
+    /// value across a batch boundary.
+    prev_cursors: Option<Vec<Option<C::SingleRowValue>>>,
 
     /// Optional number of rows to fetch
     fetch: Option<usize>,
@@ -153,7 +155,11 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             streams,
             metrics,
             cursors: (0..stream_count).map(|_| None).collect(),
-            prev_cursors: (0..stream_count).map(|_| None).collect(),
+            prev_cursors: if enable_round_robin_tie_breaker {
+                Some((0..stream_count).map(|_| None).collect())
+            } else {
+                None
+            },
             round_robin_tie_breaker_mode: false,
             num_of_polled_with_same_value: vec![0; stream_count],
             current_reset_epoch: 0,
@@ -351,7 +357,13 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
         if let Some(c) = cursor.as_mut() {
             // Compare with the last row in the previous batch
-            let prev_cursor = &self.prev_cursors[partition_idx];
+            let prev_cursor = self
+                .prev_cursors
+                .as_ref()
+                .map(|v| &v[partition_idx])
+                .expect(
+                    "prev_cursor should be set when round robin tie breaker is enabled",
+                );
             if c.is_eq_to_prev_one(prev_cursor.as_ref()) {
                 self.num_of_polled_with_same_value[partition_idx] += 1;
             } else {
@@ -375,7 +387,10 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             let _ = cursor.advance();
             if cursor.is_finished() {
                 // Take the current cursor, leaving `None` in its place
-                self.prev_cursors[stream_idx] = self.cursors[stream_idx].take();
+                let taken = self.cursors[stream_idx].take();
+                if self.enable_round_robin_tie_breaker {
+                    self.prev_cursors.as_mut().expect("prev_cursor should be set when round robin tie breaker is enabled")[stream_idx] = taken.map(|c| c.last_value());
+                }
             }
             true
         } else {
@@ -614,6 +629,8 @@ mod tests {
     struct DummyValues;
 
     impl CursorValues for DummyValues {
+        type SingleRowValue = ();
+
         fn len(&self) -> usize {
             0
         }
@@ -627,6 +644,18 @@ mod tests {
         }
 
         fn compare(_l: &Self, _l_idx: usize, _r: &Self, _r_idx: usize) -> Ordering {
+            unreachable!("done-path test should not compare cursors")
+        }
+
+        fn get_value(&self, _idx: usize) -> Self::SingleRowValue {
+            unreachable!("done-path test should not compare cursors")
+        }
+
+        fn eq_to_single_row_value(
+            _l: &Self,
+            _l_idx: usize,
+            _r: &Self::SingleRowValue,
+        ) -> bool {
             unreachable!("done-path test should not compare cursors")
         }
     }
