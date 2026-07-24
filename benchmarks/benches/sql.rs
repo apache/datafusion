@@ -24,8 +24,8 @@
 use clap::Parser;
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_benchmarks::sql_benchmark_runner::{
-    BenchmarkFilter, SqlRunConfig, default_sql_benchmark_directory,
-    run_criterion_benchmarks_impl,
+    BenchmarkFilter, SqlRunConfig, default_criterion_replacements,
+    default_sql_benchmark_directory, run_criterion_benchmarks_impl,
 };
 use datafusion_benchmarks::util::CommonOpt;
 use datafusion_common::instant::Instant;
@@ -84,6 +84,8 @@ pub fn sql(c: &mut Criterion) {
             subgroup: args.subgroup,
             query: args.query,
         },
+        replacements: default_criterion_replacements(),
+        query_filename: None,
         persist_results: args.persist_results,
         validate_results: args.validate,
         output: None,
