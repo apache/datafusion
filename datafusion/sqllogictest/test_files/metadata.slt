@@ -520,3 +520,11 @@ NULL the id field
 
 statement ok
 drop table table_with_metadata;
+
+# Test that swapped cross-join preserves metadata on conflicting values on metadata.
+# The larger_table has 10 values, smaller_tables 1 value and the fields of each table
+# have conflicting metadata, same key different values See test:context.rs register_conflicting_metadata_tables
+query II
+select * from larger_table cross join smaller_table order by larger_table.a limit 1;
+----
+1 1
