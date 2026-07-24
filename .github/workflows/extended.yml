@@ -128,6 +128,63 @@ jobs:
           cargo test  --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --exclude datafusion-cli --workspace --lib --tests --features=force_hash_collisions,avro
           cargo clean
 
+  # Smoke test the benchmarks: verify that every benchmark target still
+  # compiles and that a representative subset runs end-to-end on small data
+  # (a single query each). This is NOT a performance measurement -- it only
+  # ensures the benchmarks keep working, since nothing else exercises them
+  # in CI. See https://github.com/apache/datafusion/issues/15511
+  #
+  # Only runs on merges to main / release branches (and manual dispatch), not
+  # on pull requests, to conserve CI resources.
+  benchmarks-smoke:
+    name: benchmarks smoke test (compile + minimal run)
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    steps:
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
+          submodules: true
+          fetch-depth: 1
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source $HOME/.cargo/env
+          rustup toolchain install
+      - name: Install Protobuf Compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+      - name: Check all benchmark targets compile
+        run: cargo check --profile ci -p datafusion-benchmarks --bins --benches
+      - name: Install tpchgen-cli
+        uses: taiki-e/install-action@50414676f9f5d50a65992c6dd2ed02641263226c  # v2.82.10
+        with:
+          tool: tpchgen-cli
+      - name: Generate TPC-H SF1 data
+        run: |
+          cd benchmarks
+          ./bench.sh data tpch
+      - name: Smoke run benchmarks
+        env:
+          # ci-optimized keeps debug assertions enabled while being fast
+          # enough to actually run queries
+          CARGO_COMMAND: cargo run --profile ci-optimized
+          SQL_CARGO_COMMAND: cargo bench --profile ci-optimized --bench sql
+          RESULTS_NAME: smoke
+        run: |
+          cd benchmarks
+          # benchmarks that share the TPC-H SF1 dataset, one query each
+          ./bench.sh run tpch 1
+          ./bench.sh run tpch_mem 1
+          ./bench.sh run sort_tpch 1
+          ./bench.sh run external_aggr 1
+          # generates its own data
+          ./bench.sh run cancellation
+
   sqllogictest-sqlite:
     name: "Run sqllogictests with the sqlite test suite"
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
