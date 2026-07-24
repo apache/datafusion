@@ -39,7 +39,7 @@ use crate::expr_rewriter::{
 };
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
-use crate::logical_plan::{DmlStatement, Statement};
+use crate::logical_plan::{DmlStatement, Statement, WriteOp};
 use crate::utils::{
     check_aggregate_and_window_nesting, enumerate_grouping_sets, exprlist_to_fields,
     find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
@@ -811,12 +811,20 @@ impl LogicalPlan {
                 op,
                 ..
             }) => {
-                self.assert_no_expressions(expr)?;
                 let input = self.only_input(inputs)?;
+                let op = match op {
+                    WriteOp::MergeInto(merge_op) => {
+                        WriteOp::MergeInto(Box::new(merge_op.with_new_exprs(expr)?))
+                    }
+                    other => {
+                        self.assert_no_expressions(expr)?;
+                        other.clone()
+                    }
+                };
                 Ok(LogicalPlan::Dml(DmlStatement::new(
                     table_name.clone(),
                     Arc::clone(target),
-                    op.clone(),
+                    op,
                     Arc::new(input),
                 )))
             }
