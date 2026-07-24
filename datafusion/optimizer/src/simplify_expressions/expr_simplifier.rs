@@ -646,6 +646,11 @@ impl ConstEvaluator {
             | Expr::Placeholder(_) => false,
             Expr::ScalarFunction(ScalarFunction { func, .. }) => {
                 Self::volatility_ok(func.signature().volatility)
+                    // Some UDFs (for example, regexp_like) opt out of
+                    // constant folding because planning-time evaluation can be
+                    // too expensive. See
+                    // https://github.com/apache/datafusion/issues/22185.
+                    && func.should_const_evaluate()
             }
             Expr::HigherOrderFunction(HigherOrderFunction { func, .. }) => {
                 Self::volatility_ok(func.signature().volatility)
@@ -678,6 +683,18 @@ impl ConstEvaluator {
                 }
                 true
             }
+            // Regex operators compile the right-hand pattern during
+            // evaluation. Avoid constant folding for literal patterns so
+            // planning does not pay that cost. See
+            // https://github.com/apache/datafusion/issues/22185.
+            Expr::BinaryExpr(BinaryExpr {
+                op:
+                    Operator::RegexMatch
+                    | Operator::RegexIMatch
+                    | Operator::RegexNotMatch
+                    | Operator::RegexNotIMatch,
+                ..
+            }) => false,
             Expr::Literal(_, _)
             | Expr::Alias(..)
             | Expr::Unnest(_)

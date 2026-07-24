@@ -136,6 +136,37 @@ fn concat_ws_literals() -> Result<()> {
     Ok(())
 }
 
+/// Regression test for https://github.com/apache/datafusion/issues/22185.
+///
+/// `regexp_like('aaaaa', 'a{5}{5}{5}{5}{5}{5}{5}{5}')` used to stall planning
+/// while `regex::Regex::new` walked the crate's `size_limit`. The optimizer
+/// should leave the expression intact and avoid that work during planning.
+#[test]
+fn regexp_like_pathological_pattern_does_not_stall_planning() {
+    let pattern = format!("a{}", "{5}".repeat(8));
+    let sql = format!("SELECT regexp_like('aaaaa', '{pattern}') AS m");
+
+    let t0 = datafusion_common::instant::Instant::now();
+    let plan = test_sql(&sql).expect("optimize should succeed");
+    let elapsed = t0.elapsed();
+
+    // 100ms is comfortably above the post-fix wall time (a few ms even on
+    // CI) and well below the >1s DoS reported on the issue.
+    assert!(
+        elapsed < std::time::Duration::from_millis(100),
+        "planning took {elapsed:?} (expected < 100ms)"
+    );
+
+    // The pattern must survive optimization, i.e. it was not const-folded to
+    // a literal boolean. Guards against a future change that re-enables
+    // regex constant folding for `regexp_like`.
+    let rendered = format!("{plan}");
+    assert!(
+        rendered.contains("a{5}"),
+        "pattern absent from optimized plan: {rendered}"
+    );
+}
+
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // parse the SQL
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
@@ -148,7 +179,8 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
         .with_udf(datetime::now(&config))
         .with_udf(datafusion_functions::core::arrow_cast())
         .with_udf(datafusion_functions::string::concat())
-        .with_udf(datafusion_functions::string::concat_ws());
+        .with_udf(datafusion_functions::string::concat_ws())
+        .with_udf(datafusion_functions::regex::regexp_like());
     let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
