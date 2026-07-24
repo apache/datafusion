@@ -1761,6 +1761,197 @@ impl ExecutionPlan for HashJoinExec {
             .ok()
             .map(|exec| Arc::new(exec) as _)
     }
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        let left = ctx.encode_child(self.left())?;
+        let right = ctx.encode_child(self.right())?;
+
+        let on = self
+            .on()
+            .iter()
+            .map(|(l, r)| -> Result<protobuf::JoinOn> {
+                Ok(protobuf::JoinOn {
+                    left: Some(ctx.encode_expr(l)?),
+                    right: Some(ctx.encode_expr(r)?),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let join_type = crate::joins::proto::join_type_to_proto(*self.join_type());
+        let null_equality =
+            crate::joins::proto::null_equality_to_proto(self.null_equality());
+        // `PartitionMode` is specific to `HashJoinExec`, so its conversion stays
+        // inline (by-name on purpose: the enums are numbered differently).
+        let partition_mode = match self.partition_mode() {
+            PartitionMode::CollectLeft => protobuf::PartitionMode::CollectLeft,
+            PartitionMode::Partitioned => protobuf::PartitionMode::Partitioned,
+            PartitionMode::Auto => protobuf::PartitionMode::Auto,
+        };
+
+        let filter = self
+            .filter()
+            .map(|f| crate::joins::proto::join_filter_to_proto(f, ctx))
+            .transpose()?;
+
+        let dynamic_filter = self
+            .dynamic_filter_expr()
+            .map(|df| {
+                let df_expr: Arc<dyn PhysicalExpr> =
+                    Arc::clone(df) as Arc<dyn PhysicalExpr>;
+                ctx.encode_expr(&df_expr)
+            })
+            .transpose()?;
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::HashJoin(Box::new(
+                    protobuf::HashJoinExecNode {
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
+                        on,
+                        join_type: join_type.into(),
+                        partition_mode: partition_mode.into(),
+                        null_equality: null_equality.into(),
+                        filter,
+                        // Proto3 `repeated` cannot distinguish `None` from
+                        // `Some(vec![])`. `Some(vec![])` (reachable via
+                        // `try_embed_projection` for e.g. `SELECT count(1) … JOIN …`)
+                        // changes the output schema, so it is encoded with the
+                        // single-element sentinel `[u32::MAX]` (never a valid column
+                        // index); every other state is sent as-is. See
+                        // `try_from_proto` for the matching decoder.
+                        projection: match self.projection.as_ref() {
+                            None => Vec::new(),
+                            Some(v) if v.is_empty() => vec![u32::MAX],
+                            Some(v) => v.iter().map(|x| *x as u32).collect(),
+                        },
+                        null_aware: self.null_aware,
+                        dynamic_filter,
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl HashJoinExec {
+    /// Reconstruct a [`HashJoinExec`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::internal_datafusion_err;
+        use datafusion_proto_models::protobuf;
+        use std::any::Any;
+
+        let hashjoin = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::HashJoin,
+            "HashJoinExec",
+        );
+
+        let left =
+            ctx.decode_required_child(hashjoin.left.as_deref(), "HashJoinExec", "left")?;
+        let right = ctx.decode_required_child(
+            hashjoin.right.as_deref(),
+            "HashJoinExec",
+            "right",
+        )?;
+        let left_schema = left.schema();
+        let right_schema = right.schema();
+
+        let on: Vec<(PhysicalExprRef, PhysicalExprRef)> = hashjoin
+            .on
+            .iter()
+            .map(|col| {
+                let l = ctx.decode_required_expr(
+                    col.left.as_ref(),
+                    left_schema.as_ref(),
+                    "HashJoinExec",
+                    "on.left",
+                )?;
+                let r = ctx.decode_required_expr(
+                    col.right.as_ref(),
+                    right_schema.as_ref(),
+                    "HashJoinExec",
+                    "on.right",
+                )?;
+                Ok((l, r))
+            })
+            .collect::<Result<_>>()?;
+
+        let join_type = crate::joins::proto::join_type_from_proto(
+            hashjoin.join_type,
+            "HashJoinExec",
+        )?;
+        let null_equality = crate::joins::proto::null_equality_from_proto(
+            hashjoin.null_equality,
+            "HashJoinExec",
+        )?;
+        // `PartitionMode` is specific to `HashJoinExec`, so its conversion stays
+        // inline (by-name on purpose: the enums are numbered differently).
+        let partition_mode = match protobuf::PartitionMode::try_from(
+            hashjoin.partition_mode,
+        )
+        .map_err(|_| {
+            internal_datafusion_err!(
+                "HashJoinExec: unknown PartitionMode {}",
+                hashjoin.partition_mode
+            )
+        })? {
+            protobuf::PartitionMode::CollectLeft => PartitionMode::CollectLeft,
+            protobuf::PartitionMode::Partitioned => PartitionMode::Partitioned,
+            protobuf::PartitionMode::Auto => PartitionMode::Auto,
+        };
+
+        let filter = hashjoin
+            .filter
+            .as_ref()
+            .map(|f| crate::joins::proto::join_filter_from_proto(f, ctx, "HashJoinExec"))
+            .transpose()?;
+
+        // Preserve the empty-projection sentinel written by `try_to_proto`.
+        let projection = match hashjoin.projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Vec::new()),
+            indices => Some(indices.iter().map(|i| *i as usize).collect()),
+        };
+
+        let mut hash_join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            filter,
+            &join_type,
+            projection,
+            partition_mode,
+            null_equality,
+            hashjoin.null_aware,
+        )?;
+
+        if let Some(dynamic_filter_proto) = &hashjoin.dynamic_filter {
+            // The dynamic filter is a `DynamicFilterPhysicalExpr` over the probe
+            // (right) side; decode against the right schema then downcast.
+            let dynamic_filter_expr =
+                ctx.decode_expr(dynamic_filter_proto, right_schema.as_ref())?;
+            let df = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
+                .downcast::<DynamicFilterPhysicalExpr>()
+                .map_err(|_| {
+                    internal_datafusion_err!(
+                        "HashJoinExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
+                    )
+                })?;
+            hash_join = hash_join.with_dynamic_filter_expr(df)?;
+        }
+
+        Ok(Arc::new(hash_join))
+    }
 }
 
 /// Determines which sides of a join are "preserved" for filter pushdown.

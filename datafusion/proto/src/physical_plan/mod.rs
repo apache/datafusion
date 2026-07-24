@@ -27,8 +27,7 @@ use datafusion_common::config::CsvOptions;
 use datafusion_common::display::StringifiedPlan;
 use datafusion_common::format::ExplainFormat;
 use datafusion_common::{
-    DataFusionError, JoinType, NullEquality, Result, internal_datafusion_err,
-    internal_err, not_impl_err,
+    DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
 };
 #[cfg(feature = "parquet")]
 use datafusion_datasource::file::FileSource;
@@ -60,7 +59,7 @@ use datafusion_functions_table::generate_series::{
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
 use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
-use datafusion_physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
+use datafusion_physical_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
 use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
 use datafusion_physical_plan::aggregates::{
@@ -80,9 +79,8 @@ use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::explain::ExplainExec;
 use datafusion_physical_plan::expressions::PhysicalSortExpr;
 use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion_physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
+    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, SortMergeJoinExec,
     SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
@@ -799,8 +797,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::Aggregate(hash_agg) => {
                 self.try_into_aggregate_physical_plan(hash_agg, ctx, proto_converter)
             }
-            PhysicalPlanType::HashJoin(hashjoin) => {
-                self.try_into_hash_join_physical_plan(hashjoin, ctx, proto_converter)
+            PhysicalPlanType::HashJoin(_) => {
+                HashJoinExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::SymmetricHashJoin(_) => {
                 SymmetricHashJoinExec::try_from_proto(self.node(), &decode_ctx)
@@ -903,14 +901,6 @@ pub trait PhysicalPlanNodeExt: Sized {
 
         if let Some(exec) = plan.downcast_ref::<AnalyzeExec>() {
             return protobuf::PhysicalPlanNode::try_from_analyze_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<HashJoinExec>() {
-            return protobuf::PhysicalPlanNode::try_from_hash_join_exec(
                 exec,
                 codec,
                 proto_converter,
@@ -1703,137 +1693,27 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(agg))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `HashJoinExec` deserializes itself via `HashJoinExec::try_from_proto`"
+    )]
     fn try_into_hash_join_physical_plan(
         &self,
         hashjoin: &protobuf::HashJoinExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let left: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&hashjoin.left, ctx, proto_converter)?;
-        let right: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&hashjoin.right, ctx, proto_converter)?;
-        let left_schema = left.schema();
-        let right_schema = right.schema();
-        let on: Vec<(PhysicalExprRef, PhysicalExprRef)> = hashjoin
-            .on
-            .iter()
-            .map(|col| {
-                let left = proto_converter.proto_to_physical_expr(
-                    &col.left.clone().unwrap(),
-                    left_schema.as_ref(),
-                    ctx,
-                )?;
-                let right = proto_converter.proto_to_physical_expr(
-                    &col.right.clone().unwrap(),
-                    right_schema.as_ref(),
-                    ctx,
-                )?;
-                Ok((left, right))
-            })
-            .collect::<Result<_>>()?;
-        let join_type =
-            protobuf::JoinType::try_from(hashjoin.join_type).map_err(|_| {
-                proto_error(format!(
-                    "Received a HashJoinNode message with unknown JoinType {}",
-                    hashjoin.join_type
-                ))
-            })?;
-        let null_equality = protobuf::NullEquality::try_from(hashjoin.null_equality)
-            .map_err(|_| {
-                proto_error(format!(
-                    "Received a HashJoinNode message with unknown NullEquality {}",
-                    hashjoin.null_equality
-                ))
-            })?;
-        let filter = hashjoin
-            .filter
-            .as_ref()
-            .map(|f| {
-                let schema = f
-                    .schema
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Missing JoinFilter schema"))?
-                    .try_into()?;
-
-                let expression = proto_converter.proto_to_physical_expr(
-                    f.expression.as_ref().ok_or_else(|| {
-                        proto_error("Unexpected empty filter expression")
-                    })?,
-                    &schema,
-                    ctx,
-                )?;
-                let column_indices = f.column_indices
-                    .iter()
-                    .map(|i| {
-                        let side = protobuf::JoinSide::try_from(i.side)
-                            .map_err(|_| proto_error(format!(
-                                "Received a HashJoinNode message with JoinSide in Filter {}",
-                                i.side))
-                            )?;
-
-                        Ok(ColumnIndex {
-                            index: i.index as usize,
-                            side: side.into(),
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                Ok(JoinFilter::new(expression, column_indices, Arc::new(schema)))
-            })
-            .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
-
-        let partition_mode = protobuf::PartitionMode::try_from(hashjoin.partition_mode)
-            .map_err(|_| {
-            proto_error(format!(
-                "Received a HashJoinNode message with unknown PartitionMode {}",
-                hashjoin.partition_mode
-            ))
-        })?;
-        let partition_mode = match partition_mode {
-            protobuf::PartitionMode::CollectLeft => PartitionMode::CollectLeft,
-            protobuf::PartitionMode::Partitioned => PartitionMode::Partitioned,
-            protobuf::PartitionMode::Auto => PartitionMode::Auto,
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::HashJoin(Box::new(
+                hashjoin.clone(),
+            ))),
         };
-        // Proto3 `repeated` cannot distinguish `None` from `Some(vec![])`. The latter
-        // is reachable via `try_embed_projection` for `SELECT count(1) … JOIN …` and
-        // changes the join's output schema, so the encoder reserves the single-element
-        // sentinel `[u32::MAX]` (never a valid column index) to mean "explicitly empty";
-        // every other state is sent as-is. See `try_from_hash_join_exec`.
-        let projection = match hashjoin.projection.as_slice() {
-            [] => None,
-            [u32::MAX] => Some(Vec::new()),
-            indices => Some(indices.iter().map(|i| *i as usize).collect()),
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
         };
-        let mut hash_join = HashJoinExec::try_new(
-            left,
-            right,
-            on,
-            filter,
-            &JoinType::from_proto(join_type),
-            projection,
-            partition_mode,
-            NullEquality::from_proto(null_equality),
-            hashjoin.null_aware,
-        )?;
-
-        if let Some(dynamic_filter_proto) = &hashjoin.dynamic_filter {
-            let dynamic_filter_expr = proto_converter.proto_to_physical_expr(
-                dynamic_filter_proto,
-                right_schema.as_ref(),
-                ctx,
-            )?;
-            let df = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
-                .downcast::<DynamicFilterPhysicalExpr>()
-                .map_err(|_| {
-                    internal_datafusion_err!(
-                        "HashJoinExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
-                    )
-                })?;
-            hash_join = hash_join.with_dynamic_filter_expr(df)?;
-        }
-
-        Ok(Arc::new(hash_join))
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        HashJoinExec::try_from_proto(&node, &decode_ctx)
     }
 
     #[deprecated(
@@ -2585,99 +2465,22 @@ pub trait PhysicalPlanNodeExt: Sized {
             .ok_or_else(|| internal_datafusion_err!("LocalLimitExec is not serializable"))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `HashJoinExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_hash_join_exec(
         exec: &HashJoinExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let left = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.left().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-        let right = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.right().to_owned(),
-            codec,
-            proto_converter,
-        )?;
-        let on: Vec<protobuf::JoinOn> = exec
-            .on()
-            .iter()
-            .map(|tuple| {
-                let l = proto_converter.physical_expr_to_proto(&tuple.0, codec)?;
-                let r = proto_converter.physical_expr_to_proto(&tuple.1, codec)?;
-                Ok::<_, DataFusionError>(protobuf::JoinOn {
-                    left: Some(l),
-                    right: Some(r),
-                })
-            })
-            .collect::<Result<_>>()?;
-        let join_type = protobuf::JoinType::from_proto(exec.join_type().to_owned());
-        let null_equality = protobuf::NullEquality::from_proto(exec.null_equality());
-        let filter = exec
-            .filter()
-            .as_ref()
-            .map(|f| {
-                let expression =
-                    proto_converter.physical_expr_to_proto(f.expression(), codec)?;
-                let column_indices = f
-                    .column_indices()
-                    .iter()
-                    .map(|i| {
-                        let side: protobuf::JoinSide = i.side.to_owned().into();
-                        protobuf::ColumnIndex {
-                            index: i.index as u32,
-                            side: side.into(),
-                        }
-                    })
-                    .collect();
-                let schema = f.schema().as_ref().try_into()?;
-                Ok(protobuf::JoinFilter {
-                    expression: Some(expression),
-                    column_indices,
-                    schema: Some(schema),
-                })
-            })
-            .map_or(Ok(None), |v: Result<protobuf::JoinFilter>| v.map(Some))?;
-
-        let partition_mode = match exec.partition_mode() {
-            PartitionMode::CollectLeft => protobuf::PartitionMode::CollectLeft,
-            PartitionMode::Partitioned => protobuf::PartitionMode::Partitioned,
-            PartitionMode::Auto => protobuf::PartitionMode::Auto,
         };
-
-        let dynamic_filter = exec
-            .dynamic_filter_expr()
-            .map(|df| {
-                let df_expr: Arc<dyn PhysicalExpr> =
-                    Arc::clone(df) as Arc<dyn PhysicalExpr>;
-                proto_converter.physical_expr_to_proto(&df_expr, codec)
-            })
-            .transpose()?;
-
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::HashJoin(Box::new(
-                protobuf::HashJoinExecNode {
-                    left: Some(Box::new(left)),
-                    right: Some(Box::new(right)),
-                    on,
-                    join_type: join_type.into(),
-                    partition_mode: partition_mode.into(),
-                    null_equality: null_equality.into(),
-                    filter,
-                    // Send `Some(vec![])` as `[u32::MAX]` (never a valid index) so the
-                    // wire format can distinguish it from `None` (which stays empty).
-                    // See `try_into_hash_join_physical_plan` for the matching decoder.
-                    projection: match exec.projection.as_ref() {
-                        None => Vec::new(),
-                        Some(v) if v.is_empty() => vec![u32::MAX],
-                        Some(v) => v.iter().map(|x| *x as u32).collect(),
-                    },
-                    null_aware: exec.null_aware,
-                    dynamic_filter,
-                },
-            ))),
-        })
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?
+            .ok_or_else(|| internal_datafusion_err!("HashJoinExec is not serializable"))
     }
 
     #[deprecated(
