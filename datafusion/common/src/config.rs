@@ -1133,6 +1133,13 @@ config_namespace! {
         /// the hint, two reads will still be performed.
         pub metadata_size_hint: Option<usize>, default = Some(512 * 1024)
 
+        /// (reading) If specified, the parquet reader will prefetch data for
+        /// subsequent row groups when the projected column chunks fit within
+        /// this many bytes. The required ranges for the current row group are
+        /// always read, even when they exceed this value. None disables data
+        /// prefetching.
+        pub prefetch_size: Option<usize>, default = None
+
         /// (reading) If true, filter expressions are be applied during the parquet decoding operation to
         /// reduce the number of rows decoded. This optimization is sometimes called "late materialization".
         pub pushdown_filters: bool, default = false

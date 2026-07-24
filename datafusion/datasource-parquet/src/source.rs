@@ -631,6 +631,7 @@ impl FileSource for ParquetSource {
             predicate: self.predicate.clone(),
             table_schema: self.table_schema.clone(),
             metadata_size_hint: self.metadata_size_hint,
+            prefetch_size: self.table_parquet_options.global.prefetch_size,
             metrics: self.metrics().clone(),
             parquet_file_reader_factory,
             pushdown_filters: self.pushdown_filters(),
