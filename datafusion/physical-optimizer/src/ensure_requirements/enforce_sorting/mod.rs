@@ -120,7 +120,6 @@ fn update_sort_ctx_children_data(
                 |(maintains, required_ordering, preserve_input_order, child)| {
                     let propagates_ordering = !preserve_input_order
                         && ((maintains && required_ordering.is_none()) || is_spm);
-                    // `connected_to_sort` only returns the correct answer with bottom-up traversal
                     propagates_ordering && child.data
                 },
             )
