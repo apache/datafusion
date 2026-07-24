@@ -364,7 +364,7 @@ mod tests {
             .push_batch_with_filter(oversized_batch, &oversized_filter)
             .unwrap_err();
         assert_eq!(
-            error.to_string(),
+            error.strip_backtrace(),
             "Arrow error: Invalid argument error: Filter predicate of length 6 is larger than target array of length 5"
         );
     }
