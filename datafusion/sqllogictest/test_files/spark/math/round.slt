@@ -70,6 +70,17 @@ SELECT round(123.456::double, 1::int);
 ----
 123.5
 
+# HALF_UP via BigDecimal shortest-string repr: naive binary float gives 1.25 / 1.00
+query R
+SELECT round(1.255::double, 2::int);
+----
+1.26
+
+query R
+SELECT round(1.005::double, 2::int);
+----
+1.01
+
 # round(float)
 query R
 SELECT round(arrow_cast(2.5, 'Float32'));
