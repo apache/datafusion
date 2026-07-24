@@ -1,0 +1,116 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+CREATE TABLE kv (g INT, k VARCHAR, v INT, ts INT) AS VALUES
+  (1, 'a', 1, 10),
+  (1, 'b', 2, 20),
+  (2, 'c', 3, 30),
+  (2, 'a', 4, 40);
+
+# Basic grouped map_agg
+query I?
+SELECT g, map_agg(k, v) FROM kv GROUP BY g ORDER BY g;
+----
+1 {a: 1, b: 2}
+2 {c: 3, a: 4}
+
+# Duplicate key within a group: first value wins. ORDER BY decides which row is
+# first, hence which value survives.
+statement ok
+CREATE TABLE dup (k VARCHAR, v INT, ts INT) AS VALUES
+  ('a', 1, 10),
+  ('a', 2, 20);
+
+# ORDER BY ts ASC -> v=1 (ts=10) is first -> wins
+query ?
+SELECT map_agg(k, v ORDER BY ts ASC) FROM dup;
+----
+{a: 1}
+
+# ORDER BY ts DESC -> v=2 (ts=20) is first -> wins
+query ?
+SELECT map_agg(k, v ORDER BY ts DESC) FROM dup;
+----
+{a: 2}
+
+# Grouped duplicate keys with ORDER BY: each group de-duplicates its map, so the
+# partial ordering state must stay aligned with the de-duplicated map across the
+# partial -> final merge. ASC keeps the lowest-ts value per key.
+statement ok
+CREATE TABLE dup_grouped (g INT, k VARCHAR, v INT, ts INT) AS VALUES
+  (1, 'a', 1, 10),
+  (1, 'a', 2, 20),
+  (1, 'b', 3, 30),
+  (2, 'c', 4, 40),
+  (2, 'c', 5, 50);
+
+query I?
+SELECT g, map_agg(k, v ORDER BY ts ASC) FROM dup_grouped GROUP BY g ORDER BY g;
+----
+1 {a: 1, b: 3}
+2 {c: 4}
+
+# Pair with a NULL key is skipped
+statement ok
+CREATE TABLE nullkey (k VARCHAR, v INT) AS VALUES
+  ('a', 1),
+  (NULL, 2),
+  ('c', 3);
+
+query ?
+SELECT map_agg(k, v) FROM nullkey;
+----
+{a: 1, c: 3}
+
+# Empty input: a global aggregate over zero rows returns a single NULL map.
+query ?
+SELECT map_agg(k, v) FROM nullkey WHERE false;
+----
+NULL
+
+# Window usage: a cumulative frame calls evaluate() once per row, so the map
+# grows as the frame expands. Guards against optimizations that consume the
+# accumulator state between evaluate() calls.
+statement ok
+CREATE TABLE win (k VARCHAR, v INT, ts INT) AS VALUES
+  ('a', 1, 10),
+  ('b', 2, 20),
+  ('c', 3, 30);
+
+query ?
+SELECT map_agg(k, v) OVER (ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+FROM win;
+----
+{a: 1}
+{a: 1, b: 2}
+{a: 1, b: 2, c: 3}
+
+statement ok
+DROP TABLE win;
+
+statement ok
+DROP TABLE kv;
+
+statement ok
+DROP TABLE dup;
+
+statement ok
+DROP TABLE dup_grouped;
+
+statement ok
+DROP TABLE nullkey;
