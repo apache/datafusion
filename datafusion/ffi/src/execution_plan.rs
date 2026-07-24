@@ -50,6 +50,10 @@ pub struct FFI_ExecutionPlan {
     /// Return a vector of children plans
     pub children: unsafe extern "C" fn(plan: &Self) -> SVec<FFI_ExecutionPlan>,
 
+    /// Return whether each child input's ordering must be preserved.
+    pub requires_input_order_preservation:
+        unsafe extern "C" fn(plan: &Self) -> SVec<bool>,
+
     pub with_new_children:
         unsafe extern "C" fn(plan: &Self, children: SVec<Self>) -> FFI_Result<Self>,
 
@@ -135,6 +139,15 @@ unsafe extern "C" fn children_fn_wrapper(
         .children()
         .into_iter()
         .map(|child| FFI_ExecutionPlan::new(Arc::clone(child), runtime.clone()))
+        .collect()
+}
+
+unsafe extern "C" fn requires_input_order_preservation_fn_wrapper(
+    plan: &FFI_ExecutionPlan,
+) -> SVec<bool> {
+    plan.inner()
+        .requires_input_order_preservation()
+        .into_iter()
         .collect()
 }
 
@@ -306,6 +319,8 @@ impl FFI_ExecutionPlan {
         Self {
             properties: properties_fn_wrapper,
             children: children_fn_wrapper,
+            requires_input_order_preservation:
+                requires_input_order_preservation_fn_wrapper,
             with_new_children: with_new_children_fn_wrapper,
             name: name_fn_wrapper,
             execute: execute_fn_wrapper,
@@ -416,6 +431,12 @@ impl ExecutionPlan for ForeignExecutionPlan {
         self.children.iter().collect()
     }
 
+    fn requires_input_order_preservation(&self) -> Vec<bool> {
+        unsafe { (self.plan.requires_input_order_preservation)(&self.plan) }
+            .into_iter()
+            .collect()
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -485,6 +506,7 @@ pub mod tests {
         children: Vec<Arc<dyn ExecutionPlan>>,
         metrics: Option<MetricsSet>,
         statistics: Option<Statistics>,
+        requires_input_order_preservation: bool,
     }
 
     impl EmptyExec {
@@ -499,7 +521,16 @@ pub mod tests {
                 children: Vec::default(),
                 metrics: None,
                 statistics: None,
+                requires_input_order_preservation: false,
             }
+        }
+
+        pub fn with_input_order_preservation(
+            mut self,
+            requires_input_order_preservation: bool,
+        ) -> Self {
+            self.requires_input_order_preservation = requires_input_order_preservation;
+            self
         }
 
         pub fn with_metrics(mut self, metrics: MetricsSet) -> Self {
@@ -545,7 +576,12 @@ pub mod tests {
                 children,
                 metrics: self.metrics.clone(),
                 statistics: self.statistics.clone(),
+                requires_input_order_preservation: self.requires_input_order_preservation,
             }))
+        }
+
+        fn requires_input_order_preservation(&self) -> Vec<bool> {
+            vec![self.requires_input_order_preservation; self.children.len()]
         }
 
         fn execute(
@@ -596,6 +632,25 @@ pub mod tests {
             buf.trim(),
             "FFI_ExecutionPlan: empty-exec, number_of_children=0"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_execution_plan_input_order_preservation_round_trip() -> Result<()> {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("a", arrow::datatypes::DataType::Float32, false),
+        ]));
+        let child = Arc::new(EmptyExec::new(Arc::clone(&schema))) as _;
+        let original_plan =
+            Arc::new(EmptyExec::new(schema).with_input_order_preservation(true))
+                .with_new_children(vec![child])?;
+
+        let mut local_plan = FFI_ExecutionPlan::new(original_plan, None);
+        local_plan.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_plan: Arc<dyn ExecutionPlan> = (&local_plan).try_into()?;
+
+        assert_eq!(foreign_plan.requires_input_order_preservation(), vec![true]);
 
         Ok(())
     }

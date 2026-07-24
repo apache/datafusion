@@ -299,6 +299,36 @@ fn test_projection_over_multi_partition_sort_limit() {
     ");
 }
 
+/// A limit consumes the global ordering established below a projection even
+/// when the projection removes the sort key from its output schema. The
+/// ordering must survive a second `EnsureRequirements` pass, which sees the
+/// `SortPreservingMergeExec` introduced by the first pass.
+#[test]
+fn test_limit_preserves_hidden_sort_across_distribution_passes() {
+    let source = Arc::new(MockMultiPartitionExec::new(16));
+    let sort_expr = sort_expr_on("a", 0, true, true);
+    let sort = Arc::new(SortExec::new(sort_expr, source));
+
+    // Hide the sort key so the projection itself has no output ordering.
+    let projection = Arc::new(
+        ProjectionExec::try_new(
+            vec![(Arc::new(Column::new("b", 1)) as _, "b".to_string())],
+            sort,
+        )
+        .unwrap(),
+    );
+    let limit: Arc<dyn ExecutionPlan> =
+        Arc::new(GlobalLimitExec::new(projection, 1, None));
+
+    assert_ensure_requirements_plan!(limit, @r"
+    GlobalLimitExec: skip=1, fetch=None
+      ProjectionExec: expr=[b@1 as b]
+        SortPreservingMergeExec: [a@0 DESC]
+          SortExec: expr=[a@0 DESC], preserve_partitioning=[true]
+            MockMultiPartitionExec
+    ");
+}
+
 // ========================================================================
 // Single partition tests (no unnecessary operators)
 // ========================================================================

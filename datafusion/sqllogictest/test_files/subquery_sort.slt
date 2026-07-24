@@ -191,3 +191,20 @@ b 5
 c 4
 d 1
 e 1
+
+# ORDER BY is semantically required by OFFSET, even when the subquery's
+# consumer does not preserve that ordering.
+query TI
+SELECT grp, COUNT(*) AS n
+FROM (
+  SELECT grp, sort_key
+  FROM (
+    VALUES ('physical_second', 2), ('sorted_first', 1)
+  ) AS t(grp, sort_key)
+  ORDER BY sort_key ASC NULLS LAST
+  OFFSET 1
+) q
+GROUP BY grp
+ORDER BY grp;
+----
+physical_second 1

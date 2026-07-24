@@ -194,14 +194,15 @@ impl PhysicalOptimizerRule for EnsureRequirements {
 
         // Phase 2: Combined distribution + sorting enforcement (single bottom-up pass)
         // For each node: distribution first, then sorting.
-        use super::enforce_distribution::{DistributionContext, ensure_distribution};
+        use super::enforce_distribution::{
+            DistributionContext, ensure_distribution_with_order_preservation,
+        };
         use super::enforce_sorting::{PlanWithCorrespondingSort, ensure_sorting};
 
         // Step 2a: Distribution enforcement (bottom-up)
         let dist_ctx = DistributionContext::new_default(plan);
-        let dist_ctx = dist_ctx
-            .transform_up(|ctx| ensure_distribution(ctx, config))
-            .data()?;
+        let dist_ctx =
+            ensure_distribution_with_order_preservation(dist_ctx, config, false)?;
 
         // Step 2b: Sorting enforcement (bottom-up) — runs on distribution-fixed plan
         let sort_ctx = PlanWithCorrespondingSort::new_default(dist_ctx.plan);

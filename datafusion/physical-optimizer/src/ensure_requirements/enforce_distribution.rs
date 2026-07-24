@@ -839,12 +839,21 @@ struct RemovedDistOps {
 
 fn remove_dist_changing_operators(
     mut distribution_context: DistributionContext,
+    preserve_output_order: bool,
 ) -> Result<RemovedDistOps> {
     let mut removed_fetch = None;
     while is_repartition(&distribution_context.plan)
         || is_coalesce_partitions(&distribution_context.plan)
         || is_sort_preserving_merge(&distribution_context.plan)
     {
+        // Keep an order-producing distribution operator when an ancestor
+        // semantically depends on its output sequence. Once such an operator
+        // is removed, an intervening projection may make its ordering
+        // impossible to reconstruct.
+        if preserve_output_order && distribution_context.plan.output_ordering().is_some()
+        {
+            break;
+        }
         // Preserve fetch from SPM or CoalescePartitions before removing (#14150).
         if let Some(fetch) = distribution_context.plan.fetch() {
             removed_fetch = Some(
@@ -936,6 +945,7 @@ struct DistributionChildState {
     context: DistributionContext,
     required_input_ordering: Option<OrderingRequirements>,
     maintains_input_order: bool,
+    preserve_output_order: bool,
     requirement: Distribution,
 }
 
@@ -1126,13 +1136,46 @@ fn enforce_distribution_relationships(
 /// This function is intended to be used in a bottom up traversal, as it
 /// can first repartition (or newly partition) at the datasources -- these
 /// source partitions may be later repartitioned with additional data exchange operators.
+pub fn ensure_distribution(
+    dist_context: DistributionContext,
+    config: &ConfigOptions,
+) -> Result<Transformed<DistributionContext>> {
+    ensure_distribution_inner(dist_context, config, false)
+}
+
+/// Enforces distribution bottom-up while carrying semantic order-preservation
+/// requirements top-down.
+pub(super) fn ensure_distribution_with_order_preservation(
+    mut dist_context: DistributionContext,
+    config: &ConfigOptions,
+    preserve_output_order: bool,
+) -> Result<DistributionContext> {
+    let own_requirements = dist_context.plan.requires_input_order_preservation();
+    let maintains_input_order = dist_context.plan.maintains_input_order();
+    dist_context.children = izip!(
+        dist_context.children,
+        own_requirements,
+        maintains_input_order
+    )
+    .map(|(child, own_requirement, maintains_input_order)| {
+        let preserve_child_order =
+            own_requirement || (preserve_output_order && maintains_input_order);
+        ensure_distribution_with_order_preservation(child, config, preserve_child_order)
+    })
+    .collect::<Result<Vec<_>>>()?;
+
+    ensure_distribution_inner(dist_context, config, preserve_output_order)
+        .map(|transformed| transformed.data)
+}
+
 #[expect(
     deprecated,
     reason = "HashPartitioned is accepted during the KeyPartitioned migration"
 )]
-pub fn ensure_distribution(
+fn ensure_distribution_inner(
     dist_context: DistributionContext,
     config: &ConfigOptions,
+    preserve_output_order: bool,
 ) -> Result<Transformed<DistributionContext>> {
     let dist_context = update_children(dist_context)?;
 
@@ -1171,7 +1214,7 @@ pub fn ensure_distribution(
                 children,
             },
         removed_fetch,
-    } = remove_dist_changing_operators(dist_context)?;
+    } = remove_dist_changing_operators(dist_context, preserve_output_order)?;
 
     if let Some(exec) = plan.downcast_ref::<WindowAggExec>() {
         if let Some(updated_window) = get_best_fitting_window(
@@ -1238,6 +1281,7 @@ pub fn ensure_distribution(
         children.into_iter(),
         plan.required_input_ordering(),
         plan.maintains_input_order(),
+        plan.requires_input_order_preservation(),
         repartition_status_flags.into_iter()
     )
     .map(
@@ -1246,6 +1290,7 @@ pub fn ensure_distribution(
             mut child,
             required_input_ordering,
             maintains,
+            own_order_preservation,
             RepartitionRequirementStatus {
                 requirement,
                 roundrobin_beneficial,
@@ -1253,6 +1298,8 @@ pub fn ensure_distribution(
                 hash_necessary,
             },
         )| {
+            let preserve_child_order =
+                own_order_preservation || (preserve_output_order && maintains);
             // Allow subset satisfaction when:
             // 1. Current partition count >= threshold
             // 2. Not a partitioned join since must use exact hash matching for joins
@@ -1391,6 +1438,7 @@ pub fn ensure_distribution(
                 context: child,
                 required_input_ordering,
                 maintains_input_order: maintains,
+                preserve_output_order: preserve_child_order,
                 requirement,
             })
         },
@@ -1414,6 +1462,7 @@ pub fn ensure_distribution(
                  mut context,
                  required_input_ordering,
                  maintains_input_order,
+                 preserve_output_order,
                  requirement,
              }| {
                 let streaming_benefit = if context.data {
@@ -1436,6 +1485,7 @@ pub fn ensure_distribution(
                     if (!ordering_satisfied || !order_preserving_variants_desirable)
                         && !streaming_benefit
                         && context.data
+                        && !preserve_output_order
                     {
                         context = replace_order_preserving_variants(context)?;
                         // If ordering requirements were satisfied before repartitioning,
@@ -1464,14 +1514,18 @@ pub fn ensure_distribution(
                             // ordering is pointless. However, if it does maintain
                             // input order, we keep order-preserving variants so
                             // ordering can flow through to ancestors that need it.
-                            if !maintains_input_order && !streaming_benefit {
+                            if !maintains_input_order
+                                && !streaming_benefit
+                                && !preserve_output_order
+                            {
                                 context = replace_order_preserving_variants(context)?;
                             }
                         }
                         Distribution::UnspecifiedDistribution => {
                             // Since ordering is lost, trying to preserve ordering is pointless
-                            if !maintains_input_order
-                                || plan.is::<OutputRequirementExec>()
+                            if (!maintains_input_order
+                                || plan.is::<OutputRequirementExec>())
+                                && !preserve_output_order
                             {
                                 context = replace_order_preserving_variants(context)?;
                             }

@@ -2246,6 +2246,29 @@ async fn test_do_not_pushdown_through_limit() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_limit_preserves_input_order_through_projection() -> Result<()> {
+    let schema = create_test_schema()?;
+    let source = memory_exec(&schema);
+    let input = sort_exec([sort_expr("non_nullable_col", &schema)].into(), source);
+    let projection = projection_exec(
+        vec![(col("nullable_col", &schema)?, "nullable_col".to_string())],
+        input,
+    )?;
+    let physical_plan = Arc::new(GlobalLimitExec::new(projection, 1, None)) as _;
+
+    let test = EnforceSortingTest::new(physical_plan).with_repartition_sorts(true);
+    assert_snapshot!(test.run(), @r"
+    Input / Optimized Plan:
+    GlobalLimitExec: skip=1, fetch=None
+      ProjectionExec: expr=[nullable_col@0 as nullable_col]
+        SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]
+          DataSourceExec: partitions=1, partition_sizes=[0]
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_remove_unnecessary_spm1() -> Result<()> {
     let schema = create_test_schema()?;
     let source = memory_exec(&schema);

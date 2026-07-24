@@ -29,6 +29,19 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    fn test_ffi_execution_plan_input_order_preservation_cross_library()
+    -> Result<(), DataFusionError> {
+        let module = get_module()?;
+        let plan = (module.create_order_sensitive_exec)();
+        let plan: Arc<dyn ExecutionPlan> = (&plan).try_into()?;
+
+        assert!(plan.is::<ForeignExecutionPlan>());
+        assert_eq!(plan.requires_input_order_preservation(), vec![true]);
+
+        Ok(())
+    }
+
+    #[test]
     #[expect(deprecated)]
     fn test_ffi_execution_plan_partition_statistics_cross_library()
     -> Result<(), DataFusionError> {
