@@ -69,61 +69,123 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
             })?
             .data;
 
-        let LogicalPlan::Filter(filter) = plan else {
-            return Ok(Transformed::no(plan));
-        };
+        match plan {
+            LogicalPlan::Filter(filter) => {
+                if !has_subquery(&filter.predicate) {
+                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                }
 
-        if !has_subquery(&filter.predicate) {
-            return Ok(Transformed::no(LogicalPlan::Filter(filter)));
-        }
+                let (with_subqueries, mut other_exprs): (Vec<_>, Vec<_>) =
+                    split_conjunction_owned(filter.predicate)
+                        .into_iter()
+                        .partition(has_subquery);
 
-        let (with_subqueries, mut other_exprs): (Vec<_>, Vec<_>) =
-            split_conjunction_owned(filter.predicate)
-                .into_iter()
-                .partition(has_subquery);
+                assert_or_internal_err!(
+                    !with_subqueries.is_empty(),
+                    "can not find expected subqueries in DecorrelatePredicateSubquery"
+                );
 
-        assert_or_internal_err!(
-            !with_subqueries.is_empty(),
-            "can not find expected subqueries in DecorrelatePredicateSubquery"
-        );
-
-        // iterate through all exists clauses in predicate, turning each into a join
-        let mut cur_input = Arc::unwrap_or_clone(filter.input);
-        let original_schema = cur_input.schema().columns();
-        for subquery_expr in with_subqueries {
-            match extract_subquery_info(subquery_expr) {
-                // The subquery expression is at the top level of the filter
-                SubqueryPredicate::Top(subquery) => {
-                    match build_join_top(&subquery, &cur_input, config.alias_generator())?
-                    {
-                        Some(plan) => cur_input = plan,
-                        // If the subquery can not be converted to a Join, reconstruct the subquery expression and add it to the Filter
-                        None => other_exprs.push(subquery.expr()),
+                // iterate through all exists clauses in predicate, turning each into a join
+                let mut cur_input = Arc::unwrap_or_clone(filter.input);
+                let original_schema = cur_input.schema().columns();
+                for subquery_expr in with_subqueries {
+                    match extract_subquery_info(subquery_expr) {
+                        // The subquery expression is at the top level of the filter
+                        SubqueryPredicate::Top(subquery) => {
+                            match build_join_top(
+                                &subquery,
+                                &cur_input,
+                                config.alias_generator(),
+                            )? {
+                                Some(plan) => cur_input = plan,
+                                // If the subquery can not be converted to a Join, reconstruct the subquery expression and add it to the Filter
+                                None => other_exprs.push(subquery.expr()),
+                            }
+                        }
+                        // The subquery expression is embedded within another expression
+                        SubqueryPredicate::Embedded(expr) => {
+                            let (plan, expr_without_subqueries) =
+                                rewrite_inner_subqueries(cur_input, expr, config)?;
+                            cur_input = plan;
+                            other_exprs.push(expr_without_subqueries);
+                        }
                     }
                 }
-                // The subquery expression is embedded within another expression
-                SubqueryPredicate::Embedded(expr) => {
-                    let (plan, expr_without_subqueries) =
-                        rewrite_inner_subqueries(cur_input, expr, config)?;
-                    cur_input = plan;
-                    other_exprs.push(expr_without_subqueries);
+
+                let expr = conjunction(other_exprs);
+                if let Some(expr) = expr {
+                    let new_filter = Filter::try_new(expr, Arc::new(cur_input))?;
+                    cur_input = LogicalPlan::Filter(new_filter);
                 }
+
+                // Re-project to the original schema if a join introduced extra
+                // columns. Carried over from the upstream Filter refactor — keeps
+                // the post-rewrite Filter plan's schema width stable for callers.
+                if cur_input.schema().fields().len() != original_schema.len() {
+                    cur_input = LogicalPlanBuilder::from(cur_input)
+                        .project(original_schema.into_iter().map(Expr::from))?
+                        .build()?;
+                }
+
+                Ok(Transformed::yes(cur_input))
             }
-        }
+            LogicalPlan::Projection(projection) => {
+                // Optimization: skip if no predicate subqueries in any projection expression
+                if !projection.expr.iter().any(has_subquery) {
+                    return Ok(Transformed::no(LogicalPlan::Projection(projection)));
+                }
 
-        let expr = conjunction(other_exprs);
-        if let Some(expr) = expr {
-            let new_filter = Filter::try_new(expr, Arc::new(cur_input))?;
-            cur_input = LogicalPlan::Filter(new_filter);
-        }
+                // Clone projection.expr up front so we can iterate without
+                // holding a borrow on `projection`, which lets us move it
+                // directly on bail-out (mirrors ScalarSubqueryToJoin).
+                let projection_exprs = projection.expr.clone();
+                let mut cur_input = projection.input.as_ref().clone();
+                let mut new_exprs = Vec::with_capacity(projection_exprs.len());
 
-        if cur_input.schema().fields().len() != original_schema.len() {
-            cur_input = LogicalPlanBuilder::from(cur_input)
-                .project(original_schema.into_iter().map(Expr::from))?
-                .build()?;
-        }
+                // Rewrite each expression in turn. Check per-expression whether
+                // decorrelation succeeded, and bail out early on the first failure
+                // (same all-or-nothing semantics as ScalarSubqueryToJoin).
+                for expr in projection_exprs {
+                    if !has_subquery(&expr) {
+                        new_exprs.push(expr);
+                        continue;
+                    }
+                    let (plan, rewritten) =
+                        rewrite_inner_subqueries(cur_input, expr, config)?;
+                    if has_subquery(&rewritten) {
+                        // Decorrelation failed for this expression — bail out
+                        // for the whole projection.
+                        return Ok(Transformed::no(LogicalPlan::Projection(projection)));
+                    }
+                    cur_input = plan;
+                    new_exprs.push(rewritten);
+                }
 
-        Ok(Transformed::yes(cur_input))
+                // Preserve original column names via aliases where the rewrite
+                // changed them — keeps output column names stable for
+                // downstream consumers.
+                let proj_exprs: Vec<Expr> = projection
+                    .expr
+                    .iter()
+                    .zip(new_exprs)
+                    .map(|(old, new)| {
+                        let old_name = old.schema_name().to_string();
+                        let new_name = new.schema_name().to_string();
+                        if old_name != new_name {
+                            new.alias(old_name)
+                        } else {
+                            new
+                        }
+                    })
+                    .collect();
+
+                let new_plan = LogicalPlanBuilder::from(cur_input)
+                    .project(proj_exprs)?
+                    .build()?;
+                Ok(Transformed::yes(new_plan))
+            }
+            plan => Ok(Transformed::no(plan)),
+        }
     }
 
     fn name(&self) -> &str {
@@ -546,7 +608,9 @@ mod tests {
     use crate::assert_optimized_plan_eq_display_indent_snapshot;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::builder::table_source;
-    use datafusion_expr::{and, binary_expr, col, out_ref_col, table_scan};
+    use datafusion_expr::{
+        and, binary_expr, col, not_in_subquery, out_ref_col, table_scan, when,
+    };
 
     macro_rules! assert_optimized_plan_equal {
         (
@@ -2121,6 +2185,308 @@ mod tests {
               Projection: Int32(1), TEST_B.A [Int32(1):Int32, A:UInt32]
                 TableScan: TEST_B [A:UInt32, B:UInt32]
         "
+        )
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for InSubquery / Exists in Projection expressions
+    // -----------------------------------------------------------------------
+
+    /// IN subquery inside CASE WHEN in a projection expression
+    #[test]
+    fn in_subquery_in_case_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let sq = test_subquery_with_name("sq")?;
+
+        let case_expr =
+            when(in_subquery(col("c"), sq), lit("yes")).otherwise(lit("no"))?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), case_expr])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r#"
+        Projection: test.a, CASE WHEN __correlated_sq_1.mark THEN Utf8("yes") ELSE Utf8("no") END AS CASE WHEN IN THEN Utf8("yes") ELSE Utf8("no") END [a:UInt32, CASE WHEN IN THEN Utf8("yes") ELSE Utf8("no") END:Utf8]
+          LeftMark Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            Projection: __correlated_sq_1.c [c:UInt32]
+              SubqueryAlias: __correlated_sq_1 [c:UInt32]
+                Projection: sq.c [c:UInt32]
+                  TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+        "#
+        )
+    }
+
+    /// EXISTS subquery inside CASE WHEN in a projection expression
+    #[test]
+    fn exists_in_case_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(
+                    col("orders.o_custkey").eq(out_ref_col(DataType::UInt32, "test.a")),
+                )?
+                .project(vec![lit(1)])?
+                .build()?,
+        );
+
+        let case_expr =
+            when(exists(sq), lit("has_orders")).otherwise(lit("no_orders"))?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), case_expr])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r#"
+        Projection: test.a, CASE WHEN __correlated_sq_1.mark THEN Utf8("has_orders") ELSE Utf8("no_orders") END AS CASE WHEN EXISTS THEN Utf8("has_orders") ELSE Utf8("no_orders") END [a:UInt32, CASE WHEN EXISTS THEN Utf8("has_orders") ELSE Utf8("no_orders") END:Utf8]
+          LeftMark Join:  Filter: __correlated_sq_1.o_custkey = test.a [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            Projection: __correlated_sq_1.o_custkey [o_custkey:Int64]
+              SubqueryAlias: __correlated_sq_1 [Int32(1):Int32, o_custkey:Int64]
+                Projection: Int32(1), orders.o_custkey [Int32(1):Int32, o_custkey:Int64]
+                  TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+        "#
+        )
+    }
+
+    /// NOT IN subquery inside CASE WHEN in a projection expression
+    #[test]
+    fn not_in_subquery_in_case_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let sq = test_subquery_with_name("sq")?;
+
+        let case_expr = when(not_in_subquery(col("c"), sq), lit("excluded"))
+            .otherwise(lit("included"))?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), case_expr])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r#"
+        Projection: test.a, CASE WHEN NOT __correlated_sq_1.mark THEN Utf8("excluded") ELSE Utf8("included") END AS CASE WHEN NOT IN THEN Utf8("excluded") ELSE Utf8("included") END [a:UInt32, CASE WHEN NOT IN THEN Utf8("excluded") ELSE Utf8("included") END:Utf8]
+          LeftMark Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            Projection: __correlated_sq_1.c [c:UInt32]
+              SubqueryAlias: __correlated_sq_1 [c:UInt32]
+                Projection: sq.c [c:UInt32]
+                  TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+        "#
+        )
+    }
+
+    /// IN subquery as bare boolean in SELECT (no CASE wrapper)
+    #[test]
+    fn in_subquery_bare_bool_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let sq = test_subquery_with_name("sq")?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), in_subquery(col("c"), sq)])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, __correlated_sq_1.mark AS IN [a:UInt32, IN:Boolean]
+          LeftMark Join:  Filter: test.c = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            Projection: __correlated_sq_1.c [c:UInt32]
+              SubqueryAlias: __correlated_sq_1 [c:UInt32]
+                Projection: sq.c [c:UInt32]
+                  TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    /// Correlated IN subquery inside CASE WHEN in a projection expression
+    #[test]
+    fn correlated_in_subquery_in_case_projection() -> Result<()> {
+        let orders = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(
+                    col("orders.o_custkey")
+                        .eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
+                )?
+                .project(vec![col("orders.o_custkey")])?
+                .build()?,
+        );
+
+        let case_expr = when(
+            in_subquery(col("customer.c_custkey"), orders),
+            lit("active"),
+        )
+        .otherwise(lit("inactive"))?;
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .project(vec![col("customer.c_custkey"), case_expr])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r#"
+        Projection: customer.c_custkey, CASE WHEN __correlated_sq_1.mark THEN Utf8("active") ELSE Utf8("inactive") END AS CASE WHEN IN THEN Utf8("active") ELSE Utf8("inactive") END [c_custkey:Int64, CASE WHEN IN THEN Utf8("active") ELSE Utf8("inactive") END:Utf8]
+          LeftMark Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, mark:Boolean]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+            Projection: __correlated_sq_1.o_custkey [o_custkey:Int64]
+              SubqueryAlias: __correlated_sq_1 [o_custkey:Int64]
+                Projection: orders.o_custkey [o_custkey:Int64]
+                  TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+        "#
+        )
+    }
+
+    /// Multiple subqueries in one projection expression
+    #[test]
+    fn multiple_subqueries_in_one_projection_expr() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let sq1 = test_subquery_with_name("sq_1")?;
+        let sq2 = test_subquery_with_name("sq_2")?;
+
+        // CASE WHEN a IN (sq1) THEN 'a_match'
+        //      WHEN b IN (sq2) THEN 'b_match'
+        //      ELSE 'none' END
+        let case_expr = when(in_subquery(col("a"), sq1), lit("a_match"))
+            .when(in_subquery(col("b"), sq2), lit("b_match"))
+            .otherwise(lit("none"))?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), case_expr])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r#"
+        Projection: test.a, CASE WHEN __correlated_sq_1.mark THEN Utf8("a_match") WHEN __correlated_sq_2.mark THEN Utf8("b_match") ELSE Utf8("none") END AS CASE WHEN IN THEN Utf8("a_match") WHEN IN THEN Utf8("b_match") ELSE Utf8("none") END [a:UInt32, CASE WHEN IN THEN Utf8("a_match") WHEN IN THEN Utf8("b_match") ELSE Utf8("none") END:Utf8]
+          LeftMark Join:  Filter: test.b = __correlated_sq_2.c [a:UInt32, b:UInt32, c:UInt32, mark:Boolean, mark:Boolean]
+            LeftMark Join:  Filter: test.a = __correlated_sq_1.c [a:UInt32, b:UInt32, c:UInt32, mark:Boolean]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+              Projection: __correlated_sq_1.c [c:UInt32]
+                SubqueryAlias: __correlated_sq_1 [c:UInt32]
+                  Projection: sq_1.c [c:UInt32]
+                    TableScan: sq_1 [a:UInt32, b:UInt32, c:UInt32]
+            Projection: __correlated_sq_2.c [c:UInt32]
+              SubqueryAlias: __correlated_sq_2 [c:UInt32]
+                Projection: sq_2.c [c:UInt32]
+                  TableScan: sq_2 [a:UInt32, b:UInt32, c:UInt32]
+        "#
+        )
+    }
+
+    /// Projection with no subquery is not modified
+    #[test]
+    fn projection_without_subquery_unchanged() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, test.b [a:UInt32, b:UInt32]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    /// When a correlated IN subquery inside a projection cannot be decorrelated
+    /// (e.g. LIMIT in a correlated subquery), the plan is returned unchanged.
+    #[test]
+    fn projection_in_subquery_cannot_decorrelate_bails_out() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // Build a correlated subquery with LIMIT — LIMIT prevents decorrelation
+        // for IN subqueries (can_pull_up becomes false).
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+                .filter(out_ref_col(DataType::UInt32, "test.a").eq(col("sq.a")))?
+                .project(vec![col("sq.c")])?
+                .limit(0, Some(1))?
+                .build()?,
+        );
+
+        let case_expr =
+            when(in_subquery(col("c"), sq), lit("yes")).otherwise(lit("no"))?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), case_expr])?
+            .build()?;
+
+        // Decorrelation fails, plan should be returned unchanged
+        assert_optimized_plan_equal!(
+            plan,
+            @r#"
+        Projection: test.a, CASE WHEN test.c IN (<subquery>) THEN Utf8("yes") ELSE Utf8("no") END [a:UInt32, CASE WHEN IN THEN Utf8("yes") ELSE Utf8("no") END:Utf8]
+          Subquery: [c:UInt32]
+            Limit: skip=0, fetch=1 [c:UInt32]
+              Projection: sq.c [c:UInt32]
+                Filter: outer_ref(test.a) = sq.a [a:UInt32, b:UInt32, c:UInt32]
+                  TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "#
+        )
+    }
+
+    /// When a projection contains one decorrelatable subquery and one that
+    /// cannot be decorrelated, the whole projection should bail out and leave
+    /// both subqueries in place — neither should be partially rewritten.
+    #[test]
+    fn projection_mixed_decorrelatable_and_non_bails_out() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // Decorrelatable subquery: simple correlated IN with no LIMIT
+        let sq_ok = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq_ok")?)
+                .filter(out_ref_col(DataType::UInt32, "test.a").eq(col("sq_ok.a")))?
+                .project(vec![col("sq_ok.c")])?
+                .build()?,
+        );
+
+        // Non-decorrelatable subquery: LIMIT prevents decorrelation
+        let sq_bad = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq_bad")?)
+                .filter(out_ref_col(DataType::UInt32, "test.a").eq(col("sq_bad.a")))?
+                .project(vec![col("sq_bad.c")])?
+                .limit(0, Some(1))?
+                .build()?,
+        );
+
+        let case_ok =
+            when(in_subquery(col("c"), sq_ok), lit("ok")).otherwise(lit("not_ok"))?;
+        let case_bad =
+            when(in_subquery(col("c"), sq_bad), lit("bad")).otherwise(lit("not_bad"))?;
+
+        // case_ok is listed before case_bad so it would decorrelate first
+        // if we processed each expression independently. The per-expression
+        // bail-out must detect case_bad's failure and discard case_ok's
+        // rewrite too.
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), case_ok, case_bad])?
+            .build()?;
+
+        // Both subqueries remain — bail-out is all-or-nothing.
+        // The decorrelatable one is NOT rewritten because its sibling can't be.
+        assert_optimized_plan_equal!(
+            plan,
+            @r#"
+        Projection: test.a, CASE WHEN test.c IN (<subquery>) THEN Utf8("ok") ELSE Utf8("not_ok") END, CASE WHEN test.c IN (<subquery>) THEN Utf8("bad") ELSE Utf8("not_bad") END [a:UInt32, CASE WHEN IN THEN Utf8("ok") ELSE Utf8("not_ok") END:Utf8, CASE WHEN IN THEN Utf8("bad") ELSE Utf8("not_bad") END:Utf8]
+          Subquery: [c:UInt32]
+            Projection: sq_ok.c [c:UInt32]
+              Filter: outer_ref(test.a) = sq_ok.a [a:UInt32, b:UInt32, c:UInt32]
+                TableScan: sq_ok [a:UInt32, b:UInt32, c:UInt32]
+          Subquery: [c:UInt32]
+            Limit: skip=0, fetch=1 [c:UInt32]
+              Projection: sq_bad.c [c:UInt32]
+                Filter: outer_ref(test.a) = sq_bad.a [a:UInt32, b:UInt32, c:UInt32]
+                  TableScan: sq_bad [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "#
         )
     }
 }
