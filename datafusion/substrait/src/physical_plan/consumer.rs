@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -37,19 +38,55 @@ use async_recursion::async_recursion;
 use chrono::DateTime;
 use datafusion::datasource::memory::DataSourceExec;
 use object_store::ObjectMeta;
+use object_store::path::Path as ObjectStorePath;
 use substrait::proto::Type;
 use substrait::proto::read_rel::local_files::file_or_files::PathType;
 use substrait::proto::r#type::{Kind, Nullability};
 use substrait::proto::{
     Rel, expression::MaskExpression, read_rel::ReadType, rel::RelType,
 };
+use url::Url;
+
+/// Options controlling Substrait physical plan import.
+#[derive(Debug, Clone, Default)]
+pub struct PhysicalPlanConsumerOptions {
+    allowed_local_file_roots: Vec<PathBuf>,
+}
+
+impl PhysicalPlanConsumerOptions {
+    /// Create import options that deny access to local files.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Allow imported local file paths under `root`.
+    ///
+    /// The root and imported file path are canonicalized before comparison, so
+    /// relative paths and symlinks cannot escape the configured root.
+    pub fn with_allowed_local_file_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.allowed_local_file_roots.push(root.into());
+        self
+    }
+}
 
 /// Convert Substrait Rel to DataFusion ExecutionPlan
 #[async_recursion]
 pub async fn from_substrait_rel(
+    ctx: &SessionContext,
+    rel: &Rel,
+    extensions: &HashMap<u32, &String>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let options = PhysicalPlanConsumerOptions::default();
+    from_substrait_rel_with_options(ctx, rel, extensions, &options).await
+}
+
+/// Convert Substrait Rel to DataFusion ExecutionPlan using explicit import options.
+#[async_recursion]
+pub async fn from_substrait_rel_with_options(
     _ctx: &SessionContext,
     rel: &Rel,
     _extensions: &HashMap<u32, &String>,
+    options: &PhysicalPlanConsumerOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut base_config_builder;
 
@@ -96,10 +133,15 @@ pub async fn from_substrait_rel(
                     for file in &files.items {
                         let path = if let Some(path_type) = &file.path_type {
                             match path_type {
-                                PathType::UriPath(path) => Ok(path.clone()),
-                                PathType::UriPathGlob(path) => Ok(path.clone()),
-                                PathType::UriFile(path) => Ok(path.clone()),
-                                PathType::UriFolder(path) => Ok(path.clone()),
+                                PathType::UriPath(path) | PathType::UriFile(path) => {
+                                    local_file_path(path, options)
+                                }
+                                PathType::UriPathGlob(_) => not_impl_err!(
+                                    "Substrait physical plan import with local file globs is not supported"
+                                ),
+                                PathType::UriFolder(_) => not_impl_err!(
+                                    "Substrait physical plan import with local folders is not supported"
+                                ),
                             }
                         } else {
                             Err(DataFusionError::Substrait(
@@ -122,7 +164,7 @@ pub async fn from_substrait_rel(
                         let partitioned_file =
                             PartitionedFile::new_from_meta(ObjectMeta {
                                 last_modified: last_modified.into(),
-                                location: path.into(),
+                                location: path,
                                 size,
                                 e_tag: None,
                                 version: None,
@@ -162,6 +204,65 @@ pub async fn from_substrait_rel(
         }
         _ => not_impl_err!("Unsupported Reltype: {:?}", rel.rel_type),
     }
+}
+
+fn local_file_path(
+    path: &str,
+    options: &PhysicalPlanConsumerOptions,
+) -> Result<ObjectStorePath> {
+    if options.allowed_local_file_roots.is_empty() {
+        return substrait_err!(
+            "Importing Substrait physical plans with local file paths requires an allowed local file root"
+        );
+    }
+
+    let path = parse_local_file_path(path)?;
+    let path = canonicalize_path(&path)?;
+
+    let is_allowed = options
+        .allowed_local_file_roots
+        .iter()
+        .map(|root| canonicalize_path(root))
+        .collect::<Result<Vec<_>>>()?
+        .iter()
+        .any(|root| path.starts_with(root));
+
+    if !is_allowed {
+        return substrait_err!(
+            "Substrait physical plan local file path {} is outside the allowed local file roots",
+            path.display()
+        );
+    }
+
+    ObjectStorePath::from_filesystem_path(path).map_err(|e| {
+        DataFusionError::Substrait(format!(
+            "Invalid local file path in Substrait physical plan: {e}"
+        ))
+    })
+}
+
+fn parse_local_file_path(path: &str) -> Result<PathBuf> {
+    match Url::parse(path) {
+        Ok(url) if url.scheme() == "file" => url.to_file_path().map_err(|_| {
+            DataFusionError::Substrait(format!(
+                "Invalid local file URL in Substrait physical plan: {path}"
+            ))
+        }),
+        Ok(url) => substrait_err!(
+            "Unsupported Substrait physical plan file URL scheme: {}",
+            url.scheme()
+        ),
+        Err(_) => Ok(Path::new("/").join(path)),
+    }
+}
+
+fn canonicalize_path(path: &Path) -> Result<PathBuf> {
+    path.canonicalize().map_err(|e| {
+        DataFusionError::Substrait(format!(
+            "Unable to canonicalize Substrait physical plan local file path {}: {e}",
+            path.display()
+        ))
+    })
 }
 
 fn to_field(name: &String, r#type: &Type) -> Result<Field> {
