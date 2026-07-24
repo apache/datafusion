@@ -87,6 +87,23 @@ fn cast_output_field(
     Arc::new(f)
 }
 
+fn scalar_arguments_for_fields(
+    args: &[Expr],
+    arg_fields: &[FieldRef],
+) -> Vec<Option<ScalarValue>> {
+    args.iter()
+        .zip(arg_fields)
+        .map(|(expr, field)| scalar_argument_for_field(expr, field))
+        .collect()
+}
+
+fn scalar_argument_for_field(expr: &Expr, arg_field: &FieldRef) -> Option<ScalarValue> {
+    match expr {
+        Expr::Literal(sv, _) => sv.cast_to(arg_field.data_type()).ok(),
+        _ => None,
+    }
+}
+
 impl ExprSchemable for Expr {
     /// Returns the [arrow::datatypes::DataType] of the expression
     /// based on [ExprSchema]
@@ -580,16 +597,12 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 let new_fields = verify_function_arguments(func.as_ref(), &fields)?;
 
-                let arguments = args
-                    .iter()
-                    .map(|e| match e {
-                        Expr::Literal(sv, _) => Some(sv),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>();
+                let arguments = scalar_arguments_for_fields(args, &new_fields);
+                let argument_refs =
+                    arguments.iter().map(Option::as_ref).collect::<Vec<_>>();
                 let args = ReturnFieldArgs {
                     arg_fields: &new_fields,
-                    scalar_arguments: &arguments,
+                    scalar_arguments: &argument_refs,
                 };
 
                 func.return_field_from_args(args)
@@ -805,6 +818,54 @@ mod tests {
             let expr = lit(ScalarValue::Null).$EXPR_TYPE();
             assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
         }};
+    }
+
+    #[test]
+    fn scalar_arguments_match_coerced_fields() {
+        let int16_field: FieldRef = Field::new("arg", DataType::Int16, true).into();
+
+        assert_eq!(
+            scalar_argument_for_field(&lit(1_i64), &int16_field),
+            Some(ScalarValue::Int16(Some(1)))
+        );
+        assert_eq!(
+            scalar_argument_for_field(&lit(ScalarValue::Null), &int16_field),
+            Some(ScalarValue::Int16(None))
+        );
+
+        let int32_list = ScalarValue::List(ScalarValue::new_list(
+            &[ScalarValue::Int32(Some(1))],
+            &DataType::Int32,
+            true,
+        ));
+        let int64_list_type = DataType::new_list(DataType::Int64, true);
+        let int64_list_field: FieldRef =
+            Field::new("arg", int64_list_type.clone(), true).into();
+        assert_eq!(
+            scalar_argument_for_field(&lit(int32_list.clone()), &int64_list_field),
+            Some(int32_list.cast_to(&int64_list_type).unwrap())
+        );
+    }
+
+    #[test]
+    fn scalar_arguments_exclude_expression_casts_and_invalid_values() {
+        let int16_field: FieldRef = Field::new("arg", DataType::Int16, true).into();
+        let explicit_cast = Expr::Cast(Cast::new(Box::new(lit(1_i64)), DataType::Int16));
+        let explicit_try_cast =
+            Expr::TryCast(TryCast::new(Box::new(lit(1_i64)), DataType::Int16));
+
+        assert_eq!(
+            scalar_argument_for_field(&explicit_cast, &int16_field),
+            None
+        );
+        assert_eq!(
+            scalar_argument_for_field(&explicit_try_cast, &int16_field),
+            None
+        );
+        assert_eq!(
+            scalar_argument_for_field(&lit("not an integer"), &int16_field),
+            None
+        );
     }
 
     #[test]

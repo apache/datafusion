@@ -456,6 +456,10 @@ pub struct ReturnFieldArgs<'a> {
     ///
     /// If the argument `i` is not a scalar, it will be None
     ///
+    /// When present, the scalar value has the same data type as the corresponding
+    /// entry in [`Self::arg_fields`], including after implicit type coercion.
+    /// User-written `Cast` and `TryCast` expressions are not scalar arguments.
+    ///
     /// For example, if a function is called like `my_function(column_a, 5)`
     /// this field will be `[None, Some(ScalarValue::Int32(Some(5)))]`
     pub scalar_arguments: &'a [Option<&'a ScalarValue>],
