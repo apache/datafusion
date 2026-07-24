@@ -18,7 +18,7 @@
 use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::from_substrait_literal;
 use crate::logical_plan::consumer::from_substrait_named_struct;
-use crate::logical_plan::consumer::utils::ensure_schema_compatibility;
+use crate::logical_plan::consumer::utils::{ensure_schema_compatibility, rename_field};
 use datafusion::common::{
     DFSchema, DFSchemaRef, TableReference, not_impl_err, plan_err,
     substrait_datafusion_err, substrait_err,
@@ -148,19 +148,52 @@ pub async fn from_read_rel(
             let values = if !vt.expressions.is_empty() {
                 let mut exprs = vec![];
                 for row in &vt.expressions {
-                    let mut row_exprs = vec![];
-                    for expression in &row.fields {
-                        let expr = consumer
-                            .consume_expression(expression, &substrait_schema)
-                            .await?;
-                        row_exprs.push(expr);
-                    }
-                    // For expressions, validate against top-level schema fields, not nested names
-                    if row_exprs.len() != substrait_schema.fields().len() {
+                    if row.fields.len() != substrait_schema.fields().len() {
                         return substrait_err!(
                             "Field count mismatch: expected {} fields but found {} in virtual table row",
                             substrait_schema.fields().len(),
-                            row_exprs.len()
+                            row.fields.len()
+                        );
+                    }
+
+                    let mut row_exprs = vec![];
+                    let mut name_idx = 0;
+                    for (field_idx, expression) in row.fields.iter().enumerate() {
+                        let expr = match expression.rex_type.as_ref() {
+                            Some(substrait::proto::expression::RexType::Literal(lit)) => {
+                                if !named_struct.names.is_empty() {
+                                    name_idx += 1; // top-level names are provided through schema
+                                }
+                                Expr::Literal(
+                                    from_substrait_literal(
+                                        consumer,
+                                        lit,
+                                        &named_struct.names,
+                                        &mut name_idx,
+                                    )?,
+                                    None,
+                                )
+                            }
+                            _ => {
+                                rename_field(
+                                    substrait_schema.field(field_idx).as_ref(),
+                                    &named_struct.names,
+                                    field_idx,
+                                    &mut name_idx,
+                                )?;
+                                consumer
+                                    .consume_expression(expression, &substrait_schema)
+                                    .await?
+                            }
+                        };
+                        row_exprs.push(expr);
+                    }
+
+                    if name_idx != named_struct.names.len() {
+                        return substrait_err!(
+                            "Names list must match exactly to nested schema, but found {} uses for {} names",
+                            name_idx,
+                            named_struct.names.len()
                         );
                     }
                     exprs.push(row_exprs);
