@@ -20,6 +20,7 @@
 //! ["on" values] to a list of indices with this key's value.
 
 use std::fmt::{self, Debug};
+use std::ops::Range;
 use std::ops::Sub;
 
 use arrow::array::BooleanArray;
@@ -139,6 +140,59 @@ pub trait JoinHashMapType: Send + Sync {
 
     /// Returns the number of entries in the join hash map.
     fn len(&self) -> usize;
+
+    /// Returns the existence-probe interface if this map supports first-match
+    /// probing, `None` otherwise.
+    ///
+    /// Callers that receive `None` must use the general pair-producing path
+    /// ([`Self::get_matched_indices_with_limit_offset`]) instead.
+    fn existence_probe(&self) -> Option<&dyn ExistenceProbe> {
+        None
+    }
+}
+
+/// First-match probing protocol used by the hash join's semi/anti existence
+/// fast path.
+///
+/// The protocol walks build-side hash chains one link at a time across a
+/// window of probe rows: [`get_probe_first_candidates`] gathers each probe
+/// row's chain head as its initial candidate, the caller checks join-key
+/// equality for the window in a vectorized fashion, and
+/// [`get_next_probe_candidates`] advances only the rows that have not
+/// matched yet.
+///
+/// [`get_probe_first_candidates`]: Self::get_probe_first_candidates
+/// [`get_next_probe_candidates`]: Self::get_next_probe_candidates
+pub trait ExistenceProbe {
+    /// Collects the first build candidate for each probe row with a matching hash.
+    ///
+    /// The returned indices preserve ascending probe order.
+    fn get_probe_first_candidates(
+        &self,
+        hash_values: &[u64],
+        range: Range<usize>,
+        probe_indices: &mut Vec<u32>,
+        build_indices: &mut Vec<u64>,
+    );
+
+    /// Collects the next hash-chain candidate for each unmatched probe row.
+    ///
+    /// `matched_candidates` is indexed by the original candidate position, not
+    /// the current candidate window.
+    #[expect(clippy::too_many_arguments)]
+    fn get_next_probe_candidates(
+        &self,
+        build_indices: &[u64],
+        probe_indices: &[u32],
+        candidate_positions: &[u32],
+        matched_candidates: &[bool],
+        next_candidate_positions: &mut Vec<u32>,
+        next_build_indices: &mut Vec<u64>,
+        next_probe_indices: &mut Vec<u32>,
+    );
+
+    /// Returns `true` if every hash table entry has exactly one build row.
+    fn has_unique_hashes(&self) -> bool;
 }
 
 pub struct JoinHashMapU32 {
@@ -219,6 +273,54 @@ impl JoinHashMapType for JoinHashMapU32 {
     fn len(&self) -> usize {
         self.map.len()
     }
+
+    fn existence_probe(&self) -> Option<&dyn ExistenceProbe> {
+        Some(self)
+    }
+}
+
+impl ExistenceProbe for JoinHashMapU32 {
+    fn get_probe_first_candidates(
+        &self,
+        hash_values: &[u64],
+        range: Range<usize>,
+        probe_indices: &mut Vec<u32>,
+        build_indices: &mut Vec<u64>,
+    ) {
+        get_probe_first_candidates(
+            &self.map,
+            hash_values,
+            range,
+            probe_indices,
+            build_indices,
+        )
+    }
+
+    fn get_next_probe_candidates(
+        &self,
+        build_indices: &[u64],
+        probe_indices: &[u32],
+        candidate_positions: &[u32],
+        matched_candidates: &[bool],
+        next_candidate_positions: &mut Vec<u32>,
+        next_build_indices: &mut Vec<u64>,
+        next_probe_indices: &mut Vec<u32>,
+    ) {
+        get_next_probe_candidates(
+            &self.next,
+            build_indices,
+            probe_indices,
+            candidate_positions,
+            matched_candidates,
+            next_candidate_positions,
+            next_build_indices,
+            next_probe_indices,
+        )
+    }
+
+    fn has_unique_hashes(&self) -> bool {
+        self.map.len() == self.next.len()
+    }
 }
 
 pub struct JoinHashMapU64 {
@@ -298,6 +400,54 @@ impl JoinHashMapType for JoinHashMapU64 {
 
     fn len(&self) -> usize {
         self.map.len()
+    }
+
+    fn existence_probe(&self) -> Option<&dyn ExistenceProbe> {
+        Some(self)
+    }
+}
+
+impl ExistenceProbe for JoinHashMapU64 {
+    fn get_probe_first_candidates(
+        &self,
+        hash_values: &[u64],
+        range: Range<usize>,
+        probe_indices: &mut Vec<u32>,
+        build_indices: &mut Vec<u64>,
+    ) {
+        get_probe_first_candidates(
+            &self.map,
+            hash_values,
+            range,
+            probe_indices,
+            build_indices,
+        )
+    }
+
+    fn get_next_probe_candidates(
+        &self,
+        build_indices: &[u64],
+        probe_indices: &[u32],
+        candidate_positions: &[u32],
+        matched_candidates: &[bool],
+        next_candidate_positions: &mut Vec<u32>,
+        next_build_indices: &mut Vec<u64>,
+        next_probe_indices: &mut Vec<u32>,
+    ) {
+        get_next_probe_candidates(
+            &self.next,
+            build_indices,
+            probe_indices,
+            candidate_positions,
+            matched_candidates,
+            next_candidate_positions,
+            next_build_indices,
+            next_probe_indices,
+        )
+    }
+
+    fn has_unique_hashes(&self) -> bool {
+        self.map.len() == self.next.len()
     }
 }
 
@@ -483,6 +633,82 @@ where
     None
 }
 
+pub fn get_probe_first_candidates<T>(
+    map: &HashTable<(u64, T)>,
+    hash_values: &[u64],
+    range: Range<usize>,
+    probe_indices: &mut Vec<u32>,
+    build_indices: &mut Vec<u64>,
+) where
+    T: Copy + TryFrom<usize> + Into<u64> + Sub<Output = T>,
+    <T as TryFrom<usize>>::Error: Debug,
+{
+    probe_indices.clear();
+    build_indices.clear();
+
+    let end = range.end.min(hash_values.len());
+    if range.start >= end {
+        return;
+    }
+
+    let one = T::try_from(1).unwrap();
+
+    for (offset, &hash) in hash_values[range.start..end].iter().enumerate() {
+        let Some((_, index)) = map.find(hash, |(h, _)| hash == *h) else {
+            continue;
+        };
+
+        let build_idx = *index - one;
+        let build_idx_u64 = build_idx.into();
+        probe_indices.push((range.start + offset) as u32);
+        build_indices.push(build_idx_u64);
+    }
+}
+
+#[expect(clippy::too_many_arguments)]
+pub fn get_next_probe_candidates<T>(
+    next_chain: &[T],
+    build_indices: &[u64],
+    probe_indices: &[u32],
+    candidate_positions: &[u32],
+    matched_candidates: &[bool],
+    next_candidate_positions: &mut Vec<u32>,
+    next_build_indices: &mut Vec<u64>,
+    next_probe_indices: &mut Vec<u32>,
+) where
+    T: Copy + TryFrom<usize> + PartialEq + Into<u64> + Sub<Output = T>,
+    <T as TryFrom<usize>>::Error: Debug,
+{
+    debug_assert_eq!(probe_indices.len(), build_indices.len());
+    debug_assert_eq!(probe_indices.len(), candidate_positions.len());
+
+    next_candidate_positions.clear();
+    next_build_indices.clear();
+    next_probe_indices.clear();
+
+    let zero = T::try_from(0usize).unwrap();
+    let one = T::try_from(1usize).unwrap();
+
+    for ((&position, &build_idx), &probe_idx) in candidate_positions
+        .iter()
+        .zip(build_indices.iter())
+        .zip(probe_indices.iter())
+    {
+        if matched_candidates[position as usize] {
+            continue;
+        }
+
+        let next = next_chain[build_idx as usize];
+        if next == zero {
+            continue;
+        }
+
+        next_candidate_positions.push(position);
+        next_build_indices.push((next - one).into());
+        next_probe_indices.push(probe_idx);
+    }
+}
+
 pub fn contain_hashes<T>(map: &HashTable<(u64, T)>, hash_values: &[u64]) -> BooleanArray {
     let buffer = BooleanBuffer::collect_bool(hash_values.len(), |i| {
         let hash = hash_values[i];
@@ -494,6 +720,8 @@ pub fn contain_hashes<T>(map: &HashTable<(u64, T)>, hash_values: &[u64]) -> Bool
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use datafusion_common::Result;
 
     #[test]
     fn test_contain_hashes() {
@@ -512,6 +740,52 @@ mod tests {
                 assert!(!array.value(i), "Hash {hash} should NOT exist in the map");
             }
         }
+    }
+
+    #[test]
+    fn probe_first_candidates_preserve_order() -> Result<()> {
+        let mut hash_map = JoinHashMapU32::with_capacity(3);
+        hash_map.update_from_iter(Box::new([10u64, 10, 20].iter().enumerate()), 0);
+
+        let probe_hashes = vec![30, 10, 20, 10];
+        let mut probe_indices = vec![];
+        let mut build_indices = vec![];
+        get_probe_first_candidates(
+            &hash_map.map,
+            &probe_hashes,
+            0..probe_hashes.len(),
+            &mut probe_indices,
+            &mut build_indices,
+        );
+
+        assert_eq!(probe_indices, vec![1, 2, 3]);
+        assert_eq!(build_indices, vec![1, 2, 1]);
+        Ok(())
+    }
+
+    #[test]
+    fn next_probe_candidates_skips_matched_and_exhausted_candidates() -> Result<()> {
+        let mut hash_map = JoinHashMapU32::with_capacity(2);
+        hash_map.update_from_iter(Box::new([10u64, 10].iter().enumerate()), 0);
+
+        let mut next_positions = vec![99];
+        let mut next_build_indices = vec![99];
+        let mut next_probe_indices = vec![99];
+        get_next_probe_candidates(
+            &hash_map.next,
+            &[1, 0],
+            &[3, 4],
+            &[0, 1],
+            &[false, true],
+            &mut next_positions,
+            &mut next_build_indices,
+            &mut next_probe_indices,
+        );
+
+        assert_eq!(next_positions, vec![0]);
+        assert_eq!(next_build_indices, vec![0]);
+        assert_eq!(next_probe_indices, vec![3]);
+        Ok(())
     }
 
     #[test]

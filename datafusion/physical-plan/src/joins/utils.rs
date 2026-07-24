@@ -38,7 +38,7 @@ use crate::{
 };
 // compatibility
 pub use super::join_filter::JoinFilter;
-pub use super::join_hash_map::JoinHashMapType;
+pub use super::join_hash_map::{ExistenceProbe, JoinHashMapType};
 pub use crate::joins::{JoinOn, JoinOnRef};
 
 use arrow::array::{
@@ -69,7 +69,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::utils::normalize_float_zero;
 use datafusion_common::{
     DataFusionError, JoinSide, JoinType, NullEquality, Result, SharedResult,
-    internal_datafusion_err, not_impl_err, plan_err,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_expr::Operator;
 use datafusion_expr::interval_arithmetic::Interval;
@@ -1482,8 +1482,14 @@ pub(crate) fn adjust_indices_by_join_type(
             Ok((left_indices, right_indices))
         }
         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
-            // matched or unmatched left row will be produced in the end of loop
-            // When visit the right batch, we can output the matched left row and don't need to wait the end of loop
+            // These join types output build-side rows. Instead of emitting
+            // during probing, each matched build row is recorded in the shared
+            // visited bitmap; the output is produced from that bitmap once the
+            // probe side is exhausted. Deferring this way emits each build row
+            // exactly once across all probe partitions. It is also necessary
+            // for anti rows, whose unmatched status is only known after the
+            // whole probe side has been seen. The probe phase contributes no
+            // rows here, so empty indices are returned.
             Ok((
                 UInt64Array::from_iter_values(vec![]),
                 UInt32Array::from_iter_values(vec![]),
@@ -1624,6 +1630,36 @@ where
         }));
     }
     PrimitiveArray::<T>::new(output.into(), None)
+}
+
+/// Checks if an index array contains a contiguous ascending range (e.g. \[3,4,5,6\]).
+/// Returns `Some(start..start+len)` if so, `None` otherwise (including for
+/// empty or null-containing input).
+/// This allows replacing an O(n) `take` with an O(1) `slice`.
+#[inline]
+pub(crate) fn is_contiguous_range<T: ArrowPrimitiveType>(
+    indices: &PrimitiveArray<T>,
+) -> Option<Range<usize>>
+where
+    T::Native: Into<u64>,
+{
+    if indices.is_empty() || indices.null_count() > 0 {
+        return None;
+    }
+    let values = indices.values();
+    let start: u64 = values[0].into();
+    let len = values.len() as u64;
+    // Quick rejection: if last element doesn't match expected, not contiguous
+    if values[values.len() - 1].into() != start + len - 1 {
+        return None;
+    }
+    // Verify every element is sequential (handles duplicates and gaps)
+    for (i, &v) in values.iter().enumerate().skip(1) {
+        if v.into() != start + i as u64 {
+            return None;
+        }
+    }
+    Some(start as usize..(start + len) as usize)
 }
 
 /// Returns the intersection of `range` and `input_indices`, omitting duplicates.
@@ -2196,10 +2232,42 @@ pub(super) fn equal_rows_arr(
     right_arrays: &[ArrayRef],
     null_equality: NullEquality,
 ) -> Result<(UInt64Array, UInt32Array)> {
+    if left_arrays.is_empty() {
+        return Ok((Vec::<u64>::new().into(), Vec::<u32>::new().into()));
+    };
+
+    let equal_mask = equal_rows_mask(
+        indices_left,
+        indices_right,
+        left_arrays,
+        right_arrays,
+        null_equality,
+    )?;
+
+    let filter_builder = FilterBuilder::new(&equal_mask).optimize().build();
+
+    let left_filtered = filter_builder.filter(indices_left)?;
+    let right_filtered = filter_builder.filter(indices_right)?;
+
+    Ok((
+        downcast_array(left_filtered.as_ref()),
+        downcast_array(right_filtered.as_ref()),
+    ))
+}
+
+pub(super) fn equal_rows_mask(
+    indices_left: &UInt64Array,
+    indices_right: &UInt32Array,
+    left_arrays: &[ArrayRef],
+    right_arrays: &[ArrayRef],
+    null_equality: NullEquality,
+) -> Result<BooleanArray> {
+    debug_assert_eq!(indices_left.len(), indices_right.len());
+
     let mut iter = left_arrays.iter().zip(right_arrays.iter());
 
     let Some((first_left, first_right)) = iter.next() else {
-        return Ok((Vec::<u64>::new().into(), Vec::<u32>::new().into()));
+        return internal_err!("equal_rows_mask requires at least one join key column");
     };
 
     let arr_left = take(first_left.as_ref(), indices_left, None)?;
@@ -2218,15 +2286,7 @@ pub(super) fn equal_rows_arr(
         })
         .try_fold(equal, |acc, equal2| and(&acc, &equal2?))?;
 
-    let filter_builder = FilterBuilder::new(&equal).optimize().build();
-
-    let left_filtered = filter_builder.filter(indices_left)?;
-    let right_filtered = filter_builder.filter(indices_right)?;
-
-    Ok((
-        downcast_array(left_filtered.as_ref()),
-        downcast_array(right_filtered.as_ref()),
-    ))
+    Ok(equal)
 }
 
 // version of eq_dyn supporting equality on null arrays

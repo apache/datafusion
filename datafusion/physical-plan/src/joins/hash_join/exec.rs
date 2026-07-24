@@ -101,8 +101,6 @@ use super::partitioned_hash_eval::SeededRandomState;
 pub(crate) const HASH_JOIN_SEED: SeededRandomState =
     SeededRandomState::with_seed(12210250226015887276);
 
-const ARRAY_MAP_CREATED_COUNT_METRIC_NAME: &str = "array_map_created_count";
-
 #[expect(clippy::too_many_arguments)]
 fn try_create_array_map(
     bounds: &Option<PartitionBounds>,
@@ -815,6 +813,11 @@ impl EmbeddedProjection for HashJoinExec {
 }
 
 impl HashJoinExec {
+    /// Name of the metric counting how many partitions selected the
+    /// `ArrayMap`-based build-side strategy instead of a hash table.
+    pub const ARRAY_MAP_CREATED_COUNT_METRIC_NAME: &'static str =
+        "array_map_created_count";
+
     /// Tries to create a new [`HashJoinExec`].
     ///
     /// # Error
@@ -1377,7 +1380,7 @@ impl ExecutionPlan for HashJoinExec {
 
         let array_map_created_count = MetricBuilder::new(&self.metrics)
             .with_category(MetricCategory::Rows)
-            .counter(ARRAY_MAP_CREATED_COUNT_METRIC_NAME, partition);
+            .counter(Self::ARRAY_MAP_CREATED_COUNT_METRIC_NAME, partition);
 
         // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
         // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
@@ -2157,7 +2160,7 @@ mod tests {
         if use_phj {
             assert!(
                 metrics
-                    .sum_by_name(ARRAY_MAP_CREATED_COUNT_METRIC_NAME)
+                    .sum_by_name(HashJoinExec::ARRAY_MAP_CREATED_COUNT_METRIC_NAME)
                     .expect("should have array_map_created_count metrics")
                     .as_usize()
                     >= 1
@@ -2165,7 +2168,7 @@ mod tests {
         } else {
             assert_eq!(
                 metrics
-                    .sum_by_name(ARRAY_MAP_CREATED_COUNT_METRIC_NAME)
+                    .sum_by_name(HashJoinExec::ARRAY_MAP_CREATED_COUNT_METRIC_NAME)
                     .map(|v| v.as_usize())
                     .unwrap_or(0),
                 0
@@ -3684,6 +3687,22 @@ mod tests {
         )
     }
 
+    fn build_high_fanout_left_table() -> Arc<dyn ExecutionPlan> {
+        build_table(
+            ("a1", &vec![10, 11, 12, 13, 14, 15, 16, 17, 18]),
+            ("b1", &vec![1, 1, 1, 1, 3, 3, 5, 5, 5]),
+            ("c1", &vec![100, 110, 120, 130, 140, 150, 160, 170, 180]),
+        )
+    }
+
+    fn build_high_fanout_right_table() -> Arc<dyn ExecutionPlan> {
+        build_table(
+            ("a2", &vec![0, 1, 2, 3, 4, 5, 6, 7]),
+            ("b2", &vec![0, 1, 1, 2, 3, 1, 4, 5]),
+            ("c2", &vec![10, 20, 30, 40, 50, 60, 70, 80]),
+        )
+    }
+
     #[apply(hash_join_exec_configs)]
     #[tokio::test]
     async fn join_left_semi(
@@ -3885,6 +3904,85 @@ mod tests {
 
         let metrics = join.metrics().unwrap();
         assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_right_semi_high_fanout_hashmap_preserves_probe_order() -> Result<()> {
+        let task_ctx = prepare_task_ctx(2, false);
+        let left = build_high_fanout_left_table();
+        let right = build_high_fanout_right_table();
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        )];
+
+        let (columns, batches, metrics) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::RightSemi,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a2", "b2", "c2"]);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r"
+            +----+----+----+
+            | a2 | b2 | c2 |
+            +----+----+----+
+            | 1  | 1  | 20 |
+            | 2  | 1  | 30 |
+            | 4  | 3  | 50 |
+            | 5  | 1  | 60 |
+            | 7  | 5  | 80 |
+            +----+----+----+
+            ");
+        }
+        assert_join_metrics!(metrics, 5);
+        assert_phj_used(&metrics, false);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_right_semi_high_fanout_partitioned_hashmap() -> Result<()> {
+        let task_ctx = prepare_task_ctx(2, false);
+        let left = build_high_fanout_left_table();
+        let right = build_high_fanout_right_table();
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        )];
+
+        let (columns, batches, metrics) = partitioned_join_collect(
+            left,
+            right,
+            on,
+            &JoinType::RightSemi,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a2", "b2", "c2"]);
+        let expected = [
+            "+----+----+----+",
+            "| a2 | b2 | c2 |",
+            "+----+----+----+",
+            "| 1  | 1  | 20 |",
+            "| 2  | 1  | 30 |",
+            "| 4  | 3  | 50 |",
+            "| 5  | 1  | 60 |",
+            "| 7  | 5  | 80 |",
+            "+----+----+----+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
+        assert_join_metrics!(metrics, 5);
+        assert_phj_used(&metrics, false);
 
         Ok(())
     }
@@ -4203,6 +4301,254 @@ mod tests {
 
         let metrics = join.metrics().unwrap();
         assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_right_anti_high_fanout_hashmap_preserves_probe_order() -> Result<()> {
+        let task_ctx = prepare_task_ctx(2, false);
+        let left = build_high_fanout_left_table();
+        let right = build_high_fanout_right_table();
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        )];
+
+        let (columns, batches, metrics) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::RightAnti,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a2", "b2", "c2"]);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r"
+            +----+----+----+
+            | a2 | b2 | c2 |
+            +----+----+----+
+            | 0  | 0  | 10 |
+            | 3  | 2  | 40 |
+            | 6  | 4  | 70 |
+            +----+----+----+
+            ");
+        }
+        assert_join_metrics!(metrics, 3);
+        assert_phj_used(&metrics, false);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_right_anti_high_fanout_partitioned_hashmap() -> Result<()> {
+        let task_ctx = prepare_task_ctx(2, false);
+        let left = build_high_fanout_left_table();
+        let right = build_high_fanout_right_table();
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        )];
+
+        let (columns, batches, metrics) = partitioned_join_collect(
+            left,
+            right,
+            on,
+            &JoinType::RightAnti,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a2", "b2", "c2"]);
+        let expected = [
+            "+----+----+----+",
+            "| a2 | b2 | c2 |",
+            "+----+----+----+",
+            "| 0  | 0  | 10 |",
+            "| 3  | 2  | 40 |",
+            "| 6  | 4  | 70 |",
+            "+----+----+----+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
+        assert_join_metrics!(metrics, 3);
+        assert_phj_used(&metrics, false);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_right_semi_anti_hashmap_null_equality() -> Result<()> {
+        let task_ctx = prepare_task_ctx(2, false);
+        let left = build_table_two_cols(
+            ("a1", &vec![Some(1), None, Some(3)]),
+            ("b1", &vec![Some(10), Some(20), Some(30)]),
+        );
+        let right = build_table_two_cols(
+            ("a2", &vec![Some(1), None, Some(2), None]),
+            ("b2", &vec![Some(10), Some(20), Some(30), Some(40)]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("a2", &right.schema())?) as _,
+        )];
+
+        let (_, batches_null_eq, _) = join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::RightSemi,
+            NullEquality::NullEqualsNull,
+            Arc::clone(&task_ctx),
+        )
+        .await?;
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches_null_eq), @r"
+            +----+----+
+            | a2 | b2 |
+            +----+----+
+            | 1  | 10 |
+            |    | 20 |
+            |    | 40 |
+            +----+----+
+            ");
+        }
+
+        let (_, batches_null_neq, _) = join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::RightSemi,
+            NullEquality::NullEqualsNothing,
+            Arc::clone(&task_ctx),
+        )
+        .await?;
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches_null_neq), @r"
+            +----+----+
+            | a2 | b2 |
+            +----+----+
+            | 1  | 10 |
+            +----+----+
+            ");
+        }
+
+        let (_, batches_null_eq, _) = join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::RightAnti,
+            NullEquality::NullEqualsNull,
+            Arc::clone(&task_ctx),
+        )
+        .await?;
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches_null_eq), @r"
+            +----+----+
+            | a2 | b2 |
+            +----+----+
+            | 2  | 30 |
+            +----+----+
+            ");
+        }
+
+        let (_, batches_null_neq, _) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::RightAnti,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches_null_neq), @r"
+            +----+----+
+            | a2 | b2 |
+            +----+----+
+            |    | 20 |
+            | 2  | 30 |
+            |    | 40 |
+            +----+----+
+            ");
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_right_semi_anti_phj_null_equality() -> Result<()> {
+        let task_ctx = prepare_task_ctx(2, true);
+        let left = build_table_two_cols(
+            ("a1", &vec![Some(1), None, Some(3)]),
+            ("b1", &vec![Some(10), Some(20), Some(30)]),
+        );
+        let right = build_table_two_cols(
+            ("a2", &vec![Some(1), None, Some(2), None]),
+            ("b2", &vec![Some(10), Some(20), Some(30), Some(40)]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("a2", &right.schema())?) as _,
+        )];
+
+        let (_, _, metrics) = join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::RightSemi,
+            NullEquality::NullEqualsNull,
+            Arc::clone(&task_ctx),
+        )
+        .await?;
+        assert_phj_used(&metrics, false);
+
+        let (_, batches_null_neq, metrics) = join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::RightSemi,
+            NullEquality::NullEqualsNothing,
+            Arc::clone(&task_ctx),
+        )
+        .await?;
+        assert_batches_eq!(
+            [
+                "+----+----+",
+                "| a2 | b2 |",
+                "+----+----+",
+                "| 1  | 10 |",
+                "+----+----+",
+            ],
+            &batches_null_neq
+        );
+        assert_phj_used(&metrics, true);
+
+        let (_, batches_null_neq, metrics) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::RightAnti,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+        assert_batches_eq!(
+            [
+                "+----+----+",
+                "| a2 | b2 |",
+                "+----+----+",
+                "|    | 20 |",
+                "| 2  | 30 |",
+                "|    | 40 |",
+                "+----+----+",
+            ],
+            &batches_null_neq
+        );
+        assert_phj_used(&metrics, true);
 
         Ok(())
     }
