@@ -83,7 +83,7 @@ fn bench_sliding_max(c: &mut Criterion) {
     ];
 
     for (label, data) in datasets {
-        let mut group = c.benchmark_group(format!("sliding_window_max_{}", label));
+        let mut group = c.benchmark_group(format!("sliding_window_max_{label}"));
 
         for window_size in [100, 1000, 5000] {
             group.throughput(Throughput::Elements(data_size as u64));
