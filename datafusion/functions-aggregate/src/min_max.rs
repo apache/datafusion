@@ -392,28 +392,41 @@ impl SlidingMaxAccumulator {
             moving_max: MovingMax::<ScalarValue>::new(),
         })
     }
+
+    /// Sets `self.max` to the maximum of the current window, or a typed NULL
+    /// if the window contains no non-null values. NULL values are never pushed
+    /// into `self.moving_max`, so it may be empty even when the window frame
+    /// is not.
+    fn update_max(&mut self) -> Result<()> {
+        self.max = match self.moving_max.max() {
+            Some(res) => res.clone(),
+            None => ScalarValue::try_from(&self.max.data_type())?,
+        };
+        Ok(())
+    }
 }
 
 impl Accumulator for SlidingMaxAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         for idx in 0..values[0].len() {
             let val = ScalarValue::try_from_array(&values[0], idx)?;
-            self.moving_max.push(val);
+            if !val.is_null() {
+                self.moving_max.push(val);
+            }
         }
-        if let Some(res) = self.moving_max.max() {
-            self.max = res.clone();
-        }
-        Ok(())
+        self.update_max()
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        for _idx in 0..values[0].len() {
-            (self.moving_max).pop();
+        // We assume that values are retracted in the order they were added, so
+        // the retracted values must be the oldest elements of `moving_max`.
+        // NULLs are never pushed, so be sure to only pop once per non-NULL
+        // value.
+        let non_null = values[0].len() - values[0].logical_null_count();
+        for _ in 0..non_null {
+            self.moving_max.pop();
         }
-        if let Some(res) = self.moving_max.max() {
-            self.max = res.clone();
-        }
-        Ok(())
+        self.update_max()
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -675,6 +688,18 @@ impl SlidingMinAccumulator {
             moving_min: MovingMin::<ScalarValue>::new(),
         })
     }
+
+    /// Sets `self.min` to the minimum of the current window, or a typed NULL
+    /// if the window contains no non-null values. NULL values are never pushed
+    /// into `self.moving_min`, so it may be empty even when the window frame
+    /// is not.
+    fn update_min(&mut self) -> Result<()> {
+        self.min = match self.moving_min.min() {
+            Some(res) => res.clone(),
+            None => ScalarValue::try_from(&self.min.data_type())?,
+        };
+        Ok(())
+    }
 }
 
 impl Accumulator for SlidingMinAccumulator {
@@ -689,23 +714,19 @@ impl Accumulator for SlidingMinAccumulator {
                 self.moving_min.push(val);
             }
         }
-        if let Some(res) = self.moving_min.min() {
-            self.min = res.clone();
-        }
-        Ok(())
+        self.update_min()
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        for idx in 0..values[0].len() {
-            let val = ScalarValue::try_from_array(&values[0], idx)?;
-            if !val.is_null() {
-                (self.moving_min).pop();
-            }
+        // We assume that values are retracted in the order they were added, so
+        // the retracted values must be the oldest elements of `moving_min`.
+        // NULLs are never pushed, so be sure to only pop once per non-NULL
+        // value.
+        let non_null = values[0].len() - values[0].logical_null_count();
+        for _ in 0..non_null {
+            self.moving_min.pop();
         }
-        if let Some(res) = self.moving_min.min() {
-            self.min = res.clone();
-        }
-        Ok(())
+        self.update_min()
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -1192,6 +1213,58 @@ mod tests {
             res.push(*moving_max.max().unwrap());
         }
         assert_eq!(res, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_min_all_null_window() -> Result<()> {
+        let mut min_acc = SlidingMinAccumulator::try_new(&DataType::Int32)?;
+
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![Some(3), None]));
+        min_acc.update_batch(&[Arc::clone(&values)])?;
+        assert_eq!(min_acc.evaluate()?, ScalarValue::Int32(Some(3)));
+
+        // Retract `3`; the window now contains only the NULL
+        let retracted: ArrayRef = Arc::new(Int32Array::from(vec![Some(3)]));
+        min_acc.retract_batch(&[Arc::clone(&retracted)])?;
+        assert_eq!(min_acc.evaluate()?, ScalarValue::Int32(None));
+
+        // A subsequent non-null value must be picked up again
+        let update: ArrayRef = Arc::new(Int32Array::from(vec![Some(7)]));
+        min_acc.update_batch(&[Arc::clone(&update)])?;
+        assert_eq!(min_acc.evaluate()?, ScalarValue::Int32(Some(7)));
+
+        // Retracting the NULL row must not pop the remaining value
+        let null_row: ArrayRef = Arc::new(Int32Array::from(vec![None::<i32>]));
+        min_acc.retract_batch(&[Arc::clone(&null_row)])?;
+        assert_eq!(min_acc.evaluate()?, ScalarValue::Int32(Some(7)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_max_all_null_window() -> Result<()> {
+        let mut max_acc = SlidingMaxAccumulator::try_new(&DataType::Int32)?;
+
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![Some(3), None]));
+        max_acc.update_batch(&[Arc::clone(&values)])?;
+        assert_eq!(max_acc.evaluate()?, ScalarValue::Int32(Some(3)));
+
+        // Retract `3`; the window now contains only the NULL
+        let retracted: ArrayRef = Arc::new(Int32Array::from(vec![Some(3)]));
+        max_acc.retract_batch(&[Arc::clone(&retracted)])?;
+        assert_eq!(max_acc.evaluate()?, ScalarValue::Int32(None));
+
+        // A subsequent non-null value must be picked up again
+        let update: ArrayRef = Arc::new(Int32Array::from(vec![Some(7)]));
+        max_acc.update_batch(&[Arc::clone(&update)])?;
+        assert_eq!(max_acc.evaluate()?, ScalarValue::Int32(Some(7)));
+
+        // Retracting the NULL row must not disturb the remaining value
+        let null_row: ArrayRef = Arc::new(Int32Array::from(vec![None::<i32>]));
+        max_acc.retract_batch(&[Arc::clone(&null_row)])?;
+        assert_eq!(max_acc.evaluate()?, ScalarValue::Int32(Some(7)));
+
         Ok(())
     }
 
