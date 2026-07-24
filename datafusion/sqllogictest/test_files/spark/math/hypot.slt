@@ -21,7 +21,45 @@
 # For more information, please see:
 #   https://github.com/apache/datafusion/issues/15914
 
-## Original Query: SELECT hypot(3, 4);
-## PySpark 3.5.5 Result: {'HYPOT(3, 4)': 5.0, 'typeof(HYPOT(3, 4))': 'double', 'typeof(3)': 'int', 'typeof(4)': 'int'}
-#query
-#SELECT hypot(3::int, 4::int);
+# Scalar: classic Pythagorean triples (3-4-5, 5-12-13)
+query R
+SELECT hypot(3, 4);
+----
+5
+
+query R
+SELECT hypot(5, 12);
+----
+13
+
+# Double inputs
+query R
+SELECT hypot(3.0::double, 4.0::double);
+----
+5
+
+# NULL if either argument is NULL (binary kernel null propagation)
+query R
+SELECT hypot(NULL::double, 4.0::double);
+----
+NULL
+
+query R
+SELECT hypot(3.0::double, NULL::double);
+----
+NULL
+
+# Array path, including a NULL row
+query R
+SELECT hypot(a, b) FROM (VALUES (3.0::double, 4.0::double), (6.0::double, 8.0::double), (NULL::double, 1.0::double)) AS t(a, b);
+----
+5
+10
+NULL
+
+# Overflow-safe: a naive sqrt(a*a + b*b) would overflow to Infinity here,
+# but f64::hypot (like Spark's Math.hypot) stays finite.
+query B
+SELECT hypot(3e200::double, 4e200::double) < 'Infinity'::double;
+----
+true
