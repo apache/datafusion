@@ -97,6 +97,7 @@ pub struct GlobalRequirements {
     skip: usize,
     satisfied: bool,
     preserve_order: bool,
+    requires_global_limit: bool,
 }
 
 impl LimitPushdown {
@@ -117,6 +118,7 @@ impl PhysicalOptimizerRule for LimitPushdown {
             skip: 0,
             satisfied: false,
             preserve_order: false,
+            requires_global_limit: false,
         };
         pushdown_limits(plan, global_state)
     }
@@ -135,6 +137,7 @@ struct LimitInfo {
     fetch: Option<usize>,
     skip: usize,
     preserve_order: bool,
+    is_global: bool,
 }
 
 /// This function is the main helper function of the `LimitPushDown` rule.
@@ -150,6 +153,39 @@ pub fn pushdown_limit_helper(
 ) -> Result<(Transformed<Arc<dyn ExecutionPlan>>, GlobalRequirements)> {
     // Extract limit, if exist, and return child inputs.
     if let Some(limit_info) = extract_limit(&pushdown_plan) {
+        // A no-op global limit must not establish or reset a global
+        // requirement that may already be tracked by an outer limit.
+        if limit_info.is_global && limit_info.skip == 0 && limit_info.fetch.is_none() {
+            return Ok((
+                Transformed {
+                    data: limit_info.input,
+                    transformed: true,
+                    tnr: TreeNodeRecursion::Stop,
+                },
+                global_state,
+            ));
+        }
+
+        // A multi-partition local limit is per partition. Materialize an
+        // outstanding global requirement above it before combining the local
+        // fetch, which otherwise incorrectly narrows the global cap.
+        if global_state.requires_global_limit
+            && !limit_info.is_global
+            && limit_info.input.output_partitioning().partition_count() > 1
+        {
+            let fetch = global_state.fetch;
+            let skip = global_state.skip;
+            let new_plan = materialize_global_requirement(
+                pushdown_plan,
+                skip,
+                fetch,
+                global_state.preserve_order,
+            );
+            global_state.fetch = fetch.map(|fetch| fetch + skip);
+            mark_satisfied(&mut global_state);
+            return Ok((Transformed::yes(new_plan), global_state));
+        }
+
         // If we have fetch/skip info in the global state already, we need to
         // decide which one to continue with:
         let (skip, fetch) = combine_limit(
@@ -161,6 +197,7 @@ pub fn pushdown_limit_helper(
         global_state.skip = skip;
         global_state.fetch = fetch;
         global_state.preserve_order = limit_info.preserve_order;
+        global_state.requires_global_limit |= limit_info.is_global;
         global_state.satisfied = false;
 
         if let Some(fetch) = fetch
@@ -170,7 +207,7 @@ pub fn pushdown_limit_helper(
             // node is needed. Mark satisfied so downstream won't re-add one,
             // but preserve skip/fetch so any nested limit nodes (e.g. an inner
             // GlobalLimitExec) can still be merged with the outer constraint.
-            global_state.satisfied = true;
+            mark_satisfied(&mut global_state);
 
             return Ok((
                 Transformed {
@@ -197,31 +234,61 @@ pub fn pushdown_limit_helper(
 
     // If we have a non-limit operator with fetch capability, update global
     // state as necessary:
-    if pushdown_plan.fetch().is_some() {
-        if global_state.skip == 0 {
-            global_state.satisfied = true;
+    let plan_fetch = pushdown_plan.fetch();
+    let plan_fetch_is_per_partition_global = plan_fetch.is_some()
+        && global_state.requires_global_limit
+        && pushdown_plan.output_partitioning().partition_count() > 1;
+    if plan_fetch.is_some() {
+        if !plan_fetch_is_per_partition_global {
+            (global_state.skip, global_state.fetch) =
+                combine_limit(global_state.skip, global_state.fetch, 0, plan_fetch);
         }
-        (global_state.skip, global_state.fetch) = combine_limit(
-            global_state.skip,
-            global_state.fetch,
-            0,
-            pushdown_plan.fetch(),
-        );
+        if global_state.skip == 0
+            && (!global_state.requires_global_limit
+                || pushdown_plan.output_partitioning().partition_count() == 1)
+        {
+            mark_satisfied(&mut global_state);
+        }
+    }
+
+    // A global limit cannot be satisfied by a fetch on a multi-partition
+    // plan: the fetch applies independently to each output partition.
+    if global_state.requires_global_limit
+        && !global_state.satisfied
+        && (global_state.fetch.is_some() || global_state.skip > 0)
+        && pushdown_plan.output_partitioning().partition_count() > 1
+    {
+        let fetch_for_plan = match global_state.fetch {
+            Some(fetch) => Some(
+                plan_fetch
+                    .unwrap_or(fetch + global_state.skip)
+                    .min(fetch + global_state.skip),
+            ),
+            None => plan_fetch,
+        };
+        if fetch_for_plan != plan_fetch
+            && let Some(plan_with_fetch) = pushdown_plan.with_fetch(fetch_for_plan)
+        {
+            pushdown_plan = plan_with_fetch;
+        }
+
+        let fetch = global_state.fetch;
+        let skip = global_state.skip;
+        let preserve_order = global_state.preserve_order;
+        let new_plan =
+            materialize_global_requirement(pushdown_plan, skip, fetch, preserve_order);
+        global_state.fetch = fetch.map(|fetch| fetch + skip);
+        mark_satisfied(&mut global_state);
+        return Ok((Transformed::yes(new_plan), global_state));
     }
 
     let Some(global_fetch) = global_state.fetch else {
         // There's no valid fetch information, exit early:
         return if global_state.skip > 0 && !global_state.satisfied {
             // There might be a case with only offset, if so add a global limit:
-            global_state.satisfied = true;
-            Ok((
-                Transformed::yes(add_global_limit(
-                    pushdown_plan,
-                    global_state.skip,
-                    None,
-                )),
-                global_state,
-            ))
+            let new_plan = add_global_limit(pushdown_plan, global_state.skip, None);
+            mark_satisfied(&mut global_state);
+            Ok((Transformed::yes(new_plan), global_state))
         } else {
             // There's no info on offset or fetch, nothing to do:
             Ok((Transformed::no(pushdown_plan), global_state))
@@ -241,28 +308,22 @@ pub fn pushdown_limit_helper(
             // with the information from the global state.
             let mut new_plan = plan_with_fetch;
             // Execution plans can't (yet) handle skip, so if we have one,
-            // we still need to add a global limit
+            // we still need to add a global limit.
             if global_state.skip > 0 {
                 new_plan =
                     add_global_limit(new_plan, global_state.skip, global_state.fetch);
             }
             global_state.fetch = skip_and_fetch;
             global_state.skip = 0;
-            global_state.satisfied = true;
+            mark_satisfied(&mut global_state);
             Ok((Transformed::yes(new_plan), global_state))
         } else if global_state.satisfied {
             // If the plan is already satisfied, do not add a limit:
             Ok((Transformed::no(pushdown_plan), global_state))
         } else {
-            global_state.satisfied = true;
-            Ok((
-                Transformed::yes(add_limit(
-                    pushdown_plan,
-                    global_state.skip,
-                    global_fetch,
-                )),
-                global_state,
-            ))
+            let new_plan = add_limit(pushdown_plan, global_state.skip, global_fetch);
+            mark_satisfied(&mut global_state);
+            Ok((Transformed::yes(new_plan), global_state))
         }
     } else {
         // The plan does not support push down and it is not a limit. We will need
@@ -274,7 +335,12 @@ pub fn pushdown_limit_helper(
         global_state.fetch = None;
         global_state.skip = 0;
 
-        let maybe_fetchable = pushdown_plan.with_fetch(skip_and_fetch);
+        let fetch_for_plan = if plan_fetch_is_per_partition_global {
+            plan_fetch.map(|fetch| fetch.min(global_fetch + global_skip))
+        } else {
+            skip_and_fetch
+        };
+        let maybe_fetchable = pushdown_plan.with_fetch(fetch_for_plan);
         if global_state.satisfied {
             if let Some(plan_with_fetch) = maybe_fetchable {
                 let plan_with_preserve_order = plan_with_fetch
@@ -285,7 +351,6 @@ pub fn pushdown_limit_helper(
                 Ok((Transformed::no(pushdown_plan), global_state))
             }
         } else {
-            global_state.satisfied = true;
             pushdown_plan = if let Some(plan_with_fetch) = maybe_fetchable {
                 let plan_with_preserve_order = plan_with_fetch
                     .with_preserve_order(global_state.preserve_order)
@@ -303,6 +368,7 @@ pub fn pushdown_limit_helper(
             } else {
                 add_limit(pushdown_plan, global_skip, global_fetch)
             };
+            mark_satisfied(&mut global_state);
             Ok((Transformed::yes(pushdown_plan), global_state))
         }
     }
@@ -418,6 +484,7 @@ fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitInfo> {
             fetch: global_limit.fetch(),
             skip: global_limit.skip(),
             preserve_order: global_limit.required_ordering().is_some(),
+            is_global: true,
         })
     } else {
         plan.downcast_ref::<LocalLimitExec>()
@@ -426,6 +493,7 @@ fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitInfo> {
                 fetch: Some(local_limit.fetch()),
                 skip: 0,
                 preserve_order: local_limit.required_ordering().is_some(),
+                is_global: false,
             })
     }
 }
@@ -447,6 +515,44 @@ fn add_limit(
     } else {
         Arc::new(LocalLimitExec::new(pushdown_plan, fetch + skip)) as _
     }
+}
+
+/// Materializes a global requirement at a single-partition boundary. A fetch
+/// on a multi-partition plan is only a per-partition hint, so it must be
+/// followed by a partition combiner before the requirement is satisfied.
+fn materialize_global_requirement(
+    pushdown_plan: Arc<dyn ExecutionPlan>,
+    skip: usize,
+    fetch: Option<usize>,
+    preserve_order: bool,
+) -> Arc<dyn ExecutionPlan> {
+    if pushdown_plan.output_partitioning().partition_count() == 1 {
+        return add_global_limit(pushdown_plan, skip, fetch);
+    }
+
+    let skip_and_fetch = fetch.map(|fetch| fetch + skip);
+    let limited: Arc<dyn ExecutionPlan> = if preserve_order
+        && let Some(ordering) = pushdown_plan.output_ordering().cloned()
+    {
+        Arc::new(
+            SortPreservingMergeExec::new(ordering, pushdown_plan)
+                .with_fetch(skip_and_fetch),
+        )
+    } else {
+        Arc::new(CoalescePartitionsExec::new(pushdown_plan).with_fetch(skip_and_fetch))
+    };
+
+    if skip > 0 {
+        add_global_limit(limited, skip, fetch)
+    } else {
+        limited
+    }
+}
+
+/// Marks the current requirement as enforced and clears its global scope.
+fn mark_satisfied(global_state: &mut GlobalRequirements) {
+    global_state.satisfied = true;
+    global_state.requires_global_limit = false;
 }
 
 /// Adds a global limit to the plan.
