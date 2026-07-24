@@ -411,6 +411,41 @@ pub fn split_vec_min_alloc<T>(vec: &mut Vec<T>, n: usize) -> Vec<T> {
     }
 }
 
+/// Splits a vector of offsets at index `n`, returning a vector with
+/// `[offsets[0], ..., offsets[n]]` and leaving the remaining offsets in shifted
+/// `offsets`, adjusted to start at 0. This function assumes monotonicity of the
+/// `offsets` elements, so the `offsets[n]` cut-off value is subtracted from
+/// the remaining offset values with no overflow checks, except those enabled
+/// in debug builds.
+///
+/// Allocates for whichever side is smaller, so the new allocation is
+/// `min(n + 1, offsets.len() - n)`. This matters when the split emits a prefix
+/// under memory pressure, where `n` can be close to `offsets.len()`.
+pub fn take_n_offsets<O>(offsets: &mut Vec<O>, n: usize) -> Vec<O>
+where
+    O: OffsetSizeTrait,
+{
+    let cut_offset = offsets[n];
+    if n < offsets.len() - n {
+        let prefix = offsets[..=n].to_vec();
+        let new_len = offsets.len() - n;
+        // Shift the retained tail down to the front and rebase it to start at 0
+        // in a single fused pass.
+        for i in 0..new_len {
+            offsets[i] = offsets[n + i] - cut_offset;
+        }
+        offsets.truncate(new_len);
+        prefix
+    } else {
+        let remaining = offsets[n..]
+            .iter()
+            .map(|&offset| offset - cut_offset)
+            .collect::<Vec<O>>();
+        offsets.truncate(n + 1);
+        std::mem::replace(offsets, remaining)
+    }
+}
+
 #[cfg(test)]
 mod split_vec_min_alloc_tests {
     use super::split_vec_min_alloc;
@@ -523,6 +558,88 @@ mod split_vec_min_alloc_tests {
     fn shrink_then_push_capacity(v: &mut Vec<u32>) -> usize {
         v.push(99);
         v.capacity()
+    }
+}
+
+#[cfg(test)]
+mod take_n_offsets_tests {
+    use super::take_n_offsets;
+
+    /// Reference implementation used to cross-check both branches: the emitted
+    /// prefix is `offsets[..=n]`, and the retained offsets are `offsets[n..]`
+    /// rebased so the first is 0.
+    fn expected(offsets: &[i64], n: usize) -> (Vec<i64>, Vec<i64>) {
+        let cut = offsets[n];
+        let prefix = offsets[..=n].to_vec();
+        let remaining = offsets[n..].iter().map(|&o| o - cut).collect();
+        (prefix, remaining)
+    }
+
+    fn check(offsets: &[i64], n: usize) {
+        let (exp_prefix, exp_remaining) = expected(offsets, n);
+        let mut v = offsets.to_vec();
+        let prefix = take_n_offsets(&mut v, n);
+        assert_eq!(prefix, exp_prefix, "prefix mismatch for n={n}");
+        assert_eq!(v, exp_remaining, "remaining mismatch for n={n}");
+    }
+
+    #[test]
+    fn in_place_shift_branch() {
+        // n < len - n  ->  in-place shift branch (branch A). len = 11, n = 3:
+        // new_len = 8 > n = 3, so the write range [0..8) overlaps the read
+        // range [3..11) -- exercises the overlapping-copy correctness.
+        let offsets = [0, 2, 5, 9, 14, 20, 27, 35, 44, 54, 65];
+        check(&offsets, 3);
+    }
+
+    #[test]
+    fn allocate_remaining_branch() {
+        // n >= len - n  ->  allocate-remaining branch (branch B). len = 11, n = 8.
+        let offsets = [0, 2, 5, 9, 14, 20, 27, 35, 44, 54, 65];
+        check(&offsets, 8);
+    }
+
+    #[test]
+    fn pivot_boundary() {
+        // Straddle the `n < len - n` pivot the way the benchmarks do (g/2 and
+        // g/2 + 1). With len = 2m + 1, n = m takes branch A and n = m + 1 takes
+        // branch B.
+        let m = 500usize;
+        let offsets: Vec<i64> = (0..=(2 * m as i64)).map(|i| i * 3).collect();
+        assert_eq!(offsets.len(), 2 * m + 1);
+        check(&offsets, m); // branch A: n=500, new_len=501 > n
+        check(&offsets, m + 1); // branch B: n=501, new_len=500 <= n
+    }
+
+    #[test]
+    fn take_one() {
+        // Smallest branch-A case: n = 1, so the shift loop's src index n + i
+        // always leads the dst index i by exactly 1.
+        let offsets = [0, 4, 7, 11, 18];
+        check(&offsets, 1);
+    }
+
+    #[test]
+    fn take_all_but_last() {
+        // Largest branch-B case: n = len - 1, remaining is a single 0.
+        let offsets = [0, 4, 7, 11, 18];
+        check(&offsets, offsets.len() - 1);
+    }
+
+    #[test]
+    fn i32_offsets() {
+        // Confirm monomorphization over the other OffsetSizeTrait width, both
+        // branches.
+        let offsets: [i32; 7] = [0, 3, 6, 10, 15, 21, 28];
+        let mut a = offsets.to_vec();
+        let pa = take_n_offsets(&mut a, 2); // branch A
+        assert_eq!(pa, vec![0, 3, 6]);
+        assert_eq!(a, vec![0, 4, 9, 15, 22]);
+
+        let mut b = offsets.to_vec();
+        let pb = take_n_offsets(&mut b, 5); // branch B
+        assert_eq!(pb, vec![0, 3, 6, 10, 15, 21]);
+        assert_eq!(b, vec![0, 7]);
     }
 }
 
