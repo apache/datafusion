@@ -46,6 +46,7 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
 use datafusion_physical_expr::projection::ProjectionExprs;
+use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, conjunction};
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_adapter::rewrite::{
@@ -827,7 +828,42 @@ impl FileSource for ParquetSource {
         // because even if scan pushdown is disabled we can still use the filters for stats pruning.
         let config_pushdown_enabled = config.execution.parquet.pushdown_filters;
         let table_pushdown_enabled = self.pushdown_filters();
-        let pushdown_filters = table_pushdown_enabled || config_pushdown_enabled;
+        let mut pushdown_filters = table_pushdown_enabled || config_pushdown_enabled;
+
+        // Adaptive filter placement (see issue #23263 and its Q10/Q40/Q41
+        // ClickBench regression discussion): RowFilter has a fixed
+        // per-row machinery overhead that only pays for itself when the
+        // wide-column decode it lets us skip is larger. When the filter
+        // touches most of the projection, that saving is small and the
+        // overhead dominates.
+        //
+        // Heuristic: only push filters into the Parquet scan when the
+        // projection contains at least PUSHDOWN_MIN_NON_FILTER_COLS
+        // columns that are not referenced by the filter — i.e., there
+        // is meaningful wide-decode to save. Otherwise, treat this scan
+        // as if `pushdown_filters` were disabled: the filter stays above
+        // the scan in a FilterExec (correctness preserved), and the
+        // predicate is still injected into ParquetSource for stats /
+        // page-index pruning.
+        const PUSHDOWN_MIN_NON_FILTER_COLS: usize = 3;
+        if pushdown_filters {
+            let filter_col_indices: std::collections::HashSet<usize> = filters
+                .iter()
+                .flat_map(|f| collect_columns(f).into_iter().map(|c| c.index()))
+                .collect();
+            let non_filter_projected = self
+                .projection
+                .as_ref()
+                .iter()
+                .flat_map(|pe| collect_columns(&pe.expr))
+                .map(|c| c.index())
+                .filter(|idx| !filter_col_indices.contains(idx))
+                .collect::<std::collections::HashSet<_>>()
+                .len();
+            if non_filter_projected < PUSHDOWN_MIN_NON_FILTER_COLS {
+                pushdown_filters = false;
+            }
+        }
 
         let mut source = self.clone();
         let filters: Vec<PushedDownPredicate> = filters
