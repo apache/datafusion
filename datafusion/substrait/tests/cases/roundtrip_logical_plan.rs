@@ -732,6 +732,50 @@ async fn roundtrip_scalar_subquery_substrait() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_scalar_subquery_projection_with_join_rewrite() -> Result<()> {
+    let ctx = create_context().await?;
+    ctx.sql(
+        "SET datafusion.optimizer.enable_physical_uncorrelated_scalar_subquery = false",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    let plan = generate_plan_from_sql_with_ctx(
+        "SELECT a, (SELECT MAX(b) FROM data2) AS max_b FROM data",
+        false,
+        true,
+        &ctx,
+    )
+    .await?;
+
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: data.a, max(data2.b) AS max_b
+      Left Join:
+        TableScan: data projection=[a]
+        Aggregate: groupBy=[[]], aggr=[[max(data2.b)]]
+          TableScan: data2 projection=[b], partial_filters=[Boolean(true)]
+    "
+    );
+
+    let results = DataFrame::new(ctx.state(), plan).collect().await?;
+    datafusion::assert_batches_sorted_eq!(
+        [
+            "+---+-------+",
+            "| a | max_b |",
+            "+---+-------+",
+            "| 1 | 4.5   |",
+            "| 3 | 4.5   |",
+            "+---+-------+",
+        ],
+        &results
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_exists_substrait() -> Result<()> {
     let ctx = create_context().await?;
     let plan = build_exists_filter_plan(&ctx, false).await?;
