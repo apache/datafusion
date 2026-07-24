@@ -115,6 +115,11 @@ impl GroupOrderingFull {
         self.state = State::Complete;
     }
 
+    /// Starts tracking a new fully ordered input segment.
+    pub fn reset(&mut self) {
+        self.state = State::Start;
+    }
+
     /// Called when new groups are added in a batch. See documentation
     /// on [`super::GroupOrdering::new_groups`]
     pub fn new_groups(&mut self, total_num_groups: usize) {
