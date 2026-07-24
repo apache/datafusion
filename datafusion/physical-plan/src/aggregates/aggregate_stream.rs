@@ -70,6 +70,8 @@ struct AggregateStreamInner {
     // None if the dynamic filter is not applicable. See details in `AggrDynFilter`.
     agg_dyn_filter_state: Option<Arc<AggrDynFilter>>,
     finished: bool,
+    emit_no_rows_on_empty_input: bool,
+    saw_input_rows: bool,
 
     // ==== Execution Resources ====
     baseline_metrics: BaselineMetrics,
@@ -331,6 +333,8 @@ impl AggregateStream {
             reservation,
             finished: false,
             agg_dyn_filter_state: maybe_dynamic_filter,
+            emit_no_rows_on_empty_input: agg.emit_no_rows_on_empty_input,
+            saw_input_rows: false,
         };
 
         let stream = futures::stream::unfold(inner, |mut this| async move {
@@ -341,6 +345,10 @@ impl AggregateStream {
             loop {
                 let result = match this.input.next().await {
                     Some(Ok(batch)) => {
+                        if batch.num_rows() > 0 {
+                            this.saw_input_rows = true;
+                        }
+
                         let result = {
                             let elapsed_compute = this.baseline_metrics.elapsed_compute();
                             let _timer = elapsed_compute.timer(); // Stops on drop
@@ -374,6 +382,11 @@ impl AggregateStream {
                         // Release the input pipeline's resources before finalization.
                         let input_schema = this.input.schema();
                         this.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
+                        // Zero input rows means zero groups: end without the
+                        // default row (issue #11748).
+                        if this.emit_no_rows_on_empty_input && !this.saw_input_rows {
+                            return None;
+                        }
                         let timer = this.baseline_metrics.elapsed_compute().timer();
                         let result =
                             finalize_aggregation(&mut this.accumulators, &this.mode)

@@ -1444,6 +1444,8 @@ message AggregateExecNode {
   bool has_grouping_set = 12;
   // Optional dynamic filter expression for pushing down to the child.
   PhysicalExprNode dynamic_filter = 13;
+  // True when this global aggregate (all-constant GROUP BY rewrite) must emit zero rows on empty input.
+  bool emit_no_rows_on_empty_input = 14;
 }
 
 message GlobalLimitExecNode {

@@ -1700,6 +1700,9 @@ pub trait PhysicalPlanNodeExt: Sized {
             agg
         };
 
+        let agg =
+            agg.with_emit_no_rows_on_empty_input(hash_agg.emit_no_rows_on_empty_input);
+
         Ok(Arc::new(agg))
     }
 
@@ -2835,6 +2838,7 @@ pub trait PhysicalPlanNodeExt: Sized {
                             proto_converter.physical_expr_to_proto(&df_expr, codec)
                         })
                         .transpose()?,
+                    emit_no_rows_on_empty_input: exec.emit_no_rows_on_empty_input(),
                 },
             ))),
         })

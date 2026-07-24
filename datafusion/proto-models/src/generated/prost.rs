@@ -2173,6 +2173,9 @@ pub struct AggregateExecNode {
     /// Optional dynamic filter expression for pushing down to the child.
     #[prost(message, optional, tag = "13")]
     pub dynamic_filter: ::core::option::Option<PhysicalExprNode>,
+    /// True when this global aggregate (all-constant GROUP BY rewrite) must emit zero rows on empty input.
+    #[prost(bool, tag = "14")]
+    pub emit_no_rows_on_empty_input: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GlobalLimitExecNode {

@@ -19,6 +19,7 @@
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::scalar::ScalarValue;
+use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateInputMode, AggregateMode,
@@ -60,6 +61,18 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 .expect("take_optimizable() ensures that this is a AggregateExec");
             let stats = StatisticsContext::new()
                 .compute(partial_agg_exec.input().as_ref(), &StatisticsArgs::new())?;
+            // The single-row rewrite is only safe for a flagged aggregate when
+            // the input is provably non-empty; otherwise the runtime aggregate
+            // decides (it honors the flag).
+            if partial_agg_exec.emit_no_rows_on_empty_input()
+                && !matches!(stats.num_rows, Precision::Exact(n) if n > 0)
+            {
+                return plan
+                    .map_children(|child| {
+                        self.optimize(child, config).map(Transformed::yes)
+                    })
+                    .data();
+            }
             let mut projections = vec![];
             for expr in partial_agg_exec.aggr_expr() {
                 let field = expr.field();

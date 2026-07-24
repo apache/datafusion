@@ -861,6 +861,46 @@ fn roundtrip_aggregate_with_limit() -> Result<()> {
 }
 
 #[test]
+fn roundtrip_aggregate_emit_no_rows_on_empty_input() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, true)]));
+
+    let aggregates = vec![
+        AggregateExprBuilder::new(count_udaf(), vec![col("v", &schema)?])
+            .schema(Arc::clone(&schema))
+            .alias("count(v)")
+            .build()
+            .map(Arc::new)?,
+    ];
+
+    // Global aggregate (empty group by) carrying the flag.
+    let agg = AggregateExec::try_new(
+        AggregateMode::Single,
+        PhysicalGroupBy::default(),
+        aggregates,
+        vec![None],
+        Arc::new(EmptyExec::new(Arc::clone(&schema))),
+        schema,
+    )?
+    .with_emit_no_rows_on_empty_input(true);
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let result =
+        roundtrip_test_and_return(Arc::new(agg), &ctx, &codec, &proto_converter)?;
+
+    let result_agg = result
+        .downcast_ref::<AggregateExec>()
+        .expect("expected AggregateExec after roundtrip");
+    assert!(
+        result_agg.emit_no_rows_on_empty_input(),
+        "flag must survive proto roundtrip"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn roundtrip_aggregate_with_approx_pencentile_cont() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let field_b = Field::new("b", DataType::Int64, false);
