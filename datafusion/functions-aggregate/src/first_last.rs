@@ -49,7 +49,7 @@ use datafusion_functions_aggregate_common::utils::get_sort_options;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
-mod state;
+pub(crate) mod state;
 
 use state::{BytesValueState, PrimitiveValueState, ValueState};
 

@@ -95,5 +95,9 @@ harness = false
 name = "percentile_cont"
 harness = false
 
+[[bench]]
+name = "any_value"
+harness = false
+
 [features]
 force_hash_collisions = ["datafusion-common/force_hash_collisions"]
