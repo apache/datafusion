@@ -5853,6 +5853,116 @@ SELECT order_id FROM elim_orders LEFT JOIN elim_users ON true;
 3
 3
 
+# A LIMIT makes the row count observable, but the uniqueness path does not
+# depend on duplicate-insensitivity: the unique (PK) right side is unused, so
+# the join is removed even under a LIMIT.
+query TT
+EXPLAIN SELECT order_id FROM elim_orders LEFT JOIN elim_users ON user_id = id LIMIT 2;
+----
+logical_plan
+01)Limit: skip=0, fetch=2
+02)--TableScan: elim_orders projection=[order_id], fetch=2
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1], fetch=2
+
+query I rowsort
+SELECT order_id FROM elim_orders LEFT JOIN elim_users ON user_id = id LIMIT 2;
+----
+1
+2
+
+# Negative case: a LIMIT between the join and a DISTINCT ancestor makes the
+# row count observable, so the DISTINCT's duplicate-insensitivity does not
+# reach the join; with a non-unique right side the join must stay.
+query TT
+EXPLAIN SELECT DISTINCT id FROM (SELECT elim_users.id FROM elim_users LEFT JOIN elim_orders ON elim_users.id = elim_orders.user_id LIMIT 5);
+----
+logical_plan
+01)Aggregate: groupBy=[[elim_users.id]], aggr=[[]]
+02)--Projection: elim_users.id
+03)----Limit: skip=0, fetch=5
+04)------Left Join: elim_users.id = elim_orders.user_id
+05)--------Limit: skip=0, fetch=5
+06)----------TableScan: elim_users projection=[id], fetch=5
+07)--------TableScan: elim_orders projection=[user_id]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[]
+02)--RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=4
+03)----AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, user_id@0)], projection=[id@0], fetch=5
+06)----------DataSourceExec: partitions=1, partition_sizes=[1], fetch=5
+07)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT DISTINCT id FROM (SELECT elim_users.id FROM elim_users LEFT JOIN elim_orders ON elim_users.id = elim_orders.user_id LIMIT 5);
+----
+1
+2
+4
+
+# LEFT JOIN LATERAL decorrelates into a plain left join, with equality
+# predicates extracted as join keys: the unique (PK) lateral side is unused,
+# so the join is removed.
+query TT
+EXPLAIN SELECT order_id FROM elim_orders LEFT JOIN LATERAL (SELECT * FROM elim_users WHERE id = user_id) AS u ON true;
+----
+logical_plan TableScan: elim_orders projection=[order_id]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT order_id FROM elim_orders LEFT JOIN LATERAL (SELECT * FROM elim_users WHERE id = user_id) AS u ON true;
+----
+1
+2
+3
+
+# A non-equality lateral predicate becomes a join filter, which does not
+# block removal under a duplicate-insensitive ancestor (DISTINCT).
+query TT
+EXPLAIN SELECT DISTINCT order_id FROM elim_orders LEFT JOIN LATERAL (SELECT * FROM elim_users WHERE id > user_id) AS u ON true;
+----
+logical_plan
+01)Aggregate: groupBy=[[elim_orders.order_id]], aggr=[[]]
+02)--TableScan: elim_orders projection=[order_id]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[order_id@0 as order_id], aggr=[]
+02)--RepartitionExec: partitioning=Hash([order_id@0], 4), input_partitions=1
+03)----AggregateExec: mode=Partial, gby=[order_id@0 as order_id], aggr=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT DISTINCT order_id FROM elim_orders LEFT JOIN LATERAL (SELECT * FROM elim_users WHERE id > user_id) AS u ON true;
+----
+1
+2
+3
+
+# Negative case: without the DISTINCT a filter-only lateral can multiply left
+# rows observably (each order matches every user with a greater id), so the
+# join must stay.
+query TT
+EXPLAIN SELECT order_id FROM elim_orders LEFT JOIN LATERAL (SELECT * FROM elim_users WHERE id > user_id) AS u ON true;
+----
+logical_plan
+01)Projection: elim_orders.order_id
+02)--Left Join:  Filter: u.id > elim_orders.user_id
+03)----TableScan: elim_orders projection=[order_id, user_id]
+04)----SubqueryAlias: u
+05)------TableScan: elim_users projection=[id]
+physical_plan
+01)NestedLoopJoinExec: join_type=Right, filter=id@1 > user_id@0, projection=[order_id@1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT order_id FROM elim_orders LEFT JOIN LATERAL (SELECT * FROM elim_users WHERE id > user_id) AS u ON true;
+----
+1
+1
+2
+2
+3
+
 # RIGHT JOIN is symmetric: the join is removed when its *left* side is
 # unreferenced above the join and cannot duplicate right rows.
 
