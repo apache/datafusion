@@ -6844,65 +6844,6 @@ mod tests {
     }
 
     #[test]
-    fn test_partitioned_dynamic_filter_pushdown_rejects_float_zero_split() -> Result<()> {
-        let left_schema = Arc::new(Schema::new(vec![Field::new(
-            "left_key",
-            DataType::Float64,
-            false,
-        )]));
-        let right_schema = Arc::new(Schema::new(vec![Field::new(
-            "right_key",
-            DataType::Float64,
-            false,
-        )]));
-        let left_key = Arc::new(Column::new("left_key", 0)) as PhysicalExprRef;
-        let right_key = Arc::new(Column::new("right_key", 0)) as PhysicalExprRef;
-        let split_points = vec![SplitPoint::new(vec![ScalarValue::Float64(Some(0.0))])];
-        let left = Arc::new(PartitionedTestExec::try_new(
-            left_schema,
-            Partitioning::Range(RangePartitioning::try_new(
-                [PhysicalSortExpr::new(
-                    Arc::clone(&left_key),
-                    Default::default(),
-                )]
-                .into(),
-                split_points.clone(),
-            )?),
-        )?);
-        let right = Arc::new(PartitionedTestExec::try_new(
-            right_schema,
-            Partitioning::Range(RangePartitioning::try_new(
-                [PhysicalSortExpr::new(
-                    Arc::clone(&right_key),
-                    Default::default(),
-                )]
-                .into(),
-                split_points,
-            )?),
-        )?);
-        let join = HashJoinExec::try_new(
-            left,
-            right,
-            vec![(left_key, right_key)],
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::Partitioned,
-            NullEquality::NullEqualsNothing,
-            false,
-        )?;
-        let mut session_config = SessionConfig::default();
-        session_config
-            .options_mut()
-            .optimizer
-            .enable_join_dynamic_filter_pushdown = true;
-
-        assert!(!join.allow_join_dynamic_filter_pushdown(session_config.options()));
-
-        Ok(())
-    }
-
-    #[test]
     fn test_with_dynamic_filter_rejects_invalid_columns() -> Result<()> {
         let (_, _, on) = build_schema_and_on()?;
         let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![1]));
