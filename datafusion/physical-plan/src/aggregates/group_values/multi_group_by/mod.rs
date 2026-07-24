@@ -20,9 +20,11 @@
 mod boolean;
 mod bytes;
 pub mod bytes_view;
+mod list;
 pub mod primitive;
 
 use std::mem::{self, size_of};
+use std::sync::Arc;
 
 use crate::aggregates::group_values::GroupValues;
 use crate::aggregates::group_values::multi_group_by::{
@@ -923,8 +925,7 @@ macro_rules! instantiate_primitive {
 /// builder for. The `group_column_supported_type_matches_make_group_column`
 /// test below pins this biconditional.
 fn group_column_supported_type(data_type: &DataType) -> bool {
-    matches!(
-        *data_type,
+    match data_type {
         DataType::Int8
             | DataType::Int16
             | DataType::Int32
@@ -954,8 +955,12 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::Timestamp(_, _)
             | DataType::Utf8View
             | DataType::BinaryView
-            | DataType::Boolean
-    )
+            | DataType::Boolean => true,
+        DataType::List(child_field) | DataType::LargeList(child_field) => {
+            group_column_supported_type(child_field.data_type())
+        }
+        _ => false,
+    }
 }
 
 /// Build a [`GroupColumn`] for a single schema field.
@@ -977,7 +982,7 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
     let nullable = field.is_nullable();
     let data_type = field.data_type();
     let mut v: Vec<Box<dyn GroupColumn>> = Vec::with_capacity(1);
-    match *data_type {
+    match data_type {
         DataType::Int8 => instantiate_primitive!(v, nullable, Int8Type, data_type),
         DataType::Int16 => instantiate_primitive!(v, nullable, Int16Type, data_type),
         DataType::Int32 => instantiate_primitive!(v, nullable, Int32Type, data_type),
@@ -1066,6 +1071,20 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
             } else {
                 v.push(Box::new(BooleanGroupValueBuilder::<false>::new()));
             }
+        }
+        DataType::List(child_field) => {
+            let child = make_group_column(child_field.as_ref())?;
+            v.push(Box::new(list::ListGroupValueBuilder::<i32>::new(
+                Arc::clone(child_field),
+                child,
+            )));
+        }
+        DataType::LargeList(child_field) => {
+            let child = make_group_column(child_field.as_ref())?;
+            v.push(Box::new(list::ListGroupValueBuilder::<i64>::new(
+                Arc::clone(child_field),
+                child,
+            )));
         }
         _ => return not_impl_err!("{data_type} not supported in GroupValuesColumn"),
     }
@@ -1288,6 +1307,10 @@ mod tests {
     /// it should be added to unsupported_cases.
     #[test]
     fn group_column_supported_type_matches_make_group_column() {
+        let utf8 = || Field::new("v", DataType::Utf8, true);
+        let int32 = || Field::new("v", DataType::Int32, true);
+        let f16 = || Field::new("v", DataType::Float16, true);
+
         let supported_cases: Vec<DataType> = vec![
             DataType::Int8,
             DataType::Int64,
@@ -1309,6 +1332,15 @@ mod tests {
             DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
             DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond),
             DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+            // Nested
+            DataType::List(Arc::new(int32())),
+            DataType::LargeList(Arc::new(int32())),
+            DataType::List(Arc::new(utf8())),
+            DataType::List(Arc::new(Field::new(
+                "v",
+                DataType::List(Arc::new(int32())),
+                true,
+            ))),
         ];
 
         for dt in &supported_cases {
@@ -1316,6 +1348,8 @@ mod tests {
                 group_column_supported_type(dt),
                 "expected group_column_supported_type=true for {dt:?}"
             );
+            // Building a top-level Field and feeding it through the factory
+            // must succeed for every supported case.
             let field = Field::new("col", dt.clone(), true);
             make_group_column(&field).unwrap_or_else(|e| {
                 panic!(
@@ -1337,6 +1371,15 @@ mod tests {
             DataType::Time64(arrow::datatypes::TimeUnit::Millisecond),
             DataType::Time32(arrow::datatypes::TimeUnit::Microsecond),
             DataType::Time32(arrow::datatypes::TimeUnit::Nanosecond),
+            // Nested with an unsupported leaf
+            DataType::List(Arc::new(f16())),
+            DataType::LargeList(Arc::new(f16())),
+            // Deeply nested unsupported
+            DataType::List(Arc::new(Field::new(
+                "v",
+                DataType::List(Arc::new(f16())),
+                true,
+            ))),
         ];
 
         for dt in &unsupported_cases {
