@@ -24,7 +24,6 @@ use arrow::array::{Array, ArrayRef, BinaryViewArray, ByteView, make_view};
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
 use datafusion_common::hash_utils::RandomState;
-use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 use std::fmt::Debug;
 use std::mem::size_of;
@@ -33,7 +32,7 @@ use std::sync::Arc;
 /// HashSet optimized for storing string or binary values that can produce that
 /// the final set as a `GenericBinaryViewArray` with minimal copies.
 #[derive(Debug)]
-pub struct ArrowBytesViewSet(ArrowBytesViewMap<()>);
+pub struct ArrowBytesViewSet(ArrowBytesViewMap<usize>);
 
 impl ArrowBytesViewSet {
     pub fn new(output_type: OutputType) -> Self {
@@ -42,10 +41,16 @@ impl ArrowBytesViewSet {
 
     /// Inserts each value from `values` into the set
     pub fn insert(&mut self, values: &ArrayRef) {
-        fn make_payload_fn(_value: Option<&[u8]>) {}
-        fn observe_payload_fn(_payload: ()) {}
-        self.0
-            .insert_if_new(values, make_payload_fn, observe_payload_fn);
+        let mut next_group_index = self.0.len();
+        self.0.insert_if_new(
+            values,
+            |_value| {
+                let group_index = next_group_index;
+                next_group_index += 1;
+                group_index
+            },
+            |_payload| {},
+        );
     }
 
     /// Return the contents of this map and replace it with a new empty map with
@@ -108,8 +113,7 @@ impl ArrowBytesViewSet {
 /// 2. Retains the insertion order of entries in the final array. The values are
 ///    in the same order as they were inserted.
 ///
-/// Note this structure can be used as a `HashSet` by specifying the value type
-/// as `()`, as is done by [`ArrowBytesViewSet`].
+/// [`ArrowBytesViewSet`] wraps this structure to implement set semantics.
 ///
 /// This map is used by the special `COUNT DISTINCT` aggregate function to
 /// store the distinct values, and by the `GROUP BY` operator to store
@@ -117,9 +121,25 @@ impl ArrowBytesViewSet {
 /// Max size of the in-progress buffer before flushing to completed buffers
 const BYTE_VIEW_MAX_BLOCK_SIZE: usize = 2 * 1024 * 1024;
 
+/// Payload stored in [`ArrowBytesViewMap`].
+///
+/// The payload must expose the logical group index so the map can fetch the
+/// corresponding stored view from [`ArrowBytesViewMap::views`].
+pub trait ByteViewMapPayload: Debug + PartialEq + Eq + Clone + Copy + Default {
+    /// Returns the logical group index for this payload.
+    fn group_index(self) -> usize;
+}
+
+impl ByteViewMapPayload for usize {
+    #[inline]
+    fn group_index(self) -> usize {
+        self
+    }
+}
+
 pub struct ArrowBytesViewMap<V>
 where
-    V: Debug + PartialEq + Eq + Clone + Copy + Default,
+    V: ByteViewMapPayload,
 {
     /// Should the output be StringView or BinaryView?
     output_type: OutputType,
@@ -152,7 +172,7 @@ const INITIAL_MAP_CAPACITY: usize = 512;
 
 impl<V> ArrowBytesViewMap<V>
 where
-    V: Debug + PartialEq + Eq + Clone + Copy + Default,
+    V: ByteViewMapPayload,
 {
     pub fn new(output_type: OutputType) -> Self {
         Self {
@@ -252,22 +272,22 @@ where
         OP: FnMut(V),
         B: ByteViewType,
     {
-        // step 1: compute hashes
-        let batch_hashes = &mut self.hashes_buffer;
-        batch_hashes.clear();
-        batch_hashes.resize(values.len(), 0);
-        create_hashes([values], &self.random_state, batch_hashes)
-            // hash is supported for all types and create_hashes only
-            // returns errors for unsupported types
-            .unwrap();
-
-        // step 2: insert each value into the set, if not already present
         let values = values.as_byte_view::<B>();
-
-        // Get raw views buffer for direct comparison
         let input_views = values.views();
 
-        // Ensure lengths are equivalent
+        let batch_hashes = &mut self.hashes_buffer;
+        batch_hashes.clear();
+        batch_hashes.reserve(values.len());
+        for i in 0..values.len() {
+            let view_u128 = input_views[i];
+            let hash = if values.is_null(i) {
+                0
+            } else {
+                Self::cheap_hash::<B>(values, i, view_u128)
+            };
+            batch_hashes.push(hash);
+        }
+
         assert_eq!(values.len(), self.hashes_buffer.len());
 
         for i in 0..values.len() {
@@ -305,20 +325,22 @@ where
                             return false;
                         }
 
+                        let stored_view = self.views[header.payload.group_index()];
+
                         // Fast path: inline strings can be compared directly
                         if len <= 12 {
-                            return header.view == view_u128;
+                            return stored_view == view_u128;
                         }
 
                         // For larger strings: first compare the 4-byte prefix
-                        let stored_prefix = (header.view >> 32) as u32;
+                        let stored_prefix = (stored_view >> 32) as u32;
                         let input_prefix = (view_u128 >> 32) as u32;
                         if stored_prefix != input_prefix {
                             return false;
                         }
 
                         // Prefix matched - compare full bytes
-                        let byte_view = ByteView::from(header.view);
+                        let byte_view = ByteView::from(stored_view);
                         let stored_len = byte_view.length as usize;
                         let buffer_index = byte_view.buffer_index as usize;
                         let offset = byte_view.offset as usize;
@@ -339,7 +361,7 @@ where
                 payload
             } else {
                 // no existing value, make a new one
-                let (new_view, payload) = if len <= 12 {
+                let payload = if len <= 12 {
                     // Inline path: bytes are already packed in view_u128.
                     // The inline ByteView format is [len:u32 LE][data:12 bytes zero-padded],
                     // so extracting bytes from the u128 avoids a round-trip through
@@ -352,20 +374,16 @@ where
                     //
                     // SAFETY: view_u128 was a valid view, and the enclosing `len <= 12`
                     // ensures it is inline
-                    let new_view = unsafe { self.append_inline_view(view_u128) };
-                    (new_view, payload)
+                    unsafe { self.append_inline_view(view_u128) };
+                    payload
                 } else {
                     let value: &[u8] = values.value(i).as_ref();
                     let payload = make_payload_fn(Some(value));
-                    let new_view = self.append_value(value);
-                    (new_view, payload)
+                    self.append_value(value);
+                    payload
                 };
 
-                let new_header = Entry {
-                    view: new_view,
-                    hash,
-                    payload,
-                };
+                let new_header = Entry { hash, payload };
 
                 self.map
                     .insert_accounted(new_header, |h| h.hash, &mut self.map_size);
@@ -373,6 +391,39 @@ where
             };
             observe_payload_fn(payload);
         }
+    }
+
+    #[inline(always)]
+    fn cheap_hash<B: ByteViewType>(
+        values: &arrow::array::GenericByteViewArray<B>,
+        row: usize,
+        view_u128: u128,
+    ) -> u64 {
+        let len = view_u128 as usize;
+        let (first8, last8) = if len <= 12 {
+            let view_bytes = view_u128.to_le_bytes();
+            let value = &view_bytes[4..4 + len];
+            let first8 = Self::sample_u64(value, 0);
+            let last8_offset = value.len().saturating_sub(8);
+            let last8 = Self::sample_u64(value, last8_offset);
+            (first8, last8)
+        } else {
+            let value: &[u8] = values.value(row).as_ref();
+            let first8 = Self::sample_u64(value, 0);
+            let last8_offset = value.len().saturating_sub(8);
+            let last8 = Self::sample_u64(value, last8_offset);
+            (first8, last8)
+        };
+
+        (len as u64).wrapping_add(first8).wrapping_add(last8)
+    }
+
+    #[inline(always)]
+    fn sample_u64(value: &[u8], offset: usize) -> u64 {
+        let mut sample = [0_u8; 8];
+        let sample_len = value.len().saturating_sub(offset).min(8);
+        sample[..sample_len].copy_from_slice(&value[offset..offset + sample_len]);
+        u64::from_le_bytes(sample)
     }
 
     /// Converts this set into a `StringViewArray`, or `BinaryViewArray`,
@@ -487,7 +538,7 @@ where
 
 impl<V> Debug for ArrowBytesViewMap<V>
 where
-    V: Debug + PartialEq + Eq + Clone + Copy + Default,
+    V: ByteViewMapPayload,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ArrowBytesMap")
@@ -502,24 +553,14 @@ where
 }
 
 /// Entry in the hash table -- see [`ArrowBytesViewMap`] for more details
-///
-/// Stores the view pointing to our internal buffers, eliminating the need
-/// for a separate builder index. For inline strings (<=12 bytes), the view
-/// contains the entire value. For out-of-line strings, the view contains
-/// buffer_index and offset pointing directly to our storage.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 struct Entry<V>
 where
-    V: Debug + PartialEq + Eq + Clone + Copy + Default,
+    V: ByteViewMapPayload,
 {
-    /// The u128 view pointing to our internal buffers. For inline strings,
-    /// this contains the complete value. For larger strings, this contains
-    /// the buffer_index/offset into our completed/in_progress buffers.
-    view: u128,
-
     hash: u64,
 
-    /// value stored by the entry
+    /// Value stored by the entry.
     payload: V,
 }
 
@@ -717,8 +758,13 @@ mod tests {
 
     #[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
     struct TestPayload {
-        // store the string value to check against input
-        index: usize, // store the index of the string (each new string gets the next sequential input)
+        index: usize,
+    }
+
+    impl ByteViewMapPayload for TestPayload {
+        fn group_index(self) -> usize {
+            self.index
+        }
     }
 
     /// Wraps an [`ArrowBytesViewMap`], validating its invariants
