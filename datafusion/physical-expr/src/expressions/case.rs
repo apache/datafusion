@@ -1549,7 +1549,7 @@ fn replace_with_null(
 /// in `datafusion/expr/src/expr_schema.rs`. If the two disagree on which wrappers
 /// are null-preserving, `CASE` nullability computed by the logical and physical
 /// planners can diverge and cause a schema mismatch during planning.
-/// See https://github.com/apache/datafusion/pull/23844 for rationale.
+/// See <https://github.com/apache/datafusion/pull/23844> for rationale.
 fn unwrap_certainly_null_expr(expr: &dyn PhysicalExpr) -> &dyn PhysicalExpr {
     if let Some(expr) = expr.downcast_ref::<NotExpr>() {
         unwrap_certainly_null_expr(expr.arg().as_ref())
