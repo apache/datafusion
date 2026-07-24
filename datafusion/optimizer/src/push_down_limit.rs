@@ -18,16 +18,17 @@
 //! [`PushDownLimit`] pushes `LIMIT` earlier in the query plan
 
 use std::cmp::min;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::Result;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::utils::combine_limit;
-use datafusion_expr::logical_plan::{Join, JoinType, Limit, LogicalPlan};
-use datafusion_expr::{FetchType, SkipType, lit};
+use datafusion_common::{NullEquality, Result, get_required_group_by_exprs_indices};
+use datafusion_expr::logical_plan::{Aggregate, Join, JoinType, Limit, LogicalPlan};
+use datafusion_expr::{Expr, FetchType, LogicalPlanBuilder, SkipType, lit};
 
 /// Optimization rule that tries to push down `LIMIT`.
 //. It will push down through projection, limits (taking the smaller limit)
@@ -47,7 +48,6 @@ impl OptimizerRule for PushDownLimit {
         true
     }
 
-    #[expect(clippy::only_used_in_recursion)]
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -122,6 +122,21 @@ impl OptimizerRule for PushDownLimit {
                 .update_data(|join| {
                     make_limit(skip, fetch, Arc::new(LogicalPlan::Join(join)))
                 })),
+
+            LogicalPlan::Aggregate(aggregate)
+                if config
+                    .options()
+                    .optimizer
+                    .enable_distinct_aggregation_soft_limit =>
+            {
+                if let Some(aggregate) =
+                    prefilter_limited_aggregate(aggregate.clone(), fetch + skip)?
+                {
+                    transformed_limit(skip, fetch, aggregate)
+                } else {
+                    original_limit(skip, fetch, LogicalPlan::Aggregate(aggregate))
+                }
+            }
 
             LogicalPlan::Sort(mut sort) => {
                 let new_fetch = {
@@ -237,6 +252,99 @@ fn transformed_limit(
     Ok(Transformed::yes(make_limit(skip, fetch, Arc::new(input))))
 }
 
+/// Rewrite `LIMIT K (GROUP BY keys, aggs)` into a key preselection followed
+/// by a semi join. This keeps the aggregate itself ordinary while letting the
+/// join's dynamic filter push the selected key set into the second input scan.
+fn prefilter_limited_aggregate(
+    aggregate: Aggregate,
+    limit: usize,
+) -> Result<Option<LogicalPlan>> {
+    if limit == 0 || aggregate.aggr_expr.is_empty() || aggregate.group_expr.is_empty() {
+        return Ok(None);
+    }
+    if is_key_prefiltered_aggregate(&aggregate) {
+        return Ok(None);
+    }
+    if has_functionally_reducible_group_exprs(&aggregate) {
+        return Ok(None);
+    }
+
+    let mut seen_columns = HashSet::with_capacity(aggregate.group_expr.len());
+    let mut join_columns = Vec::with_capacity(aggregate.group_expr.len());
+    for expr in &aggregate.group_expr {
+        let Expr::Column(column) = expr else {
+            return Ok(None);
+        };
+        if !seen_columns.insert(column.clone()) {
+            return Ok(None);
+        }
+        join_columns.push(column.clone());
+    }
+
+    let key_input = aggregate.input.as_ref().clone();
+    let keys = LogicalPlanBuilder::from(key_input)
+        .aggregate(aggregate.group_expr.clone(), Vec::<Expr>::new())?
+        .limit(0, Some(limit))?
+        .build()?;
+
+    let filtered_input = LogicalPlanBuilder::from(keys)
+        .join_detailed(
+            aggregate.input.as_ref().clone(),
+            JoinType::RightSemi,
+            (join_columns.clone(), join_columns),
+            None,
+            NullEquality::NullEqualsNull,
+        )?
+        .build()?;
+
+    Aggregate::try_new(
+        Arc::new(filtered_input),
+        aggregate.group_expr,
+        aggregate.aggr_expr,
+    )
+    .map(LogicalPlan::Aggregate)
+    .map(Some)
+}
+
+fn has_functionally_reducible_group_exprs(aggregate: &Aggregate) -> bool {
+    if aggregate
+        .input
+        .schema()
+        .functional_dependencies()
+        .is_empty()
+    {
+        return false;
+    }
+
+    let group_expr_names = aggregate
+        .group_expr
+        .iter()
+        .map(|expr| expr.schema_name().to_string())
+        .collect::<Vec<_>>();
+
+    get_required_group_by_exprs_indices(aggregate.input.schema(), &group_expr_names)
+        .is_some_and(|required_indices| {
+            required_indices.len() < aggregate.group_expr.len()
+        })
+}
+
+fn is_key_prefiltered_aggregate(aggregate: &Aggregate) -> bool {
+    let LogicalPlan::Join(join) = aggregate.input.as_ref() else {
+        return false;
+    };
+    if join.join_type != JoinType::RightSemi {
+        return false;
+    }
+    let LogicalPlan::Limit(limit) = join.left.as_ref() else {
+        return false;
+    };
+    let LogicalPlan::Aggregate(keys) = limit.input.as_ref() else {
+        return false;
+    };
+
+    keys.aggr_expr.is_empty() && keys.group_expr == aggregate.group_expr
+}
+
 /// Adds a limit to the inputs of a join, if possible
 fn push_down_join(mut join: Join, limit: usize) -> Transformed<Join> {
     use JoinType::*;
@@ -279,10 +387,11 @@ mod test {
     use crate::test::*;
 
     use crate::OptimizerContext;
-    use datafusion_common::DFSchemaRef;
+    use arrow::datatypes::Schema;
+    use datafusion_common::{Constraint, Constraints, DFSchemaRef};
     use datafusion_expr::{
         Expr, Extension, UserDefinedLogicalNodeCore, col, exists,
-        logical_plan::builder::LogicalPlanBuilder,
+        logical_plan::builder::{LogicalPlanBuilder, table_source_with_constraints},
     };
     use datafusion_functions_aggregate::expr_fn::max;
 
@@ -583,7 +692,7 @@ mod test {
     }
 
     #[test]
-    fn limit_doesnt_push_down_aggregation() -> Result<()> {
+    fn limit_prefilters_aggregation() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -591,12 +700,44 @@ mod test {
             .limit(0, Some(1000))?
             .build()?;
 
-        // Limit should *not* push down aggregate node
+        // Limit preselects group keys before running the aggregate
         assert_optimized_plan_equal!(
             plan,
             @r"
         Limit: skip=0, fetch=1000
           Aggregate: groupBy=[[test.a]], aggr=[[max(test.b)]]
+            RightSemi Join: test.a = test.a
+              Limit: skip=0, fetch=1000
+                Aggregate: groupBy=[[test.a]], aggr=[[]]
+                  TableScan: test
+              TableScan: test
+        "
+        )
+    }
+
+    #[test]
+    fn limit_does_not_prefilter_fd_reducible_aggregation() -> Result<()> {
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+        let table_source = table_source_with_constraints(
+            &Schema::new(test_table_scan_fields()),
+            constraints,
+        );
+        let table_scan = LogicalPlanBuilder::scan("test", table_source, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a"), col("b"), col("c")], vec![max(col("b"))])?
+            .limit(0, Some(1000))?
+            .build()?;
+
+        // SQL planning may add functionally dependent fields as implicit group
+        // keys. Do not turn those redundant keys into semijoin predicates before
+        // projection optimization has a chance to simplify them.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Limit: skip=0, fetch=1000
+          Aggregate: groupBy=[[test.a, test.b, test.c]], aggr=[[max(test.b)]]
             TableScan: test
         "
         )
@@ -675,14 +816,20 @@ mod test {
             .limit(0, Some(10))?
             .build()?;
 
-        // Limit should use deeper LIMIT 1000, but Limit 10 shouldn't push down aggregation
+        // Limit should use deeper LIMIT 1000 and preselect group keys for the
+        // aggregate using the outer LIMIT 10.
         assert_optimized_plan_equal!(
             plan,
             @r"
         Limit: skip=0, fetch=10
           Aggregate: groupBy=[[test.a]], aggr=[[max(test.b)]]
-            Limit: skip=0, fetch=1000
-              TableScan: test, fetch=1000
+            RightSemi Join: test.a = test.a
+              Limit: skip=0, fetch=10
+                Aggregate: groupBy=[[test.a]], aggr=[[]]
+                  Limit: skip=0, fetch=1000
+                    TableScan: test, fetch=1000
+              Limit: skip=0, fetch=1000
+                TableScan: test, fetch=1000
         "
         )
     }
@@ -786,7 +933,7 @@ mod test {
     }
 
     #[test]
-    fn limit_doesnt_push_down_with_offset_aggregation() -> Result<()> {
+    fn limit_with_offset_prefilters_aggregation() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
@@ -794,13 +941,17 @@ mod test {
             .limit(10, Some(1000))?
             .build()?;
 
-        // Limit should *not* push down aggregate node
+        // Limit preselects enough group keys to satisfy offset and fetch
         assert_optimized_plan_equal!(
             plan,
             @r"
         Limit: skip=10, fetch=1000
           Aggregate: groupBy=[[test.a]], aggr=[[max(test.b)]]
-            TableScan: test
+            RightSemi Join: test.a = test.a
+              Limit: skip=0, fetch=1010
+                Aggregate: groupBy=[[test.a]], aggr=[[]]
+                  TableScan: test
+              TableScan: test
         "
         )
     }

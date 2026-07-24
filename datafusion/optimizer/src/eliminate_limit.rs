@@ -210,7 +210,11 @@ mod tests {
           Sort: test.a ASC NULLS LAST, fetch=3
             Limit: skip=0, fetch=2
               Aggregate: groupBy=[[test.a]], aggr=[[sum(test.b)]]
-                TableScan: test
+                RightSemi Join: test.a = test.a
+                  Limit: skip=0, fetch=2
+                    Aggregate: groupBy=[[test.a]], aggr=[[]]
+                      TableScan: test
+                  TableScan: test
         "
         )
     }
