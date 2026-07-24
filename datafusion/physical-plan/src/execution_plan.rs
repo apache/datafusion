@@ -664,6 +664,12 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// There are two different phases in filter pushdown, which some operators may handle the same and some differently.
     /// Depending on the phase the operator may or may not be allowed to modify the plan.
     /// See [`FilterPushdownPhase`] for more details.
+    ///
+    /// Implementations must preserve the order of `parent_filters` in the
+    /// returned child [`FilterDescription`]: each child parent-filter result is
+    /// matched back to the corresponding input parent filter by position.
+    /// Unsupported filters should therefore be marked unsupported in place,
+    /// rather than removed or appended after supported filters.
     fn gather_filters_for_pushdown(
         &self,
         _phase: FilterPushdownPhase,
