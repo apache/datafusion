@@ -60,7 +60,8 @@ use datafusion_common::{internal_err, tree_node::Transformed};
 use datafusion_expr::{BinaryExpr, lit};
 use datafusion_expr::{Cast, Expr, Operator, TryCast, simplify::SimplifyContext};
 use datafusion_expr_common::casts::{
-    is_supported_type, is_timestamp_precision_narrowing_cast, try_cast_literal_to_type,
+    is_date_narrowing_cast, is_supported_type, is_timestamp_precision_narrowing_cast,
+    try_cast_literal_to_type,
 };
 
 pub(super) fn unwrap_cast_in_comparison_for_binary(
@@ -134,7 +135,9 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary(
                 return false;
             };
 
-            if is_timestamp_precision_narrowing_cast(&expr_type, field.data_type()) {
+            if is_timestamp_precision_narrowing_cast(&expr_type, field.data_type())
+                || is_date_narrowing_cast(&expr_type, field.data_type())
+            {
                 return false;
             }
 
@@ -177,7 +180,9 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist(
         return false;
     }
 
-    if is_timestamp_precision_narrowing_cast(&expr_type, field.data_type()) {
+    if is_timestamp_precision_narrowing_cast(&expr_type, field.data_type())
+        || is_date_narrowing_cast(&expr_type, field.data_type())
+    {
         return false;
     }
 
