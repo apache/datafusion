@@ -148,7 +148,7 @@ enum PartialHashAggregateState {
         /// finish in `Done`. If `Some`, partial skip has triggered and the
         /// stream will move to `SkippingAggregation` after these accumulated
         /// groups are emitted.
-        skip_hash_table: Option<AggregateHashTable<PartialSkipMarker>>,
+        skip_hash_table: Option<Box<AggregateHashTable<PartialSkipMarker>>>,
     },
     SkippingAggregation {
         hash_table: AggregateHashTable<PartialSkipMarker>,
@@ -457,7 +457,7 @@ impl PartialHashAggregateStream {
                             return ControlFlow::Continue(
                                 PartialHashAggregateState::ProducingOutput {
                                     hash_table,
-                                    skip_hash_table: Some(skip_hash_table),
+                                    skip_hash_table: Some(Box::new(skip_hash_table)),
                                 },
                             );
                         }
@@ -547,9 +547,9 @@ impl PartialHashAggregateStream {
                         PartialHashAggregateState::ProducingOutput {
                             skip_hash_table: Some(hash_table),
                             ..
-                        } => {
-                            PartialHashAggregateState::SkippingAggregation { hash_table }
-                        }
+                        } => PartialHashAggregateState::SkippingAggregation {
+                            hash_table: *hash_table,
+                        },
                         PartialHashAggregateState::ProducingOutput {
                             skip_hash_table: None,
                             ..
@@ -573,7 +573,9 @@ impl PartialHashAggregateStream {
                     PartialHashAggregateState::ProducingOutput {
                         skip_hash_table: Some(hash_table),
                         ..
-                    } => PartialHashAggregateState::SkippingAggregation { hash_table },
+                    } => PartialHashAggregateState::SkippingAggregation {
+                        hash_table: *hash_table,
+                    },
                     PartialHashAggregateState::ProducingOutput {
                         skip_hash_table: None,
                         ..

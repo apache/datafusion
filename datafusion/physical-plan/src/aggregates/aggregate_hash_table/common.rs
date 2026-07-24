@@ -31,8 +31,10 @@ use crate::aggregates::group_values::{GroupByMetrics, GroupValues, new_group_val
 use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
-    AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
+    AggregateExec, AggregateOutputMode, GroupHashTracker, PhysicalGroupBy,
+    aggregate_expressions, evaluate_group_by,
 };
+use crate::repartition::{ExpressionHasher, HashMetrics};
 
 /// Marker for raw rows -> partial state aggregation.
 pub(in crate::aggregates) struct PartialMarker;
@@ -129,15 +131,24 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         let group_schema = agg.group_by.group_schema(&input_schema)?;
         let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
 
+        let hasher = ExpressionHasher::new_with_metrics(
+            agg.group_by.input_exprs(),
+            HashMetrics::new(&agg.metrics, partition),
+        );
+        let should_output_hashes = hasher.should_output_hashes(&input_schema)?
+            && agg.mode.output_mode() == AggregateOutputMode::Partial;
+
         Ok(Self {
             group_by_metrics: GroupByMetrics::new(&agg.metrics, partition),
-            input_schema,
+            input_schema: Arc::clone(&input_schema),
             output_schema,
             batch_size,
             state: AggregateHashTableState::Building(AggregateHashTableBuffer {
                 group_by: Arc::clone(&agg.group_by),
                 group_values,
                 batch_group_indices: Default::default(),
+                group_hash_tracker: should_output_hashes.then(GroupHashTracker::default),
+                hasher,
                 accumulators,
             }),
             _mode: PhantomData,
@@ -145,10 +156,10 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     }
 
     /// See comments in [`EvaluatedAggregateBatch`]
-    pub(super) fn evaluate_batch(
+    pub(super) fn evaluate_batch<'a>(
         &self,
-        batch: &RecordBatch,
-    ) -> Result<EvaluatedAggregateBatch> {
+        batch: &'a RecordBatch,
+    ) -> Result<EvaluatedAggregateBatch<'a>> {
         let state = self.state.building();
         let timer = self.group_by_metrics.time_calculating_group_ids.timer();
         // outer vec: one per each grouping set
@@ -170,6 +181,9 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         Ok(EvaluatedAggregateBatch {
             grouping_set_args,
             accumulator_args,
+            precomputed_group_hashes: state
+                .hasher
+                .precomputed_group_by(&state.group_by, batch),
         })
     }
 
@@ -189,9 +203,24 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 
         let _timer = self.group_by_metrics.aggregation_time.timer();
         for group_values in &evaluated_batch.grouping_set_args {
-            state
-                .group_values
-                .intern(group_values, &mut state.batch_group_indices)?;
+            let previous_group_count = state.group_values.len();
+            let hashes = match evaluated_batch.precomputed_group_hashes {
+                Some(hashes) => hashes,
+                None => state.hasher.compute_hashes(group_values)?,
+            };
+            state.group_values.intern(
+                group_values,
+                &mut state.batch_group_indices,
+                hashes,
+            )?;
+            if let Some(group_hash_tracker) = &mut state.group_hash_tracker {
+                group_hash_tracker.record_new_groups(
+                    previous_group_count,
+                    state.group_values.len(),
+                    &state.batch_group_indices,
+                    hashes,
+                );
+            }
             let group_indices = &state.batch_group_indices;
             let total_num_groups = state.group_values.len();
 
@@ -238,6 +267,9 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                     for acc in state.accumulators.iter_mut() {
                         columns.extend(materialize_accumulator_fn(acc, emit_to)?);
                     }
+                    if let Some(group_hash_tracker) = &mut state.group_hash_tracker {
+                        columns.push(group_hash_tracker.emit(emit_to));
+                    }
                     drop(timer);
 
                     let batch = RecordBatch::try_new(output_schema, columns)?;
@@ -274,6 +306,11 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 
                 acc + state.group_values.size()
                     + state.batch_group_indices.allocated_size()
+                    + state
+                        .group_hash_tracker
+                        .as_ref()
+                        .map_or(0, |v| v.allocated_size())
+                    + state.hasher.allocated_size()
             }
             AggregateHashTableState::OutputtingMaterialized(output) => {
                 output.memory_size()
@@ -374,13 +411,16 @@ pub(super) struct EvaluatedAccumulatorArgs {
 ///
 /// e.g., `select k+1, sum(v*v) from t group by (k+1)`, this function evaluates
 /// `k+1`, `v*v`
-pub(super) struct EvaluatedAggregateBatch {
+pub(super) struct EvaluatedAggregateBatch<'a> {
     /// One entry per grouping set; each entry contains all evaluated group key
     /// arrays for the current input batch.
     pub(super) grouping_set_args: Vec<Vec<ArrayRef>>,
 
     /// Evaluated arguments and filters, one entry per aggregate expression.
     pub(super) accumulator_args: Vec<EvaluatedAccumulatorArgs>,
+
+    /// Hashes carried by the input batch for a simple GROUP BY, when available.
+    pub(super) precomputed_group_hashes: Option<&'a [u64]>,
 }
 
 /// Buffer for the aggregate hash table's group keys and accumulator states.
@@ -402,6 +442,14 @@ pub(super) struct AggregateHashTableBuffer {
     /// Each value indexes into `group_values`, and the same index is used by every
     /// accumulator to update that group's aggregate state.
     pub(super) batch_group_indices: Vec<usize>,
+
+    /// Hashes retained for the internal hash column when output requires it.
+    /// If this field is `None`, it means that the output does not require to emit
+    /// intermediate hashes.
+    pub(super) group_hash_tracker: Option<GroupHashTracker>,
+
+    /// Computes group hashes when the input has no reusable hash column.
+    pub(super) hasher: ExpressionHasher,
 
     /// One item per aggregate expression.
     ///

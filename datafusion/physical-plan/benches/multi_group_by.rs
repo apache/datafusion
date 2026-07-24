@@ -27,11 +27,12 @@
 //! covers a `(FixedSizeBinary, Int32)` key to exercise the
 //! `FixedSizeBinaryGroupValueBuilder`.
 
-use arrow::array::{ArrayRef, Int32Array, UInt32Array};
+use arrow::array::{ArrayRef, Int32Array, UInt32Array, UInt64Array};
 use arrow::compute::take;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::util::bench_util::create_fsb_array;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_physical_plan::aggregates::group_values::GroupValues;
 use datafusion_physical_plan::aggregates::group_values::GroupValuesRows;
 use datafusion_physical_plan::aggregates::group_values::multi_group_by::GroupValuesColumn;
@@ -39,6 +40,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 const DEFAULT_BATCH_SIZE: usize = 8192;
+const AGGREGATION_HASH_SEED: u64 = 15395726432021054657;
 
 fn make_schema(num_cols: usize) -> SchemaRef {
     let fields: Vec<Field> = (0..num_cols)
@@ -98,10 +100,15 @@ fn bench_intern(
     gv: &mut Box<dyn GroupValues>,
     batches: &[Vec<ArrayRef>],
     groups: &mut Vec<usize>,
+    hashes: &mut Vec<u64>,
 ) {
+    let random_state = RandomState::with_seed(AGGREGATION_HASH_SEED);
     for batch in batches {
         groups.clear();
-        gv.intern(batch, groups).unwrap();
+        hashes.clear();
+        hashes.resize(batch[0].len(), 0);
+        create_hashes(batch, &random_state, hashes).unwrap();
+        gv.intern(batch, groups, hashes).unwrap();
     }
     black_box(&*groups);
 }
@@ -135,9 +142,10 @@ fn bench_issue_17850_regression(c: &mut Criterion) {
                             (
                                 create_group_values(&schema, vectorized),
                                 Vec::<usize>::with_capacity(DEFAULT_BATCH_SIZE),
+                                Vec::<u64>::with_capacity(DEFAULT_BATCH_SIZE),
                             )
                         },
-                        |(gv, groups)| bench_intern(gv, batches, groups),
+                        |(gv, groups, hashes)| bench_intern(gv, batches, groups, hashes),
                         criterion::BatchSize::LargeInput,
                     );
                 },
@@ -178,9 +186,10 @@ fn bench_low_cardinality(c: &mut Criterion) {
                             (
                                 create_group_values(&schema, vectorized),
                                 Vec::<usize>::with_capacity(DEFAULT_BATCH_SIZE),
+                                Vec::<u64>::with_capacity(DEFAULT_BATCH_SIZE),
                             )
                         },
-                        |(gv, groups)| bench_intern(gv, batches, groups),
+                        |(gv, groups, hashes)| bench_intern(gv, batches, groups, hashes),
                         criterion::BatchSize::LargeInput,
                     );
                 },
@@ -217,9 +226,10 @@ fn bench_batch_size_sensitivity(c: &mut Criterion) {
                             (
                                 create_group_values(&schema, vectorized),
                                 Vec::<usize>::with_capacity(batch_size),
+                                Vec::<u64>::with_capacity(batch_size),
                             )
                         },
-                        |(gv, groups)| bench_intern(gv, batches, groups),
+                        |(gv, groups, hashes)| bench_intern(gv, batches, groups, hashes),
                         criterion::BatchSize::LargeInput,
                     );
                 },
@@ -257,9 +267,10 @@ fn bench_column_scaling(c: &mut Criterion) {
                             (
                                 create_group_values(&schema, vectorized),
                                 Vec::<usize>::with_capacity(DEFAULT_BATCH_SIZE),
+                                Vec::<u64>::with_capacity(DEFAULT_BATCH_SIZE),
                             )
                         },
-                        |(gv, groups)| bench_intern(gv, batches, groups),
+                        |(gv, groups, hashes)| bench_intern(gv, batches, groups, hashes),
                         criterion::BatchSize::LargeInput,
                     );
                 },
@@ -295,9 +306,10 @@ fn bench_high_cardinality_scaling(c: &mut Criterion) {
                             (
                                 create_group_values(&schema, vectorized),
                                 Vec::<usize>::with_capacity(DEFAULT_BATCH_SIZE),
+                                Vec::<u64>::with_capacity(DEFAULT_BATCH_SIZE),
                             )
                         },
-                        |(gv, groups)| bench_intern(gv, batches, groups),
+                        |(gv, groups, hashes)| bench_intern(gv, batches, groups, hashes),
                         criterion::BatchSize::LargeInput,
                     );
                 },
@@ -336,9 +348,10 @@ fn bench_group_count_sweep(c: &mut Criterion) {
                             (
                                 create_group_values(&schema, vectorized),
                                 Vec::<usize>::with_capacity(DEFAULT_BATCH_SIZE),
+                                Vec::<u64>::with_capacity(DEFAULT_BATCH_SIZE),
                             )
                         },
-                        |(gv, groups)| bench_intern(gv, batches, groups),
+                        |(gv, groups, hashes)| bench_intern(gv, batches, groups, hashes),
                         criterion::BatchSize::LargeInput,
                     );
                 },
@@ -432,9 +445,10 @@ fn bench_fixed_size_binary(c: &mut Criterion) {
                             (
                                 create_group_values(&schema, vectorized),
                                 Vec::<usize>::with_capacity(DEFAULT_BATCH_SIZE),
+                                Vec::<u64>::with_capacity(DEFAULT_BATCH_SIZE),
                             )
                         },
-                        |(gv, groups)| bench_intern(gv, batches, groups),
+                        |(gv, groups, hashes)| bench_intern(gv, batches, groups, hashes),
                         criterion::BatchSize::LargeInput,
                     );
                 },

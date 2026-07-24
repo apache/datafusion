@@ -27,6 +27,7 @@ use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
 use criterion::{
     BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
 };
+use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_expr::EmitTo;
 use datafusion_physical_plan::aggregates::group_values::new_group_values;
 use datafusion_physical_plan::aggregates::order::GroupOrdering;
@@ -41,6 +42,18 @@ const CARDS_RELATIVE: [usize; 4] = [20, 75, 300, 1000];
 const N_BATCHES: usize = 4;
 // Fixed for reproducibility.
 const SEED: u64 = 0xD1C7;
+const AGGREGATION_HASH_SEED: u64 = 15395726432021054657;
+
+fn create_aggregation_hashes(array: &ArrayRef, hashes: &mut Vec<u64>) {
+    hashes.clear();
+    hashes.resize(array.len(), 0);
+    create_hashes(
+        std::slice::from_ref(array),
+        &RandomState::with_seed(AGGREGATION_HASH_SEED),
+        hashes,
+    )
+    .unwrap();
+}
 
 fn dict_schema() -> SchemaRef {
     let dict_ty =
@@ -109,10 +122,13 @@ fn bench_intern_emit(c: &mut Criterion) {
                                 new_group_values(schema.clone(), &GroupOrdering::None)
                                     .unwrap(),
                                 Vec::<usize>::with_capacity(size),
+                                Vec::<u64>::with_capacity(size),
                             )
                         },
-                        |(gv, groups)| {
-                            gv.intern(std::slice::from_ref(&array), groups).unwrap();
+                        |(gv, groups, hashes)| {
+                            create_aggregation_hashes(&array, hashes);
+                            gv.intern(std::slice::from_ref(&array), groups, hashes)
+                                .unwrap();
                             black_box(&*groups);
                             black_box(gv.emit(EmitTo::All).unwrap());
                         },
@@ -154,11 +170,14 @@ fn bench_repeated_intern_emit(c: &mut Criterion) {
                                 new_group_values(schema.clone(), &GroupOrdering::None)
                                     .unwrap(),
                                 Vec::<usize>::with_capacity(size),
+                                Vec::<u64>::with_capacity(size),
                             )
                         },
-                        |(gv, groups)| {
+                        |(gv, groups, hashes)| {
                             for arr in &batches {
-                                gv.intern(std::slice::from_ref(arr), groups).unwrap();
+                                create_aggregation_hashes(arr, hashes);
+                                gv.intern(std::slice::from_ref(arr), groups, hashes)
+                                    .unwrap();
                                 black_box(&*groups);
                             }
                             black_box(gv.emit(EmitTo::All).unwrap());

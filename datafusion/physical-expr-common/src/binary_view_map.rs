@@ -212,12 +212,41 @@ where
         MP: FnMut(Option<&[u8]>) -> V,
         OP: FnMut(V),
     {
+        let mut hashes = std::mem::take(&mut self.hashes_buffer);
+        hashes.clear();
+        hashes.resize(values.len(), 0);
+        create_hashes([values], &self.random_state, &mut hashes)
+            // hash is supported for all types and create_hashes only
+            // returns errors for unsupported types
+            .unwrap();
+        self.insert_if_new_with_hashes(
+            values,
+            &hashes,
+            make_payload_fn,
+            observe_payload_fn,
+        );
+        self.hashes_buffer = hashes;
+    }
+
+    /// Like [`Self::insert_if_new`], but uses a hash supplied for each input value.
+    pub fn insert_if_new_with_hashes<MP, OP>(
+        &mut self,
+        values: &ArrayRef,
+        hashes: &[u64],
+        make_payload_fn: MP,
+        observe_payload_fn: OP,
+    ) where
+        MP: FnMut(Option<&[u8]>) -> V,
+        OP: FnMut(V),
+    {
+        assert_eq!(values.len(), hashes.len());
         // Sanity check array type
         match self.output_type {
             OutputType::BinaryView => {
                 assert!(matches!(values.data_type(), DataType::BinaryView));
                 self.insert_if_new_inner::<MP, OP, BinaryViewType>(
                     values,
+                    hashes,
                     make_payload_fn,
                     observe_payload_fn,
                 )
@@ -226,6 +255,7 @@ where
                 assert!(matches!(values.data_type(), DataType::Utf8View));
                 self.insert_if_new_inner::<MP, OP, StringViewType>(
                     values,
+                    hashes,
                     make_payload_fn,
                     observe_payload_fn,
                 )
@@ -245,6 +275,7 @@ where
     fn insert_if_new_inner<MP, OP, B>(
         &mut self,
         values: &ArrayRef,
+        hashes: &[u64],
         mut make_payload_fn: MP,
         mut observe_payload_fn: OP,
     ) where
@@ -252,27 +283,17 @@ where
         OP: FnMut(V),
         B: ByteViewType,
     {
-        // step 1: compute hashes
-        let batch_hashes = &mut self.hashes_buffer;
-        batch_hashes.clear();
-        batch_hashes.resize(values.len(), 0);
-        create_hashes([values], &self.random_state, batch_hashes)
-            // hash is supported for all types and create_hashes only
-            // returns errors for unsupported types
-            .unwrap();
-
-        // step 2: insert each value into the set, if not already present
         let values = values.as_byte_view::<B>();
 
         // Get raw views buffer for direct comparison
         let input_views = values.views();
 
         // Ensure lengths are equivalent
-        assert_eq!(values.len(), self.hashes_buffer.len());
+        assert_eq!(values.len(), hashes.len());
 
         for i in 0..values.len() {
             let view_u128 = input_views[i];
-            let hash = self.hashes_buffer[i];
+            let hash = hashes[i];
 
             // handle null value via validity bitmap check
             if values.is_null(i) {

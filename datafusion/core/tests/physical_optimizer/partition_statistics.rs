@@ -911,7 +911,6 @@ mod test {
                 ColumnStatistics::new_unknown(),
             ],
         };
-
         assert_eq!(*p0_statistics, expected_p0_statistics);
 
         let expected_p1_statistics = Statistics {
@@ -930,7 +929,6 @@ mod test {
                 ColumnStatistics::new_unknown(),
             ],
         };
-
         let p1_statistics = StatisticsContext::new().compute(
             aggregate_exec_partial.as_ref(),
             &StatisticsArgs::new().with_partition(Some(1)),
@@ -1009,7 +1007,6 @@ mod test {
                 ColumnStatistics::new_unknown(),
             ],
         };
-
         assert_eq!(
             empty_stat,
             *StatisticsContext::new().compute(
