@@ -17,6 +17,7 @@
 
 //! Runtime configuration, via [`ConfigOptions`]
 
+use arrow::array::timezone::Tz;
 use arrow_ipc::CompressionType;
 
 #[cfg(feature = "parquet_encryption")]
@@ -720,6 +721,42 @@ impl From<SpillCompression> for Option<CompressionType> {
     }
 }
 
+/// A validated timezone configuration value.
+#[derive(Debug, Copy, Clone)]
+pub struct ConfigTimeZone(Tz);
+
+impl ConfigTimeZone {
+    /// Returns the parsed timezone value.
+    pub fn tz(&self) -> Tz {
+        self.0
+    }
+}
+
+impl FromStr for ConfigTimeZone {
+    type Err = DataFusionError;
+
+    fn from_str(value: &str) -> Result<Self> {
+        value
+            .parse::<Tz>()
+            .map(Self)
+            .map_err(|e| DataFusionError::Configuration(e.to_string()))
+    }
+}
+
+impl Display for ConfigTimeZone {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl PartialEq for ConfigTimeZone {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_string() == other.to_string()
+    }
+}
+
+impl Eq for ConfigTimeZone {}
+
 config_namespace! {
     /// Options related to query execution
     ///
@@ -770,7 +807,7 @@ config_namespace! {
         /// The default time zone
         ///
         /// Some functions, e.g. `now` return timestamps in this time zone
-        pub time_zone: Option<String>, default = None
+        pub time_zone: Option<ConfigTimeZone>, default = None
 
         /// Parquet options
         pub parquet: ParquetOptions, default = Default::default()
@@ -2248,6 +2285,38 @@ impl<F: ConfigField + Default> ConfigField for Option<F> {
             Ok(())
         } else {
             self.get_or_insert_with(Default::default).reset(key)
+        }
+    }
+}
+
+impl ConfigField for Option<ConfigTimeZone> {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        match self {
+            Some(tz) => v.some(key, tz, description),
+            None => v.none(key, description),
+        }
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if !key.is_empty() {
+            return _config_err!(
+                "Config field is an optional timezone and does not have nested field \"{}\"",
+                key
+            );
+        }
+        *self = Some(value.parse()?);
+        Ok(())
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            *self = None;
+            Ok(())
+        } else {
+            _config_err!(
+                "Config field is an optional timezone and does not have nested field \"{}\"",
+                key
+            )
         }
     }
 }
@@ -4337,6 +4406,45 @@ mod tests {
             err.to_string(),
             "Invalid or Unsupported Configuration: Invalid parquet writer version: 3.0. Expected one of: 1.0, 2.0"
         );
+    }
+
+    #[test]
+    fn test_execution_time_zone_validation() {
+        use crate::config::{ConfigOptions, ConfigTimeZone};
+
+        let mut config = ConfigOptions::default();
+
+        for valid in ["+08:00", "-08:00", "+0800", "+08", "Asia/Taipei"] {
+            config.set("datafusion.execution.time_zone", valid).unwrap();
+            assert_eq!(
+                config.execution.time_zone.as_ref().map(ToString::to_string),
+                Some(valid.parse::<ConfigTimeZone>().unwrap().to_string())
+            );
+        }
+
+        let previous = config.execution.time_zone;
+        for invalid in ["+08:00:00", "08:00", "08", "Asia/Taipei2"] {
+            let err = config
+                .set("datafusion.execution.time_zone", invalid)
+                .unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Invalid or Unsupported Configuration: Parser error: Invalid timezone {invalid:?}: failed to parse timezone"
+                )
+            );
+            assert_eq!(config.execution.time_zone, previous);
+        }
+
+        let err = config
+            .set("datafusion.execution.time_zone.name", "UTC")
+            .unwrap_err();
+        assert!(
+            err.strip_backtrace()
+                .contains("does not have nested field \"name\""),
+            "Unexpected error {err:?}"
+        );
+        assert_eq!(config.execution.time_zone, previous);
     }
 
     #[cfg(feature = "parquet")]

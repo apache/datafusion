@@ -213,23 +213,19 @@ SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
 statement ok
 set datafusion.catalog.information_schema = true
 
-statement ok
+statement error DataFusion error: Invalid or Unsupported Configuration: Parser error: Invalid timezone "\+08:00:00": failed to parse timezone
 SET TIME ZONE = '+08:00:00'
 
-statement error Arrow error: Parser error: Invalid timezone "\+08:00:00": failed to parse timezone
-SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
+query TT
+SHOW TIME ZONE
+----
+datafusion.execution.time_zone +08:00
 
-statement ok
+statement error DataFusion error: Invalid or Unsupported Configuration: Parser error: Invalid timezone "08:00": failed to parse timezone
 SET TIME ZONE = '08:00'
 
-statement error Arrow error: Parser error: Invalid timezone "08:00": failed to parse timezone
-SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
-
-statement ok
+statement error DataFusion error: Invalid or Unsupported Configuration: Parser error: Invalid timezone "08": failed to parse timezone
 SET TIME ZONE = '08'
-
-statement error Arrow error: Parser error: Invalid timezone "08": failed to parse timezone
-SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
 
 statement ok
 SET TIME ZONE = 'Asia/Taipei'
@@ -239,11 +235,8 @@ SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
 ----
 2000-01-01T00:00:00+08:00
 
-statement ok
+statement error DataFusion error: Invalid or Unsupported Configuration: Parser error: Invalid timezone "Asia/Taipei2": failed to parse timezone
 SET TIME ZONE = 'Asia/Taipei2'
-
-statement error Arrow error: Parser error: Invalid timezone "Asia/Taipei2": failed to parse timezone
-SELECT '2000-01-01T00:00:00'::TIMESTAMP::TIMESTAMPTZ
 
 # reset variable restores default
 statement ok
