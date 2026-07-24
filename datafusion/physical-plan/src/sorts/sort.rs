@@ -631,13 +631,13 @@ impl ExternalSorter {
             return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
-        // For single-column sorts, coalesce the buffered batches into fewer,
-        // larger runs to cut the merge fan-in (where the cheap per-key compare is
-        // dominated by per-stream cursor/merge overhead). Multi-column sorts are
-        // left as one run per batch: the row-format merge of many small runs
-        // beats sorting a few large runs with the lexicographic comparator.
+        // Coalesce the buffered batches into fewer, larger runs to cut the merge
+        // fan-in. Single-column runs are sorted with `lexsort_to_indices`;
+        // multi-column runs are sorted via the Arrow row format (see
+        // `sorted_indices`), whose one-off encode is amortized over the larger
+        // run, so both column counts benefit from larger runs here.
         let batches = std::mem::take(&mut self.in_mem_batches);
-        let runs = if coalesce_runs && self.expr.len() == 1 {
+        let runs = if coalesce_runs {
             self.coalesce_in_mem_batches_into_runs(batches)?
         } else {
             batches
