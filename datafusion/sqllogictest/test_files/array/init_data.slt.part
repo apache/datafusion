@@ -688,3 +688,4 @@ AS
     arrow_cast(column4, 'FixedSizeList(3, Float64)') AS column4
 FROM arrays_distance_table
 ;
+
