@@ -290,7 +290,7 @@ pub fn parse_write_op(
     })
 }
 
-fn parse_merge_into_op(
+pub fn parse_merge_into_op(
     op: &protobuf::MergeIntoOpNode,
     ctx: &TaskContext,
     codec: &dyn LogicalExtensionCodec,

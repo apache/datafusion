@@ -24,7 +24,7 @@ use crate::session::Session;
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::{Constraints, Statistics, not_impl_err};
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{DFSchemaRef, Result, internal_err};
 use datafusion_expr::Expr;
 use datafusion_expr::statistics::StatisticsRequest;
 
@@ -383,6 +383,10 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// Merge rows from a source into this table.
     ///
     /// The `source` is an [`ExecutionPlan`] representing the USING clause.
+    /// The `merge_schema` contains the target columns followed by the source
+    /// columns, preserving their logical qualifiers. Providers can use this
+    /// schema to resolve the logical expressions against the combined rows
+    /// they construct while executing the merge.
     /// The `on` condition is the join predicate from the ON clause.
     /// The `clauses` describe the WHEN MATCHED / WHEN NOT MATCHED actions.
     ///
@@ -391,6 +395,7 @@ pub trait TableProvider: Any + Debug + Sync + Send {
         &self,
         _state: &dyn Session,
         _source: Arc<dyn ExecutionPlan>,
+        _merge_schema: DFSchemaRef,
         _on: Expr,
         _clauses: Vec<MergeIntoClause>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

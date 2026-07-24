@@ -193,8 +193,58 @@ impl<'a> TypeCoercionRewriter<'a> {
             LogicalPlan::Join(join) => self.coerce_join(join),
             LogicalPlan::Union(union) => Self::coerce_union(union),
             LogicalPlan::Limit(limit) => Self::coerce_limit(limit),
+            LogicalPlan::Dml(dml) => self.coerce_dml(dml),
             _ => Ok(plan),
         }
+    }
+
+    fn coerce_dml(&self, mut dml: DmlStatement) -> Result<LogicalPlan> {
+        let WriteOp::MergeInto(merge_op) = &dml.op else {
+            return Ok(LogicalPlan::Dml(dml));
+        };
+
+        let target_schema = DFSchema::try_from_qualified_schema(
+            dml.table_name.clone(),
+            &dml.target.schema(),
+        )?;
+        let mut merge_op = (**merge_op).clone();
+        merge_op.on = self.coerce_predicate(merge_op.on, "MERGE ON condition")?;
+        for clause in &mut merge_op.clauses {
+            clause.predicate = clause
+                .predicate
+                .take()
+                .map(|expr| self.coerce_predicate(expr, "MERGE WHEN condition"))
+                .transpose()?;
+
+            match &mut clause.action {
+                datafusion_expr::dml::MergeIntoAction::Update(assignments) => {
+                    for (column, value) in assignments {
+                        let field = target_schema.field_with_unqualified_name(column)?;
+                        *value = value.clone().cast_to(field.data_type(), self.schema)?;
+                    }
+                }
+                datafusion_expr::dml::MergeIntoAction::Insert { columns, values } => {
+                    if columns.is_empty() {
+                        for (value, field) in
+                            values.iter_mut().zip(target_schema.fields())
+                        {
+                            *value =
+                                value.clone().cast_to(field.data_type(), self.schema)?;
+                        }
+                    } else {
+                        for (column, value) in columns.iter().zip(values) {
+                            let field =
+                                target_schema.field_with_unqualified_name(column)?;
+                            *value =
+                                value.clone().cast_to(field.data_type(), self.schema)?;
+                        }
+                    }
+                }
+                datafusion_expr::dml::MergeIntoAction::Delete => {}
+            }
+        }
+        dml.op = WriteOp::MergeInto(Box::new(merge_op));
+        Ok(LogicalPlan::Dml(dml))
     }
 
     /// Coerce join equality expressions and join filter
@@ -228,7 +278,7 @@ impl<'a> TypeCoercionRewriter<'a> {
         // Join filter must be boolean
         join.filter = join
             .filter
-            .map(|expr| self.coerce_join_filter(expr))
+            .map(|expr| self.coerce_predicate(expr, "Join condition"))
             .transpose()?;
 
         Ok(LogicalPlan::Join(join))
@@ -296,12 +346,14 @@ impl<'a> TypeCoercionRewriter<'a> {
         }))
     }
 
-    fn coerce_join_filter(&self, expr: Expr) -> Result<Expr> {
+    fn coerce_predicate(&self, expr: Expr, description: &str) -> Result<Expr> {
         let expr_type = expr.get_type(self.schema)?;
         match expr_type {
             DataType::Boolean => Ok(expr),
             DataType::Null => expr.cast_to(&DataType::Boolean, self.schema),
-            other => plan_err!("Join condition must be boolean type, but got {other:?}"),
+            other => {
+                plan_err!("{description} must be boolean type, but got {other:?}")
+            }
         }
     }
 
@@ -1584,11 +1636,24 @@ mod test {
         let on = col("target.id").eq(col("source.id"));
         let merge_op = MergeIntoOp {
             on,
-            clauses: vec![MergeIntoClause {
-                kind: MergeIntoClauseKind::Matched,
-                predicate: None,
-                action: MergeIntoAction::Delete,
-            }],
+            clauses: vec![
+                MergeIntoClause {
+                    kind: MergeIntoClauseKind::Matched,
+                    predicate: None,
+                    action: MergeIntoAction::Update(vec![(
+                        "id".to_string(),
+                        col("source.id"),
+                    )]),
+                },
+                MergeIntoClause {
+                    kind: MergeIntoClauseKind::NotMatched,
+                    predicate: None,
+                    action: MergeIntoAction::Insert {
+                        columns: vec!["id".to_string()],
+                        values: vec![col("source.id")],
+                    },
+                },
+            ],
         };
         let plan = LogicalPlan::Dml(DmlStatement::new(
             target_table_name,
@@ -1597,13 +1662,27 @@ mod test {
             Arc::new(source_plan),
         ));
 
-        assert_analyzed_plan_eq!(
-            plan,
-            @r"
-        Dml: op=[MergeInto] table=[target]
-          TableScan: source
-        "
-        )
+        let analyzed = Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())])
+            .execute_and_check(plan, &ConfigOptions::default(), |_, _| {})?;
+        let LogicalPlan::Dml(dml) = analyzed else {
+            panic!("expected Dml");
+        };
+        let WriteOp::MergeInto(merge_op) = dml.op else {
+            panic!("expected MergeInto");
+        };
+        assert_eq!(
+            merge_op.on.to_string(),
+            "CAST(target.id AS Int64) = source.id"
+        );
+        let MergeIntoAction::Update(assignments) = &merge_op.clauses[0].action else {
+            panic!("expected UPDATE");
+        };
+        assert_eq!(assignments[0].1.to_string(), "CAST(source.id AS UInt32)");
+        let MergeIntoAction::Insert { values, .. } = &merge_op.clauses[1].action else {
+            panic!("expected INSERT");
+        };
+        assert_eq!(values[0].to_string(), "CAST(source.id AS UInt32)");
+        Ok(())
     }
 
     #[test]

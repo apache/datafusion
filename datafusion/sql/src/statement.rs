@@ -33,7 +33,7 @@ use arrow::datatypes::{Field, FieldRef, Fields};
 use datafusion_common::error::_plan_err;
 use datafusion_common::format::ExplainStatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     Column, Constraint, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result,
     ScalarValue, SchemaError, SchemaReference, TableReference, ToDFSchema, exec_err,
@@ -2439,9 +2439,47 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return not_impl_err!("MERGE OUTPUT clause is not supported");
         }
 
+        if clauses.is_empty() {
+            return plan_err!("MERGE INTO requires at least one WHEN clause");
+        }
+
         // 1. Resolve target table
-        let (target_table_name, target_alias) = match &table {
-            TableFactor::Table { name, alias, .. } => (name.clone(), alias.clone()),
+        let (target_table_name, target_alias) = match table {
+            TableFactor::Table {
+                name,
+                alias,
+                args,
+                with_hints,
+                version,
+                with_ordinality,
+                partitions,
+                json_path,
+                sample,
+                index_hints,
+            } => {
+                if alias
+                    .as_ref()
+                    .is_some_and(|alias| !alias.columns.is_empty())
+                {
+                    return not_impl_err!(
+                        "MERGE target alias column lists are not supported"
+                    );
+                }
+                if args.is_some()
+                    || !with_hints.is_empty()
+                    || version.is_some()
+                    || with_ordinality
+                    || !partitions.is_empty()
+                    || json_path.is_some()
+                    || sample.is_some()
+                    || !index_hints.is_empty()
+                {
+                    return not_impl_err!(
+                        "MERGE target table modifiers are not supported"
+                    );
+                }
+                (name, alias)
+            }
             _ => plan_err!("Cannot MERGE INTO non-table relation!")?,
         };
         let target_table_ref = self.object_name_to_table_reference(target_table_name)?;
@@ -2485,7 +2523,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     clause,
                     &combined_schema,
                     &target_schema,
-                    &target_alias,
+                    &target_qualifier,
                     &mut planner_context,
                 )
             })
@@ -2502,17 +2540,30 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             clauses: df_clauses,
         };
         if target_qualifier != target_table_ref {
+            // Target references in correlated subqueries are represented as
+            // `OuterReferenceColumn`s inside the embedded logical plan. The
+            // alias canonicalization below only rewrites top-level expression
+            // columns, so accepting such a subquery would leave the target
+            // alias in the public MERGE representation. Reject this case until
+            // the alias can be rewritten scope-safely inside subquery plans.
+            for expr in merge_op.exprs() {
+                if Self::has_outer_reference_to_qualifier(expr, &target_qualifier)? {
+                    return not_impl_err!(
+                        "MERGE subqueries correlated to target alias \
+                         '{target_qualifier}' are not supported"
+                    );
+                }
+            }
+
             // Canonicalizing target columns to `target_table_ref` is only safe
             // when the source does not already use that qualifier. If it does
             // (e.g. `MERGE INTO target AS t USING source AS target`), the two
             // namespaces would collapse and later resolution could silently
             // pick the source column for a target reference. Reject that
             // collision rather than change the meaning of the condition.
-            if source_plan
-                .schema()
-                .iter()
-                .any(|(qualifier, _)| qualifier == Some(&target_table_ref))
-            {
+            if source_plan.schema().iter().any(|(qualifier, _)| {
+                qualifier.is_some_and(|q| q.resolved_eq(&target_table_ref))
+            }) {
                 return plan_err!(
                     "MERGE source may not use the target table name '{target_table_ref}' \
                      as a qualifier while the target is aliased as '{target_qualifier}'; \
@@ -2559,15 +2610,81 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         .map(|transformed| transformed.data)
     }
 
-    fn ident_from_object_name_last(name: &ObjectName) -> Result<Ident> {
+    /// Return true if an expression contains a subquery whose embedded plan
+    /// has an outer reference qualified by `qualifier`.
+    fn has_outer_reference_to_qualifier(
+        expr: &Expr,
+        qualifier: &TableReference,
+    ) -> Result<bool> {
+        let mut found = false;
+        expr.apply(|expr| {
+            let subquery = match expr {
+                Expr::Exists(exists) => Some(&exists.subquery),
+                Expr::InSubquery(in_subquery) => Some(&in_subquery.subquery),
+                Expr::SetComparison(set_comparison) => Some(&set_comparison.subquery),
+                Expr::ScalarSubquery(subquery) => Some(subquery),
+                _ => None,
+            };
+
+            if let Some(subquery) = subquery {
+                subquery.subquery.apply_with_subqueries(|plan| {
+                    plan.apply_expressions(|expr| {
+                        expr.apply(|expr| {
+                            if let Expr::OuterReferenceColumn(_, column) = expr
+                                && column.relation.as_ref() == Some(qualifier)
+                            {
+                                found = true;
+                                Ok(TreeNodeRecursion::Stop)
+                            } else {
+                                Ok(TreeNodeRecursion::Continue)
+                            }
+                        })
+                    })?;
+                    Ok(if found {
+                        TreeNodeRecursion::Stop
+                    } else {
+                        TreeNodeRecursion::Continue
+                    })
+                })?;
+            }
+
+            Ok(if found {
+                TreeNodeRecursion::Stop
+            } else {
+                TreeNodeRecursion::Continue
+            })
+        })?;
+        Ok(found)
+    }
+
+    fn merge_target_column_name(
+        &self,
+        name: &ObjectName,
+        target_qualifier: &TableReference,
+    ) -> Result<String> {
         let part = name
             .0
             .iter()
             .last()
             .ok_or_else(|| plan_datafusion_err!("Empty column name"))?;
-        part.as_ident()
+        let ident = part
+            .as_ident()
             .cloned()
-            .ok_or_else(|| plan_datafusion_err!("Expected simple identifier"))
+            .ok_or_else(|| plan_datafusion_err!("Expected simple identifier"))?;
+
+        if name.0.len() > 1 {
+            let qualifier = self.object_name_to_table_reference(ObjectName(
+                name.0[..name.0.len() - 1].to_vec(),
+            ))?;
+            if !qualifier.resolved_eq(target_qualifier) {
+                return plan_err!(
+                    "MERGE assignment target '{name}' must reference target table \
+                     '{target_qualifier}'"
+                );
+            }
+        }
+
+        Ok(self.ident_normalizer.normalize(ident))
     }
 
     fn merge_clause_to_plan(
@@ -2575,7 +2692,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         clause: ast::MergeClause,
         combined_schema: &DFSchema,
         target_schema: &DFSchema,
-        _target_alias: &Option<ast::TableAlias>,
+        target_qualifier: &TableReference,
         planner_context: &mut PlannerContext,
     ) -> Result<MergeIntoClause> {
         let kind = match clause.clause_kind {
@@ -2596,14 +2713,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let action = match clause.action {
             ast::MergeAction::Update(update_expr) => {
+                if update_expr.update_predicate.is_some() {
+                    return not_impl_err!(
+                        "MERGE UPDATE WHERE predicates are not supported"
+                    );
+                }
+                if update_expr.delete_predicate.is_some() {
+                    return not_impl_err!(
+                        "MERGE UPDATE DELETE WHERE predicates are not supported"
+                    );
+                }
                 let assignments = update_expr
                     .assignments
                     .into_iter()
                     .map(|assign| {
                         let col_name = match &assign.target {
                             AssignmentTarget::ColumnName(cols) => {
-                                let ident = Self::ident_from_object_name_last(cols)?;
-                                self.ident_normalizer.normalize(ident)
+                                self.merge_target_column_name(cols, target_qualifier)?
                             }
                             _ => plan_err!("Tuples are not supported")?,
                         };
@@ -2617,16 +2743,24 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         Ok((col_name, value))
                     })
                     .collect::<Result<Vec<_>>>()?;
+                let mut seen = HashSet::new();
+                for (column, _) in &assignments {
+                    if !seen.insert(column.as_str()) {
+                        return plan_err!("Duplicate column '{column}' in MERGE UPDATE");
+                    }
+                }
                 MergeIntoAction::Update(assignments)
             }
             ast::MergeAction::Insert(insert_expr) => {
+                if insert_expr.insert_predicate.is_some() {
+                    return not_impl_err!(
+                        "MERGE INSERT WHERE predicates are not supported"
+                    );
+                }
                 let columns: Vec<String> = insert_expr
                     .columns
                     .iter()
-                    .map(|c| {
-                        let ident = Self::ident_from_object_name_last(c)?;
-                        Ok(self.ident_normalizer.normalize(ident))
-                    })
+                    .map(|c| self.merge_target_column_name(c, target_qualifier))
                     .collect::<Result<Vec<_>>>()?;
 
                 // Validate: no duplicates, all columns exist in target schema
