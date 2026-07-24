@@ -83,7 +83,7 @@ use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
-    StreamJoinPartitionMode, SymmetricHashJoinExec,
+    SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::memory::LazyMemoryExec;
@@ -802,12 +802,9 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::HashJoin(hashjoin) => {
                 self.try_into_hash_join_physical_plan(hashjoin, ctx, proto_converter)
             }
-            PhysicalPlanType::SymmetricHashJoin(sym_join) => self
-                .try_into_symmetric_hash_join_physical_plan(
-                    sym_join,
-                    ctx,
-                    proto_converter,
-                ),
+            PhysicalPlanType::SymmetricHashJoin(_) => {
+                SymmetricHashJoinExec::try_from_proto(self.node(), &decode_ctx)
+            }
             PhysicalPlanType::Union(_) => {
                 UnionExec::try_from_proto(self.node(), &decode_ctx)
             }
@@ -914,14 +911,6 @@ pub trait PhysicalPlanNodeExt: Sized {
 
         if let Some(exec) = plan.downcast_ref::<HashJoinExec>() {
             return protobuf::PhysicalPlanNode::try_from_hash_join_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<SymmetricHashJoinExec>() {
-            return protobuf::PhysicalPlanNode::try_from_symmetric_hash_join_exec(
                 exec,
                 codec,
                 proto_converter,
@@ -1857,129 +1846,27 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(Arc::new(hash_join))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `SymmetricHashJoinExec` deserializes itself via `SymmetricHashJoinExec::try_from_proto`"
+    )]
     fn try_into_symmetric_hash_join_physical_plan(
         &self,
         sym_join: &protobuf::SymmetricHashJoinExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let left = into_physical_plan(&sym_join.left, ctx, proto_converter)?;
-        let right = into_physical_plan(&sym_join.right, ctx, proto_converter)?;
-        let left_schema = left.schema();
-        let right_schema = right.schema();
-        let on = sym_join
-            .on
-            .iter()
-            .map(|col| {
-                let left = proto_converter.proto_to_physical_expr(
-                    &col.left.clone().unwrap(),
-                    left_schema.as_ref(),
-                    ctx,
-                )?;
-                let right = proto_converter.proto_to_physical_expr(
-                    &col.right.clone().unwrap(),
-                    right_schema.as_ref(),
-                    ctx,
-                )?;
-                Ok((left, right))
-            })
-            .collect::<Result<_>>()?;
-        let join_type =
-            protobuf::JoinType::try_from(sym_join.join_type).map_err(|_| {
-                proto_error(format!(
-                    "Received a SymmetricHashJoin message with unknown JoinType {}",
-                    sym_join.join_type
-                ))
-            })?;
-        let null_equality = protobuf::NullEquality::try_from(sym_join.null_equality)
-            .map_err(|_| {
-                proto_error(format!(
-                    "Received a SymmetricHashJoin message with unknown NullEquality {}",
-                    sym_join.null_equality
-                ))
-            })?;
-        let filter = sym_join
-            .filter
-            .as_ref()
-            .map(|f| {
-                let schema = f
-                    .schema
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Missing JoinFilter schema"))?
-                    .try_into()?;
-
-                let expression = proto_converter.proto_to_physical_expr(
-                    f.expression.as_ref().ok_or_else(|| {
-                        proto_error("Unexpected empty filter expression")
-                    })?,
-                    &schema,
-                    ctx,
-                )?;
-                let column_indices = f.column_indices
-                    .iter()
-                    .map(|i| {
-                        let side = protobuf::JoinSide::try_from(i.side)
-                            .map_err(|_| proto_error(format!(
-                                "Received a HashJoinNode message with JoinSide in Filter {}",
-                                i.side))
-                            )?;
-
-                        Ok(ColumnIndex {
-                            index: i.index as usize,
-                            side: side.into(),
-                        })
-                    })
-                    .collect::<Result<_>>()?;
-
-                Ok(JoinFilter::new(expression, column_indices, Arc::new(schema)))
-            })
-            .map_or(Ok(None), |v: Result<JoinFilter>| v.map(Some))?;
-
-        let left_sort_exprs = parse_physical_sort_exprs(
-            &sym_join.left_sort_exprs,
-            ctx,
-            &left_schema,
-            proto_converter,
-        )?;
-        let left_sort_exprs = LexOrdering::new(left_sort_exprs);
-
-        let right_sort_exprs = parse_physical_sort_exprs(
-            &sym_join.right_sort_exprs,
-            ctx,
-            &right_schema,
-            proto_converter,
-        )?;
-        let right_sort_exprs = LexOrdering::new(right_sort_exprs);
-
-        let partition_mode = protobuf::StreamPartitionMode::try_from(
-            sym_join.partition_mode,
-        )
-        .map_err(|_| {
-            proto_error(format!(
-                "Received a SymmetricHashJoin message with unknown PartitionMode {}",
-                sym_join.partition_mode
-            ))
-        })?;
-        let partition_mode = match partition_mode {
-            protobuf::StreamPartitionMode::SinglePartition => {
-                StreamJoinPartitionMode::SinglePartition
-            }
-            protobuf::StreamPartitionMode::PartitionedExec => {
-                StreamJoinPartitionMode::Partitioned
-            }
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::SymmetricHashJoin(Box::new(
+                sym_join.clone(),
+            ))),
         };
-        SymmetricHashJoinExec::try_new(
-            left,
-            right,
-            on,
-            filter,
-            &JoinType::from_proto(join_type),
-            NullEquality::from_proto(null_equality),
-            left_sort_exprs,
-            right_sort_exprs,
-            partition_mode,
-        )
-        .map(|e| Arc::new(e) as _)
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        SymmetricHashJoinExec::try_from_proto(&node, &decode_ctx)
     }
 
     #[deprecated(
@@ -2786,124 +2673,22 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `SymmetricHashJoinExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_symmetric_hash_join_exec(
         exec: &SymmetricHashJoinExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let left = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.left().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-        let right = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.right().to_owned(),
-            codec,
-            proto_converter,
-        )?;
-        let on = exec
-            .on()
-            .iter()
-            .map(|tuple| {
-                let l = proto_converter.physical_expr_to_proto(&tuple.0, codec)?;
-                let r = proto_converter.physical_expr_to_proto(&tuple.1, codec)?;
-                Ok::<_, DataFusionError>(protobuf::JoinOn {
-                    left: Some(l),
-                    right: Some(r),
-                })
-            })
-            .collect::<Result<_>>()?;
-        let join_type = protobuf::JoinType::from_proto(exec.join_type().to_owned());
-        let null_equality = protobuf::NullEquality::from_proto(exec.null_equality());
-        let filter = exec
-            .filter()
-            .as_ref()
-            .map(|f| {
-                let expression =
-                    proto_converter.physical_expr_to_proto(f.expression(), codec)?;
-                let column_indices = f
-                    .column_indices()
-                    .iter()
-                    .map(|i| {
-                        let side: protobuf::JoinSide = i.side.to_owned().into();
-                        protobuf::ColumnIndex {
-                            index: i.index as u32,
-                            side: side.into(),
-                        }
-                    })
-                    .collect();
-                let schema = f.schema().as_ref().try_into()?;
-                Ok(protobuf::JoinFilter {
-                    expression: Some(expression),
-                    column_indices,
-                    schema: Some(schema),
-                })
-            })
-            .map_or(Ok(None), |v: Result<protobuf::JoinFilter>| v.map(Some))?;
-
-        let partition_mode = match exec.partition_mode() {
-            StreamJoinPartitionMode::SinglePartition => {
-                protobuf::StreamPartitionMode::SinglePartition
-            }
-            StreamJoinPartitionMode::Partitioned => {
-                protobuf::StreamPartitionMode::PartitionedExec
-            }
         };
-
-        let left_sort_exprs = exec
-            .left_sort_exprs()
-            .map(|exprs| {
-                exprs
-                    .iter()
-                    .map(|expr| {
-                        Ok(protobuf::PhysicalSortExprNode {
-                            expr: Some(Box::new(
-                                proto_converter
-                                    .physical_expr_to_proto(&expr.expr, codec)?,
-                            )),
-                            asc: !expr.options.descending,
-                            nulls_first: expr.options.nulls_first,
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()
-            })
-            .transpose()?
-            .unwrap_or(vec![]);
-
-        let right_sort_exprs = exec
-            .right_sort_exprs()
-            .map(|exprs| {
-                exprs
-                    .iter()
-                    .map(|expr| {
-                        Ok(protobuf::PhysicalSortExprNode {
-                            expr: Some(Box::new(
-                                proto_converter
-                                    .physical_expr_to_proto(&expr.expr, codec)?,
-                            )),
-                            asc: !expr.options.descending,
-                            nulls_first: expr.options.nulls_first,
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()
-            })
-            .transpose()?
-            .unwrap_or(vec![]);
-
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::SymmetricHashJoin(Box::new(
-                protobuf::SymmetricHashJoinExecNode {
-                    left: Some(Box::new(left)),
-                    right: Some(Box::new(right)),
-                    on,
-                    join_type: join_type.into(),
-                    partition_mode: partition_mode.into(),
-                    null_equality: null_equality.into(),
-                    left_sort_exprs,
-                    right_sort_exprs,
-                    filter,
-                },
-            ))),
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("SymmetricHashJoinExec is not serializable")
         })
     }
 
