@@ -57,15 +57,12 @@ use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::{
     Empty, GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, TimestampValue,
 };
-use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
 use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
 use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
 use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
-use datafusion_physical_plan::aggregates::{
-    AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
-};
+use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::analyze::AnalyzeExec;
 use datafusion_physical_plan::async_func::AsyncFuncExec;
 use datafusion_physical_plan::buffer::BufferExec;
@@ -109,17 +106,15 @@ use crate::common::{byte_to_string, str_to_byte};
 use crate::convert::{FromProto, TryFromProto};
 use crate::convert_required;
 use crate::physical_plan::from_proto::{
-    parse_physical_expr_with_converter, parse_physical_sort_expr,
-    parse_physical_sort_exprs, parse_physical_window_expr,
-    parse_protobuf_file_scan_config, parse_record_batches, parse_table_schema_from_proto,
+    parse_physical_expr_with_converter, parse_physical_sort_exprs,
+    parse_physical_window_expr, parse_protobuf_file_scan_config, parse_record_batches,
+    parse_table_schema_from_proto,
 };
 use crate::physical_plan::to_proto::{
-    serialize_file_scan_config, serialize_maybe_filter, serialize_physical_aggr_expr,
-    serialize_physical_expr_with_converter, serialize_physical_sort_exprs,
-    serialize_physical_window_expr, serialize_record_batches,
+    serialize_file_scan_config, serialize_physical_expr_with_converter,
+    serialize_physical_sort_exprs, serialize_physical_window_expr,
+    serialize_record_batches,
 };
-use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
-use crate::protobuf::physical_expr_node::ExprType;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::{self, SortMergeJoinExecNode, proto_error, window_agg_exec_node};
 
@@ -135,47 +130,9 @@ fn encode_human_display_alias(human_display: &str, alias: &str) -> String {
     )
 }
 
-fn split_human_display_alias<'a>(
-    human_display: &'a str,
-    name: &'a str,
-) -> (&'a str, Option<&'a str>) {
-    if let Some(encoded) = human_display.strip_prefix(HUMAN_DISPLAY_ALIAS_PREFIX)
-        && let Some((alias_len, encoded)) = encoded.split_once(':')
-        && let Ok(alias_len) = alias_len.parse::<usize>()
-        && let Some(alias) = encoded.get(..alias_len)
-        && let Some(human_display) = encoded.get(alias_len..)
-        && alias == name
-        && !human_display.is_empty()
-    {
-        return (human_display, Some(alias));
-    }
-
-    (human_display, None)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn split_human_display_alias_ignores_mismatched_alias() {
-        let encoded = encode_human_display_alias("sum(value)", "revenue");
-
-        assert_eq!(
-            split_human_display_alias(&encoded, "other"),
-            (encoded.as_str(), None)
-        );
-    }
-
-    #[test]
-    fn split_human_display_alias_keeps_malformed_prefix_literal() {
-        let display = format!("{HUMAN_DISPLAY_ALIAS_PREFIX}not-an-encoding");
-
-        assert_eq!(
-            split_human_display_alias(&display, "agg"),
-            (display.as_str(), None)
-        );
-    }
 
     /// Unit tests for the bytes-only function serde exposed on
     /// [`ExecutionPlanEncodeCtx`] / [`ExecutionPlanDecodeCtx`] and backed by
@@ -796,8 +753,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::Window(window_agg) => {
                 self.try_into_window_physical_plan(window_agg, ctx, proto_converter)
             }
-            PhysicalPlanType::Aggregate(hash_agg) => {
-                self.try_into_aggregate_physical_plan(hash_agg, ctx, proto_converter)
+            PhysicalPlanType::Aggregate(_) => {
+                AggregateExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::HashJoin(hashjoin) => {
                 self.try_into_hash_join_physical_plan(hashjoin, ctx, proto_converter)
@@ -922,14 +879,6 @@ pub trait PhysicalPlanNodeExt: Sized {
 
         if let Some(exec) = plan.downcast_ref::<SymmetricHashJoinExec>() {
             return protobuf::PhysicalPlanNode::try_from_symmetric_hash_join_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
-        }
-
-        if let Some(exec) = plan.downcast_ref::<AggregateExec>() {
-            return protobuf::PhysicalPlanNode::try_from_aggregate_exec(
                 exec,
                 codec,
                 proto_converter,
@@ -1516,212 +1465,27 @@ pub trait PhysicalPlanNodeExt: Sized {
         }
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `AggregateExec` deserializes itself via `AggregateExec::try_from_proto`"
+    )]
     fn try_into_aggregate_physical_plan(
         &self,
         hash_agg: &protobuf::AggregateExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input: Arc<dyn ExecutionPlan> =
-            into_physical_plan(&hash_agg.input, ctx, proto_converter)?;
-        let mode = protobuf::AggregateMode::try_from(hash_agg.mode).map_err(|_| {
-            proto_error(format!(
-                "Received a AggregateNode message with unknown AggregateMode {}",
-                hash_agg.mode
-            ))
-        })?;
-        let agg_mode: AggregateMode = match mode {
-            protobuf::AggregateMode::Partial => AggregateMode::Partial,
-            protobuf::AggregateMode::Final => AggregateMode::Final,
-            protobuf::AggregateMode::FinalPartitioned => AggregateMode::FinalPartitioned,
-            protobuf::AggregateMode::Single => AggregateMode::Single,
-            protobuf::AggregateMode::SinglePartitioned => {
-                AggregateMode::SinglePartitioned
-            }
-            protobuf::AggregateMode::PartialReduce => AggregateMode::PartialReduce,
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::Aggregate(Box::new(
+                hash_agg.clone(),
+            ))),
         };
-
-        let num_expr = hash_agg.group_expr.len();
-
-        let group_expr = hash_agg
-            .group_expr
-            .iter()
-            .zip(hash_agg.group_expr_name.iter())
-            .map(|(expr, name)| {
-                proto_converter
-                    .proto_to_physical_expr(expr, input.schema().as_ref(), ctx)
-                    .map(|expr| (expr, name.to_string()))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let null_expr = hash_agg
-            .null_expr
-            .iter()
-            .zip(hash_agg.group_expr_name.iter())
-            .map(|(expr, name)| {
-                proto_converter
-                    .proto_to_physical_expr(expr, input.schema().as_ref(), ctx)
-                    .map(|expr| (expr, name.to_string()))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let groups: Vec<Vec<bool>> = if !hash_agg.groups.is_empty() {
-            hash_agg
-                .groups
-                .chunks(num_expr)
-                .map(|g| g.to_vec())
-                .collect::<Vec<Vec<bool>>>()
-        } else {
-            vec![]
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
         };
-
-        let has_grouping_set = hash_agg.has_grouping_set;
-
-        let input_schema = hash_agg.input_schema.as_ref().ok_or_else(|| {
-            internal_datafusion_err!("input_schema in AggregateNode is missing.")
-        })?;
-        let physical_schema: SchemaRef = SchemaRef::new(input_schema.try_into()?);
-
-        let physical_filter_expr = hash_agg
-            .filter_expr
-            .iter()
-            .map(|expr| {
-                expr.expr
-                    .as_ref()
-                    .map(|e| {
-                        proto_converter.proto_to_physical_expr(e, &physical_schema, ctx)
-                    })
-                    .transpose()
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let physical_aggr_expr: Vec<Arc<AggregateFunctionExpr>> = hash_agg
-            .aggr_expr
-            .iter()
-            .zip(hash_agg.aggr_expr_name.iter())
-            .map(|(expr, name)| {
-                let expr_type = expr.expr_type.as_ref().ok_or_else(|| {
-                    proto_error("Unexpected empty aggregate physical expression")
-                })?;
-
-                match expr_type {
-                    ExprType::AggregateExpr(agg_node) => {
-                        let input_phy_expr: Vec<Arc<dyn PhysicalExpr>> = agg_node
-                            .expr
-                            .iter()
-                            .map(|e| {
-                                proto_converter.proto_to_physical_expr(
-                                    e,
-                                    &physical_schema,
-                                    ctx,
-                                )
-                            })
-                            .collect::<Result<Vec<_>>>()?;
-                        let order_bys = agg_node
-                            .ordering_req
-                            .iter()
-                            .map(|e| {
-                                parse_physical_sort_expr(
-                                    e,
-                                    ctx,
-                                    &physical_schema,
-                                    proto_converter,
-                                )
-                            })
-                            .collect::<Result<_>>()?;
-                        agg_node
-                            .aggregate_function
-                            .as_ref()
-                            .map(|func| match func {
-                                AggregateFunction::UserDefinedAggrFunction(udaf_name) => {
-                                    let agg_udf = match &agg_node.fun_definition {
-                                        Some(buf) => {
-                                            ctx.codec().try_decode_udaf(udaf_name, buf)?
-                                        }
-                                        None => ctx.task_ctx().udaf(udaf_name).or_else(
-                                            |_| {
-                                                ctx.codec()
-                                                    .try_decode_udaf(udaf_name, &[])
-                                            },
-                                        )?,
-                                    };
-
-                                    let (human_display, human_display_alias) =
-                                        split_human_display_alias(
-                                            &agg_node.human_display,
-                                            name,
-                                        );
-                                    let builder = AggregateExprBuilder::new(
-                                        agg_udf,
-                                        input_phy_expr,
-                                    )
-                                    .schema(Arc::clone(&physical_schema))
-                                    .alias(name)
-                                    .with_ignore_nulls(agg_node.ignore_nulls)
-                                    .with_distinct(agg_node.distinct)
-                                    .order_by(order_bys)
-                                    .human_display(human_display);
-                                    let builder = if let Some(alias) = human_display_alias
-                                    {
-                                        builder.human_display_alias(alias)
-                                    } else {
-                                        builder
-                                    };
-                                    builder.build().map(Arc::new)
-                                }
-                            })
-                            .transpose()?
-                            .ok_or_else(|| {
-                                proto_error(
-                                    "Invalid AggregateExpr, missing aggregate_function",
-                                )
-                            })
-                    }
-                    _ => internal_err!("Invalid aggregate expression for AggregateExec"),
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let physical_schema_ref = Arc::clone(&physical_schema);
-        let agg = AggregateExec::try_new(
-            agg_mode,
-            PhysicalGroupBy::new(group_expr, null_expr, groups, has_grouping_set),
-            physical_aggr_expr,
-            physical_filter_expr,
-            input,
-            physical_schema,
-        )?;
-
-        let agg = if let Some(limit_proto) = &hash_agg.limit {
-            let limit = limit_proto.limit as usize;
-            let limit_options = match limit_proto.descending {
-                Some(descending) => LimitOptions::new_with_order(limit, descending),
-                None => LimitOptions::new(limit),
-            };
-            agg.with_limit_options(Some(limit_options))
-        } else {
-            agg
-        };
-
-        let agg = if let Some(dynamic_filter_proto) = &hash_agg.dynamic_filter {
-            let dynamic_filter_expr = proto_converter.proto_to_physical_expr(
-                dynamic_filter_proto,
-                physical_schema_ref.as_ref(),
-                ctx,
-            )?;
-            let df = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
-                .downcast::<DynamicFilterPhysicalExpr>()
-                .map_err(|_| {
-                    internal_datafusion_err!(
-                        "AggregateExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
-                    )
-                })?;
-            agg.with_dynamic_filter_expr(df)?
-        } else {
-            agg
-        };
-
-        Ok(Arc::new(agg))
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        AggregateExec::try_from_proto(&node, &decode_ctx)
     }
 
     fn try_into_hash_join_physical_plan(
@@ -2944,108 +2708,22 @@ pub trait PhysicalPlanNodeExt: Sized {
             .ok_or_else(|| internal_datafusion_err!("CrossJoinExec is not serializable"))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `AggregateExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_aggregate_exec(
         exec: &AggregateExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let groups: Vec<bool> = exec
-            .group_expr()
-            .groups()
-            .iter()
-            .flatten()
-            .copied()
-            .collect();
-
-        let group_names = exec
-            .group_expr()
-            .expr()
-            .iter()
-            .map(|expr| expr.1.to_owned())
-            .collect();
-
-        let filter = exec
-            .filter_expr()
-            .iter()
-            .map(|expr| serialize_maybe_filter(expr.to_owned(), codec, proto_converter))
-            .collect::<Result<Vec<_>>>()?;
-
-        let agg = exec
-            .aggr_expr()
-            .iter()
-            .map(|expr| {
-                serialize_physical_aggr_expr(expr.to_owned(), codec, proto_converter)
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let agg_names = exec
-            .aggr_expr()
-            .iter()
-            .map(|expr| expr.name().to_string())
-            .collect::<Vec<_>>();
-
-        let agg_mode = match exec.mode() {
-            AggregateMode::Partial => protobuf::AggregateMode::Partial,
-            AggregateMode::Final => protobuf::AggregateMode::Final,
-            AggregateMode::FinalPartitioned => protobuf::AggregateMode::FinalPartitioned,
-            AggregateMode::Single => protobuf::AggregateMode::Single,
-            AggregateMode::SinglePartitioned => {
-                protobuf::AggregateMode::SinglePartitioned
-            }
-            AggregateMode::PartialReduce => protobuf::AggregateMode::PartialReduce,
-        };
-        let input_schema = exec.input_schema();
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            exec.input().to_owned(),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-
-        let null_expr = exec
-            .group_expr()
-            .null_expr()
-            .iter()
-            .map(|expr| proto_converter.physical_expr_to_proto(&expr.0, codec))
-            .collect::<Result<Vec<_>>>()?;
-
-        let group_expr = exec
-            .group_expr()
-            .expr()
-            .iter()
-            .map(|expr| proto_converter.physical_expr_to_proto(&expr.0, codec))
-            .collect::<Result<Vec<_>>>()?;
-
-        let limit = exec.limit_options().map(|config| protobuf::AggLimit {
-            limit: config.limit() as u64,
-            descending: config.descending(),
-        });
-
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::Aggregate(Box::new(
-                protobuf::AggregateExecNode {
-                    group_expr,
-                    group_expr_name: group_names,
-                    aggr_expr: agg,
-                    filter_expr: filter,
-                    aggr_expr_name: agg_names,
-                    mode: agg_mode as i32,
-                    input: Some(Box::new(input)),
-                    input_schema: Some(input_schema.as_ref().try_into()?),
-                    null_expr,
-                    groups,
-                    limit,
-                    has_grouping_set: exec.group_expr().has_grouping_set(),
-                    dynamic_filter: exec
-                        .dynamic_filter_expr()
-                        .map(|df| {
-                            let df_expr: Arc<dyn PhysicalExpr> =
-                                Arc::clone(df) as Arc<dyn PhysicalExpr>;
-                            proto_converter.physical_expr_to_proto(&df_expr, codec)
-                        })
-                        .transpose()?,
-                },
-            ))),
-        })
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?
+            .ok_or_else(|| internal_datafusion_err!("AggregateExec is not serializable"))
     }
 
     fn try_from_empty_exec(
