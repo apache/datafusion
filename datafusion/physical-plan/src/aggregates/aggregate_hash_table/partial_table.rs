@@ -68,14 +68,6 @@ impl AggregateHashTable<PartialMarker> {
         self.next_output_batch_inner(HashAggregateAccumulator::state)
     }
 
-    pub(in crate::aggregates) fn can_skip_aggregation(&self) -> bool {
-        self.state
-            .building()
-            .accumulators
-            .iter()
-            .all(|acc| acc.supports_convert_to_state())
-    }
-
     /// In skip-partial-aggregation optimization, when a decision has been made to skip
     /// partial stage, build a typed hash table only for aggregation state conversion
     /// row-by-row.

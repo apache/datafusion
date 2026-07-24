@@ -36,6 +36,8 @@ use crate::aggregates::{
 
 /// Marker for raw rows -> partial state aggregation.
 pub(in crate::aggregates) struct PartialMarker;
+/// Marker for raw rows -> final value aggregation.
+pub(in crate::aggregates) struct SingleMarker;
 /// Marker for partial state -> partial state aggregation.
 pub(in crate::aggregates) struct PartialReduceMarker;
 /// Marker for raw rows -> partial state conversion without aggregation.
@@ -565,10 +567,6 @@ impl HashAggregateAccumulator {
     /// , and clear the inner buffers)
     pub(super) fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         self.accumulator.state(emit_to)
-    }
-
-    pub(super) fn supports_convert_to_state(&self) -> bool {
-        self.accumulator.supports_convert_to_state()
     }
 
     pub(super) fn convert_to_state(

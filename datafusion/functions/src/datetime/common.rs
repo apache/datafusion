@@ -32,7 +32,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err,
-    internal_datafusion_err, unwrap_or_internal_err,
+    internal_datafusion_err,
 };
 use datafusion_expr::ColumnarValue;
 
@@ -353,9 +353,9 @@ where
         // if the first argument is a scalar utf8 all arguments are expected to be scalar utf8
         ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
             Some(a) => {
-                let a = a.as_ref();
-                // ASK: Why do we trust `a` to be non-null at this point?
-                let a = unwrap_or_internal_err!(a);
+                let Some(a) = a.as_ref() else {
+                    return Ok(ColumnarValue::Scalar(scalar_value(dt, None)?));
+                };
 
                 let mut ret = None;
 
@@ -384,7 +384,10 @@ where
                     }
                 }
 
-                unwrap_or_internal_err!(ret)
+                match ret {
+                    Some(ret) => ret,
+                    None => Ok(ColumnarValue::Scalar(scalar_value(dt, None)?)),
+                }
             }
             other => {
                 exec_err!("Unsupported data type {other:?} for function {name}")
@@ -483,12 +486,21 @@ where
             if let Some(x) = x {
                 for arg in args {
                     let v = match arg {
-                        ColumnarValue::Array(a) => match a.data_type() {
-                            DataType::Utf8View => Ok(a.as_string_view().value(pos)),
-                            DataType::LargeUtf8 => Ok(a.as_string::<i64>().value(pos)),
-                            DataType::Utf8 => Ok(a.as_string::<i32>().value(pos)),
-                            other => exec_err!("Unexpected type encountered '{other}'"),
-                        },
+                        ColumnarValue::Array(a) => {
+                            if a.is_null(pos) {
+                                continue;
+                            }
+                            match a.data_type() {
+                                DataType::Utf8View => Ok(a.as_string_view().value(pos)),
+                                DataType::LargeUtf8 => {
+                                    Ok(a.as_string::<i64>().value(pos))
+                                }
+                                DataType::Utf8 => Ok(a.as_string::<i32>().value(pos)),
+                                other => {
+                                    exec_err!("Unexpected type encountered '{other}'")
+                                }
+                            }
+                        }
                         ColumnarValue::Scalar(s) => match s.try_as_str() {
                             Some(Some(v)) => Ok(v),
                             Some(None) => continue, // null string

@@ -33,7 +33,8 @@ use crate::metrics::{
 };
 use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::{
-    ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning, Statistics,
+    ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    RangePartitioning, Statistics,
 };
 // compatibility
 pub use super::join_filter::JoinFilter;
@@ -68,7 +69,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::utils::normalize_float_zero;
 use datafusion_common::{
     DataFusionError, JoinSide, JoinType, NullEquality, Result, SharedResult,
-    not_impl_err, plan_err,
+    internal_datafusion_err, not_impl_err, plan_err,
 };
 use datafusion_expr::Operator;
 use datafusion_expr::interval_arithmetic::Interval;
@@ -145,12 +146,20 @@ pub fn adjust_right_output_partitioning(
                 .collect::<Result<_>>()?;
             Partitioning::Hash(new_exprs, *size)
         }
-        Partitioning::Range(_) => {
-            // Range partitioning optimizer propagation is tracked in
-            // https://github.com/apache/datafusion/issues/22395
-            return not_impl_err!(
-                "Join output partitioning with range partitioning is not implemented"
-            );
+        Partitioning::Range(range) => {
+            let ordering = add_offset_to_physical_sort_exprs(
+                range.ordering().iter().cloned(),
+                left_columns_len as _,
+            )?;
+            let ordering = LexOrdering::new(ordering).ok_or_else(|| {
+                internal_datafusion_err!(
+                    "Offsetting range partitioning produced an empty ordering"
+                )
+            })?;
+            Partitioning::Range(RangePartitioning::new(
+                ordering,
+                range.split_points().to_vec(),
+            ))
         }
         result => result.clone(),
     };
@@ -837,15 +846,22 @@ fn estimate_inner_join_cardinality(
     // With the assumption that the smaller input's domain is generally represented in the bigger
     // input's domain, we can estimate the inner join's cardinality by taking the cartesian product
     // of the two inputs and normalizing it by the selectivity factor.
-    let left_num_rows = left_stats.num_rows.get_value()?;
-    let right_num_rows = right_stats.num_rows.get_value()?;
+    let left_num_rows = *left_stats.num_rows.get_value()?;
+    let right_num_rows = *right_stats.num_rows.get_value()?;
+    // Widen before multiplying so the intermediate Cartesian product does not
+    // overflow when the normalized cardinality is still representable as usize.
+    let cartesian_product = (left_num_rows as u128) * (right_num_rows as u128);
+    let normalized_cardinality =
+        |value: usize| usize::try_from(cartesian_product / value as u128);
     match join_selectivity {
-        Precision::Exact(value) if value > 0 => {
-            Some(Precision::Exact((left_num_rows * right_num_rows) / value))
-        }
-        Precision::Inexact(value) if value > 0 => {
-            Some(Precision::Inexact((left_num_rows * right_num_rows) / value))
-        }
+        Precision::Exact(value) if value > 0 => Some(
+            normalized_cardinality(value)
+                .map(Precision::Exact)
+                .unwrap_or(Precision::Inexact(usize::MAX)),
+        ),
+        Precision::Inexact(value) if value > 0 => Some(Precision::Inexact(
+            normalized_cardinality(value).unwrap_or(usize::MAX),
+        )),
         // Since we don't have any information about the selectivity (which is derived
         // from the number of distinct rows information) we can give up here for now.
         // And let other passes handle this (otherwise we would need to produce an
@@ -2470,7 +2486,7 @@ mod tests {
     use arrow::datatypes::{DataType, Fields};
     use arrow::error::{ArrowError, Result as ArrowResult};
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
-    use datafusion_common::{ScalarValue, arrow_datafusion_err, arrow_err};
+    use datafusion_common::{ScalarValue, SplitPoint, arrow_datafusion_err, arrow_err};
     use datafusion_physical_expr::PhysicalSortExpr;
 
     use rstest::rstest;
@@ -3060,6 +3076,46 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_inner_join_cardinality_multiplication_overflow() {
+        let statistics = |num_rows, distinct_count| Statistics {
+            num_rows,
+            total_byte_size: Absent,
+            column_statistics: vec![ColumnStatistics {
+                distinct_count,
+                ..Default::default()
+            }],
+        };
+        let large_row_count = usize::MAX / 2 + 1;
+
+        // The Cartesian product overflows usize, but applying the NDV divisor
+        // produces a representable cardinality.
+        assert_eq!(
+            estimate_inner_join_cardinality(
+                statistics(Inexact(large_row_count), Inexact(1)),
+                statistics(Inexact(3), Inexact(3)),
+            ),
+            Some(Inexact(large_row_count))
+        );
+        assert_eq!(
+            estimate_inner_join_cardinality(
+                statistics(Exact(large_row_count), Exact(1)),
+                statistics(Exact(3), Exact(3)),
+            ),
+            Some(Exact(large_row_count))
+        );
+
+        // If the normalized result itself cannot fit in usize, cap the
+        // estimate and mark it as inexact.
+        assert_eq!(
+            estimate_inner_join_cardinality(
+                statistics(Exact(usize::MAX), Exact(1)),
+                statistics(Exact(2), Exact(1)),
+            ),
+            Some(Inexact(usize::MAX))
+        );
     }
 
     #[test]
@@ -4131,6 +4187,53 @@ mod tests {
         assert_eq!(result.column_statistics[1].distinct_count, Inexact(31));
         assert_eq!(result.column_statistics[1].sum_value, Absent);
         assert_eq!(result.column_statistics[1].byte_size, Inexact(256));
+    }
+
+    #[test]
+    fn test_adjust_right_output_partitioning_preserves_range() -> Result<()> {
+        let split_points = vec![
+            SplitPoint::new(vec![
+                ScalarValue::Int32(Some(10)),
+                ScalarValue::Int32(Some(100)),
+            ]),
+            SplitPoint::new(vec![
+                ScalarValue::Int32(Some(20)),
+                ScalarValue::Int32(Some(50)),
+            ]),
+        ];
+        let range = RangePartitioning::try_new(
+            LexOrdering::new([
+                PhysicalSortExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    SortOptions::new(false, true),
+                ),
+                PhysicalSortExpr::new(
+                    Arc::new(Column::new("b", 2)),
+                    SortOptions::new(true, false),
+                ),
+            ])
+            .unwrap(),
+            split_points.clone(),
+        )?;
+
+        let adjusted = adjust_right_output_partitioning(&Partitioning::Range(range), 3)?;
+        let expected = Partitioning::Range(RangePartitioning::new(
+            LexOrdering::new([
+                PhysicalSortExpr::new(
+                    Arc::new(Column::new("a", 3)),
+                    SortOptions::new(false, true),
+                ),
+                PhysicalSortExpr::new(
+                    Arc::new(Column::new("b", 5)),
+                    SortOptions::new(true, false),
+                ),
+            ])
+            .unwrap(),
+            split_points,
+        ));
+
+        assert_eq!(adjusted, expected);
+        Ok(())
     }
 
     #[test]

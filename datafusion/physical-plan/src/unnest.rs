@@ -174,17 +174,6 @@ impl UnnestExec {
     pub fn options(&self) -> &UnnestOptions {
         &self.options
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for UnnestExec {
@@ -231,8 +220,25 @@ impl ExecutionPlan for UnnestExec {
         )?))
     }
 
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
+    }
+
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::UnspecifiedDistribution]
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+        crate::InputDistributionRequirements::new(vec![
+            Distribution::UnspecifiedDistribution,
+        ])
     }
 
     fn execute(
@@ -255,6 +261,127 @@ impl ExecutionPlan for UnnestExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        let input = ctx.encode_child(self.input())?;
+        let schema = self.schema().as_ref().try_into()?;
+        let list_type_columns = self
+            .list_column_indices()
+            .iter()
+            .map(|column| protobuf::ListUnnest {
+                index_in_input_schema: column.index_in_input_schema as _,
+                depth: column.depth as _,
+            })
+            .collect();
+        let struct_type_columns = self
+            .struct_column_indices()
+            .iter()
+            .map(|index| *index as _)
+            .collect();
+        let options = protobuf::UnnestOptions {
+            preserve_nulls: self.options().preserve_nulls,
+            recursions: self
+                .options()
+                .recursions
+                .iter()
+                .map(|recursion| protobuf::RecursionUnnestOption {
+                    input_column: Some((&recursion.input_column).into()),
+                    output_column: Some((&recursion.output_column).into()),
+                    depth: recursion.depth as _,
+                })
+                .collect(),
+        };
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Unnest(Box::new(
+                    protobuf::UnnestExecNode {
+                        input: Some(Box::new(input)),
+                        schema: Some(schema),
+                        list_type_columns,
+                        struct_type_columns,
+                        options: Some(options),
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl UnnestExec {
+    /// Reconstruct an [`UnnestExec`] from its protobuf representation.
+    ///
+    /// The exact inverse of [`ExecutionPlan::try_to_proto`].
+    ///
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let unnest = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Unnest,
+            "UnnestExec",
+        );
+        let input =
+            ctx.decode_required_child(unnest.input.as_deref(), "UnnestExec", "input")?;
+        let schema: Schema = unnest
+            .schema
+            .as_ref()
+            .ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "UnnestExec is missing required field 'schema'"
+                )
+            })?
+            .try_into()?;
+        let list_column_indices = unnest
+            .list_type_columns
+            .iter()
+            .map(|column| ListUnnest {
+                index_in_input_schema: column.index_in_input_schema as _,
+                depth: column.depth as _,
+            })
+            .collect();
+        let struct_column_indices = unnest
+            .struct_type_columns
+            .iter()
+            .map(|index| *index as _)
+            .collect();
+        let options = unnest.options.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "UnnestExec is missing required field 'options'"
+            )
+        })?;
+        let options = UnnestOptions {
+            preserve_nulls: options.preserve_nulls,
+            recursions: options
+                .recursions
+                .iter()
+                .map(|recursion| datafusion_common::RecursionUnnestOption {
+                    input_column: recursion.input_column.as_ref().unwrap().into(),
+                    output_column: recursion.output_column.as_ref().unwrap().into(),
+                    depth: recursion.depth as _,
+                })
+                .collect(),
+        };
+
+        Ok(Arc::new(UnnestExec::new(
+            input,
+            list_column_indices,
+            struct_column_indices,
+            Arc::new(schema),
+            options,
+        )?))
     }
 }
 

@@ -48,8 +48,8 @@ pub struct FixedSchemaProvider {
 }
 
 pub fn fruit_table() -> Arc<dyn TableProvider + 'static> {
+    use arrow::array::record_batch;
     use arrow::datatypes::{DataType, Field};
-    use datafusion_common::record_batch;
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("units", DataType::Int32, true),

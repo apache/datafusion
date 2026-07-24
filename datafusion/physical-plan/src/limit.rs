@@ -27,7 +27,7 @@ use super::{
     SendableRecordBatchStream, Statistics,
 };
 use crate::execution_plan::{Boundedness, CardinalityEffect};
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     check_if_same_properties,
@@ -109,17 +109,6 @@ impl GlobalLimitExec {
     pub fn set_required_ordering(&mut self, required_ordering: Option<LexOrdering>) {
         self.required_ordering = required_ordering;
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for GlobalLimitExec {
@@ -163,7 +152,11 @@ impl ExecutionPlan for GlobalLimitExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+        crate::InputDistributionRequirements::new(vec![Distribution::SinglePartition])
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -184,6 +177,17 @@ impl ExecutionPlan for GlobalLimitExec {
             self.skip,
             self.fetch,
         )))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
     }
 
     fn execute(
@@ -220,10 +224,16 @@ impl ExecutionPlan for GlobalLimitExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        let stats = Arc::unwrap_or_clone(
-            args.compute_child_statistics(&self.input, args.partition())?,
-        );
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let stats = input_stats[0].as_ref().clone();
         Ok(Arc::new(stats.with_fetch(self.fetch, self.skip, 1)?))
     }
 
@@ -233,6 +243,59 @@ impl ExecutionPlan for GlobalLimitExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::GlobalLimit(Box::new(
+                    protobuf::GlobalLimitExecNode {
+                        input: Some(Box::new(input)),
+                        skip: self.skip() as u32,
+                        fetch: match self.fetch() {
+                            Some(n) => n as i64,
+                            _ => -1, // no limit
+                        },
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl GlobalLimitExec {
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let limit = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::GlobalLimit,
+            "GlobalLimitExec",
+        );
+        let input = ctx.decode_required_child(
+            limit.input.as_deref(),
+            "GlobalLimitExec",
+            "input",
+        )?;
+        let fetch = if limit.fetch >= 0 {
+            Some(limit.fetch as usize)
+        } else {
+            None
+        };
+        Ok(Arc::new(GlobalLimitExec::new(
+            input,
+            limit.skip as usize,
+            fetch,
+        )))
     }
 }
 
@@ -294,17 +357,6 @@ impl LocalLimitExec {
     pub fn set_required_ordering(&mut self, required_ordering: Option<LexOrdering>) {
         self.required_ordering = required_ordering;
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
-    }
 }
 
 impl DisplayAs for LocalLimitExec {
@@ -360,6 +412,17 @@ impl ExecutionPlan for LocalLimitExec {
         }
     }
 
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -385,10 +448,16 @@ impl ExecutionPlan for LocalLimitExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        let stats = Arc::unwrap_or_clone(
-            args.compute_child_statistics(&self.input, args.partition())?,
-        );
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let stats = input_stats[0].as_ref().clone();
         Ok(Arc::new(stats.with_fetch(Some(self.fetch), 0, 1)?))
     }
 
@@ -402,6 +471,43 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::LowerEqual
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::LocalLimit(Box::new(
+                    protobuf::LocalLimitExecNode {
+                        input: Some(Box::new(input)),
+                        fetch: self.fetch() as u32,
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl LocalLimitExec {
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let limit = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::LocalLimit,
+            "LocalLimitExec",
+        );
+        let input =
+            ctx.decode_required_child(limit.input.as_deref(), "LocalLimitExec", "input")?;
+        Ok(Arc::new(LocalLimitExec::new(input, limit.fetch as usize)))
     }
 }
 
@@ -535,7 +641,7 @@ mod tests {
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common::collect;
-    use crate::statistics::StatisticsArgs;
+    use crate::statistics::{StatisticsArgs, StatisticsContext};
     use crate::test;
 
     use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
@@ -818,8 +924,8 @@ mod tests {
         let offset =
             GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), skip, fetch);
 
-        Ok(offset
-            .statistics_with_args(&StatisticsArgs::new())?
+        Ok(StatisticsContext::new()
+            .compute(&offset, &StatisticsArgs::new())?
             .num_rows)
     }
 
@@ -860,8 +966,8 @@ mod tests {
             fetch,
         );
 
-        Ok(offset
-            .statistics_with_args(&StatisticsArgs::new())?
+        Ok(StatisticsContext::new()
+            .compute(&offset, &StatisticsArgs::new())?
             .num_rows)
     }
 
@@ -875,8 +981,8 @@ mod tests {
 
         let offset = LocalLimitExec::new(csv, fetch);
 
-        Ok(offset
-            .statistics_with_args(&StatisticsArgs::new())?
+        Ok(StatisticsContext::new()
+            .compute(&offset, &StatisticsArgs::new())?
             .num_rows)
     }
 

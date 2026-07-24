@@ -292,9 +292,10 @@ fn decode_array(array: &ArrayRef, encoding: Encoding) -> Result<ColumnarValue> {
         }
         DataType::BinaryView => {
             let array = array.as_binary_view();
-            // Don't know if there is a more strict upper bound we can infer
-            // for view arrays byte data size.
-            encoding.decode_array::<_, i32>(&array, array.get_buffer_memory_size())
+            encoding.decode_array::<_, i32>(
+                &array,
+                array.lengths().map(|l| l as usize).sum::<usize>(),
+            )
         }
         DataType::LargeBinary => {
             let array = array.as_binary::<i64>();
@@ -410,11 +411,7 @@ impl Encoding {
                     .collect();
                 Ok(Arc::new(array))
             }
-            Self::Hex => {
-                let array: GenericStringArray<OutputOffset> =
-                    array.iter().map(|x| x.map(hex::encode)).collect();
-                Ok(Arc::new(array))
-            }
+            Self::Hex => hex_encode_array::<_, OutputOffset>(array),
         }
     }
 
@@ -459,6 +456,45 @@ impl Encoding {
     }
 }
 
+/// Hex-encode a binary array into a string array, writing the lowercase hex
+/// digits directly into a single pre-sized value buffer. Each input byte maps
+/// to exactly two hex characters, so the output size is known up front and no
+/// per-element `String` is allocated.
+fn hex_encode_array<'a, InputBinaryArray, OutputOffset>(
+    array: &InputBinaryArray,
+) -> Result<ArrayRef>
+where
+    InputBinaryArray: BinaryArrayType<'a>,
+    OutputOffset: OffsetSizeTrait,
+{
+    let total_input_bytes: usize = array.iter().flatten().map(|v| v.len()).sum();
+
+    let mut values = vec![0u8; total_input_bytes * 2];
+    let mut offsets = Vec::<OutputOffset>::with_capacity(array.len() + 1);
+    offsets.push(OutputOffset::zero());
+
+    let mut pos = 0usize;
+    for v in array.iter() {
+        if let Some(v) = v {
+            let out_len = v.len() * 2;
+            // The slice is sized to exactly `2 * v.len()`, which is the only
+            // condition under which `encode_to_slice` can fail, so this cannot
+            // error.
+            hex::encode_to_slice(v, &mut values[pos..pos + out_len])
+                .map_err(|e| exec_datafusion_err!("Failed to encode to hex: {e}"))?;
+            pos += out_len;
+        }
+        offsets.push(OutputOffset::usize_as(pos));
+    }
+
+    let array = GenericStringArray::<OutputOffset>::try_new(
+        OffsetBuffer::new(offsets.into()),
+        Buffer::from_vec(values),
+        array.nulls().cloned(),
+    )?;
+    Ok(Arc::new(array))
+}
+
 fn delegated_decode<'a, DecodeFunction, InputBinaryArray, OutputOffset>(
     decode: DecodeFunction,
     input: &InputBinaryArray,
@@ -493,7 +529,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::BinaryArray;
+    use arrow::array::{ArrayBuilder, BinaryArray, BinaryViewBuilder};
     use arrow_buffer::OffsetBuffer;
 
     use super::*;
@@ -517,5 +553,15 @@ mod tests {
         );
         let size = estimate_byte_data_size(&array);
         assert_eq!(size, 31);
+    }
+
+    #[test]
+    fn test_estimate_view_size() {
+        let mut builder = BinaryViewBuilder::new().with_deduplicate_strings();
+        for _ in 0..1000 {
+            builder.append_value([65u8; 64]);
+        }
+        let arr = ArrayBuilder::finish(&mut builder);
+        decode_array(&arr, Encoding::Base64).unwrap();
     }
 }

@@ -28,6 +28,7 @@
 [![Discord chat][discord-badge]][discord-url]
 [![Linkedin][linkedin-badge]][linkedin-url]
 ![Crates.io MSRV][msrv-badge]
+[![Codecov][codecov-badge]][codecov-url]
 
 [crates-badge]: https://img.shields.io/crates/v/datafusion.svg
 [crates-url]: https://crates.io/crates/datafusion
@@ -40,11 +41,13 @@
 [commit-activity-badge]: https://img.shields.io/github/commit-activity/m/apache/datafusion
 [open-issues-badge]: https://img.shields.io/github/issues-raw/apache/datafusion
 [open-issues-url]: https://github.com/apache/datafusion/issues
-[pending-pr-badge]: https://img.shields.io/github/issues-search/apache/datafusion?query=is%3Apr+is%3Aopen+draft%3Afalse+review%3Arequired+status%3Asuccess&label=Pending%20PRs&logo=github
-[pending-pr-url]: https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+draft%3Afalse+review%3Arequired+status%3Asuccess+sort%3Aupdated-desc
+[pending-pr-badge]: https://img.shields.io/github/issues-search/apache/datafusion?query=is%3Apr+is%3Aopen+draft%3Afalse+review%3Arequired&label=Pending%20PRs&logo=github
+[pending-pr-url]: https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+draft%3Afalse+review%3Arequired+sort%3Aupdated-desc
 [linkedin-badge]: https://img.shields.io/badge/Follow-Linkedin-blue
 [linkedin-url]: https://www.linkedin.com/company/apache-datafusion/
 [msrv-badge]: https://img.shields.io/crates/msrv/datafusion?label=Min%20Rust%20Version
+[codecov-badge]: https://codecov.io/github/apache/datafusion/graph/badge.svg
+[codecov-url]: https://app.codecov.io/github/apache/datafusion/tree/main
 
 [Website](https://datafusion.apache.org/) |
 [API Docs](https://docs.rs/datafusion/latest/datafusion/) |

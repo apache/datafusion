@@ -152,7 +152,11 @@ impl ExecutionPlan for EmptyExec {
         )?))
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
         if let Some(partition) = args.partition() {
             assert_or_internal_err!(
                 partition < self.partitions,
@@ -180,6 +184,54 @@ impl ExecutionPlan for EmptyExec {
         }
 
         Ok(Arc::new(stats))
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let schema = self.schema().as_ref().try_into()?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Empty(
+                    protobuf::EmptyExecNode {
+                        schema: Some(schema),
+                        partitions: self
+                            .properties()
+                            .output_partitioning()
+                            .partition_count() as u32,
+                    },
+                ),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl EmptyExec {
+    /// Reconstruct an [`EmptyExec`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        _ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let empty = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Empty,
+            "EmptyExec",
+        );
+        let schema = empty.schema.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "EmptyExec is missing required field 'schema'"
+            )
+        })?;
+        let schema = Arc::new(arrow::datatypes::Schema::try_from(schema)?);
+        // A zero (absent) partition count comes from a plan encoded before the
+        // field existed, which always meant a single partition.
+        let partitions = empty.partitions.max(1) as usize;
+        Ok(Arc::new(EmptyExec::new(schema).with_partitions(partitions)))
     }
 }
 

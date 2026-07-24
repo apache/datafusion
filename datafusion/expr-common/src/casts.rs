@@ -28,7 +28,9 @@ use arrow::datatypes::{
     MAX_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL32_FOR_EACH_PRECISION,
     MIN_DECIMAL64_FOR_EACH_PRECISION, MIN_DECIMAL128_FOR_EACH_PRECISION, TimeUnit,
 };
-use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
+use arrow::temporal_conversions::{
+    MICROSECONDS, MILLISECONDS, MILLISECONDS_IN_DAY, NANOSECONDS,
+};
 use datafusion_common::ScalarValue;
 
 /// Convert a literal [`ScalarValue`] to `target_type`, preserving the exact value.
@@ -98,7 +100,26 @@ fn is_date_type(data_type: &DataType) -> bool {
 /// For example, `CAST(ts AS DATE) = DATE '2024-01-01'` means "any timestamp
 /// during that day", but unwrapping it to `ts = TIMESTAMP '2024-01-01
 /// 00:00:00'` matches only midnight.
+///
+/// An identity cast (`from_type == to_type`, e.g. `Date32 -> Date32`) never
+/// changes comparison semantics and is therefore not lossy.
+///
+/// A cast between the two date types (`Date32` <-> `Date64`) is not pre-filtered
+/// as lossy here, because whether it loses information is a per-value question
+/// rather than a per-type one. `Date32` -> `Date64` is always exact (a day scaled
+/// to midnight in milliseconds). `Date64` -> `Date32` is exact only when the value
+/// lands on a day boundary: Arrow nominally defines `Date64` as whole days encoded
+/// in milliseconds, but arrow-rs does not enforce that (see arrow-rs#5288), so a
+/// `Date64` carrying sub-day milliseconds would lose them. This is not a licence to
+/// drop them - [`try_cast_numeric_literal`] returns `None` for a `Date64` value not
+/// divisible by 86_400_000, so an inexact `Date64` -> `Date32` fold never happens.
 fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
+    if from_type == to_type {
+        return false;
+    }
+    if is_date_type(from_type) && is_date_type(to_type) {
+        return false;
+    }
     (is_date_type(from_type) && to_type.is_temporal())
         || (is_date_type(to_type) && from_type.is_temporal())
 }
@@ -121,6 +142,19 @@ pub fn is_timestamp_precision_narrowing_cast(
     };
 
     timestamp_unit_scale(from_unit) > timestamp_unit_scale(to_unit)
+}
+
+/// Returns true when casting a date column from `from_type` to `to_type` narrows
+/// `Date64` (milliseconds) to `Date32` (days).
+///
+/// Like [`is_timestamp_precision_narrowing_cast`], this guards comparison cast
+/// unwrapping against a many-to-one column cast. `CAST(date64 AS Date32) = lit_day`
+/// matches any millisecond within that day, but the rewritten `date64 = lit_ms`
+/// matches only midnight. Arrow does not require `Date64` values to be whole days
+/// (see arrow-rs#5288), so the column may carry sub-day values the planner cannot
+/// see; the widening direction (`Date32 -> Date64`) is injective and stays allowed.
+pub fn is_date_narrowing_cast(from_type: &DataType, to_type: &DataType) -> bool {
+    matches!((from_type, to_type), (DataType::Date64, DataType::Date32))
 }
 
 fn timestamp_unit_scale(unit: &TimeUnit) -> i128 {
@@ -169,6 +203,36 @@ fn is_supported_dictionary_type(data_type: &DataType) -> bool {
 
 fn is_supported_binary_type(data_type: &DataType) -> bool {
     matches!(data_type, DataType::Binary | DataType::FixedSizeBinary(_))
+}
+
+/// Scale a `Date32`/`Date64` literal value into the units of `target_type`,
+/// returning `None` when the conversion is not exact.
+///
+/// `Date32` counts **days** since the Unix epoch while `Date64` counts
+/// **milliseconds** since the Unix epoch, so a cross conversion scales by
+/// [`MILLISECONDS_IN_DAY`]:
+/// * `Date32` -> `Date64` is always exact: `days * MILLISECONDS_IN_DAY`
+///   (guarded against `i64`/`i128` overflow).
+/// * `Date64` -> `Date32` is exact only when the millisecond value lands on a
+///   whole-day boundary; otherwise it returns `None` so the cast unwrap is
+///   skipped (correct for every operator, including `=`).
+///
+/// For a same-type date cast or a date/integer cast the generic `mul`
+/// multiplier already applies, so this returns `value * mul`.
+fn scale_date_literal(
+    value: i128,
+    from_type: &DataType,
+    target_type: &DataType,
+    mul: i128,
+) -> Option<i128> {
+    const MILLIS_PER_DAY: i128 = MILLISECONDS_IN_DAY as i128;
+    match (from_type, target_type) {
+        (DataType::Date32, DataType::Date64) => value.checked_mul(MILLIS_PER_DAY),
+        (DataType::Date64, DataType::Date32) => {
+            (value % MILLIS_PER_DAY == 0).then_some(value / MILLIS_PER_DAY)
+        }
+        _ => value.checked_mul(mul),
+    }
 }
 
 /// Convert a numeric value from one numeric data type to another
@@ -246,8 +310,12 @@ fn try_cast_numeric_literal(
         ScalarValue::UInt16(Some(v)) => (*v as i128).checked_mul(mul),
         ScalarValue::UInt32(Some(v)) => (*v as i128).checked_mul(mul),
         ScalarValue::UInt64(Some(v)) => (*v as i128).checked_mul(mul),
-        ScalarValue::Date32(Some(v)) => (*v as i128).checked_mul(mul),
-        ScalarValue::Date64(Some(v)) => (*v as i128).checked_mul(mul),
+        ScalarValue::Date32(Some(v)) => {
+            scale_date_literal(*v as i128, &lit_data_type, target_type, mul)
+        }
+        ScalarValue::Date64(Some(v)) => {
+            scale_date_literal(*v as i128, &lit_data_type, target_type, mul)
+        }
         ScalarValue::TimestampSecond(Some(v), _) => (*v as i128).checked_mul(mul),
         ScalarValue::TimestampMillisecond(Some(v), _) => (*v as i128).checked_mul(mul),
         ScalarValue::TimestampMicrosecond(Some(v), _) => (*v as i128).checked_mul(mul),
@@ -814,6 +882,123 @@ mod tests {
     }
 
     #[test]
+    fn test_try_cast_identity_date_allowed() {
+        // An identity Date cast (e.g. `CAST(date_col AS DATE)` where the column
+        // is already Date32) must fold: it never changes comparison semantics,
+        // so `try_cast_literal_to_type` should return the same value rather than
+        // treating it as a lossy temporal cast.
+        expect_cast(
+            ScalarValue::Date32(Some(19_723)),
+            DataType::Date32,
+            ExpectedCast::Value(ScalarValue::Date32(Some(19_723))),
+        );
+
+        expect_cast(
+            ScalarValue::Date64(Some(1_704_067_200_000)),
+            DataType::Date64,
+            ExpectedCast::Value(ScalarValue::Date64(Some(1_704_067_200_000))),
+        );
+
+        // is_lossy_temporal_cast must classify an identity cast as non-lossy.
+        assert!(!is_lossy_temporal_cast(
+            &DataType::Date32,
+            &DataType::Date32
+        ));
+        assert!(!is_lossy_temporal_cast(
+            &DataType::Date64,
+            &DataType::Date64
+        ));
+    }
+
+    #[test]
+    fn test_try_cast_between_date32_and_date64() {
+        // 2025-01-01 is day 20089 since the Unix epoch, which is
+        // 20089 * 86_400_000 = 1_735_689_600_000 milliseconds.
+        const DAY_2025_01_01: i32 = 20089;
+        const MS_2025_01_01: i64 = 1_735_689_600_000;
+        assert_eq!(DAY_2025_01_01 as i64 * MILLISECONDS_IN_DAY, MS_2025_01_01);
+
+        // Date32 -> Date64 is always exact (days scaled up to milliseconds).
+        expect_cast(
+            ScalarValue::Date32(Some(DAY_2025_01_01)),
+            DataType::Date64,
+            ExpectedCast::Value(ScalarValue::Date64(Some(MS_2025_01_01))),
+        );
+
+        // Date64 -> Date32 is exact only on a whole-day boundary.
+        expect_cast(
+            ScalarValue::Date64(Some(MS_2025_01_01)),
+            DataType::Date32,
+            ExpectedCast::Value(ScalarValue::Date32(Some(DAY_2025_01_01))),
+        );
+
+        // A Date64 value that is not on a day boundary cannot be represented as
+        // a Date32 exactly, so no rewrite is produced.
+        expect_cast(
+            ScalarValue::Date64(Some(MS_2025_01_01 + 1)),
+            DataType::Date32,
+            ExpectedCast::NoValue,
+        );
+        expect_cast(
+            ScalarValue::Date64(Some(MS_2025_01_01 - 1)),
+            DataType::Date32,
+            ExpectedCast::NoValue,
+        );
+
+        // The epoch and negative (pre-epoch) days round-trip exactly.
+        expect_cast(
+            ScalarValue::Date32(Some(0)),
+            DataType::Date64,
+            ExpectedCast::Value(ScalarValue::Date64(Some(0))),
+        );
+        expect_cast(
+            ScalarValue::Date32(Some(-1)),
+            DataType::Date64,
+            ExpectedCast::Value(ScalarValue::Date64(Some(-MILLISECONDS_IN_DAY))),
+        );
+        expect_cast(
+            ScalarValue::Date64(Some(-MILLISECONDS_IN_DAY)),
+            DataType::Date32,
+            ExpectedCast::Value(ScalarValue::Date32(Some(-1))),
+        );
+
+        // Same-type date casts remain identity conversions.
+        expect_cast(
+            ScalarValue::Date32(Some(DAY_2025_01_01)),
+            DataType::Date32,
+            ExpectedCast::Value(ScalarValue::Date32(Some(DAY_2025_01_01))),
+        );
+        expect_cast(
+            ScalarValue::Date64(Some(MS_2025_01_01)),
+            DataType::Date64,
+            ExpectedCast::Value(ScalarValue::Date64(Some(MS_2025_01_01))),
+        );
+    }
+
+    #[test]
+    fn test_is_lossy_temporal_cast_date_pairs() {
+        // Date <-> Date is let through the pre-filter (per-value exactness is
+        // enforced downstream in try_cast_numeric_literal, not here).
+        assert!(!is_lossy_temporal_cast(
+            &DataType::Date32,
+            &DataType::Date64
+        ));
+        assert!(!is_lossy_temporal_cast(
+            &DataType::Date64,
+            &DataType::Date32
+        ));
+        // Identity is not lossy.
+        assert!(!is_lossy_temporal_cast(
+            &DataType::Date32,
+            &DataType::Date32
+        ));
+        // Date <-> Timestamp remains lossy.
+        let ts = DataType::Timestamp(TimeUnit::Millisecond, None);
+        assert!(is_lossy_temporal_cast(&DataType::Date32, &ts));
+        assert!(is_lossy_temporal_cast(&ts, &DataType::Date32));
+    }
+
+    #[test]
     fn test_timestamp_precision_narrowing_cast() {
         let ts_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
         let ts_us = DataType::Timestamp(TimeUnit::Microsecond, None);
@@ -828,6 +1013,90 @@ mod tests {
             &DataType::Int64,
             &ts_ms
         ));
+    }
+
+    #[test]
+    fn test_is_date_narrowing_cast() {
+        // Only Date64 -> Date32 narrows (ms -> days, many-to-one).
+        assert!(is_date_narrowing_cast(&DataType::Date64, &DataType::Date32));
+        // The widening direction is injective and must not be flagged.
+        assert!(!is_date_narrowing_cast(
+            &DataType::Date32,
+            &DataType::Date64
+        ));
+        // Identity and non-date pairs are not date-narrowing casts.
+        assert!(!is_date_narrowing_cast(
+            &DataType::Date32,
+            &DataType::Date32
+        ));
+        assert!(!is_date_narrowing_cast(
+            &DataType::Date64,
+            &DataType::Date64
+        ));
+        assert!(!is_date_narrowing_cast(&DataType::Int64, &DataType::Date32));
+    }
+
+    #[test]
+    fn test_scale_date_literal_exactness_and_overflow() {
+        const MS_PER_DAY: i128 = MILLISECONDS_IN_DAY as i128;
+
+        // Date32 -> Date64 is always exact: days scaled to midnight milliseconds.
+        // 2025-01-01 is day 20089 = 1_735_689_600_000 ms.
+        assert_eq!(
+            scale_date_literal(20089, &DataType::Date32, &DataType::Date64, 1),
+            Some(1_735_689_600_000)
+        );
+        assert_eq!(
+            scale_date_literal(0, &DataType::Date32, &DataType::Date64, 1),
+            Some(0)
+        );
+        // Negative (pre-epoch) whole day: 1969-12-31 is day -1 = -86_400_000 ms.
+        assert_eq!(
+            scale_date_literal(-1, &DataType::Date32, &DataType::Date64, 1),
+            Some(-86_400_000)
+        );
+
+        // Date64 -> Date32 is exact only on a whole-day boundary.
+        assert_eq!(
+            scale_date_literal(
+                1_735_689_600_000,
+                &DataType::Date64,
+                &DataType::Date32,
+                1
+            ),
+            Some(20089)
+        );
+        assert_eq!(
+            scale_date_literal(-86_400_000, &DataType::Date64, &DataType::Date32, 1),
+            Some(-1)
+        );
+        // Sub-day values are not exactly representable as a Date32, in both the
+        // positive and the pre-epoch negative direction -> None (no fold).
+        assert_eq!(
+            scale_date_literal(
+                1_735_732_800_000,
+                &DataType::Date64,
+                &DataType::Date32,
+                1
+            ),
+            None
+        );
+        assert_eq!(
+            scale_date_literal(-43_200_000, &DataType::Date64, &DataType::Date32, 1),
+            None
+        );
+
+        // Extremes: a Date32 at i32::MIN / i32::MAX widens with checked i128
+        // arithmetic, producing the exact millisecond value without overflow or
+        // panic.
+        assert_eq!(
+            scale_date_literal(i32::MAX as i128, &DataType::Date32, &DataType::Date64, 1),
+            Some(i32::MAX as i128 * MS_PER_DAY)
+        );
+        assert_eq!(
+            scale_date_literal(i32::MIN as i128, &DataType::Date32, &DataType::Date64, 1),
+            Some(i32::MIN as i128 * MS_PER_DAY)
+        );
     }
 
     #[test]

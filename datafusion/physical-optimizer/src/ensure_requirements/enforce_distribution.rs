@@ -34,9 +34,8 @@ use std::sync::Arc;
 
 use crate::output_requirements::OutputRequirementExec;
 use crate::utils::{
-    add_sort_above_with_check, aggregate_can_reuse_range_partitioning,
-    is_coalesce_partitions, is_repartition, is_sort_preserving_merge,
-    range_partitioning_satisfies_key_partitioning,
+    add_sort_above_with_check, is_coalesce_partitions, is_repartition,
+    is_sort_preserving_merge,
 };
 
 use arrow::compute::SortOptions;
@@ -48,7 +47,8 @@ use datafusion_expr::logical_plan::{Aggregate, JoinType};
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
-    EquivalenceProperties, PhysicalExpr, PhysicalExprRef, physical_exprs_equal,
+    EquivalenceProperties, OrderingRequirements, PhysicalExpr, PhysicalExprRef,
+    physical_exprs_equal,
 };
 use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::aggregates::{
@@ -62,13 +62,14 @@ use datafusion_physical_plan::joins::{
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::statistics::StatisticsArgs;
+use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::{InterleaveExec, UnionExec, can_interleave};
 use datafusion_physical_plan::windows::WindowAggExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, get_best_fitting_window};
 use datafusion_physical_plan::{
-    Distribution, ExecutionPlan, Partitioning, with_new_children_if_necessary,
+    ChildSatisfactionOptions, Distribution, ExecutionPlan, InputDistributionRequirements,
+    Partitioning, with_new_children_if_necessary,
 };
 
 use itertools::izip;
@@ -630,12 +631,9 @@ fn expected_expr_positions(
     let mut current = current.to_vec();
     for expr in expected.iter() {
         // Find the position of the expected expr in the current expressions
-        if let Some(expected_position) = current.iter().position(|e| e.eq(expr)) {
-            current[expected_position] = Arc::new(NoOp::new());
-            indexes.push(expected_position);
-        } else {
-            return None;
-        }
+        let expected_position = current.iter().position(|e| e.eq(expr))?;
+        current[expected_position] = Arc::new(NoOp::new());
+        indexes.push(expected_position);
     }
     Some(indexes)
 }
@@ -700,17 +698,13 @@ fn add_roundrobin_on_top(
     }
 }
 
-// TODO: remove this private helper once Range generally satisfies
-// KeyPartitioned requirements through Partitioning::satisfaction.
-// See <https://github.com/apache/datafusion/issues/23266>.
-//
-// Partial aggregates do not require key partitioning, but they preserve their
-// input partitioning for the final aggregate. Until Range satisfies
-// KeyPartitioned generally, this check keeps preserve_file_partitions from
-// inserting RoundRobin between a reusable Range input and the partial aggregate.
-fn partial_aggregate_preserves_reusable_partitioning(
+// Partial aggregates require unspecified input distribution, but their output
+// may already satisfy the final aggregate's key distribution because partial
+// aggregation preserves/projects input partitioning. Keep that reusable output
+// partitioning intact when preserve_file_partitions would otherwise insert
+// RoundRobin below the partial aggregate.
+fn partial_aggregate_output_satisfies_final_partitioning(
     plan: &Arc<dyn ExecutionPlan>,
-    child: &Arc<dyn ExecutionPlan>,
     allow_subset_satisfy_partitioning: bool,
 ) -> bool {
     let Some(aggregate) = plan.downcast_ref::<AggregateExec>() else {
@@ -723,24 +717,15 @@ fn partial_aggregate_preserves_reusable_partitioning(
         return false;
     }
 
-    let group_exprs = aggregate.group_expr().input_exprs();
-    let output_partitioning = child.output_partitioning();
-    let eq_properties = child.equivalence_properties();
-    let key_distribution = Distribution::KeyPartitioned(group_exprs.clone());
+    let key_distribution = Distribution::KeyPartitioned(aggregate.output_group_expr());
 
-    output_partitioning
+    plan.output_partitioning()
         .satisfaction(
             &key_distribution,
-            eq_properties,
+            plan.equivalence_properties(),
             allow_subset_satisfy_partitioning,
         )
         .is_satisfied()
-        || range_partitioning_satisfies_key_partitioning(
-            output_partitioning,
-            &group_exprs,
-            eq_properties,
-            allow_subset_satisfy_partitioning,
-        )
 }
 
 /// Adds a [`SortPreservingMergeExec`] or a [`CoalescePartitionsExec`] operator
@@ -946,6 +931,14 @@ struct RepartitionRequirementStatus {
     hash_necessary: bool,
 }
 
+/// Per-child state while enforcing a parent's distribution requirements.
+struct DistributionChildState {
+    context: DistributionContext,
+    required_input_ordering: Option<OrderingRequirements>,
+    maintains_input_order: bool,
+    requirement: Distribution,
+}
+
 /// Calculates the `RepartitionRequirementStatus` for each children to generate
 /// consistent and sensible (in terms of performance) distribution requirements.
 /// As an example, a hash join's left (build) child might produce
@@ -989,15 +982,15 @@ fn get_repartition_requirement_status(
     let mut needs_alignment = false;
     let children = plan.children();
     let rr_beneficial = plan.benefits_from_input_partitioning();
-    let requirements = plan.required_input_distribution();
+    let requirements = plan.input_distribution_requirements().into_per_child();
     let mut repartition_status_flags = vec![];
     for (child, requirement, roundrobin_beneficial) in
         izip!(children.into_iter(), requirements, rr_beneficial)
     {
         // Decide whether adding a round robin is beneficial depending on
         // the statistical information we have on the number of rows:
-        let roundrobin_beneficial_stats = match child
-            .statistics_with_args(&StatisticsArgs::new())?
+        let roundrobin_beneficial_stats = match StatisticsContext::new()
+            .compute(child.as_ref(), &StatisticsArgs::new())?
             .num_rows
         {
             Precision::Exact(n_rows) => n_rows > batch_size,
@@ -1039,6 +1032,90 @@ fn get_repartition_requirement_status(
         .into_iter()
         .map(|(_, status)| status)
         .collect())
+}
+
+/// Enforce cross-child distribution relationships after each child has already
+/// satisfied its own distribution requirement.
+///
+/// See [`InputDistributionRequirements`] for the distinction between
+/// independent per-child requirements and co-partitioned child relationships.
+///
+/// Currently, unsatisfied co-partitioning is repaired by hash repartitioning
+/// key-partitioned children and other relationship kinds are rejected.
+#[expect(
+    deprecated,
+    reason = "HashPartitioned is accepted during the KeyPartitioned migration"
+)]
+fn enforce_distribution_relationships(
+    plan_name: &str,
+    input_distributions: &InputDistributionRequirements,
+    children: &mut [DistributionChildState],
+    target_partitions: usize,
+) -> Result<()> {
+    let mut repartitioned_for_relationship = vec![false; children.len()];
+
+    loop {
+        let child_plan_refs = children
+            .iter()
+            .map(|child| child.context.plan.as_ref())
+            .collect::<Vec<_>>();
+        let unsatisfied_children = input_distributions
+            .unsatisfied_co_partitioned_children(plan_name, &child_plan_refs)?;
+
+        if unsatisfied_children.is_empty() {
+            return Ok(());
+        }
+
+        let mut changed = false;
+        for child_idx in unsatisfied_children {
+            if repartitioned_for_relationship[child_idx] {
+                continue;
+            }
+
+            let (Distribution::HashPartitioned(exprs)
+            | Distribution::KeyPartitioned(exprs)) = &children[child_idx].requirement
+            else {
+                continue;
+            };
+
+            let already_target_hash = matches!(
+                children[child_idx].context.plan.output_partitioning(),
+                Partitioning::Hash(_, partition_count) if *partition_count == target_partitions
+            ) && input_distributions
+                .child_satisfaction(
+                    child_idx,
+                    children[child_idx].context.plan.as_ref(),
+                    ChildSatisfactionOptions::new(),
+                )?
+                .is_satisfied();
+
+            if already_target_hash {
+                continue;
+            }
+
+            let partitioning = Distribution::KeyPartitioned(exprs.to_vec())
+                .create_partitioning(target_partitions);
+            let repartition = RepartitionExec::try_new(
+                Arc::clone(&children[child_idx].context.plan),
+                partitioning,
+            )?
+            .with_preserve_order();
+            let plan = Arc::new(repartition) as _;
+            let original_child = std::mem::replace(
+                &mut children[child_idx].context,
+                DistributionContext::new(plan, true, vec![]),
+            );
+            children[child_idx].context.children = vec![original_child];
+            repartitioned_for_relationship[child_idx] = true;
+            changed = true;
+        }
+
+        if !changed {
+            return datafusion_common::internal_err!(
+                "{plan_name} has distribution relationships that could not be enforced"
+            );
+        }
+    }
 }
 
 /// This function checks whether we need to add additional data exchange
@@ -1148,6 +1225,7 @@ pub fn ensure_distribution(
         .is_some_and(|join| join.mode == PartitionMode::Partitioned)
         || plan.is::<SortMergeJoinExec>();
 
+    let input_distributions = plan.input_distribution_requirements();
     let repartition_status_flags =
         get_repartition_requirement_status(&plan, batch_size, should_use_estimates)?;
     // This loop iterates over all the children to:
@@ -1155,7 +1233,8 @@ pub fn ensure_distribution(
     // - Satisfy the distribution requirements of every child, if it is not
     //   already satisfied.
     // We store the updated children in `new_children`.
-    let children = izip!(
+    let mut children = izip!(
+        0..children.len(),
         children.into_iter(),
         plan.required_input_ordering(),
         plan.maintains_input_order(),
@@ -1163,6 +1242,7 @@ pub fn ensure_distribution(
     )
     .map(
         |(
+            child_idx,
             mut child,
             required_input_ordering,
             maintains,
@@ -1177,6 +1257,10 @@ pub fn ensure_distribution(
             // 1. Current partition count >= threshold
             // 2. Not a partitioned join since must use exact hash matching for joins
             // 3. Not a grouping set aggregate (requires exact hash including __grouping_id)
+            //
+            // Partitioned joins still require exact satisfaction. If that
+            // exact check already passes, preserve_file_partitions can skip
+            // repartitioning whose only purpose is increasing partition count.
             let current_partitions = child.plan.output_partitioning().partition_count();
             let preserve_file_partition_threshold_met =
                 config.optimizer.preserve_file_partitions > 0
@@ -1210,9 +1294,8 @@ pub fn ensure_distribution(
 
             let preserve_partial_aggregate_partitioning =
                 preserve_file_partition_threshold_met
-                    && partial_aggregate_preserves_reusable_partitioning(
+                    && partial_aggregate_output_satisfies_final_partitioning(
                         &plan,
-                        &child.plan,
                         allow_subset_satisfy_partitioning,
                     );
 
@@ -1247,26 +1330,19 @@ pub fn ensure_distribution(
                 | Distribution::KeyPartitioned(exprs) => {
                     let child_partitions =
                         child.plan.output_partitioning().partition_count();
-                    let distribution_satisfied = child
-                        .plan
-                        .output_partitioning()
-                        .satisfaction(
-                            &requirement,
-                            child.plan.equivalence_properties(),
-                            allow_subset_satisfy_partitioning,
-                        )
+                    let partitioning_satisfied = input_distributions
+                        .child_satisfaction(
+                            child_idx,
+                            child.plan.as_ref(),
+                            ChildSatisfactionOptions::new()
+                                .with_allow_subset(allow_subset_satisfy_partitioning),
+                        )?
                         .is_satisfied();
-                    let range_satisfied_for_aggregate =
-                        aggregate_can_reuse_range_partitioning(&plan)
-                            && range_partitioning_satisfies_key_partitioning(
-                                child.plan.output_partitioning(),
-                                exprs,
-                                child.plan.equivalence_properties(),
-                                allow_subset_satisfy_partitioning,
-                            );
-
-                    let partitioning_satisfied =
-                        distribution_satisfied || range_satisfied_for_aggregate;
+                    let preserve_satisfying_file_partitioning =
+                        preserve_file_partition_threshold_met
+                            && !requires_grouping_id
+                            && partitioning_satisfied
+                            && target_partitions > child_partitions;
 
                     // When subset satisfaction is enabled, preserve an
                     // already-satisfying partitioning. Otherwise, hash
@@ -1274,7 +1350,9 @@ pub fn ensure_distribution(
                     let needs_hash_repartition = if allow_subset_satisfy_partitioning {
                         !partitioning_satisfied
                     } else {
-                        !partitioning_satisfied || target_partitions > child_partitions
+                        !partitioning_satisfied
+                            || (target_partitions > child_partitions
+                                && !preserve_satisfying_file_partitioning)
                     };
                     let should_add_hash_repartition =
                         hash_necessary && needs_hash_repartition;
@@ -1309,75 +1387,101 @@ pub fn ensure_distribution(
                 }
             };
 
-            let streaming_benefit = if child.data {
-                preserving_order_enables_streaming(&plan, &child.plan)?
-            } else {
-                false
-            };
-
-            // There is an ordering requirement of the operator:
-            if let Some(required_input_ordering) = required_input_ordering {
-                // Either:
-                // - Ordering requirement cannot be satisfied by preserving ordering through repartitions, or
-                // - using order preserving variant is not desirable.
-                let sort_req = required_input_ordering.into_single();
-                let ordering_satisfied = child
-                    .plan
-                    .equivalence_properties()
-                    .ordering_satisfy_requirement(sort_req.clone())?;
-
-                if (!ordering_satisfied || !order_preserving_variants_desirable)
-                    && !streaming_benefit
-                    && child.data
-                {
-                    child = replace_order_preserving_variants(child)?;
-                    // If ordering requirements were satisfied before repartitioning,
-                    // make sure ordering requirements are still satisfied after.
-                    if ordering_satisfied {
-                        // Make sure to satisfy ordering requirement:
-                        child = add_sort_above_with_check(
-                            child,
-                            sort_req,
-                            plan.downcast_ref::<OutputRequirementExec>()
-                                .map(|output| output.fetch())
-                                .unwrap_or(None),
-                        )?;
-                    }
-                }
-                // Stop tracking distribution changing operators
-                child.data = false;
-            } else {
-                let streaming_benefit = if child.data {
-                    preserving_order_enables_streaming(&plan, &child.plan)?
-                } else {
-                    false
-                };
-                // no ordering requirement
-                match requirement {
-                    // Operator requires specific distribution.
-                    Distribution::SinglePartition
-                    | Distribution::HashPartitioned(_)
-                    | Distribution::KeyPartitioned(_) => {
-                        // If the parent doesn't maintain input order, preserving
-                        // ordering is pointless. However, if it does maintain
-                        // input order, we keep order-preserving variants so
-                        // ordering can flow through to ancestors that need it.
-                        if !maintains && !streaming_benefit {
-                            child = replace_order_preserving_variants(child)?;
-                        }
-                    }
-                    Distribution::UnspecifiedDistribution => {
-                        // Since ordering is lost, trying to preserve ordering is pointless
-                        if !maintains || plan.is::<OutputRequirementExec>() {
-                            child = replace_order_preserving_variants(child)?;
-                        }
-                    }
-                }
-            }
-            Ok(child)
+            Ok(DistributionChildState {
+                context: child,
+                required_input_ordering,
+                maintains_input_order: maintains,
+                requirement,
+            })
         },
     )
     .collect::<Result<Vec<_>>>()?;
+
+    // This is called after each child satisfies its own distribution requirement.
+    // It enforces relationships between child partition layouts for multi-child
+    // operators that process matching partition indexes together.
+    enforce_distribution_relationships(
+        plan.name(),
+        &input_distributions,
+        &mut children,
+        target_partitions,
+    )?;
+
+    let children = children
+        .into_iter()
+        .map(
+            |DistributionChildState {
+                 mut context,
+                 required_input_ordering,
+                 maintains_input_order,
+                 requirement,
+             }| {
+                let streaming_benefit = if context.data {
+                    preserving_order_enables_streaming(&plan, &context.plan)?
+                } else {
+                    false
+                };
+
+                // There is an ordering requirement of the operator:
+                if let Some(required_input_ordering) = required_input_ordering {
+                    // Either:
+                    // - Ordering requirement cannot be satisfied by preserving ordering through repartitions, or
+                    // - using order preserving variant is not desirable.
+                    let sort_req = required_input_ordering.into_single();
+                    let ordering_satisfied = context
+                        .plan
+                        .equivalence_properties()
+                        .ordering_satisfy_requirement(sort_req.clone())?;
+
+                    if (!ordering_satisfied || !order_preserving_variants_desirable)
+                        && !streaming_benefit
+                        && context.data
+                    {
+                        context = replace_order_preserving_variants(context)?;
+                        // If ordering requirements were satisfied before repartitioning,
+                        // make sure ordering requirements are still satisfied after.
+                        if ordering_satisfied {
+                            // Make sure to satisfy ordering requirement:
+                            context = add_sort_above_with_check(
+                                context,
+                                sort_req,
+                                plan.downcast_ref::<OutputRequirementExec>()
+                                    .map(|output| output.fetch())
+                                    .unwrap_or(None),
+                            )?;
+                        }
+                    }
+                    // Stop tracking distribution changing operators
+                    context.data = false;
+                } else {
+                    // no ordering requirement
+                    match requirement {
+                        // Operator requires specific distribution.
+                        Distribution::SinglePartition
+                        | Distribution::HashPartitioned(_)
+                        | Distribution::KeyPartitioned(_) => {
+                            // If the parent doesn't maintain input order, preserving
+                            // ordering is pointless. However, if it does maintain
+                            // input order, we keep order-preserving variants so
+                            // ordering can flow through to ancestors that need it.
+                            if !maintains_input_order && !streaming_benefit {
+                                context = replace_order_preserving_variants(context)?;
+                            }
+                        }
+                        Distribution::UnspecifiedDistribution => {
+                            // Since ordering is lost, trying to preserve ordering is pointless
+                            if !maintains_input_order
+                                || plan.is::<OutputRequirementExec>()
+                            {
+                                context = replace_order_preserving_variants(context)?;
+                            }
+                        }
+                    }
+                }
+                Ok(context)
+            },
+        )
+        .collect::<Result<Vec<_>>>()?;
 
     let children_plans = children
         .iter()
@@ -1452,7 +1556,8 @@ fn update_children(mut dist_context: DistributionContext) -> Result<Distribution
                 || child_context.children[0].data
                 || child_context
                     .plan
-                    .required_input_distribution()
+                    .input_distribution_requirements()
+                    .into_per_child()
                     .iter()
                     .zip(child_context.children.iter())
                     .any(|(required_dist, child_context)| {

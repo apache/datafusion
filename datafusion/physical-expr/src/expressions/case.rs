@@ -19,7 +19,9 @@ mod literal_lookup_table;
 
 use super::{Column, Literal};
 use crate::PhysicalExpr;
-use crate::expressions::{LambdaVariable, lit, try_cast};
+use crate::expressions::{
+    CastExpr, LambdaVariable, NegativeExpr, NotExpr, lit, try_cast,
+};
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
@@ -1278,7 +1280,11 @@ impl PhysicalExpr for CaseExpr {
                 // it would evaluate to null.
 
                 // Replace the `then` expression with `NULL` in the `when` expression
-                let with_null = match replace_with_null(w, t.as_ref(), input_schema) {
+                let with_null = match replace_with_null(
+                    w,
+                    unwrap_certainly_null_expr(t.as_ref()),
+                    input_schema,
+                ) {
                     Err(e) => return Some(Err(e)),
                     Ok(e) => e,
                 };
@@ -1535,6 +1541,25 @@ fn replace_with_null(
         })?
         .data;
     Ok(with_null)
+}
+
+/// Returns the innermost [`PhysicalExpr`] that is provably null if `expr` is null.
+///
+/// Keep this in sync with the logical-plan equivalent, `unwrap_certainly_null_expr`
+/// in `datafusion/expr/src/expr_schema.rs`. If the two disagree on which wrappers
+/// are null-preserving, `CASE` nullability computed by the logical and physical
+/// planners can diverge and cause a schema mismatch during planning.
+/// See <https://github.com/apache/datafusion/pull/23844> for rationale.
+fn unwrap_certainly_null_expr(expr: &dyn PhysicalExpr) -> &dyn PhysicalExpr {
+    if let Some(expr) = expr.downcast_ref::<NotExpr>() {
+        unwrap_certainly_null_expr(expr.arg().as_ref())
+    } else if let Some(expr) = expr.downcast_ref::<NegativeExpr>() {
+        unwrap_certainly_null_expr(expr.arg().as_ref())
+    } else if let Some(expr) = expr.downcast_ref::<CastExpr>() {
+        unwrap_certainly_null_expr(expr.expr.as_ref())
+    } else {
+        expr
+    }
 }
 
 /// Create a CASE expression
@@ -2577,10 +2602,45 @@ mod tests {
         let zero = lit(0);
         let foo_eq_zero =
             binary(Arc::clone(&foo), Operator::Eq, Arc::clone(&zero), &schema)?;
+        let cast_foo = cast(Arc::clone(&foo), &schema, DataType::Int64)?;
+        let negative_foo = expressions::negative(Arc::clone(&foo), &schema)?;
 
         assert_not_nullable(when_then_else(&foo_is_not_null, &foo, &zero)?, &schema);
         assert_not_nullable(when_then_else(&not_foo_is_null, &foo, &zero)?, &schema);
         assert_not_nullable(when_then_else(&foo_eq_zero, &foo, &zero)?, &schema);
+        assert_not_nullable(
+            when_then_else(&foo_is_not_null, &cast_foo, &lit(0i64))?,
+            &schema,
+        );
+        assert_not_nullable(
+            when_then_else(&foo_is_not_null, &negative_foo, &zero)?,
+            &schema,
+        );
+
+        // Nested null-preserving wrappers must be unwrapped recursively. `CAST(-foo)`
+        // still collapses `foo IS NOT NULL` to `false`, so the branch is
+        // unreachable-as-null and the `CASE` is not nullable.
+        let cast_negative_foo = cast(
+            expressions::negative(Arc::clone(&foo), &schema)?,
+            &schema,
+            DataType::Int64,
+        )?;
+        assert_not_nullable(
+            when_then_else(&foo_is_not_null, &cast_negative_foo, &lit(0i64))?,
+            &schema,
+        );
+
+        // `TRY_CAST` is intentionally NOT treated as null-preserving: it yields
+        // NULL on a failed cast even for a non-null input, so a guarded `TRY_CAST`
+        // branch is still reachable-as-null and the `CASE` stays nullable. This must
+        // stay consistent with the logical planner (`unwrap_certainly_null_expr` in
+        // `datafusion/expr/src/expr_schema.rs`); unwrapping it on only one side would
+        // reintroduce a logical/physical schema mismatch.
+        let try_cast_foo = try_cast(Arc::clone(&foo), &schema, DataType::Int64)?;
+        assert_nullable(
+            when_then_else(&foo_is_not_null, &try_cast_foo, &lit(0i64))?,
+            &schema,
+        );
 
         assert_not_nullable(
             when_then_else(
@@ -2700,6 +2760,23 @@ mod tests {
                 &zero,
             )?,
             &schema,
+        );
+
+        let boolean_schema =
+            Schema::new(vec![Field::new("predicate", DataType::Boolean, true)]);
+        let predicate = col("predicate", &boolean_schema)?;
+        let predicate_is_not_null = is_not_null(Arc::clone(&predicate))?;
+        let not_predicate = expressions::not(Arc::clone(&predicate))?;
+        assert_not_nullable(
+            when_then_else(&predicate_is_not_null, &not_predicate, &lit(false))?,
+            &boolean_schema,
+        );
+
+        // Nested `NOT` is likewise unwrapped recursively.
+        let not_not_predicate = expressions::not(Arc::clone(&not_predicate))?;
+        assert_not_nullable(
+            when_then_else(&predicate_is_not_null, &not_not_predicate, &lit(false))?,
+            &boolean_schema,
         );
 
         Ok(())
