@@ -815,6 +815,8 @@ pub struct ParquetOptions {
     /// default = false
     #[prost(bool, tag = "5")]
     pub pushdown_filters: bool,
+    #[prost(enumeration = "parquet_options::PushdownFilterMode", tag = "38")]
+    pub pushdown_filter_mode: i32,
     /// default = false
     #[prost(bool, tag = "6")]
     pub reorder_filters: bool,
@@ -913,6 +915,48 @@ pub struct ParquetOptions {
 }
 /// Nested message and enum types in `ParquetOptions`.
 pub mod parquet_options {
+    /// Strategy for deciding whether to push filters into the parquet scan when
+    /// `pushdown_filters` is enabled. Nested so its `ALWAYS` value does not
+    /// collide with other file-level enum values.
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash,
+        PartialOrd,
+        Ord,
+        ::prost::Enumeration
+    )]
+    #[repr(i32)]
+    pub enum PushdownFilterMode {
+        Auto = 0,
+        Always = 1,
+        Heuristic = 2,
+    }
+    impl PushdownFilterMode {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Auto => "AUTO",
+                Self::Always => "ALWAYS",
+                Self::Heuristic => "HEURISTIC",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "AUTO" => Some(Self::Auto),
+                "ALWAYS" => Some(Self::Always),
+                "HEURISTIC" => Some(Self::Heuristic),
+                _ => None,
+            }
+        }
+    }
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum MetadataSizeHintOpt {
         #[prost(uint64, tag = "4")]

@@ -37,6 +37,7 @@ use datafusion::{
     physical_plan::metrics::MetricsSet,
     prelude::{ParquetReadOptions, SessionConfig, SessionContext},
 };
+use datafusion_common::config::ParquetPushdownFilterMode;
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_physical_plan::metrics::MetricValue;
 use parquet::arrow::ArrowWriter;
@@ -323,6 +324,10 @@ impl ContextWithParquet {
             Unit::RowGroup(row_per_group) => {
                 config = config.with_parquet_bloom_filter_pruning(true);
                 config.options_mut().execution.parquet.pushdown_filters = true;
+                // force unconditional pushdown to test so the filters are
+                // applied for TopK dynamic RG pruning
+                config.options_mut().execution.parquet.pushdown_filter_mode =
+                    ParquetPushdownFilterMode::Always;
                 make_test_file_rg(
                     scenario,
                     row_per_group,
@@ -340,6 +345,10 @@ impl ContextWithParquet {
                 config = config.with_parquet_bloom_filter_pruning(true);
                 config = config.with_parquet_page_index_pruning(true);
                 config.options_mut().execution.parquet.pushdown_filters = true;
+                // force unconditional pushdown to test so the filters are
+                // applied for TopK dynamic RG pruning
+                config.options_mut().execution.parquet.pushdown_filter_mode =
+                    ParquetPushdownFilterMode::Always;
                 make_test_file_rg(
                     scenario,
                     row_per_group,

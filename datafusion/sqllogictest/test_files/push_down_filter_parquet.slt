@@ -24,6 +24,12 @@ set datafusion.explain.physical_plan_only = true;
 statement ok
 set datafusion.execution.parquet.pushdown_filters = true;
 
+# Test file exercises the pushdown path directly. Force unconditional
+# pushdown (pushdown_filter_mode = always) so the expected plans (FilterExec absorbed
+# into DataSourceExec) are reproduced regardless of projection width.
+statement ok
+set datafusion.execution.parquet.pushdown_filter_mode = always;
+
 # this one is also required to make DF skip second file due to "sufficient" amount of rows
 statement ok
 set datafusion.execution.collect_statistics = true;
@@ -1072,6 +1078,9 @@ RESET datafusion.explain.physical_plan_only;
 
 statement ok
 RESET datafusion.execution.parquet.pushdown_filters;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filter_mode;
 
 statement ok
 drop table t;

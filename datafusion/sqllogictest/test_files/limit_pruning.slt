@@ -18,6 +18,12 @@
 statement ok
 set datafusion.execution.parquet.pushdown_filters = true;
 
+# Test file exercises the pushdown path directly. Force unconditional
+# pushdown (pushdown_filter_mode = always) so the expected plans (FilterExec absorbed
+# into DataSourceExec) are reproduced.
+statement ok
+set datafusion.execution.parquet.pushdown_filter_mode = always;
+
 
 statement ok
 CREATE TABLE tracking_data AS VALUES
@@ -131,3 +137,6 @@ reset datafusion.explain.analyze_level;
 # Config reset
 statement ok
 RESET datafusion.execution.parquet.pushdown_filters;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filter_mode;

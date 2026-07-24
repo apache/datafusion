@@ -21,6 +21,12 @@
 # scan not just the metadata)
 ##########
 
+# Test file exercises the pushdown path directly. Force unconditional
+# pushdown (pushdown_filter_mode = always) so the expected plans (FilterExec absorbed
+# into DataSourceExec) are reproduced regardless of projection width.
+statement ok
+set datafusion.execution.parquet.pushdown_filter_mode = always;
+
 # File1 has only columns a and b
 statement ok
 COPY  (
@@ -933,10 +939,13 @@ A 78
 
 # Cleanup
 statement ok
-set datafusion.execution.parquet.pushdown_filters = false;
+RESET datafusion.execution.parquet.pushdown_filters;
 
 statement ok
 set datafusion.execution.parquet.reorder_filters = false;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filter_mode;
 
 statement ok
 DROP TABLE dict_filter_bug;
