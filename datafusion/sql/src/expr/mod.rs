@@ -1009,7 +1009,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<Expr> {
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
         let pattern_type = pattern.get_type(schema)?;
-        if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
+        // The analyzer coerces both operands to a common string type, so any
+        // string-typed (or untyped NULL) pattern is accepted here.
+        if !matches!(
+            pattern_type,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null
+        ) {
             return plan_err!("Invalid pattern in SIMILAR TO expression");
         }
         let escape_char = match escape_char.map(|v| v.value) {
