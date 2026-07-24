@@ -93,7 +93,7 @@ use object_store::ObjectStore;
 #[cfg(feature = "sql")]
 use sqlparser::{
     ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias},
-    dialect::dialect_from_str,
+    dialect::{Dialect as SqlParserDialect, dialect_from_str},
 };
 use url::Url;
 use uuid::Uuid;
@@ -152,6 +152,16 @@ pub struct SessionState {
     /// Provides support for customizing the SQL type planning
     #[cfg(feature = "sql")]
     type_planner: Option<Arc<dyn TypePlanner>>,
+    /// Optional custom [`sqlparser`] dialect used when parsing SQL.
+    ///
+    /// When set, this overrides the dialect selected by
+    /// [`SqlParserOptions::dialect`] for parsing SQL statements and
+    /// expressions. This makes it possible to use custom dialects, for example
+    /// those derived with `sqlparser`'s `derive_dialect!` macro.
+    ///
+    /// [`SqlParserOptions::dialect`]: datafusion_common::config::SqlParserOptions::dialect
+    #[cfg(feature = "sql")]
+    sql_dialect: Option<Arc<dyn SqlParserDialect + Send + Sync>>,
     /// Responsible for optimizing a logical plan
     optimizer: Optimizer,
     /// Responsible for optimizing a physical execution plan
@@ -245,6 +255,9 @@ impl Debug for SessionState {
 
         #[cfg(feature = "sql")]
         let ret = ret.field("type_planner", &self.type_planner);
+
+        #[cfg(feature = "sql")]
+        let ret = ret.field("sql_dialect", &self.sql_dialect);
 
         ret.field("query_planners", &self.query_planner)
             .field("analyzer", &self.analyzer)
@@ -433,6 +446,40 @@ impl SessionState {
         &mut self.table_factories
     }
 
+    /// Returns the custom [`sqlparser`] dialect configured for this session, if
+    /// any.
+    ///
+    /// When present, this dialect takes precedence over
+    /// [`SqlParserOptions::dialect`] when parsing SQL. See
+    /// [`SessionStateBuilder::with_sql_dialect`].
+    ///
+    /// [`SqlParserOptions::dialect`]: datafusion_common::config::SqlParserOptions::dialect
+    #[cfg(feature = "sql")]
+    pub fn sql_dialect(&self) -> Option<&Arc<dyn SqlParserDialect + Send + Sync>> {
+        self.sql_dialect.as_ref()
+    }
+
+    /// Resolve the [`sqlparser`] dialect to use for parsing.
+    ///
+    /// Prefers a custom dialect set via [`SessionStateBuilder::with_sql_dialect`];
+    /// otherwise resolves the built-in [`Dialect`] enum from the session config.
+    #[cfg(feature = "sql")]
+    fn resolve_sql_dialect(
+        &self,
+        dialect: &Dialect,
+    ) -> datafusion_common::Result<Arc<dyn SqlParserDialect>> {
+        if let Some(dialect) = &self.sql_dialect {
+            return Ok(Arc::clone(dialect) as Arc<dyn SqlParserDialect>);
+        }
+        let dialect = dialect_from_str(dialect).ok_or_else(|| {
+            plan_datafusion_err!(
+                "Unsupported SQL dialect: {dialect}. Available dialects: {}.",
+                Dialect::available()
+            )
+        })?;
+        Ok(Arc::from(dialect))
+    }
+
     /// Parse an SQL string into an DataFusion specific AST
     /// [`Statement`]. See [`SessionContext::sql`] for running queries.
     ///
@@ -443,12 +490,7 @@ impl SessionState {
         sql: &str,
         dialect: &Dialect,
     ) -> datafusion_common::Result<Statement> {
-        let dialect = dialect_from_str(dialect).ok_or_else(|| {
-            plan_datafusion_err!(
-                "Unsupported SQL dialect: {dialect}. Available dialects: {}.",
-                Dialect::available()
-            )
-        })?;
+        let dialect = self.resolve_sql_dialect(dialect)?;
 
         let recursion_limit = self.config.options().sql_parser.recursion_limit.get();
 
@@ -491,12 +533,7 @@ impl SessionState {
         sql: &str,
         dialect: &Dialect,
     ) -> datafusion_common::Result<SQLExprWithAlias> {
-        let dialect = dialect_from_str(dialect).ok_or_else(|| {
-            plan_datafusion_err!(
-                "Unsupported SQL dialect: {dialect}. Available dialects: {}.",
-                Dialect::available()
-            )
-        })?;
+        let dialect = self.resolve_sql_dialect(dialect)?;
 
         let recursion_limit = self.config.options().sql_parser.recursion_limit.get();
         let expr = DFParserBuilder::new(sql)
@@ -1041,6 +1078,8 @@ pub struct SessionStateBuilder {
     relation_planners: Option<Vec<Arc<dyn RelationPlanner>>>,
     #[cfg(feature = "sql")]
     type_planner: Option<Arc<dyn TypePlanner>>,
+    #[cfg(feature = "sql")]
+    sql_dialect: Option<Arc<dyn SqlParserDialect + Send + Sync>>,
     optimizer: Option<Optimizer>,
     physical_optimizers: Option<PhysicalOptimizer>,
     query_planner: Option<Arc<dyn QueryPlanner + Send + Sync>>,
@@ -1084,6 +1123,8 @@ impl SessionStateBuilder {
             relation_planners: None,
             #[cfg(feature = "sql")]
             type_planner: None,
+            #[cfg(feature = "sql")]
+            sql_dialect: None,
             optimizer: None,
             physical_optimizers: None,
             query_planner: None,
@@ -1140,6 +1181,8 @@ impl SessionStateBuilder {
             relation_planners: Some(existing.relation_planners),
             #[cfg(feature = "sql")]
             type_planner: existing.type_planner,
+            #[cfg(feature = "sql")]
+            sql_dialect: existing.sql_dialect,
             optimizer: Some(existing.optimizer),
             physical_optimizers: Some(existing.physical_optimizers),
             query_planner: Some(existing.query_planner),
@@ -1307,6 +1350,36 @@ impl SessionStateBuilder {
     #[cfg(feature = "sql")]
     pub fn with_type_planner(mut self, type_planner: Arc<dyn TypePlanner>) -> Self {
         self.type_planner = Some(type_planner);
+        self
+    }
+
+    /// Set a custom [`sqlparser`] dialect used when parsing SQL.
+    ///
+    /// When set, this dialect takes precedence over the built-in dialect
+    /// selected by [`SqlParserOptions::dialect`]. This allows using custom
+    /// dialects, for example those derived with `sqlparser`'s `derive_dialect!`
+    /// macro.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use datafusion::execution::session_state::SessionStateBuilder;
+    /// # use datafusion::prelude::SessionContext;
+    /// use sqlparser::dialect::PostgreSqlDialect;
+    ///
+    /// let state = SessionStateBuilder::new()
+    ///     .with_default_features()
+    ///     .with_sql_dialect(Arc::new(PostgreSqlDialect {}))
+    ///     .build();
+    /// let ctx = SessionContext::new_with_state(state);
+    /// ```
+    ///
+    /// [`SqlParserOptions::dialect`]: datafusion_common::config::SqlParserOptions::dialect
+    #[cfg(feature = "sql")]
+    pub fn with_sql_dialect(
+        mut self,
+        dialect: Arc<dyn SqlParserDialect + Send + Sync>,
+    ) -> Self {
+        self.sql_dialect = Some(dialect);
         self
     }
 
@@ -1557,6 +1630,8 @@ impl SessionStateBuilder {
             relation_planners,
             #[cfg(feature = "sql")]
             type_planner,
+            #[cfg(feature = "sql")]
+            sql_dialect,
             optimizer,
             physical_optimizers,
             query_planner,
@@ -1593,6 +1668,8 @@ impl SessionStateBuilder {
             relation_planners: relation_planners.unwrap_or_default(),
             #[cfg(feature = "sql")]
             type_planner,
+            #[cfg(feature = "sql")]
+            sql_dialect,
             optimizer: optimizer.unwrap_or_default(),
             physical_optimizers: physical_optimizers.unwrap_or_default(),
             query_planner: query_planner
@@ -1771,6 +1848,14 @@ impl SessionStateBuilder {
         &mut self.type_planner
     }
 
+    /// Returns the current custom SQL dialect value
+    #[cfg(feature = "sql")]
+    pub fn sql_dialect(
+        &mut self,
+    ) -> &mut Option<Arc<dyn SqlParserDialect + Send + Sync>> {
+        &mut self.sql_dialect
+    }
+
     /// Returns the current optimizer value
     pub fn optimizer(&mut self) -> &mut Option<Optimizer> {
         &mut self.optimizer
@@ -1907,6 +1992,8 @@ impl Debug for SessionStateBuilder {
             .field("expr_planners", &self.expr_planners);
         #[cfg(feature = "sql")]
         let ret = ret.field("type_planner", &self.type_planner);
+        #[cfg(feature = "sql")]
+        let ret = ret.field("sql_dialect", &self.sql_dialect);
         ret.field("query_planners", &self.query_planner)
             .field("analyzer_rules", &self.analyzer_rules)
             .field("analyzer", &self.analyzer)
@@ -2452,6 +2539,88 @@ mod tests {
                 .unwrap();
             assert_eq!(from_str, from_expr);
         }
+    }
+
+    #[test]
+    #[cfg(feature = "sql")]
+    fn test_custom_sql_dialect_overrides_config() {
+        // A minimal custom dialect that, unlike the default `Generic` dialect,
+        // honors backslash escapes inside string literals. This is decided
+        // purely by the dialect at tokenization time, so it lets us observe that
+        // the custom dialect is actually used for parsing.
+        #[derive(Debug)]
+        struct BackslashEscapeDialect;
+
+        impl sqlparser::dialect::Dialect for BackslashEscapeDialect {
+            fn is_identifier_start(&self, ch: char) -> bool {
+                ch.is_ascii_alphabetic() || ch == '_'
+            }
+
+            fn is_identifier_part(&self, ch: char) -> bool {
+                ch.is_ascii_alphanumeric() || ch == '_'
+            }
+
+            fn supports_string_literal_backslash_escape(&self) -> bool {
+                true
+            }
+        }
+
+        // `\t` is an escaped tab under the custom dialect, but a literal
+        // backslash followed by `t` under the default `Generic` dialect.
+        let sql = r"SELECT 'a\tb' AS x";
+
+        let custom_state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_sql_dialect(Arc::new(BackslashEscapeDialect))
+            .build();
+        assert!(custom_state.sql_dialect().is_some());
+
+        // The config dialect is left at its default, yet the custom dialect is
+        // the one that actually drives parsing.
+        let config_dialect = custom_state.config.options().sql_parser.dialect;
+        assert_eq!(config_dialect, Dialect::Generic);
+        let custom_stmt = custom_state
+            .sql_to_statement(sql, &config_dialect)
+            .expect("custom dialect should parse the statement");
+
+        // Parsing the same SQL without the custom dialect yields a different AST
+        // (the backslash escape is not interpreted), proving the override took
+        // effect rather than being silently ignored.
+        let default_state = SessionStateBuilder::new().with_default_features().build();
+        assert!(default_state.sql_dialect().is_none());
+        let default_stmt = default_state
+            .sql_to_statement(sql, &config_dialect)
+            .expect("generic dialect should parse the statement");
+
+        assert_ne!(
+            custom_stmt, default_stmt,
+            "custom dialect should change how the string literal is parsed"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "sql")]
+    fn test_custom_sql_dialect_preserved_by_builder_roundtrip() {
+        #[derive(Debug)]
+        struct MarkerDialect;
+        impl sqlparser::dialect::Dialect for MarkerDialect {
+            fn is_identifier_start(&self, ch: char) -> bool {
+                ch.is_ascii_alphabetic()
+            }
+            fn is_identifier_part(&self, ch: char) -> bool {
+                ch.is_ascii_alphanumeric()
+            }
+        }
+
+        let state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_sql_dialect(Arc::new(MarkerDialect))
+            .build();
+        assert!(state.sql_dialect().is_some());
+
+        // Rebuilding from an existing state should carry the custom dialect over.
+        let rebuilt = SessionStateBuilder::new_from_existing(state).build();
+        assert!(rebuilt.sql_dialect().is_some());
     }
 
     #[test]
