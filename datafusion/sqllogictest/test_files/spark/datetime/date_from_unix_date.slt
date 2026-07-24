@@ -1,0 +1,135 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# date_from_unix_date tests
+#
+# The function lowers to an Int32 -> Date32 cast in `simplify()`, so the logical
+# optimizer replaces it before physical planning and `invoke_with_args` is never
+# reached. Consumers that build physical expressions directly (for example
+# DataFusion Comet) do not run `SimplifyExpressions` and call `invoke_with_args`
+# instead. Both paths are covered below: the second section disables the logical
+# optimizer so that the function survives into the physical plan.
+
+##########
+# simplify() path (default)
+##########
+
+# The plan below confirms this section exercises the rewritten cast.
+query TT
+EXPLAIN SELECT date_from_unix_date(a) FROM (VALUES (0::INT), (1::INT), (18628::INT)) AS t(a);
+----
+logical_plan
+01)Projection: CAST(t.a AS Date32) AS date_from_unix_date(t.a)
+02)--SubqueryAlias: t
+03)----Projection: column1 AS a
+04)------Values: (Int32(0) AS Int64(0)), (Int32(1) AS Int64(1)), (Int32(18628) AS Int64(18628))
+physical_plan
+01)ProjectionExec: expr=[CAST(column1@0 AS Date32) as date_from_unix_date(t.a)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Scalar cases
+query D
+SELECT date_from_unix_date(0::INT);
+----
+1970-01-01
+
+query D
+SELECT date_from_unix_date(1::INT);
+----
+1970-01-02
+
+query D
+SELECT date_from_unix_date((-1)::INT);
+----
+1969-12-31
+
+query D
+SELECT date_from_unix_date(18628::INT);
+----
+2021-01-01
+
+# NULL input
+query D
+SELECT date_from_unix_date(NULL::INT);
+----
+NULL
+
+# Array input
+query D
+SELECT date_from_unix_date(a) FROM (VALUES (0::INT), (1::INT), (18628::INT)) AS t(a);
+----
+1970-01-01
+1970-01-02
+2021-01-01
+
+##########
+# invoke_with_args() path
+##########
+
+statement ok
+set datafusion.optimizer.max_passes = 0;
+
+# The plan below confirms this section exercises the function itself.
+query TT
+EXPLAIN SELECT date_from_unix_date(a) FROM (VALUES (0::INT), (1::INT), (18628::INT)) AS t(a);
+----
+logical_plan
+01)Projection: date_from_unix_date(t.a)
+02)--SubqueryAlias: t
+03)----Projection: column1 AS a
+04)------Values: (CAST(Int64(0) AS Int32)), (CAST(Int64(1) AS Int32)), (CAST(Int64(18628) AS Int32))
+physical_plan
+01)ProjectionExec: expr=[date_from_unix_date(column1@0) as date_from_unix_date(t.a)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Scalar cases
+query D
+SELECT date_from_unix_date(0::INT);
+----
+1970-01-01
+
+query D
+SELECT date_from_unix_date(1::INT);
+----
+1970-01-02
+
+query D
+SELECT date_from_unix_date((-1)::INT);
+----
+1969-12-31
+
+query D
+SELECT date_from_unix_date(18628::INT);
+----
+2021-01-01
+
+# NULL input
+query D
+SELECT date_from_unix_date(NULL::INT);
+----
+NULL
+
+# Array input
+query D
+SELECT date_from_unix_date(a) FROM (VALUES (0::INT), (1::INT), (18628::INT)) AS t(a);
+----
+1970-01-01
+1970-01-02
+2021-01-01
+
+statement ok
+reset datafusion.optimizer.max_passes;
