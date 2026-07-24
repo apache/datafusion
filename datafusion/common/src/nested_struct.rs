@@ -542,8 +542,8 @@ pub fn validate_data_type_compatibility(
 /// name-based nested struct casting logic, rather than Arrow's standard cast.
 ///
 /// This is the case when both types are struct types, or both are the same
-/// container type (List, LargeList, ListView, LargeListView, Dictionary) wrapping
-/// types that recursively contain structs.
+/// container type (List, LargeList, equal-width FixedSizeList, ListView,
+/// LargeListView, Dictionary) wrapping types that recursively contain structs.
 ///
 /// Use this predicate at both planning time (to decide whether to apply struct
 /// compatibility validation) and execution time (to decide whether to route
@@ -1502,18 +1502,36 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_fixed_size_list_struct_size_mismatch_rejected() {
-        let (source_field, target_field) = create_fixed_size_list_test_fields(
-            vec![("a", DataType::Int32)],
-            vec![("a", DataType::Int64), ("b", DataType::Utf8)],
-        );
-        let source = DataType::FixedSizeList(source_field, 2);
-        let target = DataType::FixedSizeList(target_field, 3);
+    fn test_fixed_size_list_struct_size_mismatch_rejected() {
+        let source_field = fixed_size_list_struct_field(vec![("a", DataType::Int32)]);
+        let target_field = Arc::clone(&source_field);
+        let source_type = DataType::FixedSizeList(Arc::clone(&source_field), 2);
+        let target_type = DataType::FixedSizeList(target_field, 3);
 
-        let error = validate_data_type_compatibility("col", &source, &target)
+        let validation_error =
+            validate_data_type_compatibility("col", &source_type, &target_type)
+                .unwrap_err()
+                .to_string();
+        assert_contains!(validation_error, "Cannot cast struct field 'col'");
+
+        let struct_arr = StructArray::from(vec![(
+            arc_field("a", DataType::Int32),
+            Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+        )]);
+        let source_col: ArrayRef = Arc::new(FixedSizeListArray::new(
+            source_field,
+            2,
+            Arc::new(struct_arr),
+            None,
+        ));
+
+        let runtime_error = cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS)
             .unwrap_err()
             .to_string();
-        assert_contains!(error, "Cannot cast struct field 'col'");
+        assert_contains!(
+            runtime_error,
+            "cannot cast fixed-size-list to fixed-size-list with different size"
+        );
     }
 
     #[test]
