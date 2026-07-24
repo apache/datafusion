@@ -19,12 +19,15 @@
 //!
 //! See comments in [`super::ordered_partial_table`] for details.
 
+use std::sync::Arc;
+
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 
 use crate::InputOrderMode;
 use crate::aggregates::aggregate_hash_table::FinalMarker;
+use crate::aggregates::group_values::GroupByMetrics;
 use crate::aggregates::{AggregateExec, AggregateMode};
 
 use super::common_ordered::OrderedAggregateTable;
@@ -41,21 +44,22 @@ use super::common_ordered::OrderedAggregateTable;
 impl OrderedAggregateTable<FinalMarker> {
     pub(in crate::aggregates) fn new_with_input_order(
         agg: &AggregateExec,
-        partition: usize,
         input_schema: &SchemaRef,
         output_schema: SchemaRef,
         batch_size: usize,
         input_order_mode: &InputOrderMode,
+        group_by_metrics: GroupByMetrics,
     ) -> Result<Self> {
         Self::new_for_mode(
             agg,
-            partition,
             input_schema,
             output_schema,
+            Arc::clone(input_schema),
             batch_size,
             input_order_mode,
             &AggregateMode::Final,
             vec![None; agg.aggr_expr.len()],
+            group_by_metrics,
         )
     }
 
