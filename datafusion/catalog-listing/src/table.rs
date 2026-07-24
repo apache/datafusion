@@ -735,11 +735,21 @@ impl TableProvider for ListingTable {
 
         // Invalidate cache entries for this table if they exist
         if let Some(lfc) = state.runtime_env().cache_manager.get_list_files_cache() {
-            let key = TableScopedPath {
-                table: table_path.get_table_ref().clone(),
-                path: table_path.prefix().clone(),
-            };
-            let _ = lfc.remove(&key);
+            if let Some(table_ref) = table_path.get_table_ref() {
+                lfc.drop_table_entries(table_ref)?;
+            } else {
+                let table_prefix = table_path.prefix();
+                let keys: Vec<_> = lfc
+                    .list_entries()
+                    .into_keys()
+                    .filter(|key| {
+                        key.table.is_none() && key.path.prefix_matches(table_prefix)
+                    })
+                    .collect();
+                for key in keys {
+                    let _ = lfc.remove(&key);
+                }
+            }
         }
 
         // Sink related option, apart from format
