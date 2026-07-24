@@ -25,6 +25,7 @@ use arrow::compute::kernels::bitwise::{
 };
 use arrow::compute::kernels::boolean::not;
 use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scalar};
+use arrow::compute::take;
 use arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common::{exec_err, internal_err, plan_err};
@@ -213,6 +214,11 @@ pub(crate) fn regex_match_dyn(
         DataType::LargeUtf8 => {
             regexp_is_match_flag!(left, right, LargeStringArray, not_match, flag)
         }
+        DataType::Dictionary(_, _) => {
+            let dict = left.as_any_dictionary();
+            let unpacked_left = take(dict.values().as_ref(), dict.keys(), None)?;
+            regex_match_dyn(&unpacked_left, right, not_match, flag)
+        }
         other => internal_err!(
             "Data type {} not supported for regex_match_dyn on string array",
             other
@@ -297,4 +303,24 @@ pub(crate) fn regex_match_dyn_scalar(
         ),
     };
     Some(result)
+}
+
+#[test]
+fn test_regex_match_dyn_dictionary() -> Result<()> {
+    let values = StringArray::from(vec![Some("user auth failed"), Some("anonymous")]);
+    let keys = Int32Array::from(vec![Some(0), Some(1), None, Some(0)]);
+    let left: ArrayRef = Arc::new(DictionaryArray::new(keys, Arc::new(values)));
+    let right: ArrayRef = Arc::new(StringArray::from(vec![
+        Some("(auth|login)"),
+        Some("^anon"),
+        Some("x"),
+        Some("nope"),
+    ]));
+
+    let result = regex_match_dyn(&left, &right, false, false)?;
+    assert_eq!(
+        result.as_any().downcast_ref::<BooleanArray>().unwrap(),
+        &BooleanArray::from(vec![Some(true), Some(true), None, Some(false)])
+    );
+    Ok(())
 }
