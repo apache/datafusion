@@ -28,6 +28,7 @@ use super::{
     ColumnStatistics, DisplayAs, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
+use crate::adaptive_filter::{AdaptiveConjunction, AdaptiveFilterShared};
 use crate::check_if_same_properties;
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::common::can_project;
@@ -98,6 +99,13 @@ pub struct FilterExec {
     batch_size: usize,
     /// Number of rows to fetch
     fetch: Option<usize>,
+    /// Measurements shared by all partition streams, used by adaptive conjunct
+    /// reordering (see [`AdaptiveConjunction`]) so the streams learn as one.
+    /// Fresh per plan node; never affects the plan. `Clone` deliberately shares
+    /// it (the clone filters the same predicate over the same input, so pooled
+    /// learning still applies); [`reset_state`](ExecutionPlan::reset_state)
+    /// and predicate rewrites replace it with a fresh instance.
+    adaptive_stats: Arc<AdaptiveFilterShared>,
 }
 
 /// Builder for [`FilterExec`] to set optional parameters
@@ -217,6 +225,7 @@ impl FilterExecBuilder {
             projection: self.projection,
             batch_size: self.batch_size,
             fetch: self.fetch,
+            adaptive_stats: Arc::new(AdaptiveFilterShared::new()),
         })
     }
 }
@@ -290,6 +299,7 @@ impl FilterExec {
             projection: self.projection.clone(),
             batch_size,
             fetch: self.fetch,
+            adaptive_stats: Arc::clone(&self.adaptive_stats),
         })
     }
 
@@ -562,6 +572,24 @@ impl ExecutionPlan for FilterExec {
         }))
     }
 
+    /// Reset per-execution state so an independent re-execution (e.g. a
+    /// recursive query) does not inherit runtime state from a prior run.
+    ///
+    /// The pooled adaptive-conjunct measurements (`AdaptiveFilterShared`) and
+    /// the execution metrics are the per-execution state that must be reset —
+    /// otherwise the adaptive reordering learned in one execution would leak
+    /// into the next. The predicate, input, and cached plan properties are
+    /// unchanged and remain valid, so they are preserved (unlike
+    /// [`with_new_children`](Self::with_new_children), this does not recompute
+    /// them). Any dynamic filters *inside* the predicate are owned and reset by
+    /// the operator that created them, not by `FilterExec`.
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut new = (*self).clone();
+        new.adaptive_stats = Arc::new(AdaptiveFilterShared::new());
+        new.metrics = ExecutionPlanMetricsSet::new();
+        Ok(Arc::new(new))
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -574,9 +602,23 @@ impl ExecutionPlan for FilterExec {
             context.task_id()
         );
         let metrics = FilterExecMetrics::new(&self.metrics, partition);
+        let enabled = context
+            .session_config()
+            .options()
+            .execution
+            .adaptive_filter_reordering;
+        let adaptive = enabled
+            .then(|| {
+                AdaptiveConjunction::try_new(
+                    &self.predicate,
+                    Arc::clone(&self.adaptive_stats),
+                )
+            })
+            .flatten();
         Ok(Box::pin(FilterExecStream {
             schema: self.schema(),
             predicate: Arc::clone(&self.predicate),
+            adaptive,
             input: self.input.execute(partition, context)?,
             metrics,
             projection: self.projection.clone(),
@@ -773,6 +815,9 @@ impl ExecutionPlan for FilterExec {
                 projection: self.projection.clone(),
                 batch_size: self.batch_size,
                 fetch: self.fetch,
+                // The predicate changed; pooled per-conjunct stats no longer
+                // describe it.
+                adaptive_stats: Arc::new(AdaptiveFilterShared::new()),
             };
             Some(Arc::new(new) as _)
         };
@@ -797,6 +842,7 @@ impl ExecutionPlan for FilterExec {
             projection: self.projection.clone(),
             batch_size: self.batch_size,
             fetch,
+            adaptive_stats: Arc::clone(&self.adaptive_stats),
         }))
     }
 
@@ -1155,6 +1201,10 @@ struct FilterExecStream {
     schema: SchemaRef,
     /// The expression to filter on. This expression must evaluate to a boolean value.
     predicate: Arc<dyn PhysicalExpr>,
+    /// When set, the predicate is a reorderable conjunction evaluated
+    /// adaptively (conjuncts measured, then reordered) instead of via
+    /// `predicate`.
+    adaptive: Option<AdaptiveConjunction>,
     /// The input partition to filter.
     input: SendableRecordBatchStream,
     /// Runtime metrics recording
@@ -1250,9 +1300,15 @@ impl Stream for FilterExecStream {
                 }
                 Some(Ok(batch)) => {
                     let timer = elapsed_compute.timer();
-                    let status = self.predicate.as_ref()
-                        .evaluate(&batch)
-                        .and_then(|v| v.into_array(batch.num_rows()))
+                    let array = match self.adaptive.as_mut() {
+                        Some(adaptive) => adaptive.evaluate(&batch),
+                        None => self
+                            .predicate
+                            .as_ref()
+                            .evaluate(&batch)
+                            .and_then(|v| v.into_array(batch.num_rows())),
+                    };
+                    let status = array
                         .and_then(|array| {
                             Ok(match self.projection.as_ref()  {
                                 Some(projection) => {
@@ -2130,6 +2186,34 @@ mod tests {
             StatisticsContext::new().compute(&filter, &StatisticsArgs::new())?;
         assert_eq!(statistics.num_rows, Precision::Inexact(400));
         assert_eq!(statistics.total_byte_size, Precision::Inexact(1600));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_reset_state_gives_fresh_adaptive_stats() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics::new_unknown(&schema),
+            schema,
+        ));
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        ));
+        let filter = Arc::new(FilterExec::try_new(predicate, input)?);
+
+        let reset = Arc::clone(&filter).reset_state()?;
+        let reset = reset
+            .as_ref()
+            .downcast_ref::<FilterExec>()
+            .expect("reset_state returns a FilterExec");
+
+        // The per-execution adaptive state is a fresh instance, so learning
+        // cannot leak across independent executions...
+        assert!(!Arc::ptr_eq(&filter.adaptive_stats, &reset.adaptive_stats));
+        // ...while the predicate (which the reset does not touch) is preserved.
+        assert!(Arc::ptr_eq(&filter.predicate, &reset.predicate));
         Ok(())
     }
 
