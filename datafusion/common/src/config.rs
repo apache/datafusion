@@ -1390,6 +1390,14 @@ config_namespace! {
         /// cause regressions in both memory usage and runtime.
         pub enable_window_topn: bool, default = false
 
+        /// When set to true, coalesce peer `first_value` / `last_value`
+        /// expressions that share the same `ORDER BY` key — e.g.
+        /// `first_value(a ORDER BY o), first_value(b ORDER BY o), ... GROUP BY p`
+        /// — into a single `first_value(named_struct(a, b, ...) ORDER BY o)`,
+        /// cutting N argmax scans to one pass over the input.
+        /// Particularly beneficial for wide payloads.
+        pub enable_coalesce_first_last: bool, default = false
+
         /// When set to true, the optimizer will push TopK (Sort with fetch)
         /// below hash repartition when the partition key is a prefix of the
         /// sort key, reducing data volume before the shuffle.
