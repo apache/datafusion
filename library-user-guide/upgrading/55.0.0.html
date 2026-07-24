@@ -661,6 +661,34 @@ call sites:</p>
 it was <code class="docutils literal notranslate"><span class="pre">None</span></code>), that code can simply be deleted.</p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/22775">issue #22775</a> for details.</p>
 </section>
+<section id="groupsaccumulator-convert-to-state-is-now-required">
+<h3><code class="docutils literal notranslate"><span class="pre">GroupsAccumulator::convert_to_state</span></code> is now required<a class="headerlink" href="#groupsaccumulator-convert-to-state-is-now-required" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion_expr_common::groups_accumulator::GroupsAccumulator::convert_to_state</span></code>
+no longer provides a default implementation, and the
+<code class="docutils literal notranslate"><span class="pre">GroupsAccumulator::supports_convert_to_state</span></code> capability method has been
+removed. All <code class="docutils literal notranslate"><span class="pre">GroupsAccumulator</span></code> implementations must now support converting
+input batches directly to intermediate aggregate state.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users with custom <code class="docutils literal notranslate"><span class="pre">GroupsAccumulator</span></code> implementations.</p></li>
+<li><p>FFI providers and consumers that use <code class="docutils literal notranslate"><span class="pre">FFI_GroupsAccumulator</span></code>.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Custom <code class="docutils literal notranslate"><span class="pre">GroupsAccumulator</span></code> implementations must now provide their own
+<code class="docutils literal notranslate"><span class="pre">convert_to_state</span></code> implementation.</p>
+<p>Delete <code class="docutils literal notranslate"><span class="pre">supports_convert_to_state</span></code> implementations because <code class="docutils literal notranslate"><span class="pre">convert_to_state</span></code>
+is now required:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- fn supports_convert_to_state(&amp;self) -&gt; bool {</span>
+<span class="gd">-     true</span>
+<span class="gd">- }</span>
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">supports_convert_to_state</span></code> field has also been removed from
+<code class="docutils literal notranslate"><span class="pre">datafusion_ffi::udaf::groups_accumulator::FFI_GroupsAccumulator</span></code>, changing its
+ABI layout. Rebuild both FFI providers and consumers against DataFusion 55, and
+do not exchange this struct with libraries built against older major versions.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/23081">issue #23081</a> for details.</p>
+</section>
 <section id="is-dynamic-physical-expr-is-deprecated">
 <h3><code class="docutils literal notranslate"><span class="pre">is_dynamic_physical_expr</span></code> is deprecated<a class="headerlink" href="#is-dynamic-physical-expr-is-deprecated" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">datafusion_physical_expr_common::physical_expr::is_dynamic_physical_expr</span></code> is
@@ -1209,6 +1237,7 @@ not expose a catalog can return the new <code class="docutils literal notranslat
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#decimal-scalar-formatting-uses-human-readable-values">Decimal scalar formatting uses human-readable values</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#coercion-supports-dictionary-encoding-preservation"><code class="docutils literal notranslate"><span class="pre">Coercion</span></code> supports dictionary encoding preservation</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupsaccumulator-merge-batch-no-longer-takes-opt-filter"><code class="docutils literal notranslate"><span class="pre">GroupsAccumulator::merge_batch</span></code> no longer takes <code class="docutils literal notranslate"><span class="pre">opt_filter</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupsaccumulator-convert-to-state-is-now-required"><code class="docutils literal notranslate"><span class="pre">GroupsAccumulator::convert_to_state</span></code> is now required</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#is-dynamic-physical-expr-is-deprecated"><code class="docutils literal notranslate"><span class="pre">is_dynamic_physical_expr</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filepruner-try-new-no-longer-builds-a-pruner-for-static-predicates-without-statistics"><code class="docutils literal notranslate"><span class="pre">FilePruner::try_new</span></code> no longer builds a pruner for static predicates without statistics</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#queryplanner-adds-any-as-a-supertrait"><code class="docutils literal notranslate"><span class="pre">QueryPlanner</span></code> adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait</a></li>
