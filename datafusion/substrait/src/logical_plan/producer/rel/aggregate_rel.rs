@@ -24,7 +24,8 @@ use datafusion::logical_expr::utils::powerset;
 use datafusion::logical_expr::{Aggregate, Distinct, Expr, GroupingSet};
 use substrait::proto::aggregate_rel::{Grouping, Measure};
 use substrait::proto::rel::RelType;
-use substrait::proto::{AggregateRel, Expression, Rel};
+use substrait::proto::rel_common::EmitKind;
+use substrait::proto::{AggregateRel, Expression, Rel, RelCommon, rel_common};
 
 pub fn from_aggregate(
     producer: &mut impl SubstraitProducer,
@@ -38,10 +39,12 @@ pub fn from_aggregate(
         .iter()
         .map(|e| to_substrait_agg_measure(producer, e, agg.input.schema()))
         .collect::<datafusion::common::Result<Vec<_>>>()?;
+    let common = (groupings.len() > 1)
+        .then(|| grouping_set_output_mapping(grouping_expressions.len(), measures.len()));
 
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Aggregate(Box::new(AggregateRel {
-            common: None,
+            common,
             input: Some(input),
             grouping_expressions,
             groupings,
@@ -49,6 +52,22 @@ pub fn from_aggregate(
             advanced_extension: None,
         }))),
     }))
+}
+
+/// Maps Substrait's `[groups, measures, grouping_id]` direct output to
+/// DataFusion's `[groups, grouping_id, measures]` aggregate schema.
+fn grouping_set_output_mapping(grouping_count: usize, measure_count: usize) -> RelCommon {
+    let grouping_id_index = grouping_count + measure_count;
+    let output_mapping = (0..grouping_count)
+        .chain(std::iter::once(grouping_id_index))
+        .chain(grouping_count..grouping_id_index)
+        .map(|index| index as i32)
+        .collect();
+    RelCommon {
+        emit_kind: Some(EmitKind::Emit(rel_common::Emit { output_mapping })),
+        hint: None,
+        advanced_extension: None,
+    }
 }
 
 pub fn from_distinct(
@@ -165,8 +184,12 @@ pub fn parse_flat_grouping_exprs(
     for e in exprs {
         let rex = producer.handle_expr(e, schema)?;
         grouping_expressions.push(rex.clone());
-        ref_group_exprs.push(rex);
-        expression_references.push((ref_group_exprs.len() - 1) as u32);
+        let reference = ref_group_exprs.iter().position(|existing| existing == &rex);
+        let reference = reference.unwrap_or_else(|| {
+            ref_group_exprs.push(rex);
+            ref_group_exprs.len() - 1
+        });
+        expression_references.push(reference as u32);
     }
     #[expect(deprecated)]
     Ok(Grouping {
