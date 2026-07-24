@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use crate::ExecutionPlan;
 use crate::ExecutionPlanProperties;
+use crate::Partitioning;
 use crate::joins::Map;
 use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::HASH_JOIN_SEED;
@@ -30,6 +31,7 @@ use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{
     HashExpr, HashTableLookupExpr, SeededRandomState,
 };
+use crate::ordering::build_lexicographic_filter;
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
@@ -39,7 +41,10 @@ use datafusion_functions::core::r#struct as struct_func;
 use datafusion_physical_expr::expressions::{
     BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr, IsNullExpr, lit,
 };
-use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
+use datafusion_physical_expr::{
+    PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, RangePartitioning,
+    ScalarFunctionExpr,
+};
 
 use parking_lot::Mutex;
 use tokio::sync::Notify;
@@ -255,6 +260,8 @@ pub(crate) struct SharedBuildAccumulator {
     repartition_random_state: SeededRandomState,
     /// Schema of the probe (right) side for evaluating filter expressions
     probe_schema: Arc<Schema>,
+    /// Probe-side Range routing metadata for partitioned dynamic filters.
+    probe_range_partitioning: Option<RangePartitioning>,
     /// Null-aware anti join (`NOT IN`). A probe-side NULL must reach the join so its
     /// three-valued logic can collapse the result, so the pushed filter keeps NULL rows.
     null_aware: bool,
@@ -398,6 +405,14 @@ impl SharedBuildAccumulator {
             ),
         };
 
+        let probe_range_partitioning =
+            match (partition_mode, right_child.output_partitioning()) {
+                (PartitionMode::Partitioned, Partitioning::Range(range)) => {
+                    Some(range.clone())
+                }
+                _ => None,
+            };
+
         Self {
             inner: Mutex::new(AccumulatorState {
                 data: mode_data,
@@ -408,6 +423,7 @@ impl SharedBuildAccumulator {
             on_right,
             repartition_random_state,
             probe_schema: right_child.schema(),
+            probe_range_partitioning,
             null_aware,
         }
     }
@@ -601,19 +617,8 @@ impl SharedBuildAccumulator {
             },
             FinalizeInput::Partitioned(partitions) => {
                 let num_partitions = partitions.len();
-                let routing_hash_expr = Arc::new(HashExpr::new(
-                    self.on_right.clone(),
-                    self.repartition_random_state.clone(),
-                    "hash_repartition".to_string(),
-                )) as Arc<dyn PhysicalExpr>;
-
-                let modulo_expr = Arc::new(BinaryExpr::new(
-                    routing_hash_expr,
-                    Operator::Modulo,
-                    lit(ScalarValue::UInt64(Some(num_partitions as u64))),
-                )) as Arc<dyn PhysicalExpr>;
-
-                let mut real_branches = Vec::new();
+                let mut partition_filters = Vec::with_capacity(num_partitions);
+                let mut real_partition_ids = Vec::new();
                 let mut empty_partition_ids = Vec::new();
                 let mut has_canceled_unknown = false;
 
@@ -623,8 +628,10 @@ impl SharedBuildAccumulator {
                             if matches!(partition.pushdown, PushdownStrategy::Empty) =>
                         {
                             empty_partition_ids.push(partition_id);
+                            partition_filters.push(lit(false));
                         }
                         PartitionStatus::Reported(partition) => {
+                            real_partition_ids.push(partition_id);
                             let membership_expr = create_membership_predicate(
                                 &self.on_right,
                                 partition.pushdown.clone(),
@@ -640,13 +647,11 @@ impl SharedBuildAccumulator {
                                 bounds_expr,
                             )
                             .unwrap_or_else(|| lit(true));
-                            real_branches.push((
-                                lit(ScalarValue::UInt64(Some(partition_id as u64))),
-                                then_expr,
-                            ));
+                            partition_filters.push(then_expr);
                         }
                         PartitionStatus::CanceledUnknown => {
                             has_canceled_unknown = true;
+                            partition_filters.push(lit(true));
                         }
                         PartitionStatus::Pending => {
                             return datafusion_common::internal_err!(
@@ -656,38 +661,99 @@ impl SharedBuildAccumulator {
                     }
                 }
 
-                let filter_expr = if has_canceled_unknown {
-                    let mut when_then_branches = empty_partition_ids
-                        .into_iter()
-                        .map(|partition_id| {
-                            (
-                                lit(ScalarValue::UInt64(Some(partition_id as u64))),
-                                lit(false),
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    when_then_branches.extend(real_branches);
-
-                    if when_then_branches.is_empty() {
-                        lit(true)
-                    } else {
-                        Arc::new(CaseExpr::try_new(
-                            Some(modulo_expr),
-                            when_then_branches,
-                            Some(lit(true)),
-                        )?) as Arc<dyn PhysicalExpr>
-                    }
-                } else if real_branches.is_empty() {
+                let filter_expr = if has_canceled_unknown
+                    && real_partition_ids.is_empty()
+                    && empty_partition_ids.is_empty()
+                {
+                    lit(true)
+                } else if !has_canceled_unknown && real_partition_ids.is_empty() {
                     lit(false)
-                } else if real_branches.len() == 1
+                } else if !has_canceled_unknown
+                    && real_partition_ids.len() == 1
                     && empty_partition_ids.len() + 1 == num_partitions
                 {
-                    Arc::clone(&real_branches[0].1)
+                    Arc::clone(&partition_filters[real_partition_ids[0]])
+                } else if let Some(range_partitioning) = &self.probe_range_partitioning {
+                    // Range partitioning
+                    assert_eq!(
+                        partition_filters.len(),
+                        range_partitioning.partition_count()
+                    );
+                    assert_eq!(self.on_right.len(), range_partitioning.ordering().len());
+                    let sort_exprs = self
+                        .on_right
+                        .iter()
+                        .zip(range_partitioning.ordering())
+                        .map(|(expr, sort_expr)| {
+                            PhysicalSortExpr::new(Arc::clone(expr), sort_expr.options)
+                        })
+                        .collect::<Vec<_>>();
+                    let else_expr = partition_filters
+                        .pop()
+                        .expect("Range partitioning always has at least one partition");
+                    // CASE evaluates in order
+                    //
+                    // CASE
+                    //   WHEN key <range split[0] THEN F0
+                    //   WHEN key <range split[1] THEN F1
+                    //   ...
+                    //   ELSE Fn
+                    // END
+                    let when_then_expr = range_partitioning
+                        .split_points()
+                        .iter()
+                        .zip(partition_filters)
+                        .map(|(split_point, then_expr)| {
+                            let when_expr = build_lexicographic_filter(
+                                &sort_exprs,
+                                split_point.values(),
+                            )?;
+                            Ok((when_expr, then_expr))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+
+                    Arc::new(CaseExpr::try_new(None, when_then_expr, Some(else_expr))?)
+                        as Arc<dyn PhysicalExpr>
                 } else {
+                    // Hash partitioning
+                    let routing_hash_expr = Arc::new(HashExpr::new(
+                        self.on_right.clone(),
+                        self.repartition_random_state.clone(),
+                        "hash_repartition".to_string(),
+                    ))
+                        as Arc<dyn PhysicalExpr>;
+                    let modulo_expr = Arc::new(BinaryExpr::new(
+                        routing_hash_expr,
+                        Operator::Modulo,
+                        lit(ScalarValue::UInt64(Some(num_partitions as u64))),
+                    )) as Arc<dyn PhysicalExpr>;
+
+                    let mut when_then_branches = if has_canceled_unknown {
+                        empty_partition_ids
+                            .into_iter()
+                            .map(|partition_id| {
+                                (
+                                    lit(ScalarValue::UInt64(Some(partition_id as u64))),
+                                    lit(false),
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                    } else {
+                        vec![]
+                    };
+                    when_then_branches.extend(real_partition_ids.into_iter().map(
+                        |partition_id| {
+                            (
+                                lit(ScalarValue::UInt64(Some(partition_id as u64))),
+                                Arc::clone(&partition_filters[partition_id]),
+                            )
+                        },
+                    ));
+
                     Arc::new(CaseExpr::try_new(
                         Some(modulo_expr),
-                        real_branches,
-                        Some(lit(false)),
+                        when_then_branches,
+                        Some(lit(has_canceled_unknown)),
                     )?) as Arc<dyn PhysicalExpr>
                 };
 
@@ -756,6 +822,7 @@ pub(super) fn make_partitioned_accumulator_for_test(
         on_right: vec![],
         repartition_random_state: SeededRandomState::with_seed(1),
         probe_schema,
+        probe_range_partitioning: None,
         null_aware: false,
     }
 }
@@ -777,7 +844,9 @@ pub(super) fn completed_partitions_for_test(acc: &SharedBuildAccumulator) -> usi
 mod tests {
     use super::*;
 
-    use arrow::array::{ArrayRef, Int32Array};
+    use arrow::array::{ArrayRef, BooleanArray, Int32Array};
+    use arrow::record_batch::RecordBatch;
+    use datafusion_common::SplitPoint;
     use datafusion_physical_expr::expressions::{Column, Literal};
 
     fn test_on_right() -> Vec<PhysicalExprRef> {
@@ -813,6 +882,7 @@ mod tests {
             on_right,
             repartition_random_state: SeededRandomState::with_seed(1),
             probe_schema: test_probe_schema(),
+            probe_range_partitioning: None,
             null_aware: false,
         }
     }
@@ -1015,6 +1085,56 @@ mod tests {
             case.else_expr().expect("expected permissive fallback"),
             true,
         );
+    }
+
+    #[test]
+    fn partitioned_range_dynamic_filter_routes_with_searched_case() -> Result<()> {
+        let mut acc = make_partitioned_expr_accumulator_for_test(4);
+        acc.probe_range_partitioning = Some(RangePartitioning::try_new(
+            [PhysicalSortExpr::new(
+                Arc::clone(&acc.on_right[0]),
+                Default::default(),
+            )]
+            .into(),
+            vec![
+                SplitPoint::new(vec![ScalarValue::Int32(Some(10))]),
+                SplitPoint::new(vec![ScalarValue::Int32(Some(20))]),
+                SplitPoint::new(vec![ScalarValue::Int32(Some(30))]),
+            ],
+        )?);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(PushdownStrategy::Empty, no_bounds()),
+            PartitionStatus::CanceledUnknown,
+            reported(in_list(&[20, 29]), no_bounds()),
+            reported(in_list(&[30]), no_bounds()),
+        ]))?;
+
+        let expr = current_expr(&acc);
+        let case = case_expr(&expr);
+        assert!(
+            case.expr().is_none(),
+            "Range routing must use searched CASE"
+        );
+        assert_eq!(case.when_then_expr().len(), 3);
+
+        let batch = RecordBatch::try_new(
+            test_probe_schema(),
+            vec![Arc::new(Int32Array::from(vec![
+                9, 10, 19, 20, 21, 29, 30, 31,
+            ]))],
+        )?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = result
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .expect("dynamic filter should evaluate to BooleanArray");
+        assert_eq!(
+            result,
+            &BooleanArray::from(vec![false, true, true, true, false, true, true, false,])
+        );
+
+        Ok(())
     }
 
     // Regression guard for the build-report lifecycle fix: on `Drop`, a stream
