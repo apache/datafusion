@@ -22,20 +22,18 @@ use arrow::datatypes::SchemaRef;
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
 use datafusion_catalog::{Session, TableProvider};
+use datafusion_common::Statistics;
 use datafusion_common::error::{DataFusionError, Result};
-use datafusion_common::{DFSchemaRef, Statistics};
 use datafusion_execution::TaskContext;
-use datafusion_expr::dml::{InsertOp, MergeIntoClause, MergeIntoOp};
+use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_proto::logical_plan::from_proto::{parse_exprs, parse_merge_into_op};
-use datafusion_proto::logical_plan::to_proto::{
-    serialize_exprs, serialize_merge_into_op,
-};
+use datafusion_proto::logical_plan::from_proto::parse_exprs;
+use datafusion_proto::logical_plan::to_proto::serialize_exprs;
 use datafusion_proto::logical_plan::{
     DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
-use datafusion_proto::protobuf::{DfSchema, LogicalExprList, MergeIntoOpNode};
+use datafusion_proto::protobuf::LogicalExprList;
 use prost::Message;
 
 use stabby::vec::Vec as SVec;
@@ -135,17 +133,6 @@ pub struct FFI_TableProvider {
         session: FFI_SessionRef,
         input: &FFI_ExecutionPlan,
         insert_op: FFI_InsertOp,
-    ) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>>,
-
-    /// Merge source rows into the table. The schema and MERGE operation are
-    /// prost-encoded to preserve logical qualifiers and expressions across the
-    /// FFI boundary.
-    merge_into: unsafe extern "C" fn(
-        provider: &Self,
-        session: FFI_SessionRef,
-        source: &FFI_ExecutionPlan,
-        merge_schema_serialized: SVec<u8>,
-        merge_op_serialized: SVec<u8>,
     ) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>>,
 
     /// Snapshot the provider's table-level statistics. [`FFI_Option::None`]
@@ -349,60 +336,6 @@ unsafe extern "C" fn insert_into_fn_wrapper(
     .into_ffi()
 }
 
-unsafe extern "C" fn merge_into_fn_wrapper(
-    provider: &FFI_TableProvider,
-    session: FFI_SessionRef,
-    source: &FFI_ExecutionPlan,
-    merge_schema_serialized: SVec<u8>,
-    merge_op_serialized: SVec<u8>,
-) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>> {
-    let task_ctx: Result<Arc<TaskContext>, DataFusionError> =
-        (&provider.logical_codec.task_ctx_provider).try_into();
-    let runtime = provider.runtime().clone();
-    let logical_codec: Arc<dyn LogicalExtensionCodec> = (&provider.logical_codec).into();
-    let internal_provider = Arc::clone(provider.inner());
-    let source = source.clone();
-
-    async move {
-        let mut foreign_session = None;
-        let session = sresult_return!(
-            session
-                .as_local()
-                .map(Ok::<&(dyn Session + Send + Sync), DataFusionError>)
-                .unwrap_or_else(|| {
-                    foreign_session = Some(ForeignSession::try_from(&session)?);
-                    Ok(foreign_session.as_ref().unwrap())
-                })
-        );
-
-        let source = sresult_return!(<Arc<dyn ExecutionPlan>>::try_from(&source));
-        let task_ctx = sresult_return!(task_ctx);
-
-        let merge_schema =
-            sresult_return!(DfSchema::decode(merge_schema_serialized.as_ref()));
-        let merge_schema: DFSchemaRef = sresult_return!(
-            DFSchemaRef::try_from(merge_schema)
-                .map_err(|e| DataFusionError::Plan(e.to_string()))
-        );
-
-        let merge_op =
-            sresult_return!(MergeIntoOpNode::decode(merge_op_serialized.as_ref()));
-        let MergeIntoOp { on, clauses } = sresult_return!(
-            parse_merge_into_op(&merge_op, task_ctx.as_ref(), logical_codec.as_ref())
-                .map_err(|e| DataFusionError::Plan(e.to_string()))
-        );
-
-        let plan = sresult_return!(
-            internal_provider
-                .merge_into(session, source, merge_schema, on, clauses)
-                .await
-        );
-
-        FFI_Result::Ok(FFI_ExecutionPlan::new(plan, runtime.clone()))
-    }
-    .into_ffi()
-}
-
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_TableProvider) {
     unsafe {
         debug_assert!(!provider.private_data.is_null());
@@ -428,7 +361,6 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_Table
         table_type: table_type_fn_wrapper,
         supports_filters_pushdown: provider.supports_filters_pushdown,
         insert_into: provider.insert_into,
-        merge_into: provider.merge_into,
         statistics: statistics_fn_wrapper,
         logical_codec: provider.logical_codec.clone(),
         clone: clone_fn_wrapper,
@@ -490,7 +422,6 @@ impl FFI_TableProvider {
                 false => None,
             },
             insert_into: insert_into_fn_wrapper,
-            merge_into: merge_into_fn_wrapper,
             statistics: statistics_fn_wrapper,
             logical_codec,
             clone: clone_fn_wrapper,
@@ -646,62 +577,15 @@ impl TableProvider for ForeignTableProvider {
 
         Ok(plan)
     }
-
-    async fn merge_into(
-        &self,
-        session: &dyn Session,
-        source: Arc<dyn ExecutionPlan>,
-        merge_schema: DFSchemaRef,
-        on: Expr,
-        clauses: Vec<MergeIntoClause>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let session = FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
-
-        let rc = Handle::try_current().ok();
-        let source = FFI_ExecutionPlan::new(source, rc);
-
-        let merge_schema = DfSchema::try_from(&merge_schema)
-            .map_err(|e| DataFusionError::Plan(e.to_string()))?;
-        let merge_schema_serialized: SVec<u8> =
-            merge_schema.encode_to_vec().into_iter().collect();
-
-        let codec: Arc<dyn LogicalExtensionCodec> = (&self.0.logical_codec).into();
-        let merge_op =
-            serialize_merge_into_op(&MergeIntoOp { on, clauses }, codec.as_ref())
-                .map_err(|e| DataFusionError::Plan(e.to_string()))?;
-        let merge_op_serialized = merge_op.encode_to_vec().into_iter().collect();
-
-        let plan = unsafe {
-            let maybe_plan = (self.0.merge_into)(
-                &self.0,
-                session,
-                &source,
-                merge_schema_serialized,
-                merge_op_serialized,
-            )
-            .await;
-
-            <Arc<dyn ExecutionPlan>>::try_from(&df_result!(maybe_plan)?)?
-        };
-
-        Ok(plan)
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::common::{Column, DFSchema};
-    use datafusion::logical_expr::dml::{MergeIntoAction, MergeIntoClauseKind};
-    use datafusion::physical_plan::empty::EmptyExec;
+    use arrow::datatypes::Schema;
     use datafusion::prelude::{SessionContext, col, lit};
     use datafusion_execution::TaskContextProvider;
 
     use super::*;
-
-    type CapturedMerge = (usize, usize, String, Vec<String>);
 
     fn create_test_table_provider() -> Result<Arc<dyn TableProvider>> {
         use arrow::datatypes::Field;
@@ -727,122 +611,6 @@ mod tests {
             schema,
             vec![vec![batch1], vec![batch2]],
         )?))
-    }
-
-    #[derive(Debug)]
-    struct CaptureMergeProvider {
-        schema: SchemaRef,
-        captured: Mutex<Option<CapturedMerge>>,
-    }
-
-    #[async_trait]
-    impl TableProvider for CaptureMergeProvider {
-        fn schema(&self) -> SchemaRef {
-            Arc::clone(&self.schema)
-        }
-
-        fn table_type(&self) -> TableType {
-            TableType::Base
-        }
-
-        async fn scan(
-            &self,
-            _state: &dyn Session,
-            _projection: Option<&Vec<usize>>,
-            _filters: &[Expr],
-            _limit: Option<usize>,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            Ok(Arc::new(EmptyExec::new(Arc::clone(&self.schema))))
-        }
-
-        async fn merge_into(
-            &self,
-            state: &dyn Session,
-            source: Arc<dyn ExecutionPlan>,
-            merge_schema: DFSchemaRef,
-            on: Expr,
-            clauses: Vec<MergeIntoClause>,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            let target_id =
-                merge_schema.index_of_column(&Column::new(Some("target"), "id"))?;
-            let source_id =
-                merge_schema.index_of_column(&Column::new(Some("source"), "id"))?;
-            let physical_on = state.create_physical_expr(on, &merge_schema)?;
-            let clauses = clauses.iter().map(|clause| format!("{clause:?}")).collect();
-            *self.captured.lock().unwrap() =
-                Some((target_id, source_id, format!("{physical_on:?}"), clauses));
-            Ok(source)
-        }
-    }
-
-    #[tokio::test]
-    async fn test_round_trip_ffi_table_provider_merge_into() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("val", DataType::Int64, true),
-        ]));
-        let provider = Arc::new(CaptureMergeProvider {
-            schema: Arc::clone(&schema),
-            captured: Mutex::new(None),
-        });
-        let ctx = Arc::new(SessionContext::new());
-        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
-        let task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
-
-        let mut ffi_provider = FFI_TableProvider::new(
-            Arc::clone(&provider) as Arc<dyn TableProvider>,
-            true,
-            None,
-            task_ctx_provider,
-            None,
-        );
-        ffi_provider.library_marker_id = crate::mock_foreign_marker_id;
-        let foreign: Arc<dyn TableProvider> = (&ffi_provider).into();
-
-        let target_schema = DFSchema::try_from_qualified_schema("target", &schema)?;
-        let source_schema = DFSchema::try_from_qualified_schema("source", &schema)?;
-        let merge_schema = Arc::new(target_schema.join(&source_schema)?);
-        let source: Arc<dyn ExecutionPlan> =
-            Arc::new(EmptyExec::new(Arc::clone(&schema)));
-        let clauses = vec![
-            MergeIntoClause {
-                kind: MergeIntoClauseKind::Matched,
-                predicate: Some(col("target.val").is_null()),
-                action: MergeIntoAction::Update(vec![(
-                    "val".to_string(),
-                    col("source.val"),
-                )]),
-            },
-            MergeIntoClause {
-                kind: MergeIntoClauseKind::NotMatched,
-                predicate: None,
-                action: MergeIntoAction::Insert {
-                    columns: vec!["id".to_string(), "val".to_string()],
-                    values: vec![col("source.id"), col("source.val")],
-                },
-            },
-        ];
-
-        foreign
-            .merge_into(
-                &ctx.state(),
-                source,
-                merge_schema,
-                col("target.id").eq(col("source.id")),
-                clauses,
-            )
-            .await?;
-
-        let captured = provider.captured.lock().unwrap();
-        let (target_id, source_id, physical_on, clauses) =
-            captured.as_ref().expect("merge_into should be called");
-        assert_eq!((*target_id, *source_id), (0, 2));
-        assert!(physical_on.contains("index: 0"));
-        assert!(physical_on.contains("index: 2"));
-        assert_eq!(clauses.len(), 2);
-        assert!(clauses[0].contains("source"));
-        assert!(clauses[1].contains("Insert"));
-        Ok(())
     }
 
     #[tokio::test]

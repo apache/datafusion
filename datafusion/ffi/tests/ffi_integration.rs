@@ -24,13 +24,12 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::Schema;
     use datafusion::catalog::{TableProvider, TableProviderFactory};
     use datafusion::error::Result;
-    use datafusion::physical_plan::empty::EmptyExec;
-    use datafusion_common::{DFSchema, TableReference, ToDFSchema};
-    use datafusion_expr::dml::{MergeIntoAction, MergeIntoClause, MergeIntoClauseKind};
-    use datafusion_expr::{CreateExternalTable, col};
+    use datafusion_common::TableReference;
+    use datafusion_common::ToDFSchema;
+    use datafusion_expr::CreateExternalTable;
     use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
 
@@ -93,55 +92,6 @@ mod tests {
 
         assert_eq!(foreign.statistics().as_ref(), Some(&expected));
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_ffi_table_provider_merge_into_cross_library() -> Result<()> {
-        let module = get_module()?;
-        let (ctx, codec) = super::utils::ctx_and_codec();
-        let ffi_provider = (module.create_merge_table)(codec);
-        let foreign: Arc<dyn TableProvider> = (&ffi_provider).into();
-
-        let target_schema =
-            DFSchema::try_from_qualified_schema("target", &foreign.schema())?;
-        let source_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("val", DataType::Int64, true),
-        ]));
-        let source_df_schema =
-            DFSchema::try_from_qualified_schema("source", &source_schema)?;
-        let merge_schema = Arc::new(target_schema.join(&source_df_schema)?);
-        let source = Arc::new(EmptyExec::new(Arc::clone(&source_schema)));
-        let clauses = vec![
-            MergeIntoClause {
-                kind: MergeIntoClauseKind::Matched,
-                predicate: Some(col("target.val").is_null()),
-                action: MergeIntoAction::Update(vec![(
-                    "val".to_string(),
-                    col("source.val"),
-                )]),
-            },
-            MergeIntoClause {
-                kind: MergeIntoClauseKind::NotMatched,
-                predicate: None,
-                action: MergeIntoAction::Insert {
-                    columns: vec!["id".to_string(), "val".to_string()],
-                    values: vec![col("source.id"), col("source.val")],
-                },
-            },
-        ];
-
-        let result = foreign
-            .merge_into(
-                &ctx.state(),
-                source,
-                merge_schema,
-                col("target.id").eq(col("source.id")),
-                clauses,
-            )
-            .await?;
-        assert_eq!(result.schema(), source_schema);
         Ok(())
     }
 

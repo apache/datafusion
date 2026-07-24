@@ -25,9 +25,8 @@ use catalog::create_catalog_provider;
 use datafusion_catalog::MemTable;
 use datafusion_catalog::{Session, TableProvider};
 use datafusion_common::stats::Precision;
-use datafusion_common::{Column, DFSchemaRef, Result, ScalarValue};
 use datafusion_common::{ColumnStatistics, Statistics};
-use datafusion_expr::dml::{MergeIntoAction, MergeIntoClause, MergeIntoClauseKind};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_plan::ExecutionPlan;
 use sync_provider::create_sync_table_provider;
@@ -111,9 +110,6 @@ pub struct ForeignLibraryModule {
     pub create_exec_with_statistics: extern "C" fn() -> FFI_ExecutionPlan,
 
     pub create_table_with_statistics:
-        extern "C" fn(codec: FFI_LogicalExtensionCodec) -> FFI_TableProvider,
-
-    pub create_merge_table:
         extern "C" fn(codec: FFI_LogicalExtensionCodec) -> FFI_TableProvider,
 
     pub create_physical_optimizer_rule: extern "C" fn() -> FFI_PhysicalOptimizerRule,
@@ -245,123 +241,6 @@ pub(crate) extern "C" fn create_table_with_statistics(
     FFI_TableProvider::new_with_ffi_codec(provider, true, None, codec)
 }
 
-#[derive(Debug)]
-struct MergeTableProvider {
-    schema: Arc<Schema>,
-}
-
-#[async_trait]
-impl TableProvider for MergeTableProvider {
-    fn schema(&self) -> Arc<Schema> {
-        Arc::clone(&self.schema)
-    }
-
-    fn table_type(&self) -> TableType {
-        TableType::Base
-    }
-
-    async fn scan(
-        &self,
-        _state: &dyn Session,
-        _projection: Option<&Vec<usize>>,
-        _filters: &[Expr],
-        _limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(EmptyExec::new(Arc::clone(&self.schema))))
-    }
-
-    async fn merge_into(
-        &self,
-        _state: &dyn Session,
-        source: Arc<dyn ExecutionPlan>,
-        merge_schema: DFSchemaRef,
-        on: Expr,
-        clauses: Vec<MergeIntoClause>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let target_id =
-            merge_schema.index_of_column(&Column::new(Some("target"), "id"))?;
-        let source_id =
-            merge_schema.index_of_column(&Column::new(Some("source"), "id"))?;
-        if (target_id, source_id) != (0, 2) {
-            return datafusion_common::plan_err!(
-                "unexpected MERGE schema indices: target={target_id}, source={source_id}"
-            );
-        }
-
-        if on.to_string() != "target.id = source.id" {
-            return datafusion_common::plan_err!(
-                "unexpected logical MERGE condition: {on}"
-            );
-        }
-
-        let [matched, not_matched] = clauses.as_slice() else {
-            return datafusion_common::plan_err!(
-                "expected two MERGE clauses, got {}",
-                clauses.len()
-            );
-        };
-        if matched.kind != MergeIntoClauseKind::Matched
-            || matched
-                .predicate
-                .as_ref()
-                .map(ToString::to_string)
-                .as_deref()
-                != Some("target.val IS NULL")
-        {
-            return datafusion_common::plan_err!(
-                "unexpected matched MERGE clause: {matched:?}"
-            );
-        }
-        let MergeIntoAction::Update(assignments) = &matched.action else {
-            return datafusion_common::plan_err!(
-                "expected MERGE update action, got {:?}",
-                matched.action
-            );
-        };
-        if assignments.len() != 1
-            || assignments[0].0 != "val"
-            || assignments[0].1.to_string() != "source.val"
-        {
-            return datafusion_common::plan_err!(
-                "unexpected MERGE update assignments: {assignments:?}"
-            );
-        }
-
-        if not_matched.kind != MergeIntoClauseKind::NotMatched {
-            return datafusion_common::plan_err!(
-                "unexpected not-matched MERGE clause: {not_matched:?}"
-            );
-        }
-        let MergeIntoAction::Insert { columns, values } = &not_matched.action else {
-            return datafusion_common::plan_err!(
-                "expected MERGE insert action, got {:?}",
-                not_matched.action
-            );
-        };
-        if columns != &["id".to_string(), "val".to_string()]
-            || values.iter().map(ToString::to_string).collect::<Vec<_>>()
-                != ["source.id".to_string(), "source.val".to_string()]
-        {
-            return datafusion_common::plan_err!(
-                "unexpected MERGE insert action: {not_matched:?}"
-            );
-        }
-
-        Ok(source)
-    }
-}
-
-pub(crate) extern "C" fn create_merge_table(
-    codec: FFI_LogicalExtensionCodec,
-) -> FFI_TableProvider {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
-        Field::new("val", DataType::Int64, true),
-    ]));
-    let provider = Arc::new(MergeTableProvider { schema });
-    FFI_TableProvider::new_with_ffi_codec(provider, true, None, codec)
-}
-
 /// This defines the entry point for using the module.
 #[unsafe(no_mangle)]
 pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
@@ -382,7 +261,6 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_empty_exec,
         create_exec_with_statistics,
         create_table_with_statistics,
-        create_merge_table,
         create_physical_optimizer_rule:
             physical_optimizer::create_physical_optimizer_rule,
         create_context_aware_optimizer_rule:
