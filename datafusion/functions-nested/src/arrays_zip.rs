@@ -118,25 +118,7 @@ impl ScalarUDFImpl for ArraysZip {
         if arg_types.is_empty() {
             return exec_err!("arrays_zip requires at least one argument");
         }
-
-        let mut fields = Vec::with_capacity(arg_types.len());
-        for (i, arg_type) in arg_types.iter().enumerate() {
-            let element_type = match arg_type {
-                List(field) | LargeList(field) | FixedSizeList(field, _) => {
-                    field.data_type().clone()
-                }
-                Null => Null,
-                dt => {
-                    return exec_err!("arrays_zip expects array arguments, got {dt}");
-                }
-            };
-            fields.push(Field::new(arrays_zip_field_name(i), element_type, true));
-        }
-
-        Ok(List(Arc::new(Field::new_list_field(
-            DataType::Struct(Fields::from(fields)),
-            true,
-        ))))
+        arrays_zip_return_type(arg_types, &arrays_zip_field_names(arg_types.len()))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -152,21 +134,55 @@ impl ScalarUDFImpl for ArraysZip {
     }
 }
 
+/// Zip with the native default field names — 1-based ordinals (`"1"`, `"2"`, ...)
+fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    arrays_zip_inner_with_names(args, &arrays_zip_field_names(args.len()))
+}
+
+pub fn arrays_zip_return_type(
+    arg_types: &[DataType],
+    field_names: &[String],
+) -> Result<DataType> {
+    debug_assert_eq!(arg_types.len(), field_names.len());
+    let mut fields = Vec::with_capacity(arg_types.len());
+    for (arg_type, name) in arg_types.iter().zip(field_names) {
+        let element_type = match arg_type {
+            List(field) | LargeList(field) | FixedSizeList(field, _) => {
+                field.data_type().clone()
+            }
+            Null => Null,
+            dt => {
+                return exec_err!("arrays_zip expects array arguments, got {dt}");
+            }
+        };
+        fields.push(Field::new(name.clone(), element_type, true));
+    }
+    Ok(List(Arc::new(Field::new_list_field(
+        DataType::Struct(Fields::from(fields)),
+        true,
+    ))))
+}
+
 /// Core implementation for arrays_zip.
 ///
-/// Takes N list arrays and produces a list of structs where each struct
-/// has one field per input array. If arrays within a row have different
-/// lengths, shorter arrays are padded with NULLs.
-/// Supports List, LargeList, and Null input types.
-fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+/// Takes N list arrays and produces a list of structs where each struct has
+/// one field per input array, named with the corresponding entry of
+/// `field_names`. If arrays within a row have different lengths, shorter
+/// arrays are padded with NULLs. Supports List, LargeList, and Null inputs.
+///
+/// `field_names.len()` must equal `args.len()`.
+pub fn arrays_zip_inner_with_names(
+    args: &[ArrayRef],
+    field_names: &[String],
+) -> Result<ArrayRef> {
     if args.is_empty() {
         return exec_err!("arrays_zip requires at least one argument");
     }
+    debug_assert_eq!(args.len(), field_names.len());
 
-    let field_names = arrays_zip_field_names(args.len());
     let num_rows = args[0].len();
 
-    if let Some(result) = try_perfect_list_zip(args, &field_names)? {
+    if let Some(result) = try_perfect_list_zip(args, field_names)? {
         return Ok(result);
     }
 
@@ -468,10 +484,13 @@ mod tests {
         let left = list(vec![1, 2, 3, 4, 5, 6], vec![0, 2, 3, 6]);
         let right = list(vec![10, 20, 30, 40, 50, 60], vec![0, 2, 3, 6]);
 
-        let result = arrays_zip_inner(&[
-            Arc::clone(&left) as ArrayRef,
-            Arc::clone(&right) as ArrayRef,
-        ])
+        let result = arrays_zip_inner_with_names(
+            &[
+                Arc::clone(&left) as ArrayRef,
+                Arc::clone(&right) as ArrayRef,
+            ],
+            &arrays_zip_field_names(2),
+        )
         .unwrap();
         let result = result.as_any().downcast_ref::<ListArray>().unwrap();
         let values = result
@@ -528,10 +547,13 @@ mod tests {
             Some(vec![true, false, true]),
         );
 
-        let result = arrays_zip_inner(&[
-            Arc::clone(&left) as ArrayRef,
-            Arc::clone(&right) as ArrayRef,
-        ])
+        let result = arrays_zip_inner_with_names(
+            &[
+                Arc::clone(&left) as ArrayRef,
+                Arc::clone(&right) as ArrayRef,
+            ],
+            &arrays_zip_field_names(2),
+        )
         .unwrap();
         let result = result.as_any().downcast_ref::<ListArray>().unwrap();
 
@@ -546,10 +568,13 @@ mod tests {
         let right =
             list_with_validity(vec![], vec![0, 0, 0, 0], Some(vec![true, false, false]));
 
-        let result = arrays_zip_inner(&[
-            Arc::clone(&left) as ArrayRef,
-            Arc::clone(&right) as ArrayRef,
-        ])
+        let result = arrays_zip_inner_with_names(
+            &[
+                Arc::clone(&left) as ArrayRef,
+                Arc::clone(&right) as ArrayRef,
+            ],
+            &arrays_zip_field_names(2),
+        )
         .unwrap();
         let result = result.as_any().downcast_ref::<ListArray>().unwrap();
 
@@ -569,10 +594,13 @@ mod tests {
             Some(vec![true, false]),
         );
 
-        let result = arrays_zip_inner(&[
-            Arc::clone(&left) as ArrayRef,
-            Arc::clone(&right) as ArrayRef,
-        ])
+        let result = arrays_zip_inner_with_names(
+            &[
+                Arc::clone(&left) as ArrayRef,
+                Arc::clone(&right) as ArrayRef,
+            ],
+            &arrays_zip_field_names(2),
+        )
         .unwrap();
         let result = result.as_any().downcast_ref::<ListArray>().unwrap();
 
@@ -591,10 +619,13 @@ mod tests {
             Some(vec![true, true]),
         );
 
-        let result = arrays_zip_inner(&[
-            Arc::clone(&left) as ArrayRef,
-            Arc::clone(&right) as ArrayRef,
-        ])
+        let result = arrays_zip_inner_with_names(
+            &[
+                Arc::clone(&left) as ArrayRef,
+                Arc::clone(&right) as ArrayRef,
+            ],
+            &arrays_zip_field_names(2),
+        )
         .unwrap();
         let result = result.as_any().downcast_ref::<ListArray>().unwrap();
         let values = result
@@ -609,5 +640,48 @@ mod tests {
         assert!(values.column(0).is_null(3));
         assert!(!values.column(1).is_null(2));
         assert!(!values.column(1).is_null(3));
+    }
+
+    fn list_arg_type(element: DataType) -> DataType {
+        List(Arc::new(Field::new_list_field(element, true)))
+    }
+
+    #[test]
+    fn return_type_uses_supplied_field_names() {
+        let arg_types = vec![
+            list_arg_type(DataType::Int64),
+            list_arg_type(DataType::Utf8),
+        ];
+        let names = vec!["a".to_string(), "b".to_string()];
+
+        let dt = arrays_zip_return_type(&arg_types, &names).unwrap();
+
+        let List(list_field) = &dt else {
+            panic!("expected List return type, got {dt:?}");
+        };
+        let DataType::Struct(fields) = list_field.data_type() else {
+            panic!("expected List<Struct>, got {:?}", list_field.data_type());
+        };
+        let got: Vec<&str> = fields.iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(got, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn native_udf_keeps_ordinal_struct_field_names() {
+        let arg_types = vec![
+            list_arg_type(DataType::Int64),
+            list_arg_type(DataType::Utf8),
+        ];
+
+        let dt = ArraysZip::new().return_type(&arg_types).unwrap();
+
+        let List(list_field) = &dt else {
+            panic!("expected List return type, got {dt:?}");
+        };
+        let DataType::Struct(fields) = list_field.data_type() else {
+            panic!("expected List<Struct>, got {:?}", list_field.data_type());
+        };
+        let got: Vec<&str> = fields.iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(got, vec!["1", "2"]);
     }
 }
