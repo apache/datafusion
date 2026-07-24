@@ -66,6 +66,7 @@ use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::coop::CooperativeExec;
 use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::explain::ExplainExec;
 use datafusion::physical_plan::expressions::{
     BinaryExpr, Column, DynamicFilterPhysicalExpr, NotExpr, PhysicalSortExpr, binary,
     cast, col, in_list, like, lit,
@@ -76,6 +77,7 @@ use datafusion::physical_plan::joins::{
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion::physical_plan::metrics::MetricCategory;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::repartition::RepartitionExec;
@@ -97,8 +99,10 @@ use datafusion::physical_plan::{
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion::scalar::ScalarValue;
 use datafusion_common::config::{ConfigOptions, TableParquetOptions};
+use datafusion_common::display::{PlanType, StringifiedPlan};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
+use datafusion_common::format::ExplainFormat;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -1946,14 +1950,112 @@ fn roundtrip_like() -> Result<()> {
 
 #[test]
 fn roundtrip_analyze() -> Result<()> {
-    let field_a = Field::new("plan_type", DataType::Utf8, false);
-    let field_b = Field::new("plan", DataType::Utf8, false);
-    let schema = Schema::new(vec![field_a, field_b]);
-    let input = Arc::new(PlaceholderRowExec::new(Arc::new(schema.clone())));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("plan_type", DataType::Utf8, false),
+        Field::new("plan", DataType::Utf8, false),
+    ]));
+    let input = Arc::new(PlaceholderRowExec::new(Arc::clone(&schema)));
+    let metric_categories = vec![MetricCategory::Rows, MetricCategory::Timing];
+    let analyze = Arc::new(
+        AnalyzeExec::builder(true, true, input, Arc::clone(&schema))
+            .with_metric_categories(Some(metric_categories.clone()))
+            .with_format(ExplainFormat::Tree)
+            .build(),
+    );
 
-    roundtrip_test(Arc::new(
-        AnalyzeExec::builder(false, false, input, Arc::new(schema)).build(),
-    ))
+    let ctx = SessionContext::new();
+    let roundtripped = roundtrip_test_and_return(
+        analyze,
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let roundtripped = roundtripped.downcast_ref::<AnalyzeExec>().unwrap();
+
+    assert_eq!(roundtripped.schema(), schema);
+    assert!(roundtripped.verbose());
+    assert!(roundtripped.show_statistics());
+    assert_eq!(
+        roundtripped.metric_categories(),
+        Some(metric_categories.as_slice())
+    );
+    assert_eq!(roundtripped.format(), &ExplainFormat::Tree);
+    assert!(
+        roundtripped
+            .input()
+            .downcast_ref::<PlaceholderRowExec>()
+            .is_some()
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_explain() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("plan_type", DataType::Utf8, false),
+        Field::new("plan", DataType::Utf8, false),
+    ]));
+    let stringified_plans = vec![
+        StringifiedPlan::new(PlanType::InitialLogicalPlan, "initial logical"),
+        StringifiedPlan::new(
+            PlanType::AnalyzedLogicalPlan {
+                analyzer_name: "analyzer".to_string(),
+            },
+            "analyzed logical",
+        ),
+        StringifiedPlan::new(PlanType::FinalAnalyzedLogicalPlan, "final analyzed"),
+        StringifiedPlan::new(
+            PlanType::OptimizedLogicalPlan {
+                optimizer_name: "logical optimizer".to_string(),
+            },
+            "optimized logical",
+        ),
+        StringifiedPlan::new(PlanType::FinalLogicalPlan, "final logical"),
+        StringifiedPlan::new(PlanType::InitialPhysicalPlan, "initial physical"),
+        StringifiedPlan::new(
+            PlanType::InitialPhysicalPlanWithStats,
+            "initial physical with stats",
+        ),
+        StringifiedPlan::new(
+            PlanType::InitialPhysicalPlanWithSchema,
+            "initial physical with schema",
+        ),
+        StringifiedPlan::new(
+            PlanType::OptimizedPhysicalPlan {
+                optimizer_name: "physical optimizer".to_string(),
+            },
+            "optimized physical",
+        ),
+        StringifiedPlan::new(PlanType::FinalPhysicalPlan, "final physical"),
+        StringifiedPlan::new(
+            PlanType::FinalPhysicalPlanWithStats,
+            "final physical with stats",
+        ),
+        StringifiedPlan::new(
+            PlanType::FinalPhysicalPlanWithSchema,
+            "final physical with schema",
+        ),
+        StringifiedPlan::new(PlanType::PhysicalPlanError, "physical plan error"),
+    ];
+    let explain = Arc::new(ExplainExec::new(
+        Arc::clone(&schema),
+        stringified_plans.clone(),
+        true,
+    ));
+
+    let ctx = SessionContext::new();
+    let roundtripped = roundtrip_test_and_return(
+        explain,
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let roundtripped = roundtripped.downcast_ref::<ExplainExec>().unwrap();
+
+    assert_eq!(roundtripped.schema(), schema);
+    assert_eq!(roundtripped.stringified_plans(), stringified_plans);
+    assert!(roundtripped.verbose());
+    Ok(())
 }
 
 #[tokio::test]
