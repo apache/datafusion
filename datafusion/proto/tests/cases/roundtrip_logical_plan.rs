@@ -867,6 +867,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
     let mut parquet_format = table_options.parquet;
 
     parquet_format.global.bloom_filter_on_read = true;
+    parquet_format.global.dictionary_filter_on_read = true;
     parquet_format.global.created_by = "DataFusion Test".to_string();
     parquet_format.global.writer_version = DFParquetWriterVersion::V2_0;
     parquet_format.global.write_batch_size = 111;
@@ -1256,6 +1257,7 @@ async fn roundtrip_default_codec_parquet() -> Result<()> {
         TableOptions::default_from_session_config(ctx.state().config_options());
     let mut parquet_format = table_options.parquet;
     parquet_format.global.bloom_filter_on_read = true;
+    parquet_format.global.dictionary_filter_on_read = true;
     parquet_format.global.created_by = "DefaultCodecTest".to_string();
 
     let file_type = format_as_file_type(Arc::new(
@@ -1290,6 +1292,7 @@ async fn roundtrip_default_codec_parquet() -> Result<()> {
                 .unwrap();
             let decoded = pq.options.as_ref().unwrap();
             assert!(decoded.global.bloom_filter_on_read);
+            assert!(decoded.global.dictionary_filter_on_read);
             assert_eq!("DefaultCodecTest", decoded.global.created_by);
         }
         _ => panic!("Expected CopyTo plan"),

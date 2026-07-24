@@ -25,6 +25,7 @@ use self::early_stop::EarlyStoppingStream;
 use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
+use crate::dictionary_filter::is_fully_dictionary_encoded;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
     DecoderBuilderConfig, PushDecoderStreamState, RgPlanEntry, RowGroupPruner,
@@ -32,9 +33,9 @@ use crate::push_decoder::{
 use crate::row_filter::RowFilterGenerator;
 use crate::row_group_filter::RowGroupAccessPlanFilter;
 use crate::{
-    BloomFilterStatistics, Int96Coercer, ParquetAccessPlan, ParquetFileMetrics,
-    ParquetFileReaderFactory, ParquetRowSelection, ParquetVirtualColumn,
-    apply_file_schema_type_coercions,
+    BloomFilterStatistics, DictionaryStatistics, Int96Coercer, ParquetAccessPlan,
+    ParquetFileMetrics, ParquetFileReaderFactory, ParquetRowSelection,
+    ParquetVirtualColumn, apply_file_schema_type_coercions,
 };
 use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
@@ -269,6 +270,9 @@ pub(super) struct ParquetMorselizer {
     /// Should the bloom filter be read from parquet, if present, to skip row
     /// groups
     pub enable_bloom_filter: bool,
+    /// Should fully dictionary-encoded `BYTE_ARRAY` column chunks be used as
+    /// an exact row-group membership index, if present, to skip row groups
+    pub enable_dictionary_filter: bool,
     /// Should row group pruning be applied
     pub enable_row_group_stats_pruning: bool,
     /// Coerce INT96 timestamps to specific TimeUnit
@@ -305,6 +309,7 @@ impl fmt::Debug for ParquetMorselizer {
             .field("preserve_order", &self.preserve_order)
             .field("enable_page_index", &self.enable_page_index)
             .field("enable_bloom_filter", &self.enable_bloom_filter)
+            .field("enable_dictionary_filter", &self.enable_dictionary_filter)
             .finish()
     }
 }
@@ -350,6 +355,12 @@ impl Morselizer for ParquetMorselizer {
 /// PruneWithBloomFilters
 ///        |
 ///        v
+///  LoadDictionaries
+///        |
+///        v
+/// PruneWithDictionaries
+///        |
+///        v
 ///   BuildStream
 ///        |
 ///        v
@@ -384,6 +395,10 @@ enum ParquetOpenState {
     LoadBloomFilters(BoxFuture<'static, Result<BloomFiltersLoadedParquetOpen>>),
     /// Pruning with preloaded Bloom Filters
     PruneWithBloomFilters(Box<BloomFiltersLoadedParquetOpen>),
+    /// Loading Parquet dictionary pages required for row-group pruning
+    LoadDictionaries(BoxFuture<'static, Result<DictionariesLoadedParquetOpen>>),
+    /// Pruning with preloaded dictionary pages
+    PruneWithDictionaries(Box<DictionariesLoadedParquetOpen>),
     /// Builds the final reader stream
     ///
     /// TODO: split state as this currently does both I/O and CPU work.
@@ -407,6 +422,8 @@ impl fmt::Debug for ParquetOpenState {
             ParquetOpenState::PruneWithStatistics(_) => "PruneWithStatistics",
             ParquetOpenState::LoadBloomFilters(_) => "LoadBloomFilters",
             ParquetOpenState::PruneWithBloomFilters(_) => "PruneWithBloomFilters",
+            ParquetOpenState::LoadDictionaries(_) => "LoadDictionaries",
+            ParquetOpenState::PruneWithDictionaries(_) => "PruneWithDictionaries",
             ParquetOpenState::BuildStream(_) => "BuildStream",
             ParquetOpenState::Ready(_) => "Ready",
             ParquetOpenState::Done => "Done",
@@ -444,6 +461,7 @@ struct PreparedParquetOpen {
     force_filter_selections: bool,
     enable_page_index: bool,
     enable_bloom_filter: bool,
+    enable_dictionary_filter: bool,
     enable_row_group_stats_pruning: bool,
     limit: Option<usize>,
     coerce_int96: Option<TimeUnit>,
@@ -494,6 +512,18 @@ struct BloomFiltersLoadedParquetOpen {
     ///
     /// indexed by parquet row-group index
     row_group_bloom_filters: Vec<BloomFilterStatistics>,
+}
+
+/// State of [`ParquetOpenState`]
+///
+/// Result of loading dictionary pages needed for row-group pruning.
+struct DictionariesLoadedParquetOpen {
+    prepared: RowGroupsPrunedParquetOpen,
+    /// Dictionary values loaded for each row group that remains under
+    /// consideration.
+    ///
+    /// indexed by parquet row-group index
+    row_group_dictionaries: Vec<DictionaryStatistics>,
 }
 
 impl ParquetOpenState {
@@ -583,8 +613,17 @@ impl ParquetOpenState {
             ParquetOpenState::LoadBloomFilters(future) => {
                 Ok(ParquetOpenState::LoadBloomFilters(future))
             }
-            ParquetOpenState::PruneWithBloomFilters(loaded) => Ok(
-                ParquetOpenState::BuildStream(Box::new(loaded.prune_bloom_filters())),
+            ParquetOpenState::PruneWithBloomFilters(loaded) => {
+                let prepared_row_groups = loaded.prune_bloom_filters();
+                Ok(ParquetOpenState::LoadDictionaries(
+                    prepared_row_groups.load_dictionaries().boxed(),
+                ))
+            }
+            ParquetOpenState::LoadDictionaries(future) => {
+                Ok(ParquetOpenState::LoadDictionaries(future))
+            }
+            ParquetOpenState::PruneWithDictionaries(loaded) => Ok(
+                ParquetOpenState::BuildStream(Box::new(loaded.prune_dictionaries())),
             ),
             ParquetOpenState::BuildStream(prepared) => {
                 Ok(ParquetOpenState::Ready(prepared.build_stream()?))
@@ -701,6 +740,13 @@ impl MorselPlanner for ParquetMorselPlanner {
             ParquetOpenState::LoadBloomFilters(future) => {
                 Ok(Some(Self::schedule_io(async move {
                     Ok(ParquetOpenState::PruneWithBloomFilters(Box::new(
+                        future.await?,
+                    )))
+                })))
+            }
+            ParquetOpenState::LoadDictionaries(future) => {
+                Ok(Some(Self::schedule_io(async move {
+                    Ok(ParquetOpenState::PruneWithDictionaries(Box::new(
                         future.await?,
                     )))
                 })))
@@ -843,6 +889,7 @@ impl ParquetMorselizer {
             force_filter_selections: self.force_filter_selections,
             enable_page_index: self.enable_page_index,
             enable_bloom_filter: self.enable_bloom_filter,
+            enable_dictionary_filter: self.enable_dictionary_filter,
             enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
             limit: self.limit,
             coerce_int96: self.coerce_int96,
@@ -1124,6 +1171,15 @@ impl FiltersPreparedParquetOpen {
                     .row_groups_pruned_bloom_filter
                     .add_matched(row_groups.remaining_row_group_count());
             }
+
+            if !prepared.enable_dictionary_filter || row_groups.is_empty() {
+                // Update metrics: dictionary filter unavailable, so all row
+                // groups are matched (not pruned)
+                prepared
+                    .file_metrics
+                    .row_groups_pruned_dictionary
+                    .add_matched(row_groups.remaining_row_group_count());
+            }
         } else {
             // Update metrics: no predicate, so all row groups are matched (not pruned)
             let remaining = row_groups.remaining_row_group_count();
@@ -1134,6 +1190,10 @@ impl FiltersPreparedParquetOpen {
             prepared
                 .file_metrics
                 .row_groups_pruned_bloom_filter
+                .add_matched(remaining);
+            prepared
+                .file_metrics
+                .row_groups_pruned_dictionary
                 .add_matched(remaining);
         }
 
@@ -1247,6 +1307,126 @@ impl RowGroupsPrunedParquetOpen {
             prepared: self,
             row_group_bloom_filters,
         })
+    }
+
+    /// Load dictionary pages needed for pruning when enabled and a pruning
+    /// predicate exists.
+    ///
+    /// Only column chunks that are fully `BYTE_ARRAY` dictionary-encoded
+    /// (see [`is_fully_dictionary_encoded`]) are read: their dictionary is
+    /// the exact set of the row group's distinct values, so partially
+    /// dictionary-encoded chunks (writers fall back to `PLAIN` past a size
+    /// limit) are skipped rather than risk unsound pruning.
+    async fn load_dictionaries(mut self) -> Result<DictionariesLoadedParquetOpen> {
+        let num_row_groups = self
+            .prepared
+            .loaded
+            .reader_metadata
+            .metadata()
+            .num_row_groups();
+        let mut row_group_dictionaries =
+            vec![DictionaryStatistics::new(); num_row_groups];
+
+        if let Some(predicate) =
+            self.prepared.pruning_predicate.as_ref().map(|p| p.as_ref())
+            && self.prepared.loaded.prepared.enable_dictionary_filter
+            && !self.row_groups.is_empty()
+        {
+            // Use the existing reader for dictionary I/O;
+            // replace with a fresh reader for decoding below.
+            let reader_metadata = self.prepared.loaded.reader_metadata.clone();
+            let replacement_reader = {
+                let prepared = &self.prepared.loaded.prepared;
+                prepared.parquet_file_reader_factory.create_reader(
+                    prepared.partition_index,
+                    prepared.partitioned_file.clone(),
+                    prepared.metadata_size_hint,
+                    &prepared.metrics,
+                )?
+            };
+
+            let prepared = &mut self.prepared.loaded.prepared;
+            let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(
+                mem::replace(&mut prepared.async_file_reader, replacement_reader),
+                reader_metadata,
+            );
+            let parquet_columns: Vec<(String, usize)> = predicate
+                .literal_columns()
+                .into_iter()
+                .filter_map(|column_name| {
+                    let parquet_schema = builder.parquet_schema();
+                    let (column_idx, _) = parquet_column(
+                        parquet_schema,
+                        &prepared.physical_file_schema,
+                        &column_name,
+                    )?;
+                    Some((column_name, column_idx))
+                })
+                .collect();
+
+            let file_metadata = Arc::clone(builder.metadata());
+            for idx in self.row_groups.row_group_indexes() {
+                let mut row_group_dictionary =
+                    DictionaryStatistics::with_capacity(parquet_columns.len());
+                for (column_name, column_idx) in &parquet_columns {
+                    let col_meta = file_metadata.row_group(idx).column(*column_idx);
+                    if !is_fully_dictionary_encoded(col_meta) {
+                        continue;
+                    }
+                    let dictionary = match builder
+                        .get_row_group_column_dictionary(idx, *column_idx)
+                        .await
+                    {
+                        Ok(Some(dictionary)) => dictionary,
+                        Ok(None) => continue,
+                        Err(e) => {
+                            debug!("Ignoring error reading dictionary page: {e}");
+                            prepared.file_metrics.predicate_evaluation_errors.add(1);
+                            continue;
+                        }
+                    };
+                    if let Err(e) = row_group_dictionary.insert(column_name, &dictionary)
+                    {
+                        debug!("Ignoring error decoding dictionary page: {e}");
+                        prepared.file_metrics.predicate_evaluation_errors.add(1);
+                    }
+                }
+                row_group_dictionaries[idx] = row_group_dictionary;
+            }
+        }
+
+        Ok(DictionariesLoadedParquetOpen {
+            prepared: self,
+            row_group_dictionaries,
+        })
+    }
+}
+
+impl DictionariesLoadedParquetOpen {
+    /// Apply dictionary-based pruning using already loaded dictionary values.
+    fn prune_dictionaries(mut self) -> RowGroupsPrunedParquetOpen {
+        if let Some(predicate) = self
+            .prepared
+            .prepared
+            .pruning_predicate
+            .as_ref()
+            .map(|p| p.as_ref())
+            && self
+                .prepared
+                .prepared
+                .loaded
+                .prepared
+                .enable_dictionary_filter
+            && !self.prepared.row_groups.is_empty()
+        {
+            self.prepared.row_groups.prune_by_dictionary(
+                predicate,
+                &self.prepared.prepared.loaded.prepared.file_metrics,
+                &self.row_group_dictionaries,
+            );
+        }
+
+        self.prepared
     }
 }
 
@@ -1749,6 +1929,7 @@ mod test {
         force_filter_selections: bool,
         enable_page_index: bool,
         enable_bloom_filter: bool,
+        enable_dictionary_filter: bool,
         enable_row_group_stats_pruning: bool,
         coerce_int96: Option<TimeUnit>,
         max_predicate_cache_size: Option<usize>,
@@ -1857,6 +2038,7 @@ mod test {
                 force_filter_selections: false,
                 enable_page_index: false,
                 enable_bloom_filter: false,
+                enable_dictionary_filter: false,
                 enable_row_group_stats_pruning: false,
                 coerce_int96: None,
                 max_predicate_cache_size: None,
@@ -2025,6 +2207,7 @@ mod test {
                 force_filter_selections: self.force_filter_selections,
                 enable_page_index: self.enable_page_index,
                 enable_bloom_filter: self.enable_bloom_filter,
+                enable_dictionary_filter: self.enable_dictionary_filter,
                 enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
                 coerce_int96: self.coerce_int96,
                 // End-to-end coercion behavior (including timezone) is
