@@ -793,11 +793,6 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
 
         Ok(vec![Arc::new(list_array)])
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn size(&self) -> usize {
         self.batches
             .iter()

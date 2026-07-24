@@ -773,11 +773,6 @@ impl GroupsAccumulator for CountGroupsAccumulator {
 
         Ok(vec![state_array])
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn size(&self) -> usize {
         self.counts.capacity() * size_of::<usize>()
     }

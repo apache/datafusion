@@ -719,11 +719,6 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
             + self.extreme_of_each_group_buf.0.capacity() * size_of::<usize>()
             + self.extreme_of_each_group_buf.1.capacity() / 8
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn convert_to_state(
         &self,
         values: &[ArrayRef],

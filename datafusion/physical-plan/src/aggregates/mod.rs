@@ -7132,6 +7132,22 @@ mod tests {
             Ok(vec![self.emit_counts(emit_to)?])
         }
 
+        fn convert_to_state(
+            &self,
+            values: &[ArrayRef],
+            opt_filter: Option<&BooleanArray>,
+        ) -> Result<Vec<ArrayRef>> {
+            assert_eq!(values.len(), 1, "one argument to convert_to_state");
+            let counts = match opt_filter {
+                Some(filter) => filter
+                    .iter()
+                    .map(|value| i64::from(value.unwrap_or(false)))
+                    .collect::<Vec<_>>(),
+                None => vec![1; values[0].len()],
+            };
+            Ok(vec![Arc::new(Int64Array::from(counts))])
+        }
+
         fn merge_batch(
             &mut self,
             _values: &[ArrayRef],
