@@ -17,130 +17,28 @@
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
-use rand::Rng;
-use std::collections::VecDeque;
-
-// === Old Two-Stack Queue Implementation ===
-#[derive(Debug)]
-pub struct TwoStackMax<T> {
-    push_stack: Vec<(T, T)>,
-    pop_stack: Vec<(T, T)>,
-}
-
-impl<T: Clone + PartialOrd> TwoStackMax<T> {
-    pub fn new() -> Self {
-        Self {
-            push_stack: Vec::new(),
-            pop_stack: Vec::new(),
-        }
-    }
-
-    pub fn max(&self) -> Option<&T> {
-        match (self.push_stack.last(), self.pop_stack.last()) {
-            (None, None) => None,
-            (Some((_, max)), None) => Some(max),
-            (None, Some((_, max))) => Some(max),
-            (Some((_, a)), Some((_, b))) => Some(if a > b { a } else { b }),
-        }
-    }
-
-    pub fn push(&mut self, val: T) {
-        self.push_stack.push(match self.push_stack.last() {
-            Some((_, max)) => {
-                if val < *max {
-                    (val, max.clone())
-                } else {
-                    (val.clone(), val)
-                }
-            }
-            None => (val.clone(), val),
-        });
-    }
-
-    pub fn pop(&mut self) -> Option<T> {
-        if self.pop_stack.is_empty() {
-            match self.push_stack.pop() {
-                Some((val, _)) => {
-                    let mut last = (val.clone(), val);
-                    self.pop_stack.push(last.clone());
-                    while let Some((val, _)) = self.push_stack.pop() {
-                        let max = if last.1 > val {
-                            last.1.clone()
-                        } else {
-                            val.clone()
-                        };
-                        last = (val.clone(), max);
-                        self.pop_stack.push(last.clone());
-                    }
-                }
-                None => return None,
-            }
-        }
-        self.pop_stack.pop().map(|(val, _)| val)
-    }
-}
-
-// === Production Monotonic Deque Implementation (storing T directly) ===
-#[derive(Debug)]
-pub struct MonotonicMax<T> {
-    fifo: VecDeque<T>,
-    deque: VecDeque<T>,
-}
-
-impl<T: Clone + PartialOrd> MonotonicMax<T> {
-    pub fn new() -> Self {
-        Self {
-            fifo: VecDeque::new(),
-            deque: VecDeque::new(),
-        }
-    }
-
-    pub fn max(&self) -> Option<&T> {
-        self.deque.front()
-    }
-
-    pub fn push(&mut self, val: T) {
-        self.fifo.push_back(val.clone());
-        while self.deque.back().map_or(false, |back_val| *back_val < val) {
-            self.deque.pop_back();
-        }
-        self.deque.push_back(val);
-    }
-
-    pub fn pop(&mut self) -> Option<T> {
-        if let Some(popped) = self.fifo.pop_front() {
-            if self
-                .deque
-                .front()
-                .map_or(false, |front_val| *front_val == popped)
-            {
-                self.deque.pop_front();
-            }
-            Some(popped)
-        } else {
-            None
-        }
-    }
-}
+use datafusion_functions_aggregate::min_max::MovingMax;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
 // === Generator Utilities ===
 fn generate_random_i64(size: usize) -> Vec<i64> {
-    let mut rng = rand::thread_rng();
-    (0..size).map(|_| rng.gen_range(0..1000000)).collect()
+    let mut rng = StdRng::seed_from_u64(42);
+    (0..size).map(|_| rng.random_range(0..1000000)).collect()
 }
 
 fn generate_random_f64(size: usize) -> Vec<f64> {
-    let mut rng = rand::thread_rng();
-    (0..size).map(|_| rng.r#gen()).collect()
+    let mut rng = StdRng::seed_from_u64(42);
+    (0..size).map(|_| rng.random()).collect()
 }
 
 fn generate_random_strings(size: usize) -> Vec<String> {
-    let mut rng = rand::thread_rng();
+    let mut rng = StdRng::seed_from_u64(42);
     (0..size)
         .map(|_| {
-            let len = rng.gen_range(10..40);
+            let len = rng.random_range(10..40);
             (0..len)
-                .map(|_| rng.gen_range(b'a'..=b'z') as char)
+                .map(|_| rng.random_range(b'a'..=b'z') as char)
                 .collect()
         })
         .collect()
@@ -191,28 +89,11 @@ fn bench_sliding_max(c: &mut Criterion) {
             group.throughput(Throughput::Elements(data_size as u64));
 
             group.bench_with_input(
-                BenchmarkId::new("two_stack_queue", window_size),
-                &window_size,
-                |b, &w| {
-                    b.iter(|| {
-                        let mut q = TwoStackMax::new();
-                        for (i, val) in data.iter().enumerate() {
-                            q.push(val.clone());
-                            if i >= w {
-                                q.pop();
-                            }
-                            let _res = q.max();
-                        }
-                    });
-                },
-            );
-
-            group.bench_with_input(
                 BenchmarkId::new("monotonic_deque", window_size),
                 &window_size,
                 |b, &w| {
                     b.iter(|| {
-                        let mut q = MonotonicMax::new();
+                        let mut q = MovingMax::new();
                         for (i, val) in data.iter().enumerate() {
                             q.push(val.clone());
                             if i >= w {

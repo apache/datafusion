@@ -727,21 +727,14 @@ impl Accumulator for SlidingMinAccumulator {
 
 /// Keep track of the minimum value in a sliding window.
 ///
-/// The implementation is taken from <https://github.com/spebern/moving_min_max/blob/master/src/lib.rs>
-///
-/// `moving min max` provides one data structure for keeping track of the
-/// minimum value and one for keeping track of the maximum value in a sliding
-/// window.
-///
-/// Each element is stored with the current min/max. One stack to push and another one for pop. If pop stack is empty,
-/// push to this stack all elements popped from first stack while updating their current min/max. Now pop from
-/// the second stack (MovingMin/Max struct works as a queue). To find the minimum element of the queue,
-/// look at the smallest/largest two elements of the individual stacks, then take the minimum of those two values.
+/// `MovingMin` keeps track of the minimum value in a sliding window using a monotonic deque.
+/// Each element is stored with its sequence number, and the deque maintains elements in
+/// strictly increasing order.
 ///
 /// The complexity of the operations are
-/// - O(1) for getting the minimum/maximum
-/// - O(1) for push
-/// - amortized O(1) for pop
+/// - O(1) for getting the minimum
+/// - amortized O(1) for push
+/// - O(1) for pop
 ///
 /// ```
 /// # use datafusion_functions_aggregate::min_max::MovingMin;
@@ -751,28 +744,29 @@ impl Accumulator for SlidingMinAccumulator {
 /// moving_min.push(3);
 ///
 /// assert_eq!(moving_min.min(), Some(&1));
-/// assert_eq!(moving_min.pop(), Some(2));
+/// moving_min.pop();
 ///
 /// assert_eq!(moving_min.min(), Some(&1));
-/// assert_eq!(moving_min.pop(), Some(1));
+/// moving_min.pop();
 ///
 /// assert_eq!(moving_min.min(), Some(&3));
-/// assert_eq!(moving_min.pop(), Some(3));
+/// moving_min.pop();
 ///
 /// assert_eq!(moving_min.min(), None);
-/// assert_eq!(moving_min.pop(), None);
 /// ```
 #[derive(Debug)]
 pub struct MovingMin<T> {
-    fifo: std::collections::VecDeque<T>,
-    deque: std::collections::VecDeque<T>,
+    deque: std::collections::VecDeque<(u64, T)>,
+    push_seq: u64,
+    pop_seq: u64,
 }
 
 impl<T: Clone + PartialOrd> Default for MovingMin<T> {
     fn default() -> Self {
         Self {
-            fifo: std::collections::VecDeque::new(),
             deque: std::collections::VecDeque::new(),
+            push_seq: 0,
+            pop_seq: 0,
         }
     }
 }
@@ -790,8 +784,9 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            fifo: std::collections::VecDeque::with_capacity(capacity),
             deque: std::collections::VecDeque::with_capacity(capacity),
+            push_seq: 0,
+            pop_seq: 0,
         }
     }
 
@@ -799,46 +794,44 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
     /// empty.
     #[inline]
     pub fn min(&self) -> Option<&T> {
-        self.deque.front()
+        self.deque.front().map(|(_, val)| val)
     }
 
     /// Pushes a new element into the sliding window.
     #[inline]
     pub fn push(&mut self, val: T) {
-        self.fifo.push_back(val.clone());
-        while self.deque.back().is_some_and(|back_val| *back_val > val) {
+        let seq = self.push_seq;
+        self.push_seq += 1;
+        while self.deque.back().is_some_and(|back_val| back_val.1 > val) {
             self.deque.pop_back();
         }
-        self.deque.push_back(val);
+        self.deque.push_back((seq, val));
     }
 
-    /// Removes and returns the last value of the sliding window.
+    /// Removes the oldest value from the sliding window.
     #[inline]
-    pub fn pop(&mut self) -> Option<T> {
-        if let Some(popped) = self.fifo.pop_front() {
-            if self
-                .deque
-                .front()
-                .is_some_and(|front_val| *front_val == popped)
-            {
-                self.deque.pop_front();
-            }
-            Some(popped)
-        } else {
-            None
+    pub fn pop(&mut self) {
+        let seq = self.pop_seq;
+        self.pop_seq += 1;
+        if self
+            .deque
+            .front()
+            .is_some_and(|front_val| front_val.0 == seq)
+        {
+            self.deque.pop_front();
         }
     }
 
     /// Returns the number of elements stored in the sliding window.
     #[inline]
     pub fn len(&self) -> usize {
-        self.fifo.len()
+        (self.push_seq - self.pop_seq) as usize
     }
 
     /// Returns `true` if the moving window contains no elements.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.fifo.is_empty()
+        self.push_seq == self.pop_seq
     }
 }
 
@@ -854,28 +847,29 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
 /// moving_max.push(1);
 ///
 /// assert_eq!(moving_max.max(), Some(&3));
-/// assert_eq!(moving_max.pop(), Some(2));
+/// moving_max.pop();
 ///
 /// assert_eq!(moving_max.max(), Some(&3));
-/// assert_eq!(moving_max.pop(), Some(3));
+/// moving_max.pop();
 ///
 /// assert_eq!(moving_max.max(), Some(&1));
-/// assert_eq!(moving_max.pop(), Some(1));
+/// moving_max.pop();
 ///
 /// assert_eq!(moving_max.max(), None);
-/// assert_eq!(moving_max.pop(), None);
 /// ```
 #[derive(Debug)]
 pub struct MovingMax<T> {
-    fifo: std::collections::VecDeque<T>,
-    deque: std::collections::VecDeque<T>,
+    deque: std::collections::VecDeque<(u64, T)>,
+    push_seq: u64,
+    pop_seq: u64,
 }
 
 impl<T: Clone + PartialOrd> Default for MovingMax<T> {
     fn default() -> Self {
         Self {
-            fifo: std::collections::VecDeque::new(),
             deque: std::collections::VecDeque::new(),
+            push_seq: 0,
+            pop_seq: 0,
         }
     }
 }
@@ -892,54 +886,53 @@ impl<T: Clone + PartialOrd> MovingMax<T> {
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            fifo: std::collections::VecDeque::with_capacity(capacity),
             deque: std::collections::VecDeque::with_capacity(capacity),
+            push_seq: 0,
+            pop_seq: 0,
         }
     }
 
     /// Returns the maximum of the sliding window or `None` if the window is empty.
     #[inline]
     pub fn max(&self) -> Option<&T> {
-        self.deque.front()
+        self.deque.front().map(|(_, val)| val)
     }
 
     /// Pushes a new element into the sliding window.
     #[inline]
     pub fn push(&mut self, val: T) {
-        self.fifo.push_back(val.clone());
-        while self.deque.back().is_some_and(|back_val| *back_val < val) {
+        let seq = self.push_seq;
+        self.push_seq += 1;
+        while self.deque.back().is_some_and(|back_val| back_val.1 < val) {
             self.deque.pop_back();
         }
-        self.deque.push_back(val);
+        self.deque.push_back((seq, val));
     }
 
-    /// Removes and returns the last value of the sliding window.
+    /// Removes the oldest value from the sliding window.
     #[inline]
-    pub fn pop(&mut self) -> Option<T> {
-        if let Some(popped) = self.fifo.pop_front() {
-            if self
-                .deque
-                .front()
-                .is_some_and(|front_val| *front_val == popped)
-            {
-                self.deque.pop_front();
-            }
-            Some(popped)
-        } else {
-            None
+    pub fn pop(&mut self) {
+        let seq = self.pop_seq;
+        self.pop_seq += 1;
+        if self
+            .deque
+            .front()
+            .is_some_and(|front_val| front_val.0 == seq)
+        {
+            self.deque.pop_front();
         }
     }
 
     /// Returns the number of elements stored in the sliding window.
     #[inline]
     pub fn len(&self) -> usize {
-        self.fifo.len()
+        (self.push_seq - self.pop_seq) as usize
     }
 
     /// Returns `true` if the moving window contains no elements.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.fifo.is_empty()
+        self.push_seq == self.pop_seq
     }
 }
 
