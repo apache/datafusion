@@ -533,8 +533,13 @@ query error DataFusion error: Error during planning: EXPLAIN VERBOSE with FORMAT
 explain verbose format tree select * from values (1);
 
 # valid explain format
-query error DataFusion error: Invalid or Unsupported Configuration: Invalid explain format. Expected 'indent', 'tree', 'pgjson' or 'graphviz'. Got 'xxx'
+query error
 set datafusion.explain.format = "xxx";
+----
+DataFusion error: Error setting config datafusion.explain.format
+caused by
+Invalid or Unsupported Configuration: Invalid explain format. Expected 'indent', 'tree', 'pgjson' or 'graphviz'. Got 'xxx'
+
 
 # verbose uses indent mode even when a different mode (e.g tree) is set
 

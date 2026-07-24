@@ -81,6 +81,10 @@ pub(in crate::aggregates) struct OrderedAggregateTable<OrderedAggrMode> {
     /// Output schema: group columns followed by aggregate state or final values.
     pub(super) output_schema: SchemaRef,
 
+    /// Intermediate-state schema used when memory pressure requires the table
+    /// to pass through or spill its current state.
+    pub(super) state_schema: SchemaRef,
+
     /// Maximum rows per emitted output batch, from config `batch_size`.
     pub(super) batch_size: usize,
 
@@ -129,13 +133,14 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
     )]
     pub(super) fn new_for_mode(
         agg: &AggregateExec,
-        partition: usize,
         input_schema: &SchemaRef,
         output_schema: SchemaRef,
+        state_schema: SchemaRef,
         batch_size: usize,
         input_order_mode: &InputOrderMode,
         aggregate_mode: &AggregateMode,
         filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
+        group_by_metrics: GroupByMetrics,
     ) -> Result<Self> {
         assert_or_internal_err!(
             batch_size > 0,
@@ -168,8 +173,9 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
 
         Ok(Self {
             output_schema,
+            state_schema,
             batch_size,
-            group_by_metrics: GroupByMetrics::new(&agg.metrics, partition),
+            group_by_metrics,
             buffer: OrderedAggregateTableBuffer {
                 group_by: Arc::clone(&agg.group_by),
                 group_ordering,
@@ -217,9 +223,19 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         self.buffer.group_ordering.input_done();
     }
 
+    /// Returns the ordering state used to decide how memory pressure is handled.
+    pub(in crate::aggregates) fn group_ordering(&self) -> &GroupOrdering {
+        &self.buffer.group_ordering
+    }
+
+    /// Number of groups currently buffered.
+    pub(in crate::aggregates) fn num_groups(&self) -> usize {
+        self.buffer.group_values.len()
+    }
+
     /// Check if there is zero groups accumulated so far.
     pub(in crate::aggregates) fn is_empty(&self) -> bool {
-        self.buffer.group_values.is_empty()
+        self.num_groups() == 0
     }
 
     /// All internal buffer's memory size.
@@ -232,6 +248,43 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             + self.buffer.group_values.size()
             + self.buffer.group_ordering.size()
             + self.buffer.group_indices.allocated_size()
+    }
+
+    pub(in crate::aggregates) fn group_by_metrics(&self) -> GroupByMetrics {
+        self.group_by_metrics.clone()
+    }
+
+    /// Takes every intermediate aggregate state and resets the table so it can
+    /// continue with a new ordered input segment.
+    ///
+    /// Unlike normal ordered emission, this operation is allowed to take the
+    /// active (incomplete) groups. Partial aggregation can pass those states to
+    /// its final stage, while final aggregation sorts and spills them before
+    /// replay.
+    pub(in crate::aggregates) fn take_state_batch(
+        &mut self,
+    ) -> Result<Option<RecordBatch>> {
+        if self.buffer.group_values.is_empty() {
+            return Ok(None);
+        }
+
+        let mut output = self.buffer.group_values.emit(EmitTo::All)?;
+        for acc in &mut self.buffer.accumulators {
+            output.extend(acc.state(EmitTo::All)?);
+        }
+
+        let batch = RecordBatch::try_new(Arc::clone(&self.state_schema), output)?;
+        debug_assert!(batch.num_rows() > 0);
+
+        // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
+        // key/index buffers too so the memory reservation can be released
+        // before the batch is passed downstream or sorted for spilling.
+        self.buffer.group_values.clear_shrink(0);
+        self.buffer.group_indices.clear();
+        self.buffer.group_indices.shrink_to_fit();
+        self.buffer.group_ordering.reset();
+
+        Ok(Some(batch))
     }
 
     /// Returns the [`EmitTo`], clamped to the specified batch size

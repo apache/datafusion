@@ -28,7 +28,7 @@ use std::task::{Context, Poll};
 
 use super::utils::create_schema;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::EmptyRecordBatchStream;
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
@@ -36,8 +36,9 @@ use crate::windows::{
 };
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    ExecutionPlanProperties, InputOrderMode, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics, WindowExpr, check_if_same_properties,
+    ExecutionPlanProperties, InputDistributionRequirements, InputOrderMode,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
+    check_if_same_properties,
 };
 
 use arrow::compute::take_record_batch;
@@ -324,13 +325,15 @@ impl ExecutionPlan for BoundedWindowAggExec {
         self.input_distribution_requirements().into_per_child()
     }
 
-    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
-        crate::InputDistributionRequirements::new(if self.partition_keys().is_empty() {
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        if self.partition_keys().is_empty() {
             debug!("No partition defined for BoundedWindowAggExec!!!");
-            vec![Distribution::SinglePartition]
+            InputDistributionRequirements::new(vec![Distribution::SinglePartition])
         } else {
-            vec![Distribution::KeyPartitioned(self.partition_keys().clone())]
-        })
+            InputDistributionRequirements::new(vec![Distribution::KeyPartitioned(
+                self.partition_keys(),
+            )])
+        }
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -382,10 +385,16 @@ impl ExecutionPlan for BoundedWindowAggExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        let input_stat = Arc::unwrap_or_clone(
-            args.compute_child_statistics(&self.input, args.partition())?,
-        );
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let input_stat = input_stats[0].as_ref().clone();
         Ok(Arc::new(self.statistics_helper(input_stat)?))
     }
 

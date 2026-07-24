@@ -29,12 +29,15 @@
 //! The implementation is separated from other aggregate tables because this
 //! execution path is likely to be optimized further in the future.
 
+use std::sync::Arc;
+
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 
 use crate::aggregates::{
     AggregateExec, AggregateMode, aggregate_hash_table::PartialMarker,
+    group_values::GroupByMetrics,
 };
 
 use super::common_ordered::OrderedAggregateTable;
@@ -56,15 +59,18 @@ impl OrderedAggregateTable<PartialMarker> {
         batch_size: usize,
     ) -> Result<Self> {
         let input_schema = agg.input().schema();
+        let state_schema = Arc::clone(&output_schema);
+        let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
         Self::new_for_mode(
             agg,
-            partition,
             &input_schema,
             output_schema,
+            state_schema,
             batch_size,
             &agg.input_order_mode,
             &AggregateMode::Partial,
             agg.filter_expr.iter().cloned().collect(),
+            group_by_metrics,
         )
     }
 
