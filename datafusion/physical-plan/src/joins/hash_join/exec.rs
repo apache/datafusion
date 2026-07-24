@@ -1271,7 +1271,7 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn input_distribution_requirements(&self) -> InputDistributionRequirements {
-        let requirements = match self.mode {
+        match self.mode {
             PartitionMode::Partitioned => {
                 let (left_expr, right_expr) = self
                     .on
@@ -1291,14 +1291,6 @@ impl ExecutionPlan for HashJoinExec {
                 Distribution::UnspecifiedDistribution,
                 Distribution::UnspecifiedDistribution,
             ]),
-        };
-
-        if self.mode == PartitionMode::Partitioned {
-            // Compatible Range inputs co-locate equal join keys, which
-            // satisfies the co-partitioned requirement for hash joins.
-            requirements.allow_range_satisfaction_for_key_partitioning()
-        } else {
-            requirements
         }
     }
 

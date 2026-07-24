@@ -1,0 +1,201 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# End-to-end tests for ordered aggregation under finite memory.
+
+# Result set more than 100 lines will be hashed
+hash-threshold 100
+
+statement ok
+SET datafusion.execution.target_partitions = 2
+
+statement ok
+SET datafusion.execution.batch_size = 128
+
+statement ok
+SET datafusion.optimizer.repartition_aggregations = true
+
+statement ok
+SET datafusion.optimizer.prefer_existing_sort = true
+
+statement ok
+SET datafusion.execution.enable_migration_aggregate = true
+
+statement ok
+SET datafusion.runtime.memory_limit = '1M'
+
+# ==================================================================================
+# Input is fully ordered by group keys (input order by (a,b), query is 'group by a,b')
+# ==================================================================================
+
+# Fully ordered input uses the ordered partial and final streams without spill.
+query TT
+EXPLAIN ANALYZE
+SELECT v1, sum(v1 * 2)
+FROM generate_series(20000) AS t1(v1)
+GROUP BY v1
+----
+Plan with Metrics
+01)AggregateExec: mode=FinalPartitioned,<slt:ignore>ordering_mode=Sorted, metrics=[<slt:ignore>spill_count=0,<slt:ignore>]
+02)--RepartitionExec:<slt:ignore>preserve_order=true<slt:ignore>
+03)----AggregateExec: mode=Partial,<slt:ignore>ordering_mode=Sorted, metrics=[<slt:ignore>spill_count=0,<slt:ignore>]
+<slt:ignore>
+
+query II rowsort
+SELECT v1, sum(v1 * 2)
+FROM generate_series(20000) AS t1(v1)
+GROUP BY v1
+----
+40002 values hashing to 34c2b23730596cbd2489ed4a627c17d7
+
+# The same fully ordered query cannot spill and reports OOM under tighter memory.
+statement ok
+SET datafusion.runtime.memory_limit = '1K'
+
+query error Resources exhausted
+SELECT v1, sum(v1 * 2)
+FROM generate_series(20000) AS t1(v1)
+GROUP BY v1
+
+# ==================================================================================
+# Input is partially ordered by group keys (input order by (a), query is 'group by a,b')
+# 
+# Try different memory limits, ensure result is the same, but spill count differ
+
+# HACK: check `spilled_bytes=x KB` to ensure it has spilled. If it has not spilled,
+# the it shows `spilled_bytes = 0B`. Should better check spill_count, but it's not
+# stable due to ordered hash repartition, and `sqllogictest` don't support regex.
+# ==================================================================================
+
+statement ok
+SET datafusion.runtime.memory_limit = '2M'
+
+statement ok
+SET datafusion.optimizer.enable_round_robin_repartition = false
+
+# Round 1: The input is partially ordered and does not spill with a 2 MB limit.
+query TT
+EXPLAIN ANALYZE
+SELECT round(v1, -4), v1 % 5000, sum(v1 * 2)
+FROM generate_series(20000) AS t1(v1)
+GROUP BY round(v1, -4), v1 % 5000
+----
+Plan with Metrics
+01)AggregateExec: mode=FinalPartitioned,<slt:ignore>aggr=[sum(t1.v1 * Int64(2))], ordering_mode=PartiallySorted([0]), metrics=[<slt:ignore>spill_count=0,<slt:ignore>]
+02)--RepartitionExec:<slt:ignore>input_partitions=1, maintains_sort_order=true<slt:ignore>
+03)----AggregateExec: mode=Partial,<slt:ignore>ordering_mode=PartiallySorted([0]), metrics=[<slt:ignore>spill_count=0,<slt:ignore>]
+<slt:ignore>
+
+# All rounds should have the same result hash
+query III rowsort
+SELECT round(v1, -4), v1 % 5000, sum(v1 * 2)
+FROM generate_series(20000) AS t1(v1)
+GROUP BY round(v1, -4), v1 % 5000
+----
+45000 values hashing to e6ece4b4b86e6152a1c785e90ab5ba12
+
+# Round 2: The same query spills five times with a 600 KB limit.
+statement ok
+SET datafusion.runtime.memory_limit = '600K'
+
+query TT
+EXPLAIN ANALYZE
+SELECT round(v1, -4), v1 % 5000, sum(v1 * 2)
+FROM generate_series(20000) AS t1(v1)
+GROUP BY round(v1, -4), v1 % 5000
+----
+Plan with Metrics
+01)AggregateExec: mode=FinalPartitioned,<slt:ignore>aggr=[sum(t1.v1 * Int64(2))], ordering_mode=PartiallySorted([0]), metrics=[<slt:ignore>spilled_bytes=<slt:ignore> KB,<slt:ignore>]
+02)--RepartitionExec:<slt:ignore>input_partitions=1, maintains_sort_order=true<slt:ignore>
+03)----AggregateExec: mode=Partial,<slt:ignore>ordering_mode=PartiallySorted([0]), metrics=[<slt:ignore>spill_count=0,<slt:ignore>]
+<slt:ignore>
+
+# All rounds should have the same result hash
+query III rowsort
+SELECT round(v1, -4), v1 % 5000, sum(v1 * 2)
+FROM generate_series(20000) AS t1(v1)
+GROUP BY round(v1, -4), v1 % 5000
+----
+45000 values hashing to e6ece4b4b86e6152a1c785e90ab5ba12
+
+# Round 3: The same query spills six times with a 500 KB limit.
+statement ok
+SET datafusion.runtime.memory_limit = '500K'
+
+query TT
+EXPLAIN ANALYZE
+SELECT round(v1, -4), v1 % 5000, sum(v1 * 2)
+FROM generate_series(20000) AS t1(v1)
+GROUP BY round(v1, -4), v1 % 5000
+----
+Plan with Metrics
+01)AggregateExec: mode=FinalPartitioned,<slt:ignore>aggr=[sum(t1.v1 * Int64(2))], ordering_mode=PartiallySorted([0]), metrics=[<slt:ignore>spilled_bytes=<slt:ignore> KB,<slt:ignore>]
+02)--RepartitionExec:<slt:ignore>input_partitions=1, maintains_sort_order=true<slt:ignore>
+03)----AggregateExec: mode=Partial,<slt:ignore>ordering_mode=PartiallySorted([0]), metrics=[<slt:ignore>spill_count=0,<slt:ignore>]
+<slt:ignore>
+
+# All rounds should have the same result hash
+query III rowsort
+SELECT round(v1, -4), v1 % 5000, sum(v1 * 2)
+FROM generate_series(20000) AS t1(v1)
+GROUP BY round(v1, -4), v1 % 5000
+----
+45000 values hashing to e6ece4b4b86e6152a1c785e90ab5ba12
+
+# Exercise the same spill path with a variable-width string aggregate state in
+# the spilled payload. Keep one partial input partition so memory pressure is on
+# the ordered aggregate rather than a repartition merge.
+statement ok
+SET datafusion.runtime.memory_limit = '600K'
+
+# Ensures final aggregate has spill_count > 0
+query TT
+EXPLAIN ANALYZE
+SELECT round(v1, -4), v1 % 5000,
+  sum(v1 * 2), min(CAST(v1 % 2 AS VARCHAR))
+FROM generate_series(20000) AS t1(v1)
+GROUP BY round(v1, -4), v1 % 5000
+----
+Plan with Metrics
+01)AggregateExec: mode=FinalPartitioned,<slt:ignore>aggr=[sum(t1.v1 * Int64(2)), min(t1.v1 % Int64(2))], ordering_mode=PartiallySorted([0]), metrics=[<slt:ignore>spilled_bytes=<slt:ignore>KB,<slt:ignore>]
+02)--RepartitionExec:<slt:ignore>input_partitions=1, maintains_sort_order=true<slt:ignore>
+03)----AggregateExec: mode=Partial,<slt:ignore>aggr=[sum(t1.v1 * Int64(2)), min(t1.v1 % Int64(2))], ordering_mode=PartiallySorted([0]), metrics=[<slt:ignore>spill_count=0,<slt:ignore>]
+<slt:ignore>
+
+statement ok
+RESET datafusion.runtime.memory_limit
+
+statement ok
+RESET datafusion.optimizer.enable_round_robin_repartition
+
+statement ok
+RESET datafusion.execution.enable_migration_aggregate
+
+statement ok
+RESET datafusion.optimizer.prefer_existing_sort
+
+statement ok
+RESET datafusion.optimizer.repartition_aggregations
+
+statement ok
+RESET datafusion.execution.batch_size
+
+statement ok
+SET datafusion.execution.target_partitions = 4
+
+statement ok
+RESET datafusion.catalog.create_default_catalog_and_schema
