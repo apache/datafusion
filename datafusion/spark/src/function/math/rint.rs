@@ -22,11 +22,12 @@ use arrow::compute::cast;
 use arrow::datatypes::DataType::{
     Float32, Float64, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64,
 };
-use arrow::datatypes::{DataType, Float32Type, Float64Type};
-use datafusion_common::{Result, assert_eq_or_internal_err, exec_err};
+use arrow::datatypes::{DataType, Field, FieldRef, Float32Type, Float64Type};
+use datafusion_common::{Result, assert_eq_or_internal_err, exec_err, internal_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 
@@ -59,7 +60,15 @@ impl ScalarUDFImpl for SparkRint {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Float64)
+        internal_err!("return_field_from_args should be called instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        // Spark's `rint` is a null-intolerant `UnaryMathExpression`: the result is NULL
+        // exactly when the input is NULL, so propagate the child's nullability instead of
+        // defaulting to always-nullable. See #19144.
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        Ok(Arc::new(Field::new(self.name(), Float64, nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -154,5 +163,21 @@ mod tests {
         // Test zero
         let result = spark_rint(&[Arc::new(Float64Array::from(vec![0.0]))]).unwrap();
         assert_eq!(result.as_ref(), &Float64Array::from(vec![0.0]));
+    }
+
+    #[test]
+    fn test_rint_nullability() {
+        let rint = SparkRint::new();
+        for nullable in [true, false] {
+            let field = Arc::new(Field::new("c", Float64, nullable));
+            let out = rint
+                .return_field_from_args(ReturnFieldArgs {
+                    arg_fields: &[field],
+                    scalar_arguments: &[None],
+                })
+                .unwrap();
+            assert_eq!(out.data_type(), &Float64);
+            assert_eq!(out.is_nullable(), nullable);
+        }
     }
 }

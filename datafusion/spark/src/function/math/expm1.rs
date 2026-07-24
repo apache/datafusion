@@ -17,11 +17,12 @@
 
 use crate::function::error_utils::unsupported_data_type_exec_err;
 use arrow::array::{ArrayRef, AsArray};
-use arrow::datatypes::{DataType, Float64Type};
+use arrow::datatypes::{DataType, Field, FieldRef, Float64Type};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use std::sync::Arc;
 
@@ -55,7 +56,19 @@ impl ScalarUDFImpl for SparkExpm1 {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Float64)
+        internal_err!("return_field_from_args should be called instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        // Spark's `expm1` is a null-intolerant `UnaryMathExpression`: the result is NULL
+        // exactly when the input is NULL, so propagate the child's nullability instead of
+        // defaulting to always-nullable. See #19144.
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Float64,
+            nullable,
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -82,6 +95,27 @@ impl ScalarUDFImpl for SparkExpm1 {
                 format!("{}", DataType::Float64).as_str(),
                 &other.data_type(),
             )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_expm1_nullability() {
+        let expm1 = SparkExpm1::new();
+        for nullable in [true, false] {
+            let field = Arc::new(Field::new("c", DataType::Float64, nullable));
+            let out = expm1
+                .return_field_from_args(ReturnFieldArgs {
+                    arg_fields: &[field],
+                    scalar_arguments: &[None],
+                })
+                .unwrap();
+            assert_eq!(out.data_type(), &DataType::Float64);
+            assert_eq!(out.is_nullable(), nullable);
         }
     }
 }
