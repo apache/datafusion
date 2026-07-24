@@ -27,6 +27,7 @@
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use super::bitwise_stream::BitwiseSortMergeJoinStream;
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn};
@@ -51,6 +52,7 @@ use arrow_ord::sort::SortColumn;
 use arrow_schema::SchemaRef;
 use bytes::Bytes;
 use datafusion_common::JoinType::*;
+use datafusion_common::instant::Instant;
 use datafusion_common::{
     JoinSide, internal_err,
     test_util::{batches_to_sort_string, batches_to_string},
@@ -3814,7 +3816,7 @@ async fn consume_stream_until_finish_barrier_reached(
     let mut after_finish_barrier_reached = vec![];
     let mut background_task = JoinSet::new();
 
-    let mut start_time_since_last_ready = datafusion_common::instant::Instant::now();
+    let mut start_time_since_last_ready = Instant::now();
     loop {
         let next_item = output_stream.next();
 
@@ -3834,7 +3836,7 @@ async fn consume_stream_until_finish_barrier_reached(
                 } else {
                     output_batched.push(batch);
                 }
-                start_time_since_last_ready = datafusion_common::instant::Instant::now();
+                start_time_since_last_ready = Instant::now();
             }
             Poll::Ready(Some(Err(e))) => return Err(e),
             Poll::Ready(None) if !switch_to_finish_barrier => {
@@ -3861,9 +3863,7 @@ async fn consume_stream_until_finish_barrier_reached(
                 }
 
                 // Make sure the test doesn't run forever
-                if start_time_since_last_ready.elapsed()
-                    > std::time::Duration::from_secs(5)
-                {
+                if start_time_since_last_ready.elapsed() > Duration::from_secs(5) {
                     return internal_err!(
                         "Stream should have emitted data by now, but it's still pending. Output batches so far: {}",
                         output_batched.len()
@@ -4112,8 +4112,207 @@ impl RecordBatchStream for PendingStream {
 }
 
 /// Helper: collect all output from a BitwiseSortMergeJoinStream.
-async fn collect_stream(stream: BitwiseSortMergeJoinStream) -> Result<Vec<RecordBatch>> {
-    common::collect(Box::pin(stream)).await
+async fn collect_stream(stream: SendableRecordBatchStream) -> Result<Vec<RecordBatch>> {
+    common::collect(stream).await
+}
+
+// ==================== join_time metric tests ====================
+//
+// These verify that `join_time` measures only the join's own work: waiting
+// for either child input or for the consumer to take an emitted batch must
+// not be counted.
+
+/// Stream that sleeps `delay` before yielding each batch, to simulate a
+/// slow input.
+fn delayed_stream(
+    batches: Vec<RecordBatch>,
+    delay: Duration,
+) -> SendableRecordBatchStream {
+    let schema = batches[0].schema();
+    Box::pin(crate::stream::RecordBatchStreamAdapter::new(
+        schema,
+        futures::stream::iter(batches.into_iter().map(Ok)).then(move |item| async move {
+            tokio::time::sleep(delay).await;
+            item
+        }),
+    ))
+}
+
+/// Three 2-row batches with unique matching keys.
+fn join_time_batches() -> Vec<RecordBatch> {
+    vec![
+        build_table_i32(
+            ("a1", &vec![0, 1]),
+            ("b1", &vec![1, 2]),
+            ("c1", &vec![7, 8]),
+        ),
+        build_table_i32(
+            ("a1", &vec![2, 3]),
+            ("b1", &vec![3, 4]),
+            ("c1", &vec![7, 8]),
+        ),
+        build_table_i32(
+            ("a1", &vec![4, 5]),
+            ("b1", &vec![5, 6]),
+            ("c1", &vec![7, 8]),
+        ),
+    ]
+}
+
+/// Build a no-filter LeftSemi bitwise stream over the given input streams.
+/// The small batch size makes each outer batch surface as its own output
+/// batch, so a slow consumer test sees multiple emits.
+fn join_time_test_join(
+    outer: SendableRecordBatchStream,
+    inner: SendableRecordBatchStream,
+) -> (SendableRecordBatchStream, ExecutionPlanMetricsSet) {
+    let metrics = ExecutionPlanMetricsSet::new();
+    let outer_schema = outer.schema();
+    let (reservation, spill_manager, runtime_env) =
+        test_stream_resources(inner.schema(), &metrics);
+    let stream = BitwiseSortMergeJoinStream::try_new(
+        outer_schema,
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+        outer,
+        inner,
+        vec![Arc::new(Column::new("b1", 1)) as PhysicalExprRef],
+        vec![Arc::new(Column::new("b1", 1)) as PhysicalExprRef],
+        None,
+        LeftSemi,
+        2,
+        0,
+        &metrics,
+        reservation,
+        spill_manager,
+        runtime_env,
+    )
+    .unwrap();
+    (stream, metrics)
+}
+
+fn join_time_of(metrics: &ExecutionPlanMetricsSet) -> Duration {
+    Duration::from_nanos(
+        metrics
+            .clone_inner()
+            .sum_by_name("join_time")
+            .map(|m| m.as_usize())
+            .unwrap_or(0) as u64,
+    )
+}
+
+/// Run a join with the given injected `delay`, retrying with 4x the delay
+/// (up to 3 attempts) when `join_time < delay` fails.
+///
+/// This de-flakes the check without masking real bugs: a genuine exclusion
+/// bug makes `join_time` absorb the injected waits, so it scales with the
+/// delay and fails at every escalation level. Only a fixed-size disturbance
+/// (e.g. the OS preempting the test thread while the join_time clock is
+/// running) is filtered out, since it cannot grow 4x with the delay.
+///
+/// `run` returns `(join_time, wall)` for one join execution. Deterministic
+/// invariants (row counts, wall-time lower bounds) stay as asserts inside
+/// `run` — deliberately: a panic there fails the test immediately without
+/// retrying, since those cannot flake and escalation would only mask a real
+/// bug. Likewise `Err` from `run` (join execution failure) propagates
+/// immediately. Only the preemption-sensitive `join_time` check is retried.
+async fn check_join_time_excluded<F, Fut>(mut run: F) -> Result<()>
+where
+    F: FnMut(Duration) -> Fut,
+    Fut: Future<Output = Result<(Duration, Duration)>>,
+{
+    let mut delay = Duration::from_millis(50);
+    for attempt in 0..3 {
+        let (join_time, wall) = run(delay).await?;
+        if join_time < delay {
+            return Ok(());
+        }
+        assert!(
+            attempt < 2,
+            "join_time ({join_time:?}) should be well below the injected \
+             delay ({delay:?}) even after escalating retries; wall {wall:?}"
+        );
+        delay *= 4;
+    }
+    unreachable!()
+}
+
+/// join_time must not include time spent waiting for the outer input.
+#[tokio::test]
+async fn join_time_excludes_outer_input_wait() -> Result<()> {
+    check_join_time_excluded(|delay| async move {
+        let outer = delayed_stream(join_time_batches(), delay);
+        let inner = delayed_stream(join_time_batches(), Duration::ZERO);
+        let (stream, metrics) = join_time_test_join(outer, inner);
+
+        let start = Instant::now();
+        let batches = collect_stream(stream).await?;
+        let wall = start.elapsed();
+
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 6, "all outer rows should match");
+        assert!(
+            wall >= delay * 3,
+            "outer delays should dominate wall time, got {wall:?}"
+        );
+        Ok((join_time_of(&metrics), wall))
+    })
+    .await
+}
+
+/// join_time must not include time spent waiting for the inner input.
+#[tokio::test]
+async fn join_time_excludes_inner_input_wait() -> Result<()> {
+    check_join_time_excluded(|delay| async move {
+        let outer = delayed_stream(join_time_batches(), Duration::ZERO);
+        let inner = delayed_stream(join_time_batches(), delay);
+        let (stream, metrics) = join_time_test_join(outer, inner);
+
+        let start = Instant::now();
+        let batches = collect_stream(stream).await?;
+        let wall = start.elapsed();
+
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 6, "all outer rows should match");
+        assert!(
+            wall >= delay * 3,
+            "inner delays should dominate wall time, got {wall:?}"
+        );
+        Ok((join_time_of(&metrics), wall))
+    })
+    .await
+}
+
+/// join_time must not include time the consumer spends holding an emitted
+/// batch (the generator is suspended inside `emitter.emit` meanwhile).
+#[tokio::test]
+async fn join_time_excludes_consumer_wait() -> Result<()> {
+    check_join_time_excluded(|delay| async move {
+        let outer = delayed_stream(join_time_batches(), Duration::ZERO);
+        let inner = delayed_stream(join_time_batches(), Duration::ZERO);
+        let (mut stream, metrics) = join_time_test_join(outer, inner);
+
+        let start = Instant::now();
+        let mut output_batches = 0u32;
+        while let Some(batch) = stream.next().await {
+            batch?;
+            output_batches += 1;
+            // Simulate a slow consumer between emitted batches.
+            tokio::time::sleep(delay).await;
+        }
+        let wall = start.elapsed();
+
+        assert!(
+            output_batches >= 3,
+            "expected multiple emitted batches, got {output_batches}"
+        );
+        assert!(
+            wall >= delay * output_batches,
+            "consumer delays should dominate wall time, got {wall:?}"
+        );
+        Ok((join_time_of(&metrics), wall))
+    })
+    .await
 }
 
 /// Reproduces the buffer_inner_key_group re-entry bug:
@@ -4655,6 +4854,21 @@ async fn bitwise_spill_with_filter() -> Result<()> {
             assert!(
                 metrics.spilled_rows().unwrap() > 0,
                 "expected spilled_rows > 0 for {join_type:?}, batch_size={batch_size}"
+            );
+            let join_time = metrics
+                .sum_by_name("join_time")
+                .map(|m| m.as_usize())
+                .unwrap_or(0);
+            assert!(
+                join_time > 0,
+                "expected join_time > 0 for {join_type:?}, batch_size={batch_size}"
+            );
+            let output_rows = metrics.output_rows().unwrap_or(0);
+            let collected_rows: usize = spilled_result.iter().map(|b| b.num_rows()).sum();
+            assert_eq!(
+                output_rows, collected_rows,
+                "output_rows metric should match collected rows for \
+                 {join_type:?}, batch_size={batch_size}"
             );
 
             // Run without spilling and compare results
