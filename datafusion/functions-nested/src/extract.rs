@@ -970,7 +970,7 @@ where
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Returns the first non-null element in the array.",
+    description = "Returns the first non-null element in the array. Returns NULL if the array is empty or NULL.",
     syntax_example = "array_any_value(array)",
     sql_example = r#"```sql
 > select array_any_value([NULL, 1, 2, 3]);
@@ -1062,9 +1062,17 @@ where
 
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
         let start = offset_window[0];
+        let end = offset_window[1];
 
-        // array is null
+        // the list element is null
         if array.is_null(row_index) {
+            mutable.try_extend_nulls(1)?;
+            continue;
+        }
+
+        // the list element is empty; there is no value to take, so the result
+        // is NULL.
+        if start == end {
             mutable.try_extend_nulls(1)?;
             continue;
         }

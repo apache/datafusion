@@ -19,9 +19,8 @@
 /// when the feature integration-tests is built
 #[cfg(feature = "integration-tests")]
 mod tests {
-    use arrow::array::{Array, AsArray};
+    use arrow::array::{Array, AsArray, record_batch};
     use arrow::datatypes::DataType;
-    use datafusion::common::record_batch;
     use datafusion::error::Result;
     use datafusion::logical_expr::{ExpressionPlacement, ScalarUDF, ScalarUDFImpl};
     use datafusion::prelude::{SessionContext, col};

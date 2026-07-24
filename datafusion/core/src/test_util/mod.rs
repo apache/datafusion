@@ -45,7 +45,7 @@ use crate::execution::{SendableRecordBatchStream, SessionState, SessionStateBuil
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_catalog::Session;
-use datafusion_common::{DFSchemaRef, TableReference};
+use datafusion_common::{DFSchemaRef, TableReference, plan_err};
 use datafusion_expr::{
     CreateExternalTable, Expr, LogicalPlan, SortExpr, TableType,
     UserDefinedLogicalNodeCore,
@@ -187,8 +187,12 @@ impl TableProviderFactory for TestTableFactory {
         _: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
+        let Some(location) = cmd.locations.first() else {
+            return plan_err!("TestTableFactory requires at least one location");
+        };
+
         Ok(Arc::new(TestTableProvider {
-            url: cmd.location.to_string(),
+            url: location.clone(),
             schema: Arc::clone(cmd.schema.inner()),
         }))
     }

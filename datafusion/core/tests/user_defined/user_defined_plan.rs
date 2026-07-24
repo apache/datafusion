@@ -99,6 +99,7 @@ use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 use async_trait::async_trait;
 use datafusion_common::cast::as_string_view_array;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use futures::{Stream, StreamExt};
 
 /// Execute the specified sql and return the resulting record batches
@@ -518,7 +519,7 @@ impl OptimizerRule for TopKOptimizerRule {
         if let LogicalPlan::Sort(Sort { expr, input, .. }) = limit.input.as_ref()
             && expr.len() == 1
         {
-            // we found a sort with a single sort expr, replace with a a TopK
+            // we found a sort with a single sort expr, replace with a TopK
             return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                 node: Arc::new(TopKPlanNode {
                     k: fetch,
@@ -630,6 +631,7 @@ impl ExtensionPlanner for TopKPlanner {
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         _session_state: &SessionState,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         Ok(
             if let Some(topk_node) = node.as_any().downcast_ref::<TopKPlanNode>() {
