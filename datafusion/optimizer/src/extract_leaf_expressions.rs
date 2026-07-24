@@ -757,6 +757,66 @@ fn try_push_input(
     split_and_push_projection(proj, alias_generator)
 }
 
+/// Returns `true` if merging the extracted `pairs` (and the pass-through
+/// `columns_needed`) into `child` would inline a `KeepInPlace` definition into
+/// more than one reference site — e.g. a struct-returning UDF `f(c)` behind both
+/// `f(c)['a']` and `f(c)['b']`, or behind `f(c)['a']` and a bare `f(c)`.
+///
+/// `CommonSubexprEliminate` hoists such an expression into a shared column so it
+/// runs once; [`build_extraction_projection_impl`] then resolves that column
+/// back to its definition and re-duplicates it. Mirrors the
+/// `optimize_projections` merge guard (#8296): a compute-once expression used
+/// more than once stays in place.
+fn merge_would_duplicate_kept_expr(
+    pairs: &[(Expr, String)],
+    columns_needed: &IndexSet<Column>,
+    child: &Projection,
+) -> bool {
+    // Columns whose `KeepInPlace` definition must stay put; inlining one would
+    // duplicate a compute-once expression. Plain columns, pushable exprs, and
+    // literals are all cheap to duplicate, so only `KeepInPlace` counts.
+    let kept_columns: std::collections::HashSet<String> = child
+        .schema
+        .iter()
+        .zip(child.expr.iter())
+        .filter_map(|((qualifier, field), expr)| {
+            if matches!(expr.placement(), ExpressionPlacement::KeepInPlace) {
+                Some(Column::from((qualifier, field)).flat_name())
+            } else {
+                None
+            }
+        })
+        .collect();
+    if kept_columns.is_empty() {
+        return false;
+    }
+
+    // Count every site that references a kept column. A pair that references the
+    // same kept column twice still inlines one copy, so count each pair at most
+    // once per column.
+    let mut usage: HashMap<String, usize> = HashMap::new();
+    for (expr, _alias) in pairs {
+        let mut seen: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for col in expr.column_refs() {
+            let name = col.flat_name();
+            if kept_columns.contains(&name) && seen.insert(name.clone()) {
+                *usage.entry(name).or_insert(0) += 1;
+            }
+        }
+    }
+    // Pass-through / pre-existing-alias inputs are additional reference sites:
+    // a bare `f(c)` alongside `f(c)['a']` also pins the compute-once column, so
+    // counting only `pairs` under-counted and re-duplicated it (#23655).
+    for col in columns_needed {
+        let name = col.flat_name();
+        if kept_columns.contains(&name) {
+            *usage.entry(name).or_insert(0) += 1;
+        }
+    }
+    usage.values().any(|&count| count > 1)
+}
+
 /// Splits a projection into extractable pieces, pushes them towards leaf
 /// nodes, and adds a recovery projection if needed.
 ///
@@ -896,6 +956,14 @@ fn split_and_push_projection(
 
     // If no extractions found, nothing to do
     if extraction_pairs.is_empty() {
+        return Ok(None);
+    }
+
+    // Merging here would re-inline an expression `CommonSubexprEliminate` hoisted
+    // to run once, undoing it (issue #23655); leave the projection in place.
+    if let LogicalPlan::Projection(child) = input.as_ref()
+        && merge_would_duplicate_kept_expr(&extraction_pairs, columns_needed, child)
+    {
         return Ok(None);
     }
 
@@ -1246,8 +1314,9 @@ fn try_push_into_inputs(
 mod tests {
 
     use super::*;
+    use crate::common_subexpr_eliminate::CommonSubexprEliminate;
     use crate::optimize_projections::OptimizeProjections;
-    use crate::test::udfs::PlacementTestUDF;
+    use crate::test::udfs::{PlacementTestUDF, get_field_like};
     use crate::test::*;
     use crate::{Optimizer, OptimizerContext};
     use datafusion_expr::expr::ScalarFunction;
@@ -3159,6 +3228,104 @@ mod tests {
               Filter: __datafusion_extracted_1 IS NOT NULL
                 Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.id, test.user, leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_2
                   TableScan: test projection=[id, user]
+        "#);
+
+        Ok(())
+    }
+
+    /// Regression test for issue #23655: `f(c)['a'], f(c)['b']` on a
+    /// struct-returning UDF must evaluate `f(c)` once, not once per field access.
+    ///
+    /// `keep_in_place_udf` / `get_field_like` model `f(c)` and `f(c)[key]` — the
+    /// crate can't depend on the real `get_field` (see [`get_field_like`]).
+    /// Without the guard, `PushDownLeafProjections` re-inlines the shared UDF that
+    /// `CommonSubexprEliminate` hoisted and the passes oscillate to a double
+    /// evaluation.
+    #[test]
+    fn test_struct_returning_udf_evaluated_once() -> Result<()> {
+        let udf = ScalarUDF::new_from_impl(
+            PlacementTestUDF::new().with_placement(ExpressionPlacement::KeepInPlace),
+        );
+        let f_c = udf.call(vec![col("c")]);
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![
+                get_field_like(f_c.clone(), "a"),
+                get_field_like(f_c, "b"),
+            ])?
+            .build()?;
+
+        // The full four-rule interaction, default pass budget so any oscillation
+        // would surface here as a double evaluation.
+        let ctx = OptimizerContext::new();
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(CommonSubexprEliminate::new()),
+            Arc::new(ExtractLeafExpressions::new()),
+            Arc::new(PushDownLeafProjections::new()),
+            Arc::new(OptimizeProjections::new()),
+        ]);
+        let optimized = optimizer.optimize(plan, &ctx, |_, _| {})?;
+
+        // Every field access reads the UDF back through `__common_expr_1`; none
+        // wraps a fresh `keep_in_place_udf(...)` call. Asserted explicitly so a
+        // careless snapshot re-accept can't quietly restore the double evaluation.
+        let formatted = format!("{optimized}");
+        assert_eq!(
+            formatted
+                .matches("get_field_like(keep_in_place_udf")
+                .count(),
+            0,
+            "struct-returning UDF must not be re-evaluated inside a field access; got:\n{formatted}"
+        );
+
+        insta::assert_snapshot!(formatted, @r#"
+        Projection: get_field_like(__common_expr_1 AS keep_in_place_udf(test.c), Utf8("a")), get_field_like(__common_expr_1 AS keep_in_place_udf(test.c), Utf8("b"))
+          Projection: keep_in_place_udf(test.c) AS __common_expr_1
+            TableScan: test projection=[c]
+        "#);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_struct_returning_udf_evaluated_once_with_bare_reference() -> Result<()> {
+        // Regression for the `SELECT f(c)['a'], f(c)` shape: the struct UDF is
+        // referenced once through a field access and once as a bare value. The
+        // bare reference is tracked in `columns_needed`, not `extraction_pairs`,
+        // so a guard that counted only pairs would re-inline `f(c)` and evaluate
+        // it twice (#23655).
+        let udf = ScalarUDF::new_from_impl(
+            PlacementTestUDF::new().with_placement(ExpressionPlacement::KeepInPlace),
+        );
+        let f_c = udf.call(vec![col("c")]);
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![get_field_like(f_c.clone(), "a"), f_c])?
+            .build()?;
+
+        let ctx = OptimizerContext::new();
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(CommonSubexprEliminate::new()),
+            Arc::new(ExtractLeafExpressions::new()),
+            Arc::new(PushDownLeafProjections::new()),
+            Arc::new(OptimizeProjections::new()),
+        ]);
+        let optimized = optimizer.optimize(plan, &ctx, |_, _| {})?;
+
+        // The field access must read the UDF back through `__common_expr_1`, not
+        // wrap a fresh `keep_in_place_udf(...)` call. Asserted explicitly so a
+        // careless snapshot re-accept can't quietly restore the double evaluation.
+        let formatted = format!("{optimized}");
+        assert_eq!(
+            formatted
+                .matches("get_field_like(keep_in_place_udf")
+                .count(),
+            0,
+            "struct-returning UDF must not be re-evaluated inside a field access; got:\n{formatted}"
+        );
+
+        insta::assert_snapshot!(formatted, @r#"
+        Projection: get_field_like(__common_expr_1 AS keep_in_place_udf(test.c), Utf8("a")), __common_expr_1 AS keep_in_place_udf(test.c)
+          Projection: keep_in_place_udf(test.c) AS __common_expr_1
+            TableScan: test projection=[c]
         "#);
 
         Ok(())
