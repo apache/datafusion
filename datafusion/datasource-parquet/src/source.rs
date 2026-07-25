@@ -866,14 +866,14 @@ impl FileSource for ParquetSource {
         source.predicate = Some(predicate);
         source = source.with_pushdown_filters(pushdown_filters);
         let source = Arc::new(source);
-        // If pushdown_filters is false we tell our parents that they still have to handle the filters,
-        // even if we updated the predicate to include the filters (they will only be used for stats pruning).
-        if !pushdown_filters {
-            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-                vec![PushedDown::No; filters.len()],
-            )
-            .with_updated_node(source));
-        }
+        // The parquet scan always accepts pushable filters: report each
+        // pushable filter as accepted (`Yes`) so the parent `FilterExec` is
+        // removed. The scan now owns these filters and guarantees they are
+        // applied — as a parquet `RowFilter` when `pushdown_filters` is
+        // enabled, or as the in-scan post-scan filter otherwise (and for any
+        // conjunct the `RowFilter` cannot evaluate on a given file). The
+        // `pushdown_filters` config is preserved because it still controls the
+        // `RowFilter` vs. post-scan placement downstream.
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
             filters.iter().map(|f| f.discriminant).collect(),
         )

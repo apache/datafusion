@@ -265,6 +265,12 @@ pub(crate) struct PushDecoderStreamState {
     pub(crate) row_group_pruner: Option<RowGroupPruner>,
     /// Count of row groups skipped at runtime by [`Self::row_group_pruner`].
     pub(crate) row_groups_pruned_dynamic: Count,
+    /// Stream-level remaining row limit, enforced *after* the post-scan
+    /// filter. `Some` only when the file has a post-scan filter (which makes
+    /// the decoder-local `with_limit` unsafe — the decoder would short-circuit
+    /// before the filter rejects enough rows); `None` otherwise, in which case
+    /// the limit is enforced inside the decoder via `DecoderBuilderConfig`.
+    pub(crate) remaining_limit: Option<usize>,
 }
 
 impl PushDecoderStreamState {
@@ -293,12 +299,62 @@ impl PushDecoderStreamState {
     /// with `unfold`'s ownership across yield points.
     async fn transition(mut self) -> Option<(Result<RecordBatch>, Self)> {
         loop {
+            // The stream-level limit (set only when a post-scan filter made
+            // the decoder-local limit unsafe) is exhausted — stop.
+            if self.remaining_limit == Some(0) {
+                return None;
+            }
+
             // Step 1: drain a batch from the active reader if any.
             if let Some(reader) = self.active_reader.as_mut() {
                 match reader.next() {
                     Some(Ok(batch)) => {
                         let mut timer = self.baseline_metrics.elapsed_compute().timer();
                         self.copy_arrow_reader_metrics();
+
+                        // Apply the in-scan post-scan filter (if any) before
+                        // limit slicing and projection. The decoder's
+                        // projection mask already covers the predicate's
+                        // columns.
+                        let batch = if let Some(filter) =
+                            self.decoder_projection.post_scan_filter()
+                        {
+                            match filter.filter(&batch) {
+                                Ok(b) => b,
+                                Err(e) => {
+                                    timer.stop();
+                                    drop(timer);
+                                    return Some((Err(e), self));
+                                }
+                            }
+                        } else {
+                            batch
+                        };
+
+                        // Don't yield empty batches downstream — keep pulling
+                        // until we have rows or the decoder is exhausted.
+                        if batch.num_rows() == 0 {
+                            timer.stop();
+                            drop(timer);
+                            continue;
+                        }
+
+                        // Enforce the stream-level limit *after* the post-scan
+                        // filter. `remaining_limit` is `Some` only when a
+                        // post-scan filter is present; otherwise the limit was
+                        // pushed into the decoder and this is a no-op.
+                        let batch = if let Some(remaining) = self.remaining_limit {
+                            if batch.num_rows() > remaining {
+                                self.remaining_limit = Some(0);
+                                batch.slice(0, remaining)
+                            } else {
+                                self.remaining_limit = Some(remaining - batch.num_rows());
+                                batch
+                            }
+                        } else {
+                            batch
+                        };
+
                         let result = self.project_batch(&batch);
                         timer.stop();
                         drop(timer);

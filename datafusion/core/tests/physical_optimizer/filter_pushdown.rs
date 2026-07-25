@@ -1083,7 +1083,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE hash_repartition % 12 WHEN 5 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) WHEN 8 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) ELSE false END ]
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb ]
     "
     );
 
@@ -1101,7 +1101,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ]
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb ]
     "
     );
 
@@ -1279,7 +1279,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
     -     HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
     -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ]
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb ]
     "
     );
 
@@ -2552,12 +2552,18 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
         cp,
     )) as Arc<dyn ExecutionPlan>;
 
-    // Apply the optimization with config setting that forces HashTable strategy
+    // Apply the optimization with config setting that forces HashTable strategy.
+    // Membership gate is opt-in (default false since #23701); this test explicitly
+    // exercises `HashTableLookupExpr`, so enable it here.
     let session_config = SessionConfig::default()
         .with_batch_size(10)
         .set_usize("datafusion.optimizer.hash_join_inlist_pushdown_max_size", 1)
         .set_bool("datafusion.execution.parquet.pushdown_filters", true)
-        .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", true);
+        .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", true)
+        .set_bool(
+            "datafusion.optimizer.enable_hash_join_dynamic_membership_filter",
+            true,
+        );
     let plan = FilterPushdown::new_post_optimization()
         .optimize(plan, session_config.options())
         .unwrap();
@@ -2703,12 +2709,18 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
         cp,
     )) as Arc<dyn ExecutionPlan>;
 
-    // Apply the optimization with config setting that forces HashTable strategy
+    // Apply the optimization with config setting that forces HashTable strategy.
+    // Membership gate is opt-in (default false since #23701); this test explicitly
+    // exercises `HashTableLookupExpr`, so enable it here.
     let session_config = SessionConfig::default()
         .with_batch_size(10)
         .set_usize("datafusion.optimizer.hash_join_inlist_pushdown_max_size", 1)
         .set_bool("datafusion.execution.parquet.pushdown_filters", true)
-        .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", true);
+        .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", true)
+        .set_bool(
+            "datafusion.optimizer.enable_hash_join_dynamic_membership_filter",
+            true,
+        );
     let plan = FilterPushdown::new_post_optimization()
         .optimize(plan, session_config.options())
         .unwrap();
