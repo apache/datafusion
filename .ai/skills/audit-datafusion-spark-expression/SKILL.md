@@ -206,6 +206,31 @@ other arguments, so a NULL in one argument suppresses an error the other
 argument would otherwise raise, even under ANSI mode. An implementation that
 validates first and checks nullness second raises where Spark returns NULL.
 
+**Arrow kernel semantics are not Java semantics.** A `datafusion-spark`
+function is usually a thin arrangement of Arrow kernels, and the kernels do not
+share Java's rules. Check each one the implementation leans on:
+
+- **Comparison kernels order floats by total order**, so `-0.0` compares as
+  *less than* `0.0` rather than equal to it. Any `eq`/`lt` used to detect a
+  special value, such as a zero divisor, silently misses `-0.0`. Java compares
+  them as equal. This is easy to miss because `-0.0` almost never appears in
+  hand-written test values, so write it in deliberately.
+- **Arithmetic kernels are checked, not wrapping.** Java wraps silently on
+  overflow, so a checked Arrow kernel raises where Spark returns a wrapped
+  value. Where Spark's own expression is written in `Int` arithmetic, a
+  wrapping kernel is the faithful choice, not the reckless one.
+- **Java promotes `byte` and `short` operands to `int`.** A Spark expression
+  whose Scala source reads `(r + n)` on `Byte` operands is evaluated at `Int`
+  width and cannot overflow, while the same source on `Int` operands can.
+  Reproducing it at `Int8` width wraps where Spark does not.
+- **Kernel coverage is type dependent.** Arrow's `rem` raises on a zero divisor
+  for integers and decimals but returns `NaN` for floats, so an ANSI check that
+  relies on the kernel to raise silently does nothing on the float path.
+
+Read the Scala source as arithmetic to be reproduced, not as pseudocode to be
+paraphrased. Then test each of these against a live Spark rather than reasoning
+about them.
+
 **`ColumnarValue` shape dispatch.** A two-argument function has four shape
 combinations, and each needs its own branch:
 `(Scalar, Scalar)`, `(Array, Scalar)`, `(Scalar, Array)`, `(Array, Array)`.
@@ -283,9 +308,20 @@ let ansi_mode = config_options.execution.enable_ansi_mode;
 
 `datafusion/spark/src/function/math/abs.rs` and
 `datafusion/spark/src/function/math/modulus.rs` are the in-repo precedents for
-both the plumbing and the test layout. Match Spark's error *message text*, which
-DataFusion can express, and note in the audit that DataFusion does not model
-Spark's error classes or SQLSTATE values.
+both the plumbing and the test layout. DataFusion does not model Spark's error
+classes or SQLSTATE values, so say that in the audit either way.
+
+Whether to match Spark's message text depends on who constructs the error:
+
+- **The function constructs it** (an `exec_err!` you write). Match Spark's text
+  exactly, including trailing punctuation, and assert it in the `.slt`.
+- **An Arrow kernel constructs it** (`rem`, `add`, a cast). You do not control
+  the wording. Assert only that an error is raised, note the divergence in a
+  comment, and file an issue for the message text rather than contorting the
+  implementation to restate an Arrow error in Spark's words.
+
+Do not read the `abs.rs` precedent as licence to invent DataFusion-flavoured
+text for an error you *do* construct. Those sites predate this rule.
 
 **Rust unit tests.** Read the `#[test]` blocks in the same file. Per the crate
 README, direct invocation through `test_scalar_function!()` bypasses input
@@ -443,6 +479,10 @@ Write this to the scratchpad as `spark_ground_truth.py`. It is deliberately not
 committed to the repo: `pyspark` is too heavy a dependency to add to the `uv`
 workspace in `dev/`, and `datafusion/spark/scripts/` is claimed by other
 in-flight work.
+
+Write it unconditionally, overwriting whatever is already there. A previous
+audit may have left an older copy in the same scratchpad, and silently reusing
+it means auditing with a harness whose fixes you do not have.
 
 ```python
 #!/usr/bin/env python3
@@ -634,6 +674,12 @@ cargo test --test sqllogictests -- spark/<category>/$ARGUMENTS   # expect FAIL
 git stash pop
 cargo test --test sqllogictests -- spark/<category>/$ARGUMENTS   # expect PASS
 ```
+
+This verifies SLT tests only. Rust unit tests live inside the implementation
+file, so stashing that file stashes the tests with it and the run proves
+nothing about them. For a unit test, get the fail-before evidence by reverting
+the implementation body by hand, or by writing the test first and watching it
+fail before the fix exists.
 
 Read the failure list from the first run and confirm it names the queries you
 added. Do not judge the run by an exit code you captured through a pipe:
