@@ -709,6 +709,44 @@ physical_plan
 statement ok
 drop table multiple_ordered_table;
 
+
+# Create a table having dependent sort order
+statement ok
+CREATE EXTERNAL TABLE multiple_ordered_table (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER,
+  d INTEGER
+)
+STORED AS CSV
+WITH ORDER (a ASC, b ASC, c ASC)
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
+
+# Test without repartition so removal of sort is more apperant
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query TT
+EXPLAIN SELECT array_repeat(a, 2) AS a_, array_repeat(b, 2) AS b_, array_repeat(c, 2) AS c_
+FROM multiple_ordered_table
+ORDER BY a_, b_, c_;
+----
+logical_plan
+01)Sort: a_ ASC NULLS LAST, b_ ASC NULLS LAST, c_ ASC NULLS LAST
+02)--Projection: array_repeat(multiple_ordered_table.a, Int64(2)) AS a_, array_repeat(multiple_ordered_table.b, Int64(2)) AS b_, array_repeat(multiple_ordered_table.c, Int64(2)) AS c_
+03)----TableScan: multiple_ordered_table projection=[a, b, c]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[array_repeat(a@1, 2) as a_, array_repeat(b@2, 2) as b_, array_repeat(c@3, 2) as c_], file_type=csv, has_header=true
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
+# reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+drop table multiple_ordered_table;
+
 # Create tables having some ordered columns. In the next step, we will expect to observe that scalar
 # functions, such as mathematical functions like atan(), ceil(), sqrt(), or date_time functions
 # like date_bin() and date_trunc(), will maintain the order of its argument columns.

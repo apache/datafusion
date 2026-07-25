@@ -31,7 +31,8 @@ use arrow::datatypes::{
 };
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::types::{NativeType, logical_int64};
-use datafusion_common::{Result, exec_datafusion_err};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err};
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -139,6 +140,24 @@ impl ScalarUDFImpl for ArrayRepeat {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {
+        if self.strictly_order_preserving(inputs)? {
+            Ok(inputs[0].sort_properties.clone())
+        } else {
+            Ok(SortProperties::Unordered)
+        }
+    }
+
+    fn strictly_order_preserving(&self, inputs: &[ExprProperties]) -> Result<bool> {
+        // Only keep ordering if:
+        // 1. repeat count is literal: so all values will be repeated by the same amount and ties will be kept ties
+        // 2. > 0 so all values are kept in their respected ordering (having repeat 0 will cause all values to be ties) 
+        match (inputs[1].sort_properties, inputs[1].range.lower()) {
+            (SortProperties::Singleton, ScalarValue::Int64(Some(v))) if *v > 0 => Ok(true),
+            _ => Ok(false)
+        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
