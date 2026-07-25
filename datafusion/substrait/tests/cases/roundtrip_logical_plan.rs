@@ -2405,7 +2405,7 @@ fn check_post_join_filters(rel: &Rel) -> Result<()> {
     }
 }
 
-async fn verify_post_join_filter_value(proto: Box<Plan>) -> Result<()> {
+fn verify_post_join_filter_value(proto: &Plan) -> Result<()> {
     for relation in &proto.relations {
         match relation.rel_type.as_ref() {
             Some(rt) => match rt {
@@ -2444,10 +2444,7 @@ fn count_read_filters(rel: &Rel, filter_count: &mut u32) -> Result<()> {
     }
 }
 
-async fn assert_read_filter_count(
-    proto: Box<Plan>,
-    expected_filter_count: u32,
-) -> Result<()> {
+fn assert_read_filter_count(proto: &Plan, expected_filter_count: u32) -> Result<()> {
     let mut filter_count: u32 = 0;
     for relation in &proto.relations {
         match relation.rel_type.as_ref() {
@@ -2825,7 +2822,7 @@ async fn roundtrip_verify_post_join_filter(sql: &str) -> Result<()> {
     let proto = roundtrip_with_ctx(sql, ctx).await?;
 
     // verify that the join filters are None
-    verify_post_join_filter_value(proto).await
+    verify_post_join_filter_value(&proto)
 }
 
 async fn roundtrip_verify_read_filter_count(
@@ -2836,7 +2833,7 @@ async fn roundtrip_verify_read_filter_count(
     let proto = roundtrip_with_ctx(sql, ctx).await?;
 
     // verify that filter counts in read relations are as expected
-    assert_read_filter_count(proto, expected_filter_count).await
+    assert_read_filter_count(&proto, expected_filter_count)
 }
 
 async fn roundtrip_all_types(sql: &str) -> Result<()> {

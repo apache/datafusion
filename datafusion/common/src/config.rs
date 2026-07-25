@@ -858,22 +858,22 @@ config_namespace! {
         /// may create spill files larger than the limit.
         ///
         /// Default: 128 MB
-        pub max_spill_file_size_bytes: usize, default = 128 * 1024 * 1024
+        pub max_spill_file_size_bytes: ConfigNonZeroUsize, default = non_zero_usize_default(128 * 1024 * 1024)
 
         /// Number of files to read in parallel when inferring schema and statistics
-        pub meta_fetch_concurrency: usize, default = 32
+        pub meta_fetch_concurrency: ConfigNonZeroUsize, default = non_zero_usize_default(32)
 
         /// Guarantees a minimum level of output files running in parallel.
         /// RecordBatches will be distributed in round robin fashion to each
         /// parallel writer. Each writer is closed and a new file opened once
         /// soft_max_rows_per_output_file is reached.
-        pub minimum_parallel_output_files: usize, default = 4
+        pub minimum_parallel_output_files: ConfigNonZeroUsize, default = non_zero_usize_default(4)
 
         /// Target number of rows in output files when writing multiple.
         /// This is a soft max, so it can be exceeded slightly. There also
         /// will be one file smaller than the limit if the total
         /// number of rows written is not roughly divisible by the soft max
-        pub soft_max_rows_per_output_file: usize, default = 50000000
+        pub soft_max_rows_per_output_file: ConfigNonZeroUsize, default = non_zero_usize_default(50000000)
 
         /// This is the maximum number of RecordBatches buffered
         /// for each output file being worked. Higher values can potentially
@@ -1932,7 +1932,8 @@ impl ConfigOptions {
                 }
                 return Ok(());
             }
-            return ConfigField::set(self, inner_key, value);
+            return ConfigField::set(self, inner_key, value)
+                .map_err(|e| e.context(format!("Error setting config {key}")));
         }
 
         if !self.extensions.0.contains_key(prefix)
@@ -3771,6 +3772,7 @@ impl Display for OutputFormat {
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "parquet")]
+    use crate::assert_contains;
     use crate::config::TableParquetOptions;
     use crate::config::{
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
@@ -4331,7 +4333,7 @@ mod tests {
         let err = config
             .set("datafusion.execution.parquet.writer_version", "3.0")
             .unwrap_err();
-        assert_eq!(
+        assert_contains!(
             err.to_string(),
             "Invalid or Unsupported Configuration: Invalid parquet writer version: 3.0. Expected one of: 1.0, 2.0"
         );
