@@ -31,8 +31,15 @@ static GLOBAL: MiMalloc = MiMalloc;
 #[derive(Debug, Parser, PartialEq)]
 #[clap(author, version, about, long_about= None)]
 struct CustomArgs {
-    #[command(flatten)]
-    cli_args: CliArgs,
+
+    #[arg(
+        long,
+        allow_hyphen_values = true,
+        num_args = 0..,
+        value_terminator = "--datafusion-cli-end"
+    )]
+    datafusion_cli_start: Option<Vec<String>>,
+
     #[clap(long, help = "Register the hello udf function", action = clap::ArgAction::Set, default_value_t = true)]
     register_hello: bool,
 }
@@ -62,7 +69,12 @@ pub async fn main() -> Result<(), CliError> {
         }),
     );
     let args = CustomArgs::try_parse()?;
-    let cli_session = CliSession::builder().with_args(args.cli_args).build()?;
+    let mut cli_args_input = vec![std::env::args().nth(0).unwrap()];
+    if let Some(datafusion_args) = args.datafusion_cli_start {
+        cli_args_input.extend(datafusion_args);
+    }
+    let cli_args = CliArgs::try_parse_from(cli_args_input)?;
+    let cli_session = CliSession::builder().with_args(cli_args).build()?;
     let ctx: &SessionContext = cli_session.session_context();
     if args.register_hello {
         ctx.register_udf(hello_udf);
