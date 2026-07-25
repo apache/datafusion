@@ -120,4 +120,8 @@ name = "next_day"
 
 [[bench]]
 harness = false
+name = "url_decode"
+
+[[bench]]
+harness = false
 name = "floor"
