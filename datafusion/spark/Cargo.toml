@@ -104,4 +104,16 @@ name = "sha2"
 
 [[bench]]
 harness = false
+name = "bin"
+
+[[bench]]
+harness = false
+name = "soundex_quote"
+
+[[bench]]
+harness = false
+name = "url_encode"
+
+[[bench]]
+harness = false
 name = "floor"
