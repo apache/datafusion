@@ -1205,6 +1205,31 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_check_bigger_cast_precision_loss() {
+        use DataType::*;
+
+        // Exact conversions without precision loss
+        assert!(CastExpr::check_bigger_cast(&Int16, &Int8));
+        assert!(CastExpr::check_bigger_cast(&Int64, &Int32));
+        assert!(CastExpr::check_bigger_cast(&Float32, &Int16));
+        assert!(CastExpr::check_bigger_cast(&Float32, &UInt16));
+        assert!(CastExpr::check_bigger_cast(&Float64, &Int32));
+        assert!(CastExpr::check_bigger_cast(&Float64, &UInt32));
+        assert!(CastExpr::check_bigger_cast(&LargeUtf8, &Utf8));
+
+        // Precision-losing int-to-float conversions should return false
+        assert!(!CastExpr::check_bigger_cast(&Float32, &Int32));
+        assert!(!CastExpr::check_bigger_cast(&Float32, &UInt32));
+        assert!(!CastExpr::check_bigger_cast(&Float64, &Int64));
+        assert!(!CastExpr::check_bigger_cast(&Float64, &UInt64));
+
+        // Signed <-> Unsigned conversions should return false (not order-preserving due to negative values)
+        assert!(!CastExpr::check_bigger_cast(&UInt16, &Int8));
+        assert!(!CastExpr::check_bigger_cast(&UInt32, &Int16));
+        assert!(!CastExpr::check_bigger_cast(&Int16, &UInt8));
+    }
 }
 
 /// Tests for the `try_to_proto` / `try_from_proto` hooks.
@@ -1365,25 +1390,5 @@ mod proto_tests {
             err,
             DataFusionError::Internal(msg) if msg.contains("call 1")
         ));
-    }
-
-    #[test]
-    fn test_check_bigger_cast_precision_loss() {
-        use DataType::*;
-
-        // Exact conversions without precision loss
-        assert!(CastExpr::check_bigger_cast(&Int16, &Int8));
-        assert!(CastExpr::check_bigger_cast(&Int64, &Int32));
-        assert!(CastExpr::check_bigger_cast(&Float32, &Int16));
-        assert!(CastExpr::check_bigger_cast(&Float32, &UInt16));
-        assert!(CastExpr::check_bigger_cast(&Float64, &Int32));
-        assert!(CastExpr::check_bigger_cast(&Float64, &UInt32));
-        assert!(CastExpr::check_bigger_cast(&LargeUtf8, &Utf8));
-
-        // Precision-losing int-to-float conversions should return false
-        assert!(!CastExpr::check_bigger_cast(&Float32, &Int32));
-        assert!(!CastExpr::check_bigger_cast(&Float32, &UInt32));
-        assert!(!CastExpr::check_bigger_cast(&Float64, &Int64));
-        assert!(!CastExpr::check_bigger_cast(&Float64, &UInt64));
     }
 }
