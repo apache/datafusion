@@ -425,6 +425,10 @@ pub fn parse_protobuf_partitioning(
         .transpose()
         .map(Option::flatten)
 }
+#[deprecated(
+    since = "55.0.0",
+    note = "unused by DataFusion; `ParquetSource::try_from_proto` parses the schema itself"
+)]
 pub fn parse_protobuf_file_scan_schema(
     proto: &protobuf::FileScanExecConf,
 ) -> Result<Arc<Schema>> {

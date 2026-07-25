@@ -27,8 +27,6 @@ use datafusion_common::config::CsvOptions;
 use datafusion_common::{
     DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
 };
-#[cfg(feature = "parquet")]
-use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::DataSinkExec;
@@ -41,13 +39,9 @@ use datafusion_datasource_csv::source::CsvSource;
 use datafusion_datasource_json::file_format::JsonSink;
 use datafusion_datasource_json::source::JsonSource;
 #[cfg(feature = "parquet")]
-use datafusion_datasource_parquet::CachedParquetFileReaderFactory;
-#[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::ParquetSink;
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::source::ParquetSource;
-#[cfg(feature = "parquet")]
-use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
@@ -1090,8 +1084,15 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::JsonScan(scan) => {
                 self.try_into_json_scan_physical_plan(scan, ctx, proto_converter)
             }
-            PhysicalPlanType::ParquetScan(scan) => {
-                self.try_into_parquet_scan_physical_plan(scan, ctx, proto_converter)
+            PhysicalPlanType::ParquetScan(_) => {
+                #[cfg(feature = "parquet")]
+                {
+                    ParquetSource::try_from_proto(self.node(), &decode_ctx)
+                }
+                #[cfg(not(feature = "parquet"))]
+                panic!(
+                    "Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled"
+                )
             }
             PhysicalPlanType::AvroScan(scan) => {
                 self.try_into_avro_scan_physical_plan(scan, ctx, proto_converter)
@@ -1430,6 +1431,10 @@ pub trait PhysicalPlanNodeExt: Sized {
     }
 
     #[cfg_attr(not(feature = "parquet"), expect(unused_variables))]
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `ParquetSource` deserializes itself via `ParquetSource::try_from_proto`"
+    )]
     fn try_into_parquet_scan_physical_plan(
         &self,
         scan: &protobuf::ParquetScanExecNode,
@@ -1438,74 +1443,17 @@ pub trait PhysicalPlanNodeExt: Sized {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         #[cfg(feature = "parquet")]
         {
-            let schema = from_proto::parse_protobuf_file_scan_schema(
-                scan.base_conf.as_ref().unwrap(),
-            )?;
-
-            // Check if there's a projection and use projected schema for predicate parsing
-            let base_conf = scan.base_conf.as_ref().unwrap();
-            let predicate_schema = if !base_conf.projection.is_empty() {
-                // Create projected schema for parsing the predicate
-                let projected_fields: Vec<_> = base_conf
-                    .projection
-                    .iter()
-                    .map(|&i| schema.field(i as usize).clone())
-                    .collect();
-                Arc::new(Schema::new(projected_fields))
-            } else {
-                schema
+            let node = protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::ParquetScan(scan.clone())),
             };
-
-            let predicate = scan
-                .predicate
-                .as_ref()
-                .map(|expr| {
-                    proto_converter.proto_to_physical_expr(
-                        expr,
-                        predicate_schema.as_ref(),
-                        ctx,
-                    )
-                })
-                .transpose()?;
-            let mut options = datafusion_common::config::TableParquetOptions::default();
-
-            if let Some(table_options) = scan.parquet_options.as_ref() {
-                options = table_options.try_into()?;
-            }
-
-            // Parse table schema with partition columns
-            let table_schema = parse_table_schema_from_proto(base_conf)?;
-            let object_store_url = match base_conf.object_store_url.is_empty() {
-                false => ObjectStoreUrl::parse(&base_conf.object_store_url)?,
-                true => ObjectStoreUrl::local_filesystem(),
-            };
-            let store = ctx
-                .task_ctx()
-                .runtime_env()
-                .object_store(object_store_url)?;
-            let metadata_cache = ctx
-                .task_ctx()
-                .runtime_env()
-                .cache_manager
-                .get_file_metadata_cache();
-            let reader_factory =
-                Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
-
-            let mut source = ParquetSource::new(table_schema)
-                .with_parquet_file_reader_factory(reader_factory)
-                .with_table_parquet_options(options);
-
-            if let Some(predicate) = predicate {
-                source = source.with_predicate(predicate);
-            }
-            let base_config = parse_protobuf_file_scan_config(
-                base_conf,
+            let decoder = ConverterPlanDecoder {
                 ctx,
                 proto_converter,
-                Arc::new(source),
-            )?;
-            Ok(DataSourceExec::from_data_source(base_config))
+            };
+            let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+            ParquetSource::try_from_proto(&node, &decode_ctx)
         }
+
         #[cfg(not(feature = "parquet"))]
         panic!(
             "Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled"
@@ -2635,29 +2583,6 @@ pub trait PhysicalPlanNodeExt: Sized {
                     )),
                 }));
             }
-        }
-
-        #[cfg(feature = "parquet")]
-        if let Some((maybe_parquet, conf)) =
-            data_source_exec.downcast_to_file_source::<ParquetSource>()
-        {
-            let predicate = conf
-                .filter()
-                .map(|pred| proto_converter.physical_expr_to_proto(&pred, codec))
-                .transpose()?;
-            return Ok(Some(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::ParquetScan(
-                    protobuf::ParquetScanExecNode {
-                        base_conf: Some(serialize_file_scan_config(
-                            maybe_parquet,
-                            codec,
-                            proto_converter,
-                        )?),
-                        predicate,
-                        parquet_options: Some(conf.table_parquet_options().try_into()?),
-                    },
-                )),
-            }));
         }
 
         #[cfg(feature = "avro")]

@@ -1057,6 +1057,142 @@ impl FileSource for ParquetSource {
             inner: Arc::new(new_source) as Arc<dyn FileSource>,
         })
     }
+
+    /// Emit a `ParquetScan` node wrapping the shared base config plus the
+    /// Parquet-specific pushdown predicate and `TableParquetOptions`.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        base: &FileScanConfig,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> datafusion_common::Result<
+        Option<datafusion_proto_models::protobuf::PhysicalPlanNode>,
+    > {
+        use datafusion_proto_models::protobuf;
+        use protobuf::physical_plan_node::PhysicalPlanType;
+
+        let predicate = self
+            .filter()
+            .map(|pred| ctx.encode_expr(&pred))
+            .transpose()?;
+
+        let node = protobuf::ParquetScanExecNode {
+            base_conf: Some(base.try_to_proto(ctx)?),
+            predicate,
+            parquet_options: Some(self.table_parquet_options().try_into()?),
+        };
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::ParquetScan(node)),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl ParquetSource {
+    /// Reconstruct a `DataSourceExec` (wrapping a `FileScanConfig` over a
+    /// `ParquetSource`) from a `ParquetScan` [`PhysicalPlanNode`].
+    ///
+    /// The inverse of [`FileSource::try_to_proto`] on `ParquetSource`. The
+    /// reader factory is not on the wire, so it is rebuilt as a
+    /// `CachedParquetFileReaderFactory` from the decode context's runtime
+    /// environment.
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> datafusion_common::Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>> {
+        use crate::CachedParquetFileReaderFactory;
+        use arrow::datatypes::Schema;
+        use datafusion_common::config::TableParquetOptions;
+        use datafusion_datasource::file_scan_config::FileScanConfig;
+        use datafusion_datasource::source::DataSourceExec;
+        use datafusion_execution::object_store::ObjectStoreUrl;
+        use datafusion_proto_models::protobuf;
+
+        let scan = match &node.physical_plan_type {
+            Some(protobuf::physical_plan_node::PhysicalPlanType::ParquetScan(scan)) => {
+                scan
+            }
+            _ => {
+                return datafusion_common::internal_err!(
+                    "PhysicalPlanNode is not a ParquetScan"
+                );
+            }
+        };
+
+        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "ParquetScanExecNode is missing required field 'base_conf'"
+            )
+        })?;
+
+        // Full table schema (file + partition columns).
+        let schema: Arc<Schema> = Arc::new(
+            base_conf
+                .schema
+                .as_ref()
+                .ok_or_else(|| {
+                    datafusion_common::internal_datafusion_err!(
+                        "FileScanExecConf is missing required field 'schema'"
+                    )
+                })?
+                .try_into()?,
+        );
+
+        // The predicate was serialized against the scan's output schema, so it
+        // must be decoded against the projected schema when a projection is
+        // present.
+        let predicate_schema = if !base_conf.projection.is_empty() {
+            let projected_fields: Vec<_> = base_conf
+                .projection
+                .iter()
+                .map(|&i| schema.field(i as usize).clone())
+                .collect();
+            Arc::new(Schema::new(projected_fields))
+        } else {
+            schema
+        };
+
+        let predicate = scan
+            .predicate
+            .as_ref()
+            .map(|expr| ctx.decode_expr(expr, predicate_schema.as_ref()))
+            .transpose()?;
+
+        let mut options = TableParquetOptions::default();
+        if let Some(table_options) = scan.parquet_options.as_ref() {
+            options = table_options.try_into()?;
+        }
+
+        let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
+        let object_store_url = match base_conf.object_store_url.is_empty() {
+            false => ObjectStoreUrl::parse(&base_conf.object_store_url)?,
+            true => ObjectStoreUrl::local_filesystem(),
+        };
+        let store = ctx
+            .task_ctx()
+            .runtime_env()
+            .object_store(object_store_url)?;
+        let metadata_cache = ctx
+            .task_ctx()
+            .runtime_env()
+            .cache_manager
+            .get_file_metadata_cache();
+        let reader_factory =
+            Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
+
+        let mut source = ParquetSource::new(table_schema)
+            .with_parquet_file_reader_factory(reader_factory)
+            .with_table_parquet_options(options);
+
+        if let Some(predicate) = predicate {
+            source = source.with_predicate(predicate);
+        }
+        let base_config =
+            FileScanConfig::try_from_proto(base_conf, ctx, Arc::new(source))?;
+        Ok(DataSourceExec::from_data_source(base_config))
+    }
 }
 
 /// Returns the a [`TableSchema`] containing a [`RowNumber`] virtual column and a [`Column`] expression referencing its row index column.
