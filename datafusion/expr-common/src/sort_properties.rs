@@ -140,8 +140,7 @@ pub struct ExprProperties {
     /// the expression. Used to compute reliable bounds.
     pub range: Interval,
     /// Indicates whether the expression preserves lexicographical ordering
-    /// of its inputs. For example, string concatenation preserves ordering,
-    /// while addition does not.
+    /// of its inputs.
     ///
     /// This is a *non-strict* (monotone) property: inputs advancing in
     /// lexicographical order never make the output decrease, but distinct
@@ -173,9 +172,9 @@ pub struct ExprProperties {
     /// For an expression with a single ordered input the premises coincide,
     /// and this field is simply the stronger claim: it implies
     /// `preserves_lex_ordering`. With multiple ordered inputs, neither
-    /// implies the other: `concat(a, b)` preserves lexicographical ordering
-    /// but is not strict (distinct inputs can produce equal outputs), while
-    /// `a + b` over two ordered, overflow-free inputs is strict but not
+    /// implies the other: a lexicographical-ordering-preserving expression
+    /// need not be strict (distinct inputs may still produce equal outputs),
+    /// while `a + b` over two ordered, overflow-free inputs is strict but not
     /// lexicographical (under the lexicographical premise `b` may decrease
     /// while `a` increases, making the sum decrease).
     ///

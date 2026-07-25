@@ -985,8 +985,6 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// Returns true if the function preserves lexicographical ordering based on
     /// the input ordering.
     ///
-    /// For example, `concat(a || b)` preserves lexicographical ordering, but `abs(a)` does not.
-    ///
     /// This is a *non-strict* (monotone) property: distinct inputs may map to
     /// equal outputs. See [`Self::strictly_order_preserving`] for a related
     /// strict property and [`ExprProperties::strictly_order_preserving`] for
