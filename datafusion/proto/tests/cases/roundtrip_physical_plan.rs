@@ -71,6 +71,7 @@ use datafusion::physical_plan::expressions::{
     cast, col, in_list, like, lit,
 };
 use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
+use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
     StreamJoinPartitionMode, SymmetricHashJoinExec,
@@ -102,7 +103,7 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    DataFusionError, NullEquality, Result, UnnestOptions, exec_datafusion_err,
+    DataFusionError, JoinSide, NullEquality, Result, UnnestOptions, exec_datafusion_err,
     internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion_datasource::file::FileSource;
@@ -2098,17 +2099,66 @@ fn roundtrip_parquet_sink() -> Result<()> {
 
 #[test]
 fn roundtrip_sym_hash_join() -> Result<()> {
-    let field_a = Field::new("col", DataType::Int64, false);
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let field_a = Field::new("col_a", DataType::Int64, false);
+    let field_b = Field::new("col_b", DataType::Int64, false);
     let schema_left = Schema::new(vec![field_a.clone()]);
-    let schema_right = Schema::new(vec![field_a]);
+    let schema_right = Schema::new(vec![field_b.clone()]);
     let on = vec![(
-        Arc::new(Column::new("col", schema_left.index_of("col")?)) as _,
-        Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
+        Arc::new(Column::new("col_a", schema_left.index_of("col_a")?)) as _,
+        Arc::new(Column::new("col_b", schema_right.index_of("col_b")?)) as _,
     )];
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("col_a", 0)),
+            Operator::Gt,
+            Arc::new(Column::new("col_b", 1)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![field_a, field_b])),
+    );
 
     let schema_left = Arc::new(schema_left);
     let schema_right = Arc::new(schema_right);
-    for join_type in &[
+    let left_order: LexOrdering = [PhysicalSortExpr {
+        expr: Arc::new(Column::new("col_a", schema_left.index_of("col_a")?)),
+        options: SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    }]
+    .into();
+    let right_order: LexOrdering = [PhysicalSortExpr {
+        expr: Arc::new(Column::new("col_b", schema_right.index_of("col_b")?)),
+        options: SortOptions {
+            descending: false,
+            nulls_first: true,
+        },
+    }]
+    .into();
+    let ordering_cases = [
+        (None, None),
+        (Some(left_order.clone()), None),
+        (None, Some(right_order.clone())),
+        (Some(left_order), Some(right_order)),
+    ];
+    let ordering_options = |ordering: Option<&LexOrdering>| {
+        ordering
+            .map(|ordering| ordering.iter().map(|expr| expr.options).collect::<Vec<_>>())
+    };
+
+    for join_type in [
         JoinType::Inner,
         JoinType::Left,
         JoinType::Right,
@@ -2117,36 +2167,53 @@ fn roundtrip_sym_hash_join() -> Result<()> {
         JoinType::RightAnti,
         JoinType::LeftSemi,
         JoinType::RightSemi,
+        JoinType::LeftMark,
+        JoinType::RightMark,
     ] {
-        for partition_mode in &[
-            StreamJoinPartitionMode::Partitioned,
-            StreamJoinPartitionMode::SinglePartition,
+        for null_equality in [
+            NullEquality::NullEqualsNothing,
+            NullEquality::NullEqualsNull,
         ] {
-            for left_order in &[
-                None,
-                LexOrdering::new(vec![PhysicalSortExpr {
-                    expr: Arc::new(Column::new("col", schema_left.index_of("col")?)),
-                    options: Default::default(),
-                }]),
-            ] {
-                for right_order in [
-                    None,
-                    LexOrdering::new(vec![PhysicalSortExpr {
-                        expr: Arc::new(Column::new("col", schema_right.index_of("col")?)),
-                        options: Default::default(),
-                    }]),
+            for filter in [None, Some(filter.clone())] {
+                for partition_mode in [
+                    StreamJoinPartitionMode::Partitioned,
+                    StreamJoinPartitionMode::SinglePartition,
                 ] {
-                    roundtrip_test(Arc::new(SymmetricHashJoinExec::try_new(
-                        Arc::new(EmptyExec::new(schema_left.clone())),
-                        Arc::new(EmptyExec::new(schema_right.clone())),
-                        on.clone(),
-                        None,
-                        join_type,
-                        NullEquality::NullEqualsNothing,
-                        left_order.clone(),
-                        right_order,
-                        *partition_mode,
-                    )?))?;
+                    for (left_order, right_order) in &ordering_cases {
+                        let result = roundtrip_test_and_return(
+                            Arc::new(SymmetricHashJoinExec::try_new(
+                                Arc::new(EmptyExec::new(schema_left.clone())),
+                                Arc::new(EmptyExec::new(schema_right.clone())),
+                                on.clone(),
+                                filter.clone(),
+                                &join_type,
+                                null_equality,
+                                left_order.clone(),
+                                right_order.clone(),
+                                partition_mode,
+                            )?),
+                            &ctx,
+                            &codec,
+                            &proto_converter,
+                        )?;
+                        let result =
+                            result.downcast_ref::<SymmetricHashJoinExec>().unwrap();
+                        assert_eq!(result.join_type(), &join_type);
+                        assert_eq!(result.null_equality(), null_equality);
+                        assert_eq!(result.partition_mode(), partition_mode);
+                        assert_eq!(
+                            ordering_options(result.left_sort_exprs()),
+                            ordering_options(left_order.as_ref())
+                        );
+                        assert_eq!(
+                            ordering_options(result.right_sort_exprs()),
+                            ordering_options(right_order.as_ref())
+                        );
+                        assert_eq!(
+                            result.filter().map(JoinFilter::column_indices),
+                            filter.as_ref().map(JoinFilter::column_indices)
+                        );
+                    }
                 }
             }
         }
@@ -2251,7 +2318,14 @@ fn roundtrip_unnest() -> Result<()> {
     let output_schema =
         Arc::new(Schema::new(vec![fa, fb0, fc1, fc2, fd0, fe1, fe2, fe3]));
     let input = Arc::new(EmptyExec::new(input_schema));
-    let options = UnnestOptions::default();
+    let options = UnnestOptions {
+        preserve_nulls: false,
+        recursions: vec![datafusion_common::RecursionUnnestOption {
+            input_column: datafusion_common::Column::new_unqualified("b"),
+            output_column: datafusion_common::Column::new_unqualified("b"),
+            depth: 2,
+        }],
+    };
     let unnest = UnnestExec::new(
         input,
         vec![
@@ -2270,9 +2344,17 @@ fn roundtrip_unnest() -> Result<()> {
         ],
         vec![2, 4],
         output_schema,
-        options,
+        options.clone(),
     )?;
-    roundtrip_test(Arc::new(unnest))
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let result =
+        roundtrip_test_and_return(Arc::new(unnest), &ctx, &codec, &proto_converter)?;
+    let result = result.downcast_ref::<UnnestExec>().unwrap();
+    assert_eq!(result.options(), &options);
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -2454,6 +2536,64 @@ async fn roundtrip_physical_plan_node() {
         .unwrap();
 
     let _ = plan.execute(0, ctx.task_ctx()).unwrap();
+}
+
+/// The deprecated `try_into_projection_physical_plan` shim now delegates to
+/// [`ProjectionExec::try_from_proto`], which reads the enclosing
+/// `PhysicalPlanNode` rather than a `ProjectionExecNode`. Assert the shim still
+/// decodes the node passed as an argument, not `self`, so an out-of-tree caller
+/// that passes a projection unrelated to `self` keeps the old behaviour.
+#[test]
+fn deprecated_projection_shim_decodes_argument_not_self() -> Result<()> {
+    use datafusion_proto::protobuf::PhysicalPlanNode;
+    use datafusion_proto::protobuf::physical_plan_node::PhysicalPlanType;
+
+    let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+    let input = Arc::new(EmptyExec::new(Arc::new(schema.clone())));
+    let projection = Arc::new(ProjectionExec::try_new(
+        vec![ProjectionExpr::new(
+            col("a", &schema)?,
+            "renamed".to_string(),
+        )],
+        input,
+    )?);
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let projection_node = PhysicalPlanNode::try_from_physical_plan_with_converter(
+        projection,
+        &codec,
+        &proto_converter,
+    )?;
+    let Some(PhysicalPlanType::Projection(projection_exec_node)) =
+        &projection_node.physical_plan_type
+    else {
+        panic!("expected a Projection node, got {projection_node:?}");
+    };
+
+    // `self` is deliberately a different plan variant than the argument.
+    let unrelated_node = PhysicalPlanNode::try_from_physical_plan_with_converter(
+        Arc::new(EmptyExec::new(Arc::new(schema))),
+        &codec,
+        &proto_converter,
+    )?;
+
+    let session_ctx = SessionContext::new();
+    let task_ctx = session_ctx.task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
+    #[allow(deprecated)]
+    let decoded = unrelated_node.try_into_projection_physical_plan(
+        projection_exec_node,
+        &decode_ctx,
+        &proto_converter,
+    )?;
+
+    let decoded = decoded
+        .downcast_ref::<ProjectionExec>()
+        .expect("decoded plan should be a ProjectionExec");
+    assert_eq!(decoded.expr().len(), 1);
+    assert_eq!(decoded.expr()[0].alias, "renamed");
+    Ok(())
 }
 
 /// Helper function to create a SessionContext with all TPC-H tables registered as external tables

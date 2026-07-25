@@ -1135,11 +1135,42 @@ SELECT lcm(6, arrow_cast(column1, 'Decimal128(38,0)')) FROM (VALUES (4), (9), (0
 0
 
 query R
+SELECT lcm(arrow_cast(column1, 'Decimal32(7,0)'), arrow_cast(column2, 'Decimal32(7,0)')) FROM (VALUES (6, 4), (6, 9), (6, 0));
+----
+12
+18
+0
+
+query R
+SELECT lcm(arrow_cast(column1, 'Decimal64(16,0)'), arrow_cast(column2, 'Decimal64(16,0)')) FROM (VALUES (6, 4), (6, 9), (6, 0));
+----
+12
+18
+0
+
+query R
 SELECT lcm(arrow_cast(column1, 'Decimal128(38,0)'), arrow_cast(column2, 'Decimal128(38,0)')) FROM (VALUES (6, 4), (6, 9), (6, 0));
 ----
 12
 18
 0
+
+query R
+SELECT lcm(arrow_cast(column1, 'Decimal256(40,0)'), arrow_cast(column2, 'Decimal256(40,0)')) FROM (VALUES (6, 4), (6, 9), (6, 0));
+----
+12
+18
+0
+
+# invalid argument count and type
+query error DataFusion error:
+SELECT lcm();
+
+query error DataFusion error:
+SELECT lcm(1, 2, 3);
+
+query error DataFusion error:
+SELECT lcm('x', 'y');
 
 # lcm array and scalar with nulls in the array
 query I

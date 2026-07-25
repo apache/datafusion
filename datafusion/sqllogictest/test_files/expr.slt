@@ -1618,6 +1618,31 @@ SELECT sha224(NULL);
 ----
 NULL
 
+# sha224 string and binary array inputs
+query BBBBBB
+SELECT
+  sha224(column1) = sha224('tom'),
+  sha224(arrow_cast(column1, 'LargeUtf8')) = sha224('tom'),
+  sha224(arrow_cast(column1, 'Utf8View')) = sha224('tom'),
+  sha224(arrow_cast(column1, 'Binary')) = sha224('tom'),
+  sha224(arrow_cast(column1, 'LargeBinary')) = sha224('tom'),
+  sha224(arrow_cast(column1, 'BinaryView')) = sha224('tom')
+FROM (VALUES ('tom'), (NULL), ('mot')) AS t(column1);
+----
+true true true true true true
+NULL NULL NULL NULL NULL NULL
+false false false false false false
+
+# invalid argument count and type
+query error DataFusion error:
+SELECT sha224();
+
+query error DataFusion error:
+SELECT sha224('tom', 'extra');
+
+query error DataFusion error:
+SELECT sha224(1);
+
 query ?
 SELECT digest(NULL,'sha224');
 ----
@@ -1678,6 +1703,31 @@ SELECT sha384(NULL);
 ----
 NULL
 
+# sha384 string and binary array inputs
+query BBBBBB
+SELECT
+  sha384(column1) = sha384('tom'),
+  sha384(arrow_cast(column1, 'LargeUtf8')) = sha384('tom'),
+  sha384(arrow_cast(column1, 'Utf8View')) = sha384('tom'),
+  sha384(arrow_cast(column1, 'Binary')) = sha384('tom'),
+  sha384(arrow_cast(column1, 'LargeBinary')) = sha384('tom'),
+  sha384(arrow_cast(column1, 'BinaryView')) = sha384('tom')
+FROM (VALUES ('tom'), (NULL), ('mot')) AS t(column1);
+----
+true true true true true true
+NULL NULL NULL NULL NULL NULL
+false false false false false false
+
+# invalid argument count and type
+query error DataFusion error:
+SELECT sha384();
+
+query error DataFusion error:
+SELECT sha384('tom', 'extra');
+
+query error DataFusion error:
+SELECT sha384(1);
+
 query ?
 SELECT digest(NULL,'sha384');
 ----
@@ -1707,6 +1757,31 @@ query ?
 SELECT sha512(NULL);
 ----
 NULL
+
+# sha512 string and binary array inputs
+query BBBBBB
+SELECT
+  sha512(column1) = sha512('tom'),
+  sha512(arrow_cast(column1, 'LargeUtf8')) = sha512('tom'),
+  sha512(arrow_cast(column1, 'Utf8View')) = sha512('tom'),
+  sha512(arrow_cast(column1, 'Binary')) = sha512('tom'),
+  sha512(arrow_cast(column1, 'LargeBinary')) = sha512('tom'),
+  sha512(arrow_cast(column1, 'BinaryView')) = sha512('tom')
+FROM (VALUES ('tom'), (NULL), ('mot')) AS t(column1);
+----
+true true true true true true
+NULL NULL NULL NULL NULL NULL
+false false false false false false
+
+# invalid argument count and type
+query error DataFusion error:
+SELECT sha512();
+
+query error DataFusion error:
+SELECT sha512('tom', 'extra');
+
+query error DataFusion error:
+SELECT sha512(1);
 
 query ?
 SELECT digest(NULL,'sha512');
@@ -1747,6 +1822,69 @@ query ?
 SELECT digest('','blake3');
 ----
 af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262
+
+# digest every supported algorithm over an array
+query BBBBBBBB
+SELECT
+  digest(column1, 'md5') = digest('tom', 'md5'),
+  digest(column1, 'sha224') = digest('tom', 'sha224'),
+  digest(column1, 'sha256') = digest('tom', 'sha256'),
+  digest(column1, 'sha384') = digest('tom', 'sha384'),
+  digest(column1, 'sha512') = digest('tom', 'sha512'),
+  digest(column1, 'blake2s') = digest('tom', 'blake2s'),
+  digest(column1, 'blake2b') = digest('tom', 'blake2b'),
+  digest(column1, 'blake3') = digest('tom', 'blake3')
+FROM (VALUES ('tom'), (NULL), ('mot')) AS t(column1);
+----
+true true true true true true true true
+NULL NULL NULL NULL NULL NULL NULL NULL
+false false false false false false false false
+
+# binary-view, large-utf8, and utf8-view array inputs
+query BBBBBBBB
+SELECT
+  digest(arrow_cast(column1, 'BinaryView'), 'md5') = digest('tom', 'md5'),
+  digest(arrow_cast(column1, 'BinaryView'), 'sha224') = digest('tom', 'sha224'),
+  digest(arrow_cast(column1, 'BinaryView'), 'sha256') = digest('tom', 'sha256'),
+  digest(arrow_cast(column1, 'BinaryView'), 'sha384') = digest('tom', 'sha384'),
+  digest(arrow_cast(column1, 'BinaryView'), 'sha512') = digest('tom', 'sha512'),
+  digest(arrow_cast(column1, 'BinaryView'), 'blake2s') = digest('tom', 'blake2s'),
+  digest(arrow_cast(column1, 'BinaryView'), 'blake2b') = digest('tom', 'blake2b'),
+  digest(arrow_cast(column1, 'BinaryView'), 'blake3') = digest('tom', 'blake3')
+FROM (VALUES ('tom'), (NULL), ('mot')) AS t(column1);
+----
+true true true true true true true true
+NULL NULL NULL NULL NULL NULL NULL NULL
+false false false false false false false false
+
+query BB
+SELECT
+  digest(arrow_cast(column1, 'LargeUtf8'), 'md5') = digest('tom', 'md5'),
+  digest(arrow_cast(column1, 'Utf8View'), 'md5') = digest('tom', 'md5')
+FROM (VALUES ('tom'), (NULL), ('mot')) AS t(column1);
+----
+true true
+NULL NULL
+false false
+
+# invalid algorithm, dynamic algorithm, argument count, and argument type
+query error There is no built-in digest algorithm named 'unknown'
+SELECT digest('tom', 'unknown');
+
+query error Digest using dynamically decided method is not yet supported
+SELECT digest(column1, column2) FROM (VALUES ('tom', 'md5')) AS t(column1, column2);
+
+query error DataFusion error:
+SELECT digest();
+
+query error DataFusion error:
+SELECT digest('tom');
+
+query error DataFusion error:
+SELECT digest('tom', 'md5', 'extra');
+
+query error DataFusion error:
+SELECT digest(1, 'md5');
 
 # vverify utf8view
 query ?
