@@ -2901,6 +2901,48 @@ mod tests {
     }
 
     #[test]
+    fn plan_builder_aggregate_rejects_nested_aggregates() -> Result<()> {
+        // https://github.com/apache/datafusion/issues/23812
+        let err = table_scan(
+            Some("employee_csv"),
+            &employee_schema(),
+            Some(vec![0, 3, 4]),
+        )?
+        .aggregate(vec![col("id")], vec![sum(sum(col("salary")))])
+        .expect_err("nested aggregates should be rejected");
+
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @"Error during planning: Aggregate function calls cannot be nested: 'sum(employee_csv.salary)' is nested inside 'sum(sum(employee_csv.salary))'"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_window_rejects_nested_window_functions() -> Result<()> {
+        // https://github.com/apache/datafusion/issues/23812
+        let sum_over = |arg| {
+            Expr::from(expr::WindowFunction::new(
+                crate::WindowFunctionDefinition::AggregateUDF(
+                    crate::test::function_stub::sum_udaf(),
+                ),
+                vec![arg],
+            ))
+        };
+        let err = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![4]))?
+            .window(vec![sum_over(sum_over(col("salary")))])
+            .expect_err("nested window functions should be rejected");
+
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @"Error during planning: Window function calls cannot be nested: 'sum(employee_csv.salary) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is nested inside 'sum(sum(employee_csv.salary) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_join_metadata() -> Result<()> {
         let left_schema = DFSchema::new_with_metadata(
             vec![(None, Arc::new(Field::new("a", DataType::Int32, false)))],

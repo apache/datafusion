@@ -507,22 +507,34 @@ The runner applies two ClickBench-specific setup steps automatically:
   runner enables the parquet `binary_as_string` option so those columns
   are read as strings.
 
-If you set up ClickBench manually through SQL, use the same `EventDate`
-view pattern:
+If you set up ClickBench manually through SQL, register the single-file
+dataset as follows:
 
 ```sql
 CREATE EXTERNAL TABLE hits_raw
 STORED AS PARQUET
 LOCATION 'benchmarks/data/hits.parquet';
+```
 
+For the partitioned dataset, register the directory and enable
+`binary_as_string`:
+
+```sql
+CREATE EXTERNAL TABLE hits_raw
+STORED AS PARQUET
+LOCATION 'benchmarks/data/hits_partitioned'
+OPTIONS ('binary_as_string' 'true');
+```
+
+After registering either dataset as `hits_raw`, create the `hits` view with
+the required `EventDate` conversion:
+
+```sql
 CREATE VIEW hits AS
 SELECT * EXCEPT ("EventDate"),
        CAST(CAST("EventDate" AS INTEGER) AS DATE) AS "EventDate"
 FROM hits_raw;
 ```
-
-For the partitioned dataset, use `benchmarks/data/hits_partitioned` and
-add `OPTIONS ('binary_as_string' 'true')` to the external table statement.
 
 From the repository root, download data and run the default ClickBench
 queries against the single parquet file:

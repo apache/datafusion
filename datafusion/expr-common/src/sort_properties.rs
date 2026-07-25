@@ -140,8 +140,7 @@ pub struct ExprProperties {
     /// the expression. Used to compute reliable bounds.
     pub range: Interval,
     /// Indicates whether the expression preserves lexicographical ordering
-    /// of its inputs. For example, string concatenation preserves ordering,
-    /// while addition does not.
+    /// of its inputs.
     pub preserves_lex_ordering: bool,
 }
 

@@ -292,9 +292,10 @@ fn decode_array(array: &ArrayRef, encoding: Encoding) -> Result<ColumnarValue> {
         }
         DataType::BinaryView => {
             let array = array.as_binary_view();
-            // Don't know if there is a more strict upper bound we can infer
-            // for view arrays byte data size.
-            encoding.decode_array::<_, i32>(&array, array.get_buffer_memory_size())
+            encoding.decode_array::<_, i32>(
+                &array,
+                array.lengths().map(|l| l as usize).sum::<usize>(),
+            )
         }
         DataType::LargeBinary => {
             let array = array.as_binary::<i64>();
@@ -528,7 +529,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::BinaryArray;
+    use arrow::array::{ArrayBuilder, BinaryArray, BinaryViewBuilder};
     use arrow_buffer::OffsetBuffer;
 
     use super::*;
@@ -552,5 +553,15 @@ mod tests {
         );
         let size = estimate_byte_data_size(&array);
         assert_eq!(size, 31);
+    }
+
+    #[test]
+    fn test_estimate_view_size() {
+        let mut builder = BinaryViewBuilder::new().with_deduplicate_strings();
+        for _ in 0..1000 {
+            builder.append_value([65u8; 64]);
+        }
+        let arr = ArrayBuilder::finish(&mut builder);
+        decode_array(&arr, Encoding::Base64).unwrap();
     }
 }

@@ -218,8 +218,8 @@ impl Drop for FFI_RecordBatchStream {
 mod tests {
     use std::sync::Arc;
 
+    use arrow::array::record_batch;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::common::record_batch;
     use datafusion::error::Result;
     use datafusion::execution::SendableRecordBatchStream;
     use datafusion::test_util::bounded_stream;
