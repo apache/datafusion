@@ -766,7 +766,7 @@ pub struct MovingMin<T> {
     pop_seq: u64,
 }
 
-impl<T: Clone + PartialOrd> Default for MovingMin<T> {
+impl<T: PartialOrd> Default for MovingMin<T> {
     fn default() -> Self {
         Self {
             deque: VecDeque::new(),
@@ -776,7 +776,7 @@ impl<T: Clone + PartialOrd> Default for MovingMin<T> {
     }
 }
 
-impl<T: Clone + PartialOrd> MovingMin<T> {
+impl<T: PartialOrd> MovingMin<T> {
     /// Creates a new `MovingMin` to keep track of the minimum in a sliding
     /// window.
     #[inline]
@@ -802,20 +802,46 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
         self.deque.front().map(|(_, val)| val)
     }
 
+    #[inline]
+    fn check_invariants(&self) {
+        debug_assert!(self.pop_seq <= self.push_seq);
+        debug_assert!(self
+            .deque
+            .front()
+            .is_none_or(|&(front_seq, _)| front_seq >= self.pop_seq));
+
+        #[cfg(debug_assertions)]
+        {
+            let mut iter = self.deque.iter();
+            if let Some(mut prev) = iter.next() {
+                for curr in iter {
+                    debug_assert!(prev.0 < curr.0);
+                    debug_assert!(prev.1 < curr.1);
+                    prev = curr;
+                }
+            }
+        }
+    }
+
     /// Pushes a new element into the sliding window.
     #[inline]
     pub fn push(&mut self, val: T) {
         let seq = self.push_seq;
         self.push_seq += 1;
-        while self.deque.back().is_some_and(|back_val| back_val.1 > val) {
+        while self.deque.back().is_some_and(|back_val| back_val.1 >= val) {
             self.deque.pop_back();
         }
         self.deque.push_back((seq, val));
+
+        self.check_invariants();
     }
 
     /// Removes the oldest value from the sliding window.
     #[inline]
     pub fn pop(&mut self) {
+        if self.is_empty() {
+            return;
+        }
         let seq = self.pop_seq;
         self.pop_seq += 1;
         if self
@@ -825,6 +851,8 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
         {
             self.deque.pop_front();
         }
+
+        self.check_invariants();
     }
 
     /// Returns the number of elements stored in the sliding window.
@@ -839,28 +867,23 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
         self.push_seq == self.pop_seq
     }
 
-    /// Heap bytes owned by the two stack buffers plus each stored `T`'s
+    /// Heap bytes owned by the deque plus each stored `T`'s
     /// heap payload as reported by `elem_heap`. Excludes `size_of::<Self>()`.
     #[inline]
     fn heap_size(&self, elem_heap: impl Fn(&T) -> usize) -> usize {
-        moving_stacks_heap_size(&self.push_stack, &self.pop_stack, elem_heap)
+        moving_deque_heap_size(&self.deque, elem_heap)
     }
 }
 
 /// Shared implementation for [`MovingMin::heap_size`] and
-/// [`MovingMax::heap_size`]. Both share the same two-stack layout.
+/// [`MovingMax::heap_size`]. Both share the same deque layout.
 #[inline]
-fn moving_stacks_heap_size<T>(
-    push_stack: &Vec<(T, T)>,
-    pop_stack: &Vec<(T, T)>,
+fn moving_deque_heap_size<T>(
+    deque: &VecDeque<(u64, T)>,
     elem_heap: impl Fn(&T) -> usize,
 ) -> usize {
-    let buffers = (push_stack.capacity() + pop_stack.capacity()) * size_of::<(T, T)>();
-    let elems: usize = push_stack
-        .iter()
-        .chain(pop_stack.iter())
-        .map(|(a, b)| elem_heap(a) + elem_heap(b))
-        .sum();
+    let buffers = deque.capacity() * size_of::<(u64, T)>();
+    let elems: usize = deque.iter().map(|(_, val)| elem_heap(val)).sum();
     buffers + elems
 }
 
@@ -893,7 +916,7 @@ pub struct MovingMax<T> {
     pop_seq: u64,
 }
 
-impl<T: Clone + PartialOrd> Default for MovingMax<T> {
+impl<T: PartialOrd> Default for MovingMax<T> {
     fn default() -> Self {
         Self {
             deque: VecDeque::new(),
@@ -903,7 +926,7 @@ impl<T: Clone + PartialOrd> Default for MovingMax<T> {
     }
 }
 
-impl<T: Clone + PartialOrd> MovingMax<T> {
+impl<T: PartialOrd> MovingMax<T> {
     /// Creates a new `MovingMax` to keep track of the maximum in a sliding window.
     #[inline]
     pub fn new() -> Self {
@@ -927,20 +950,46 @@ impl<T: Clone + PartialOrd> MovingMax<T> {
         self.deque.front().map(|(_, val)| val)
     }
 
+    #[inline]
+    fn check_invariants(&self) {
+        debug_assert!(self.pop_seq <= self.push_seq);
+        debug_assert!(self
+            .deque
+            .front()
+            .is_none_or(|&(front_seq, _)| front_seq >= self.pop_seq));
+
+        #[cfg(debug_assertions)]
+        {
+            let mut iter = self.deque.iter();
+            if let Some(mut prev) = iter.next() {
+                for curr in iter {
+                    debug_assert!(prev.0 < curr.0);
+                    debug_assert!(prev.1 > curr.1);
+                    prev = curr;
+                }
+            }
+        }
+    }
+
     /// Pushes a new element into the sliding window.
     #[inline]
     pub fn push(&mut self, val: T) {
         let seq = self.push_seq;
         self.push_seq += 1;
-        while self.deque.back().is_some_and(|back_val| back_val.1 < val) {
+        while self.deque.back().is_some_and(|back_val| back_val.1 <= val) {
             self.deque.pop_back();
         }
         self.deque.push_back((seq, val));
+
+        self.check_invariants();
     }
 
     /// Removes the oldest value from the sliding window.
     #[inline]
     pub fn pop(&mut self) {
+        if self.is_empty() {
+            return;
+        }
         let seq = self.pop_seq;
         self.pop_seq += 1;
         if self
@@ -950,6 +999,8 @@ impl<T: Clone + PartialOrd> MovingMax<T> {
         {
             self.deque.pop_front();
         }
+
+        self.check_invariants();
     }
 
     /// Returns the number of elements stored in the sliding window.
@@ -968,7 +1019,7 @@ impl<T: Clone + PartialOrd> MovingMax<T> {
     /// heap payload as reported by `elem_heap`. Excludes `size_of::<Self>()`.
     #[inline]
     fn heap_size(&self, elem_heap: impl Fn(&T) -> usize) -> usize {
-        moving_stacks_heap_size(&self.push_stack, &self.pop_stack, elem_heap)
+        moving_deque_heap_size(&self.deque, elem_heap)
     }
 }
 
@@ -1211,13 +1262,12 @@ mod tests {
     #[test]
     fn moving_min_max_heap_size_i32() {
         // Fixed-width `T` has no per-element heap payload, so `heap_size`
-        // reports exactly the two stack buffers' capacity in bytes.
+        // reports exactly the buffer's capacity in bytes.
         let mut moving_min = MovingMin::<i32>::with_capacity(4);
         let mut moving_max = MovingMax::<i32>::with_capacity(4);
         let elem = |_: &i32| 0;
 
-        // Both stacks are `with_capacity(4)`, so total slots = 8.
-        let buffer_only = 2 * 4 * size_of::<(i32, i32)>();
+        let buffer_only = moving_min.deque.capacity() * size_of::<(u64, i32)>();
         assert_eq!(moving_min.heap_size(elem), buffer_only);
         assert_eq!(moving_max.heap_size(elem), buffer_only);
 
@@ -1232,8 +1282,6 @@ mod tests {
 
     #[test]
     fn moving_min_max_heap_size_counts_elems() {
-        // Each buffered slot is a `(T, T)` pair, so a stored element is
-        // visited twice by `heap_size` — mirrors two independent `Clone`s.
         let mut moving_min = MovingMin::<String>::with_capacity(2);
         let mut moving_max = MovingMax::<String>::with_capacity(2);
         let elem = |s: &String| s.capacity();
@@ -1241,13 +1289,63 @@ mod tests {
         moving_min.push("abcdef".to_string());
         moving_max.push("abcdef".to_string());
 
-        // Both `push_stack` and `pop_stack` allocate `capacity` slots.
-        let buffers = 2 * 2 * size_of::<(String, String)>();
-        // 2 slots per stored element (value + running extremum) times the
-        // per-element heap payload from `elem`.
-        let elems = 2 * 6;
+        let buffers = moving_min.deque.capacity() * size_of::<(u64, String)>();
+        let elems = 6;
         assert_eq!(moving_min.heap_size(elem), buffers + elems);
         assert_eq!(moving_max.heap_size(elem), buffers + elems);
+    }
+
+    #[test]
+    fn test_moving_min_max_empty_pop() {
+        let mut moving_min = MovingMin::<i32>::new();
+        moving_min.pop(); // empty pop is a no-op
+        assert_eq!(moving_min.len(), 0);
+        assert!(moving_min.is_empty());
+        // Verify it still works correctly after empty pop
+        moving_min.push(10);
+        moving_min.push(20);
+        assert_eq!(moving_min.min(), Some(&10));
+        moving_min.pop();
+        assert_eq!(moving_min.min(), Some(&20));
+
+        let mut moving_max = MovingMax::<i32>::new();
+        moving_max.pop(); // empty pop is a no-op
+        assert_eq!(moving_max.len(), 0);
+        assert!(moving_max.is_empty());
+        // Verify it still works correctly after empty pop
+        moving_max.push(20);
+        moving_max.push(10);
+        assert_eq!(moving_max.max(), Some(&20));
+        moving_max.pop();
+        assert_eq!(moving_max.max(), Some(&10));
+    }
+
+    #[test]
+    fn test_moving_min_max_duplicate_heavy() {
+        let mut moving_min = MovingMin::<i32>::new();
+        let mut moving_max = MovingMax::<i32>::new();
+
+        // Push duplicates
+        for _ in 0..5 {
+            moving_min.push(5);
+            moving_max.push(5);
+        }
+
+        assert_eq!(moving_min.len(), 5);
+        assert_eq!(moving_max.len(), 5);
+        
+        // Ensure min/max query works and we can pop all duplicates correctly
+        for i in (1..=5).rev() {
+            assert_eq!(moving_min.len(), i);
+            assert_eq!(moving_max.len(), i);
+            assert_eq!(moving_min.min(), Some(&5));
+            assert_eq!(moving_max.max(), Some(&5));
+            moving_min.pop();
+            moving_max.pop();
+        }
+
+        assert!(moving_min.is_empty());
+        assert!(moving_max.is_empty());
     }
 
     #[test]

@@ -89,7 +89,7 @@ fn bench_sliding_max(c: &mut Criterion) {
             group.throughput(Throughput::Elements(data_size as u64));
 
             group.bench_with_input(
-                BenchmarkId::new("monotonic_deque", window_size),
+                BenchmarkId::new("sliding_max", window_size),
                 &window_size,
                 |b, &w| {
                     b.iter(|| {
@@ -99,7 +99,7 @@ fn bench_sliding_max(c: &mut Criterion) {
                             if i >= w {
                                 q.pop();
                             }
-                            let _res = q.max();
+                            std::hint::black_box(q.max());
                         }
                     });
                 },
