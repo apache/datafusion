@@ -563,12 +563,14 @@ fn validate_map_compatibility(
     target_entries: &Field,
     target_sorted: bool,
 ) -> Result<()> {
-    if source_sorted != target_sorted {
-        return _plan_err!("Cannot change Map sorted flag during schema adaptation");
+    if !source_sorted && target_sorted {
+        return _plan_err!(
+            "Cannot change Map sorted flag from unsorted to sorted during schema adaptation"
+        );
     }
     let (source_key, source_value, target_key, target_value) =
         map_entry_fields(source_entries, target_entries)?;
-    validate_map_key_compatibility(source_key, target_key, source_sorted)?;
+    validate_map_key_compatibility(source_key, target_key, target_sorted)?;
     validate_field_compatibility(source_value, target_value)
 }
 
@@ -690,8 +692,8 @@ fn validate_map_entries_field(entries: &Field) -> Result<&[FieldRef]> {
 ///
 /// Unsorted Struct keys may add nullable fields and use only injective primitive
 /// widening casts, but may not remove source fields. Sorted Maps require an
-/// unchanged key type. Map entries and keys must remain non-nullable, and source
-/// and target sorted flags must match.
+/// unchanged key type. Map entries and keys must remain non-nullable. A sorted
+/// source may become unsorted, but an unsorted source cannot become sorted.
 pub fn validate_data_type_compatibility(
     field_name: &str,
     source_type: &DataType,
@@ -1765,6 +1767,44 @@ mod tests {
     }
 
     #[test]
+    fn test_sorted_map_value_struct_schema_evolution_to_unsorted() {
+        let source_col = struct_map_array_with_sorted(true);
+        let target_type = map_type_with_entry_names(
+            struct_type(vec![
+                field("id", DataType::Int32),
+                field("label", DataType::Utf8),
+            ]),
+            struct_type(vec![
+                field("amount", DataType::Int64),
+                field("currency", DataType::Utf8),
+            ]),
+            "keys",
+            "values",
+            false,
+        );
+
+        assert!(
+            validate_data_type_compatibility(
+                "map_col",
+                source_col.data_type(),
+                &target_type
+            )
+            .is_ok()
+        );
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        assert_eq!(result.data_type(), &target_type);
+        assert!(matches!(result.data_type(), DataType::Map(_, false)));
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        let keys = map.keys().as_struct();
+        assert_eq!(get_column_as!(keys, "id", Int32Array).value(0), 1);
+        assert!(get_column_as!(keys, "label", StringArray).is_null(0));
+        let values = map.values().as_struct();
+        assert_eq!(get_column_as!(values, "amount", Int64Array).value(0), 10);
+        assert!(get_column_as!(values, "currency", StringArray).is_null(0));
+    }
+
+    #[test]
     fn test_null_map_parent_hides_invalid_nested_value_cast() {
         let values = StructArray::from(vec![(
             arc_field("amount", DataType::Utf8),
@@ -1964,14 +2004,12 @@ mod tests {
         .to_string();
         assert_contains!(error, "Map key field must be non-nullable");
 
-        let error = validate_data_type_compatibility(
-            "map_col",
-            source_col.data_type(),
-            &DataType::Map(target_entries, !sorted),
-        )
-        .unwrap_err()
-        .to_string();
-        assert_contains!(error, "Cannot change Map sorted flag");
+        let sorted_target = DataType::Map(target_entries, !sorted);
+        assert_map_planning_runtime_error(
+            &source_col,
+            &sorted_target,
+            "Cannot change Map sorted flag",
+        );
     }
 
     fn assert_map_planning_runtime_error(
