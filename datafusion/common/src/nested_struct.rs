@@ -365,14 +365,12 @@ fn cast_map_column(
     let DataType::Map(source_entries, source_sorted) = source_map.data_type() else {
         unreachable!("MapArray data type must be Map")
     };
-    validate_map_compatibility(
+    let (target_key, target_value) = validate_map_compatibility(
         source_entries,
         *source_sorted,
         target_entries,
         target_sorted,
     )?;
-    let (_, _, target_key, target_value) =
-        map_entry_fields(source_entries, target_entries)?;
 
     let offsets = source_map.value_offsets();
     let has_unreachable_entries = offsets[0] != 0
@@ -557,35 +555,22 @@ fn validate_field_compatibility(
     )
 }
 
-fn validate_map_compatibility(
+fn validate_map_compatibility<'a>(
     source_entries: &Field,
     source_sorted: bool,
-    target_entries: &Field,
+    target_entries: &'a Field,
     target_sorted: bool,
-) -> Result<()> {
+) -> Result<(&'a FieldRef, &'a FieldRef)> {
     if !source_sorted && target_sorted {
         return _plan_err!(
             "Cannot change Map sorted flag from unsorted to sorted during schema adaptation"
         );
     }
-    let (source_key, source_value, target_key, target_value) =
-        map_entry_fields(source_entries, target_entries)?;
+    let (source_key, source_value) = validate_map_entries_field(source_entries)?;
+    let (target_key, target_value) = validate_map_entries_field(target_entries)?;
     validate_map_key_compatibility(source_key, target_key, target_sorted)?;
-    validate_field_compatibility(source_value, target_value)
-}
-
-fn map_entry_fields<'a>(
-    source_entries: &'a Field,
-    target_entries: &'a Field,
-) -> Result<(&'a FieldRef, &'a FieldRef, &'a FieldRef, &'a FieldRef)> {
-    let source_fields = validate_map_entries_field(source_entries)?;
-    let target_fields = validate_map_entries_field(target_entries)?;
-    Ok((
-        &source_fields[0],
-        &source_fields[1],
-        &target_fields[0],
-        &target_fields[1],
-    ))
+    validate_field_compatibility(source_value, target_value)?;
+    Ok((target_key, target_value))
 }
 
 fn validate_map_key_compatibility(
@@ -660,7 +645,7 @@ fn validate_map_key_data_type(
     }
 }
 
-fn validate_map_entries_field(entries: &Field) -> Result<&[FieldRef]> {
+fn validate_map_entries_field(entries: &Field) -> Result<(&FieldRef, &FieldRef)> {
     if entries.is_nullable() {
         return _plan_err!("Map entries field must be non-nullable");
     }
@@ -677,7 +662,7 @@ fn validate_map_entries_field(entries: &Field) -> Result<&[FieldRef]> {
     if fields[0].is_nullable() {
         return _plan_err!("Map key field must be non-nullable");
     }
-    Ok(fields)
+    Ok((&fields[0], &fields[1]))
 }
 
 /// Validates that `source_type` can be cast to `target_type`, recursively
@@ -716,7 +701,7 @@ pub fn validate_data_type_compatibility(
             validate_field_compatibility(s, t)?;
         }
         (DataType::Map(s, source_sorted), DataType::Map(t, target_sorted)) => {
-            validate_map_compatibility(s, *source_sorted, t, *target_sorted)?;
+            let _ = validate_map_compatibility(s, *source_sorted, t, *target_sorted)?;
         }
         (DataType::Dictionary(s_key, s_val), DataType::Dictionary(t_key, t_val)) => {
             if !can_cast_types(s_key, t_key) {
@@ -1672,18 +1657,10 @@ mod tests {
                 field("ignored", DataType::Utf8),
             ]),
         );
-        assert!(
-            validate_data_type_compatibility(
-                "map_col",
-                source_col.data_type(),
-                &target_type
-            )
-            .is_err(),
-            "planner accepted removal of a field from an unsorted Map key Struct"
-        );
-        assert!(
-            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).is_err(),
-            "runtime accepted removal of a field from an unsorted Map key Struct"
+        assert_map_planning_runtime_error(
+            &source_col,
+            &target_type,
+            "Cannot remove field 'tenant' from a Map key Struct",
         );
     }
 
@@ -1720,18 +1697,10 @@ mod tests {
             "values",
             true,
         );
-        assert!(
-            validate_data_type_compatibility(
-                "map_col",
-                source_col.data_type(),
-                &target_type
-            )
-            .is_err(),
-            "planner accepted schema evolution of a sorted Map key Struct"
-        );
-        assert!(
-            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).is_err(),
-            "runtime accepted schema evolution of a sorted Map key Struct"
+        assert_map_planning_runtime_error(
+            &source_col,
+            &target_type,
+            "Cannot evolve key type of a sorted Map",
         );
     }
 
@@ -1759,7 +1728,6 @@ mod tests {
         let result =
             cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
         assert_eq!(result.data_type(), &target_type);
-        assert!(matches!(result.data_type(), DataType::Map(_, true)));
         let map = result.as_any().downcast_ref::<MapArray>().unwrap();
         let values = map.values().as_struct();
         assert_eq!(get_column_as!(values, "amount", Int64Array).value(0), 10);
@@ -1794,7 +1762,6 @@ mod tests {
         let result =
             cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
         assert_eq!(result.data_type(), &target_type);
-        assert!(matches!(result.data_type(), DataType::Map(_, false)));
         let map = result.as_any().downcast_ref::<MapArray>().unwrap();
         let keys = map.keys().as_struct();
         assert_eq!(get_column_as!(keys, "id", Int32Array).value(0), 1);
