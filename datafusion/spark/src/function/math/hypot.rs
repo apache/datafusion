@@ -25,6 +25,7 @@ use datafusion_common::utils::take_function_args;
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_functions::utils::make_scalar_function;
 
 /// Spark-compatible `hypot` function.
 ///
@@ -46,8 +47,7 @@ impl Default for SparkHypot {
 impl SparkHypot {
     pub fn new() -> Self {
         Self {
-            // Spark only defines hypot over doubles; `exact` makes coercion
-            // guarantee both inputs are Float64 before `invoke` runs.
+            // Spark only defines hypot over doubles
             signature: Signature::exact(
                 vec![DataType::Float64, DataType::Float64],
                 Volatility::Immutable,
@@ -70,21 +70,15 @@ impl ScalarUDFImpl for SparkHypot {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let num_rows = args.number_rows;
-        let [x, y] = take_function_args(self.name(), args.args)?;
-
-        // Broadcast scalars to arrays so one path covers every combination.
-        let x = x.to_array(num_rows)?;
-        let y = y.to_array(num_rows)?;
-
-        // Safe: the `exact` signature guarantees Float64 inputs.
-        let x = x.as_primitive::<Float64Type>();
-        let y = y.as_primitive::<Float64Type>();
-
-        // `binary` applies the op element-wise and returns NULL when either
-        // input is NULL — matching Spark's null semantics.
-        let result: Float64Array = binary(x, y, |a, b| a.hypot(b))?;
-
-        Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
+        make_scalar_function(spark_hypot, vec![])(&args.args)
     }
+}
+
+fn spark_hypot(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let [x, y] = take_function_args("hypot", args)?;
+
+    let x = x.as_primitive::<Float64Type>();
+    let y = y.as_primitive::<Float64Type>();
+    let result: Float64Array = binary(x, y, |a, b| a.hypot(b))?;
+    Ok(Arc::new(result))
 }
