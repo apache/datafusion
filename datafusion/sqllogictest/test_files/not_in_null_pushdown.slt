@@ -1,0 +1,48 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Regression test for NOT IN null-aware semantics. The right-side NULL must not
+# be removed by inferred predicate pushdown through the null-aware anti join.
+
+statement ok
+CREATE TABLE pushdown_t(id INT, a INT)
+
+statement ok
+INSERT INTO pushdown_t VALUES (1, 1), (2, 2)
+
+statement ok
+CREATE TABLE pushdown_u(k INT)
+
+statement ok
+INSERT INTO pushdown_u VALUES (NULL)
+
+# Expected result is empty:
+# - id=1: a <> 1 is false
+# - id=2: a <> 1 is true, but 2 NOT IN (NULL) is UNKNOWN
+# WHERE only keeps TRUE, so neither row should be returned.
+query I
+SELECT id
+FROM pushdown_t
+WHERE a != 1
+  AND a NOT IN (SELECT k FROM pushdown_u);
+----
+
+statement ok
+DROP TABLE pushdown_t
+
+statement ok
+DROP TABLE pushdown_u
