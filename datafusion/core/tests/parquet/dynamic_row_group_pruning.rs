@@ -433,3 +433,140 @@ async fn dynamic_rg_pruning_coexists_with_row_filter() {
         output.description(),
     );
 }
+
+/// Build five two-column `RecordBatch`es: `a` is physically clustered
+/// (batch `i` carries `a ∈ [i*100, (i+1)*100)`, disjoint per-RG stats)
+/// and `b` is a per-batch shuffle (identical `[0, 100)` range in every
+/// RG, useless for pruning).
+fn build_two_col_leading_clustered(schema: &Arc<Schema>) -> Vec<RecordBatch> {
+    (0..5i64)
+        .map(|rg| {
+            let base = rg * 100;
+            let a: Vec<i64> = (base..base + 100).collect();
+            // pseudo-shuffled b, same value set in every RG
+            let b: Vec<i64> = (0..100).map(|i| (i * 37) % 100).collect();
+            RecordBatch::try_new(
+                Arc::clone(schema),
+                vec![
+                    Arc::new(Int64Array::from(a)) as ArrayRef,
+                    Arc::new(Int64Array::from(b)) as ArrayRef,
+                ],
+            )
+            .unwrap()
+        })
+        .collect()
+}
+
+/// Build five two-column `RecordBatch`es where the *leading* sort key
+/// ties everywhere (`a = 1` in every row / RG) and the *secondary* key
+/// is clustered but stored in DESC disk order: batch 0 carries
+/// `b ∈ [400, 500)`, batch 4 carries `b ∈ [0, 100)`.
+///
+/// An `ORDER BY a, b LIMIT k` query wants the rows in batch 4 first;
+/// reading disk order decodes every RG with a monotonically *improving*
+/// threshold that never proves a later RG unwinnable.
+fn build_two_col_leading_tied_desc(schema: &Arc<Schema>) -> Vec<RecordBatch> {
+    (0..5i64)
+        .map(|rg| {
+            let base = (4 - rg) * 100;
+            let a: Vec<i64> = vec![1; 100];
+            let b: Vec<i64> = (base..base + 100).collect();
+            RecordBatch::try_new(
+                Arc::clone(schema),
+                vec![
+                    Arc::new(Int64Array::from(a)) as ArrayRef,
+                    Arc::new(Int64Array::from(b)) as ArrayRef,
+                ],
+            )
+            .unwrap()
+        })
+        .collect()
+}
+
+fn two_col_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, false),
+        Field::new("b", DataType::Int64, false),
+    ]))
+}
+
+/// A multi-column `ORDER BY a, b LIMIT k` must still engage the runtime
+/// RG pruner through the *leading* disjunct of the lexicographic dynamic
+/// filter (`a < x OR (a = x AND b < y)`): once the heap fills from the
+/// first (best) row group, `min(a) > x` alone proves later RGs
+/// unwinnable regardless of `b`.
+#[tokio::test]
+async fn dynamic_rg_pruning_fires_for_multi_column_sort_leading_clustered() {
+    let schema = two_col_schema();
+    let batches = build_two_col_leading_clustered(&schema);
+
+    let mut ctx = ContextWithParquet::with_custom_data(
+        Scenario::Int,
+        RowGroup(100),
+        Arc::clone(&schema),
+        batches,
+    )
+    .await;
+
+    let output = ctx
+        .query("SELECT a, b FROM t ORDER BY a ASC, b ASC LIMIT 5")
+        .await;
+
+    assert_eq!(output.result_rows, 5, "query must return LIMIT rows");
+
+    let pruned = output
+        .row_groups_pruned_dynamic_filter()
+        .expect("`row_groups_pruned_dynamic_filter` metric must be registered");
+    assert!(
+        pruned >= 1,
+        "multi-column TopK must prune via the leading column's disjunct; \
+         pruned={pruned}\n{}",
+        output.description(),
+    );
+}
+
+/// When the leading sort key ties across all row groups, pruning (and
+/// reading the right RG first) must fall to the *secondary* key: RG
+/// stats give `min(a) = max(a) = 1` everywhere, so the lex dynamic
+/// filter reduces to `a = 1 AND b < y` — prunable via `min(b)`.
+///
+/// The disk order is adversarial (secondary key DESC), so without
+/// multi-column stats reorder the scan reads the worst RG first and the
+/// threshold never proves later RGs unwinnable. With multi-column
+/// reorder the best RG is read first and every other RG is pruned.
+#[tokio::test]
+async fn dynamic_rg_pruning_fires_for_multi_column_sort_leading_tied() {
+    let schema = two_col_schema();
+    let batches = build_two_col_leading_tied_desc(&schema);
+
+    let mut ctx = ContextWithParquet::with_custom_data(
+        Scenario::Int,
+        RowGroup(100),
+        Arc::clone(&schema),
+        batches,
+    )
+    .await;
+
+    let output = ctx
+        .query("SELECT a, b FROM t ORDER BY a ASC, b ASC LIMIT 5")
+        .await;
+
+    assert_eq!(output.result_rows, 5, "query must return LIMIT rows");
+    let formatted = output.pretty_results();
+    for b in [0i64, 1, 2, 3, 4] {
+        assert!(
+            formatted.contains(&format!("| {b} ")),
+            "output must contain b={b}; got:\n{formatted}",
+        );
+    }
+
+    let pruned = output
+        .row_groups_pruned_dynamic_filter()
+        .expect("`row_groups_pruned_dynamic_filter` metric must be registered");
+    assert!(
+        pruned >= 1,
+        "with the leading key tied everywhere, the secondary key must \
+         drive RG reorder + pruning; pruned={pruned}\n{}",
+        output.description(),
+    );
+}
