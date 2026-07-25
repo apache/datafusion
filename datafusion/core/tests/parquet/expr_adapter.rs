@@ -19,9 +19,10 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, FixedSizeListArray, Int32Array, Int64Array,
-    LargeListArray, ListArray, RecordBatch, StringArray, StructArray, record_batch,
+    LargeListArray, ListArray, MapArray, RecordBatch, StringArray, StructArray,
+    record_batch,
 };
-use arrow::buffer::OffsetBuffer;
+use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::concat_batches;
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
 use bytes::{BufMut, BytesMut};
@@ -924,6 +925,116 @@ async fn test_struct_schema_evolution_projection_and_filter() -> Result<()> {
         .downcast_ref::<BooleanArray>()
         .expect("extra should be a boolean array");
     assert_eq!(extra.null_count(), 3);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_map_value_struct_schema_evolution_end_to_end() -> Result<()> {
+    let physical_value_fields: Fields = vec![
+        Arc::new(Field::new("amount", DataType::Int32, false)),
+        Arc::new(Field::new("ignored", DataType::Utf8, true)),
+    ]
+    .into();
+    let values = StructArray::new(
+        physical_value_fields.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![10])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["x"])) as ArrayRef,
+        ],
+        None,
+    );
+    let entry_fields: Fields = vec![
+        Arc::new(Field::new("keys", DataType::Utf8, false)),
+        Arc::new(Field::new(
+            "values",
+            DataType::Struct(physical_value_fields),
+            true,
+        )),
+    ]
+    .into();
+    let entries = StructArray::new(
+        entry_fields.clone(),
+        vec![
+            Arc::new(StringArray::from(vec!["a"])) as ArrayRef,
+            Arc::new(values) as ArrayRef,
+        ],
+        None,
+    );
+    let map = MapArray::new(
+        Arc::new(Field::new("entries", DataType::Struct(entry_fields), false)),
+        OffsetBuffer::new(vec![0, 1, 1].into()),
+        entries,
+        Some(NullBuffer::from(vec![true, false])),
+        false,
+    );
+    let batch = RecordBatch::try_from_iter(vec![
+        ("row_id", Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef),
+        ("attributes", Arc::new(map) as ArrayRef),
+    ])?;
+
+    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    write_parquet(batch, Arc::clone(&store), "map_evolution/data.parquet").await;
+
+    let target_value_fields: Fields = vec![
+        Arc::new(Field::new("amount", DataType::Int64, false)),
+        Arc::new(Field::new("currency", DataType::Utf8, true)),
+    ]
+    .into();
+    let target_entries = Field::new(
+        "entries",
+        DataType::Struct(
+            vec![
+                Arc::new(Field::new("keys", DataType::Utf8, false)),
+                Arc::new(Field::new(
+                    "values",
+                    DataType::Struct(target_value_fields),
+                    true,
+                )),
+            ]
+            .into(),
+        ),
+        false,
+    );
+    let table_schema = Arc::new(Schema::new(vec![
+        Field::new("row_id", DataType::Int32, false),
+        Field::new(
+            "attributes",
+            DataType::Map(Arc::new(target_entries), false),
+            true,
+        ),
+    ]));
+
+    let ctx = test_context();
+    register_memory_listing_table(&ctx, store, "memory:///map_evolution/", table_schema)
+        .await;
+
+    let batches = ctx
+        .sql("SELECT * FROM t ORDER BY row_id")
+        .await?
+        .collect()
+        .await?;
+    let map = batches[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<MapArray>()
+        .expect("attributes should be a MapArray");
+    assert!(map.is_valid(0));
+    assert!(map.is_null(1));
+    let values = map
+        .values()
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("map values should be a StructArray");
+    let amounts = values
+        .column_by_name("amount")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    assert_eq!(amounts.values(), &[10]);
+    assert_eq!(values.column_by_name("currency").unwrap().null_count(), 1);
+    assert!(values.column_by_name("ignored").is_none());
 
     Ok(())
 }

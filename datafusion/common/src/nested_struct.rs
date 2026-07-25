@@ -19,7 +19,8 @@ use crate::error::{_plan_err, Result};
 use arrow::{
     array::{
         Array, ArrayRef, AsArray, DictionaryArray, FixedSizeListArray, GenericListArray,
-        GenericListViewArray, StructArray, downcast_integer, make_array, new_null_array,
+        GenericListViewArray, MapArray, StructArray, downcast_integer, make_array,
+        new_null_array,
     },
     buffer::NullBuffer,
     compute::{CastOptions, can_cast_types, cast_with_options},
@@ -206,6 +207,17 @@ pub fn cast_column(
             cast_list_view_column::<i64>(source_col, target_inner, cast_options)
         }
         (
+            DataType::Map(source_entries, source_sorted),
+            DataType::Map(target_entries, target_sorted),
+        ) => cast_map_column(
+            source_col,
+            source_entries,
+            *source_sorted,
+            target_entries,
+            *target_sorted,
+            cast_options,
+        ),
+        (
             DataType::Dictionary(source_key_type, _),
             DataType::Dictionary(target_key_type, target_value_type),
         ) => cast_dictionary_column(
@@ -338,6 +350,39 @@ fn mask_array_values(
     Ok(make_array(
         values.to_data().into_builder().nulls(nulls).build()?,
     ))
+}
+
+fn cast_map_column(
+    source_col: &ArrayRef,
+    source_entries: &FieldRef,
+    source_sorted: bool,
+    target_entries: &FieldRef,
+    target_sorted: bool,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef> {
+    validate_map_compatibility(
+        source_entries,
+        source_sorted,
+        target_entries,
+        target_sorted,
+    )?;
+    let source_map = source_col.as_map();
+    let source_entries: ArrayRef = Arc::new(source_map.entries().clone());
+    let cast_entries =
+        cast_column(&source_entries, target_entries.data_type(), cast_options)?;
+    let cast_entries = cast_entries
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .expect("map entries always cast to a struct")
+        .clone();
+
+    Ok(Arc::new(MapArray::try_new(
+        Arc::clone(target_entries),
+        source_map.offsets().clone(),
+        cast_entries,
+        source_map.nulls().cloned(),
+        target_sorted,
+    )?))
 }
 
 fn cast_dictionary_column(
@@ -490,6 +535,40 @@ fn validate_field_compatibility(
     )
 }
 
+fn validate_map_compatibility(
+    source_entries: &Field,
+    source_sorted: bool,
+    target_entries: &Field,
+    target_sorted: bool,
+) -> Result<()> {
+    if source_sorted != target_sorted {
+        return _plan_err!("Cannot change Map sorted flag during schema adaptation");
+    }
+    validate_map_entries_field(source_entries)?;
+    validate_map_entries_field(target_entries)?;
+    validate_field_compatibility(source_entries, target_entries)
+}
+
+fn validate_map_entries_field(entries: &Field) -> Result<()> {
+    if entries.is_nullable() {
+        return _plan_err!("Map entries field must be non-nullable");
+    }
+
+    let Struct(fields) = entries.data_type() else {
+        return _plan_err!("Map entries field must be a struct");
+    };
+    if fields.len() != 2 {
+        return _plan_err!(
+            "Map entries struct must contain exactly two fields, found {}",
+            fields.len()
+        );
+    }
+    if fields[0].is_nullable() {
+        return _plan_err!("Map key field must be non-nullable");
+    }
+    Ok(())
+}
+
 /// Validates that `source_type` can be cast to `target_type`, recursively
 /// handling container types that wrap structs.
 pub fn validate_data_type_compatibility(
@@ -512,6 +591,9 @@ pub fn validate_data_type_compatibility(
         | (DataType::ListView(s), DataType::ListView(t))
         | (DataType::LargeListView(s), DataType::LargeListView(t)) => {
             validate_field_compatibility(s, t)?;
+        }
+        (DataType::Map(s, source_sorted), DataType::Map(t, target_sorted)) => {
+            validate_map_compatibility(s, *source_sorted, t, *target_sorted)?;
         }
         (DataType::Dictionary(s_key, s_val), DataType::Dictionary(t_key, t_val)) => {
             if !can_cast_types(s_key, t_key) {
@@ -543,7 +625,9 @@ pub fn validate_data_type_compatibility(
 ///
 /// This is the case when both types are struct types, or both are the same
 /// container type (List, LargeList, equal-width FixedSizeList, ListView,
-/// LargeListView, Dictionary) wrapping types that recursively contain structs.
+/// LargeListView, Map, Dictionary) wrapping types that recursively contain structs.
+///
+/// For maps, recursion includes both the key and value fields of the entries struct.
 ///
 /// Use this predicate at both planning time (to decide whether to apply struct
 /// compatibility validation) and execution time (to decide whether to route
@@ -564,6 +648,9 @@ pub fn requires_nested_struct_cast(
         | (DataType::LargeList(s), DataType::LargeList(t))
         | (DataType::ListView(s), DataType::ListView(t))
         | (DataType::LargeListView(s), DataType::LargeListView(t)) => {
+            requires_nested_struct_cast(s.data_type(), t.data_type())
+        }
+        (DataType::Map(s, _), DataType::Map(t, _)) => {
             requires_nested_struct_cast(s.data_type(), t.data_type())
         }
         (DataType::Dictionary(_, s_val), DataType::Dictionary(_, t_val)) => {
@@ -600,7 +687,7 @@ mod tests {
             ListArray, ListViewArray, MapArray, MapBuilder, NullArray, StringArray,
             StringBuilder,
         },
-        buffer::{NullBuffer, ScalarBuffer},
+        buffer::{NullBuffer, OffsetBuffer, ScalarBuffer},
         datatypes::{DataType, Field, FieldRef, Int32Type},
     };
     /// Macro to extract and downcast a column from a StructArray
@@ -1290,6 +1377,224 @@ mod tests {
         let b_col = get_column_as!(&struct_array, "b", Int32Array);
         assert!(b_col.is_null(0));
         assert!(b_col.is_null(1));
+    }
+
+    fn map_type(key_type: DataType, value_type: DataType) -> DataType {
+        DataType::Map(
+            Arc::new(non_null_field(
+                "entries",
+                struct_type(vec![
+                    non_null_field("keys", key_type),
+                    field("values", value_type),
+                ]),
+            )),
+            false,
+        )
+    }
+
+    fn struct_map_array() -> ArrayRef {
+        let keys = StructArray::from(vec![(
+            arc_field("id", DataType::Int32),
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+        )]);
+        let values = StructArray::from(vec![
+            (
+                arc_field("amount", DataType::Int32),
+                Arc::new(Int32Array::from(vec![10])) as ArrayRef,
+            ),
+            (
+                arc_field("ignored", DataType::Utf8),
+                Arc::new(StringArray::from(vec!["x"])) as ArrayRef,
+            ),
+        ]);
+        let entries = StructArray::new(
+            vec![
+                Arc::new(non_null_field("keys", keys.data_type().clone())),
+                arc_field("values", values.data_type().clone()),
+            ]
+            .into(),
+            vec![Arc::new(keys), Arc::new(values)],
+            None,
+        );
+        Arc::new(MapArray::new(
+            Arc::new(non_null_field("entries", entries.data_type().clone())),
+            OffsetBuffer::new(vec![0, 1, 1].into()),
+            entries,
+            Some(NullBuffer::from(vec![true, false])),
+            false,
+        ))
+    }
+
+    #[test]
+    fn test_cast_map_struct_key_and_value() {
+        let source_col = struct_map_array();
+        let target_type = map_type(
+            struct_type(vec![
+                field("id", DataType::Int64),
+                field("label", DataType::Utf8),
+            ]),
+            struct_type(vec![
+                field("amount", DataType::Int64),
+                field("currency", DataType::Utf8),
+            ]),
+        );
+
+        assert!(requires_nested_struct_cast(
+            source_col.data_type(),
+            &target_type
+        ));
+        assert!(
+            validate_data_type_compatibility(
+                "map_col",
+                source_col.data_type(),
+                &target_type
+            )
+            .is_ok()
+        );
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert!(map.is_valid(0));
+        assert!(map.is_null(1));
+
+        let keys = map.keys().as_any().downcast_ref::<StructArray>().unwrap();
+        let key_ids = get_column_as!(keys, "id", Int64Array);
+        assert_eq!(key_ids.values(), &[1]);
+        let key_labels = get_column_as!(keys, "label", StringArray);
+        assert!(key_labels.is_null(0));
+
+        let values = map.values().as_any().downcast_ref::<StructArray>().unwrap();
+        let amounts = get_column_as!(values, "amount", Int64Array);
+        assert_eq!(amounts.values(), &[10]);
+        let currencies = get_column_as!(values, "currency", StringArray);
+        assert!(currencies.is_null(0));
+        assert!(values.column_by_name("ignored").is_none());
+    }
+
+    #[test]
+    fn test_cast_all_null_map_with_struct_value() {
+        let source_type = map_type(
+            DataType::Utf8,
+            struct_type(vec![field("amount", DataType::Int32)]),
+        );
+        let target_type = map_type(
+            DataType::Utf8,
+            struct_type(vec![
+                field("amount", DataType::Int64),
+                field("currency", DataType::Utf8),
+            ]),
+        );
+        let source_col = new_null_array(&source_type, 2);
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.null_count(), 2);
+        assert!(map.entries().is_empty());
+        assert_eq!(map.data_type(), &target_type);
+    }
+
+    #[test]
+    fn test_map_entry_invariants_rejected_during_validation() {
+        let source_col = struct_map_array();
+        let DataType::Map(target_entries, sorted) = map_type(
+            struct_type(vec![field("id", DataType::Int32)]),
+            struct_type(vec![field("amount", DataType::Int32)]),
+        ) else {
+            unreachable!()
+        };
+        let nullable_entries = DataType::Map(
+            Arc::new(target_entries.as_ref().clone().with_nullable(true)),
+            sorted,
+        );
+        let error = validate_data_type_compatibility(
+            "map_col",
+            source_col.data_type(),
+            &nullable_entries,
+        )
+        .unwrap_err()
+        .to_string();
+        assert_contains!(error, "Map entries field must be non-nullable");
+
+        let Struct(fields) = target_entries.data_type() else {
+            unreachable!()
+        };
+        let nullable_key_entries = Arc::new(Field::new(
+            "entries",
+            Struct(
+                vec![
+                    Arc::new(fields[0].as_ref().clone().with_nullable(true)),
+                    Arc::clone(&fields[1]),
+                ]
+                .into(),
+            ),
+            false,
+        ));
+        let error = validate_data_type_compatibility(
+            "map_col",
+            source_col.data_type(),
+            &DataType::Map(nullable_key_entries, sorted),
+        )
+        .unwrap_err()
+        .to_string();
+        assert_contains!(error, "Map key field must be non-nullable");
+
+        let error = validate_data_type_compatibility(
+            "map_col",
+            source_col.data_type(),
+            &DataType::Map(target_entries, !sorted),
+        )
+        .unwrap_err()
+        .to_string();
+        assert_contains!(error, "Cannot change Map sorted flag");
+    }
+
+    #[test]
+    fn test_map_struct_planner_runtime_parity_on_invalid_evolution() {
+        let source_col = struct_map_array();
+        let target_type = map_type(
+            struct_type(vec![field("id", DataType::Int32)]),
+            struct_type(vec![
+                field("amount", DataType::Int32),
+                non_null_field("currency", DataType::Utf8),
+            ]),
+        );
+
+        let planning_error = validate_data_type_compatibility(
+            "map_col",
+            source_col.data_type(),
+            &target_type,
+        )
+        .unwrap_err()
+        .to_string();
+        assert_contains!(planning_error, "target field 'currency' is non-nullable");
+
+        let runtime_error = cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS)
+            .unwrap_err()
+            .to_string();
+        assert_contains!(runtime_error, "target field 'currency' is non-nullable");
+
+        let incompatible_target = map_type(
+            struct_type(vec![field("id", DataType::Int32)]),
+            struct_type(vec![field(
+                "amount",
+                struct_type(vec![field("value", DataType::Utf8)]),
+            )]),
+        );
+        let planning_error = validate_data_type_compatibility(
+            "map_col",
+            source_col.data_type(),
+            &incompatible_target,
+        )
+        .unwrap_err()
+        .to_string();
+        assert_contains!(planning_error, "Cannot cast struct field 'amount'");
+        let runtime_error =
+            cast_column(&source_col, &incompatible_target, &DEFAULT_CAST_OPTIONS)
+                .unwrap_err()
+                .to_string();
+        assert_contains!(runtime_error, "Cannot cast struct field 'amount'");
     }
 
     #[test]
