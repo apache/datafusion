@@ -43,6 +43,7 @@ use datafusion_cli::{
     pool_type::PoolType,
     print_format::PrintFormat,
     print_options::{MaxRows, PrintOptions},
+    repl_options::ReplOptions,
 };
 
 use clap::Parser;
@@ -311,17 +312,14 @@ async fn main_inner() -> Result<()> {
         }
     };
 
-    let history_file = args
-        .history_file
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("DATAFUSION_HISTORY_FILE").map(PathBuf::from));
-
     if repl_mode {
         if !rc.is_empty() {
             exec::exec_from_files(&ctx, rc, &print_options).await?;
         }
+        let repl_options = get_repl_options(&args.history_file);
+
         // TODO maybe we can have thiserror for cli but for now let's keep it simple
-        return exec::exec_from_repl(&ctx, &mut print_options, history_file.as_deref())
+        return exec::exec_from_repl(&ctx, &mut print_options, &repl_options)
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)));
     }
@@ -422,6 +420,16 @@ fn parse_command(command: &str) -> Result<String, String> {
         Ok(command.to_string())
     } else {
         Err("-c flag expects only non empty commands".to_string())
+    }
+}
+
+fn get_repl_options(history_file: &Option<String>) -> ReplOptions {
+    if let Some(history_file) = history_file {
+        ReplOptions {
+            history_file: PathBuf::from(history_file),
+        }
+    } else {
+        Default::default()
     }
 }
 
