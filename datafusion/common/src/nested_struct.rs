@@ -19,11 +19,11 @@ use crate::error::{_plan_err, Result};
 use arrow::{
     array::{
         Array, ArrayRef, AsArray, DictionaryArray, FixedSizeListArray, GenericListArray,
-        GenericListViewArray, MapArray, StructArray, downcast_integer, make_array,
-        new_null_array,
+        GenericListViewArray, MapArray, StructArray, UInt64Array, downcast_integer,
+        make_array, new_null_array,
     },
     buffer::NullBuffer,
-    compute::{CastOptions, can_cast_types, cast_with_options},
+    compute::{CastOptions, can_cast_types, cast_with_options, take},
     datatypes::{DataType, DataType::Struct, Field, FieldRef},
 };
 use std::{collections::HashSet, sync::Arc};
@@ -349,6 +349,13 @@ fn mask_array_values(
     ))
 }
 
+/// Casts Map children by their semantic positions: key at index 0 and value at
+/// index 1. Technical entry field names are taken from the target schema.
+///
+/// Nested Struct fields within keys and values are still matched by name. Key
+/// evolution is restricted by [`validate_map_key_compatibility`] so it cannot
+/// remove identity-bearing fields; sorted Maps require an unchanged key type.
+/// Entries hidden by null Map parents are compacted before casting.
 fn cast_map_column(
     source_map: &MapArray,
     target_entries: &FieldRef,
@@ -364,13 +371,32 @@ fn cast_map_column(
         target_entries,
         target_sorted,
     )?;
-    let source_entry_array: ArrayRef = Arc::new(source_map.entries().clone());
-    let cast_entries = cast_column(
-        &source_entry_array,
-        target_entries.data_type(),
-        cast_options,
-    )?;
-    let cast_entries = cast_entries.as_struct().clone();
+    let (_, _, target_key, target_value) =
+        map_entry_fields(source_entries, target_entries)?;
+
+    let offsets = source_map.value_offsets();
+    let has_unreachable_entries = offsets[0] != 0
+        || offsets[offsets.len() - 1] as usize != source_map.entries().len();
+    let needs_compaction = has_unreachable_entries
+        || source_map.offsets().has_non_empty_nulls(source_map.nulls());
+    let compacted_map = if needs_compaction {
+        let indices = UInt64Array::from_iter_values(0..source_map.len() as u64);
+        Some(take(source_map, &indices, None)?.as_map().clone())
+    } else {
+        None
+    };
+    let source_map = compacted_map.as_ref().unwrap_or(source_map);
+
+    let cast_keys = cast_column(source_map.keys(), target_key.data_type(), cast_options)
+        .map_err(|error| error.context("While casting Map keys"))?;
+    let cast_values =
+        cast_column(source_map.values(), target_value.data_type(), cast_options)
+            .map_err(|error| error.context("While casting Map values"))?;
+    let Struct(target_fields) = target_entries.data_type() else {
+        unreachable!("validated Map entries must be Struct")
+    };
+    let cast_entries =
+        StructArray::new(target_fields.clone(), vec![cast_keys, cast_values], None);
 
     Ok(Arc::new(MapArray::try_new(
         Arc::clone(target_entries),
@@ -540,12 +566,99 @@ fn validate_map_compatibility(
     if source_sorted != target_sorted {
         return _plan_err!("Cannot change Map sorted flag during schema adaptation");
     }
-    validate_map_entries_field(source_entries)?;
-    validate_map_entries_field(target_entries)?;
-    validate_field_compatibility(source_entries, target_entries)
+    let (source_key, source_value, target_key, target_value) =
+        map_entry_fields(source_entries, target_entries)?;
+    validate_map_key_compatibility(source_key, target_key, source_sorted)?;
+    validate_field_compatibility(source_value, target_value)
 }
 
-fn validate_map_entries_field(entries: &Field) -> Result<()> {
+fn map_entry_fields<'a>(
+    source_entries: &'a Field,
+    target_entries: &'a Field,
+) -> Result<(&'a FieldRef, &'a FieldRef, &'a FieldRef, &'a FieldRef)> {
+    let source_fields = validate_map_entries_field(source_entries)?;
+    let target_fields = validate_map_entries_field(target_entries)?;
+    Ok((
+        &source_fields[0],
+        &source_fields[1],
+        &target_fields[0],
+        &target_fields[1],
+    ))
+}
+
+fn validate_map_key_compatibility(
+    source_key: &Field,
+    target_key: &Field,
+    sorted: bool,
+) -> Result<()> {
+    if sorted && source_key.data_type() != target_key.data_type() {
+        return _plan_err!("Cannot evolve key type of a sorted Map");
+    }
+    validate_map_key_data_type(source_key.data_type(), target_key.data_type())
+}
+
+fn validate_map_key_data_type(
+    source_type: &DataType,
+    target_type: &DataType,
+) -> Result<()> {
+    if source_type == target_type {
+        return Ok(());
+    }
+
+    match (source_type, target_type) {
+        (Struct(source_fields), Struct(target_fields)) => {
+            for source_field in source_fields {
+                let Some(target_field) = target_fields
+                    .iter()
+                    .find(|target| target.name() == source_field.name())
+                else {
+                    return _plan_err!(
+                        "Cannot remove field '{}' from a Map key Struct",
+                        source_field.name()
+                    );
+                };
+                if source_field.is_nullable() && !target_field.is_nullable() {
+                    return _plan_err!(
+                        "Cannot cast nullable Map key field '{}' to non-nullable field",
+                        source_field.name()
+                    );
+                }
+                validate_map_key_data_type(
+                    source_field.data_type(),
+                    target_field.data_type(),
+                )?;
+            }
+            for target_field in target_fields {
+                if !source_fields
+                    .iter()
+                    .any(|source| source.name() == target_field.name())
+                    && !target_field.is_nullable()
+                {
+                    return _plan_err!(
+                        "Cannot add non-nullable field '{}' to a Map key Struct",
+                        target_field.name()
+                    );
+                }
+            }
+            Ok(())
+        }
+        (DataType::Int8, DataType::Int16 | DataType::Int32 | DataType::Int64)
+        | (DataType::Int16, DataType::Int32 | DataType::Int64)
+        | (DataType::Int32, DataType::Int64)
+        | (DataType::UInt8, DataType::UInt16 | DataType::UInt32 | DataType::UInt64)
+        | (DataType::UInt16, DataType::UInt32 | DataType::UInt64)
+        | (DataType::UInt32, DataType::UInt64)
+        | (DataType::Utf8, DataType::LargeUtf8 | DataType::Utf8View)
+        | (DataType::Binary, DataType::LargeBinary | DataType::BinaryView) => Ok(()),
+        _ => _plan_err!(
+            "Cannot safely evolve Map key type from {} to {}",
+            source_type,
+            target_type
+        ),
+    }
+}
+
+fn validate_map_entries_field(entries: &Field) -> Result<&[FieldRef]> {
     if entries.is_nullable() {
         return _plan_err!("Map entries field must be non-nullable");
     }
@@ -562,11 +675,23 @@ fn validate_map_entries_field(entries: &Field) -> Result<()> {
     if fields[0].is_nullable() {
         return _plan_err!("Map key field must be non-nullable");
     }
-    Ok(())
+    Ok(fields)
 }
 
 /// Validates that `source_type` can be cast to `target_type`, recursively
 /// handling container types that wrap structs.
+///
+/// # Map evolution
+///
+/// Map entry children are matched by position (key, then value), regardless of
+/// their technical field names. Nested Struct fields within each child are
+/// matched by name. Values use the standard Struct evolution rules: nullable
+/// target fields may be added and extra source fields are omitted.
+///
+/// Unsorted Struct keys may add nullable fields and use only injective primitive
+/// widening casts, but may not remove source fields. Sorted Maps require an
+/// unchanged key type. Map entries and keys must remain non-nullable, and source
+/// and target sorted flags must match.
 pub fn validate_data_type_compatibility(
     field_name: &str,
     source_type: &DataType,
@@ -1376,23 +1501,48 @@ mod tests {
     }
 
     fn map_type(key_type: DataType, value_type: DataType) -> DataType {
+        map_type_with_entry_names(key_type, value_type, "keys", "values", false)
+    }
+
+    fn map_type_with_entry_names(
+        key_type: DataType,
+        value_type: DataType,
+        key_name: &str,
+        value_name: &str,
+        sorted: bool,
+    ) -> DataType {
         DataType::Map(
             Arc::new(non_null_field(
                 "entries",
                 struct_type(vec![
-                    non_null_field("keys", key_type),
-                    field("values", value_type),
+                    non_null_field(key_name, key_type),
+                    field(value_name, value_type),
                 ]),
             )),
-            false,
+            sorted,
         )
     }
 
     fn struct_map_array() -> ArrayRef {
-        let keys = StructArray::from(vec![(
+        struct_map_array_with_sorted(false)
+    }
+
+    fn struct_map_array_with_sorted(sorted: bool) -> ArrayRef {
+        struct_map_array_with_key_fields(sorted, false)
+    }
+
+    fn struct_map_array_with_key_fields(sorted: bool, include_tenant: bool) -> ArrayRef {
+        let mut key_fields = vec![(
             arc_field("id", DataType::Int32),
             Arc::new(Int32Array::from(vec![1])) as ArrayRef,
-        )]);
+        )];
+        if include_tenant {
+            key_fields.push((
+                arc_field("tenant", DataType::Utf8),
+                Arc::new(StringArray::from(vec!["a"])) as ArrayRef,
+            ));
+        }
+        let keys = StructArray::from(key_fields);
         let values = StructArray::from(vec![
             (
                 arc_field("amount", DataType::Int32),
@@ -1417,8 +1567,286 @@ mod tests {
             OffsetBuffer::new(vec![0, 1, 1].into()),
             entries,
             Some(NullBuffer::from(vec![true, false])),
-            false,
+            sorted,
         ))
+    }
+
+    fn nested_struct_map_array(
+        key_name: &str,
+        value_name: &str,
+        sorted: bool,
+    ) -> ArrayRef {
+        let key_nested = StructArray::from(vec![(
+            arc_field("id", DataType::Int32),
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+        )]);
+        let keys = StructArray::from(vec![(
+            arc_field("nested", key_nested.data_type().clone()),
+            Arc::new(key_nested) as ArrayRef,
+        )]);
+        let value_nested = StructArray::from(vec![(
+            arc_field("amount", DataType::Int32),
+            Arc::new(Int32Array::from(vec![10])) as ArrayRef,
+        )]);
+        let values = StructArray::from(vec![(
+            arc_field("nested", value_nested.data_type().clone()),
+            Arc::new(value_nested) as ArrayRef,
+        )]);
+        let entries = StructArray::new(
+            vec![
+                Arc::new(non_null_field(key_name, keys.data_type().clone())),
+                arc_field(value_name, values.data_type().clone()),
+            ]
+            .into(),
+            vec![Arc::new(keys), Arc::new(values)],
+            None,
+        );
+        Arc::new(MapArray::new(
+            Arc::new(non_null_field("entries", entries.data_type().clone())),
+            OffsetBuffer::new(vec![0, 1].into()),
+            entries,
+            None,
+            sorted,
+        ))
+    }
+
+    #[test]
+    fn test_map_entry_names_match_positionally_and_adapt_nested_structs() {
+        let source_col = nested_struct_map_array("source_keys", "source_values", false);
+        let target_type = map_type_with_entry_names(
+            struct_type(vec![field(
+                "nested",
+                struct_type(vec![
+                    field("id", DataType::Int64),
+                    field("label", DataType::Utf8),
+                ]),
+            )]),
+            struct_type(vec![field(
+                "nested",
+                struct_type(vec![
+                    field("amount", DataType::Int64),
+                    field("currency", DataType::Utf8),
+                ]),
+            )]),
+            "key",
+            "value",
+            false,
+        );
+
+        assert!(
+            validate_data_type_compatibility(
+                "map_col",
+                source_col.data_type(),
+                &target_type
+            )
+            .is_ok()
+        );
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        let (key_field, value_field) = map.entries_fields();
+        assert_eq!(key_field.name(), "key");
+        assert_eq!(value_field.name(), "value");
+        let keys = map.keys().as_struct();
+        let key_nested = keys.column_by_name("nested").unwrap().as_struct();
+        assert_eq!(get_column_as!(key_nested, "id", Int64Array).value(0), 1);
+        assert!(get_column_as!(key_nested, "label", StringArray).is_null(0));
+        let values = map.values().as_struct();
+        let value_nested = values.column_by_name("nested").unwrap().as_struct();
+        assert_eq!(
+            get_column_as!(value_nested, "amount", Int64Array).value(0),
+            10
+        );
+        assert!(get_column_as!(value_nested, "currency", StringArray).is_null(0));
+    }
+
+    #[test]
+    fn test_unsorted_map_key_struct_field_removal_rejected_by_planner_and_runtime() {
+        let source_col = struct_map_array_with_key_fields(false, true);
+        let target_type = map_type(
+            struct_type(vec![field("id", DataType::Int32)]),
+            struct_type(vec![
+                field("amount", DataType::Int32),
+                field("ignored", DataType::Utf8),
+            ]),
+        );
+        assert!(
+            validate_data_type_compatibility(
+                "map_col",
+                source_col.data_type(),
+                &target_type
+            )
+            .is_err(),
+            "planner accepted removal of a field from an unsorted Map key Struct"
+        );
+        assert!(
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).is_err(),
+            "runtime accepted removal of a field from an unsorted Map key Struct"
+        );
+    }
+
+    #[test]
+    fn test_unsorted_map_non_injective_key_cast_rejected() {
+        let source_col = struct_map_array();
+        let target_type = map_type(
+            struct_type(vec![field("id", DataType::Float64)]),
+            struct_type(vec![
+                field("amount", DataType::Int32),
+                field("ignored", DataType::Utf8),
+            ]),
+        );
+        assert_map_planning_runtime_error(
+            &source_col,
+            &target_type,
+            "Cannot safely evolve Map key type",
+        );
+    }
+
+    #[test]
+    fn test_sorted_map_key_struct_schema_evolution_rejected() {
+        let source_col = struct_map_array_with_sorted(true);
+        let target_type = map_type_with_entry_names(
+            struct_type(vec![
+                field("id", DataType::Int32),
+                field("label", DataType::Utf8),
+            ]),
+            struct_type(vec![
+                field("amount", DataType::Int32),
+                field("ignored", DataType::Utf8),
+            ]),
+            "keys",
+            "values",
+            true,
+        );
+        assert!(
+            validate_data_type_compatibility(
+                "map_col",
+                source_col.data_type(),
+                &target_type
+            )
+            .is_err(),
+            "planner accepted schema evolution of a sorted Map key Struct"
+        );
+        assert!(
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).is_err(),
+            "runtime accepted schema evolution of a sorted Map key Struct"
+        );
+    }
+
+    #[test]
+    fn test_sorted_map_value_struct_schema_evolution_preserves_sorted() {
+        let source_col = struct_map_array_with_sorted(true);
+        let target_type = map_type_with_entry_names(
+            struct_type(vec![field("id", DataType::Int32)]),
+            struct_type(vec![
+                field("amount", DataType::Int64),
+                field("currency", DataType::Utf8),
+            ]),
+            "keys",
+            "values",
+            true,
+        );
+        assert!(
+            validate_data_type_compatibility(
+                "map_col",
+                source_col.data_type(),
+                &target_type
+            )
+            .is_ok()
+        );
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        assert_eq!(result.data_type(), &target_type);
+        assert!(matches!(result.data_type(), DataType::Map(_, true)));
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        let values = map.values().as_struct();
+        assert_eq!(get_column_as!(values, "amount", Int64Array).value(0), 10);
+        assert!(get_column_as!(values, "currency", StringArray).is_null(0));
+    }
+
+    #[test]
+    fn test_null_map_parent_hides_invalid_nested_value_cast() {
+        let values = StructArray::from(vec![(
+            arc_field("amount", DataType::Utf8),
+            Arc::new(StringArray::from(vec!["bad", "2"])) as ArrayRef,
+        )]);
+        let keys = StringArray::from(vec!["hidden", "visible"]);
+        let entries = StructArray::new(
+            vec![
+                Arc::new(non_null_field("keys", DataType::Utf8)),
+                arc_field("values", values.data_type().clone()),
+            ]
+            .into(),
+            vec![Arc::new(keys), Arc::new(values)],
+            None,
+        );
+        let source_col: ArrayRef = Arc::new(MapArray::new(
+            Arc::new(non_null_field("entries", entries.data_type().clone())),
+            OffsetBuffer::new(vec![0, 1, 2].into()),
+            entries,
+            Some(NullBuffer::from(vec![false, true])),
+            false,
+        ));
+        let target_type = map_type(
+            DataType::Utf8,
+            struct_type(vec![field("amount", DataType::Int32)]),
+        );
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert!(map.is_null(0));
+        assert_eq!(map.value_offsets(), &[0, 0, 1]);
+        let visible_entries = map.value(1);
+        let visible_values = visible_entries
+            .column_by_name("values")
+            .unwrap()
+            .as_struct();
+        assert_eq!(
+            get_column_as!(visible_values, "amount", Int32Array).value(0),
+            2
+        );
+    }
+
+    #[test]
+    fn test_sliced_map_ignores_unreachable_invalid_nested_value() {
+        let values = StructArray::from(vec![(
+            arc_field("amount", DataType::Utf8),
+            Arc::new(StringArray::from(vec!["bad", "2"])) as ArrayRef,
+        )]);
+        let entries = StructArray::new(
+            vec![
+                Arc::new(non_null_field("keys", DataType::Utf8)),
+                arc_field("values", values.data_type().clone()),
+            ]
+            .into(),
+            vec![
+                Arc::new(StringArray::from(vec!["unreachable", "visible"])),
+                Arc::new(values),
+            ],
+            None,
+        );
+        let source_col: ArrayRef = Arc::new(
+            MapArray::new(
+                Arc::new(non_null_field("entries", entries.data_type().clone())),
+                OffsetBuffer::new(vec![0, 1, 2].into()),
+                entries,
+                None,
+                false,
+            )
+            .slice(1, 1),
+        );
+        let target_type = map_type(
+            DataType::Utf8,
+            struct_type(vec![field("amount", DataType::Int32)]),
+        );
+
+        let result =
+            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
+        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(map.value_offsets(), &[0, 1]);
+        let values = map.values().as_struct();
+        assert_eq!(get_column_as!(values, "amount", Int32Array).value(0), 2);
     }
 
     #[test]
@@ -1979,6 +2407,10 @@ mod tests {
         assert!(requires_nested_struct_cast(
             &DataType::Dictionary(Box::new(DataType::Int32), Box::new(s1.clone())),
             &DataType::Dictionary(Box::new(DataType::Int32), Box::new(s2.clone())),
+        ));
+        assert!(requires_nested_struct_cast(
+            &map_type(DataType::Int32, DataType::Utf8),
+            &map_type(DataType::Float64, DataType::Utf8),
         ));
         assert!(requires_nested_struct_cast(
             &DataType::ListView(arc_field("item", s1.clone())),

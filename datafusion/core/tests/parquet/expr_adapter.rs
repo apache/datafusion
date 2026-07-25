@@ -985,9 +985,9 @@ async fn test_map_value_struct_schema_evolution_end_to_end() -> Result<()> {
         "entries",
         DataType::Struct(
             vec![
-                Arc::new(Field::new("keys", DataType::Utf8, false)),
+                Arc::new(Field::new("key", DataType::Utf8, false)),
                 Arc::new(Field::new(
-                    "values",
+                    "value",
                     DataType::Struct(target_value_fields),
                     true,
                 )),
@@ -1021,6 +1021,15 @@ async fn test_map_value_struct_schema_evolution_end_to_end() -> Result<()> {
         .expect("attributes should be a MapArray");
     assert!(map.is_valid(0));
     assert!(map.is_null(1));
+    let (key_field, value_field) = map.entries_fields();
+    assert_eq!(key_field.name(), "key");
+    assert_eq!(value_field.name(), "value");
+    let keys = map
+        .keys()
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("map keys should be a StringArray");
+    assert_eq!(keys.value(0), "a");
     let values = map
         .values()
         .as_any()
