@@ -244,6 +244,59 @@ impl ExecutionPlan for GlobalLimitExec {
     fn supports_limit_pushdown(&self) -> bool {
         true
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::GlobalLimit(Box::new(
+                    protobuf::GlobalLimitExecNode {
+                        input: Some(Box::new(input)),
+                        skip: self.skip() as u32,
+                        fetch: match self.fetch() {
+                            Some(n) => n as i64,
+                            _ => -1, // no limit
+                        },
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl GlobalLimitExec {
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let limit = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::GlobalLimit,
+            "GlobalLimitExec",
+        );
+        let input = ctx.decode_required_child(
+            limit.input.as_deref(),
+            "GlobalLimitExec",
+            "input",
+        )?;
+        let fetch = if limit.fetch >= 0 {
+            Some(limit.fetch as usize)
+        } else {
+            None
+        };
+        Ok(Arc::new(GlobalLimitExec::new(
+            input,
+            limit.skip as usize,
+            fetch,
+        )))
+    }
 }
 
 /// LocalLimitExec applies a limit to a single partition
@@ -418,6 +471,43 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::LowerEqual
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::LocalLimit(Box::new(
+                    protobuf::LocalLimitExecNode {
+                        input: Some(Box::new(input)),
+                        fetch: self.fetch() as u32,
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl LocalLimitExec {
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let limit = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::LocalLimit,
+            "LocalLimitExec",
+        );
+        let input =
+            ctx.decode_required_child(limit.input.as_deref(), "LocalLimitExec", "input")?;
+        Ok(Arc::new(LocalLimitExec::new(input, limit.fetch as usize)))
     }
 }
 
@@ -749,80 +839,73 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_row_number_statistics_for_global_limit() -> Result<()> {
-        let row_count = row_number_statistics_for_global_limit(0, Some(10)).await?;
+    #[test]
+    fn test_row_number_statistics_for_global_limit() -> Result<()> {
+        let row_count = row_number_statistics_for_global_limit(0, Some(10))?;
         assert_eq!(row_count, Precision::Exact(10));
 
-        let row_count = row_number_statistics_for_global_limit(5, Some(10)).await?;
+        let row_count = row_number_statistics_for_global_limit(5, Some(10))?;
         assert_eq!(row_count, Precision::Exact(10));
 
-        let row_count = row_number_statistics_for_global_limit(400, Some(10)).await?;
+        let row_count = row_number_statistics_for_global_limit(400, Some(10))?;
         assert_eq!(row_count, Precision::Exact(0));
 
-        let row_count = row_number_statistics_for_global_limit(398, Some(10)).await?;
+        let row_count = row_number_statistics_for_global_limit(398, Some(10))?;
         assert_eq!(row_count, Precision::Exact(2));
 
-        let row_count = row_number_statistics_for_global_limit(398, Some(1)).await?;
+        let row_count = row_number_statistics_for_global_limit(398, Some(1))?;
         assert_eq!(row_count, Precision::Exact(1));
 
-        let row_count = row_number_statistics_for_global_limit(398, None).await?;
+        let row_count = row_number_statistics_for_global_limit(398, None)?;
         assert_eq!(row_count, Precision::Exact(2));
 
-        let row_count =
-            row_number_statistics_for_global_limit(0, Some(usize::MAX)).await?;
+        let row_count = row_number_statistics_for_global_limit(0, Some(usize::MAX))?;
         assert_eq!(row_count, Precision::Exact(400));
 
-        let row_count =
-            row_number_statistics_for_global_limit(398, Some(usize::MAX)).await?;
+        let row_count = row_number_statistics_for_global_limit(398, Some(usize::MAX))?;
         assert_eq!(row_count, Precision::Exact(2));
 
-        let row_count =
-            row_number_inexact_statistics_for_global_limit(0, Some(10)).await?;
+        let row_count = row_number_inexact_statistics_for_global_limit(0, Some(10))?;
         assert_eq!(row_count, Precision::Inexact(10));
 
-        let row_count =
-            row_number_inexact_statistics_for_global_limit(5, Some(10)).await?;
+        let row_count = row_number_inexact_statistics_for_global_limit(5, Some(10))?;
         assert_eq!(row_count, Precision::Inexact(10));
 
         // Input was Inexact, so an `nr <= skip` outcome must remain Inexact:
         // the inexact estimate could be wrong, so we cannot promote 0 to
         // Exact.
-        let row_count =
-            row_number_inexact_statistics_for_global_limit(400, Some(10)).await?;
+        let row_count = row_number_inexact_statistics_for_global_limit(400, Some(10))?;
         assert_eq!(row_count, Precision::Inexact(0));
 
-        let row_count =
-            row_number_inexact_statistics_for_global_limit(398, Some(10)).await?;
+        let row_count = row_number_inexact_statistics_for_global_limit(398, Some(10))?;
         assert_eq!(row_count, Precision::Inexact(2));
 
-        let row_count =
-            row_number_inexact_statistics_for_global_limit(398, Some(1)).await?;
+        let row_count = row_number_inexact_statistics_for_global_limit(398, Some(1))?;
         assert_eq!(row_count, Precision::Inexact(1));
 
-        let row_count = row_number_inexact_statistics_for_global_limit(398, None).await?;
+        let row_count = row_number_inexact_statistics_for_global_limit(398, None)?;
         assert_eq!(row_count, Precision::Inexact(2));
 
         let row_count =
-            row_number_inexact_statistics_for_global_limit(0, Some(usize::MAX)).await?;
+            row_number_inexact_statistics_for_global_limit(0, Some(usize::MAX))?;
         assert_eq!(row_count, Precision::Inexact(400));
 
         let row_count =
-            row_number_inexact_statistics_for_global_limit(398, Some(usize::MAX)).await?;
+            row_number_inexact_statistics_for_global_limit(398, Some(usize::MAX))?;
         assert_eq!(row_count, Precision::Inexact(2));
 
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_row_number_statistics_for_local_limit() -> Result<()> {
-        let row_count = row_number_statistics_for_local_limit(4, 10).await?;
+    #[test]
+    fn test_row_number_statistics_for_local_limit() -> Result<()> {
+        let row_count = row_number_statistics_for_local_limit(4, 10)?;
         assert_eq!(row_count, Precision::Exact(10));
 
         Ok(())
     }
 
-    async fn row_number_statistics_for_global_limit(
+    fn row_number_statistics_for_global_limit(
         skip: usize,
         fetch: Option<usize>,
     ) -> Result<Precision<usize>> {
@@ -850,7 +933,7 @@ mod tests {
         PhysicalGroupBy::new_single(group_by_expr.clone())
     }
 
-    async fn row_number_inexact_statistics_for_global_limit(
+    fn row_number_inexact_statistics_for_global_limit(
         skip: usize,
         fetch: Option<usize>,
     ) -> Result<Precision<usize>> {
@@ -881,7 +964,7 @@ mod tests {
             .num_rows)
     }
 
-    async fn row_number_statistics_for_local_limit(
+    fn row_number_statistics_for_local_limit(
         num_partitions: usize,
         fetch: usize,
     ) -> Result<Precision<usize>> {
