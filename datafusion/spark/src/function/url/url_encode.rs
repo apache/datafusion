@@ -17,7 +17,9 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, LargeStringArray, StringArray, StringViewArray};
+use arrow::array::{
+    Array, ArrayRef, LargeStringBuilder, StringBuilder, StringViewBuilder,
+};
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{
     as_large_string_array, as_string_array, as_string_view_array,
@@ -45,20 +47,6 @@ impl UrlEncode {
         Self {
             signature: Signature::string(1, Volatility::Immutable),
         }
-    }
-
-    /// Encode a string to application/x-www-form-urlencoded format.
-    ///
-    /// # Arguments
-    ///
-    /// * `value` - The string to encode
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(String)` - The encoded string
-    ///
-    fn encode(value: &str) -> Result<String> {
-        Ok(byte_serialize(value.as_bytes()).collect::<String>())
     }
 }
 
@@ -105,22 +93,45 @@ fn spark_url_encode(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("`url_encode` expects 1 argument");
     }
 
+    // The percent-encoded form of each value is assembled in a single scratch buffer
+    // reused across rows, rather than allocating a `String` per row.
+    macro_rules! encode_all {
+        ($array:expr, $builder:expr) => {{
+            let array = $array;
+            let mut builder = $builder;
+            let mut encoded = String::new();
+            for value in array.iter() {
+                match value {
+                    Some(value) => {
+                        encoded.clear();
+                        encoded.extend(byte_serialize(value.as_bytes()));
+                        builder.append_value(&encoded);
+                    }
+                    None => builder.append_null(),
+                }
+            }
+            Ok(Arc::new(builder.finish()) as ArrayRef)
+        }};
+    }
+
     match &args[0].data_type() {
-        DataType::Utf8 => as_string_array(&args[0])?
-            .iter()
-            .map(|x| x.map(UrlEncode::encode).transpose())
-            .collect::<Result<StringArray>>()
-            .map(|array| Arc::new(array) as ArrayRef),
-        DataType::LargeUtf8 => as_large_string_array(&args[0])?
-            .iter()
-            .map(|x| x.map(UrlEncode::encode).transpose())
-            .collect::<Result<LargeStringArray>>()
-            .map(|array| Arc::new(array) as ArrayRef),
-        DataType::Utf8View => as_string_view_array(&args[0])?
-            .iter()
-            .map(|x| x.map(UrlEncode::encode).transpose())
-            .collect::<Result<StringViewArray>>()
-            .map(|array| Arc::new(array) as ArrayRef),
+        DataType::Utf8 => {
+            let array = as_string_array(&args[0])?;
+            let builder =
+                StringBuilder::with_capacity(array.len(), array.value_data().len());
+            encode_all!(array, builder)
+        }
+        DataType::LargeUtf8 => {
+            let array = as_large_string_array(&args[0])?;
+            let builder =
+                LargeStringBuilder::with_capacity(array.len(), array.value_data().len());
+            encode_all!(array, builder)
+        }
+        DataType::Utf8View => {
+            let array = as_string_view_array(&args[0])?;
+            let builder = StringViewBuilder::with_capacity(array.len());
+            encode_all!(array, builder)
+        }
         other => exec_err!("`url_encode`: Expr must be STRING, got {other:?}"),
     }
 }
