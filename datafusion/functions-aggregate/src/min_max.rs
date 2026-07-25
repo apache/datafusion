@@ -805,10 +805,11 @@ impl<T: PartialOrd> MovingMin<T> {
     #[inline]
     fn check_invariants(&self) {
         debug_assert!(self.pop_seq <= self.push_seq);
-        debug_assert!(self
-            .deque
-            .front()
-            .is_none_or(|&(front_seq, _)| front_seq >= self.pop_seq));
+        debug_assert!(
+            self.deque
+                .front()
+                .is_none_or(|&(front_seq, _)| front_seq >= self.pop_seq)
+        );
 
         #[cfg(debug_assertions)]
         {
@@ -953,10 +954,11 @@ impl<T: PartialOrd> MovingMax<T> {
     #[inline]
     fn check_invariants(&self) {
         debug_assert!(self.pop_seq <= self.push_seq);
-        debug_assert!(self
-            .deque
-            .front()
-            .is_none_or(|&(front_seq, _)| front_seq >= self.pop_seq));
+        debug_assert!(
+            self.deque
+                .front()
+                .is_none_or(|&(front_seq, _)| front_seq >= self.pop_seq)
+        );
 
         #[cfg(debug_assertions)]
         {
@@ -1333,7 +1335,7 @@ mod tests {
 
         assert_eq!(moving_min.len(), 5);
         assert_eq!(moving_max.len(), 5);
-        
+
         // Ensure min/max query works and we can pop all duplicates correctly
         for i in (1..=5).rev() {
             assert_eq!(moving_min.len(), i);
