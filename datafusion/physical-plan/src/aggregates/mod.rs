@@ -2210,6 +2210,8 @@ impl ExecutionPlan for AggregateExec {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        // Match by name because the protobuf and execution enums use different
+        // discriminants, so a numeric cast would corrupt the wire format.
         let mode = match self.mode() {
             AggregateMode::Partial => protobuf::AggregateMode::Partial,
             AggregateMode::Final => protobuf::AggregateMode::Final,
@@ -2257,6 +2259,8 @@ impl ExecutionPlan for AggregateExec {
     }
 }
 
+/// Keep this marker byte-identical to the copy used by the deprecated
+/// aggregate serializer in `datafusion-proto` until that path is removed.
 #[cfg(feature = "proto")]
 const HUMAN_DISPLAY_ALIAS_PREFIX: &str = "\u{1f}datafusion_human_display_alias_v1:";
 
@@ -2308,6 +2312,7 @@ fn encode_aggregate_expr(
         })
         .collect::<Result<Vec<_>>>()?;
     let name = aggr_expr.fun().name().to_string();
+    // The context already applies `(!buf.is_empty()).then_some(buf)`.
     let fun_definition = ctx.encode_udaf(aggr_expr.fun())?;
     let human_display = match (aggr_expr.human_display(), aggr_expr.human_display_alias())
     {
@@ -2361,6 +2366,8 @@ impl AggregateExec {
             "AggregateExec",
             "input",
         )?;
+        // Match by name because the protobuf and execution enums use different
+        // discriminants, so a numeric cast would corrupt the wire format.
         let mode = protobuf::AggregateMode::try_from(hash_agg.mode).map_err(|_| {
             datafusion_common::internal_datafusion_err!(
                 "Received an AggregateNode message with unknown AggregateMode {}",
@@ -2378,6 +2385,7 @@ impl AggregateExec {
             protobuf::AggregateMode::PartialReduce => AggregateMode::PartialReduce,
         };
         let num_expr = hash_agg.group_expr.len();
+        // Grouping expressions refer to the child plan's output schema.
         let child_schema = input.schema();
         let group_expr = hash_agg
             .group_expr
@@ -2410,6 +2418,8 @@ impl AggregateExec {
                 .map(|group| group.to_vec())
                 .collect()
         };
+        // Aggregate arguments, ordering, filters, and dynamic filters refer to
+        // the aggregate input schema carried in the protobuf node.
         let input_schema = hash_agg.input_schema.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "input_schema in AggregateNode is missing."
@@ -2472,6 +2482,8 @@ impl AggregateExec {
                         "Invalid AggregateExpr, missing aggregate_function"
                     );
                 };
+                // The context owns the payload-to-codec and
+                // registry-to-codec fallback order.
                 let udaf = ctx.decode_udaf(
                     udaf_name,
                     aggregate.fun_definition.as_deref(),
@@ -3074,6 +3086,28 @@ mod tests {
     use datafusion_physical_expr::projection::ProjectionExpr;
     use futures::{FutureExt, Stream, StreamExt};
     use insta::{allow_duplicates, assert_snapshot};
+
+    #[cfg(feature = "proto")]
+    #[test]
+    fn split_human_display_alias_ignores_mismatched_alias() {
+        let encoded = encode_human_display_alias("sum(value)", "revenue");
+
+        assert_eq!(
+            split_human_display_alias(&encoded, "other"),
+            (encoded.as_str(), None)
+        );
+    }
+
+    #[cfg(feature = "proto")]
+    #[test]
+    fn split_human_display_alias_keeps_malformed_prefix_literal() {
+        let display = format!("{HUMAN_DISPLAY_ALIAS_PREFIX}not-an-encoding");
+
+        assert_eq!(
+            split_human_display_alias(&display, "agg"),
+            (display.as_str(), None)
+        );
+    }
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
     fn create_test_schema() -> Result<SchemaRef> {
