@@ -407,7 +407,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
         &self,
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
-        use super::window_agg_exec::encode_physical_window_expr;
+        use super::proto::encode_physical_window_expr;
         use datafusion_proto_common::protobuf_common::EmptyMessage;
         use datafusion_proto_models::protobuf;
         use protobuf::window_agg_exec_node::InputOrderMode as ProtoInputOrderMode;
@@ -423,6 +423,8 @@ impl ExecutionPlan for BoundedWindowAggExec {
             .iter()
             .map(|expr| ctx.encode_expr(expr))
             .collect::<Result<Vec<_>>>()?;
+        // A `Some(input_order_mode)` is what tells the shared `Window` decode
+        // arm to rebuild a `BoundedWindowAggExec` rather than a `WindowAggExec`.
         let input_order_mode = match &self.input_order_mode {
             InputOrderMode::Linear => ProtoInputOrderMode::Linear(EmptyMessage {}),
             InputOrderMode::PartiallySorted(columns) => {
