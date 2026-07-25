@@ -728,16 +728,76 @@ OPTIONS ('format.has_header' 'true');
 statement ok
 set datafusion.execution.target_partitions = 1;
 
+# A strictly order-preserving scalar function is one-to-one, so an ordering on
+# its argument carries over to its result. `from_unixtime` reinterprets the
+# input integer as a timestamp without changing the value, so the whole
+# ordering is preserved and no SortExec is needed.
 query TT
-EXPLAIN SELECT array_repeat(a, 2) AS a_, array_repeat(b, 2) AS b_, array_repeat(c, 2) AS c_
+EXPLAIN SELECT from_unixtime(a) AS a_, from_unixtime(b) AS b_, from_unixtime(c) AS c_
 FROM multiple_ordered_table
 ORDER BY a_, b_, c_;
 ----
 logical_plan
 01)Sort: a_ ASC NULLS LAST, b_ ASC NULLS LAST, c_ ASC NULLS LAST
-02)--Projection: array_repeat(multiple_ordered_table.a, Int64(2)) AS a_, array_repeat(multiple_ordered_table.b, Int64(2)) AS b_, array_repeat(multiple_ordered_table.c, Int64(2)) AS c_
+02)--Projection: from_unixtime(CAST(multiple_ordered_table.a AS Int64)) AS a_, from_unixtime(CAST(multiple_ordered_table.b AS Int64)) AS b_, from_unixtime(CAST(multiple_ordered_table.c AS Int64)) AS c_
 03)----TableScan: multiple_ordered_table projection=[a, b, c]
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[array_repeat(a@1, 2) as a_, array_repeat(b@2, 2) as b_, array_repeat(c@3, 2) as c_], file_type=csv, has_header=true
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[from_unixtime(CAST(a@1 AS Int64)) as a_, from_unixtime(CAST(b@2 AS Int64)) as b_, from_unixtime(CAST(c@3 AS Int64)) as c_], file_type=csv, has_header=true
+
+# Being one-to-one also justifies keeping the *suffix* sort keys: data sorted
+# by [a, b] is also sorted by [from_unixtime(a), b], because rows with equal
+# `a_` have equal `a`, within which `b` is already sorted.
+query TT
+EXPLAIN SELECT from_unixtime(a) AS a_, b
+FROM multiple_ordered_table
+ORDER BY a_, b;
+----
+logical_plan
+01)Sort: a_ ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+02)--Projection: from_unixtime(CAST(multiple_ordered_table.a AS Int64)) AS a_, multiple_ordered_table.b
+03)----TableScan: multiple_ordered_table projection=[a, b]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[from_unixtime(CAST(a@1 AS Int64)) as a_, b], file_type=csv, has_header=true
+
+# A widening CAST is one-to-one too:
+query TT
+EXPLAIN SELECT CAST(a AS BIGINT) AS a_, b
+FROM multiple_ordered_table
+ORDER BY a_, b;
+----
+logical_plan
+01)Sort: a_ ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+02)--Projection: CAST(multiple_ordered_table.a AS Int64) AS a_, multiple_ordered_table.b
+03)----TableScan: multiple_ordered_table projection=[a, b]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[CAST(a@1 AS Int64) as a_, b], file_type=csv, has_header=true
+
+# In contrast, a merely monotone (`preserves_lex_ordering`, but not strictly
+# order-preserving) function such as floor() does NOT justify the suffix keys:
+# in general floor() collapses distinct inputs into one output value, and `b`
+# is not sorted within such a run, so a SortExec must remain.
+query TT
+EXPLAIN SELECT floor(CAST(a AS DOUBLE)) AS a_, b
+FROM multiple_ordered_table
+ORDER BY a_, b;
+----
+logical_plan
+01)Sort: a_ ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+02)--Projection: floor(CAST(multiple_ordered_table.a AS Float64)) AS a_, multiple_ordered_table.b
+03)----TableScan: multiple_ordered_table projection=[a, b]
+physical_plan
+01)SortExec: expr=[a_@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[floor(CAST(a@1 AS Float64)) as a_, b], file_type=csv, has_header=true
+
+# Monotonicity alone is still enough when the expression is the *only* sort
+# key, so here the SortExec is removed even though floor() is not strict:
+query TT
+EXPLAIN SELECT floor(CAST(a AS DOUBLE)) AS a_
+FROM multiple_ordered_table
+ORDER BY a_;
+----
+logical_plan
+01)Sort: a_ ASC NULLS LAST
+02)--Projection: floor(CAST(multiple_ordered_table.a AS Float64)) AS a_
+03)----TableScan: multiple_ordered_table projection=[a]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[floor(CAST(a@1 AS Float64)) as a_], file_type=csv, has_header=true
 
 # The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.

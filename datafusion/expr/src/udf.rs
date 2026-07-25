@@ -994,27 +994,41 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     }
 
     /// Returns true if the function is strictly order-preserving with respect
-    /// to its `Ordered` inputs: assuming those inputs advance simultaneously
-    /// (component-wise, i.e. all of them are sorted in the data), the output
-    /// is ordered in the same direction, equal outputs can only result from
-    /// equal values of those inputs (i.e. the mapping is one-to-one), and
-    /// nulls map to nulls.
+    /// to its `Ordered` inputs, i.e. `a.cmp(b) == f(a).cmp(f(b))`.
     ///
-    /// i.e. setting this to true means that `a.cmp(b) == f(a).cmp(f(b))`
+    /// # Examples
     ///
-    /// This is not simply a stricter [`Self::preserves_lex_ordering`] — the
+    /// * `from_unixtime(a)` returns `true`: it reinterprets the input integer
+    ///   as a timestamp without changing the value, so distinct inputs yield
+    ///   distinct, identically-ordered outputs.
+    /// * `floor(a)` and `date_trunc('day', a)` must return `false`: they are
+    ///   monotone, but collapse distinct inputs into equal outputs.
+    /// * An addition over ordered, overflow-free inputs may return `true`
+    ///   even though it does not preserve *lexicographical* ordering.
+    ///
+    /// # Definition
+    ///
+    /// Assuming the `Ordered` inputs advance simultaneously (component-wise,
+    /// i.e. all of them are sorted in the data), the output is ordered in the
+    /// same direction, equal outputs can only result from equal values of
+    /// those inputs (i.e. the mapping is one-to-one), and nulls map to nulls.
+    ///
+    /// This is not simply a stricter [`Self::preserves_lex_ordering`] - the
     /// two properties also assume different input orderings, and with
-    /// multiple ordered inputs neither implies the other. Monotone but
-    /// non-injective functions such as `floor` or `date_trunc` must return
-    /// `false` here, while an addition over ordered, overflow-free inputs
-    /// may return `true` here even though it does not preserve
-    /// lexicographical ordering. See
-    /// [`ExprProperties::strictly_order_preserving`] for a detailed
-    /// comparison.
+    /// multiple ordered inputs neither implies the other (see the examples
+    /// above). See [`ExprProperties::strictly_order_preserving`] for a
+    /// detailed comparison.
     ///
-    /// Optimizers rely on this to substitute a sort key with an expression
-    /// computed from it: if data is sorted by `[x, y]`, it is also sorted by
-    /// `[expr(x), y]`.
+    /// # Relationship to [`Self::output_ordering`]
+    ///
+    /// [`Self::output_ordering`] describes *whether and in which direction*
+    /// the output is ordered, which justifies using the expression as the
+    /// **last** (or only) sort key. This property is an additional,
+    /// independent claim of injectivity that justifies keeping the **suffix**
+    /// sort keys as well: optimizers rely on it to substitute a sort key with
+    /// an expression computed from it - if data is sorted by `[x, y]`, it is
+    /// also sorted by `[expr(x), y]`, which only holds when equal `expr(x)`
+    /// values imply equal `x` values.
     ///
     /// When in doubt, return `false` (the default). The `inputs` properties
     /// allow conditional answers, e.g. based on the ranges of the inputs.
