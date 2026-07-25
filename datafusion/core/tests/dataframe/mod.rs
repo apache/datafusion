@@ -4388,8 +4388,8 @@ async fn unnest_column_nulls() -> Result<()> {
     "
     );
 
-    // Spark `explode_outer` semantics: NULL and empty lists both produce a
-    // single output row containing NULL.
+    // Outer-unnest semantics: NULL and empty lists both produce a single
+    // output row containing NULL.
     let options = UnnestOptions::new()
         .with_null_handling(datafusion_common::NullHandling::PreserveAndExpandEmpty);
     let results = df
@@ -4414,12 +4414,12 @@ async fn unnest_column_nulls() -> Result<()> {
     Ok(())
 }
 
-/// Spark `explode_outer` on a list-of-struct column. Verifies that
+/// Outer-unnest on a list-of-struct column. Verifies that
 /// (a) struct elements unnest into flattened sub-columns and
 /// (b) NULL and empty lists both still produce a single output row whose
 ///     struct sub-columns are all NULL.
 #[tokio::test]
-async fn unnest_explode_outer_list_of_struct() -> Result<()> {
+async fn unnest_outer_list_of_struct() -> Result<()> {
     use arrow::array::{Int32Array, StructArray};
 
     // Per-row sub-list lengths: 2, 1, 0 (empty), 0 (null)
@@ -4482,13 +4482,12 @@ async fn unnest_explode_outer_list_of_struct() -> Result<()> {
     Ok(())
 }
 
-/// Spark `explode_outer` semantics applied to a `FixedSizeList` column.
-/// For fixed-size lists, every non-null row has the fixed length, so
-/// "empty" never occurs — `PreserveAndExpandEmpty` should behave identically
-/// to `Preserve` here. The test pins that equivalence so we notice if it
-/// ever diverges.
+/// Outer-unnest applied to a `FixedSizeList` column. For fixed-size lists,
+/// every non-null row has the fixed length, so "empty" never occurs —
+/// `PreserveAndExpandEmpty` should behave identically to `Preserve` here.
+/// The test pins that equivalence so we notice if it ever diverges.
 #[tokio::test]
-async fn unnest_explode_outer_fixed_size_list() -> Result<()> {
+async fn unnest_outer_fixed_size_list() -> Result<()> {
     let batch = get_fixed_list_batch()?;
     let ctx = SessionContext::new();
     ctx.register_batch("shapes", batch)?;
@@ -4502,7 +4501,7 @@ async fn unnest_explode_outer_fixed_size_list() -> Result<()> {
         )?
         .collect()
         .await?;
-    let explode_outer_results = df
+    let outer_results = df
         .unnest_columns_with_options(
             &["tags"],
             UnnestOptions::new().with_null_handling(
@@ -4513,14 +4512,14 @@ async fn unnest_explode_outer_fixed_size_list() -> Result<()> {
         .await?;
     assert_eq!(
         batches_to_sort_string(&preserve_results),
-        batches_to_sort_string(&explode_outer_results),
+        batches_to_sort_string(&outer_results),
         "FixedSizeList has no empty case, so PreserveAndExpandEmpty must \
          match Preserve exactly"
     );
 
     // And the snapshot itself, to make the expected shape explicit.
     assert_snapshot!(
-        batches_to_sort_string(&explode_outer_results),
+        batches_to_sort_string(&outer_results),
         @r"
     +----------+-------+
     | shape_id | tags  |

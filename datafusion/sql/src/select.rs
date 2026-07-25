@@ -1490,10 +1490,9 @@ fn collect_unnest_null_handling(expr_groups: &[Vec<Expr>]) -> Result<NullHandlin
     }
     if saw_outer && saw_inner {
         return plan_err!(
-            "Cannot mix `unnest(...)` (or `explode(...)`) with \
-             `explode_outer(...)` in the same SELECT — the unnest operator \
-             carries a single null-handling mode. Split the query so each \
-             unnest projection uses one mode."
+            "Cannot mix `unnest(...)` with `unnest_outer(...)` in the same \
+             SELECT — the unnest operator carries a single null-handling \
+             mode. Split the query so each unnest projection uses one mode."
         );
     }
     Ok(if saw_outer {

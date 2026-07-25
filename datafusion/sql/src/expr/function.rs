@@ -548,13 +548,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // Build Unnest expression.
         //
-        // `unnest` is DataFusion's native SQL name. `explode` and
-        // `explode_outer` are accepted aliases — `explode` matches plain
-        // `unnest` (drops NULL and empty input lists), while `explode_outer`
-        // sets `outer = true` so the downstream planner picks
-        // `NullHandling::PreserveAndExpandEmpty`.
-        if name.eq("unnest") || name.eq("explode") || name.eq("explode_outer") {
-            let outer = name.eq("explode_outer");
+        // `unnest(col)` drops `NULL` and empty input lists (default SQL
+        // semantics, matching DuckDB/PostgreSQL). `unnest_outer(col)` sets
+        // `outer = true` so the downstream planner picks
+        // `NullHandling::PreserveAndExpandEmpty`, which preserves `NULL`
+        // and empty input lists as a single `NULL` output row.
+        if name.eq("unnest") || name.eq("unnest_outer") {
+            let outer = name.eq("unnest_outer");
             let mut exprs = self.function_args_to_expr(args, schema, planner_context)?;
             if exprs.len() != 1 {
                 return plan_err!("{name}() requires exactly one argument");
