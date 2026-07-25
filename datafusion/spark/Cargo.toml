@@ -116,4 +116,8 @@ name = "url_encode"
 
 [[bench]]
 harness = false
+name = "next_day"
+
+[[bench]]
+harness = false
 name = "floor"
