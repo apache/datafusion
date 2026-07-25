@@ -695,7 +695,7 @@ pub mod unnest_options {
         /// Drop both null and empty lists from the output.
         Drop = 1,
         /// Preserve nulls, and additionally expand empty lists into a single
-        /// NULL output row (Spark `explode_outer` semantics).
+        /// NULL output row (outer-unnest semantics).
         PreserveAndExpandEmpty = 2,
     }
     impl NullHandling {
@@ -1009,8 +1009,8 @@ pub struct NegativeNode {
 pub struct Unnest {
     #[prost(message, repeated, tag = "1")]
     pub exprs: ::prost::alloc::vec::Vec<LogicalExprNode>,
-    /// When true, this Unnest expression has Spark `explode_outer` semantics:
-    /// NULL and empty input lists both produce a single NULL output row.
+    /// When true, this Unnest expression has outer-unnest semantics: NULL and
+    /// empty input lists both produce a single NULL output row.
     #[prost(bool, tag = "2")]
     pub outer: bool,
 }
