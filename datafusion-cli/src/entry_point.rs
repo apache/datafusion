@@ -314,7 +314,7 @@ impl CliSession {
     }
     pub async fn entry_point() -> Result<(), CliError> {
         let cli_session = CliSession::builder().build()?;
-        Ok(cli_session.run().await?)
+        cli_session.run().await
     }
     pub fn session_context(&self) -> &SessionContext {
         &self.ctx
