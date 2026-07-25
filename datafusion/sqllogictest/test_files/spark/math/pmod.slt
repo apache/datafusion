@@ -21,6 +21,10 @@
 # For more information, please see:
 #   https://github.com/apache/datafusion/issues/15914
 
+# Audited against Spark 4.2.0 on 2026-07-25.
+# Expected values verified with pyspark==4.2.0.
+# Known divergences are captured as commented-out queries below.
+
 # Basic PMOD tests with positive integers
 query I
 SELECT pmod(10::int, 3::int) as pmod_1;
@@ -80,34 +84,81 @@ SELECT pmod(10.5::float8, -0.0::float8) as pmod_div_zero_neg_float;
 ----
 NULL
 
-# Division by zero errors in ANSI mode
+# Division by zero errors in ANSI mode.
+# Spark 4.2.0 raises REMAINDER_BY_ZERO (SQLSTATE 22012) here. DataFusion raises
+# Arrow's divide-by-zero error instead: it does not model Spark's error classes
+# or SQLSTATE values, so only the fact that an error is raised is asserted.
+# https://github.com/apache/datafusion/issues/23897
+# Spark 3.5.8 and 4.0.4 raise DIVIDE_BY_ZERO for the same input, and Spark 4.1.3
+# renamed it to REMAINDER_BY_ZERO. The expectations below assert 4.2.0.
+# Version-specific expectations are tracked by
+# https://github.com/apache/datafusion/issues/23887
 statement ok
 set datafusion.execution.enable_ansi_mode = true;
 
-statement error DataFusion error: Arrow error: Divide by zero error
+query error DataFusion error: Arrow error: Divide by zero error
 SELECT pmod(10::int, 0::int);
 
-statement error DataFusion error: Arrow error: Divide by zero error
+query error DataFusion error: Arrow error: Divide by zero error
 SELECT pmod(-7::int, 0::int);
 
-# A zero divisor of any numeric type raises, including floating point
-statement error DataFusion error: Arrow error: Divide by zero error
+# Spark raises for a zero divisor of any numeric type under ANSI mode, including
+# floating point, where IEEE 754 remainder would otherwise yield NaN.
+query error DataFusion error: Arrow error: Divide by zero error
 SELECT pmod(10.5::float8, 0.0::float8);
 
-# A negative zero divisor counts as zero and raises
-statement error DataFusion error: Arrow error: Divide by zero error
+query error DataFusion error: Arrow error: Divide by zero error
 SELECT pmod(10.5::float8, -0.0::float8);
 
-# A NULL dividend short-circuits to NULL before the divisor is validated
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT pmod('NaN'::float8, 0.0::float8);
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT pmod(10.5::float4, 0.0::float4);
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT pmod(3.13::decimal(10,2), 0.0::decimal(10,2));
+
+# pmod is null intolerant, so a NULL dividend short circuits to NULL before the
+# zero divisor is validated, even under ANSI mode.
 query I
-SELECT pmod(NULL::int, 0::int) as pmod_null_dividend_ansi;
+SELECT pmod(NULL::int, 0::int);
 ----
 NULL
 
 query R
-SELECT pmod(NULL::float8, 0.0::float8) as pmod_null_dividend_ansi_float;
+SELECT pmod(NULL::float8, 0.0::float8);
 ----
 NULL
+
+query R
+SELECT pmod(NULL::decimal(10,2), 0.0::decimal(10,2));
+----
+NULL
+
+# The same short circuit applies per row on array inputs
+query III
+SELECT a, b, pmod(a, b) FROM (VALUES (NULL::int, 0::int), (NULL::int, 0::int)) AS t(a, b);
+----
+NULL 0 NULL
+NULL 0 NULL
+
+query III
+SELECT a, b, pmod(a, b) FROM (VALUES (-7::int, 3::int), (NULL::int, 0::int)) AS t(a, b);
+----
+-7 3 2
+NULL 0 NULL
+
+# ANSI mode does not change the result of a well defined pmod
+query I
+SELECT pmod(-7::int, 3::int);
+----
+2
+
+query I
+SELECT pmod(arrow_cast(-1, 'Int32'), arrow_cast(-2147483648, 'Int32'));
+----
+2147483647
 
 statement ok
 set datafusion.execution.enable_ansi_mode = false;
@@ -305,6 +356,17 @@ SELECT pmod(-10.0::decimal(3,1), 3.0::decimal(2,1)) as pmod_decimal_4;
 ----
 2
 
+# Spark derives a narrower decimal result type than DataFusion. The values
+# agree, only the declared precision differs.
+# https://github.com/apache/datafusion/issues/23895
+#   Spark 4.2.0: SELECT typeof(pmod(CAST(2.5 AS DECIMAL(3,1)), CAST(1.2 AS DECIMAL(2,1))))
+#                ->  decimal(2,1)
+#   DataFusion:  Decimal128(3, 1)
+# query T
+# SELECT arrow_typeof(pmod(2.5::decimal(3,1), 1.2::decimal(2,1)));
+# ----
+# Decimal128(2, 1)
+
 # PMOD tests with different integer types
 query I
 SELECT pmod(10::int8, 3::int8) as pmod_int8_1;
@@ -336,6 +398,9 @@ SELECT pmod(arrow_cast(-10, 'Int64'), arrow_cast(3, 'Int64')) as pmod_int64_2;
 ----
 2
 
+# Spark has no unsigned integer types, so the cases below have no Spark
+# equivalent. `pmod` never adjusts an unsigned remainder, because it is never
+# negative.
 # PMOD tests with unsigned integers
 query I
 SELECT pmod(arrow_cast(10, 'UInt8'), arrow_cast(3, 'UInt8')) as pmod_uint8_1;
@@ -377,3 +442,154 @@ query R
 SELECT pmod(-7.2, 3.0) as pmod_scalar_4;
 ----
 1.8
+
+# PMOD tests on array inputs, exercising every ColumnarValue shape combination
+
+# (Array, Scalar)
+query II
+SELECT a, pmod(a, 3::int) FROM (VALUES (10::int), (-10::int), (NULL::int), (0::int)) AS t(a);
+----
+10 1
+-10 2
+NULL NULL
+0 0
+
+# (Scalar, Array)
+query II
+SELECT b, pmod(10::int, b) FROM (VALUES (3::int), (-3::int), (NULL::int), (0::int)) AS t(b);
+----
+3 1
+-3 1
+NULL NULL
+0 NULL
+
+# (Array, Array)
+query III
+SELECT a, b, pmod(a, b) FROM (VALUES
+  (10::int, 3::int),
+  (-10::int, 3::int),
+  (-10::int, -3::int),
+  (NULL::int, 3::int),
+  (10::int, NULL::int),
+  (10::int, 0::int)
+) AS t(a, b);
+----
+10 3 1
+-10 3 2
+-10 -3 -1
+NULL 3 NULL
+10 NULL NULL
+10 0 NULL
+
+# (Array, Array) on floating point, including the special values
+query RRR
+SELECT a, b, pmod(a, b) FROM (VALUES
+  (10.5::float8, 3.0::float8),
+  (-7.2::float8, 3.0::float8),
+  (-7.2::float8, -3.0::float8),
+  ('NaN'::float8, 2.0::float8),
+  ('Infinity'::float8, 2.0::float8),
+  (5.0::float8, 'Infinity'::float8),
+  (-5.0::float8, 'Infinity'::float8),
+  (5.0::float8, '-Infinity'::float8),
+  (10.5::float8, 0.0::float8)
+) AS t(a, b);
+----
+10.5 3 1.5
+-7.2 3 1.8
+-7.2 -3 -1.2
+NaN 2 NaN
+Infinity 2 NaN
+5 Infinity 5
+-5 Infinity NaN
+5 -Infinity 5
+10.5 0 NULL
+
+# PMOD tests at the signed integer boundaries.
+# Spark evaluates `(r + n) % n` with Java arithmetic: `byte` and `short` are
+# promoted to `int` and never overflow, while `int` and `long` wrap around.
+query I
+SELECT pmod(arrow_cast(-1, 'Int32'), arrow_cast(-2147483648, 'Int32'));
+----
+2147483647
+
+query I
+SELECT pmod(arrow_cast(-2, 'Int32'), arrow_cast(-2147483648, 'Int32'));
+----
+2147483646
+
+query I
+SELECT pmod(arrow_cast(2147483647, 'Int32'), arrow_cast(-2147483648, 'Int32'));
+----
+2147483647
+
+query I
+SELECT pmod(arrow_cast(-2147483648, 'Int32'), arrow_cast(-1, 'Int32'));
+----
+0
+
+query I
+SELECT pmod(arrow_cast(-2147483648, 'Int32'), arrow_cast(3, 'Int32'));
+----
+1
+
+query I
+SELECT pmod(arrow_cast(-1, 'Int64'), arrow_cast(-9223372036854775808, 'Int64'));
+----
+9223372036854775807
+
+query I
+SELECT pmod(arrow_cast(-9223372036854775808, 'Int64'), arrow_cast(-1, 'Int64'));
+----
+0
+
+query I
+SELECT pmod(arrow_cast(2, 'Int64'), arrow_cast(9223372036854775807, 'Int64'));
+----
+2
+
+query I
+SELECT pmod(arrow_cast(-1, 'Int8'), arrow_cast(-128, 'Int8'));
+----
+-1
+
+query I
+SELECT pmod(arrow_cast(-128, 'Int8'), arrow_cast(-1, 'Int8'));
+----
+0
+
+query I
+SELECT pmod(arrow_cast(-1, 'Int16'), arrow_cast(-32768, 'Int16'));
+----
+-1
+
+query I
+SELECT pmod(arrow_cast(-32768, 'Int16'), arrow_cast(-1, 'Int16'));
+----
+0
+
+query I
+SELECT pmod(arrow_cast(128, 'Int16'), arrow_cast(-32768, 'Int16'));
+----
+128
+
+# The same boundary cases on array inputs
+query II
+SELECT a, pmod(a, arrow_cast(-2147483648, 'Int32')) FROM (VALUES
+  (arrow_cast(-1, 'Int32')),
+  (arrow_cast(-2, 'Int32')),
+  (arrow_cast(2147483647, 'Int32')),
+  (arrow_cast(NULL, 'Int32'))
+) AS t(a);
+----
+-1 2147483647
+-2 2147483646
+2147483647 2147483647
+NULL NULL
+
+# Spark accepts a string argument by implicitly casting it to a numeric type.
+# DataFusion's `Signature::numeric` rejects it at planning time.
+# https://github.com/apache/datafusion/issues/23896
+#   Spark 4.2.0: SELECT pmod('10', CAST(3 AS INT))  ->  1
+# query I
+# SELECT pmod('10'::string, 3::int);
