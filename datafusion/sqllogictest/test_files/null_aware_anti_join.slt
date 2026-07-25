@@ -516,3 +516,48 @@ RESET datafusion.execution.parquet.pushdown_filters;
 
 statement ok
 RESET datafusion.optimizer.enable_join_dynamic_filter_pushdown;
+
+#############
+## Regression: null-aware NOT IN with an outer predicate on the join key
+##
+## `push_down_filter` used to infer the outer predicate `id > 5` onto the
+## subquery side (as `eid > 5`), dropping the subquery's NULL row and wrongly
+## returning outer rows. The subquery NULL must reach the join so that
+## `NOT IN` stays UNKNOWN for every row.
+#############
+
+statement ok
+CREATE TABLE nai_outer(id INT) AS VALUES (3), (7);
+
+statement ok
+CREATE TABLE nai_inner(id INT) AS VALUES (NULL);
+
+# Expected: zero rows (subquery contains NULL => NOT IN is UNKNOWN for all).
+query I
+SELECT id FROM nai_outer WHERE id > 5 AND id NOT IN (SELECT id FROM nai_inner) ORDER BY id;
+----
+
+# Same query under SortMergeJoin + multiple partitions: null-aware joins must
+# be planned as a CollectLeft HashJoin, not a plain anti SortMergeJoin.
+statement ok
+SET datafusion.optimizer.prefer_hash_join = false;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+query I
+SELECT id FROM nai_outer WHERE id NOT IN (SELECT id FROM nai_inner) ORDER BY id;
+----
+
+statement ok
+SET datafusion.optimizer.prefer_hash_join = true;
+
+# The SLT runner sets target_partitions to 4, so restore that value explicitly.
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+DROP TABLE nai_outer;
+
+statement ok
+DROP TABLE nai_inner;
