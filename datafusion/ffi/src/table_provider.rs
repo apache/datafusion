@@ -410,7 +410,7 @@ unsafe extern "C" fn delete_from_fn_wrapper(
 
         let plan = sresult_return!(internal_provider.delete_from(session, filters).await);
 
-        FFI_Result::Ok(FFI_ExecutionPlan::new(plan, runtime.clone()))
+        FFI_Result::Ok(FFI_ExecutionPlan::new(plan, runtime))
     }
     .into_ffi()
 }
@@ -474,7 +474,7 @@ unsafe extern "C" fn update_fn_wrapper(
                 .await
         );
 
-        FFI_Result::Ok(FFI_ExecutionPlan::new(plan, runtime.clone()))
+        FFI_Result::Ok(FFI_ExecutionPlan::new(plan, runtime))
     }
     .into_ffi()
 }
@@ -500,7 +500,7 @@ unsafe extern "C" fn truncate_fn_wrapper(
 
         let plan = sresult_return!(internal_provider.truncate(session).await);
 
-        FFI_Result::Ok(FFI_ExecutionPlan::new(plan, runtime.clone()))
+        FFI_Result::Ok(FFI_ExecutionPlan::new(plan, runtime))
     }
     .into_ffi()
 }
@@ -1005,33 +1005,32 @@ mod tests {
         );
 
         let state = ctx.state();
-        let delete_filter = col("a").gt(lit(10_i64));
+        let delete_filters = vec![col("a").gt(lit(10_i64)), col("b").lt(lit(2.5_f64))];
         let delete_plan = foreign_table_provider
-            .delete_from(&state, vec![delete_filter.clone()])
+            .delete_from(&state, delete_filters.clone())
             .await?;
         assert_eq!(delete_plan.schema().field(0).name(), "count");
         assert_eq!(
             calls.lock().unwrap().delete_filters.clone(),
-            Some(vec![delete_filter])
+            Some(delete_filters)
         );
 
-        let update_expr = lit(42_f64);
-        let update_filter = col("a").eq(lit(7_i64));
+        let update_assignments = vec![
+            ("b".to_string(), lit(42_f64)),
+            ("a".to_string(), lit(7_i64)),
+        ];
+        let update_filters = vec![col("a").eq(lit(7_i64)), col("b").gt(lit(1.5_f64))];
         let update_plan = foreign_table_provider
-            .update(
-                &state,
-                vec![("b".to_string(), update_expr.clone())],
-                vec![update_filter.clone()],
-            )
+            .update(&state, update_assignments.clone(), update_filters.clone())
             .await?;
         assert_eq!(update_plan.schema().field(0).name(), "count");
         assert_eq!(
             calls.lock().unwrap().update_assignments.clone(),
-            Some(vec![("b".to_string(), update_expr)])
+            Some(update_assignments)
         );
         assert_eq!(
             calls.lock().unwrap().update_filters.clone(),
-            Some(vec![update_filter])
+            Some(update_filters)
         );
 
         let truncate_plan = foreign_table_provider.truncate(&state).await?;
