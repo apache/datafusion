@@ -74,7 +74,7 @@ fn test_distinct_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]))
 }
 
-async fn create_context(
+fn create_context(
     partition_cnt: i32,
     sample_cnt: i32,
     asc: bool,
@@ -94,7 +94,7 @@ async fn create_context(
     Ok(ctx)
 }
 
-async fn create_context_distinct(
+fn create_context_distinct(
     partition_cnt: i32,
     sample_cnt: i32,
     use_topk: bool,
@@ -306,12 +306,8 @@ fn assert_utf8_utf8view_match(
     asc: bool,
     use_topk: bool,
 ) {
-    let ctx_utf8 = rt
-        .block_on(create_context(partitions, samples, asc, use_topk, false))
-        .unwrap();
-    let ctx_view = rt
-        .block_on(create_context(partitions, samples, asc, use_topk, true))
-        .unwrap();
+    let ctx_utf8 = create_context(partitions, samples, asc, use_topk, false).unwrap();
+    let ctx_view = create_context(partitions, samples, asc, use_topk, true).unwrap();
     let batches_utf8 = rt
         .block_on(aggregate_string(ctx_utf8, limit, use_topk))
         .unwrap();
@@ -390,15 +386,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             .name_tpl
             .replace("{rows}", &total_rows.to_string())
             .replace("{limit}", &limit.to_string());
-        let ctx = rt
-            .block_on(create_context(
-                partitions,
-                samples,
-                case.asc,
-                case.use_topk,
-                case.use_view,
-            ))
-            .unwrap();
+        let ctx =
+            create_context(partitions, samples, case.asc, case.use_topk, case.use_view)
+                .unwrap();
         c.bench_function(&name, |b| {
             b.iter(|| run(&rt, ctx.clone(), limit, case.use_topk, case.asc))
         });
@@ -462,15 +452,9 @@ fn criterion_benchmark(c: &mut Criterion) {
         } else {
             format!("string aggregate {total_rows} {scenario} rows [{type_label}]")
         };
-        let ctx = rt
-            .block_on(create_context(
-                partitions,
-                samples,
-                case.asc,
-                case.use_topk,
-                case.use_view,
-            ))
-            .unwrap();
+        let ctx =
+            create_context(partitions, samples, case.asc, case.use_topk, case.use_view)
+                .unwrap();
         c.bench_function(&name, |b| {
             b.iter(|| run_string(&rt, ctx.clone(), limit, case.use_topk))
         });
@@ -478,11 +462,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     // DISTINCT benchmarks
     for use_topk in [false, true] {
-        let ctx = rt.block_on(async {
-            create_context_distinct(partitions, samples, use_topk)
-                .await
-                .unwrap()
-        });
+        let ctx = create_context_distinct(partitions, samples, use_topk).unwrap();
         let topk_label = if use_topk { "TopK" } else { "no TopK" };
         for asc in [false, true] {
             let dir = if asc { "asc" } else { "desc" };

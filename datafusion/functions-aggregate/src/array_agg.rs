@@ -2708,4 +2708,53 @@ mod tests {
         assert_eq!(values, vec![100i32, 200, 300, 400]);
         Ok(())
     }
+
+    #[test]
+    fn distinct_retract_memory_is_bounded() -> Result<()> {
+        use arrow::array::Int64Array;
+
+        // Emulates `ROWS BETWEEN CURRENT ROW AND CURRENT ROW`: every row enters
+        // the frame and immediately leaves it again. Only `CARDINALITY` distinct
+        // values are ever seen and the live set never holds more than one of
+        // them
+        const CARDINALITY: i64 = 10;
+        const WARMUP_ROWS: i64 = 1_000;
+        const EXTRA_ROWS: i64 = 20_000;
+
+        let mut acc =
+            DistinctArrayAggAccumulator::try_new(&DataType::Int64, None, false)?;
+
+        let slide = |acc: &mut DistinctArrayAggAccumulator, rows: i64| -> Result<()> {
+            for i in 0..rows {
+                let value: ArrayRef = Arc::new(Int64Array::from(vec![i % CARDINALITY]));
+                acc.update_batch(std::slice::from_ref(&value))?;
+                acc.retract_batch(std::slice::from_ref(&value))?;
+            }
+            Ok(())
+        };
+
+        // Let every buffer reach its steady state before taking a baseline.
+        slide(&mut acc, WARMUP_ROWS)?;
+        let baseline = acc.size();
+
+        slide(&mut acc, EXTRA_ROWS)?;
+        let grown = acc.size();
+
+        assert!(
+            grown <= 2 * baseline,
+            "size() must not grow with the number of retracted rows: \
+             {baseline} bytes after {WARMUP_ROWS} rows, \
+             {grown} bytes after {} rows",
+            WARMUP_ROWS + EXTRA_ROWS
+        );
+
+        // Everything was retracted, so nothing is left in the frame.
+        let result = acc.evaluate()?;
+        assert!(
+            matches!(&result, ScalarValue::List(arr) if arr.is_null(0)),
+            "expected null list after retracting every row, got {result:?}"
+        );
+
+        Ok(())
+    }
 }
