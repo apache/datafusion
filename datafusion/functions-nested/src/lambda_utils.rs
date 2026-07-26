@@ -244,11 +244,113 @@ pub(crate) fn evaluate_single_list_predicate(
 }
 
 #[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::{
+        array::{Array, ArrayRef},
+        buffer::{NullBuffer, OffsetBuffer},
+        datatypes::{DataType, Field},
+    };
+    use datafusion_common::Result;
+
+    use super::{adjusted_row_offsets, coerce_single_list_arg};
+    use crate::lambda_utils::test_utils::{create_i32_large_list, create_i32_list};
+
+    #[test]
+    fn adjusted_row_offsets_matches_list_lengths() -> Result<()> {
+        let list = create_i32_list(
+            vec![1, 2, 3, 4, 5],
+            OffsetBuffer::<i32>::from_lengths(vec![2, 0, 3]),
+            None,
+        );
+        let list = Arc::new(list) as ArrayRef;
+        assert_eq!(adjusted_row_offsets(&list)?, vec![0, 2, 2, 5]);
+        Ok(())
+    }
+
+    #[test]
+    fn adjusted_row_offsets_on_sliced_list() -> Result<()> {
+        let list = create_i32_list(
+            vec![10, 1, 2, 3, 4],
+            OffsetBuffer::<i32>::from_lengths(vec![1, 2, 2]),
+            None,
+        )
+        .slice(1, 2);
+        let list = Arc::new(list) as ArrayRef;
+        assert_eq!(adjusted_row_offsets(&list)?, vec![0, 2, 4]);
+        Ok(())
+    }
+
+    #[test]
+    fn adjusted_row_offsets_null_rows_keep_backing_lengths() -> Result<()> {
+        let list = create_i32_list(
+            vec![1, 99, 100, 2],
+            OffsetBuffer::<i32>::from_lengths(vec![1, 2, 1]),
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+        let list = Arc::new(list) as ArrayRef;
+        assert_eq!(adjusted_row_offsets(&list)?, vec![0, 1, 3, 4]);
+        Ok(())
+    }
+
+    #[test]
+    fn adjusted_row_offsets_large_list_parity() -> Result<()> {
+        let list = create_i32_large_list(
+            vec![1, 2, 3, 4],
+            OffsetBuffer::<i64>::from_lengths(vec![1, 3]),
+            None,
+        );
+        let list = Arc::new(list) as ArrayRef;
+        assert_eq!(adjusted_row_offsets(&list)?, vec![0, 1, 4]);
+        Ok(())
+    }
+
+    #[test]
+    fn coerce_single_list_arg_supports_advertised_list_likes() -> Result<()> {
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        assert_eq!(
+            coerce_single_list_arg("test", &[DataType::List(Arc::clone(&field))])?,
+            vec![DataType::List(Arc::clone(&field))]
+        );
+        assert_eq!(
+            coerce_single_list_arg("test", &[DataType::LargeList(Arc::clone(&field))])?,
+            vec![DataType::LargeList(Arc::clone(&field))]
+        );
+        assert_eq!(
+            coerce_single_list_arg(
+                "test",
+                &[DataType::FixedSizeList(Arc::clone(&field), 3)]
+            )?,
+            vec![DataType::List(Arc::clone(&field))]
+        );
+        assert_eq!(
+            coerce_single_list_arg("test", &[DataType::ListView(Arc::clone(&field))])?,
+            vec![DataType::List(Arc::clone(&field))]
+        );
+        assert_eq!(
+            coerce_single_list_arg(
+                "test",
+                &[DataType::LargeListView(Arc::clone(&field))]
+            )?,
+            vec![DataType::LargeList(field)]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn coerce_single_list_arg_rejects_non_list() {
+        let err = coerce_single_list_arg("test", &[DataType::Int32]).unwrap_err();
+        assert!(err.to_string().contains("expected a list"));
+    }
+}
+
+#[cfg(test)]
 pub(crate) mod test_utils {
     use std::{collections::HashMap, sync::Arc};
 
     use arrow::{
-        array::{Array, ArrayRef, Int32Array, ListArray, RecordBatch},
+        array::{Array, ArrayRef, Int32Array, LargeListArray, ListArray, RecordBatch},
         buffer::{NullBuffer, OffsetBuffer},
         datatypes::{DataType, Field},
     };
@@ -269,6 +371,15 @@ pub(crate) mod test_utils {
     ) -> ListArray {
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
         ListArray::new(list_field, offsets, Arc::new(values.into()), nulls)
+    }
+
+    pub(crate) fn create_i32_large_list(
+        values: impl Into<Int32Array>,
+        offsets: OffsetBuffer<i64>,
+        nulls: Option<NullBuffer>,
+    ) -> LargeListArray {
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        LargeListArray::new(list_field, offsets, Arc::new(values.into()), nulls)
     }
 
     pub(crate) fn eval_hof_on_i32_list(
@@ -298,6 +409,39 @@ pub(crate) mod test_utils {
         .evaluate(&RecordBatch::try_new(
             Arc::clone(schema.inner()),
             vec![Arc::new(list.clone())],
+        )?)?
+        .into_array(list.len())
+    }
+
+    /// Evaluates a HOF whose lambda body may capture an outer `number` column.
+    pub(crate) fn eval_hof_on_i32_list_with_outer(
+        func: Arc<HigherOrderUDF>,
+        list: impl Array + Clone + 'static,
+        number: Int32Array,
+        lambda_body: Expr,
+    ) -> Result<ArrayRef> {
+        assert_eq!(list.len(), number.len());
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("list", list.data_type().clone(), list.is_nullable()),
+                Field::new("number", DataType::Int32, true),
+            ]
+            .into(),
+            HashMap::new(),
+        )?;
+
+        create_physical_expr(
+            &Expr::HigherOrderFunction(HigherOrderFunction::new(
+                func,
+                vec![col("list"), lambda(["v"], lambda_body)],
+            )),
+            &schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?
+        .evaluate(&RecordBatch::try_new(
+            Arc::clone(schema.inner()),
+            vec![Arc::new(list.clone()), Arc::new(number)],
         )?)?
         .into_array(list.len())
     }

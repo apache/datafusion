@@ -197,9 +197,12 @@ mod tests {
     };
 
     use crate::array_first::array_first_higher_order_function;
-    use crate::lambda_utils::test_utils::{create_i32_list, eval_hof_on_i32_list, v};
+    use crate::lambda_utils::test_utils::{
+        create_i32_large_list, create_i32_list, eval_hof_on_i32_list,
+        eval_hof_on_i32_list_with_outer, v,
+    };
     use datafusion_common::Result;
-    use datafusion_expr::lit;
+    use datafusion_expr::{col, lit};
 
     fn first_greater_than_two(
         list: impl Array + Clone + 'static,
@@ -362,6 +365,42 @@ mod tests {
             err.to_string().contains("Divide by zero"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn test_first_large_list_parity() -> Result<()> {
+        let list = create_i32_large_list(
+            vec![1, 2, 3, 4, 5],
+            OffsetBuffer::<i64>::from_lengths(vec![5]),
+            None,
+        );
+        let res = first_greater_than_two(list)?;
+        assert_eq!(
+            res.as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![Some(3)])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_first_captured_outer_column() -> Result<()> {
+        let list = create_i32_list(
+            vec![1, 50, 4, 50, 7, 50],
+            OffsetBuffer::<i32>::from_lengths(vec![2, 2, 2]),
+            None,
+        );
+        let number = Int32Array::from(vec![10, 40, 60]);
+        let res = eval_hof_on_i32_list_with_outer(
+            array_first_higher_order_function(),
+            list,
+            number,
+            v().gt(col("number")),
+        )?;
+        assert_eq!(
+            res.as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![Some(50), Some(50), None])
+        );
+        Ok(())
     }
 
     #[test]

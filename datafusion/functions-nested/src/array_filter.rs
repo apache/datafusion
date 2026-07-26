@@ -269,9 +269,14 @@ mod tests {
         buffer::{NullBuffer, OffsetBuffer},
     };
 
+    use arrow::array::Int32Array;
+
     use crate::array_filter::array_filter_higher_order_function;
-    use crate::lambda_utils::test_utils::{create_i32_list, eval_hof_on_i32_list, v};
-    use datafusion_expr::lit;
+    use crate::lambda_utils::test_utils::{
+        create_i32_large_list, create_i32_list, eval_hof_on_i32_list,
+        eval_hof_on_i32_list_with_outer, v,
+    };
+    use datafusion_expr::{col, lit};
 
     fn keep_greater_than_two(
         list: impl Array + Clone + 'static,
@@ -437,6 +442,47 @@ mod tests {
         let expected = create_i32_list(
             vec![0i32; 0],
             OffsetBuffer::<i32>::from_lengths(vec![0, 0]),
+            None,
+        );
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn filter_large_list_parity() {
+        let list = create_i32_large_list(
+            vec![1, 2, 3, 4, 5],
+            OffsetBuffer::<i64>::from_lengths(vec![5]),
+            None,
+        );
+        let res = keep_greater_than_two(list).unwrap();
+        let actual = res.as_list::<i64>();
+        let expected = create_i32_large_list(
+            vec![3, 4, 5],
+            OffsetBuffer::<i64>::from_lengths(vec![3]),
+            None,
+        );
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn filter_captured_outer_column() {
+        let list = create_i32_list(
+            vec![1, 50, 4, 50, 7, 50],
+            OffsetBuffer::<i32>::from_lengths(vec![2, 2, 2]),
+            None,
+        );
+        let number = Int32Array::from(vec![10, 40, 60]);
+        let res = eval_hof_on_i32_list_with_outer(
+            array_filter_higher_order_function(),
+            list,
+            number,
+            v().gt(col("number")),
+        )
+        .unwrap();
+        let actual = res.as_list::<i32>();
+        let expected = create_i32_list(
+            vec![50, 50],
+            OffsetBuffer::<i32>::from_lengths(vec![1, 1, 0]),
             None,
         );
         assert_eq!(actual, &expected);

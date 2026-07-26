@@ -206,6 +206,10 @@ mod tests {
     use datafusion_physical_expr::create_physical_expr;
 
     use crate::array_any_match::{ArrayAnyMatch, array_any_match_higher_order_function};
+    use crate::lambda_utils::test_utils::{
+        create_i32_large_list, create_i32_list, eval_hof_on_i32_list,
+        eval_hof_on_i32_list_with_outer, v,
+    };
 
     fn run_any_match(
         list: impl arrow::array::Array + Clone + 'static,
@@ -443,6 +447,46 @@ mod tests {
         assert_eq!(
             result.as_any().downcast_ref::<BooleanArray>().unwrap(),
             &BooleanArray::from(vec![Some(true), Some(false)])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_any_match_large_list_parity() -> Result<()> {
+        let list = create_i32_large_list(
+            vec![1, 2, 3],
+            OffsetBuffer::<i64>::from_lengths(vec![3]),
+            None,
+        );
+        let result = eval_hof_on_i32_list(
+            array_any_match_higher_order_function(),
+            list,
+            v().gt(lit(2i32)),
+        )?;
+        assert_eq!(
+            result.as_any().downcast_ref::<BooleanArray>().unwrap(),
+            &BooleanArray::from(vec![Some(true)])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_any_match_captured_outer_column() -> Result<()> {
+        let list = create_i32_list(
+            vec![1, 50, 4, 50, 7, 50],
+            OffsetBuffer::<i32>::from_lengths(vec![2, 2, 2]),
+            None,
+        );
+        let number = Int32Array::from(vec![10, 40, 60]);
+        let result = eval_hof_on_i32_list_with_outer(
+            array_any_match_higher_order_function(),
+            list,
+            number,
+            v().gt(col("number")),
+        )?;
+        assert_eq!(
+            result.as_any().downcast_ref::<BooleanArray>().unwrap(),
+            &BooleanArray::from(vec![Some(true), Some(true), Some(false)])
         );
         Ok(())
     }
