@@ -491,12 +491,17 @@ to the main branch and are awaiting release in this version.</p>
 <p><code class="docutils literal notranslate"><span class="pre">FileScanConfig::partitioned_by_file_group</span></code> and
 <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder::with_partitioned_by_file_group(...)</span></code> have been removed.
 Use <code class="docutils literal notranslate"><span class="pre">FileScanConfig::output_partitioning</span></code> and
-<code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder::with_output_partitioning(...)</span></code> instead.</p>
+<code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder::with_output_partitioning(...)</span></code> instead.
+The corresponding
+<code class="docutils literal notranslate"><span class="pre">datafusion_proto::protobuf::FileScanExecConf::partitioned_by_file_group</span></code>
+field has also been removed.</p>
 <p><strong>Who is affected:</strong></p>
 <ul class="simple">
 <li><p>Users who accessed <code class="docutils literal notranslate"><span class="pre">FileScanConfig::partitioned_by_file_group</span></code> directly.</p></li>
 <li><p>Users who called
 <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder::with_partitioned_by_file_group(true)</span></code>.</p></li>
+<li><p>Users who constructed or accessed
+<code class="docutils literal notranslate"><span class="pre">datafusion_proto::protobuf::FileScanExecConf::partitioned_by_file_group</span></code>.</p></li>
 </ul>
 <p><strong>Migration guide:</strong></p>
 <p>If your file groups are organized by table partition column values, declare hash
@@ -522,6 +527,8 @@ output partitioning over those partition columns:</p>
 otherwise. If you construct the partitioning manually, pass
 <code class="docutils literal notranslate"><span class="pre">Some(Partitioning::Hash(partition_exprs,</span> <span class="pre">partition_count))</span></code> to
 <code class="docutils literal notranslate"><span class="pre">with_output_partitioning(...)</span></code>.</p>
+<p>When constructing <code class="docutils literal notranslate"><span class="pre">FileScanExecConf</span></code>, omit <code class="docutils literal notranslate"><span class="pre">partitioned_by_file_group</span></code> and set
+<code class="docutils literal notranslate"><span class="pre">output_partitioning</span></code> instead.</p>
 </section>
 <section id="user-spillfile-traits-instead-of-refcountedtempfile">
 <h3>User <code class="docutils literal notranslate"><span class="pre">SpillFile</span></code> traits instead of <a class="reference external" href="https://docs.rs/datafusion-execution/latest/datafusion_execution/disk_manager/struct.RefCountedTempFile.html"><code class="docutils literal notranslate"><span class="pre">RefCountedTempFile</span></code></a><a class="headerlink" href="#user-spillfile-traits-instead-of-refcountedtempfile" title="Link to this heading">#</a></h3>
