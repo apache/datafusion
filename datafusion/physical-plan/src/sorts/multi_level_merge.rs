@@ -20,6 +20,7 @@
 use crate::metrics::BaselineMetrics;
 use crate::{EmptyRecordBatchStream, SpillManager};
 use arrow::array::RecordBatch;
+use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter};
 use std::mem;
 use std::pin::Pin;
@@ -56,6 +57,7 @@ use futures::{Stream, StreamExt};
 ///
 ///  - No: return that sorted stream as the final output stream
 ///
+/// (the diagram below is for when round robin tie breaker is enabled - when disabled the order of the streams are kept)
 /// ```text
 /// Initial State: Multiple sorted streams + spill files
 ///      ┌───────────┐
@@ -147,7 +149,7 @@ pub(crate) struct MultiLevelMergeBuilder {
     /// carry `batch_size`. A run re-spilled smaller to resolve skew carries its halved
     /// limit (see [`Self::split_spill_file_in_half`]). Tracking it here keeps this limit
     /// out of the public [`SortedSpillFile`], so no external caller has to set it.
-    sorted_spill_files: Vec<(SortedSpillFile, usize)>,
+    sorted_spill_files: VecDeque<(SortedSpillFile, usize)>,
     sorted_streams: Vec<SendableRecordBatchStream>,
     expr: LexOrdering,
     metrics: BaselineMetrics,
@@ -185,7 +187,7 @@ impl MultiLevelMergeBuilder {
             sorted_spill_files: sorted_spill_files
                 .into_iter()
                 .map(|file| (file, batch_size))
-                .collect(),
+                .collect::<VecDeque<_>>(),
             sorted_streams,
             expr,
             metrics,
@@ -247,18 +249,47 @@ impl MultiLevelMergeBuilder {
             else {
                 continue;
             };
-
+            
             // Add the spill file paired with the batch-size limit of the merge that
             // produced it: if that merge consumed a shrunk (skew-resolved) run, its
             // output was capped and this intermediate run is likewise capped, so a
             // later pass that re-merges it won't rebuild an oversized batch.
-            self.sorted_spill_files.push((
+            let spill_file_to_add = (
                 SortedSpillFile {
                     file: spill_file,
                     max_record_batch_memory,
                 },
                 batch_size_limit,
-            ));
+            );
+
+            // In round robin tie breaker the sort is not expected to be stable so we push to the back for performance reasons:
+            // having even spill files
+            // 
+            // For example lets say we have 6 streams: a, b, c, d, e, f and the merge fan-in is 3:
+            // 
+            // so we merge a, b and c and write to spill file abc'
+            // and put it in the end, so we now have: d, e, f, abc'
+            // now, we merge the next 3: d, e and f into spill file def'
+            // 
+            // next we merge abc' and def' into one and return that.
+            // 
+            // now, if we kept the file at the orignal order (= the start) we would merge like this:
+            // a, b, c and write to spill file abc' (like before)
+            // and put it in the start, so we now have: abc', d, e, f
+            // now, we merge abc', d and e and write into spill file: abcde'
+            // 
+            // notice that the spill file we just wrote have data from 5 streams as opposed to before which was only 3,
+            // this mean that the spill file can be larger if each initial spill file have the same number of rows
+            if self.enable_round_robin_tie_breaker {
+                // Push back so we won't sort that file again right away
+                self.sorted_spill_files.push_back(spill_file_to_add);
+            } else {
+                // Add to front to keep the original order so the sort will be kept stable
+                // 
+                // TODO - push back and keep track of original position to merge sort in the correct order of
+                // stream to benefit from the performance improvement described above
+                self.sorted_spill_files.push_front(spill_file_to_add)
+            }
         }
     }
 
@@ -287,7 +318,8 @@ impl MultiLevelMergeBuilder {
 
             // Only single sorted spill file so return it
             (1, 0) => {
-                let (spill_file, batch_size) = self.sorted_spill_files.remove(0);
+                // TODO - check next level as well
+                let (spill_file, batch_size) = self.sorted_spill_files.remove(0).unwrap();
 
                 // Not reserving any memory for this disk as we are not holding it in memory
                 let output_stream = self
@@ -586,7 +618,7 @@ impl MultiLevelMergeBuilder {
         self.sorted_spill_files.swap(index, last);
         let (target, old_batch_size) = self
             .sorted_spill_files
-            .pop()
+            .pop_back()
             .expect("index is in bounds, so the vec is non-empty");
         let old_max = target.max_record_batch_memory;
 
@@ -644,17 +676,24 @@ impl MultiLevelMergeBuilder {
         // can't rebuild a full-size batch and reintroduce the skew.
         let new_batch_size_limit = (old_batch_size / 2).max(1);
 
-        // Push the re-spilled (smaller) file and swap it back into `index`, undoing
-        // the swap-to-back above so the order is preserved.
-        self.sorted_spill_files.push((
+        self.sorted_spill_files.push_back((
             SortedSpillFile {
                 file,
                 max_record_batch_memory: new_max,
             },
             new_batch_size_limit,
         ));
-        let last = self.sorted_spill_files.len() - 1;
-        self.sorted_spill_files.swap(index, last);
+        
+        // Only for stable sort keep it in the current position, otherwise move it to the end
+        // to avoid as much as possible creating intermidate spill file with small batch size
+        // and only defer to last
+        if !self.enable_round_robin_tie_breaker {
+            // Push the re-spilled (smaller) file and swap it back into `index`, undoing
+            // the swap-to-back above so the order is preserved.
+            let last = self.sorted_spill_files.len() - 1;
+            self.sorted_spill_files.swap(index, last);
+        }
+        
 
         Ok(())
     }
@@ -663,7 +702,7 @@ impl MultiLevelMergeBuilder {
         &self,
         stream: SendableRecordBatchStream,
     ) -> SendableRecordBatchStream {
-        Box::pin(ObservedStream::new(stream, self.metrics.clone(), None))
+        Box::pin(ObservedStream::new(stream, self.metrics.clone(), self.fetch))
     }
 }
 

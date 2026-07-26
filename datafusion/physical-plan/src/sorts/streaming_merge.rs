@@ -267,3 +267,277 @@ impl<'a> StreamingMergeBuilder<'a> {
         .into_stream())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{ops::Deref, sync::Arc};
+
+    use arrow::{
+        array::{ArrayRef, AsArray, Int32Array, RecordBatch},
+        datatypes::Int32Type,
+    };
+    use arrow_schema::{Field, Fields, Schema, SchemaRef, SortOptions};
+    use datafusion_common::Result;
+    use datafusion_execution::{
+        memory_pool::{
+            GreedyMemoryPool, MemoryConsumer, MemoryPool, UnboundedMemoryPool,
+        },
+        runtime_env::RuntimeEnv,
+    };
+    use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, expressions::col};
+    use datafusion_physical_expr_common::metrics::{
+        BaselineMetrics, ExecutionPlanMetricsSet, SpillMetrics,
+    };
+    use futures::TryStreamExt;
+    use itertools::Itertools;
+
+    use crate::{
+        SpillManager,
+        sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder},
+    };
+
+    fn create_batches(
+        arrays: Vec<(&str, ArrayRef)>,
+        batch_size: usize,
+    ) -> Vec<RecordBatch> {
+        let fields = arrays
+            .iter()
+            .map(|(name, arr)| {
+                Arc::new(Field::new(
+                    *name,
+                    arr.data_type().clone(),
+                    arr.is_nullable(),
+                ))
+            })
+            .collect::<Fields>();
+        let schema = Arc::new(Schema::new(fields));
+        let batch = RecordBatch::try_new(
+            schema,
+            arrays.into_iter().map(|(_name, arr)| arr).collect(),
+        )
+        .unwrap();
+
+        (0..batch.num_rows().div_ceil(batch_size))
+            .map(|index| {
+                let offset = index * batch_size;
+                let left = batch.num_rows() - offset;
+                batch.slice(offset, left.min(batch_size))
+            })
+            .collect::<Vec<_>>()
+    }
+
+    fn create_builder<'a>(
+        schema: &SchemaRef,
+        merge_fan_in: Option<usize>,
+    ) -> StreamingMergeBuilder<'a> {
+        let runtime = Arc::new(RuntimeEnv::default());
+
+        if let Some(merge_fan_in) = merge_fan_in {
+            runtime
+                .disk_manager
+                .set_max_spill_merge_fan_in(merge_fan_in);
+        }
+
+        let mem_pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let spill_manager = SpillManager::new(
+            runtime,
+            SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+            Arc::clone(schema),
+        );
+
+        StreamingMergeBuilder::new()
+            .with_spill_manager(spill_manager)
+            .with_reservation(
+                MemoryConsumer::new("merge stream mock memory").register(&mem_pool),
+            )
+            .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::default(), 0))
+            .with_schema(Arc::clone(schema))
+    }
+
+    fn spill_batches(
+        spill_manager: &SpillManager,
+        batches_for_files: &[&[RecordBatch]],
+    ) -> Vec<SortedSpillFile> {
+        batches_for_files
+            .iter()
+            .map(|batches| {
+                let (file, max_record_batch_memory) = spill_manager
+                    .spill_record_batch_iter_and_return_max_batch_memory(
+                        batches.iter().map(Ok),
+                        "spill",
+                    )
+                    .unwrap()
+                    .unwrap();
+
+                SortedSpillFile {
+                    file,
+                    max_record_batch_memory,
+                }
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn multi_level_merge_sort_should_respect_limit_for_single_spill_file() {
+        let batch_size = 10;
+        let batches = create_batches(
+            vec![(
+                "a",
+                Arc::new((0..(batch_size * 2) as i32).collect::<Int32Array>()),
+            )],
+            batch_size,
+        );
+
+        let schema = batches[0].schema();
+
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            col("a", &schema).unwrap(),
+            // Match the existing sort order of the data
+            SortOptions::default().asc(),
+        )])
+        .unwrap();
+
+        let fetch = (batch_size as f64 * 1.5) as usize;
+        assert_ne!(fetch % batch_size, 0);
+
+        let merge_builder = create_builder(&schema, None)
+            .with_batch_size(batch_size)
+            .with_fetch(Some(fetch))
+            .with_expressions(&ordering);
+
+        let spilled_files =
+            spill_batches(merge_builder.spill_manager.as_ref().unwrap(), &[&batches]);
+
+        let stream = merge_builder
+            .with_sorted_spill_files(spilled_files)
+            .build()
+            .unwrap();
+
+        let sorted: Result<Vec<RecordBatch>> = stream.try_collect().await;
+        let sorted = sorted.unwrap();
+
+        let output = arrow::compute::concat_batches(&schema, sorted.iter()).unwrap();
+
+        assert_eq!(output.num_rows(), fetch);
+
+        let rows = output.column(0).as_primitive::<Int32Type>();
+        assert_eq!(
+            rows.values().deref(),
+            (0..(fetch as i32)).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_level_merge_sort_should_be_stable_and_have_multiple_rounds_when_round_robin_tie_breaker_is_disabled()
+     {
+        let input_batch_size = 10;
+        let num_rows = input_batch_size * 6;
+        let batches = create_batches(
+            vec![
+                // All the same value so it should match
+                (
+                    "a",
+                    Arc::new((0..num_rows).map(|_| 0).collect::<Int32Array>()),
+                ),
+                (
+                    "other",
+                    Arc::new((0..num_rows as i32).collect::<Int32Array>()),
+                ),
+            ],
+            input_batch_size,
+        );
+
+        let schema = batches[0].schema();
+
+        let files_batches = batches.chunks(2).collect::<Vec<_>>();
+        assert_eq!(files_batches.len(), 3);
+
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(
+            col("a", &schema).unwrap(),
+        )])
+        .unwrap();
+        let output_batch_size = (input_batch_size as f64 * 1.5) as usize;
+
+        let merge_builder = create_builder(&schema, Some(2))
+            .with_batch_size(output_batch_size)
+            .with_fetch(None)
+            .with_expressions(&ordering)
+            .with_round_robin_tie_breaker(false);
+
+        let spilled_files = spill_batches(
+            merge_builder.spill_manager.as_ref().unwrap(),
+            &files_batches,
+        );
+
+        let stream = merge_builder
+            .with_sorted_spill_files(spilled_files)
+            .build()
+            .unwrap();
+
+        let sorted: Result<Vec<RecordBatch>> = stream.try_collect().await;
+        let sorted = sorted.unwrap();
+
+        let output = arrow::compute::concat_batches(&schema, sorted.iter()).unwrap();
+
+        let other_rows = output.column(1).as_primitive::<Int32Type>();
+        assert_eq!(
+            other_rows.values().deref(),
+            (0..num_rows as i32).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_level_merge_sort_should_respect_batch_size_for_single_spill_file() {
+        let input_batch_size = 10;
+        let num_rows = input_batch_size * 4;
+        let batches = create_batches(
+            vec![("a", Arc::new((0..num_rows as i32).collect::<Int32Array>()))],
+            input_batch_size,
+        );
+
+        let schema = batches[0].schema();
+
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            col("a", &schema).unwrap(),
+            // Match the existing sort order of the data
+            SortOptions::default().asc(),
+        )])
+        .unwrap();
+        let output_batch_size = (input_batch_size as f64 * 1.5) as usize;
+
+        let merge_builder = create_builder(&schema, None)
+            .with_batch_size(output_batch_size)
+            .with_fetch(None)
+            .with_expressions(&ordering);
+
+        let spilled_files =
+            spill_batches(merge_builder.spill_manager.as_ref().unwrap(), &[&batches]);
+
+        let stream = merge_builder
+            .with_sorted_spill_files(spilled_files)
+            .build()
+            .unwrap();
+
+        let sorted: Result<Vec<RecordBatch>> = stream.try_collect().await;
+        let sorted = sorted.unwrap();
+
+        assert_eq!(sorted.iter().map(|a| a.num_rows()).sum::<usize>(), num_rows);
+
+        for sorted_batch in sorted.iter().dropping_back(1) {
+            assert_eq!(
+                sorted_batch.num_rows(),
+                output_batch_size,
+                "batch size mismatch"
+            );
+        }
+
+        let last_batch_num_rows = sorted.last().unwrap().num_rows();
+        assert!(
+            last_batch_num_rows <= output_batch_size,
+            "last batch size mismatch: {last_batch_num_rows} <= {output_batch_size}"
+        );
+    }
+
+    // TODO - single spill file does not respect batch size
+    //
+}
