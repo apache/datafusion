@@ -1038,6 +1038,24 @@ mod tests {
         assert_eq!(truncate_plan.schema().field(0).name(), "count");
         assert!(calls.lock().unwrap().truncated);
 
+        let session =
+            FFI_SessionRef::new(&state, None, ffi_provider.logical_codec.clone());
+        let assignments = [FFI_TableProviderUpdateAssignment {
+            column: SString::from("b"),
+            expr_serialized: SVec::new(),
+        }]
+        .into_iter()
+        .collect();
+        let result = unsafe {
+            (ffi_provider.update)(&ffi_provider, session, assignments, SVec::new()).await
+        };
+        assert!(
+            df_result!(result)
+                .unwrap_err()
+                .to_string()
+                .contains("Expected exactly one expression for update assignment")
+        );
+
         Ok(())
     }
 
