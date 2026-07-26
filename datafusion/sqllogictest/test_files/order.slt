@@ -1748,17 +1748,24 @@ EXPLAIN SELECT a, named_struct('a', a, 'b', b) AS s FROM ordered_by_a ORDER BY s
 ----
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[a, named_struct(a, a@0, b, b@1) as s], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true
 
-# Regression test for https://github.com/apache/datafusion/issues/23902
-# Both input columns are ascending, but UInt8 addition wraps and is therefore
-# not necessarily ascending.
+query I
+COPY (
+  SELECT * FROM (VALUES (1, 1), (2, 3), (200, 10), (255, 10)) AS t(a, b)
+  ORDER BY a
+)
+TO 'test_files/scratch/order/uint8_overflow.csv'
+OPTIONS ('format.has_header' 'false');
+----
+4
+
 statement ok
 CREATE EXTERNAL TABLE ordered_u8 (
   a TINYINT UNSIGNED NOT NULL,
   b TINYINT UNSIGNED NOT NULL
 )
 STORED AS CSV
-LOCATION 'data/uint8_overflow_order.csv'
-OPTIONS ('format.has_header' 'true')
+LOCATION 'test_files/scratch/order/uint8_overflow.csv'
+OPTIONS ('format.has_header' 'false')
 WITH ORDER (a ASC)
 WITH ORDER (b ASC);
 

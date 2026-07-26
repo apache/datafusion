@@ -119,13 +119,9 @@ impl BinaryExpr {
         &self.op
     }
 
-    /// The default arithmetic kernels wrap on overflow (e.g. the sum of two
-    /// ascending `UInt8` columns wraps around to small values), which breaks
-    /// the monotonicity that `sort_properties` derives from the operands.
-    /// Keep the derived ordering only when overflow cannot corrupt it: the
-    /// expression errors on overflow instead of wrapping, the result is a
-    /// constant, or the result range proves overflow is impossible.
-    /// See <https://github.com/apache/datafusion/issues/23902>.
+    /// Wrapping on overflow breaks monotonicity (e.g. the sum of two
+    /// ascending `UInt8` columns can wrap back to small values), so the
+    /// derived ordering is kept only when overflow is impossible.
     fn arithmetic_sort_properties(
         &self,
         sort_properties: SortProperties,
