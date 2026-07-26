@@ -42,6 +42,7 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::{
     ChildStats, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, SendableRecordBatchStream, StatisticsArgs,
+    with_new_children_if_necessary,
 };
 
 /// This rule either adds or removes [`OutputRequirements`]s to/from the physical
@@ -460,7 +461,7 @@ fn require_top_ordering_helper(
                 require_top_ordering_helper(Arc::clone(&children[idx]))?;
             if is_changed {
                 children[idx] = new_child;
-                return Ok((plan.with_new_children(children)?, true));
+                return Ok((with_new_children_if_necessary(plan, children)?, true));
             }
         }
         Ok((plan, false))

@@ -861,15 +861,15 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     }
 }
 
-// A hint from `with_new_children_if_necessary` to `replace_children` indicating
-// whether the properties of the new children must be recomputed.
+/// A hint from `with_new_children_if_necessary` to `replace_children` indicating
+/// whether the properties of the new children must be recomputed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChildrenPropertiesHint {
-    // The properties of the new children are identical to the properties of the
-    // existing children, so we can skip recomuptation of plan properties.
+    /// The properties of the new children are identical to the properties of the
+    /// existing children, so we can skip recomputation of plan properties.
     SameProperties,
-    // The properties of the new children are different from the properties of the
-    // existing children, so we must recompute the properties from scratch.
+    /// The properties of the new children are different from the properties of the
+    /// existing children, so we must recompute the properties from scratch.
     Recompute,
 }
 
