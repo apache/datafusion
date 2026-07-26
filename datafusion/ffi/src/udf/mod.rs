@@ -190,14 +190,13 @@ unsafe extern "C" fn preserves_lex_ordering_fn_wrapper(
     udf: &FFI_ScalarUDF,
     inputs: SVec<FFI_ExprProperties>,
 ) -> FFI_Result<bool> {
-    let inputs = sresult_return!(
-        inputs
-            .into_iter()
-            .map(ExprProperties::try_from)
-            .collect::<Result<Vec<_>>>()
-    );
+    let result = inputs
+        .into_iter()
+        .map(ExprProperties::try_from)
+        .collect::<Result<Vec<_>>>()
+        .and_then(|inputs| udf.inner().preserves_lex_ordering(&inputs));
 
-    sresult!(udf.inner().preserves_lex_ordering(&inputs))
+    sresult!(result)
 }
 
 unsafe extern "C" fn invoke_with_args_fn_wrapper(
@@ -485,14 +484,15 @@ impl ScalarUDFImpl for ForeignScalarUDF {
     }
 
     fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
-        let inputs = inputs
+        inputs
             .iter()
             .map(FFI_ExprProperties::try_from)
-            .collect::<Result<SVec<_>>>()?;
-
-        let result = unsafe { (self.udf.preserves_lex_ordering)(&self.udf, inputs) };
-
-        df_result!(result)
+            .collect::<Result<SVec<_>>>()
+            .and_then(|inputs| {
+                let result =
+                    unsafe { (self.udf.preserves_lex_ordering)(&self.udf, inputs) };
+                df_result!(result)
+            })
     }
 }
 
@@ -536,6 +536,10 @@ mod tests {
         }
 
         fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
+            if inputs.is_empty() {
+                return internal_err!("preserves_lex_ordering requires an input");
+            }
+
             Ok(inputs.iter().all(|input| input.preserves_lex_ordering))
         }
     }
@@ -613,8 +617,17 @@ mod tests {
         let preserves = ExprProperties::new_unknown().with_preserves_lex_ordering(true);
         let does_not_preserve = ExprProperties::new_unknown();
 
-        assert!(foreign_udf.preserves_lex_ordering(std::slice::from_ref(&preserves))?);
-        assert!(!foreign_udf.preserves_lex_ordering(&[preserves, does_not_preserve])?);
+        assert!(
+            foreign_udf
+                .preserves_lex_ordering(std::slice::from_ref(&preserves))
+                .unwrap()
+        );
+        assert!(
+            !foreign_udf
+                .preserves_lex_ordering(&[preserves, does_not_preserve])
+                .unwrap()
+        );
+        assert!(foreign_udf.preserves_lex_ordering(&[]).is_err());
 
         Ok(())
     }
