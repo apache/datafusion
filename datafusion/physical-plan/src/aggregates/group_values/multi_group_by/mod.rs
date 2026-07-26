@@ -20,6 +20,7 @@
 mod boolean;
 mod bytes;
 pub mod bytes_view;
+mod fixed_size_list;
 pub mod primitive;
 
 use std::mem::{self, size_of};
@@ -923,6 +924,33 @@ macro_rules! instantiate_primitive {
 /// builder for. The `group_column_supported_type_matches_make_group_column`
 /// test below pins this biconditional.
 fn group_column_supported_type(data_type: &DataType) -> bool {
+    // FixedSizeList<primitive> is the only nested type currently supported.
+    // List / LargeList / Struct will follow in subsequent PRs of #22715.
+    if let DataType::FixedSizeList(child_field, list_size) = data_type {
+        // Arrow defines `FixedSizeList` size as a non-negative `i32`, but
+        // the enum still lets callers construct a negative size. Reject
+        // here so the schema is routed to the `GroupValuesRows` fallback
+        // instead of risking a `negative_size as usize` wrap inside the
+        // builder. Keep this guard in lockstep with `make_group_column`.
+        if *list_size < 0 {
+            return false;
+        }
+        return matches!(
+            child_field.data_type(),
+            DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+                | DataType::Float32
+                | DataType::Float64
+                | DataType::Date32
+                | DataType::Date64
+        );
+    }
     matches!(
         *data_type,
         DataType::Int8
@@ -1065,6 +1093,49 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
                 v.push(Box::new(BooleanGroupValueBuilder::<true>::new()));
             } else {
                 v.push(Box::new(BooleanGroupValueBuilder::<false>::new()));
+            }
+        }
+        DataType::FixedSizeList(ref child_field, list_size) => {
+            // `group_column_supported_type` already rejects negative
+            // `list_size`; this assert is a defensive belt-and-suspenders
+            // check so a direct caller of `make_group_column` that bypasses
+            // the allow-list can't wrap the `i32 as usize` cast in the
+            // builder into a huge value.
+            assert!(
+                list_size >= 0,
+                "FixedSizeList requires non-negative size, got {list_size}"
+            );
+            // `group_column_supported_type` already restricts the child to
+            // the primitive subset supported here. Any unsupported child
+            // type returned `false` upstream and was routed to the
+            // `GroupValuesRows` fallback, so the wildcard arm below is
+            // only reachable from the consistency-fuzz test.
+            macro_rules! instantiate_fsl {
+                ($t:ty) => {{
+                    let b = fixed_size_list::FixedSizeListGroupValueBuilder::<$t>::new(
+                        data_type,
+                    );
+                    v.push(Box::new(b) as _);
+                }};
+            }
+            match child_field.data_type() {
+                DataType::Int8 => instantiate_fsl!(Int8Type),
+                DataType::Int16 => instantiate_fsl!(Int16Type),
+                DataType::Int32 => instantiate_fsl!(Int32Type),
+                DataType::Int64 => instantiate_fsl!(Int64Type),
+                DataType::UInt8 => instantiate_fsl!(UInt8Type),
+                DataType::UInt16 => instantiate_fsl!(UInt16Type),
+                DataType::UInt32 => instantiate_fsl!(UInt32Type),
+                DataType::UInt64 => instantiate_fsl!(UInt64Type),
+                DataType::Float32 => instantiate_fsl!(Float32Type),
+                DataType::Float64 => instantiate_fsl!(Float64Type),
+                DataType::Date32 => instantiate_fsl!(Date32Type),
+                DataType::Date64 => instantiate_fsl!(Date64Type),
+                other => {
+                    return not_impl_err!(
+                        "FixedSizeList<{other}> not supported in GroupValuesColumn"
+                    );
+                }
             }
         }
         _ => return not_impl_err!("{data_type} not supported in GroupValuesColumn"),
@@ -1309,6 +1380,27 @@ mod tests {
             DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
             DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond),
             DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+            // FixedSizeList<primitive>: cover one signed integer, one
+            // unsigned, one float, and a date variant. The dispatcher in
+            // `make_group_column` enumerates the full primitive subset
+            // upstream of this test; the unit tests inside
+            // `fixed_size_list.rs` cover semantic correctness per builder.
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Int32, true)),
+                3,
+            ),
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::UInt64, false)),
+                1,
+            ),
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float64, true)),
+                4,
+            ),
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Date32, true)),
+                2,
+            ),
         ];
 
         for dt in &supported_cases {
@@ -1337,6 +1429,20 @@ mod tests {
             DataType::Time64(arrow::datatypes::TimeUnit::Millisecond),
             DataType::Time32(arrow::datatypes::TimeUnit::Microsecond),
             DataType::Time32(arrow::datatypes::TimeUnit::Nanosecond),
+            // FixedSizeList<non-primitive>: primitive-only in this PR;
+            // nested children land later in EPIC #22715.
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Utf8, true)),
+                2,
+            ),
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Decimal128(38, 10), true)),
+                2,
+            ),
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Boolean, true)),
+                2,
+            ),
         ];
 
         for dt in &unsupported_cases {
