@@ -92,6 +92,7 @@ pub struct CliSessionBuilder {
 
 #[derive(Debug, Parser, PartialEq)]
 #[clap(author, version, about, long_about= None)]
+#[non_exhaustive]
 pub struct CliArgs {
     #[clap(
         short = 'p',
