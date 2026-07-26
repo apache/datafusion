@@ -52,7 +52,7 @@ use datafusion_expr::{
 use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
 use datafusion_macros::user_doc;
 use half::f16;
-use std::mem::size_of_val;
+use std::mem::{size_of, size_of_val};
 use std::ops::Deref;
 
 fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -433,7 +433,9 @@ impl Accumulator for SlidingMaxAccumulator {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) - size_of_val(&self.max) + self.max.size()
+        size_of_val(self) - size_of_val(&self.max)
+            + self.max.size()
+            + self.moving_max.heap_size(|sv| sv.size() - size_of_val(sv))
     }
 }
 
@@ -721,7 +723,9 @@ impl Accumulator for SlidingMinAccumulator {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) - size_of_val(&self.min) + self.min.size()
+        size_of_val(self) - size_of_val(&self.min)
+            + self.min.size()
+            + self.moving_min.heap_size(|sv| sv.size() - size_of_val(sv))
     }
 }
 
@@ -857,6 +861,30 @@ impl<T: Clone + PartialOrd> MovingMin<T> {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Heap bytes owned by the two stack buffers plus each stored `T`'s
+    /// heap payload as reported by `elem_heap`. Excludes `size_of::<Self>()`.
+    #[inline]
+    fn heap_size(&self, elem_heap: impl Fn(&T) -> usize) -> usize {
+        moving_stacks_heap_size(&self.push_stack, &self.pop_stack, elem_heap)
+    }
+}
+
+/// Shared implementation for [`MovingMin::heap_size`] and
+/// [`MovingMax::heap_size`]. Both share the same two-stack layout.
+#[inline]
+fn moving_stacks_heap_size<T>(
+    push_stack: &Vec<(T, T)>,
+    pop_stack: &Vec<(T, T)>,
+    elem_heap: impl Fn(&T) -> usize,
+) -> usize {
+    let buffers = (push_stack.capacity() + pop_stack.capacity()) * size_of::<(T, T)>();
+    let elems: usize = push_stack
+        .iter()
+        .chain(pop_stack.iter())
+        .map(|(a, b)| elem_heap(a) + elem_heap(b))
+        .sum();
+    buffers + elems
 }
 
 /// Keep track of the maximum value in a sliding window.
@@ -974,6 +1002,13 @@ impl<T: Clone + PartialOrd> MovingMax<T> {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Heap bytes owned by the two stack buffers plus each stored `T`'s
+    /// heap payload as reported by `elem_heap`. Excludes `size_of::<Self>()`.
+    #[inline]
+    fn heap_size(&self, elem_heap: impl Fn(&T) -> usize) -> usize {
+        moving_stacks_heap_size(&self.push_stack, &self.pop_stack, elem_heap)
     }
 }
 
@@ -1211,6 +1246,48 @@ mod tests {
         moving_max_i32(100, 50)?;
         moving_max_i32(100, 100)?;
         Ok(())
+    }
+
+    #[test]
+    fn moving_min_max_heap_size_i32() {
+        // Fixed-width `T` has no per-element heap payload, so `heap_size`
+        // reports exactly the two stack buffers' capacity in bytes.
+        let mut moving_min = MovingMin::<i32>::with_capacity(4);
+        let mut moving_max = MovingMax::<i32>::with_capacity(4);
+        let elem = |_: &i32| 0;
+
+        // Both stacks are `with_capacity(4)`, so total slots = 8.
+        let buffer_only = 2 * 4 * size_of::<(i32, i32)>();
+        assert_eq!(moving_min.heap_size(elem), buffer_only);
+        assert_eq!(moving_max.heap_size(elem), buffer_only);
+
+        for i in 0..3 {
+            moving_min.push(i);
+            moving_max.push(i);
+        }
+        // Elements sit inside the pre-allocated buffers, so still buffer-only.
+        assert_eq!(moving_min.heap_size(elem), buffer_only);
+        assert_eq!(moving_max.heap_size(elem), buffer_only);
+    }
+
+    #[test]
+    fn moving_min_max_heap_size_counts_elems() {
+        // Each buffered slot is a `(T, T)` pair, so a stored element is
+        // visited twice by `heap_size` — mirrors two independent `Clone`s.
+        let mut moving_min = MovingMin::<String>::with_capacity(2);
+        let mut moving_max = MovingMax::<String>::with_capacity(2);
+        let elem = |s: &String| s.capacity();
+
+        moving_min.push("abcdef".to_string());
+        moving_max.push("abcdef".to_string());
+
+        // Both `push_stack` and `pop_stack` allocate `capacity` slots.
+        let buffers = 2 * 2 * size_of::<(String, String)>();
+        // 2 slots per stored element (value + running extremum) times the
+        // per-element heap payload from `elem`.
+        let elems = 2 * 6;
+        assert_eq!(moving_min.heap_size(elem), buffers + elems);
+        assert_eq!(moving_max.heap_size(elem), buffers + elems);
     }
 
     #[test]
