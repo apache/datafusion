@@ -74,7 +74,7 @@ use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, PrimitiveArray};
 use arrow::buffer::{BooleanBuffer, ScalarBuffer};
 use arrow::datatypes::*;
 use arrow::util::bit_iterator::BitIndexIterator;
-use datafusion_common::{Result, exec_datafusion_err};
+use datafusion_common::{Result, exec_datafusion_err, internal_datafusion_err};
 
 use super::result::build_result_from_contains;
 use super::static_filter::{StaticFilter, handle_dictionary};
@@ -211,7 +211,7 @@ where
         let non_null_count = in_array.len() - in_array.null_count();
         // `try_new` can be called on its own, so check the limit here too.
         if non_null_count > T::MAX_LIST_LEN {
-            return Err(exec_datafusion_err!(
+            return Err(internal_datafusion_err!(
                 "BranchlessFilter: supports at most {} non-null values, got {non_null_count}",
                 T::MAX_LIST_LEN
             ));
