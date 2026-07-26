@@ -232,7 +232,7 @@ impl TableProvider for TableWithStats {
         _state: &dyn Session,
         filters: Vec<Expr>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if filters != vec![col("a").gt(lit(10_i32))] {
+        if filters != vec![col("a").gt(lit(10_i32)), col("b").lt(lit(2.5_f64))] {
             return exec_err!("Unexpected DELETE filters");
         }
 
@@ -245,10 +245,15 @@ impl TableProvider for TableWithStats {
         assignments: Vec<(String, Expr)>,
         filters: Vec<Expr>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if assignments != vec![("b".to_string(), lit(42_f64))] {
+        if assignments
+            != vec![
+                ("b".to_string(), lit(42_f64)),
+                ("a".to_string(), lit(7_i32)),
+            ]
+        {
             return exec_err!("Unexpected UPDATE assignments");
         }
-        if filters != vec![col("a").eq(lit(7_i32))] {
+        if filters != vec![col("a").eq(lit(7_i32)), col("b").gt(lit(1.5_f64))] {
             return exec_err!("Unexpected UPDATE filters");
         }
 
