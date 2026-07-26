@@ -23,13 +23,14 @@ use std::sync::Arc;
 
 use crate::ExecutionPlan;
 use crate::ExecutionPlanProperties;
-use crate::joins::Map;
 use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::HASH_JOIN_SEED;
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{
     HashExpr, HashTableLookupExpr, SeededRandomState,
 };
+use crate::joins::{ArrayMap, Map};
+use crate::metrics::Count;
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
@@ -79,21 +80,18 @@ impl PartitionBounds {
     }
 }
 
-/// Creates a membership predicate for filter pushdown.
-///
-/// If `inlist_values` is provided (for small build sides), creates an InList expression.
-/// Otherwise, creates a HashTableLookup expression (for large build sides).
+/// Creates a membership predicate using the representation selected while
+/// collecting the build side.
 ///
 /// Supports both single-column and multi-column joins using struct expressions.
 fn create_membership_predicate(
     on_right: &[PhysicalExprRef],
-    pushdown: PushdownStrategy,
+    pushdown: &PushdownStrategy,
     random_state: &SeededRandomState,
     schema: &Schema,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
     match pushdown {
-        // Use InList expression for small build sides
-        PushdownStrategy::InList(in_list_array) => {
+        PushdownStrategy::InList(membership) => {
             // Build the expression to compare against
             let expr = if on_right.len() == 1 {
                 // Single column: col IN (val1, val2, ...)
@@ -123,19 +121,17 @@ fn create_membership_predicate(
             // Use InListExpr::try_new_from_array() to build an InList with static_filter optimization (hash-based lookup)
             Ok(Some(Arc::new(InListExpr::try_new_from_array(
                 expr,
-                in_list_array,
+                Arc::clone(&membership.values),
                 false,
                 schema,
             )?)))
         }
-        // Use hash table lookup for large build sides
         PushdownStrategy::Map(hash_map) => Ok(Some(Arc::new(HashTableLookupExpr::new(
             on_right.to_vec(),
             random_state.clone(),
-            hash_map,
+            Arc::clone(hash_map),
             "hash_lookup".to_string(),
         )) as Arc<dyn PhysicalExpr>)),
-        // Empty partition - should not create a filter for this
         PushdownStrategy::Empty => Ok(None),
     }
 }
@@ -203,6 +199,55 @@ fn combine_membership_and_bounds(
     }
 }
 
+fn inclusive_integer_span(bounds: &PartitionBounds) -> Option<u128> {
+    let [column_bounds] = bounds.column_bounds.as_slice() else {
+        return None;
+    };
+    if column_bounds.min.data_type() != column_bounds.max.data_type()
+        || column_bounds.min > column_bounds.max
+    {
+        return None;
+    }
+    let min = ArrayMap::key_to_u64(&column_bounds.min)?;
+    let max = ArrayMap::key_to_u64(&column_bounds.max)?;
+
+    // ArrayMap uses two's-complement values and wrapping subtraction, which
+    // also gives the correct span for signed ranges that cross zero.
+    Some(u128::from(ArrayMap::calculate_range(min, max)) + 1)
+}
+
+/// Returns true when the membership set is provably identical to its
+/// single-column integer bounds.
+///
+/// `distinct_key_count_lower_bound` is exact for [`ArrayMap`] and is the number of
+/// distinct hashes for the regular hash map. The latter is a lower bound on
+/// distinct keys. Because the keys are also bounded by the inclusive integer
+/// span, equality with the span proves that every value is present even when
+/// hash collisions are possible.
+fn membership_matches_integer_bounds(
+    pushdown: &PushdownStrategy,
+    bounds: &PartitionBounds,
+    join_key_count: usize,
+) -> bool {
+    if join_key_count != 1 {
+        return false;
+    }
+    let Some(distinct_key_count_lower_bound) = pushdown.distinct_key_count_lower_bound()
+    else {
+        return false;
+    };
+    let Some(inclusive_span) = inclusive_integer_span(bounds) else {
+        return false;
+    };
+    if let PushdownStrategy::InList(membership) = pushdown
+        && membership.values.data_type() != &bounds.column_bounds[0].min.data_type()
+    {
+        return false;
+    }
+
+    inclusive_span == distinct_key_count_lower_bound as u128
+}
+
 /// Coordinates build-side information collection across multiple partitions
 ///
 /// This structure collects information from the build side (hash tables and/or bounds) and
@@ -258,17 +303,82 @@ pub(crate) struct SharedBuildAccumulator {
     /// Null-aware anti join (`NOT IN`). A probe-side NULL must reach the join so its
     /// three-valued logic can collapse the result, so the pushed filter keeps NULL rows.
     null_aware: bool,
+    /// Membership predicates omitted after proving their integer keys cover
+    /// every value in the corresponding min/max bounds.
+    membership_predicates_elided: Count,
+}
+
+/// Runtime dependencies used to construct a HashJoin dynamic filter.
+pub(super) struct DynamicFilterBuildContext {
+    filter: Arc<DynamicFilterPhysicalExpr>,
+    probe_exprs: Vec<PhysicalExprRef>,
+    repartition_random_state: SeededRandomState,
+    null_aware: bool,
+    membership_predicates_elided: Count,
+}
+
+impl DynamicFilterBuildContext {
+    pub(super) fn new(
+        filter: Arc<DynamicFilterPhysicalExpr>,
+        probe_exprs: Vec<PhysicalExprRef>,
+        repartition_random_state: SeededRandomState,
+        null_aware: bool,
+        membership_predicates_elided: Count,
+    ) -> Self {
+        Self {
+            filter,
+            probe_exprs,
+            repartition_random_state,
+            null_aware,
+            membership_predicates_elided,
+        }
+    }
+}
+
+/// Data required to build an `InListExpr`, together with cardinality evidence
+/// derived from the same build-side key set.
+#[derive(Clone)]
+pub(crate) struct InListMembership {
+    values: ArrayRef,
+    /// A lower bound on the number of distinct matchable keys. This is exact
+    /// for an ArrayMap and may be conservative for a hash map due to collisions.
+    distinct_key_count_lower_bound: Option<usize>,
+}
+
+impl InListMembership {
+    /// `map` must index the same build-side rows represented by `values`.
+    pub(super) fn new(values: ArrayRef, map: &Map) -> Self {
+        let distinct_key_count_lower_bound = map.num_of_distinct_key();
+        Self {
+            // A count larger than the source array cannot describe the same
+            // build set, so discard the evidence and retain membership.
+            distinct_key_count_lower_bound: (distinct_key_count_lower_bound
+                <= values.len())
+            .then_some(distinct_key_count_lower_bound),
+            values,
+        }
+    }
 }
 
 /// Strategy for filter pushdown (decided at collection time)
 #[derive(Clone)]
 pub(crate) enum PushdownStrategy {
-    /// Use InList for small build sides (< 128MB)
-    InList(ArrayRef),
-    /// Use map lookup for large build sides
+    /// Use InList when the configured size and cardinality limits allow it.
+    InList(InListMembership),
+    /// Reuse the build map when an InList is not selected.
     Map(Arc<Map>),
     /// There was no data in this partition, do not build a dynamic filter for it
     Empty,
+}
+
+impl PushdownStrategy {
+    fn distinct_key_count_lower_bound(&self) -> Option<usize> {
+        match self {
+            Self::InList(membership) => membership.distinct_key_count_lower_bound,
+            Self::Map(map) => Some(map.num_of_distinct_key()),
+            Self::Empty => None,
+        }
+    }
 }
 
 /// Build-side data reported by a single partition
@@ -354,14 +464,11 @@ impl SharedBuildAccumulator {
     /// We cannot build a partial filter from some partitions - it would incorrectly eliminate
     /// valid join results. We must wait until we have complete information from ALL
     /// relevant partitions before updating the dynamic filter.
-    pub(crate) fn new_from_partition_mode(
+    pub(super) fn new_from_partition_mode(
         partition_mode: PartitionMode,
         left_child: &dyn ExecutionPlan,
         right_child: &dyn ExecutionPlan,
-        dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
-        on_right: Vec<PhysicalExprRef>,
-        repartition_random_state: SeededRandomState,
-        null_aware: bool,
+        context: DynamicFilterBuildContext,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -398,18 +505,52 @@ impl SharedBuildAccumulator {
             ),
         };
 
+        let DynamicFilterBuildContext {
+            filter,
+            probe_exprs,
+            repartition_random_state,
+            null_aware,
+            membership_predicates_elided,
+        } = context;
+
         Self {
             inner: Mutex::new(AccumulatorState {
                 data: mode_data,
                 completion: CompletionState::Pending,
             }),
             completion_notify: Notify::new(),
-            dynamic_filter,
-            on_right,
+            dynamic_filter: filter,
+            on_right: probe_exprs,
             repartition_random_state,
             probe_schema: right_child.schema(),
             null_aware,
+            membership_predicates_elided,
         }
+    }
+
+    /// Builds the complete dynamic-filter predicate for one build partition.
+    fn create_partition_filter(
+        &self,
+        partition: &PartitionData,
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        let bounds_expr = create_bounds_predicate(&self.on_right, &partition.bounds);
+        let membership_expr = if membership_matches_integer_bounds(
+            &partition.pushdown,
+            &partition.bounds,
+            self.on_right.len(),
+        ) {
+            self.membership_predicates_elided.add(1);
+            None
+        } else {
+            create_membership_predicate(
+                &self.on_right,
+                &partition.pushdown,
+                &HASH_JOIN_SEED,
+                self.probe_schema.as_ref(),
+            )?
+        };
+
+        Ok(combine_membership_and_bounds(membership_expr, bounds_expr))
     }
 
     /// Report build-side data from a partition
@@ -572,17 +713,8 @@ impl SharedBuildAccumulator {
         match finalize_input {
             FinalizeInput::CollectLeft(partition) => match partition {
                 PartitionStatus::Reported(partition_data) => {
-                    let membership_expr = create_membership_predicate(
-                        &self.on_right,
-                        partition_data.pushdown.clone(),
-                        &HASH_JOIN_SEED,
-                        self.probe_schema.as_ref(),
-                    )?;
-                    let bounds_expr =
-                        create_bounds_predicate(&self.on_right, &partition_data.bounds);
-
                     if let Some(filter_expr) =
-                        combine_membership_and_bounds(membership_expr, bounds_expr)
+                        self.create_partition_filter(&partition_data)?
                     {
                         self.dynamic_filter
                             .update(self.null_aware_filter(filter_expr))?;
@@ -625,21 +757,9 @@ impl SharedBuildAccumulator {
                             empty_partition_ids.push(partition_id);
                         }
                         PartitionStatus::Reported(partition) => {
-                            let membership_expr = create_membership_predicate(
-                                &self.on_right,
-                                partition.pushdown.clone(),
-                                &HASH_JOIN_SEED,
-                                self.probe_schema.as_ref(),
-                            )?;
-                            let bounds_expr = create_bounds_predicate(
-                                &self.on_right,
-                                &partition.bounds,
-                            );
-                            let then_expr = combine_membership_and_bounds(
-                                membership_expr,
-                                bounds_expr,
-                            )
-                            .unwrap_or_else(|| lit(true));
+                            let then_expr = self
+                                .create_partition_filter(partition)?
+                                .unwrap_or_else(|| lit(true));
                             real_branches.push((
                                 lit(ScalarValue::UInt64(Some(partition_id as u64))),
                                 then_expr,
@@ -757,6 +877,7 @@ pub(super) fn make_partitioned_accumulator_for_test(
         repartition_random_state: SeededRandomState::with_seed(1),
         probe_schema,
         null_aware: false,
+        membership_predicates_elided: Count::new(),
     }
 }
 
@@ -777,7 +898,7 @@ pub(super) fn completed_partitions_for_test(acc: &SharedBuildAccumulator) -> usi
 mod tests {
     use super::*;
 
-    use arrow::array::{ArrayRef, Int32Array};
+    use arrow::array::{ArrayRef, Int32Array, UInt64Array};
     use datafusion_physical_expr::expressions::{Column, Literal};
 
     fn test_on_right() -> Vec<PhysicalExprRef> {
@@ -814,6 +935,7 @@ mod tests {
             repartition_random_state: SeededRandomState::with_seed(1),
             probe_schema: test_probe_schema(),
             null_aware: false,
+            membership_predicates_elided: Count::new(),
         }
     }
 
@@ -841,7 +963,20 @@ mod tests {
     }
 
     fn in_list(values: &[i32]) -> PushdownStrategy {
-        PushdownStrategy::InList(Arc::new(Int32Array::from(values.to_vec())) as ArrayRef)
+        let array = Arc::new(Int32Array::from(values.to_vec())) as ArrayRef;
+        let map = array_map_from_i32(values);
+        PushdownStrategy::InList(InListMembership::new(array, map.as_ref()))
+    }
+
+    fn array_map_from_i32(values: &[i32]) -> Arc<Map> {
+        let array = Arc::new(Int32Array::from(values.to_vec())) as ArrayRef;
+        let min = values.iter().min().copied().unwrap() as u64;
+        let max = values.iter().max().copied().unwrap() as u64;
+        Arc::new(Map::ArrayMap(ArrayMap::try_new(&array, min, max).unwrap()))
+    }
+
+    fn array_map(values: &[i32]) -> PushdownStrategy {
+        PushdownStrategy::Map(array_map_from_i32(values))
     }
 
     fn bounds(min: i32, max: i32) -> PartitionBounds {
@@ -962,6 +1097,206 @@ mod tests {
     }
 
     #[test]
+    fn collect_left_contiguous_integer_membership_uses_bounds_only() {
+        let acc = make_collect_left_accumulator_for_test();
+
+        acc.build_filter(FinalizeInput::CollectLeft(reported(
+            in_list(&[1, 2, 3]),
+            bounds(1, 3),
+        )))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        let bounds = binary_expr(&expr);
+        assert_eq!(bounds.op(), &Operator::And);
+        assert!(
+            bounds.right().downcast_ref::<InListExpr>().is_none(),
+            "a complete integer interval must not retain a redundant InList"
+        );
+        assert_eq!(acc.membership_predicates_elided.value(), 1);
+    }
+
+    #[test]
+    fn collect_left_duplicate_contiguous_membership_uses_bounds_only() {
+        let acc = make_collect_left_accumulator_for_test();
+
+        acc.build_filter(FinalizeInput::CollectLeft(reported(
+            in_list(&[1, 2, 2, 3]),
+            bounds(1, 3),
+        )))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert!(
+            binary_expr(&expr)
+                .right()
+                .downcast_ref::<InListExpr>()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn collect_left_gapped_integer_membership_is_retained() {
+        let acc = make_collect_left_accumulator_for_test();
+
+        acc.build_filter(FinalizeInput::CollectLeft(reported(
+            in_list(&[1, 3]),
+            bounds(1, 3),
+        )))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert!(
+            binary_expr(&expr)
+                .right()
+                .downcast_ref::<InListExpr>()
+                .is_some()
+        );
+        assert_eq!(acc.membership_predicates_elided.value(), 0);
+    }
+
+    #[test]
+    fn collect_left_contiguous_array_map_uses_bounds_only() {
+        let acc = make_collect_left_accumulator_for_test();
+
+        acc.build_filter(FinalizeInput::CollectLeft(reported(
+            array_map(&[1, 2, 3]),
+            bounds(1, 3),
+        )))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert!(
+            binary_expr(&expr)
+                .right()
+                .downcast_ref::<HashTableLookupExpr>()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn collect_left_gapped_array_map_membership_is_retained() {
+        let acc = make_collect_left_accumulator_for_test();
+
+        acc.build_filter(FinalizeInput::CollectLeft(reported(
+            array_map(&[1, 3]),
+            bounds(1, 3),
+        )))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert!(
+            binary_expr(&expr)
+                .right()
+                .downcast_ref::<HashTableLookupExpr>()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn membership_range_proof_accepts_signed_and_unsigned_integers() {
+        let membership = in_list(&[-2, -1, 0, 1, 2]);
+        assert!(membership_matches_integer_bounds(
+            &membership,
+            &bounds(-2, 2),
+            1,
+        ));
+
+        let values = Arc::new(UInt64Array::from(vec![10, 11, 12])) as ArrayRef;
+        let map = Arc::new(Map::ArrayMap(ArrayMap::try_new(&values, 10, 12).unwrap()));
+        let membership =
+            PushdownStrategy::InList(InListMembership::new(values, map.as_ref()));
+        assert!(membership_matches_integer_bounds(
+            &membership,
+            &PartitionBounds::new(vec![ColumnBounds::new(
+                ScalarValue::UInt64(Some(10)),
+                ScalarValue::UInt64(Some(12)),
+            )]),
+            1,
+        ));
+    }
+
+    #[test]
+    fn membership_range_proof_rejects_unsupported_inputs() {
+        let membership = in_list(&[-2, -1, 0, 1, 2]);
+        assert!(!membership_matches_integer_bounds(
+            &membership,
+            &bounds(-2, 2),
+            0,
+        ));
+        assert!(!membership_matches_integer_bounds(
+            &membership,
+            &bounds(-2, 2),
+            2,
+        ));
+        assert!(!membership_matches_integer_bounds(
+            &membership,
+            &PartitionBounds::new(vec![
+                ColumnBounds::new(
+                    ScalarValue::Int32(Some(-2)),
+                    ScalarValue::Int32(Some(2)),
+                ),
+                ColumnBounds::new(
+                    ScalarValue::Int32(Some(0)),
+                    ScalarValue::Int32(Some(0)),
+                ),
+            ]),
+            1,
+        ));
+        assert!(!membership_matches_integer_bounds(
+            &membership,
+            &PartitionBounds::new(vec![ColumnBounds::new(
+                ScalarValue::Utf8(Some("a".to_string())),
+                ScalarValue::Utf8(Some("e".to_string())),
+            )]),
+            1,
+        ));
+        assert!(!membership_matches_integer_bounds(
+            &membership,
+            &PartitionBounds::new(vec![ColumnBounds::new(
+                ScalarValue::Int32(Some(-2)),
+                ScalarValue::Int64(Some(2)),
+            )]),
+            1,
+        ));
+        assert!(!membership_matches_integer_bounds(
+            &membership,
+            &PartitionBounds::new(vec![ColumnBounds::new(
+                ScalarValue::Int32(None),
+                ScalarValue::Int32(Some(2)),
+            )]),
+            1,
+        ));
+        assert!(!membership_matches_integer_bounds(
+            &membership,
+            &bounds(2, -2),
+            1,
+        ));
+
+        let values = Arc::new(Int32Array::from(vec![1, 3])) as ArrayRef;
+        let unrelated_map = array_map_from_i32(&[1, 2, 3]);
+        let inconsistent = PushdownStrategy::InList(InListMembership::new(
+            values,
+            unrelated_map.as_ref(),
+        ));
+        assert!(!membership_matches_integer_bounds(
+            &inconsistent,
+            &bounds(1, 3),
+            1,
+        ));
+
+        let full_i64_domain = PartitionBounds::new(vec![ColumnBounds::new(
+            ScalarValue::Int64(Some(i64::MIN)),
+            ScalarValue::Int64(Some(i64::MAX)),
+        )]);
+        assert_eq!(inclusive_integer_span(&full_i64_domain), Some(1_u128 << 64));
+        assert_ne!(
+            inclusive_integer_span(&full_i64_domain),
+            Some(usize::MAX as u128)
+        );
+    }
+
+    #[test]
     fn collect_left_empty_build_data_does_not_update_filter() {
         let acc = make_collect_left_accumulator_for_test();
         let initial_generation = acc.dynamic_filter.snapshot_generation();
@@ -995,6 +1330,30 @@ mod tests {
         let expr = current_expr(&acc);
         in_list_expr(&expr);
         assert!(expr.downcast_ref::<CaseExpr>().is_none());
+    }
+
+    #[test]
+    fn partitioned_elides_only_contiguous_membership_predicates() {
+        let acc = make_partitioned_expr_accumulator_for_test(2);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[1, 2, 3]), bounds(1, 3)),
+            reported(in_list(&[10, 12]), bounds(10, 12)),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        let branches = case_expr(&expr).when_then_expr();
+        assert_eq!(branches.len(), 2);
+
+        let contiguous = binary_expr(&branches[0].1);
+        assert_eq!(contiguous.op(), &Operator::And);
+        assert!(contiguous.right().downcast_ref::<InListExpr>().is_none());
+
+        let gapped = binary_expr(&branches[1].1);
+        assert_eq!(gapped.op(), &Operator::And);
+        assert!(gapped.right().downcast_ref::<InListExpr>().is_some());
+        assert_eq!(acc.membership_predicates_elided.value(), 1);
     }
 
     #[test]
