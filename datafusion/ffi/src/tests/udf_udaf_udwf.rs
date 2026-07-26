@@ -17,17 +17,21 @@
 
 use std::sync::Arc;
 
-use arrow_schema::DataType;
+use arrow_schema::{DataType, FieldRef};
 use datafusion_catalog::TableFunctionImpl;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
-    AggregateUDF, ColumnarValue, ExpressionPlacement, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl, Signature, Volatility, WindowUDF,
+    Accumulator, AggregateUDF, AggregateUDFImpl, ColumnarValue, ExpressionPlacement,
+    GroupsAccumulator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    Volatility, WindowUDF,
 };
 use datafusion_functions::math::abs::AbsFunc;
 use datafusion_functions::math::random::RandomFunc;
 use datafusion_functions_aggregate::stddev::Stddev;
 use datafusion_functions_aggregate::sum::Sum;
+use datafusion_functions_aggregate_common::accumulator::{
+    AccumulatorArgs, StateFieldsArgs,
+};
 use datafusion_functions_table::generate_series::RangeFunc;
 use datafusion_functions_window::rank::Rank;
 
@@ -170,8 +174,56 @@ pub(crate) extern "C" fn create_ffi_table_func(
     FFI_TableFunction::new_with_ffi_codec(udtf, None, codec)
 }
 
+#[derive(Debug, Default, Hash, Eq, PartialEq)]
+struct SumWithNullHandling {
+    inner: Sum,
+}
+
+impl AggregateUDFImpl for SumWithNullHandling {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.inner.signature()
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+        self.inner.return_type(arg_types)
+    }
+
+    fn accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> datafusion_common::Result<Box<dyn Accumulator>> {
+        self.inner.accumulator(args)
+    }
+
+    fn state_fields(
+        &self,
+        args: StateFieldsArgs,
+    ) -> datafusion_common::Result<Vec<FieldRef>> {
+        self.inner.state_fields(args)
+    }
+
+    fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        self.inner.groups_accumulator_supported(args)
+    }
+
+    fn create_groups_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> datafusion_common::Result<Box<dyn GroupsAccumulator>> {
+        self.inner.create_groups_accumulator(args)
+    }
+
+    fn supports_null_handling_clause(&self) -> bool {
+        true
+    }
+}
+
 pub(crate) extern "C" fn create_ffi_sum_func() -> FFI_AggregateUDF {
-    let udaf: Arc<AggregateUDF> = Arc::new(Sum::new().into());
+    let udaf: Arc<AggregateUDF> = Arc::new(SumWithNullHandling::default().into());
 
     udaf.into()
 }
