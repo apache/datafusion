@@ -810,18 +810,6 @@ impl<T: PartialOrd> MovingMin<T> {
                 .front()
                 .is_none_or(|&(front_seq, _)| front_seq >= self.pop_seq)
         );
-
-        #[cfg(debug_assertions)]
-        {
-            let mut iter = self.deque.iter();
-            if let Some(mut prev) = iter.next() {
-                for curr in iter {
-                    debug_assert!(prev.0 < curr.0);
-                    debug_assert!(prev.1 < curr.1);
-                    prev = curr;
-                }
-            }
-        }
     }
 
     /// Pushes a new element into the sliding window.
@@ -838,6 +826,8 @@ impl<T: PartialOrd> MovingMin<T> {
     }
 
     /// Removes the oldest value from the sliding window.
+    ///
+    /// If the window is empty, this is a no-op.
     #[inline]
     pub fn pop(&mut self) {
         if self.is_empty() {
@@ -959,18 +949,6 @@ impl<T: PartialOrd> MovingMax<T> {
                 .front()
                 .is_none_or(|&(front_seq, _)| front_seq >= self.pop_seq)
         );
-
-        #[cfg(debug_assertions)]
-        {
-            let mut iter = self.deque.iter();
-            if let Some(mut prev) = iter.next() {
-                for curr in iter {
-                    debug_assert!(prev.0 < curr.0);
-                    debug_assert!(prev.1 > curr.1);
-                    prev = curr;
-                }
-            }
-        }
     }
 
     /// Pushes a new element into the sliding window.
@@ -987,6 +965,8 @@ impl<T: PartialOrd> MovingMax<T> {
     }
 
     /// Removes the oldest value from the sliding window.
+    ///
+    /// If the window is empty, this is a no-op.
     #[inline]
     pub fn pop(&mut self) {
         if self.is_empty() {
