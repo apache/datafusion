@@ -15,21 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::{ArrayRef, Int64Array, StringArray};
+use arrow::datatypes::DataType;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use datafusion_common::ScalarValue;
-use datafusion_functions_aggregate::min_max::MovingMax;
+use datafusion_expr::Accumulator;
+use datafusion_functions_aggregate::min_max::SlidingMaxAccumulator;
+use rand::Rng;
+use rand::SeedableRng;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use std::sync::Arc;
 
-// === Generator Utilities ===
 fn generate_random_i64(size: usize) -> Vec<i64> {
     let mut rng = StdRng::seed_from_u64(42);
-    (0..size).map(|_| rng.random_range(0..1000000)).collect()
-}
-
-fn generate_random_f64(size: usize) -> Vec<f64> {
-    let mut rng = StdRng::seed_from_u64(42);
-    (0..size).map(|_| rng.random()).collect()
+    (0..size).map(|_| rng.random_range(0..1_000_000)).collect()
 }
 
 fn generate_random_strings(size: usize) -> Vec<String> {
@@ -44,68 +42,70 @@ fn generate_random_strings(size: usize) -> Vec<String> {
         .collect()
 }
 
+/// Simulates a sliding window by calling update_batch and retract_batch
+/// on SlidingMaxAccumulator, mirroring how the query engine uses it.
+fn bench_sliding_max_for(
+    c: &mut Criterion,
+    label: &str,
+    data_type: DataType,
+    array: ArrayRef,
+    data_size: usize,
+    window_size: usize,
+) {
+    let mut group = c.benchmark_group(format!("sliding_window_max_{label}"));
+    group.throughput(Throughput::Elements(data_size as u64));
+
+    group.bench_with_input(
+        BenchmarkId::new("sliding_max", window_size),
+        &window_size,
+        |b, &w| {
+            b.iter(|| {
+                let mut acc = SlidingMaxAccumulator::try_new(&data_type).unwrap();
+                // Warm up the window
+                let init_batch = array.slice(0, w);
+                acc.update_batch(&[init_batch]).unwrap();
+
+                // Slide: for each subsequent element, add it and retract one
+                for i in w..data_size {
+                    let new_val = array.slice(i, 1);
+                    let old_val = array.slice(i - w, 1);
+                    acc.update_batch(&[new_val]).unwrap();
+                    acc.retract_batch(&[old_val]).unwrap();
+                    std::hint::black_box(acc.evaluate().unwrap());
+                }
+            });
+        },
+    );
+
+    group.finish();
+}
+
 fn bench_sliding_max(c: &mut Criterion) {
-    let data_size = 50000;
+    let data_size = 50_000;
 
-    // Generate raw inputs
-    let i64_raw = generate_random_i64(data_size);
-    let f64_raw = generate_random_f64(data_size);
-    let str_raw = generate_random_strings(data_size);
+    let i64_data: Vec<i64> = generate_random_i64(data_size);
+    let str_data: Vec<String> = generate_random_strings(data_size);
 
-    // Map to ScalarValue types
-    let scalar_int_data: Vec<ScalarValue> = i64_raw
-        .iter()
-        .map(|&val| ScalarValue::Int64(Some(val)))
-        .collect();
-    let scalar_float_data: Vec<ScalarValue> = f64_raw
-        .iter()
-        .map(|&val| ScalarValue::Float64(Some(val)))
-        .collect();
-    let scalar_timestamp_data: Vec<ScalarValue> = i64_raw
-        .iter()
-        .map(|&val| ScalarValue::TimestampNanosecond(Some(val), None))
-        .collect();
-    let scalar_decimal_data: Vec<ScalarValue> = i64_raw
-        .iter()
-        .map(|&val| ScalarValue::Decimal128(Some(val as i128), 38, 10))
-        .collect();
-    let scalar_utf8_data: Vec<ScalarValue> = str_raw
-        .iter()
-        .map(|val| ScalarValue::Utf8(Some(val.clone())))
-        .collect();
+    let i64_array: ArrayRef = Arc::new(Int64Array::from(i64_data));
+    let str_array: ArrayRef = Arc::new(StringArray::from(str_data));
 
-    let datasets = vec![
-        ("scalar_int64", scalar_int_data),
-        ("scalar_float64", scalar_float_data),
-        ("scalar_timestamp", scalar_timestamp_data),
-        ("scalar_decimal128", scalar_decimal_data),
-        ("scalar_utf8_string", scalar_utf8_data),
-    ];
-
-    for (label, data) in datasets {
-        let mut group = c.benchmark_group(format!("sliding_window_max_{label}"));
-
-        for window_size in [100, 1000, 5000] {
-            group.throughput(Throughput::Elements(data_size as u64));
-
-            group.bench_with_input(
-                BenchmarkId::new("sliding_max", window_size),
-                &window_size,
-                |b, &w| {
-                    b.iter(|| {
-                        let mut q = MovingMax::new();
-                        for (i, val) in data.iter().enumerate() {
-                            q.push(val.clone());
-                            if i >= w {
-                                q.pop();
-                            }
-                            std::hint::black_box(q.max());
-                        }
-                    });
-                },
-            );
-        }
-        group.finish();
+    for window_size in [100, 1000, 5000] {
+        bench_sliding_max_for(
+            c,
+            "int64",
+            DataType::Int64,
+            Arc::clone(&i64_array),
+            data_size,
+            window_size,
+        );
+        bench_sliding_max_for(
+            c,
+            "utf8",
+            DataType::Utf8,
+            Arc::clone(&str_array),
+            data_size,
+            window_size,
+        );
     }
 }
 

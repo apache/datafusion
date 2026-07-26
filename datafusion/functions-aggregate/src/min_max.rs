@@ -732,36 +732,16 @@ impl Accumulator for SlidingMinAccumulator {
 
 /// Keep track of the minimum value in a sliding window.
 ///
-/// `MovingMin` keeps track of the minimum value in a sliding window using a monotonic deque.
-/// Each element is stored with its sequence number, and the deque maintains elements in
-/// strictly increasing order.
+/// `MovingMin` keeps track of the minimum value in a sliding window using a
+/// monotonic deque. Each element is stored with its sequence number, and the
+/// deque maintains candidate elements in strictly increasing value order.
 ///
-/// The complexity of the operations are
+/// Complexity:
 /// - O(1) for getting the minimum
 /// - amortized O(1) for push
 /// - O(1) for pop
-///
-/// ```
-/// # use datafusion_functions_aggregate::min_max::MovingMin;
-/// let mut moving_min = MovingMin::<i32>::new();
-/// moving_min.push(2);
-/// moving_min.push(1);
-/// moving_min.push(3);
-///
-/// assert_eq!(moving_min.min(), Some(&1));
-/// moving_min.pop();
-///
-/// assert_eq!(moving_min.min(), Some(&1));
-/// moving_min.pop();
-///
-/// assert_eq!(moving_min.min(), Some(&3));
-/// moving_min.pop();
-///
-/// assert_eq!(moving_min.min(), None);
-/// ```
 #[derive(Debug)]
-#[doc(hidden)] // exported only for benchmarks
-pub struct MovingMin<T> {
+pub(crate) struct MovingMin<T> {
     deque: VecDeque<(u64, T)>,
     push_seq: u64,
     pop_seq: u64,
@@ -778,22 +758,10 @@ impl<T: PartialOrd> Default for MovingMin<T> {
 }
 
 impl<T: PartialOrd> MovingMin<T> {
-    /// Creates a new `MovingMin` to keep track of the minimum in a sliding
-    /// window.
+    /// Creates a new `MovingMin` to keep track of the minimum in a sliding window.
     #[inline]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Creates a new `MovingMin` to keep track of the minimum in a sliding
-    /// window with `capacity` allocated slots.
-    #[inline]
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            deque: VecDeque::with_capacity(capacity),
-            push_seq: 0,
-            pop_seq: 0,
-        }
     }
 
     /// Returns the minimum of the sliding window or `None` if the window is
@@ -882,28 +850,8 @@ fn moving_deque_heap_size<T>(
 /// Keep track of the maximum value in a sliding window.
 ///
 /// See [`MovingMin`] for more details.
-///
-/// ```
-/// # use datafusion_functions_aggregate::min_max::MovingMax;
-/// let mut moving_max = MovingMax::<i32>::new();
-/// moving_max.push(2);
-/// moving_max.push(3);
-/// moving_max.push(1);
-///
-/// assert_eq!(moving_max.max(), Some(&3));
-/// moving_max.pop();
-///
-/// assert_eq!(moving_max.max(), Some(&3));
-/// moving_max.pop();
-///
-/// assert_eq!(moving_max.max(), Some(&1));
-/// moving_max.pop();
-///
-/// assert_eq!(moving_max.max(), None);
-/// ```
 #[derive(Debug)]
-#[doc(hidden)] // exported only for benchmarks
-pub struct MovingMax<T> {
+pub(crate) struct MovingMax<T> {
     deque: VecDeque<(u64, T)>,
     push_seq: u64,
     pop_seq: u64,
@@ -924,17 +872,6 @@ impl<T: PartialOrd> MovingMax<T> {
     #[inline]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Creates a new `MovingMax` to keep track of the maximum in a sliding window with
-    /// `capacity` allocated slots.
-    #[inline]
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            deque: VecDeque::with_capacity(capacity),
-            push_seq: 0,
-            pop_seq: 0,
-        }
     }
 
     /// Returns the maximum of the sliding window or `None` if the window is empty.
