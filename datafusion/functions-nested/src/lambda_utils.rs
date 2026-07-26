@@ -17,14 +17,22 @@
 
 //! Shared utilities for `(array, lambda)` style higher-order functions.
 
-use arrow::array::ArrayRef;
-use arrow::datatypes::{DataType, FieldRef};
+use arrow::array::{ArrayRef, AsArray, BooleanArray, OffsetSizeTrait, new_null_array};
+use arrow::buffer::{NullBuffer, OffsetBuffer};
+use arrow::compute::take_arrays;
+use arrow::datatypes::{ArrowNativeType, DataType, FieldRef};
+use datafusion_common::utils::{adjust_offsets_for_slice, list_values_row_number};
 use datafusion_common::{
     Result, ScalarValue, plan_err,
     utils::{list_values, take_function_args},
 };
-use datafusion_expr::{ColumnarValue, LambdaParametersProgress, ValueOrLambda};
+use datafusion_common::{exec_datafusion_err, exec_err};
+use datafusion_expr::{
+    ColumnarValue, HigherOrderFunctionArgs, LambdaParametersProgress, ValueOrLambda,
+};
 use std::sync::Arc;
+
+use crate::lambda_utils::SingleListLambdaResult::EarlyReturn;
 
 /// Extracts a `(value, lambda)` pair from a [`ValueOrLambda`] slice.
 pub(crate) fn value_lambda_pair<'a, V: std::fmt::Debug, L: std::fmt::Debug>(
@@ -124,6 +132,118 @@ pub(crate) fn extract_list_values(
     }
 
     Ok(ListValuesResult::Values(values))
+}
+
+enum SingleListLambdaResult {
+    EarlyReturn(ColumnarValue),
+    Ready(EvaluatedListLambda),
+}
+
+struct EvaluatedListLambda {
+    original_list: ArrayRef,
+    flattened_values: ArrayRef,
+    evaluated_result: ColumnarValue,
+    row_offsets: Vec<usize>,
+}
+
+impl EvaluatedListLambda {
+    fn len(&self) -> usize {
+        self.original_list.len()
+    }
+
+    fn nulls(&self) -> Option<&NullBuffer> {
+        self.original_list.nulls()
+    }
+
+    fn row_range(&self, i: usize) -> (usize, usize) {
+        (self.row_offsets[i], self.row_offsets[i + 1])
+    }
+
+    fn adjusted_offsets<O: OffsetSizeTrait>(&self) -> OffsetBuffer<O> {
+        OffsetBuffer::from_lengths(self.row_offsets.windows(2).map(|w| w[1] - w[0]))
+    }
+
+    fn boolean_predicate(&self, name: &str) -> Result<BooleanArray> {
+        let arr = self
+            .evaluated_result
+            .clone()
+            .into_array(self.flattened_values.len())?;
+
+        let predicate = arr.as_any().downcast_ref::<BooleanArray>().ok_or_else(|| {
+            exec_datafusion_err!("{} predicate must return boolean array", name)
+        })?;
+
+        Ok(predicate.clone())
+    }
+}
+
+fn adjusted_row_offsets(list: &ArrayRef) -> Result<Vec<usize>> {
+    Ok(match list.data_type() {
+        DataType::List(_) => adjust_offsets_for_slice(list.as_list::<i32>())
+            .iter()
+            .map(|o| o.as_usize())
+            .collect(),
+        DataType::LargeList(_) => adjust_offsets_for_slice(list.as_list::<i64>())
+            .iter()
+            .map(|o| o.as_usize())
+            .collect(),
+        other => return exec_err!("expected list, got {other}"),
+    })
+}
+
+fn evaluate_single_list_lambda(
+    name: &str,
+    args: &HigherOrderFunctionArgs,
+) -> Result<SingleListLambdaResult> {
+    let (original_list, lambda) = value_lambda_pair(name, &args.args)?;
+    let original_list = original_list.to_array(args.number_rows)?;
+
+    if original_list.null_count() == original_list.len() {
+        return Ok(EarlyReturn(ColumnarValue::Array(new_null_array(
+            args.return_type(),
+            original_list.len(),
+        ))));
+    }
+
+    let flattened_values = list_values(&original_list)?;
+    let values_param = || Ok(Arc::clone(&flattened_values));
+
+    let evaluated_result = lambda.evaluate(&[&values_param], |arrays| {
+        let indices = list_values_row_number(&original_list)?;
+        Ok(take_arrays(arrays, &indices, None)?)
+    })?;
+
+    let row_offsets = adjusted_row_offsets(&original_list)?;
+
+    Ok(SingleListLambdaResult::Ready(EvaluatedListLambda {
+        original_list,
+        flattened_values,
+        evaluated_result,
+        row_offsets,
+    }))
+}
+
+fn evaluate_single_list_predicate(
+    name: &str,
+    args: &HigherOrderFunctionArgs,
+) -> Result<SingleListLambdaResult> {
+    let result = evaluate_single_list_lambda(name, args)?;
+    let SingleListLambdaResult::Ready(evaluated_list_lambda) = &result else {
+        return Ok(result);
+    };
+
+    match &evaluated_list_lambda.evaluated_result {
+        ColumnarValue::Scalar(ScalarValue::Boolean(_)) => Ok(result),
+        ColumnarValue::Scalar(scalar) => exec_err!(
+            "{name} lambda must return boolean, got {}",
+            scalar.data_type()
+        ),
+        ColumnarValue::Array(array) if array.as_any().is::<BooleanArray>() => Ok(result),
+        ColumnarValue::Array(array) => exec_err!(
+            "{name} lambda must return boolean, got {}",
+            array.data_type()
+        ),
+    }
 }
 
 #[cfg(test)]
