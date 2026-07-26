@@ -47,8 +47,8 @@ fn generate_random_strings(size: usize) -> Vec<String> {
 fn bench_sliding_max_for(
     c: &mut Criterion,
     label: &str,
-    data_type: DataType,
-    array: ArrayRef,
+    data_type: &DataType,
+    array: &ArrayRef,
     data_size: usize,
     window_size: usize,
 ) {
@@ -60,7 +60,8 @@ fn bench_sliding_max_for(
         &window_size,
         |b, &w| {
             b.iter(|| {
-                let mut acc = SlidingMaxAccumulator::try_new(&data_type).unwrap();
+                let mut acc =
+                    SlidingMaxAccumulator::try_new(data_type).unwrap();
                 // Warm up the window
                 let init_batch = array.slice(0, w);
                 acc.update_batch(&[init_batch]).unwrap();
@@ -93,16 +94,16 @@ fn bench_sliding_max(c: &mut Criterion) {
         bench_sliding_max_for(
             c,
             "int64",
-            DataType::Int64,
-            Arc::clone(&i64_array),
+            &DataType::Int64,
+            &i64_array,
             data_size,
             window_size,
         );
         bench_sliding_max_for(
             c,
             "utf8",
-            DataType::Utf8,
-            Arc::clone(&str_array),
+            &DataType::Utf8,
+            &str_array,
             data_size,
             window_size,
         );
