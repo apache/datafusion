@@ -1607,10 +1607,29 @@ impl ExecutionPlan for RepartitionExec {
                 }
                 Partitioning::Hash(new_partitions, *size)
             }
-            Partitioning::Range(_) => {
-                // Range partitioning optimizer propagation is tracked in
-                // https://github.com/apache/datafusion/issues/23230
-                return Ok(None);
+            Partitioning::Range(range_partitioning) => {
+                // Rewrite range key expressions through the projection.
+                let mut sort_exprs =
+                    Vec::with_capacity(range_partitioning.ordering().len());
+                for sort_expr in range_partitioning.ordering() {
+                    let Some(new_expr) =
+                        update_expr(&sort_expr.expr, projection.expr(), false)?
+                    else {
+                        return Ok(None);
+                    };
+                    sort_exprs.push(PhysicalSortExpr::new(new_expr, sort_expr.options));
+                }
+
+                let Some(ordering) = LexOrdering::new(sort_exprs) else {
+                    return internal_err!(
+                        "failed to create LexOrdering for range partitioning"
+                    );
+                };
+
+                Partitioning::Range(RangePartitioning::try_new(
+                    ordering,
+                    range_partitioning.split_points().to_vec(),
+                )?)
             }
             others => others.clone(),
         };
@@ -1648,16 +1667,6 @@ impl ExecutionPlan for RepartitionExec {
         if !self.maintains_input_order()[0] {
             return Ok(SortOrderPushdownResult::Unsupported);
         }
-        match self.partitioning() {
-            Partitioning::Range(_) => {
-                // Range partitioning optimizer propagation is tracked in
-                // https://github.com/apache/datafusion/issues/23230
-                return Ok(SortOrderPushdownResult::Unsupported);
-            }
-            Partitioning::RoundRobinBatch(_)
-            | Partitioning::Hash(_, _)
-            | Partitioning::UnknownPartitioning(_) => {}
-        }
 
         // Delegate to the child and wrap with a new RepartitionExec
         self.input.try_pushdown_sort(order)?.try_map(|new_input| {
@@ -1680,12 +1689,11 @@ impl ExecutionPlan for RepartitionExec {
         new_properties.partitioning = match new_properties.partitioning {
             RoundRobinBatch(_) => RoundRobinBatch(target_partitions),
             Hash(hash, _) => Hash(hash, target_partitions),
-            UnknownPartitioning(_) => UnknownPartitioning(target_partitions),
             Range(_) => {
-                // Range repartition optimizations are tracked in
-                // https://github.com/apache/datafusion/issues/23230
+                // Number of partitions is constrained by the split points and cannot be changed
                 return Ok(None);
             }
+            UnknownPartitioning(_) => UnknownPartitioning(target_partitions),
         };
         Ok(Some(Arc::new(Self {
             input: Arc::clone(&self.input),
@@ -1694,6 +1702,187 @@ impl ExecutionPlan for RepartitionExec {
             preserve_order: self.preserve_order,
             cache: new_properties.into(),
         })))
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        let input = ctx.encode_child(self.input())?;
+
+        // Keep the existing protobuf wire representation unchanged.
+        let partition_method = match self.partitioning() {
+            Partitioning::RoundRobinBatch(n) => {
+                protobuf::partitioning::PartitionMethod::RoundRobin(*n as u64)
+            }
+            Partitioning::Hash(exprs, n) => {
+                let hash_expr = ctx.encode_expressions(exprs)?;
+                protobuf::partitioning::PartitionMethod::Hash(
+                    protobuf::PhysicalHashRepartition {
+                        hash_expr,
+                        partition_count: *n as u64,
+                    },
+                )
+            }
+            Partitioning::Range(range) => {
+                let sort_expr = range
+                    .ordering()
+                    .iter()
+                    .map(|sort_expr| {
+                        Ok(protobuf::PhysicalSortExprNode {
+                            expr: Some(Box::new(ctx.encode_expr(&sort_expr.expr)?)),
+                            asc: !sort_expr.options.descending,
+                            nulls_first: sort_expr.options.nulls_first,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let split_point = range
+                    .split_points()
+                    .iter()
+                    .map(|split_point| {
+                        let value = split_point
+                            .values()
+                            .iter()
+                            .map(|value| value.try_into().map_err(Into::into))
+                            .collect::<Result<Vec<_>>>()?;
+                        Ok(protobuf::PhysicalRangeSplitPoint { value })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                protobuf::partitioning::PartitionMethod::Range(
+                    protobuf::PhysicalRangePartitioning {
+                        sort_expr,
+                        split_point,
+                    },
+                )
+            }
+            Partitioning::UnknownPartitioning(n) => {
+                protobuf::partitioning::PartitionMethod::Unknown(*n as u64)
+            }
+        };
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Repartition(Box::new(
+                    protobuf::RepartitionExecNode {
+                        input: Some(Box::new(input)),
+                        partitioning: Some(protobuf::Partitioning {
+                            partition_method: Some(partition_method),
+                        }),
+                        preserve_order: self.preserve_order(),
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl RepartitionExec {
+    /// Reconstruct a [`RepartitionExec`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let repart = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Repartition,
+            "RepartitionExec",
+        );
+        let input = ctx.decode_required_child(
+            repart.input.as_deref(),
+            "RepartitionExec",
+            "input",
+        )?;
+        let input_schema = input.schema();
+
+        let partition_method = repart
+            .partitioning
+            .as_ref()
+            .and_then(|p| p.partition_method.as_ref())
+            .ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "RepartitionExec is missing required field 'partitioning'"
+                )
+            })?;
+
+        let partitioning = match partition_method {
+            protobuf::partitioning::PartitionMethod::RoundRobin(n) => {
+                Partitioning::RoundRobinBatch(*n as usize)
+            }
+            protobuf::partitioning::PartitionMethod::Hash(hash) => {
+                let exprs = hash
+                    .hash_expr
+                    .iter()
+                    .map(|expr| ctx.decode_expr(expr, input_schema.as_ref()))
+                    .collect::<Result<Vec<_>>>()?;
+                let partition_count =
+                    usize::try_from(hash.partition_count).map_err(|_| {
+                        datafusion_common::internal_datafusion_err!(
+                            "Hash partition count {} exceeds usize::MAX",
+                            hash.partition_count
+                        )
+                    })?;
+                Partitioning::Hash(exprs, partition_count)
+            }
+            protobuf::partitioning::PartitionMethod::Unknown(n) => {
+                Partitioning::UnknownPartitioning(*n as usize)
+            }
+            protobuf::partitioning::PartitionMethod::Range(range) => {
+                let sort_exprs = range
+                    .sort_expr
+                    .iter()
+                    .map(|sort_expr| {
+                        let expr = sort_expr.expr.as_ref().ok_or_else(|| {
+                            datafusion_common::internal_datafusion_err!(
+                                "Unexpected empty physical expression"
+                            )
+                        })?;
+                        Ok(PhysicalSortExpr {
+                            expr: ctx.decode_expr(expr, input_schema.as_ref())?,
+                            options: SortOptions {
+                                descending: !sort_expr.asc,
+                                nulls_first: sort_expr.nulls_first,
+                            },
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let sort_expr_count = sort_exprs.len();
+                let ordering = LexOrdering::new(sort_exprs).ok_or_else(|| {
+                    datafusion_common::internal_datafusion_err!(
+                        "Range partitioning requires non-empty ordering"
+                    )
+                })?;
+                if ordering.len() != sort_expr_count {
+                    return datafusion_common::internal_err!(
+                        "Range partitioning ordering must not contain duplicate expressions"
+                    );
+                }
+                let split_points = range
+                    .split_point
+                    .iter()
+                    .map(|split_point| {
+                        let values = split_point
+                            .value
+                            .iter()
+                            .map(|value| ScalarValue::try_from(value).map_err(Into::into))
+                            .collect::<Result<Vec<_>>>()?;
+                        Ok(SplitPoint::new(values))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Partitioning::Range(RangePartitioning::try_new(ordering, split_points)?)
+            }
+        };
+
+        let mut repart_exec = RepartitionExec::try_new(input, partitioning)?;
+        if repart.preserve_order {
+            repart_exec = repart_exec.with_preserve_order();
+        }
+        Ok(Arc::new(repart_exec))
     }
 }
 
@@ -2144,6 +2333,8 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+    use crate::empty::EmptyExec;
+    use crate::projection::ProjectionExpr;
     use crate::test::TestMemoryExec;
     use crate::{
         test::{
@@ -2602,6 +2793,281 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn range_repartition_swaps_with_projection_rewrites_key_index() -> Result<()> {
+        // Three columns so the projection both narrows the schema (required for
+        // swap) and moves the range key from @0 to @1.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::UInt32, false),
+            Field::new("region", DataType::Utf8, false),
+            Field::new("payload", DataType::UInt32, false),
+        ]));
+        let repartition = Arc::new(RepartitionExec::try_new(
+            Arc::new(EmptyExec::new(Arc::clone(&schema))),
+            range_partitioning_on_columns(&schema, &["id"], vec![vec![10]])?,
+        )?);
+
+        let projection =
+            projection_on_columns(&(Arc::clone(&repartition) as _), &["payload", "id"])?;
+
+        let swapped = repartition
+            .try_swapping_with_projection(&projection)?
+            .expect("swap should succeed when projection keeps the range key");
+        let swapped_repartition = swapped
+            .downcast_ref::<RepartitionExec>()
+            .expect("top node should be RepartitionExec");
+
+        assert!(swapped_repartition.input().is::<ProjectionExec>());
+        let range = expect_range_partitioning(swapped_repartition.partitioning());
+        assert_eq!(range.ordering()[0].to_string(), "id@1 ASC");
+        assert_eq!(
+            range.split_points(),
+            &[SplitPoint::new(vec![ScalarValue::UInt32(Some(10))])]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn range_repartition_does_not_swap_when_projection_drops_key() -> Result<()> {
+        // Drop a simple range key.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::UInt32, false),
+            Field::new("payload", DataType::UInt32, false),
+        ]));
+        let repartition = Arc::new(RepartitionExec::try_new(
+            Arc::new(EmptyExec::new(Arc::clone(&schema))),
+            range_partitioning_on_columns(&schema, &["id"], vec![vec![10]])?,
+        )?);
+        let projection =
+            projection_on_columns(&(Arc::clone(&repartition) as _), &["payload"])?;
+        assert!(
+            repartition
+                .try_swapping_with_projection(&projection)?
+                .is_none()
+        );
+
+        // Drop part of a compound range key.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::UInt32, false),
+            Field::new("c", DataType::UInt32, false),
+        ]));
+        let repartition = Arc::new(RepartitionExec::try_new(
+            Arc::new(EmptyExec::new(Arc::clone(&schema))),
+            range_partitioning_on_columns(&schema, &["a", "b"], vec![vec![10, 1]])?,
+        )?);
+        let projection =
+            projection_on_columns(&(Arc::clone(&repartition) as _), &["a", "c"])?;
+        assert!(
+            repartition
+                .try_swapping_with_projection(&projection)?
+                .is_none()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn range_repartition_try_pushdown_sort_when_maintains_order() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::UInt32, false)]));
+        let ordering = LexOrdering::new([PhysicalSortExpr::new(
+            col("id", &schema)?,
+            SortOptions::default(),
+        )])
+        .expect("ordering must not be empty");
+
+        // Multi-partition source with preserve_order: Range maintains input order.
+        let source = Arc::new(ExactSortPushdownExec::new(
+            Arc::clone(&schema),
+            2,
+            ordering.clone(),
+        ));
+        let repartition = Arc::new(
+            RepartitionExec::try_new(
+                source,
+                range_partitioning_on_columns(&schema, &["id"], vec![vec![10]])?,
+            )?
+            .with_preserve_order(),
+        );
+        assert!(repartition.maintains_input_order()[0]);
+
+        match repartition.try_pushdown_sort(ordering.as_ref())? {
+            SortOrderPushdownResult::Exact { inner } => {
+                let pushed = inner
+                    .downcast_ref::<RepartitionExec>()
+                    .expect("pushdown should keep RepartitionExec");
+
+                assert!(pushed.preserve_order());
+                assert!(pushed.maintains_input_order()[0]);
+
+                let range = expect_range_partitioning(pushed.partitioning());
+                assert_eq!(range.ordering()[0].to_string(), "id@0 ASC");
+                assert_eq!(
+                    inner.properties().output_ordering().map(|o| o.to_string()),
+                    Some(ordering.to_string()),
+                    "pushed repartition output ordering should match the requested sort"
+                );
+            }
+            other => panic!("expected Exact sort pushdown, got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn range_repartition_try_pushdown_sort_unsupported_without_order_maintenance()
+    -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::UInt32, false)]));
+        let ordering = LexOrdering::new([PhysicalSortExpr::new(
+            col("id", &schema)?,
+            SortOptions::default(),
+        )])
+        .expect("ordering must not be empty");
+
+        // Multi-partition source without preserve_order: Range does not maintain order.
+        let source = Arc::new(ExactSortPushdownExec::new(
+            Arc::clone(&schema),
+            2,
+            ordering.clone(),
+        ));
+        let repartition = Arc::new(RepartitionExec::try_new(
+            source,
+            range_partitioning_on_columns(&schema, &["id"], vec![vec![10]])?,
+        )?);
+        assert!(!repartition.maintains_input_order()[0]);
+
+        assert!(matches!(
+            repartition.try_pushdown_sort(ordering.as_ref())?,
+            SortOrderPushdownResult::Unsupported
+        ));
+
+        Ok(())
+    }
+
+    fn range_partitioning_on_columns(
+        schema: &SchemaRef,
+        key_columns: &[&str],
+        split_points: Vec<Vec<u32>>,
+    ) -> Result<Partitioning> {
+        let Some(ordering) = LexOrdering::new(
+            key_columns
+                .iter()
+                .map(|name| {
+                    Ok(PhysicalSortExpr::new(
+                        col(name, schema)?,
+                        SortOptions::default(),
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?,
+        ) else {
+            return exec_err!("range ordering must not be empty");
+        };
+        Ok(Partitioning::Range(RangePartitioning::try_new(
+            ordering,
+            split_points
+                .into_iter()
+                .map(|values| {
+                    SplitPoint::new(
+                        values
+                            .into_iter()
+                            .map(|value| ScalarValue::UInt32(Some(value)))
+                            .collect(),
+                    )
+                })
+                .collect(),
+        )?))
+    }
+
+    fn projection_on_columns(
+        input: &Arc<dyn ExecutionPlan>,
+        names: &[&str],
+    ) -> Result<ProjectionExec> {
+        let exprs = names
+            .iter()
+            .map(|name| {
+                Ok(ProjectionExpr {
+                    expr: col(name, &input.schema())?,
+                    alias: (*name).to_string(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        ProjectionExec::try_new(exprs, Arc::clone(input))
+    }
+
+    fn expect_range_partitioning(partitioning: &Partitioning) -> &RangePartitioning {
+        match partitioning {
+            Partitioning::Range(range) => range,
+            other => panic!("expected Range partitioning, got {other:?}"),
+        }
+    }
+
+    /// Test source that claims Exact support for any sort pushdown request.
+    #[derive(Debug, Clone)]
+    struct ExactSortPushdownExec {
+        cache: Arc<PlanProperties>,
+    }
+
+    impl ExactSortPushdownExec {
+        fn new(schema: SchemaRef, num_partitions: usize, ordering: LexOrdering) -> Self {
+            use crate::execution_plan::{Boundedness, EmissionType};
+            Self {
+                cache: Arc::new(PlanProperties::new(
+                    EquivalenceProperties::new_with_orderings(schema, [ordering]),
+                    Partitioning::UnknownPartitioning(num_partitions),
+                    EmissionType::Incremental,
+                    Boundedness::Bounded,
+                )),
+            }
+        }
+    }
+
+    impl DisplayAs for ExactSortPushdownExec {
+        fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+            write!(f, "ExactSortPushdownExec")
+        }
+    }
+
+    impl ExecutionPlan for ExactSortPushdownExec {
+        fn name(&self) -> &str {
+            "ExactSortPushdownExec"
+        }
+
+        fn properties(&self) -> &Arc<PlanProperties> {
+            &self.cache
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(self)
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            Ok(Box::pin(EmptyRecordBatchStream::new(self.schema())))
+        }
+
+        fn try_pushdown_sort(
+            &self,
+            _order: &[PhysicalSortExpr],
+        ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+            Ok(SortOrderPushdownResult::Exact {
+                inner: Arc::new(self.clone()),
+            })
+        }
     }
 
     #[tokio::test]
@@ -3793,6 +4259,33 @@ mod test {
         RepartitionExec: partitioning=RoundRobinBatch(20), input_partitions=1, maintains_sort_order=true
           DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC
         ");
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_repartitioned_returns_none() -> Result<()> {
+        let schema = test_schema();
+        let source = memory_exec(&schema);
+        let partitioning = Partitioning::Range(RangePartitioning::try_new(
+            [PhysicalSortExpr::new(
+                col("c0", &schema)?,
+                SortOptions::default(),
+            )]
+            .into(),
+            vec![
+                SplitPoint::new(vec![ScalarValue::UInt32(Some(10))]),
+                SplitPoint::new(vec![ScalarValue::UInt32(Some(20))]),
+            ],
+        )?);
+        let exec = RepartitionExec::try_new(source, partitioning)?;
+
+        // Range partition count is fixed by split points, so repartitioned()
+        // cannot change it to an arbitrary target.
+        let result = exec.repartitioned(10, &Default::default())?;
+        assert!(
+            result.is_none(),
+            "range repartitioning should not support changing partition count"
+        );
         Ok(())
     }
 

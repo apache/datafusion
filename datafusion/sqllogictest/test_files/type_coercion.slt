@@ -302,3 +302,63 @@ SELECT * FROM (SELECT 1) WHERE CAST(STARTS_WITH() AS STRING) = 'x';
 
 query error does not support zero arguments
 SELECT * FROM (SELECT 1) WHERE TRY_CAST(STARTS_WITH() AS INT) = 1;
+
+###################################################################
+## SIMILAR TO type coercion (https://github.com/apache/datafusion/issues/22886)
+###################################################################
+
+# NULL pattern is coerced to a typed NULL and evaluates to NULL instead of panicking
+query B
+SELECT 'a' SIMILAR TO NULL;
+----
+NULL
+
+query B
+SELECT NULL SIMILAR TO NULL;
+----
+NULL
+
+query B
+SELECT 'a' NOT SIMILAR TO NULL;
+----
+NULL
+
+# operands of different string types are coerced to a common type
+statement ok
+CREATE TABLE t AS SELECT * FROM (VALUES ('user auth failed')) v(s);
+
+statement ok
+CREATE TABLE p AS SELECT * FROM (VALUES ('(auth|login)')) v(pat);
+
+# Utf8View value with a non-scalar Utf8 pattern (issue repro)
+query B
+SELECT arrow_cast(t.s, 'Utf8View') SIMILAR TO p.pat FROM t CROSS JOIN p;
+----
+true
+
+# LargeUtf8 value with a non-scalar Utf8 pattern
+query B
+SELECT arrow_cast(t.s, 'LargeUtf8') SIMILAR TO p.pat FROM t CROSS JOIN p;
+----
+true
+
+# Dictionary value with a non-scalar Utf8 pattern must be unpacked before
+# reaching the regex array kernel
+query B
+SELECT arrow_cast(t.s, 'Dictionary(Int32, Utf8)') SIMILAR TO p.pat FROM t CROSS JOIN p;
+----
+true
+
+statement ok
+DROP TABLE t;
+
+statement ok
+DROP TABLE p;
+
+# incompatible operand types are a planning error, not a panic
+query error There isn't a common type to coerce Int64 and Utf8 in SIMILAR TO expression
+SELECT 1 SIMILAR TO 'a';
+
+# a non-string pattern is rejected even earlier, during SQL planning
+query error Invalid pattern in SIMILAR TO expression
+SELECT 'a' SIMILAR TO 1;

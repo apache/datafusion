@@ -119,6 +119,7 @@ use datafusion_common::{
     DFSchemaRef, DataFusionError, Result, Statistics, internal_err, not_impl_err,
     plan_datafusion_err, plan_err,
 };
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{
     UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
     logical_plan::{Extension, LogicalPlan, LogicalPlanBuilder},
@@ -587,6 +588,7 @@ impl ExtensionPlanner for TableSampleExtensionPlanner {
         _logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         _session_state: &SessionState,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let Some(sample_node) = node.as_any().downcast_ref::<TableSamplePlanNode>()
         else {

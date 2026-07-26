@@ -60,7 +60,7 @@ futures = { workspace = true }
 insta = { workspace = true }
 log = { workspace = true }
 mimalloc = { version = "0.1", default-features = false }
-object_store = { workspace = true, features = ["aws", "http"] }
+object_store = { workspace = true, features = ["aws", "fs", "http"] }
 prost = { workspace = true }
 rand = { workspace = true }
 serde = { version = "1", features = ["derive"] }
