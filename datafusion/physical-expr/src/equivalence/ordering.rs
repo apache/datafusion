@@ -486,8 +486,8 @@ mod tests {
                 vec![col_e],
                 // requirement [a ASC, c ASC, a+b ASC],
                 vec![(col_a, options), (col_c, options), (&a_plus_b, options)],
-                // expected: requirement is satisfied.
-                true,
+                // expected: requirement is not satisfied because addition can wrap.
+                false,
             ),
             // ------------ TEST CASE 4 ------------
             (
@@ -633,8 +633,8 @@ mod tests {
                 vec![col_e],
                 // requirement [c ASC, d ASC, a + b ASC],
                 vec![(col_c, options), (col_d, options), (&a_plus_b, options)],
-                // expected: requirement is satisfied.
-                true,
+                // expected: requirement is not satisfied because addition can wrap.
+                false,
             ),
         ];
 

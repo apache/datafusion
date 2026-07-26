@@ -33,7 +33,7 @@ use datafusion_common::{Result, ScalarValue, internal_err, not_impl_err};
 
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{Interval, apply_operator};
-use datafusion_expr::sort_properties::ExprProperties;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 #[expect(deprecated)]
 use datafusion_expr::statistics::Distribution::{Bernoulli, Gaussian};
 #[expect(deprecated)]
@@ -117,6 +117,28 @@ impl BinaryExpr {
     /// Get the operator for this binary expression
     pub fn op(&self) -> &Operator {
         &self.op
+    }
+
+    /// The default arithmetic kernels wrap on overflow (e.g. the sum of two
+    /// ascending `UInt8` columns wraps around to small values), which breaks
+    /// the monotonicity that `sort_properties` derives from the operands.
+    /// Keep the derived ordering only when overflow cannot corrupt it: the
+    /// expression errors on overflow instead of wrapping, the result is a
+    /// constant, or the result range proves overflow is impossible.
+    /// See <https://github.com/apache/datafusion/issues/23902>.
+    fn arithmetic_sort_properties(
+        &self,
+        sort_properties: SortProperties,
+        range: &Interval,
+    ) -> SortProperties {
+        if self.fail_on_overflow
+            || sort_properties == SortProperties::Singleton
+            || !range.is_unbounded()
+        {
+            sort_properties
+        } else {
+            SortProperties::Unordered
+        }
     }
 }
 
@@ -760,16 +782,24 @@ impl PhysicalExpr for BinaryExpr {
         let (l_order, l_range) = (children[0].sort_properties, &children[0].range);
         let (r_order, r_range) = (children[1].sort_properties, &children[1].range);
         match self.op() {
-            Operator::Plus => Ok(ExprProperties {
-                sort_properties: l_order.add(&r_order),
-                range: l_range.add(r_range)?,
-                preserves_lex_ordering: false,
-            }),
-            Operator::Minus => Ok(ExprProperties {
-                sort_properties: l_order.sub(&r_order),
-                range: l_range.sub(r_range)?,
-                preserves_lex_ordering: false,
-            }),
+            Operator::Plus => {
+                let range = l_range.add(r_range)?;
+                Ok(ExprProperties {
+                    sort_properties: self
+                        .arithmetic_sort_properties(l_order.add(&r_order), &range),
+                    range,
+                    preserves_lex_ordering: false,
+                })
+            }
+            Operator::Minus => {
+                let range = l_range.sub(r_range)?;
+                Ok(ExprProperties {
+                    sort_properties: self
+                        .arithmetic_sort_properties(l_order.sub(&r_order), &range),
+                    range,
+                    preserves_lex_ordering: false,
+                })
+            }
             Operator::Gt => Ok(ExprProperties {
                 sort_properties: l_order.gt_or_gteq(&r_order),
                 range: l_range.gt(r_range)?,
