@@ -247,6 +247,21 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// joins).
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>>;
 
+    /// Returns a clone of the existing plan with the children replaced, skipping
+    /// recomputation of plan properties if possible as indicated by the hint.
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        hint: ChildrenPropertiesHint,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        match hint {
+            ChildrenPropertiesHint::SameProperties => {
+                self.with_new_children_and_same_properties(children)
+            }
+            ChildrenPropertiesHint::Recompute => self.with_new_children(children),
+        }
+    }
+
     /// Returns a new `ExecutionPlan` where all existing children were replaced
     /// by the `children`, in order
     fn with_new_children(
@@ -306,7 +321,7 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// If the `ExecutionPlan` does not support changing its partitioning,
     /// returns `Ok(None)` (the default).
     ///
-    /// It is the `ExecutionPlan` can increase its partitioning, but not to the
+    /// If the `ExecutionPlan` can increase its partitioning, but not to
     /// `target_partitions`, it may return an ExecutionPlan with fewer
     /// partitions. This might happen, for example, if each new partition would
     /// be too small to be efficiently processed individually.
@@ -427,7 +442,7 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     ///         partition: usize,
     ///         context: Arc<TaskContext>,
     ///     ) -> Result<SendableRecordBatchStream> {
-    ///         // use functions from futures crate convert the batch into a stream
+    ///         // use functions from futures crate to convert the batch into a stream
     ///         let fut = futures::future::ready(Ok(self.batch.clone()));
     ///         let stream = futures::stream::once(fut);
     ///         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -659,7 +674,7 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     ///    up the plan that `DataSourceExec` can actually bind the filters.
     ///
     /// The default implementation bars all parent filters from being pushed down and adds no new filters.
-    /// This is the safest option, making filter pushdown opt-in on a per-node pasis.
+    /// This is the safest option, making filter pushdown opt-in on a per-node basis.
     ///
     /// There are two different phases in filter pushdown, which some operators may handle the same and some differently.
     /// Depending on the phase the operator may or may not be allowed to modify the plan.
@@ -844,6 +859,18 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         Ok(None)
     }
+}
+
+// A hint from `with_new_children_if_necessary` to `replace_children` indicating
+// whether the properties of the new children must be recomputed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildrenPropertiesHint {
+    // The properties of the new children are identical to the properties of the
+    // existing children, so we can skip recomuptation of plan properties.
+    SameProperties,
+    // The properties of the new children are different from the properties of the
+    // existing children, so we must recompute the properties from scratch.
+    Recompute,
 }
 
 impl dyn ExecutionPlan {
@@ -1176,12 +1203,10 @@ pub(crate) fn emission_type_from_children<'a>(
     }
 }
 
-/// Stores certain, often expensive to compute, plan properties used in query
-/// optimization.
+/// Stores plan properties used in query optimization.
 ///
-/// These properties are stored a single structure to permit this information to
-/// be computed once and then those cached results used multiple times without
-/// recomputation (aka a cache)
+/// Serves as a cache for these properties, which are often
+/// expensive to compute.
 #[derive(Debug, Clone)]
 pub struct PlanProperties {
     /// See [ExecutionPlanProperties::equivalence_properties]
@@ -1396,11 +1421,12 @@ pub fn with_new_children_if_necessary(
         }
         // Layer 2: same child properties → reuse `PlanProperties` cache.
         if has_same_children_properties(plan.as_ref(), &children)? {
-            return plan.with_new_children_and_same_properties(children);
+            return plan
+                .replace_children(children, ChildrenPropertiesHint::SameProperties);
         }
     }
     // Layer 3: full recompute.
-    plan.with_new_children(children)
+    plan.replace_children(children, ChildrenPropertiesHint::Recompute)
 }
 
 /// Return a [`DisplayableExecutionPlan`] wrapper around an
@@ -2209,9 +2235,18 @@ mod tests {
         let parent = Arc::new(WithChildrenTestParentDefault::new(Arc::clone(&leaf_a)));
         let parent_dyn: Arc<dyn ExecutionPlan> = Arc::clone(&parent) as _;
 
-        // Distinct child Arc but same `PlanProperties` Arc — the helper
+        // Using the same child means we return the original plan Arc verbatim, so even when
+        // no override exists for `with_new_children_and_same_properties` we do not recompute.
+        let out = with_new_children_if_necessary(
+            Arc::clone(&parent_dyn),
+            vec![Arc::clone(&leaf_a)],
+        )?;
+        assert!(Arc::ptr_eq(&out, &parent_dyn));
+        assert_eq!(parent.recompute_calls.load(Ordering::SeqCst), 0);
+
+        // Using a distinct child but the same `PlanProperties` Arc means the helper
         // enters the "same properties" branch and calls the trait method,
-        // whose default forwards to `with_new_children`.
+        // whose default forwards to `with_new_children`, causing recomputation.
         let out = with_new_children_if_necessary(
             Arc::clone(&parent_dyn),
             vec![Arc::clone(&leaf_b)],
