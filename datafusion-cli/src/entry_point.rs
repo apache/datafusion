@@ -58,7 +58,7 @@ use thiserror::Error;
 #[derive(Error)]
 #[non_exhaustive]
 pub enum CliError {
-    #[error("DataFusion error `{0}`")]
+    #[error("{0}")]
     DataFusion(#[from] DataFusionError),
     #[error("Readline error `{0}`")]
     Readline(#[from] ReadlineError),
