@@ -60,8 +60,7 @@ fn bench_sliding_max_for(
         &window_size,
         |b, &w| {
             b.iter(|| {
-                let mut acc =
-                    SlidingMaxAccumulator::try_new(data_type).unwrap();
+                let mut acc = SlidingMaxAccumulator::try_new(data_type).unwrap();
                 // Warm up the window
                 let init_batch = array.slice(0, w);
                 acc.update_batch(&[init_batch]).unwrap();
