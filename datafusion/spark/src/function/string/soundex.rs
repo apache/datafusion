@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, OffsetSizeTrait, StringArray};
+use arrow::array::StringBuilder;
+use arrow::array::{Array, ArrayRef, GenericStringBuilder, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::utils::take_function_args;
@@ -79,22 +80,54 @@ fn spark_soundex_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn soundex_array<T: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
-    let str_array = as_generic_string_array::<T>(array)?;
-    let result = str_array
-        .iter()
-        .map(|s| s.map(compute_soundex))
-        .collect::<StringArray>();
-    Ok(Arc::new(result))
+fn soundex_array<O: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
+    let str_array = as_generic_string_array::<O>(array)?;
+
+    // Pre-allocate exact memory: row count and total string bytes (each soundex is 4 bytes)
+    let mut builder =
+        GenericStringBuilder::<O>::with_capacity(str_array.len(), str_array.len() * 4);
+
+    for opt_s in str_array.iter() {
+        if let Some(s) = opt_s {
+            let code = compute_soundex(s);
+            builder.append_value(&code);
+        } else {
+            builder.append_null();
+        }
+    }
+
+    Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
 fn soundex_view(str_view: &ArrayRef) -> Result<ArrayRef> {
     let str_array = as_string_view_array(str_view)?;
-    let result = str_array
-        .iter()
-        .map(|opt_str| opt_str.map(compute_soundex))
-        .collect::<StringArray>();
-    Ok(Arc::new(result) as ArrayRef)
+
+    // Pre-allocate for Utf8View as well
+    let mut builder = StringBuilder::with_capacity(str_array.len(), str_array.len() * 4);
+
+    for opt_str in str_array.iter() {
+        if let Some(s) = opt_str {
+            let code = compute_soundex(s);
+            builder.append_value(&code);
+        } else {
+            builder.append_null();
+        }
+    }
+
+    Ok(Arc::new(builder.finish()) as ArrayRef)
+}
+
+#[inline]
+fn classify_byte(c: u8) -> Option<u8> {
+    match c {
+        b'B' | b'F' | b'P' | b'V' => Some(b'1'),
+        b'C' | b'G' | b'J' | b'K' | b'Q' | b'S' | b'X' | b'Z' => Some(b'2'),
+        b'D' | b'T' => Some(b'3'),
+        b'L' => Some(b'4'),
+        b'M' | b'N' => Some(b'5'),
+        b'R' => Some(b'6'),
+        _ => None,
+    }
 }
 
 fn classify_char(c: char) -> Option<char> {
@@ -114,30 +147,74 @@ fn is_ignored(c: char) -> bool {
 }
 
 fn compute_soundex(s: &str) -> String {
-    let mut chars = s.chars();
+    // Fast path for ASCII strings: operate directly on raw bytes with zero heap allocations
+    if s.is_ascii() {
+        let bytes = s.as_bytes();
+        let mut iter = bytes.iter();
 
+        let first_byte = match iter.next() {
+            Some(&c) if c.is_ascii_alphabetic() => c.to_ascii_uppercase(),
+            _ => return s.to_string(),
+        };
+
+        // Soundex codes are always exactly 4 characters, padded with '0'
+        let mut buf = [b'0'; 4];
+        buf[0] = first_byte;
+        let mut len = 1;
+        let mut last_code = classify_byte(first_byte);
+
+        for &c in iter {
+            if len >= 4 {
+                break;
+            }
+            let upper = c.to_ascii_uppercase();
+            if upper == b'H' || upper == b'W' {
+                continue;
+            }
+
+            match classify_byte(upper) {
+                Some(code) => {
+                    if last_code != Some(code) {
+                        buf[len] = code;
+                        len += 1;
+                    }
+                    last_code = Some(code);
+                }
+                None => {
+                    last_code = None;
+                }
+            }
+        }
+
+        // SAFETY: buf contains exclusively valid ASCII uppercase letters and '0' digits
+        return unsafe { std::str::from_utf8_unchecked(&buf).to_string() };
+    }
+
+    let mut chars = s.chars();
     let first_char = match chars.next() {
         Some(c) if c.is_ascii_alphabetic() => c.to_ascii_uppercase(),
         _ => return s.to_string(),
     };
 
-    let mut soundex_code = String::with_capacity(4);
-    soundex_code.push(first_char);
+    let mut buf = [b'0'; 4];
+    buf[0] = first_char as u8;
+    let mut len = 1;
     let mut last_code = classify_char(first_char);
 
     for c in chars {
-        if soundex_code.len() >= 4 {
+        if len >= 4 {
             break;
         }
-
         if is_ignored(c) {
             continue;
         }
 
         match classify_char(c) {
             Some(code) => {
+                let code_u8 = code as u8;
                 if last_code != Some(code) {
-                    soundex_code.push(code);
+                    buf[len] = code_u8;
+                    len += 1;
                 }
                 last_code = Some(code);
             }
@@ -146,5 +223,6 @@ fn compute_soundex(s: &str) -> String {
             }
         }
     }
-    format!("{soundex_code:0<4}")
+
+    unsafe { std::str::from_utf8_unchecked(&buf).to_string() }
 }
