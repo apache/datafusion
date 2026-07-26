@@ -764,6 +764,18 @@ impl<T: PartialOrd> MovingMin<T> {
         Self::default()
     }
 
+    /// Creates a new `MovingMin` to keep track of the minimum in a sliding window with
+    /// `capacity` allocated slots.
+    #[cfg(test)]
+    #[inline]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            deque: VecDeque::with_capacity(capacity),
+            push_seq: 0,
+            pop_seq: 0,
+        }
+    }
+
     /// Returns the minimum of the sliding window or `None` if the window is
     /// empty.
     #[inline]
@@ -872,6 +884,18 @@ impl<T: PartialOrd> MovingMax<T> {
     #[inline]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Creates a new `MovingMax` to keep track of the maximum in a sliding window with
+    /// `capacity` allocated slots.
+    #[cfg(test)]
+    #[inline]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            deque: VecDeque::with_capacity(capacity),
+            push_seq: 0,
+            pop_seq: 0,
+        }
     }
 
     /// Returns the maximum of the sliding window or `None` if the window is empty.
