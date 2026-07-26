@@ -17,7 +17,6 @@
 
 //! `lead` and `lag` window function implementations
 
-use crate::utils::get_default_value_from_args;
 use crate::utils::{get_scalar_value_from_args, get_signed_integer};
 use arrow::array::UInt64Builder;
 use arrow::compute::{interleave, take};
@@ -34,7 +33,7 @@ use datafusion_expr::{
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
-use datafusion_physical_expr::expressions;
+use datafusion_physical_expr::expressions::{self};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::cmp::min;
 use std::collections::VecDeque;
@@ -664,6 +663,31 @@ fn evaluate_all_with_ignore_null_and_array_default(
         })
         .collect();
     ScalarValue::iter_to_array(results?)
+}
+
+pub(crate) fn get_default_value_from_args(
+    args: &[Arc<dyn PhysicalExpr>],
+    index: usize,
+    field: &Arc<Field>,
+) -> Result<DefaultValue> {
+    match args.get(index) {
+        Some(expr) => {
+            if let Some(literal) = expr.downcast_ref::<expressions::Literal>() {
+                let scalar = literal.value().clone();
+                let scalar = if !scalar.data_type().is_null() {
+                    scalar.cast_to(field.data_type())
+                } else {
+                    ScalarValue::try_from(field.data_type())
+                }?;
+                Ok(DefaultValue::Literal(scalar))
+            } else {
+                Ok(DefaultValue::Expression)
+            }
+        }
+        None => Ok(DefaultValue::Literal(ScalarValue::try_from(
+            field.data_type(),
+        )?)),
+    }
 }
 
 impl PartitionEvaluator for WindowShiftEvaluator {
