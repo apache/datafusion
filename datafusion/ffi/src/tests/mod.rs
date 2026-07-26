@@ -26,8 +26,8 @@ use datafusion_catalog::MemTable;
 use datafusion_catalog::{Session, TableProvider};
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Statistics};
-use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{Expr, TableType};
+use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_expr::{Expr, TableType, col, lit};
 use datafusion_physical_plan::ExecutionPlan;
 use sync_provider::create_sync_table_provider;
 use udf_udaf_udwf::{
@@ -226,6 +226,38 @@ impl TableProvider for TableWithStats {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.inner.scan(session, projection, filters, limit).await
     }
+
+    async fn delete_from(
+        &self,
+        _state: &dyn Session,
+        filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if filters != vec![col("a").gt(lit(10_i32))] {
+            return exec_err!("Unexpected DELETE filters");
+        }
+
+        Ok(dml_count_plan())
+    }
+
+    async fn update(
+        &self,
+        _state: &dyn Session,
+        assignments: Vec<(String, Expr)>,
+        filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if assignments != vec![("b".to_string(), lit(42_f64))] {
+            return exec_err!("Unexpected UPDATE assignments");
+        }
+        if filters != vec![col("a").eq(lit(7_i32))] {
+            return exec_err!("Unexpected UPDATE filters");
+        }
+
+        Ok(dml_count_plan())
+    }
+
+    async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(dml_count_plan())
+    }
 }
 
 pub(crate) extern "C" fn create_table_with_statistics(
@@ -239,6 +271,15 @@ pub(crate) extern "C" fn create_table_with_statistics(
         stats: make_test_statistics(),
     });
     FFI_TableProvider::new_with_ffi_codec(provider, true, None, codec)
+}
+
+fn dml_count_plan() -> Arc<dyn ExecutionPlan> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "count",
+        DataType::UInt64,
+        false,
+    )]));
+    Arc::new(EmptyExec::new(schema))
 }
 
 /// This defines the entry point for using the module.
