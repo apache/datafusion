@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::execution::SessionStateBuilder;
+use datafusion::execution::session_state::index_by_name_and_aliases;
 
 use crate::planner::SparkFunctionPlanner;
 use crate::{
@@ -62,16 +63,16 @@ impl SessionStateBuilderSpark for SessionStateBuilder {
             .insert(0, Arc::new(SparkFunctionPlanner));
 
         self.scalar_functions()
-            .get_or_insert_with(Vec::new)
-            .extend(all_default_scalar_functions());
+            .get_or_insert_with(HashMap::new)
+            .extend(index_by_name_and_aliases(all_default_scalar_functions()));
 
         self.aggregate_functions()
-            .get_or_insert_with(Vec::new)
-            .extend(all_default_aggregate_functions());
+            .get_or_insert_with(HashMap::new)
+            .extend(index_by_name_and_aliases(all_default_aggregate_functions()));
 
         self.window_functions()
-            .get_or_insert_with(Vec::new)
-            .extend(all_default_window_functions());
+            .get_or_insert_with(HashMap::new)
+            .extend(index_by_name_and_aliases(all_default_window_functions()));
 
         self.table_functions()
             .get_or_insert_with(HashMap::new)
