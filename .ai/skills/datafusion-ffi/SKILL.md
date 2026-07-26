@@ -1,6 +1,6 @@
 ---
 name: datafusion-ffi
-description: Patterns and review checklist for the `datafusion-ffi` crate. Use whenever the user adds, edits, or reviews code under `datafusion/ffi/` — new `FFI_X` wrappers, `Foreign<X>` impls, codec changes, or expanding an existing wrapper to cover more of a trait's surface. Also use when reviewing PRs that touch this crate.
+description: Patterns and review checklist for the `datafusion-ffi` crate. Use whenever the user adds, edits, or reviews code under `datafusion/ffi/` — new `FFI_X` wrappers, `ForeignX` implementations, codec changes, or expanding an existing wrapper to cover more of a trait's surface. Also use when reviewing PRs that touch this crate.
 ---
 
 # DataFusion FFI Skill
@@ -209,9 +209,9 @@ cargo test -p datafusion-ffi --features integration-tests
 
 To add coverage for a new wrapper:
 
-1. **Add a constructor** in `src/tests/<area>.rs` (or a new file there). Return a populated `FFI_X` from a known-good native type.
-2. **Wire it into `ForeignLibraryModule`** in `src/tests/mod.rs`: add a field of type `extern "C" fn(...) -> FFI_X` and populate it in `datafusion_ffi_get_module`. This struct is the cross-library contract — adding a field is itself an ABI change for the test module; integration tests will rebuild the cdylib automatically.
-3. **Add the test** in `tests/ffi_<area>.rs` under `#[cfg(feature = "integration-tests")] mod tests { … }`. Call `datafusion_ffi::tests::utils::get_module()` to load the cdylib, invoke your constructor through the returned `ForeignLibraryModule`, convert into `Arc<dyn X>`, and exercise every method.
+1. **Reuse an existing fixture and constructor** when it can express the new behaviour with a small trait-method override. Do not add a dedicated test type or `ForeignLibraryModule` field for each method.
+2. **Add a constructor only when necessary** in `src/tests/<area>.rs` (or a new file there). Return a populated `FFI_X` from a known-good native type, then wire it into `ForeignLibraryModule` in `src/tests/mod.rs`.
+3. **Add the test** in `tests/ffi_<area>.rs` under `#[cfg(feature = "integration-tests")] mod tests { … }`. Call `datafusion_ffi::tests::utils::get_module()` to load the cdylib, invoke the constructor through the returned `ForeignLibraryModule`, convert into `Arc<dyn X>`, and exercise every method.
 
 What integration tests catch that unit tests cannot:
 
@@ -235,7 +235,7 @@ What integration tests catch that unit tests cannot:
 - Primitives (`u8`/`u64`/`bool`/`usize`, etc.) and `#[repr(u8)]` FFI enums (`FFI_TableType`, `Volatility`, `InsertOp`, `TableProviderFilterPushDown`).
 - A `stabby::string::String` (`SString`) returned by value, with no other args or returns.
 
-Concrete skippable example: `fn name(&self) -> SString` reading a field already validated by another method. Concrete *non*-skippable examples: anything returning `SVec<T>`, `FFI_Option<T>`, `FFI_Result<T>`, `WrappedSchema`, `WrappedArray`, an `FfiFuture`, an `FFI_*` sub-struct, or any `*mut`/`*const` pointer — those exercise alignment / padding / niche-opt across the ABI boundary and need the two-build coverage. When unsure, write the integration test; the cost is one constructor + ~20 lines.
+Concrete skippable example: `fn name(&self) -> SString` reading a field already validated by another method. Concrete *non*-skippable examples: anything returning `SVec<T>`, `FFI_Option<T>`, `FFI_Result<T>`, `WrappedSchema`, `WrappedArray`, an `FfiFuture`, an `FFI_*` sub-struct, or any `*mut`/`*const` pointer — those exercise alignment / padding / niche-opt across the ABI boundary and need the two-build coverage. When unsure, write the integration test and extend an existing fixture first.
 
 If you skip the integration test for a layout change, you have effectively shipped untested ABI.
 
@@ -313,6 +313,8 @@ If a method's body is non-trivial, the consumer-side default is non-trivial too.
 - **Logical `Expr` / `LogicalPlan`**: serialize via `datafusion-proto` using the embedded `FFI_LogicalExtensionCodec`. Same for physical plans → `FFI_PhysicalExtensionCodec`.
 - **Enums** (`Volatility`, `TableType`, `InsertOp`, `TableProviderFilterPushDown`): `#[repr(u8)]`, with `From<Native> for FFI_X` and `From<&FFI_X> for Native`. Always write a round-trip unit test that exercises every variant.
 - **Errors**: every `FFI_X` method that can fail returns `FFI_Result<T>`. Use the `sresult!`, `sresult_return!`, `df_result!` macros from `src/util.rs` — do not roll your own.
+- **Infallible trait methods**: if an FFI call can fail but the native trait cannot return the error, log the transport error before returning the trait's fallback (`None`, `false`, or a default). Never discard it with `.ok()`, `.unwrap_or_default()`, or equivalent.
+- **Owned FFI returns**: consume an owned `FFI_X` with `From<FFI_X>` instead of converting through `&FFI_X` and cloning across the boundary. Keep the borrowed conversion's local marker fast path.
 
 ## Async, sessions, and task context
 

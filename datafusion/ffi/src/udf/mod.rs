@@ -124,11 +124,7 @@ pub struct FFI_ScalarUDF {
         inputs: SVec<FFI_ExprProperties>,
     ) -> FFI_Result<bool>,
 
-    /// FFI equivalent to [`ScalarUDFImpl`]'s `with_updated_config`. Given the
-    /// session [`ConfigOptions`], optionally returns a reconfigured copy of the
-    /// UDF, or `None` when the provider does not specialize on config. Wrapped
-    /// in an `FFI_Result` because recovering the `ConfigOptions` on the provider
-    /// side is fallible.
+    /// FFI equivalent to [`ScalarUDFImpl::with_updated_config`].
     pub with_updated_config:
         unsafe extern "C" fn(
             udf: &Self,
@@ -352,6 +348,21 @@ pub struct ForeignScalarUDF {
 unsafe impl Send for ForeignScalarUDF {}
 unsafe impl Sync for ForeignScalarUDF {}
 
+impl ForeignScalarUDF {
+    fn new(udf: FFI_ScalarUDF) -> Self {
+        let name = udf.name.to_string();
+        let signature = Signature::user_defined((&udf.volatility).into());
+        let aliases = udf.aliases.iter().map(|s| s.to_string()).collect();
+
+        Self {
+            name,
+            aliases,
+            udf,
+            signature,
+        }
+    }
+}
+
 impl PartialEq for ForeignScalarUDF {
     fn eq(&self, other: &Self) -> bool {
         let Self {
@@ -383,22 +394,22 @@ impl Hash for ForeignScalarUDF {
     }
 }
 
+impl From<FFI_ScalarUDF> for Arc<dyn ScalarUDFImpl> {
+    fn from(udf: FFI_ScalarUDF) -> Self {
+        if (udf.library_marker_id)() == crate::get_library_marker_id() {
+            Arc::clone(udf.inner().inner())
+        } else {
+            Arc::new(ForeignScalarUDF::new(udf))
+        }
+    }
+}
+
 impl From<&FFI_ScalarUDF> for Arc<dyn ScalarUDFImpl> {
     fn from(udf: &FFI_ScalarUDF) -> Self {
         if (udf.library_marker_id)() == crate::get_library_marker_id() {
             Arc::clone(udf.inner().inner())
         } else {
-            let name = udf.name.to_string();
-            let signature = Signature::user_defined((&udf.volatility).into());
-
-            let aliases = udf.aliases.iter().map(|s| s.to_string()).collect();
-
-            Arc::new(ForeignScalarUDF {
-                name,
-                udf: udf.clone(),
-                aliases,
-                signature,
-            })
+            Arc::new(ForeignScalarUDF::new(udf.clone()))
         }
     }
 }
@@ -527,12 +538,15 @@ impl ScalarUDFImpl for ForeignScalarUDF {
 
         let result = unsafe { (self.udf.with_updated_config)(&self.udf, config) };
 
-        // The trait method is infallible, so a transport-level error (the config
-        // failing to round-trip on the provider side) degrades to `None`; the
-        // same outcome as a provider that does not specialize on config.
-        let updated = df_result!(result).ok()?.into_option()?;
+        let updated = match df_result!(result) {
+            Ok(updated) => updated.into_option()?,
+            Err(error) => {
+                log::warn!("Unable to update scalar UDF configuration over FFI: {error}");
+                return None;
+            }
+        };
 
-        Some(ScalarUDF::new_from_shared_impl((&updated).into()))
+        Some(ScalarUDF::new_from_shared_impl(updated.into()))
     }
 }
 
@@ -582,6 +596,12 @@ mod tests {
 
             Ok(inputs.iter().all(|input| input.preserves_lex_ordering))
         }
+
+        fn with_updated_config(&self, _config: &ConfigOptions) -> Option<ScalarUDF> {
+            Some(ScalarUDF::from(Self {
+                signature: self.signature.clone(),
+            }))
+        }
     }
 
     #[test]
@@ -595,6 +615,11 @@ mod tests {
         let foreign_udf: Arc<dyn ScalarUDFImpl> = (&local_udf).into();
 
         assert_eq!(original_udf.name(), foreign_udf.name());
+        assert!(
+            foreign_udf
+                .with_updated_config(&ConfigOptions::default())
+                .is_none()
+        );
 
         Ok(())
     }
@@ -669,63 +694,13 @@ mod tests {
         );
         assert!(foreign_udf.preserves_lex_ordering(&[]).is_err());
 
-        Ok(())
-    }
-
-    #[derive(Debug, PartialEq, Eq, Hash)]
-    struct ConfigSpecializingUdf {
-        signature: Signature,
-        specialized: bool,
-    }
-
-    impl ScalarUDFImpl for ConfigSpecializingUdf {
-        fn name(&self) -> &str {
-            if self.specialized {
-                "specialized"
-            } else {
-                "base"
-            }
-        }
-
-        fn signature(&self) -> &Signature {
-            &self.signature
-        }
-
-        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-            Ok(DataType::Int32)
-        }
-
-        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-            internal_err!("ConfigSpecializingUdf is not meant to be invoked")
-        }
-
-        fn with_updated_config(&self, _config: &ConfigOptions) -> Option<ScalarUDF> {
-            Some(ScalarUDF::from(ConfigSpecializingUdf {
-                signature: self.signature.clone(),
-                specialized: true,
-            }))
-        }
-    }
-
-    #[test]
-    fn test_ffi_udf_with_updated_config() -> Result<()> {
-        let original_udf = Arc::new(ScalarUDF::from(ConfigSpecializingUdf {
-            signature: Signature::exact(vec![], datafusion_expr::Volatility::Immutable),
-            specialized: false,
-        }));
-
-        let mut ffi_udf = FFI_ScalarUDF::from(Arc::clone(&original_udf));
-        ffi_udf.library_marker_id = crate::mock_foreign_marker_id;
-
-        let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
-        assert!(foreign_udf.is::<ForeignScalarUDF>());
-
-        // The producer override must survive the foreign path; the trait default
-        // returns `None`.
-        let updated = foreign_udf.with_updated_config(&ConfigOptions::default());
+        let updated = foreign_udf
+            .with_updated_config(&ConfigOptions::default())
+            .expect("provider should return an updated UDF");
         assert_eq!(
-            updated.map(|udf| udf.name().to_string()),
-            Some("specialized".to_string())
+            updated
+                .placement(&[ExpressionPlacement::Column, ExpressionPlacement::Literal]),
+            ExpressionPlacement::MoveTowardsLeafNodes
         );
 
         Ok(())

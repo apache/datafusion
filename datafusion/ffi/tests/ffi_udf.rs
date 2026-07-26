@@ -165,17 +165,22 @@ mod tests {
     fn test_with_updated_config_on_scalar_udf() -> Result<()> {
         let module = get_module()?;
 
-        let ffi_udf = (module.create_with_config_udf)();
+        let ffi_udf = (module.create_timezone_udf)();
         let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
+
+        assert!(
+            foreign_udf
+                .with_updated_config(&ConfigOptions::default())
+                .is_none()
+        );
 
         let mut options = ConfigOptions::default();
         options.execution.time_zone = Some("AEST".into());
 
-        let updated = foreign_udf.with_updated_config(&options);
-        assert_eq!(
-            updated.map(|udf| udf.name().to_string()),
-            Some("with_config_AEST".to_string())
-        );
+        let updated = foreign_udf
+            .with_updated_config(&options)
+            .expect("provider should return an updated UDF");
+        assert_eq!(updated.name(), "TimeZoneUDF");
 
         Ok(())
     }
