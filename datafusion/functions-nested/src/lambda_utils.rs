@@ -134,36 +134,36 @@ pub(crate) fn extract_list_values(
     Ok(ListValuesResult::Values(values))
 }
 
-enum SingleListLambdaResult {
+pub(crate) enum SingleListLambdaResult {
     EarlyReturn(ColumnarValue),
     Ready(EvaluatedListLambda),
 }
 
-struct EvaluatedListLambda {
-    original_list: ArrayRef,
-    flattened_values: ArrayRef,
-    evaluated_result: ColumnarValue,
+pub(crate) struct EvaluatedListLambda {
+    pub original_list: ArrayRef,
+    pub flattened_values: ArrayRef,
+    pub evaluated_result: ColumnarValue,
     row_offsets: Vec<usize>,
 }
 
 impl EvaluatedListLambda {
-    fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.original_list.len()
     }
 
-    fn nulls(&self) -> Option<&NullBuffer> {
+    pub(crate) fn nulls(&self) -> Option<&NullBuffer> {
         self.original_list.nulls()
     }
 
-    fn row_range(&self, i: usize) -> (usize, usize) {
+    pub(crate) fn row_range(&self, i: usize) -> (usize, usize) {
         (self.row_offsets[i], self.row_offsets[i + 1])
     }
 
-    fn adjusted_offsets<O: OffsetSizeTrait>(&self) -> OffsetBuffer<O> {
+    pub(crate) fn adjusted_offsets<O: OffsetSizeTrait>(&self) -> OffsetBuffer<O> {
         OffsetBuffer::from_lengths(self.row_offsets.windows(2).map(|w| w[1] - w[0]))
     }
 
-    fn boolean_predicate(&self, name: &str) -> Result<BooleanArray> {
+    pub(crate) fn boolean_predicate(&self, name: &str) -> Result<BooleanArray> {
         let arr = self
             .evaluated_result
             .clone()
@@ -223,7 +223,7 @@ fn evaluate_single_list_lambda(
     }))
 }
 
-fn evaluate_single_list_predicate(
+pub(crate) fn evaluate_single_list_predicate(
     name: &str,
     args: &HigherOrderFunctionArgs,
 ) -> Result<SingleListLambdaResult> {

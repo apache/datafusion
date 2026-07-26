@@ -38,7 +38,8 @@ use datafusion_macros::user_doc;
 use std::sync::Arc;
 
 use crate::lambda_utils::{
-    coerce_single_list_arg, single_list_lambda_parameters, value_lambda_pair,
+    EvaluatedListLambda, SingleListLambdaResult, coerce_single_list_arg,
+    evaluate_single_list_predicate, single_list_lambda_parameters, value_lambda_pair,
 };
 
 make_higher_order_function_expr_and_func!(
@@ -147,58 +148,19 @@ impl HigherOrderUDFImpl for ArrayFirst {
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
-        let (list, lambda) = value_lambda_pair(self.name(), &args.args)?;
+        let evaluated = match evaluate_single_list_predicate(self.name(), &args)? {
+            SingleListLambdaResult::EarlyReturn(v) => return Ok(v),
+            SingleListLambdaResult::Ready(v) => v,
+        };
 
-        let list_array = list.to_array(args.number_rows)?;
-
-        // Fast path: fully null input. Also required for FixedSizeList which
-        // can't be handled by clear_null_values when fully null.
-        if list_array.null_count() == list_array.len() {
-            return Ok(ColumnarValue::Array(new_null_array(
-                args.return_type(),
-                list_array.len(),
-            )));
-        }
-
-        let list_values = list_values(&list_array)?;
-
-        // Evaluate the predicate over every flat element. Captured columns are
-        // spread to align with the flattened values via list_values_row_number.
-        let values_param = || Ok(Arc::clone(&list_values));
-
-        let predicate_results = lambda
-            .evaluate(&[&values_param], |arrays| {
-                let indices = list_values_row_number(&list_array)?;
-                Ok(take_arrays(arrays, &indices, None)?)
-            })?
-            .into_array(list_values.len())?;
-
-        let predicate_bool = predicate_results
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .ok_or_else(|| {
-                exec_datafusion_err!(
-                    "{} predicate must return boolean array, got {}",
-                    self.name(),
-                    predicate_results.data_type()
-                )
-            })?;
-
-        // For each row, find the flat index of the first element whose predicate
-        // is true. Rows with no match, including empty rows and null rows that
-        // clear_null_values truncated to empty, map to a null index, producing
-        // a null result via `take`.
-        let indices = match list_array.data_type() {
-            DataType::List(_) => {
-                first_match_indices(list_array.as_list::<i32>(), predicate_bool)
-            }
-            DataType::LargeList(_) => {
-                first_match_indices(list_array.as_list::<i64>(), predicate_bool)
-            }
+        let predicate = evaluated.boolean_predicate(self.name())?;
+        let indices = match evaluated.original_list.data_type() {
+            DataType::List(_) => first_match_indices(&evaluated, &predicate),
+            DataType::LargeList(_) => first_match_indices(&evaluated, &predicate),
             other => return exec_err!("expected list, got {other}"),
         };
 
-        let result = take(list_values.as_ref(), &indices, None)?;
+        let result = take(evaluated.flattened_values.as_ref(), &indices, None)?;
         Ok(ColumnarValue::Array(result))
     }
 
@@ -213,18 +175,14 @@ impl HigherOrderUDFImpl for ArrayFirst {
 ///
 /// A null predicate value is treated as not matching. The matched element itself
 /// may be null and is still returned.
-fn first_match_indices<O: OffsetSizeTrait>(
-    list: &GenericListArray<O>,
+fn first_match_indices(
+    evaluated: &EvaluatedListLambda,
     predicate: &BooleanArray,
 ) -> UInt64Array {
-    // Offsets are adjusted so that sliced lists index correctly into the
-    // predicate / values arrays returned by list_values.
-    let offsets = adjust_offsets_for_slice(list);
-    let mut builder = UInt64Builder::with_capacity(list.len());
+    let mut builder = UInt64Builder::with_capacity(evaluated.len());
 
-    for i in 0..list.len() {
-        let start = offsets[i].as_usize();
-        let end = offsets[i + 1].as_usize();
+    for i in 0..evaluated.len() {
+        let (start, end) = evaluated.row_range(i);
 
         match (start..end).find(|&j| predicate.is_valid(j) && predicate.value(j)) {
             Some(j) => builder.append_value(j as u64),
