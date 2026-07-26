@@ -4032,7 +4032,7 @@ fn columns(schema: &Schema) -> Vec<String> {
 // ==================== BitwiseSortMergeJoinStream direct tests ====================
 //
 // These tests construct a BitwiseSortMergeJoinStream directly (bypassing exec)
-// to exercise async re-entry and spill edge cases using PendingStream.
+// to exercise waiting on inputs and spill edge cases using PendingStream.
 
 /// Create test memory/spill resources for stream-level tests.
 fn test_stream_resources(
@@ -4315,14 +4315,9 @@ async fn join_time_excludes_consumer_wait() -> Result<()> {
     .await
 }
 
-/// Reproduces the buffer_inner_key_group re-entry bug:
-///
-/// When buffer_inner_key_group buffers inner rows across batch boundaries
-/// and poll_next_inner_batch returns Pending mid-way, the ready! macro
-/// exits poll_join. On re-entry, the merge-scan reaches Equal again and
-/// calls buffer_inner_key_group a second time -- which starts with
-/// clear(), destroying the partially collected inner rows. Previously
-/// consumed batches are gone, so re-buffering misses them.
+/// An inner key group spanning multiple inner batches must survive the inner
+/// input returning Pending mid-way: inner rows delivered before the Pending
+/// still take part in the filter evaluation.
 ///
 /// Setup:
 /// - Inner: 3 single-row batches, all with key=1, filter values c2=[10, 20, 30]
@@ -4330,8 +4325,7 @@ async fn join_time_excludes_consumer_wait() -> Result<()> {
 /// - Filter: c1 == c2 (only first inner row c2=10 matches)
 /// - Pending injected before 3rd inner batch
 ///
-/// Without the bug: outer row emitted (match via c2=10)
-/// With the bug: outer row missing (c2=10 batch lost on re-entry)
+/// Expected: outer row emitted (match via c2=10)
 #[tokio::test]
 async fn filter_buffer_pending_loses_inner_rows() -> Result<()> {
     let left_schema = Arc::new(Schema::new(vec![
@@ -4448,22 +4442,17 @@ async fn filter_buffer_pending_loses_inner_rows() -> Result<()> {
     Ok(())
 }
 
-/// Reproduces the no-filter boundary Pending re-entry bug:
-///
-/// When an outer key group spans a batch boundary, the no-filter path
-/// emits the current batch, then polls for the next outer batch. If
-/// poll returns Pending, poll_join exits. On re-entry, without the
-/// PendingBoundary fix, the new batch is processed fresh by the
-/// merge-scan. Since inner already advanced past this key, the outer
-/// rows with the matching key are skipped via Ordering::Less.
+/// A matched outer key group spanning a batch boundary must survive the outer
+/// input returning Pending at that boundary: the rows continuing the key group
+/// still count as matched, even though the inner side has already advanced
+/// past the key.
 ///
 /// Setup:
 /// - Outer: 2 single-row batches, both with key=1 (key group spans boundary)
 /// - Inner: 1 row with key=1
 /// - Pending injected on outer before 2nd batch
 ///
-/// Without fix: only first outer row emitted (second lost on re-entry)
-/// With fix: both outer rows emitted
+/// Expected: both outer rows emitted
 #[tokio::test]
 async fn no_filter_boundary_pending_loses_outer_rows() -> Result<()> {
     let left_schema = Arc::new(Schema::new(vec![
@@ -4552,9 +4541,8 @@ async fn no_filter_boundary_pending_loses_outer_rows() -> Result<()> {
 ///
 /// The outer input has an unmatched prefix row followed by a matching key
 /// group that continues in the next batch. Both rows with key=1 should be
-/// treated as matched. Returning `Pending` before the second batch forces
-/// `poll_join` to return and later resume from its top-level state, rather
-/// than continuing the same in-progress boundary loop.
+/// treated as matched. Returning `Pending` before the second batch makes the
+/// join wait for the continuation while the key group is still open.
 #[tokio::test]
 async fn no_filter_boundary_pending_with_unmatched_prefix() -> Result<()> {
     let left_schema = Arc::new(Schema::new(vec![
@@ -4646,8 +4634,8 @@ async fn no_filter_boundary_pending_with_unmatched_prefix() -> Result<()> {
     Ok(())
 }
 
-/// Tests the filtered boundary Pending re-entry: outer key group spans
-/// batches with a filter, and poll_next_outer_batch returns Pending.
+/// Same as the no-filter boundary case, with a filter: the outer key group
+/// spans batches and the outer input returns Pending at the boundary.
 ///
 /// Setup:
 /// - Outer: 2 single-row batches, both key=1, c1=[10, 20]
@@ -4904,22 +4892,19 @@ async fn bitwise_spill_with_filter() -> Result<()> {
     Ok(())
 }
 
-/// Reproduces a bug where `resume_boundary` for the Filtered pending case
-/// only checks `inner_key_buffer.is_empty()` but ignores `inner_key_spill`.
-/// After spilling, the in-memory buffer is cleared while the spill file
-/// holds the data. If the outer key group spans a batch boundary, the
-/// second outer batch's rows are never evaluated against the inner group.
+/// Once the inner key group has spilled, an outer key group spanning a batch
+/// boundary must still be evaluated against the spilled inner rows — the
+/// second outer batch's rows must not be treated as having no inner group to
+/// match against.
 ///
 /// Setup:
 /// - Outer: 2 single-row batches, both key=1, c1=[10, 10]
 /// - Inner: 1 batch with many rows all key=1 (enough to trigger spill)
 /// - Filter: c1 == c2 (matches when c2=10)
 /// - Memory limit: tiny (100 bytes) to force spilling
-/// - Pending before 2nd outer batch to trigger boundary re-entry
+/// - Pending before 2nd outer batch, while the key group is still open
 ///
 /// Expected: both outer rows match (semi=2 rows, anti=0 rows)
-/// Bug: second outer row is skipped because resume_boundary sees empty
-///      inner_key_buffer and skips re-evaluation.
 #[tokio::test]
 async fn spill_filtered_boundary_loses_outer_rows() -> Result<()> {
     let left_schema = Arc::new(Schema::new(vec![
@@ -5467,8 +5452,8 @@ async fn materializing_spill_pending_stream() -> Result<()> {
             "expected spill_count > 0 for {join_type:?}"
         );
 
-        // Compare against a no-spill run to make sure the Pending
-        // re-entry path didn't corrupt or drop any data.
+        // Compare against a no-spill run to make sure waiting on the
+        // spill reads didn't corrupt or drop any data.
         let task_ctx_no_spill = Arc::new(TaskContext::default());
         let join_no_spill = join_with_options(
             Arc::clone(&left),
@@ -5491,9 +5476,9 @@ async fn materializing_spill_pending_stream() -> Result<()> {
 }
 
 /// Bitwise-side (Semi/Anti) coverage: identical to `bitwise_spill_with_filter`,
-/// but every spill read goes through `PendingSpillFile`, forcing
-/// `process_key_match_with_filter`'s spilled-batch loop to actually hit and
-/// resume from `Poll::Pending`.
+/// but every spill read goes through `PendingSpillFile`, so reading the
+/// spilled inner rows back must actually hit and recover from `Poll::Pending`
+/// mid-read.
 #[tokio::test]
 async fn bitwise_spill_pending_stream() -> Result<()> {
     let left = build_table(
