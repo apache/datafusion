@@ -594,6 +594,12 @@ fn validate_map_key_data_type(
 
     match (source_type, target_type) {
         (Struct(source_fields), Struct(target_fields)) => {
+            if !has_one_of_more_common_fields(source_fields, target_fields) {
+                return _plan_err!(
+                    "Cannot cast Map key Struct because there is no field name overlap"
+                );
+            }
+
             for source_field in source_fields {
                 let Some(target_field) = target_fields
                     .iter()
@@ -1678,6 +1684,40 @@ mod tests {
             &source_col,
             &target_type,
             "Cannot safely evolve Map key type",
+        );
+    }
+
+    #[test]
+    fn test_unsorted_map_key_struct_no_overlap_rejected_by_planner_and_runtime() {
+        let keys = StructArray::new_empty_fields(1, Some(NullBuffer::from(vec![true])));
+        let values = StructArray::from(vec![(
+            arc_field("amount", DataType::Int32),
+            Arc::new(Int32Array::from(vec![10])) as ArrayRef,
+        )]);
+        let entries = StructArray::new(
+            vec![
+                Arc::new(non_null_field("keys", keys.data_type().clone())),
+                arc_field("values", values.data_type().clone()),
+            ]
+            .into(),
+            vec![Arc::new(keys), Arc::new(values)],
+            None,
+        );
+        let source_col: ArrayRef = Arc::new(MapArray::new(
+            Arc::new(non_null_field("entries", entries.data_type().clone())),
+            OffsetBuffer::new(vec![0, 1].into()),
+            entries,
+            None,
+            false,
+        ));
+        let target_type = map_type(
+            struct_type(vec![field("new_id", DataType::Int32)]),
+            struct_type(vec![field("amount", DataType::Int32)]),
+        );
+        assert_map_planning_runtime_error(
+            &source_col,
+            &target_type,
+            "Cannot cast Map key Struct because there is no field name overlap",
         );
     }
 
