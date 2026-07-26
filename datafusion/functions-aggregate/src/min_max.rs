@@ -760,7 +760,8 @@ impl Accumulator for SlidingMinAccumulator {
 /// assert_eq!(moving_min.min(), None);
 /// ```
 #[derive(Debug)]
-pub(crate) struct MovingMin<T> {
+#[doc(hidden)] // exported only for benchmarks
+pub struct MovingMin<T> {
     deque: VecDeque<(u64, T)>,
     push_seq: u64,
     pop_seq: u64,
@@ -901,7 +902,8 @@ fn moving_deque_heap_size<T>(
 /// assert_eq!(moving_max.max(), None);
 /// ```
 #[derive(Debug)]
-pub(crate) struct MovingMax<T> {
+#[doc(hidden)] // exported only for benchmarks
+pub struct MovingMax<T> {
     deque: VecDeque<(u64, T)>,
     push_seq: u64,
     pop_seq: u64,
