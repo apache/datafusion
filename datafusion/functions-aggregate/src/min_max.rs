@@ -734,7 +734,7 @@ impl Accumulator for SlidingMinAccumulator {
 ///
 /// `MovingMin` keeps track of the minimum value in a sliding window using a
 /// monotonic deque. Each element is stored with its sequence number, and the
-/// deque maintains candidate elements in strictly increasing value order.
+/// deque maintains candidate elements in ascending value order.
 ///
 /// Complexity:
 /// - O(1) for getting the minimum
@@ -861,7 +861,14 @@ fn moving_deque_heap_size<T>(
 
 /// Keep track of the maximum value in a sliding window.
 ///
-/// See [`MovingMin`] for more details.
+/// `MovingMax` keeps track of the maximum value in a sliding window using a
+/// monotonic deque. Each element is stored with its sequence number, and the
+/// deque maintains candidate elements in descending value order.
+///
+/// Complexity:
+/// - O(1) for getting the maximum
+/// - amortized O(1) for push
+/// - O(1) for pop
 #[derive(Debug)]
 pub(crate) struct MovingMax<T> {
     deque: VecDeque<(u64, T)>,
@@ -960,7 +967,7 @@ impl<T: PartialOrd> MovingMax<T> {
         self.push_seq == self.pop_seq
     }
 
-    /// Heap bytes owned by the two stack buffers plus each stored `T`'s
+    /// Heap bytes owned by the deque plus each stored `T`'s
     /// heap payload as reported by `elem_heap`. Excludes `size_of::<Self>()`.
     #[inline]
     fn heap_size(&self, elem_heap: impl Fn(&T) -> usize) -> usize {
