@@ -26,7 +26,10 @@ use arrow::{
     compute::{CastOptions, can_cast_types, cast_with_options, take},
     datatypes::{DataType, DataType::Struct, Field, FieldRef},
 };
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 /// Cast a struct column to match target struct fields, handling nested structs recursively.
 ///
@@ -600,10 +603,17 @@ fn validate_map_key_data_type(
                 );
             }
 
+            let target_by_name: HashMap<&str, &FieldRef> = target_fields
+                .iter()
+                .map(|field| (field.name().as_str(), field))
+                .collect();
+            let source_names: HashSet<&str> = source_fields
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect();
+
             for source_field in source_fields {
-                let Some(target_field) = target_fields
-                    .iter()
-                    .find(|target| target.name() == source_field.name())
+                let Some(target_field) = target_by_name.get(source_field.name().as_str())
                 else {
                     return _plan_err!(
                         "Cannot remove field '{}' from a Map key Struct",
@@ -622,9 +632,7 @@ fn validate_map_key_data_type(
                 )?;
             }
             for target_field in target_fields {
-                if !source_fields
-                    .iter()
-                    .any(|source| source.name() == target_field.name())
+                if !source_names.contains(target_field.name().as_str())
                     && !target_field.is_nullable()
                 {
                     return _plan_err!(
@@ -707,7 +715,7 @@ pub fn validate_data_type_compatibility(
             validate_field_compatibility(s, t)?;
         }
         (DataType::Map(s, source_sorted), DataType::Map(t, target_sorted)) => {
-            let _ = validate_map_compatibility(s, *source_sorted, t, *target_sorted)?;
+            validate_map_compatibility(s, *source_sorted, t, *target_sorted)?;
         }
         (DataType::Dictionary(s_key, s_val), DataType::Dictionary(t_key, t_val)) => {
             if !can_cast_types(s_key, t_key) {

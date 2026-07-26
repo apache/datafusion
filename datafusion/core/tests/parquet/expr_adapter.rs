@@ -1004,24 +1004,38 @@ fn map_value_struct_table_schema(currency_nullable: bool) -> SchemaRef {
     ]))
 }
 
-#[tokio::test]
-async fn test_map_value_struct_schema_evolution_end_to_end() -> Result<()> {
+fn map_value_struct_nullable_schema() -> SchemaRef {
+    map_value_struct_table_schema(true)
+}
+
+fn map_value_struct_non_nullable_schema() -> SchemaRef {
+    map_value_struct_table_schema(false)
+}
+
+async fn setup_map_value_struct_table(
+    table_path: &str,
+    table_schema: SchemaRef,
+) -> Result<SessionContext> {
     let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    let file_path = format!("{table_path}/data.parquet");
     write_parquet(
         map_value_struct_evolution_batch()?,
         Arc::clone(&store),
-        "map_evolution/data.parquet",
+        &file_path,
     )
     .await;
 
     let ctx = test_context();
-    register_memory_listing_table(
-        &ctx,
-        store,
-        "memory:///map_evolution/",
-        map_value_struct_table_schema(true),
-    )
-    .await;
+    let table_url = format!("memory:///{table_path}/");
+    register_memory_listing_table(&ctx, store, &table_url, table_schema).await;
+    Ok(ctx)
+}
+
+#[tokio::test]
+async fn test_map_value_struct_schema_evolution_end_to_end() -> Result<()> {
+    let ctx =
+        setup_map_value_struct_table("map_evolution", map_value_struct_nullable_schema())
+            .await?;
 
     let batches = ctx
         .sql("SELECT * FROM t ORDER BY row_id")
@@ -1064,22 +1078,11 @@ async fn test_map_value_struct_schema_evolution_end_to_end() -> Result<()> {
 
 #[tokio::test]
 async fn test_map_value_struct_incompatible_schema_evolution_rejected() -> Result<()> {
-    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-    write_parquet(
-        map_value_struct_evolution_batch()?,
-        Arc::clone(&store),
-        "map_evolution_rejected/data.parquet",
+    let ctx = setup_map_value_struct_table(
+        "map_evolution_rejected",
+        map_value_struct_non_nullable_schema(),
     )
-    .await;
-
-    let ctx = test_context();
-    register_memory_listing_table(
-        &ctx,
-        store,
-        "memory:///map_evolution_rejected/",
-        map_value_struct_table_schema(false),
-    )
-    .await;
+    .await?;
 
     let error = ctx
         .sql("SELECT * FROM t ORDER BY row_id")
