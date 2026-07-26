@@ -929,8 +929,7 @@ async fn test_struct_schema_evolution_projection_and_filter() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_map_value_struct_schema_evolution_end_to_end() -> Result<()> {
+fn map_value_struct_evolution_batch() -> Result<RecordBatch> {
     let physical_value_fields: Fields = vec![
         Arc::new(Field::new("amount", DataType::Int32, false)),
         Arc::new(Field::new("ignored", DataType::Utf8, true)),
@@ -968,17 +967,16 @@ async fn test_map_value_struct_schema_evolution_end_to_end() -> Result<()> {
         Some(NullBuffer::from(vec![true, false])),
         false,
     );
-    let batch = RecordBatch::try_from_iter(vec![
+    Ok(RecordBatch::try_from_iter(vec![
         ("row_id", Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef),
         ("attributes", Arc::new(map) as ArrayRef),
-    ])?;
+    ])?)
+}
 
-    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-    write_parquet(batch, Arc::clone(&store), "map_evolution/data.parquet").await;
-
+fn map_value_struct_table_schema(currency_nullable: bool) -> SchemaRef {
     let target_value_fields: Fields = vec![
         Arc::new(Field::new("amount", DataType::Int64, false)),
-        Arc::new(Field::new("currency", DataType::Utf8, true)),
+        Arc::new(Field::new("currency", DataType::Utf8, currency_nullable)),
     ]
     .into();
     let target_entries = Field::new(
@@ -996,18 +994,34 @@ async fn test_map_value_struct_schema_evolution_end_to_end() -> Result<()> {
         ),
         false,
     );
-    let table_schema = Arc::new(Schema::new(vec![
+    Arc::new(Schema::new(vec![
         Field::new("row_id", DataType::Int32, false),
         Field::new(
             "attributes",
             DataType::Map(Arc::new(target_entries), false),
             true,
         ),
-    ]));
+    ]))
+}
+
+#[tokio::test]
+async fn test_map_value_struct_schema_evolution_end_to_end() -> Result<()> {
+    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    write_parquet(
+        map_value_struct_evolution_batch()?,
+        Arc::clone(&store),
+        "map_evolution/data.parquet",
+    )
+    .await;
 
     let ctx = test_context();
-    register_memory_listing_table(&ctx, store, "memory:///map_evolution/", table_schema)
-        .await;
+    register_memory_listing_table(
+        &ctx,
+        store,
+        "memory:///map_evolution/",
+        map_value_struct_table_schema(true),
+    )
+    .await;
 
     let batches = ctx
         .sql("SELECT * FROM t ORDER BY row_id")
@@ -1044,6 +1058,40 @@ async fn test_map_value_struct_schema_evolution_end_to_end() -> Result<()> {
     assert_eq!(amounts.values(), &[10]);
     assert_eq!(values.column_by_name("currency").unwrap().null_count(), 1);
     assert!(values.column_by_name("ignored").is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_map_value_struct_incompatible_schema_evolution_rejected() -> Result<()> {
+    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    write_parquet(
+        map_value_struct_evolution_batch()?,
+        Arc::clone(&store),
+        "map_evolution_rejected/data.parquet",
+    )
+    .await;
+
+    let ctx = test_context();
+    register_memory_listing_table(
+        &ctx,
+        store,
+        "memory:///map_evolution_rejected/",
+        map_value_struct_table_schema(false),
+    )
+    .await;
+
+    let error = ctx
+        .sql("SELECT * FROM t ORDER BY row_id")
+        .await?
+        .collect()
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("target field 'currency' is non-nullable"),
+        "unexpected error: {error}"
+    );
 
     Ok(())
 }
