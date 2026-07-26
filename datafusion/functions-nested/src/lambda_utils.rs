@@ -32,8 +32,6 @@ use datafusion_expr::{
 };
 use std::sync::Arc;
 
-use crate::lambda_utils::SingleListLambdaResult::EarlyReturn;
-
 /// Extracts a `(value, lambda)` pair from a [`ValueOrLambda`] slice.
 pub(crate) fn value_lambda_pair<'a, V: std::fmt::Debug, L: std::fmt::Debug>(
     name: &str,
@@ -151,6 +149,8 @@ impl EvaluatedListLambda {
         self.original_list.len()
     }
 
+    // Used by array_any_match / array_filter once migrated onto this helper.
+    #[allow(dead_code)]
     pub(crate) fn nulls(&self) -> Option<&NullBuffer> {
         self.original_list.nulls()
     }
@@ -159,6 +159,8 @@ impl EvaluatedListLambda {
         (self.row_offsets[i], self.row_offsets[i + 1])
     }
 
+    // Used by array_filter once migrated onto this helper.
+    #[allow(dead_code)]
     pub(crate) fn adjusted_offsets<O: OffsetSizeTrait>(&self) -> OffsetBuffer<O> {
         OffsetBuffer::from_lengths(self.row_offsets.windows(2).map(|w| w[1] - w[0]))
     }
@@ -199,10 +201,9 @@ fn evaluate_single_list_lambda(
     let original_list = original_list.to_array(args.number_rows)?;
 
     if original_list.null_count() == original_list.len() {
-        return Ok(EarlyReturn(ColumnarValue::Array(new_null_array(
-            args.return_type(),
-            original_list.len(),
-        ))));
+        return Ok(SingleListLambdaResult::EarlyReturn(ColumnarValue::Array(
+            new_null_array(args.return_type(), original_list.len()),
+        )));
     }
 
     let flattened_values = list_values(&original_list)?;

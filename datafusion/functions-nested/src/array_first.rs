@@ -18,17 +18,11 @@
 //! [`datafusion_expr::HigherOrderUDF`] definitions for array_first function.
 
 use arrow::{
-    array::{
-        Array, AsArray, BooleanArray, GenericListArray, OffsetSizeTrait, UInt64Array,
-        UInt64Builder, new_null_array,
-    },
-    compute::{take, take_arrays},
+    array::{Array, BooleanArray, UInt64Array, UInt64Builder},
+    compute::take,
     datatypes::{DataType, FieldRef},
 };
-use datafusion_common::{
-    Result, exec_datafusion_err, exec_err, plan_err,
-    utils::{adjust_offsets_for_slice, list_values, list_values_row_number},
-};
+use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
     HigherOrderSignature, HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda,
@@ -155,8 +149,9 @@ impl HigherOrderUDFImpl for ArrayFirst {
 
         let predicate = evaluated.boolean_predicate(self.name())?;
         let indices = match evaluated.original_list.data_type() {
-            DataType::List(_) => first_match_indices(&evaluated, &predicate),
-            DataType::LargeList(_) => first_match_indices(&evaluated, &predicate),
+            DataType::List(_) | DataType::LargeList(_) => {
+                first_match_indices(&evaluated, &predicate)
+            }
             other => return exec_err!("expected list, got {other}"),
         };
 
