@@ -190,7 +190,7 @@ fn update_decimal128<T: ArrowNumericType>(
     acc: &mut TrySumAccumulator<T>,
     array: &PrimitiveArray<T>,
 ) -> Result<()> {
-    let precision = acc.dec_precision.unwrap_or(38);
+    let precision = acc.dec_precision.unwrap_or(DECIMAL128_MAX_PRECISION);
 
     for v in array.iter().flatten() {
         let v_i128 = unsafe { std::mem::transmute_copy::<T::Native, i128>(&v) };

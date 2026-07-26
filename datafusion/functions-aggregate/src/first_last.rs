@@ -555,8 +555,15 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
         for (idx_in_val, group_idx) in group_indices.iter().enumerate() {
             let group_idx = *group_idx;
 
-            let passed_filter = opt_filter.is_none_or(|x| x.value(idx_in_val));
-            let is_set = is_set_arr.is_none_or(|x| x.value(idx_in_val));
+            // A row passes the FILTER clause only when the predicate is
+            // `true`; rows whose predicate evaluates to `null` are excluded.
+            let passed_filter =
+                opt_filter.is_none_or(|x| x.is_valid(idx_in_val) && x.value(idx_in_val));
+            // `is_set_arr` carries the user FILTER clause (including its
+            // nulls) when the state was produced by `convert_to_state`, so
+            // the validity check is required here as well (#22666).
+            let is_set =
+                is_set_arr.is_none_or(|x| x.is_valid(idx_in_val) && x.value(idx_in_val));
 
             if !passed_filter || !is_set {
                 continue;
@@ -671,7 +678,6 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         self.resize_states(total_num_groups);
@@ -690,7 +696,7 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
         let groups = self.get_filtered_extreme_of_each_group(
             &val_and_order_cols[1..],
             group_indices,
-            opt_filter,
+            None,
             vals,
             Some(is_set_arr),
         )?;
@@ -713,11 +719,6 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
             + self.extreme_of_each_group_buf.0.capacity() * size_of::<usize>()
             + self.extreme_of_each_group_buf.1.capacity() / 8
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn convert_to_state(
         &self,
         values: &[ArrayRef],
@@ -1416,6 +1417,7 @@ mod tests {
 
     use arrow::{
         array::{BooleanArray, Int64Array, ListArray, PrimitiveArray, StringArray},
+        buffer::NullBuffer,
         compute::SortOptions,
         datatypes::Schema,
     };
@@ -1587,12 +1589,7 @@ mod tests {
             group_acc.compute_size_of_orderings()
         );
 
-        group_acc.merge_batch(
-            &state,
-            &[0, 1, 2],
-            Some(&BooleanArray::from(vec![true, false, false])),
-            3,
-        )?;
+        group_acc.merge_batch(&state, &[0, 1, 2], 3)?;
 
         assert_eq!(
             group_acc.size_of_orderings,
@@ -1608,8 +1605,11 @@ mod tests {
         let binding = group_acc.evaluate(EmitTo::All)?;
         let eval_result = binding.as_any().downcast_ref::<Int64Array>().unwrap();
 
+        // group 0 keeps merged value=1 (ordering=1).
+        // group 1 keeps merged value=-6 (ordering=-6 < 6, so -6 is "first").
+        // group 2 had no merged value (is_set=false), so update_batch value=6 wins.
         let expect: PrimitiveArray<Int64Type> =
-            Int64Array::from(vec![Some(1), Some(6), Some(6), None]);
+            Int64Array::from(vec![Some(1), Some(-6), Some(6), None]);
 
         assert_eq!(eval_result, &expect);
 
@@ -1680,7 +1680,7 @@ mod tests {
                 group_acc.compute_size_of_orderings()
             );
 
-            group_acc.merge_batch(&s, &Vec::from_iter(0..s[0].len()), None, 100)?;
+            group_acc.merge_batch(&s, &Vec::from_iter(0..s[0].len()), 100)?;
             assert_eq!(
                 group_acc.size_of_orderings,
                 group_acc.compute_size_of_orderings()
@@ -1753,12 +1753,7 @@ mod tests {
         ];
         assert_eq!(state, expected_state);
 
-        group_acc.merge_batch(
-            &state,
-            &[0, 1, 2],
-            Some(&BooleanArray::from(vec![true, false, false])),
-            3,
-        )?;
+        group_acc.merge_batch(&state, &[0, 1, 2], 3)?;
 
         val_with_orderings.clear();
         val_with_orderings.push(Arc::new(Int64Array::from(vec![66, 6])));
@@ -1769,9 +1764,125 @@ mod tests {
         let binding = group_acc.evaluate(EmitTo::All)?;
         let eval_result = binding.as_any().downcast_ref::<Int64Array>().unwrap();
 
+        // group 0: merged value=1 (ordering=1, is_set=true), update not called.
+        // group 1: merged value=-6 (ordering=-6, is_set=true); update ordering=66 > -6
+        //          → LAST_VALUE keeps the higher ordering, so group 1 becomes 66.
+        // group 2: is_set=false after merge; update_batch sets it to 6.
         let expect: PrimitiveArray<Int64Type> =
             Int64Array::from(vec![Some(1), Some(66), Some(6), None]);
 
+        assert_eq!(eval_result, &expect);
+
+        Ok(())
+    }
+
+    /// Rows whose FILTER predicate evaluates to `null` must not pass the
+    /// filter, even when the underlying value bit at the null slot is `true`
+    /// (#22666).
+    #[test]
+    fn test_group_acc_filter_null_predicate() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("c", DataType::Int64, true),
+        ]));
+
+        let sort_keys = [PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+
+        let mut group_acc = FirstLastGroupsAccumulator::try_new(
+            PrimitiveValueState::<Int64Type>::new(DataType::Int64),
+            sort_keys.into(),
+            true,
+            &[DataType::Int64],
+            true,
+        )?;
+
+        let val_with_orderings: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(vec![10, 20, 30])),
+            Arc::new(Int64Array::from(vec![10, 20, 30])),
+        ];
+
+        // Row 0: predicate is null (but its value bit is true, as produced by
+        // kernels such as `b < 1` when the null slot's underlying value is 0)
+        // Row 1: predicate is false
+        // Row 2: predicate is true
+        let filter = BooleanArray::new(
+            BooleanBuffer::from(vec![false, true, false, true]),
+            Some(NullBuffer::from(BooleanBuffer::from(vec![
+                true, false, true, true,
+            ]))),
+        )
+        .slice(1, 3);
+        assert_eq!(filter.offset(), 1);
+
+        group_acc.update_batch(&val_with_orderings, &[0, 0, 1], Some(&filter), 2)?;
+
+        let binding = group_acc.evaluate(EmitTo::All)?;
+        let eval_result = binding.as_any().downcast_ref::<Int64Array>().unwrap();
+
+        // Group 0 has no row with a `true` predicate, so it must stay unset.
+        // Group 1 takes the only row with a `true` predicate.
+        let expect: PrimitiveArray<Int64Type> = Int64Array::from(vec![None, Some(30)]);
+        assert_eq!(eval_result, &expect);
+
+        Ok(())
+    }
+
+    /// `convert_to_state` stores the user FILTER clause (including its nulls)
+    /// in the `is_set` state column, so `merge_batch` must not treat a null
+    /// `is_set` entry with a set value bit as "is set" (#22666).
+    #[test]
+    fn test_group_acc_merge_null_is_set() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("c", DataType::Int64, true),
+        ]));
+
+        let sort_keys = [PhysicalSortExpr {
+            expr: col("c", &schema).unwrap(),
+            options: SortOptions::default(),
+        }];
+
+        let group_acc = FirstLastGroupsAccumulator::try_new(
+            PrimitiveValueState::<Int64Type>::new(DataType::Int64),
+            sort_keys.clone().into(),
+            true,
+            &[DataType::Int64],
+            true,
+        )?;
+
+        let val_with_orderings: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(vec![10, 20])),
+            Arc::new(Int64Array::from(vec![10, 20])),
+        ];
+
+        // Same null-with-set-value-bit filter as above, carried into the state
+        let filter = BooleanArray::new(
+            BooleanBuffer::from(vec![true, true]),
+            Some(NullBuffer::from(BooleanBuffer::from(vec![false, true]))),
+        );
+
+        let state = group_acc.convert_to_state(&val_with_orderings, Some(&filter))?;
+        assert_eq!(state.len(), 3);
+
+        let mut merging_acc = FirstLastGroupsAccumulator::try_new(
+            PrimitiveValueState::<Int64Type>::new(DataType::Int64),
+            sort_keys.into(),
+            true,
+            &[DataType::Int64],
+            true,
+        )?;
+
+        merging_acc.merge_batch(&state, &[0, 0], 1)?;
+
+        let binding = merging_acc.evaluate(EmitTo::All)?;
+        let eval_result = binding.as_any().downcast_ref::<Int64Array>().unwrap();
+
+        // Only the second row is valid and passes; the null-predicate row must
+        // be skipped even though its value bit is true.
+        let expect: PrimitiveArray<Int64Type> = Int64Array::from(vec![Some(20)]);
         assert_eq!(eval_result, &expect);
 
         Ok(())

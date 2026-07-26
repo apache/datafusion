@@ -63,47 +63,33 @@ fn can_evaluate_to_const(args: &[ColumnarValue]) -> bool {
         .all(|arg| matches!(arg, ColumnarValue::Scalar(_)))
 }
 
-fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+fn into_array_and_type(
+    arg: ColumnarValue,
+    rows: usize,
+    expand_scalar: bool,
+) -> Result<(ArrayRef, DataType)> {
+    let data_type = arg.data_type();
+    let array = if expand_scalar {
+        arg.into_array(rows)?
+    } else {
+        get_first_array_ref(&arg)?
+    };
+
+    Ok((array, data_type))
+}
+
+fn make_map_batch(args: Vec<ColumnarValue>, number_rows: usize) -> Result<ColumnarValue> {
+    let can_evaluate_to_const = can_evaluate_to_const(&args);
     let [keys_arg, values_arg] = take_function_args("make_map", args)?;
+    let expand_scalar = !can_evaluate_to_const;
 
-    let can_evaluate_to_const = can_evaluate_to_const(args);
+    let (keys, keys_data_type) =
+        into_array_and_type(keys_arg, number_rows, expand_scalar)?;
+    let (values, _) = into_array_and_type(values_arg, number_rows, expand_scalar)?;
 
-    let keys = get_first_array_ref(keys_arg)?;
-    let key_array = keys.as_ref();
+    validate_map_keys_for_data_type(&keys, &keys_data_type, can_evaluate_to_const)?;
 
-    match keys_arg {
-        ColumnarValue::Array(_) => match key_array.data_type() {
-            DataType::List(_) => keys
-                .as_list::<i32>()
-                .iter()
-                .flatten()
-                .try_for_each(|row| validate_map_keys(row.as_ref()))?,
-            DataType::LargeList(_) => keys
-                .as_list::<i64>()
-                .iter()
-                .flatten()
-                .try_for_each(|row| validate_map_keys(row.as_ref()))?,
-            DataType::FixedSizeList(_, _) => {
-                keys.as_fixed_size_list()
-                    .iter()
-                    .flatten()
-                    .try_for_each(|row| validate_map_keys(row.as_ref()))?
-            }
-            data_type => {
-                return exec_err!(
-                    "Expected list, large_list or fixed_size_list, got {:?}",
-                    data_type
-                );
-            }
-        },
-        ColumnarValue::Scalar(_) => {
-            validate_map_keys(key_array)?;
-        }
-    }
-
-    let values = get_first_array_ref(values_arg)?;
-
-    make_map_batch_internal(&keys, &values, can_evaluate_to_const, &keys_arg.data_type())
+    make_map_batch_internal(&keys, &values, can_evaluate_to_const, &keys_data_type)
 }
 
 fn validate_unique_primitive_keys<T: ArrowPrimitiveType>(array: &dyn Array) -> Result<()>
@@ -224,6 +210,38 @@ fn validate_map_keys(array: &dyn Array) -> Result<()> {
             validate_unique_binary_keys(arr.null_count(), arr.len(), arr.iter().flatten())
         }
         _ => validate_unique_keys_generic(array),
+    }
+}
+
+fn validate_map_keys_for_data_type(
+    keys: &ArrayRef,
+    keys_data_type: &DataType,
+    can_evaluate_to_const: bool,
+) -> Result<()> {
+    if can_evaluate_to_const {
+        return validate_map_keys(keys.as_ref());
+    }
+
+    match keys_data_type {
+        DataType::List(_) => keys
+            .as_list::<i32>()
+            .iter()
+            .flatten()
+            .try_for_each(|row| validate_map_keys(row.as_ref())),
+        DataType::LargeList(_) => keys
+            .as_list::<i64>()
+            .iter()
+            .flatten()
+            .try_for_each(|row| validate_map_keys(row.as_ref())),
+        DataType::FixedSizeList(_, _) => keys
+            .as_fixed_size_list()
+            .iter()
+            .flatten()
+            .try_for_each(|row| validate_map_keys(row.as_ref())),
+        data_type => exec_err!(
+            "Expected list, large_list or fixed_size_list, got {:?}",
+            data_type
+        ),
     }
 }
 
@@ -399,7 +417,7 @@ impl ScalarUDFImpl for MapFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_map_batch(&args.args)
+        make_map_batch(args.args, args.number_rows)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -716,10 +734,13 @@ mod tests {
         let values_array = Arc::new(value_builder.finish());
 
         // Call make_map_batch - should succeed
-        let result = make_map_batch(&[
-            ColumnarValue::Array(keys_array),
-            ColumnarValue::Array(values_array),
-        ]);
+        let result = make_map_batch(
+            vec![
+                ColumnarValue::Array(keys_array),
+                ColumnarValue::Array(values_array),
+            ],
+            3,
+        );
 
         assert!(result.is_ok(), "Should handle NULL maps correctly");
 
@@ -764,10 +785,13 @@ mod tests {
         let values_array = Arc::new(value_builder.finish());
 
         // Call make_map_batch - should fail
-        let result = make_map_batch(&[
-            ColumnarValue::Array(keys_array),
-            ColumnarValue::Array(values_array),
-        ]);
+        let result = make_map_batch(
+            vec![
+                ColumnarValue::Array(keys_array),
+                ColumnarValue::Array(values_array),
+            ],
+            1,
+        );
 
         assert!(result.is_err(), "Should reject null keys within maps");
 
@@ -812,10 +836,13 @@ mod tests {
         let values_array = Arc::new(value_builder.finish());
 
         // Call make_map_batch - should succeed
-        let result = make_map_batch(&[
-            ColumnarValue::Array(keys_array),
-            ColumnarValue::Array(values_array),
-        ]);
+        let result = make_map_batch(
+            vec![
+                ColumnarValue::Array(keys_array),
+                ColumnarValue::Array(values_array),
+            ],
+            2,
+        );
 
         assert!(
             result.is_ok(),
@@ -882,10 +909,13 @@ mod tests {
         let values_array = Arc::new(value_builder.finish());
 
         // Call make_map_batch - should succeed
-        let result = make_map_batch(&[
-            ColumnarValue::Array(keys_array),
-            ColumnarValue::Array(values_array),
-        ]);
+        let result = make_map_batch(
+            vec![
+                ColumnarValue::Array(keys_array),
+                ColumnarValue::Array(values_array),
+            ],
+            3,
+        );
 
         assert!(
             result.is_ok(),

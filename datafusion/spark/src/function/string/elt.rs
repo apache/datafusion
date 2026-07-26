@@ -69,9 +69,9 @@ impl ScalarUDFImpl for SparkElt {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let length = arg_types.len();
         if length < 2 {
-            plan_datafusion_err!(
+            return Err(plan_datafusion_err!(
                 "ELT function expects at least 2 arguments: index, value1"
-            );
+            ));
         }
 
         let idx_dt: &DataType = &arg_types[0];

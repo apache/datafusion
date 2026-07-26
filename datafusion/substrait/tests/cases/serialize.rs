@@ -28,9 +28,16 @@ mod tests {
 
     use insta::assert_snapshot;
     use std::fs;
+    use substrait::proto::expression::field_reference::{ReferenceType, RootType};
+    use substrait::proto::expression::reference_segment;
+    use substrait::proto::expression::{ReferenceSegment, RexType};
+    use substrait::proto::function_argument::ArgType;
     use substrait::proto::plan_rel::RelType;
     use substrait::proto::rel_common::{Emit, EmitKind};
-    use substrait::proto::{RelCommon, rel};
+    use substrait::proto::r#type::{I64, Kind as TypeKind, List, Nullability, Struct};
+    use substrait::proto::{Expression, RelCommon, Type, rel};
+
+    use crate::cases::roundtrip_logical_plan::higher_order_function_ctx;
 
     #[tokio::test]
     async fn serialize_to_file() -> Result<()> {
@@ -196,6 +203,101 @@ mod tests {
         panic!("plan did not match expected structure")
     }
 
+    #[tokio::test]
+    async fn higher_order_function() -> Result<()> {
+        let ctx = higher_order_function_ctx().await?;
+        let df = ctx
+            .sql(
+                "SELECT array_transform2(
+                [[data3.p1]],
+                (v, i) -> array_concat(
+                    -- when entering this expression, inner v is pushed into the producer and shadows outer v, but after exiting this,
+                    -- it should be removed and unshadow the outer v, so that it can be used in the next expression
+                    array_transform2(v, (v, j) -> v * i * j),
+                    array_transform2(v, (v, j) -> v * i * j)
+                )
+            ) from data3"
+            )
+            .await?;
+        let datafusion_plan = df.into_optimized_plan()?;
+        let plan = to_substrait_plan(&datafusion_plan, &ctx.state())?
+            .as_ref()
+            .clone();
+
+        let relation = plan.relations.first().unwrap().rel_type.as_ref();
+        let root_rel = match relation {
+            Some(RelType::Root(root)) => root.input.as_ref().unwrap(),
+            _ => panic!("expected Root"),
+        };
+
+        let Some(rel::RelType::Project(p)) = root_rel.rel_type.as_ref() else {
+            panic!("expected Project at top of plan")
+        };
+
+        let mut params = vec![];
+        let mut lambda_refs = vec![];
+
+        collect_lambda_ref(&p.expressions[0], &mut params, &mut lambda_refs);
+
+        let nullable_i64 = Type {
+            kind: Some(TypeKind::I64(I64 {
+                type_variation_reference: 0,
+                nullability: Nullability::Nullable as i32,
+            })),
+        };
+
+        let inner_lambda_struct = Struct {
+            // v, j
+            types: vec![nullable_i64.clone(); 2],
+            type_variation_reference: 0,
+            nullability: Nullability::Required as i32,
+        };
+
+        assert_eq!(
+            params,
+            vec![
+                Struct {
+                    types: vec![
+                        // v
+                        Type {
+                            kind: Some(TypeKind::List(Box::new(List {
+                                r#type: Some(Box::new(nullable_i64.clone())),
+                                type_variation_reference: 0,
+                                nullability: Nullability::Nullable as i32
+                            })))
+                        },
+                        // i
+                        nullable_i64,
+                    ],
+                    type_variation_reference: 0,
+                    nullability: Nullability::Required as i32,
+                },
+                inner_lambda_struct.clone(),
+                inner_lambda_struct,
+            ]
+        );
+
+        assert_eq!(
+            lambda_refs,
+            vec![
+                // first inner array_transform2 argument: outer v
+                (0, 0),
+                // first inner lambda body: v * i * j
+                (0, 0),
+                (1, 1),
+                (0, 1),
+                // second inner array_transform2 argument: outer v
+                (0, 0),
+                // second inner lambda body: v * i * j
+                (0, 0),
+                (1, 1),
+                (0, 1),
+            ]
+        );
+
+        Ok(())
+    }
+
     fn assert_emit(rel_common: Option<&RelCommon>, output_mapping: Vec<i32>) {
         assert_eq!(
             rel_common.unwrap().emit_kind.clone(),
@@ -210,5 +312,55 @@ mod tests {
         ctx.register_csv("data2", "tests/testdata/data.csv", CsvReadOptions::new())
             .await?;
         Ok(ctx)
+    }
+
+    // Recursively walks a expression tree depth-first, collecting in visit order:
+    // - `params`: the parameter struct of each Lambda encountered
+    // - `lambda_refs`: every field reference whose root is a LambdaParameterReference,
+    //   recorded as (steps_out, field_index) so tests can assert which enclosing
+    //   lambda each reference resolves to and which parameter within it.
+    fn collect_lambda_ref(
+        expr: &Expression,
+        params: &mut Vec<Struct>,
+        lambda_refs: &mut Vec<(u32, i32)>,
+    ) {
+        if let Some(rex_type) = &expr.rex_type {
+            match rex_type {
+                RexType::Selection(field_reference) => {
+                    if let (
+                        Some(ReferenceType::DirectReference(ReferenceSegment {
+                            reference_type:
+                                Some(reference_segment::ReferenceType::StructField(
+                                    struct_field,
+                                )),
+                        })),
+                        Some(RootType::LambdaParameterReference(lambda_param_ref)),
+                    ) = (&field_reference.reference_type, &field_reference.root_type)
+                    {
+                        lambda_refs.push((lambda_param_ref.steps_out, struct_field.field))
+                    }
+                }
+                RexType::ScalarFunction(scalar_function) => {
+                    for arg in &scalar_function.arguments {
+                        match &arg.arg_type {
+                            Some(ArgType::Value(value)) => {
+                                collect_lambda_ref(value, params, lambda_refs)
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+                }
+                RexType::Lambda(lambda) => {
+                    if let Some(parameters) = &lambda.parameters {
+                        params.push(parameters.clone());
+                    }
+                    if let Some(body) = &lambda.body {
+                        collect_lambda_ref(body, params, lambda_refs);
+                    }
+                }
+                RexType::Literal(_literal) => {}
+                _ => unreachable!(),
+            }
+        }
     }
 }

@@ -27,6 +27,8 @@ use datafusion_expr::{
     AggregateUDF, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF,
 };
 use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
+
+use crate::CatalogProviderList;
 use parking_lot::{Mutex, RwLock};
 use std::any::Any;
 use std::collections::HashMap;
@@ -79,6 +81,9 @@ pub trait Session: Send + Sync {
     /// Return the [`SessionConfig`]
     fn config(&self) -> &SessionConfig;
 
+    /// Return the catalogs registered with this session.
+    fn catalog_list(&self) -> Arc<dyn CatalogProviderList>;
+
     /// return the [`ConfigOptions`]
     fn config_options(&self) -> &ConfigOptions {
         self.config().options()
@@ -114,7 +119,7 @@ pub trait Session: Send + Sync {
     fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>>;
 
     /// Return reference to higher_order_functions
-    fn higher_order_functions(&self) -> &HashMap<String, Arc<dyn HigherOrderUDF>>;
+    fn higher_order_functions(&self) -> &HashMap<String, Arc<HigherOrderUDF>>;
 
     /// Return reference to aggregate_functions
     fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>>;

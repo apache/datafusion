@@ -156,4 +156,52 @@ select array_except(arrow_cast([1, 2, 3, 4], 'FixedSizeList(4, Int64)'), arrow_c
 [1, 2]
 
 
+# Negative zero (-0.0) and positive zero (+0.0) compare equal under
+# IEEE 754, but their bit patterns differ. array_except must treat
+# +0.0 and -0.0 as the same element when subtracting. PostgreSQL /
+# IEEE 754 expected output below.
+
+# -0.0 in rhs removes +0.0 in lhs.
+query ?
+select array_except([0.0], [-0.0]);
+----
+[]
+
+# Reverse direction.
+query ?
+select array_except([-0.0], [0.0]);
+----
+[]
+
+# -0.0 in rhs also removes the +0.0 element from the lhs.
+query ?
+select array_except([0.0, -0.0], [-0.0]);
+----
+[]
+
+# +0.0 in rhs also removes the -0.0 element from the lhs.
+query ?
+select array_except([0.0, -0.0], [0.0]);
+----
+[]
+
+# More general case with extra unmatched element.
+query ?
+select array_except([0.0, -0.0, 1.0], [-0.0]);
+----
+[1.0]
+
+# Float32 list.
+query ?
+select array_except(arrow_cast([0.0, -0.0], 'List(Float32)'), arrow_cast([0.0], 'List(Float32)'));
+----
+[]
+
+# LargeList(Float64).
+query ?
+select array_except(arrow_cast([0.0, -0.0], 'LargeList(Float64)'), arrow_cast([-0.0], 'LargeList(Float64)'));
+----
+[]
+
+
 include ./cleanup.slt.part

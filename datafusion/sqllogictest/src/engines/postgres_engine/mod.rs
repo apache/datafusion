@@ -75,8 +75,7 @@ impl Postgres {
     ///
     /// See https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html#url for format
     pub async fn connect(relative_path: PathBuf, pb: ProgressBar) -> Result<Self> {
-        let uri = std::env::var("PG_URI")
-            .map_or_else(|_| PG_URI.to_string(), std::convert::identity);
+        let uri = std::env::var("PG_URI").unwrap_or_else(|_| PG_URI.to_string());
 
         info!("Using postgres connection string: {uri}");
 

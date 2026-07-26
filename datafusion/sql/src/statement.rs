@@ -31,6 +31,7 @@ use crate::utils::normalize_ident;
 
 use arrow::datatypes::{Field, FieldRef, Fields};
 use datafusion_common::error::_plan_err;
+use datafusion_common::format::ExplainStatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     Column, Constraint, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result,
@@ -227,12 +228,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
             DFStatement::CopyTo(s) => self.copy_to_plan(s),
-            DFStatement::Explain(ExplainStatement {
-                verbose,
-                analyze,
-                format,
-                statement,
-            }) => self.explain_to_plan(verbose, analyze, format, *statement),
+            DFStatement::Explain(ExplainStatement { options, statement }) => {
+                self.explain_to_plan(options, *statement)
+            }
             DFStatement::Reset(statement) => self.reset_statement_to_plan(statement),
         }
     }
@@ -280,12 +278,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 statement,
                 analyze,
                 format,
-                describe_alias: _,
                 ..
             } => {
-                let format = format.map(|format| format.to_string());
+                let format = format
+                    .map(|format| ExplainFormat::from_str(&format.to_string()))
+                    .transpose()?;
                 let statement = DFStatement::Statement(statement);
-                self.explain_to_plan(verbose, analyze, format, statement)
+                let options = ExplainStatementOptions {
+                    analyze,
+                    verbose,
+                    format,
+                    analyze_level: None,
+                    analyze_categories: None,
+                    show_statistics: None,
+                };
+                self.explain_to_plan(options, statement)
             }
             Statement::Query(query) => self.query_to_plan(*query, planner_context),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
@@ -886,6 +893,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         "Execute statement with DEFAULT is not supported"
                     );
                 }
+                let name = name.ok_or_else(|| {
+                    plan_datafusion_err!("EXECUTE statement requires a name")
+                })?;
+
                 let empty_schema = DFSchema::empty();
                 let parameters = parameters
                     .into_iter()
@@ -893,7 +904,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .collect::<Result<Vec<Expr>>>()?;
 
                 Ok(LogicalPlan::Statement(PlanStatement::Execute(Execute {
-                    name: object_name_to_string(&name.unwrap()),
+                    name: object_name_to_string(&name),
                     parameters,
                 })))
             }
@@ -1456,7 +1467,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     function_body,
                 };
 
-                let statement = DdlStatement::CreateFunction(CreateFunction {
+                let statement = DdlStatement::CreateFunction(Box::new(CreateFunction {
                     or_replace,
                     temporary,
                     name,
@@ -1464,7 +1475,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     args,
                     params,
                     schema: DFSchemaRef::new(DFSchema::empty()),
-                });
+                }));
 
                 Ok(LogicalPlan::Ddl(statement))
             }
@@ -1793,7 +1804,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             name,
             columns,
             file_type,
-            location,
+            locations,
             table_partition_cols,
             if_not_exists,
             temporary,
@@ -1842,19 +1853,29 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let name = self.object_name_to_table_reference(name)?;
         let constraints =
             self.new_constraint_from_table_constraints(&all_constraints, &df_schema)?;
+
+        let Some(location) = locations.first().cloned() else {
+            return plan_err!("CREATE EXTERNAL TABLE requires at least one location");
+        };
+
+        // Keep the existing single-location builder API: seed it with the first
+        // location, then replace it with the complete list.
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-            PlanCreateExternalTable::builder(name, location, file_type, df_schema)
-                .with_partition_cols(table_partition_cols)
-                .with_if_not_exists(if_not_exists)
-                .with_or_replace(or_replace)
-                .with_temporary(temporary)
-                .with_definition(definition)
-                .with_order_exprs(ordered_exprs)
-                .with_unbounded(unbounded)
-                .with_options(options_map)
-                .with_constraints(constraints)
-                .with_column_defaults(column_defaults)
-                .build(),
+            Box::new(
+                PlanCreateExternalTable::builder(name, location, file_type, df_schema)
+                    .with_locations(locations)
+                    .with_partition_cols(table_partition_cols)
+                    .with_if_not_exists(if_not_exists)
+                    .with_or_replace(or_replace)
+                    .with_temporary(temporary)
+                    .with_definition(definition)
+                    .with_order_exprs(ordered_exprs)
+                    .with_unbounded(unbounded)
+                    .with_options(options_map)
+                    .with_constraints(constraints)
+                    .with_column_defaults(column_defaults)
+                    .build(),
+            ),
         )))
     }
 
@@ -2000,9 +2021,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// datafusion `EXPLAIN` statement.
     fn explain_to_plan(
         &self,
-        verbose: bool,
-        analyze: bool,
-        format: Option<String>,
+        opts: ExplainStatementOptions,
         statement: DFStatement,
     ) -> Result<LogicalPlan> {
         let plan = self.statement_to_plan(statement)?;
@@ -2014,33 +2033,76 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let schema = LogicalPlan::explain_schema();
         let schema = schema.to_dfschema_ref()?;
 
+        let ExplainStatementOptions {
+            analyze,
+            verbose,
+            format,
+            analyze_level,
+            analyze_categories,
+            show_statistics,
+        } = opts;
+
+        // Mutual exclusivity checks
         if verbose && format.is_some() {
             return plan_err!("EXPLAIN VERBOSE with FORMAT is not supported");
         }
+        if !analyze {
+            if analyze_level.is_some() {
+                return plan_err!("EXPLAIN option LEVEL requires ANALYZE");
+            }
+            if analyze_categories.is_some() {
+                return plan_err!("EXPLAIN option METRICS requires ANALYZE");
+            }
+        }
+        if analyze && show_statistics.is_some() {
+            return plan_err!("EXPLAIN option COSTS cannot be combined with ANALYZE");
+        }
+
+        // Resolve the requested output format.
+        //
+        // Verbose mode only supports indent format, and for EXPLAIN ANALYZE
+        // only `Indent` and `PostgresJSON` are supported today — `Tree` and
+        // `Graphviz` require additional work to render with live metrics.
+        let options = self.context_provider.options();
+        let format = if verbose {
+            ExplainFormat::Indent
+        } else if let Some(format) = format {
+            format
+        } else if analyze {
+            ExplainFormat::Indent
+        } else {
+            options.explain.format.clone()
+        };
 
         if analyze {
-            if format.is_some() {
-                return plan_err!("EXPLAIN ANALYZE with FORMAT is not supported");
+            match &format {
+                ExplainFormat::Indent => {}
+                ExplainFormat::PostgresJSON => {
+                    // The pgjson renderer does not emit statistics yet, so
+                    // reject the combination rather than silently ignoring it.
+                    if options.explain.show_statistics {
+                        return plan_err!(
+                            "EXPLAIN ANALYZE with FORMAT pgjson does not support show_statistics"
+                        );
+                    }
+                }
+                ExplainFormat::Tree | ExplainFormat::Graphviz => {
+                    return plan_err!(
+                        "EXPLAIN ANALYZE with FORMAT {format} is not supported"
+                    );
+                }
             }
             Ok(LogicalPlan::Analyze(Analyze {
                 verbose,
+                format,
                 input: plan,
                 schema,
+                analyze_level,
+                analyze_categories,
             }))
         } else {
             let stringified_plans =
                 vec![plan.to_stringified(PlanType::InitialLogicalPlan)];
-
-            // default to configuration value
-            // verbose mode only supports indent format
-            let options = self.context_provider.options();
-            let format = if verbose {
-                ExplainFormat::Indent
-            } else if let Some(format) = format {
-                ExplainFormat::from_str(&format)?
-            } else {
-                options.explain.format.clone()
-            };
 
             Ok(LogicalPlan::Explain(Explain {
                 verbose,
@@ -2049,6 +2111,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 stringified_plans,
                 schema,
                 logical_optimization_succeeded: false,
+                show_statistics,
             }))
         }
     }
@@ -2431,17 +2494,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         span: _,
                     }) = val
                     {
-                        let name =
-                            name.replace('$', "").parse::<usize>().map_err(|_| {
-                                plan_datafusion_err!("Can't parse placeholder: {name}")
-                            })? - 1;
+                        let index = match name[1..].parse::<usize>().map_err(|_| {
+                            plan_datafusion_err!("Can't parse placeholder: {name}")
+                        })? {
+                            0 => {
+                                return plan_err!(
+                                    "Invalid placeholder, zero is not a valid index: {name}"
+                                );
+                            }
+                            index => index - 1,
+                        };
                         let field = fields.get(idx).ok_or_else(|| {
                             plan_datafusion_err!(
                                 "Placeholder ${} refers to a non existent column",
                                 idx + 1
                             )
                         })?;
-                        let _ = prepare_param_data_types.insert(name, Arc::clone(field));
+                        let _ = prepare_param_data_types.insert(index, Arc::clone(field));
                     }
                 }
             }
@@ -2570,17 +2639,35 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             "".to_string()
         };
 
+        // Scalar / aggregate / window functions are resolved by joining
+        // parameters (IN rows aggregated per OUT row) with routines.
+        // Table functions (UDTFs) don't have parameter rows, so they are
+        // sourced directly from routines via a UNION branch. Restricting
+        // the JOIN to non-TABLE routines prevents same-named scalar+UDTF
+        // pairs (e.g. `generate_series`) from cross-joining.
+        let where_clause = where_clause.replace("p.function_name", "sc.function_name");
         let query = format!(
             r#"
 SELECT DISTINCT
-    p.*,
-    r.function_type function_type,
-    r.description description,
-    r.syntax_example syntax_example
-FROM
-    (
+    sc.function_name,
+    sc.return_type,
+    sc.parameters,
+    sc.parameter_types,
+    sc.function_type,
+    sc.description,
+    sc.syntax_example
+FROM (
+    SELECT
+        p.function_name,
+        p.return_type,
+        p.parameters,
+        p.parameter_types,
+        r.function_type function_type,
+        r.description description,
+        r.syntax_example syntax_example
+    FROM (
         SELECT
-            i.specific_name function_name,
+            o.specific_name function_name,
             o.data_type return_type,
             array_agg(i.parameter_name ORDER BY i.ordinal_position ASC) parameters,
             array_agg(i.data_type ORDER BY i.ordinal_position ASC) parameter_types
@@ -2596,9 +2683,9 @@ FROM
                  FROM
                      information_schema.parameters
                  WHERE
-                     parameter_mode = 'IN'
-             ) i
-                 JOIN
+                     parameter_mode = 'OUT'
+             ) o
+                 LEFT JOIN
              (
                  SELECT
                      specific_catalog,
@@ -2611,16 +2698,32 @@ FROM
                  FROM
                      information_schema.parameters
                  WHERE
-                     parameter_mode = 'OUT'
-             ) o
+                     parameter_mode = 'IN'
+             ) i
              ON i.specific_catalog = o.specific_catalog
                  AND i.specific_schema = o.specific_schema
                  AND i.specific_name = o.specific_name
                  AND i.rid = o.rid
-        GROUP BY 1, 2, i.rid
+        GROUP BY 1, 2, o.rid
     ) as p
-JOIN information_schema.routines r
-ON p.function_name = r.routine_name
+    JOIN information_schema.routines r
+      ON p.function_name = r.routine_name
+     AND r.function_type <> 'TABLE'
+
+    UNION ALL
+
+    SELECT
+        routine_name function_name,
+        data_type return_type,
+        array_agg(NULL) FILTER (WHERE FALSE) parameters,
+        array_agg(NULL) FILTER (WHERE FALSE) parameter_types,
+        function_type,
+        description,
+        syntax_example
+    FROM information_schema.routines
+    WHERE function_type = 'TABLE'
+    GROUP BY routine_name, data_type, function_type, description, syntax_example
+) sc
 {where_clause}
             "#
         );

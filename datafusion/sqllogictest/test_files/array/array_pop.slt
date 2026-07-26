@@ -22,10 +22,8 @@ include ./init_data.slt.part
 # array_pop_back scalar function with null
 #TODO: https://github.com/apache/datafusion/issues/7142
 # follow clickhouse and duckdb
-#query ?
-#select array_pop_back(null);
-#----
-#NULL
+query error array_pop_back does not support type: Null
+select array_pop_back(null);
 
 # array_pop_back scalar function #1
 query ??
@@ -201,10 +199,8 @@ NULL
 #TODO:https://github.com/apache/datafusion/issues/7142
 # array_pop_front scalar function with null
 # follow clickhouse and duckdb
-#query ?
-#select array_pop_front(null);
-#----
-#NULL
+query error array_pop_front does not support type: Null
+select array_pop_front(null);
 
 # array_pop_front scalar function #1
 query ??

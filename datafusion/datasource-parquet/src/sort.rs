@@ -17,7 +17,11 @@
 
 //! Sort-related utilities for Parquet scanning
 
-use datafusion_common::Result;
+use arrow::datatypes::Schema;
+use datafusion_common::{Result, ScalarValue};
+use datafusion_datasource::PartitionedFile;
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::file::metadata::ParquetMetaData;
 use std::collections::HashMap;
@@ -116,6 +120,89 @@ pub fn reverse_row_selection(
     }
 
     Ok(RowSelection::from(reversed_selectors))
+}
+
+/// Reorder a file list so the most "promising" files are read first,
+/// matching `PreparedAccessPlan::reorder_by_statistics` at the
+/// row-group level: key off the file's `min(col)`, and let the sort
+/// direction follow the request (ASC by `min` for ASC requests, DESC
+/// by `min` for DESC requests).
+///
+/// Keeping both layers consistent matters because they share the same
+/// convergence story for TopK's dynamic filter: file `i`'s `min` is a
+/// lower bound on every row group inside it, so the order chosen here
+/// is a natural prefix of the order `reorder_by_statistics` will
+/// produce within each file.
+///
+/// No-op when:
+/// * `sort_order` is `None` (sort pushdown didn't fire);
+/// * the leading sort expression is not a plain `Column`; or
+/// * the column is not in `table_schema`.
+///
+/// Files missing statistics sort to the end so present-stats files
+/// run first.
+pub(crate) fn reorder_files_by_min_statistics(
+    mut files: Vec<PartitionedFile>,
+    sort_order: Option<&LexOrdering>,
+    reverse_row_groups: bool,
+    table_schema: &Schema,
+) -> Vec<PartitionedFile> {
+    let Some((col_name, descending)) =
+        extract_topk_sort_info(sort_order, reverse_row_groups)
+    else {
+        return files;
+    };
+
+    let Ok(col_idx) = table_schema.index_of(&col_name) else {
+        return files;
+    };
+
+    files.sort_by(|a, b| {
+        let key_a = file_min_value(a, col_idx);
+        let key_b = file_min_value(b, col_idx);
+        match (key_a, key_b) {
+            (Some(va), Some(vb)) => {
+                let cmp = va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal);
+                if descending { cmp.reverse() } else { cmp }
+            }
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+    });
+
+    log::debug!(
+        "Reordered {} files by min({}) {} for TopK optimization",
+        files.len(),
+        col_name,
+        if descending { "DESC" } else { "ASC" }
+    );
+
+    files
+}
+
+/// Extract the `(column name, descending)` tuple used by file-level
+/// reordering. Returns `None` when the sort order isn't set or the
+/// leading sort expression isn't a plain `Column`.
+fn extract_topk_sort_info(
+    sort_order: Option<&LexOrdering>,
+    reverse_row_groups: bool,
+) -> Option<(String, bool)> {
+    let sort_order = sort_order?;
+    let first = sort_order.first();
+    let col = first.expr.downcast_ref::<Column>()?;
+    Some((col.name().to_string(), reverse_row_groups))
+}
+
+/// File's per-column `min` for the reorder key.
+fn file_min_value(file: &PartitionedFile, col_idx: usize) -> Option<ScalarValue> {
+    let stats = file.statistics.as_ref()?;
+    stats
+        .column_statistics
+        .get(col_idx)?
+        .min_value
+        .get_value()
+        .cloned()
 }
 
 #[cfg(test)]

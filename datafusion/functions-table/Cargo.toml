@@ -46,6 +46,7 @@ async-trait = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-physical-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 parking_lot = { workspace = true }
 

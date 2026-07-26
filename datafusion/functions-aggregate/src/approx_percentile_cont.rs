@@ -301,6 +301,13 @@ impl AggregateUDFImpl for ApproxPercentileCont {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        // Defensive: the public signature already restricts callers to 2 or 3
+        // arguments. This guards against aggregate planning accidentally
+        // feeding state-field types (e.g. from `PartialReduce`) back into
+        // `return_type`, which would otherwise silently choose the wrong type.
+        if arg_types.len() > 3 {
+            return plan_err!("approx_percentile_cont requires at most 3 arguments");
+        }
         if !arg_types[0].is_numeric() {
             return plan_err!("approx_percentile_cont requires numeric input types");
         }

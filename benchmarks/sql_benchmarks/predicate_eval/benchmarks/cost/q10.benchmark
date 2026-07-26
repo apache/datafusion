@@ -1,0 +1,7 @@
+subgroup cost
+
+template sql_benchmarks/predicate_eval/predicate_eval.benchmark.template
+SUBGROUP=cost
+QPAD=10
+DATASET=mixed
+NAME=cost_q10_expensive_first

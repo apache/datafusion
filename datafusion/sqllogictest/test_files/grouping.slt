@@ -232,6 +232,12 @@ SELECT SUM(v1) FROM generate_series(10) AS t1(v1) WHERE false GROUP BY GROUPING 
 ----
 NULL
 
+# grouping_sets_empty_input_avg: AVG returns NULL for the empty group
+query R
+SELECT AVG(v1) FROM generate_series(10) AS t1(v1) WHERE false GROUP BY GROUPING SETS(())
+----
+NULL
+
 # grouping_sets_empty_input_count: COUNT returns 0 for the empty group, not a missing row
 query I
 SELECT COUNT(*) FROM generate_series(10) AS t1(v1) WHERE false GROUP BY GROUPING SETS(())

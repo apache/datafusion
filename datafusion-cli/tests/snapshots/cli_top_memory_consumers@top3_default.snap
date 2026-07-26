@@ -6,7 +6,7 @@ info:
     - "--memory-limit"
     - 10M
     - "--command"
-    - "select * from generate_series(1,500000) as t1(v1) order by v1;"
+    - "select * from generate_series(1,500000) as t1(v1) order by v1 desc;"
 ---
 success: false
 exit_code: 1

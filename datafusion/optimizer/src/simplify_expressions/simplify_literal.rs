@@ -62,7 +62,7 @@ where
         .simplify(expr.clone())
         .map_err(|err| plan_datafusion_err!("Cannot simplify {expr:?}: {err}"))?;
     let coerced_expr: Expr = simplifier.coerce(simplified_expr, schema.as_ref())?;
-    log::debug!("Coerced expression: {:?}", &coerced_expr);
+    log::debug!("Coerced expression: {coerced_expr:?}");
 
     match coerced_expr {
         Expr::Literal(scalar_value, _) => {

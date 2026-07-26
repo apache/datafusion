@@ -36,6 +36,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{
     CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider, Session,
 };
+use datafusion::common::config::Dialect;
 use datafusion::common::{DataFusionError, Result, not_impl_err};
 use datafusion::functions::math::abs;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
@@ -53,6 +54,8 @@ use datafusion::{
 use datafusion_spark::SessionStateBuilderSpark;
 
 use crate::is_spark_path;
+use range_partitioning::register_range_partitioned_table;
+
 use async_trait::async_trait;
 use datafusion::common::cast::as_float64_array;
 use datafusion::execution::SessionStateBuilder;
@@ -60,6 +63,8 @@ use datafusion::execution::runtime_env::RuntimeEnv;
 use log::info;
 use sqlparser::ast;
 use tempfile::TempDir;
+
+mod range_partitioning;
 
 /// Context for running tests
 pub struct TestContext {
@@ -112,6 +117,9 @@ impl TestContext {
 
         if is_spark_path(relative_path) {
             state_builder = state_builder.with_spark_features();
+            if let Some(config) = state_builder.config() {
+                config.options_mut().sql_parser.dialect = Dialect::Spark;
+            }
         }
 
         if matches!(
@@ -134,15 +142,15 @@ impl TestContext {
             }
             "information_schema_table_types.slt" => {
                 info!("Registering local temporary table");
-                register_temp_table(test_ctx.session_ctx()).await;
+                register_temp_table(test_ctx.session_ctx());
             }
             "information_schema_columns.slt" => {
                 info!("Registering table with many types");
-                register_table_with_many_types(test_ctx.session_ctx()).await;
+                register_table_with_many_types(test_ctx.session_ctx());
             }
             "map.slt" => {
                 info!("Registering table with map");
-                register_table_with_map(test_ctx.session_ctx()).await;
+                register_table_with_map(test_ctx.session_ctx());
             }
             "avro.slt" => {
                 #[cfg(feature = "avro")]
@@ -165,15 +173,23 @@ impl TestContext {
                 test_ctx.ctx.register_udf(example_udf);
                 register_partition_table(&mut test_ctx).await;
                 info!("Registering table with many types");
-                register_table_with_many_types(test_ctx.session_ctx()).await;
+                register_table_with_many_types(test_ctx.session_ctx());
+            }
+            "range_partitioning.slt" => {
+                info!("Registering range partitioned table");
+                register_range_partitioned_table(test_ctx.session_ctx());
             }
             "metadata.slt" | "arrow_field.slt" => {
                 info!("Registering metadata table tables");
-                register_metadata_tables(test_ctx.session_ctx()).await;
+                register_metadata_tables(test_ctx.session_ctx());
             }
             "union_function.slt" => {
                 info!("Registering table with union column");
                 register_union_table(test_ctx.session_ctx())
+            }
+            "aggregate.slt" => {
+                info!("Registering table with union column for approx_distinct");
+                register_approx_distinct_union_table(test_ctx.session_ctx())
             }
             "dictionary_struct.slt" => {
                 info!("Registering table with dictionary-encoded struct column");
@@ -354,7 +370,7 @@ pub async fn register_partition_table(test_ctx: &mut TestContext) {
 }
 
 // registers a LOCAL TEMPORARY table.
-pub async fn register_temp_table(ctx: &SessionContext) {
+pub fn register_temp_table(ctx: &SessionContext) {
     #[derive(Debug)]
     struct TestTable(TableType);
 
@@ -386,7 +402,7 @@ pub async fn register_temp_table(ctx: &SessionContext) {
     .unwrap();
 }
 
-pub async fn register_table_with_many_types(ctx: &SessionContext) {
+pub fn register_table_with_many_types(ctx: &SessionContext) {
     let catalog = MemoryCatalogProvider::new();
     let schema = MemorySchemaProvider::new();
 
@@ -402,7 +418,7 @@ pub async fn register_table_with_many_types(ctx: &SessionContext) {
     .unwrap();
 }
 
-pub async fn register_table_with_map(ctx: &SessionContext) {
+pub fn register_table_with_map(ctx: &SessionContext) {
     let key = Field::new("key", DataType::Int64, false);
     let value = Field::new("value", DataType::Int64, true);
     let map_field =
@@ -452,7 +468,7 @@ fn table_with_many_types() -> Arc<dyn TableProvider> {
 }
 
 /// Registers a table_with_metadata that contains both field level and Table level metadata
-pub async fn register_metadata_tables(ctx: &SessionContext) {
+pub fn register_metadata_tables(ctx: &SessionContext) {
     let id = Field::new("id", DataType::Int32, true).with_metadata(HashMap::from([(
         String::from("metadata_key"),
         String::from("the id field"),
@@ -579,6 +595,43 @@ fn register_union_table(ctx: &SessionContext) {
         RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(union)]).unwrap();
 
     ctx.register_batch("union_table", batch).unwrap();
+}
+
+fn register_approx_distinct_union_table(ctx: &SessionContext) {
+    let union = UnionArray::try_new(
+        UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("i", DataType::Int32, true),
+                Field::new("s", DataType::Utf8, true),
+            ],
+        )
+        .unwrap(),
+        ScalarBuffer::from(vec![0_i8, 0, 1, 1, 0, 0, 1, 0]),
+        Some(ScalarBuffer::from(vec![0, 1, 0, 1, 2, 3, 2, 4])),
+        vec![
+            Arc::new(Int32Array::from(vec![
+                Some(1),
+                Some(1),
+                None,
+                None,
+                Some(5),
+            ])),
+            Arc::new(StringArray::from(vec![Some("x"), Some("y"), None])),
+        ],
+    )
+    .unwrap();
+
+    let schema = Schema::new(vec![
+        Field::new("g", DataType::Int32, false),
+        Field::new("u", union.data_type().clone(), false),
+    ]);
+
+    let g = Arc::new(Int32Array::from(vec![1, 1, 1, 2, 2, 3, 3, 4]));
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![g, Arc::new(union)]).unwrap();
+
+    ctx.register_batch("approx_distinct_union_test", batch)
+        .unwrap();
 }
 
 fn register_dictionary_struct_table(ctx: &SessionContext) {

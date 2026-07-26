@@ -107,26 +107,38 @@ impl Ord for TestFile {
 /// $ cargo test --profile=ci --test sqllogictests -- --timing-summary top
 /// ...
 /// Per-file elapsed summary (deterministic):
-/// 1.    3.568s  aggregate.slt
-/// 2.    3.464s  joins.slt
-/// 3.    3.336s  imdb.slt
-/// 4.    3.085s  push_down_filter_regression.slt
-/// 5.    2.926s  aggregate_skip_partial.slt
-/// 6.    2.399s  window.slt
-/// 7.    2.198s  group_by.slt
-/// 8.    1.281s  clickbench.slt
-/// 9.    1.058s  datetime/timestamps.slt
+/// 1.    5.437s  nested_loop_join_spill.slt
+/// 2.    3.471s  push_down_filter_regression.slt
+/// 3.    3.458s  aggregate.slt
+/// 4.    3.065s  joins.slt
+/// 5.    2.852s  aggregate_skip_partial.slt
+/// 6.    2.832s  imdb.slt
+/// 7.    2.453s  window.slt
+/// 8.    1.831s  group_by.slt
+/// 9.    1.282s  clickbench.slt
+/// 10.   1.055s  datetime/timestamps.slt
+/// 11.   0.994s  array/array_has.slt
+/// 12.   0.840s  cte.slt
+/// 13.   0.748s  sort_pushdown.slt
+/// 14.   0.714s  push_down_filter_parquet.slt
+/// 15.   0.668s  projection_pushdown.slt
 /// ```
 const TEST_PRIORITY_ENTRIES: &[&str] = &[
-    "aggregate.slt", //  longest-running files go first
-    "joins.slt",
-    "imdb.slt",
+    "nested_loop_join_spill.slt", //  longest-running files go first
     "push_down_filter_regression.slt",
+    "aggregate.slt",
+    "joins.slt",
     "aggregate_skip_partial.slt",
+    "imdb.slt",
     "window.slt",
     "group_by.slt",
     "clickbench.slt",
     "datetime/timestamps.slt",
+    "array/array_has.slt",
+    "cte.slt",
+    "sort_pushdown.slt",
+    "push_down_filter_parquet.slt",
+    "projection_pushdown.slt",
 ];
 
 /// Default priority for tests not in the priority map. Tests with lower

@@ -33,8 +33,8 @@ use crate::expr_rewriter::{
 use crate::logical_plan::{
     Aggregate, Analyze, Distinct, DistinctOn, EmptyRelation, Explain, Filter, Join,
     JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Prepare,
-    Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
-    Window,
+    Projection, Repartition, Sort, SubqueryAlias, TableScanBuilder, Union, Unnest,
+    Values, Window,
 };
 use crate::select_expr::SelectExpr;
 use crate::utils::{
@@ -192,12 +192,13 @@ impl LogicalPlanBuilder {
         // Ensure that the recursive term has the same field types as the static term
         let coerced_recursive_term =
             coerce_plan_expr_for_schema(recursive_term, self.plan.schema())?;
-        Ok(Self::from(LogicalPlan::RecursiveQuery(RecursiveQuery {
+        let recursive_query = RecursiveQuery::try_new(
             name,
-            static_term: self.plan,
-            recursive_term: Arc::new(coerced_recursive_term),
+            self.plan,
+            Arc::new(coerced_recursive_term),
             is_distinct,
-        })))
+        )?;
+        Ok(Self::from(LogicalPlan::RecursiveQuery(recursive_query)))
     }
 
     /// Create a values list based relation, and the schema is inferred from data, consuming
@@ -302,6 +303,7 @@ impl LogicalPlanBuilder {
         for j in 0..n_cols {
             let mut common_type: Option<DataType> = None;
             let mut common_metadata: Option<FieldMetadata> = None;
+            let mut nullable = false;
             for (i, row) in values.iter().enumerate() {
                 let value = &row[j];
                 let metadata = value.metadata(&schema)?;
@@ -316,13 +318,17 @@ impl LogicalPlanBuilder {
                 } else {
                     common_metadata = Some(metadata.clone());
                 }
+                if !nullable && value.nullable(&schema)? {
+                    nullable = true;
+                }
                 let data_type = value.get_type(&schema)?;
                 if data_type == DataType::Null {
                     continue;
                 }
 
                 if let Some(prev_type) = common_type {
-                    // get common type of each column values.
+                    // Widen the running type so that it can hold both the
+                    // previously seen rows and this row's value.
                     let data_types = vec![prev_type.clone(), data_type.clone()];
                     let Some(new_type) = type_union_resolution(&data_types) else {
                         return plan_err!(
@@ -334,13 +340,13 @@ impl LogicalPlanBuilder {
                     common_type = Some(data_type);
                 }
             }
-            // assuming common_type was not set, and no error, therefore the type should be NULL
-            // since the code loop skips NULL
-            fields.push_with_metadata(
-                common_type.unwrap_or(DataType::Null),
-                true,
-                common_metadata,
-            );
+            // If common_type is not set, every value in this column had type
+            // NULL. A DataType::Null field is always nullable.
+            let (data_type, nullable) = match common_type {
+                Some(t) => (t, nullable),
+                None => (DataType::Null, true),
+            };
+            fields.push_with_metadata(data_type, nullable, common_metadata);
         }
 
         Self::infer_inner(values, fields, &schema)
@@ -510,8 +516,11 @@ impl LogicalPlanBuilder {
         filters: Vec<Expr>,
         fetch: Option<usize>,
     ) -> Result<Self> {
-        let table_scan =
-            TableScan::try_new(table_name, table_source, projection, filters, fetch)?;
+        let table_scan = TableScanBuilder::new(table_name, table_source)
+            .with_projection(projection)
+            .with_filters(filters)
+            .with_fetch(fetch)
+            .build()?;
 
         // Inline TableScan
         if table_scan.filters.is_empty()
@@ -1327,8 +1336,11 @@ impl LogicalPlanBuilder {
         if explain_option.analyze {
             Ok(Self::new(LogicalPlan::Analyze(Analyze {
                 verbose: explain_option.verbose,
+                format: explain_option.format,
                 input: self.plan,
                 schema,
+                analyze_level: explain_option.analyze_level,
+                analyze_categories: explain_option.analyze_categories,
             })))
         } else {
             let stringified_plans =
@@ -1341,6 +1353,7 @@ impl LogicalPlanBuilder {
                 stringified_plans,
                 schema,
                 logical_optimization_succeeded: false,
+                show_statistics: explain_option.show_statistics,
             })))
         }
     }
@@ -2883,6 +2896,48 @@ mod tests {
         Aggregate: groupBy=[[employee_csv.id, employee_csv.state, employee_csv.salary]], aggr=[[sum(employee_csv.salary)]]
           TableScan: employee_csv projection=[id, state, salary]
         ");
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_aggregate_rejects_nested_aggregates() -> Result<()> {
+        // https://github.com/apache/datafusion/issues/23812
+        let err = table_scan(
+            Some("employee_csv"),
+            &employee_schema(),
+            Some(vec![0, 3, 4]),
+        )?
+        .aggregate(vec![col("id")], vec![sum(sum(col("salary")))])
+        .expect_err("nested aggregates should be rejected");
+
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @"Error during planning: Aggregate function calls cannot be nested: 'sum(employee_csv.salary)' is nested inside 'sum(sum(employee_csv.salary))'"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_window_rejects_nested_window_functions() -> Result<()> {
+        // https://github.com/apache/datafusion/issues/23812
+        let sum_over = |arg| {
+            Expr::from(expr::WindowFunction::new(
+                crate::WindowFunctionDefinition::AggregateUDF(
+                    crate::test::function_stub::sum_udaf(),
+                ),
+                vec![arg],
+            ))
+        };
+        let err = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![4]))?
+            .window(vec![sum_over(sum_over(col("salary")))])
+            .expect_err("nested window functions should be rejected");
+
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @"Error during planning: Window function calls cannot be nested: 'sum(employee_csv.salary) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is nested inside 'sum(sum(employee_csv.salary) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+        );
 
         Ok(())
     }

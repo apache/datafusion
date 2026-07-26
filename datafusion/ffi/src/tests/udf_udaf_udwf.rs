@@ -21,8 +21,8 @@ use arrow_schema::DataType;
 use datafusion_catalog::TableFunctionImpl;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
-    AggregateUDF, ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-    Volatility, WindowUDF,
+    AggregateUDF, ColumnarValue, ExpressionPlacement, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature, Volatility, WindowUDF,
 };
 use datafusion_functions::math::abs::AbsFunc;
 use datafusion_functions::math::random::RandomFunc;
@@ -107,6 +107,56 @@ impl ScalarUDFImpl for TimeZoneUDF {
 pub(crate) extern "C" fn create_timezone_func() -> FFI_ScalarUDF {
     let udf: Arc<ScalarUDF> = Arc::new(ScalarUDF::from(TimeZoneUDF {
         signature: Signature::uniform(1, vec![DataType::Utf8], Volatility::Stable),
+    }));
+
+    udf.into()
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct PlacementUDF {
+    signature: Signature,
+}
+
+impl ScalarUDFImpl for PlacementUDF {
+    fn name(&self) -> &str {
+        "placement_udf"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(
+        &self,
+        _arg_types: &[DataType],
+    ) -> datafusion_common::Result<DataType> {
+        Ok(DataType::Int64)
+    }
+
+    fn invoke_with_args(
+        &self,
+        _args: ScalarFunctionArgs,
+    ) -> datafusion_common::Result<ColumnarValue> {
+        datafusion_common::internal_err!("placement_udf is not meant to be invoked")
+    }
+
+    fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
+        // Push to the leaves only for a (Column, Literal) pairing, so the
+        // test catches dropped, reordered, or truncated arguments.
+        if matches!(
+            args,
+            [ExpressionPlacement::Column, ExpressionPlacement::Literal]
+        ) {
+            ExpressionPlacement::MoveTowardsLeafNodes
+        } else {
+            ExpressionPlacement::KeepInPlace
+        }
+    }
+}
+
+pub(crate) extern "C" fn create_placement_func() -> FFI_ScalarUDF {
+    let udf: Arc<ScalarUDF> = Arc::new(ScalarUDF::from(PlacementUDF {
+        signature: Signature::uniform(1, vec![DataType::Int64], Volatility::Immutable),
     }));
 
     udf.into()

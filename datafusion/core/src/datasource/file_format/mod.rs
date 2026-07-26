@@ -67,7 +67,7 @@ pub(crate) mod test_util {
                 .await?
         };
 
-        let table_schema = TableSchema::new(file_schema.clone(), vec![]);
+        let table_schema = TableSchema::from(&file_schema);
 
         let statistics = format
             .infer_stats(state, &store, file_schema.clone(), &meta)

@@ -2942,8 +2942,8 @@ logical_plan
 08)----------SubqueryAlias: e
 09)------------TableScan: sales_global projection=[sn, ts, currency, amount]
 physical_plan
-01)SortExec: expr=[sn@2 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[zip_code@1 as zip_code, country@2 as country, sn@0 as sn, ts@3 as ts, currency@4 as currency, last_value(e.amount) ORDER BY [e.sn ASC NULLS LAST]@5 as last_rate]
+01)ProjectionExec: expr=[zip_code@1 as zip_code, country@2 as country, sn@0 as sn, ts@3 as ts, currency@4 as currency, last_value(e.amount) ORDER BY [e.sn ASC NULLS LAST]@5 as last_rate]
+02)--SortExec: expr=[sn@0 ASC NULLS LAST], preserve_partitioning=[false]
 03)----AggregateExec: mode=Single, gby=[sn@2 as sn, zip_code@0 as zip_code, country@1 as country, ts@3 as ts, currency@4 as currency], aggr=[last_value(e.amount) ORDER BY [e.sn ASC NULLS LAST]]
 04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(currency@2, currency@4)], filter=ts@0 >= ts@1, projection=[zip_code@4, country@5, sn@6, ts@7, currency@8, sn@0, amount@3]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
@@ -2985,8 +2985,8 @@ logical_plan
 04)------TableScan: sales_global projection=[country, ts, amount]
 physical_plan
 01)SortPreservingMergeExec: [country@0 ASC NULLS LAST]
-02)--SortExec: expr=[country@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[country@0 as country, first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as fv1, last_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@2 as fv2]
+02)--ProjectionExec: expr=[country@0 as country, first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as fv1, last_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@2 as fv2]
+03)----SortExec: expr=[country@0 ASC NULLS LAST], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]]
 05)--------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=1
 06)----------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]]
@@ -3019,8 +3019,8 @@ logical_plan
 04)------TableScan: sales_global projection=[country, ts, amount]
 physical_plan
 01)SortPreservingMergeExec: [country@0 ASC NULLS LAST]
-02)--SortExec: expr=[country@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[country@0 as country, first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as fv1, last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@2 as fv2]
+02)--ProjectionExec: expr=[country@0 as country, first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]@1 as fv1, last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]@2 as fv2]
+03)----SortExec: expr=[country@0 ASC NULLS LAST], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]
 05)--------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=1
 06)----------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]
@@ -3181,8 +3181,8 @@ logical_plan
 04)------TableScan: sales_global projection=[country, amount]
 physical_plan
 01)SortPreservingMergeExec: [country@0 ASC NULLS LAST]
-02)--SortExec: expr=[country@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[country@0 as country, array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@1 as array_agg1]
+02)--ProjectionExec: expr=[country@0 as country, array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@1 as array_agg1]
+03)----SortExec: expr=[country@0 ASC NULLS LAST], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]]
 05)--------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
 06)----------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]]
@@ -3216,8 +3216,8 @@ logical_plan
 04)------TableScan: sales_global projection=[country, amount]
 physical_plan
 01)SortPreservingMergeExec: [country@0 ASC NULLS LAST]
-02)--SortExec: expr=[country@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[country@0 as country, array_agg(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@1 as amounts, first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@2 as fv1, last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@3 as fv2]
+02)--ProjectionExec: expr=[country@0 as country, array_agg(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@1 as amounts, first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]@2 as fv1, last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]@3 as fv2]
+03)----SortExec: expr=[country@0 ASC NULLS LAST], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[country@0 as country], aggr=[array_agg(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]]
 05)--------RepartitionExec: partitioning=Hash([country@0], 8), input_partitions=8
 06)----------AggregateExec: mode=Partial, gby=[country@0 as country], aggr=[array_agg(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]]
@@ -3484,8 +3484,8 @@ logical_plan
 09)------------TableScan: sales_global_with_pk projection=[sn, amount]
 physical_plan
 01)SortPreservingMergeExec: [sn@0 ASC NULLS LAST]
-02)--SortExec: expr=[sn@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[sn@0 as sn, sum(l.amount)@2 as sum(l.amount), amount@1 as amount]
+02)--ProjectionExec: expr=[sn@0 as sn, sum(l.amount)@2 as sum(l.amount), amount@1 as amount]
+03)----SortExec: expr=[sn@0 ASC NULLS LAST], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[sn@0 as sn, amount@1 as amount], aggr=[sum(l.amount)]
 05)--------RepartitionExec: partitioning=Hash([sn@0, amount@1], 8), input_partitions=8
 06)----------AggregateExec: mode=Partial, gby=[sn@1 as sn, amount@2 as amount], aggr=[sum(l.amount)]
@@ -3630,8 +3630,8 @@ logical_plan
 08)--------------TableScan: sales_global_with_pk projection=[zip_code, country, sn, ts, currency, amount]
 physical_plan
 01)SortPreservingMergeExec: [sn@2 ASC NULLS LAST]
-02)--SortExec: expr=[sn@2 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[zip_code@1 as zip_code, country@2 as country, sn@0 as sn, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum_amount@6 as sum_amount]
+02)--ProjectionExec: expr=[zip_code@1 as zip_code, country@2 as country, sn@0 as sn, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum_amount@6 as sum_amount]
+03)----SortExec: expr=[sn@0 ASC NULLS LAST], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[sn@0 as sn, zip_code@1 as zip_code, country@2 as country, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum_amount@6 as sum_amount], aggr=[]
 05)--------RepartitionExec: partitioning=Hash([sn@0, zip_code@1, country@2, ts@3, currency@4, amount@5, sum_amount@6], 8), input_partitions=8
 06)----------AggregateExec: mode=Partial, gby=[sn@2 as sn, zip_code@0 as zip_code, country@1 as country, ts@3 as ts, currency@4 as currency, amount@5 as amount, sum_amount@6 as sum_amount], aggr=[]
@@ -4327,8 +4327,8 @@ logical_plan
 04)------TableScan: csv_with_timestamps projection=[ts]
 physical_plan
 01)SortPreservingMergeExec: [months@0 DESC], fetch=5
-02)--SortExec: TopK(fetch=5), expr=[months@0 DESC], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[date_part(Utf8("MONTH"),csv_with_timestamps.ts)@0 as months]
+02)--ProjectionExec: expr=[date_part(Utf8("MONTH"),csv_with_timestamps.ts)@0 as months]
+03)----SortExec: TopK(fetch=5), expr=[date_part(Utf8("MONTH"),csv_with_timestamps.ts)@0 DESC], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[date_part(Utf8("MONTH"),csv_with_timestamps.ts)@0 as date_part(Utf8("MONTH"),csv_with_timestamps.ts)], aggr=[], lim=[5]
 05)--------RepartitionExec: partitioning=Hash([date_part(Utf8("MONTH"),csv_with_timestamps.ts)@0], 8), input_partitions=8
 06)----------AggregateExec: mode=Partial, gby=[date_part(MONTH, ts@0) as date_part(Utf8("MONTH"),csv_with_timestamps.ts)], aggr=[], lim=[5]
@@ -4438,14 +4438,14 @@ logical_plan
 05)--------TableScan: aggregate_test_100 projection=[c1, c2, c3, c4]
 physical_plan
 01)SortPreservingMergeExec: [c1@0 ASC NULLS LAST]
-02)--SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[c1@0 as c1, count(alias1)@1 as count(DISTINCT aggregate_test_100.c2), min(alias1)@2 as min(DISTINCT aggregate_test_100.c2), sum(alias2)@3 as sum(aggregate_test_100.c3), max(alias3)@4 as max(aggregate_test_100.c4)]
+02)--ProjectionExec: expr=[c1@0 as c1, count(alias1)@1 as count(DISTINCT aggregate_test_100.c2), min(alias1)@2 as min(DISTINCT aggregate_test_100.c2), sum(alias2)@3 as sum(aggregate_test_100.c3), max(alias3)@4 as max(aggregate_test_100.c4)]
+03)----SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[count(alias1), min(alias1), sum(alias2), max(alias3)]
 05)--------RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8
 06)----------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[count(alias1), min(alias1), sum(alias2), max(alias3)]
-07)------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1, alias1@1 as alias1], aggr=[alias2, alias3]
+07)------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1, alias1@1 as alias1], aggr=[sum(aggregate_test_100.c3) as alias2, max(aggregate_test_100.c4) as alias3]
 08)--------------RepartitionExec: partitioning=Hash([c1@0, alias1@1], 8), input_partitions=8
-09)----------------AggregateExec: mode=Partial, gby=[c1@0 as c1, c2@1 as alias1], aggr=[alias2, alias3]
+09)----------------AggregateExec: mode=Partial, gby=[c1@0 as c1, c2@1 as alias1], aggr=[sum(aggregate_test_100.c3) as alias2, max(aggregate_test_100.c4) as alias3]
 10)------------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
 11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4], file_type=csv, has_header=true
 
@@ -5634,10 +5634,63 @@ physical_plan
 statement ok
 reset datafusion.execution.batch_size;
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;
 
 statement count 0
 drop table t;
+
+# DISTINCT must not be removed when a unique key is downgraded to a
+# non-unique functional dependency by a join: `u.id` is a primary key, but
+# after the LEFT JOIN each `u` row can occur once per matching order.
+statement ok
+CREATE TABLE users_with_pk (id INT, name VARCHAR, primary key(id)) AS VALUES
+  (1, 'alice'),
+  (2, 'bob');
+
+statement ok
+CREATE TABLE user_orders (user_id INT, amount INT) AS VALUES
+  (1, 10),
+  (1, 20),
+  (2, 30);
+
+query I
+SELECT DISTINCT u.id
+  FROM users_with_pk u
+  LEFT JOIN user_orders o ON u.id = o.user_id
+  ORDER BY u.id;
+----
+1
+2
+
+# The DISTINCT must be planned as an Aggregate; it cannot be removed based
+# on the (join-downgraded) primary key of `users_with_pk`.
+query TT
+EXPLAIN SELECT DISTINCT u.id
+  FROM users_with_pk u
+  LEFT JOIN user_orders o ON u.id = o.user_id;
+----
+logical_plan
+01)Aggregate: groupBy=[[u.id]], aggr=[[]]
+02)--Projection: u.id
+03)----Left Join: u.id = o.user_id
+04)------SubqueryAlias: u
+05)--------TableScan: users_with_pk projection=[id]
+06)------SubqueryAlias: o
+07)--------TableScan: user_orders projection=[user_id]
+physical_plan
+01)AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[]
+02)--RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=4
+03)----AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, user_id@0)], projection=[id@0]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table users_with_pk;
+
+statement ok
+drop table user_orders;

@@ -329,7 +329,7 @@ impl Range {
                         step,
                         self.include_upper_bound,
                         &mut values,
-                    );
+                    )?;
                     offsets.push(values.len() as i32);
                     valid.append_non_null();
                 }
@@ -538,6 +538,22 @@ fn retrieve_range_args(
     Some((start, stop, step))
 }
 
+/// Reserve space for `count` more elements, returning an error when the
+/// allocation would overflow `Vec`'s capacity limit or the allocator
+/// rejects it, rather than panicking on user-supplied SQL.
+fn reserve_range_capacity(values: &mut Vec<i64>, count: u64) -> Result<()> {
+    let count_usize = usize::try_from(count).map_err(|_| {
+        exec_datafusion_err!(
+            "Range too large to materialize: would produce {count} elements"
+        )
+    })?;
+    values.try_reserve(count_usize).map_err(|e| {
+        exec_datafusion_err!(
+            "Range too large to materialize: failed to allocate {count} elements: {e}"
+        )
+    })
+}
+
 /// Generate integer range values directly into the provided buffer.
 #[inline]
 fn generate_range_values(
@@ -546,9 +562,9 @@ fn generate_range_values(
     step: i64,
     include_upper: bool,
     values: &mut Vec<i64>,
-) {
+) -> Result<()> {
     if !include_upper && start == stop {
-        return;
+        return Ok(());
     }
 
     if step > 0 {
@@ -558,11 +574,10 @@ fn generate_range_values(
             stop.saturating_sub(1)
         };
         if start > limit {
-            return;
+            return Ok(());
         }
-        let count =
-            (start.abs_diff(limit) / step.unsigned_abs()).saturating_add(1) as usize;
-        values.reserve(count);
+        let count = (start.abs_diff(limit) / step.unsigned_abs()).saturating_add(1);
+        reserve_range_capacity(values, count)?;
         let mut current = start;
         while current <= limit {
             values.push(current);
@@ -578,11 +593,10 @@ fn generate_range_values(
             stop.saturating_add(1)
         };
         if start < limit {
-            return;
+            return Ok(());
         }
-        let count =
-            (start.abs_diff(limit) / step.unsigned_abs()).saturating_add(1) as usize;
-        values.reserve(count);
+        let count = (start.abs_diff(limit) / step.unsigned_abs()).saturating_add(1);
+        reserve_range_capacity(values, count)?;
         let mut current = start;
         while current >= limit {
             values.push(current);
@@ -592,6 +606,7 @@ fn generate_range_values(
             }
         }
     }
+    Ok(())
 }
 
 fn parse_tz(tz: &Option<&str>) -> Result<Tz> {

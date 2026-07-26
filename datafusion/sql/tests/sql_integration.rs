@@ -29,7 +29,7 @@ use common::MockContextProvider;
 use datafusion_common::{DFSchema, DataFusionError, Result, assert_contains};
 use datafusion_expr::{
     ColumnarValue, CreateIndex, DdlStatement, Expr, HigherOrderFunctionArgs,
-    HigherOrderReturnFieldArgs, HigherOrderSignature, HigherOrderUDF,
+    HigherOrderReturnFieldArgs, HigherOrderSignature, HigherOrderUDF, HigherOrderUDFImpl,
     LambdaParametersProgress, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     ValueOrLambda, Volatility, col,
     expr::{HigherOrderFunction, LambdaVariable, ScalarFunction},
@@ -100,7 +100,7 @@ fn parse_decimals_3() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(1),1,1)
+    Projection: Decimal128(0.1,1,1)
       EmptyRelation: rows=1
     "
     );
@@ -114,7 +114,7 @@ fn parse_decimals_4() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(1),2,2)
+    Projection: Decimal128(0.01,2,2)
       EmptyRelation: rows=1
     "
     );
@@ -128,7 +128,7 @@ fn parse_decimals_5() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(10),2,1)
+    Projection: Decimal128(1.0,2,1)
       EmptyRelation: rows=1
     "
     );
@@ -142,7 +142,7 @@ fn parse_decimals_6() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(1001),4,2)
+    Projection: Decimal128(10.01,4,2)
       EmptyRelation: rows=1
     "
     );
@@ -156,7 +156,7 @@ fn parse_decimals_7() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(1000000000000000000000),22,2)
+    Projection: Decimal128(10000000000000000000.00,22,2)
       EmptyRelation: rows=1
     "
     );
@@ -184,7 +184,7 @@ fn parse_decimals_9() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: Decimal128(Some(18446744073709551616),20,0)
+    Projection: Decimal128(18446744073709551616,20,0)
       EmptyRelation: rows=1
     "
     );
@@ -725,7 +725,7 @@ fn plan_insert_no_target_columns() {
 )]
 #[case::non_existing_column(
     "INSERT INTO test_decimal (nonexistent, price) VALUES (1, 2), (4, 5)",
-    "Schema error: No field named nonexistent. \
+    "Schema error: No field named nonexistent.\n\
     Valid fields are id, price."
 )]
 #[case::target_column_count_mismatch(
@@ -867,17 +867,25 @@ fn select_filter_cannot_use_alias() {
 
 #[test]
 fn select_neg_filter() {
+    // NOT requires a boolean expression; applying it to a Utf8 column is an error
     let sql = "SELECT id, first_name, last_name \
                    FROM person WHERE NOT state";
-    let plan = logical_plan(sql).unwrap();
-    assert_snapshot!(
-        plan,
-        @r"
-    Projection: person.id, person.first_name, person.last_name
-      Filter: NOT person.state
-        TableScan: person
-    "
+    let err = logical_plan(sql).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("Unary operator 'NOT' requires a boolean expression"),
+        "unexpected error: {err}"
     );
+}
+
+#[test]
+fn select_not_bool_filter() {
+    let sql = "SELECT order_id FROM orders WHERE NOT delivered";
+    let plan = logical_plan(sql).unwrap();
+    let expected = "Projection: orders.order_id\
+        \n  Filter: NOT orders.delivered\
+        \n    TableScan: orders";
+    assert_eq!(expected, format!("{plan}"));
 }
 
 #[test]
@@ -1681,7 +1689,10 @@ fn select_simple_aggregate_with_groupby_and_column_in_group_by_does_not_exist() 
 
     assert_snapshot!(
         err.strip_backtrace(),
-        @r#"Schema error: No field named doesnotexist. Valid fields are "sum(person.age)", person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person."😀"."#
+        @r#"
+Schema error: No field named doesnotexist.
+Valid fields are "sum(person.age)", person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person."😀".
+"#
     );
 }
 
@@ -1757,6 +1768,81 @@ fn select_simple_aggregate_with_groupby_position_out_of_range() {
     assert_snapshot!(
         err2.strip_backtrace(),
         @"Error during planning: Cannot find column with position 5 in SELECT clause. Valid columns: 1 to 2"
+    );
+}
+
+#[test]
+fn select_nested_aggregate() {
+    // https://github.com/apache/datafusion/issues/23812
+    let err = logical_plan("SELECT sum(sum(age)) FROM person")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Aggregate function calls cannot be nested: 'sum(person.age)' is nested inside 'sum(sum(person.age))'"
+    );
+
+    let err = logical_plan("SELECT state, sum(count(age)) FROM person GROUP BY state")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Aggregate function calls cannot be nested: 'count(person.age)' is nested inside 'sum(count(person.age))'"
+    );
+
+    let err =
+        logical_plan("SELECT state FROM person GROUP BY state HAVING sum(sum(age)) > 0")
+            .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Aggregate function calls cannot be nested: 'sum(person.age)' is nested inside 'sum(sum(person.age))'"
+    );
+}
+
+#[test]
+fn select_window_function_inside_aggregate() {
+    // https://github.com/apache/datafusion/issues/23812
+    let err = logical_plan("SELECT sum(sum(age) OVER ()) FROM person")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Aggregate function calls cannot contain window function calls: 'sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is nested inside 'sum(sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)'"
+    );
+}
+
+#[test]
+fn select_nested_window_function() {
+    // https://github.com/apache/datafusion/issues/23812
+    let err = logical_plan("SELECT sum(sum(age) OVER ()) OVER () FROM person")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls cannot be nested: 'sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is nested inside 'sum(sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+    );
+
+    let err = logical_plan(
+        "SELECT rank() OVER (ORDER BY rank() OVER (ORDER BY age)) FROM person",
+    )
+    .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls cannot be nested: 'rank() ORDER BY [person.age ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW' is nested inside 'rank() ORDER BY [rank() ORDER BY [person.age ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW'"
+    );
+}
+
+#[test]
+fn select_aggregate_inside_window_function() {
+    // an aggregate as the argument of a window function is legal: the window
+    // function is evaluated on top of the aggregate
+    let plan =
+        logical_plan("SELECT state, sum(sum(age)) OVER () FROM person GROUP BY state")
+            .unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: person.state, sum(sum(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+      WindowAggr: windowExpr=[[sum(sum(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+        Aggregate: groupBy=[[person.state]], aggr=[[sum(person.age)]]
+          TableScan: person
+    "
     );
 }
 
@@ -2265,6 +2351,29 @@ fn create_external_table_csv() {
         plan,
         @r#"CreateExternalTable: Bare { table: "t" }"#
     );
+}
+
+#[test]
+fn create_external_table_multiple_locations() {
+    let sql = "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION ('foo.csv', 'bar.csv')";
+    let plan = logical_plan(sql).unwrap();
+    let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = plan else {
+        panic!("expected a CreateExternalTable plan");
+    };
+    assert_eq!(
+        cmd.locations,
+        vec!["foo.csv".to_string(), "bar.csv".to_string()]
+    );
+}
+
+#[test]
+fn create_external_table_location_with_literal_comma() {
+    let sql = "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo,bar.csv'";
+    let plan = logical_plan(sql).unwrap();
+    let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = plan else {
+        panic!("expected a CreateExternalTable plan");
+    };
+    assert_eq!(cmd.locations, vec!["foo,bar.csv".to_string()]);
 }
 
 #[test]
@@ -3510,7 +3619,9 @@ fn logical_plan_with_options(sql: &str, options: ParserOptions) -> Result<Logica
 fn logical_plan_with_dialect(sql: &str, dialect: &dyn Dialect) -> Result<LogicalPlan> {
     let state = MockSessionState::default()
         .with_aggregate_function(sum_udaf())
-        .with_higher_order_function(Arc::new(MockArrayReduce::new()))
+        .with_higher_order_function(Arc::new(HigherOrderUDF::new_from_impl(
+            MockArrayReduce::new(),
+        )))
         .with_scalar_function(make_array_udf())
         .with_expr_planner(Arc::new(CustomExprPlanner {})); // plan array literal
     let context = MockContextProvider { state };
@@ -5358,7 +5469,7 @@ fn test_progressive_lambda_parameters() {
     assert_eq!(
         expr,
         Expr::HigherOrderFunction(HigherOrderFunction::new(
-            Arc::new(MockArrayReduce::new()),
+            Arc::new(HigherOrderUDF::new_from_impl(MockArrayReduce::new())),
             vec![
                 Expr::ScalarFunction(ScalarFunction::new_udf(
                     make_array_udf(),
@@ -5402,7 +5513,7 @@ impl MockArrayReduce {
     }
 }
 
-impl HigherOrderUDF for MockArrayReduce {
+impl HigherOrderUDFImpl for MockArrayReduce {
     fn name(&self) -> &str {
         "array_reduce"
     }

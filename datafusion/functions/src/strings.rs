@@ -19,18 +19,40 @@ use std::marker::PhantomData;
 use std::mem::size_of;
 use std::sync::Arc;
 
-use datafusion_common::{Result, exec_datafusion_err, internal_err};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
+    plan_err,
+};
 
 use arrow::array::{
-    Array, ArrayAccessor, ArrayDataBuilder, ArrayRef, BinaryArray, ByteView,
-    GenericStringArray, LargeStringArray, OffsetSizeTrait, StringArray, StringViewArray,
-    make_view,
+    Array, ArrayAccessor, ArrayDataBuilder, ArrayRef, BinaryArray, BinaryViewArray,
+    ByteView, GenericStringArray, LargeBinaryArray, LargeStringArray, OffsetSizeTrait,
+    StringArray, StringViewArray, as_largestring_array, make_view,
 };
 use arrow::buffer::{Buffer, MutableBuffer, NullBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
+use arrow_buffer::ArrowNativeType;
+use datafusion_common::cast::{
+    as_binary_array, as_binary_view_array, as_large_binary_array, as_string_array,
+    as_string_view_array,
+};
+use datafusion_expr_common::columnar_value::ColumnarValue;
 
-/// Builder used by `concat`/`concat_ws` to assemble a [`StringArray`] one row
-/// at a time from multiple input columns.
+/// Trait abstracting concatenating string and binary collections.
+pub(crate) trait ConcatBuilder {
+    fn write<const CHECK_VALID: bool>(
+        &mut self,
+        column: &ColumnarValueRef,
+        i: usize,
+    ) -> Result<()>;
+
+    fn append_offset(&mut self) -> Result<()>;
+
+    fn finish(self, null_buffer: Option<NullBuffer>) -> Result<ArrayRef>;
+}
+
+/// Builder used by `concat`/`concat_ws` to assemble a [`GenericStringArray<O>`]
+/// (`StringArray` or `LargeStringArray`) one row at a time from multiple input columns.
 ///
 /// Each row is written via repeated `write` calls (one per input fragment)
 /// followed by a single `append_offset` to commit the row.  The output null
@@ -39,39 +61,46 @@ use arrow::datatypes::DataType;
 ///
 /// For the common "produce one `&str` per row" pattern, prefer
 /// `GenericStringArrayBuilder` instead.
-pub(crate) struct ConcatStringBuilder {
+pub(crate) struct ConcatGenericStringBuilder<O: OffsetSizeTrait + ArrowNativeType> {
     offsets_buffer: MutableBuffer,
     value_buffer: MutableBuffer,
-    /// If true, a safety check is required during the `finish` call
-    tainted: bool,
+    _phantom: PhantomData<O>,
 }
+pub(crate) type ConcatStringBuilder = ConcatGenericStringBuilder<i32>;
+pub(crate) type ConcatLargeStringBuilder = ConcatGenericStringBuilder<i64>;
 
-impl ConcatStringBuilder {
+impl<O: OffsetSizeTrait + ArrowNativeType> ConcatGenericStringBuilder<O> {
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
         let capacity = item_capacity
             .checked_add(1)
-            .map(|i| i.saturating_mul(size_of::<i32>()))
+            .map(|i| i.saturating_mul(size_of::<O>()))
             .expect("capacity integer overflow");
 
         let mut offsets_buffer = MutableBuffer::with_capacity(capacity);
         // SAFETY: the first offset value is definitely not going to exceed the bounds.
-        unsafe { offsets_buffer.push_unchecked(0_i32) };
+        unsafe { offsets_buffer.push_unchecked(O::usize_as(0)) };
         Self {
             offsets_buffer,
             value_buffer: MutableBuffer::with_capacity(data_capacity),
-            tainted: false,
+            _phantom: PhantomData,
         }
     }
+}
 
-    pub fn write<const CHECK_VALID: bool>(
+impl<O: OffsetSizeTrait + ArrowNativeType> ConcatBuilder
+    for ConcatGenericStringBuilder<O>
+{
+    fn write<const CHECK_VALID: bool>(
         &mut self,
         column: &ColumnarValueRef,
         i: usize,
-    ) {
+    ) -> Result<()> {
         match column {
             ColumnarValueRef::Scalar(s) => {
+                std::str::from_utf8(s).map_err(|_| {
+                    exec_datafusion_err!("concat: scalar bytes are not valid UTF-8")
+                })?;
                 self.value_buffer.extend_from_slice(s);
-                self.tainted = true;
             }
             ColumnarValueRef::NullableArray(array) => {
                 if !CHECK_VALID || array.is_valid(i) {
@@ -91,12 +120,6 @@ impl ConcatStringBuilder {
                         .extend_from_slice(array.value(i).as_bytes());
                 }
             }
-            ColumnarValueRef::NullableBinaryArray(array) => {
-                if !CHECK_VALID || array.is_valid(i) {
-                    self.value_buffer.extend_from_slice(array.value(i));
-                }
-                self.tainted = true;
-            }
             ColumnarValueRef::NonNullableArray(array) => {
                 self.value_buffer
                     .extend_from_slice(array.value(i).as_bytes());
@@ -109,32 +132,31 @@ impl ConcatStringBuilder {
                 self.value_buffer
                     .extend_from_slice(array.value(i).as_bytes());
             }
-            ColumnarValueRef::NonNullableBinaryArray(array) => {
-                self.value_buffer.extend_from_slice(array.value(i));
-                self.tainted = true;
+            _ => {
+                return exec_err!(
+                    "concat: unexpected column type for string builder: {column:?}"
+                );
             }
         }
+        Ok(())
     }
 
-    pub fn append_offset(&mut self) -> Result<()> {
-        let next_offset: i32 = self
-            .value_buffer
-            .len()
-            .try_into()
-            .map_err(|_| exec_datafusion_err!("byte array offset overflow"))?;
+    fn append_offset(&mut self) -> Result<()> {
+        let next_offset: O = O::from_usize(self.value_buffer.len())
+            .ok_or_else(|| exec_datafusion_err!("byte array offset overflow"))?;
         self.offsets_buffer.push(next_offset);
         Ok(())
     }
 
-    /// Finalize the builder into a concrete [`StringArray`].
+    /// Finalize the builder into a concrete [`GenericStringArray<O>`].
     ///
     /// # Errors
     ///
     /// Returns an error when:
     ///
     /// - the provided `null_buffer` is not the same length as the `offsets_buffer`.
-    pub fn finish(self, null_buffer: Option<NullBuffer>) -> Result<StringArray> {
-        let row_count = self.offsets_buffer.len() / size_of::<i32>() - 1;
+    fn finish(self, null_buffer: Option<NullBuffer>) -> Result<ArrayRef> {
+        let row_count = self.offsets_buffer.len() / size_of::<O>() - 1;
         if let Some(ref null_buffer) = null_buffer
             && null_buffer.len() != row_count
         {
@@ -142,22 +164,16 @@ impl ConcatStringBuilder {
                 "Null buffer and offsets buffer must be the same length"
             );
         }
-        let array_builder = ArrayDataBuilder::new(DataType::Utf8)
+        let array_builder = ArrayDataBuilder::new(GenericStringArray::<O>::DATA_TYPE)
             .len(row_count)
             .add_buffer(self.offsets_buffer.into())
             .add_buffer(self.value_buffer.into())
             .nulls(null_buffer);
-        if self.tainted {
-            // Raw binary arrays with possible invalid utf-8 were used,
-            // so let ArrayDataBuilder perform validation
-            let array_data = array_builder.build()?;
-            Ok(StringArray::from(array_data))
-        } else {
-            // SAFETY: all data that was appended was valid UTF8 and the values
-            // and offsets were created correctly
-            let array_data = unsafe { array_builder.build_unchecked() };
-            Ok(StringArray::from(array_data))
-        }
+        // SAFETY: all data that was appended was valid UTF8 and the values
+        // and offsets were created correctly
+        let array_data = unsafe { array_builder.build_unchecked() };
+        let array = GenericStringArray::<O>::from(array_data);
+        Ok(Arc::new(array))
     }
 }
 
@@ -175,8 +191,6 @@ pub(crate) struct ConcatStringViewBuilder {
     views: Vec<u128>,
     data: Vec<u8>,
     block: Vec<u8>,
-    /// If true, a safety check is required during the `append_offset` call
-    tainted: bool,
 }
 
 impl ConcatStringViewBuilder {
@@ -185,19 +199,22 @@ impl ConcatStringViewBuilder {
             views: Vec::with_capacity(item_capacity),
             data: Vec::with_capacity(data_capacity),
             block: vec![],
-            tainted: false,
         }
     }
+}
 
-    pub fn write<const CHECK_VALID: bool>(
+impl ConcatBuilder for ConcatStringViewBuilder {
+    fn write<const CHECK_VALID: bool>(
         &mut self,
         column: &ColumnarValueRef,
         i: usize,
-    ) {
+    ) -> Result<()> {
         match column {
             ColumnarValueRef::Scalar(s) => {
+                std::str::from_utf8(s).map_err(|_| {
+                    exec_datafusion_err!("concat: scalar bytes are not valid UTF-8")
+                })?;
                 self.block.extend_from_slice(s);
-                self.tainted = true;
             }
             ColumnarValueRef::NullableArray(array) => {
                 if !CHECK_VALID || array.is_valid(i) {
@@ -214,12 +231,6 @@ impl ConcatStringViewBuilder {
                     self.block.extend_from_slice(array.value(i).as_bytes());
                 }
             }
-            ColumnarValueRef::NullableBinaryArray(array) => {
-                if !CHECK_VALID || array.is_valid(i) {
-                    self.block.extend_from_slice(array.value(i));
-                }
-                self.tainted = true;
-            }
             ColumnarValueRef::NonNullableArray(array) => {
                 self.block.extend_from_slice(array.value(i).as_bytes());
             }
@@ -229,21 +240,18 @@ impl ConcatStringViewBuilder {
             ColumnarValueRef::NonNullableStringViewArray(array) => {
                 self.block.extend_from_slice(array.value(i).as_bytes());
             }
-            ColumnarValueRef::NonNullableBinaryArray(array) => {
-                self.block.extend_from_slice(array.value(i));
-                self.tainted = true;
+            _ => {
+                return exec_err!(
+                    "concat: unexpected column type for string view builder: {column:?}"
+                );
             }
         }
+        Ok(())
     }
 
     /// Finalizes the current row by converting the accumulated data into a
     /// StringView and appending it to the views buffer.
-    pub fn append_offset(&mut self) -> Result<()> {
-        if self.tainted {
-            std::str::from_utf8(&self.block)
-                .map_err(|_| exec_datafusion_err!("invalid UTF-8 in binary literal"))?;
-        }
-
+    fn append_offset(&mut self) -> Result<()> {
         let v = &self.block;
         if v.len() > 12 {
             let offset: u32 = self
@@ -258,7 +266,6 @@ impl ConcatStringViewBuilder {
         }
 
         self.block.clear();
-        self.tainted = false;
         Ok(())
     }
 
@@ -269,7 +276,7 @@ impl ConcatStringViewBuilder {
     /// Returns an error when:
     ///
     /// - the provided `null_buffer` length does not match the row count.
-    pub fn finish(self, null_buffer: Option<NullBuffer>) -> Result<StringViewArray> {
+    fn finish(self, null_buffer: Option<NullBuffer>) -> Result<ArrayRef> {
         if let Some(ref nulls) = null_buffer
             && nulls.len() != self.views.len()
         {
@@ -287,8 +294,8 @@ impl ConcatStringViewBuilder {
         };
 
         // SAFETY: views were constructed with correct lengths, offsets, and
-        // prefixes. UTF-8 validity was checked in append_offset() for any row
-        // where tainted data (e.g., binary literals) was appended.
+        // prefixes. All input fragments came from string arrays or string
+        // scalars, all of which are valid UTF-8.
         let array = unsafe {
             StringViewArray::new_unchecked(
                 ScalarBuffer::from(self.views),
@@ -296,135 +303,7 @@ impl ConcatStringViewBuilder {
                 null_buffer,
             )
         };
-        Ok(array)
-    }
-}
-
-/// Builder used by `concat`/`concat_ws` to assemble a [`LargeStringArray`] one
-/// row at a time from multiple input columns. See [`ConcatStringBuilder`] for
-/// details on the row-composition contract.
-///
-/// For the common "produce one `&str` per row" pattern, prefer
-/// `GenericStringArrayBuilder` instead.
-pub(crate) struct ConcatLargeStringBuilder {
-    offsets_buffer: MutableBuffer,
-    value_buffer: MutableBuffer,
-    /// If true, a safety check is required during the `finish` call
-    tainted: bool,
-}
-
-impl ConcatLargeStringBuilder {
-    pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
-        let capacity = item_capacity
-            .checked_add(1)
-            .map(|i| i.saturating_mul(size_of::<i64>()))
-            .expect("capacity integer overflow");
-
-        let mut offsets_buffer = MutableBuffer::with_capacity(capacity);
-        // SAFETY: the first offset value is definitely not going to exceed the bounds.
-        unsafe { offsets_buffer.push_unchecked(0_i64) };
-        Self {
-            offsets_buffer,
-            value_buffer: MutableBuffer::with_capacity(data_capacity),
-            tainted: false,
-        }
-    }
-
-    pub fn write<const CHECK_VALID: bool>(
-        &mut self,
-        column: &ColumnarValueRef,
-        i: usize,
-    ) {
-        match column {
-            ColumnarValueRef::Scalar(s) => {
-                self.value_buffer.extend_from_slice(s);
-                self.tainted = true;
-            }
-            ColumnarValueRef::NullableArray(array) => {
-                if !CHECK_VALID || array.is_valid(i) {
-                    self.value_buffer
-                        .extend_from_slice(array.value(i).as_bytes());
-                }
-            }
-            ColumnarValueRef::NullableLargeStringArray(array) => {
-                if !CHECK_VALID || array.is_valid(i) {
-                    self.value_buffer
-                        .extend_from_slice(array.value(i).as_bytes());
-                }
-            }
-            ColumnarValueRef::NullableStringViewArray(array) => {
-                if !CHECK_VALID || array.is_valid(i) {
-                    self.value_buffer
-                        .extend_from_slice(array.value(i).as_bytes());
-                }
-            }
-            ColumnarValueRef::NullableBinaryArray(array) => {
-                if !CHECK_VALID || array.is_valid(i) {
-                    self.value_buffer.extend_from_slice(array.value(i));
-                }
-                self.tainted = true;
-            }
-            ColumnarValueRef::NonNullableArray(array) => {
-                self.value_buffer
-                    .extend_from_slice(array.value(i).as_bytes());
-            }
-            ColumnarValueRef::NonNullableLargeStringArray(array) => {
-                self.value_buffer
-                    .extend_from_slice(array.value(i).as_bytes());
-            }
-            ColumnarValueRef::NonNullableStringViewArray(array) => {
-                self.value_buffer
-                    .extend_from_slice(array.value(i).as_bytes());
-            }
-            ColumnarValueRef::NonNullableBinaryArray(array) => {
-                self.value_buffer.extend_from_slice(array.value(i));
-                self.tainted = true;
-            }
-        }
-    }
-
-    pub fn append_offset(&mut self) -> Result<()> {
-        let next_offset: i64 = self
-            .value_buffer
-            .len()
-            .try_into()
-            .map_err(|_| exec_datafusion_err!("byte array offset overflow"))?;
-        self.offsets_buffer.push(next_offset);
-        Ok(())
-    }
-
-    /// Finalize the builder into a concrete [`LargeStringArray`].
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when:
-    ///
-    /// - the provided `null_buffer` is not the same length as the `offsets_buffer`.
-    pub fn finish(self, null_buffer: Option<NullBuffer>) -> Result<LargeStringArray> {
-        let row_count = self.offsets_buffer.len() / size_of::<i64>() - 1;
-        if let Some(ref null_buffer) = null_buffer
-            && null_buffer.len() != row_count
-        {
-            return internal_err!(
-                "Null buffer and offsets buffer must be the same length"
-            );
-        }
-        let array_builder = ArrayDataBuilder::new(DataType::LargeUtf8)
-            .len(row_count)
-            .add_buffer(self.offsets_buffer.into())
-            .add_buffer(self.value_buffer.into())
-            .nulls(null_buffer);
-        if self.tainted {
-            // Raw binary arrays with possible invalid utf-8 were used,
-            // so let ArrayDataBuilder perform validation
-            let array_data = array_builder.build()?;
-            Ok(LargeStringArray::from(array_data))
-        } else {
-            // SAFETY: all data that was appended was valid Large UTF8 and the values
-            // and offsets were created correctly
-            let array_data = unsafe { array_builder.build_unchecked() };
-            Ok(LargeStringArray::from(array_data))
-        }
+        Ok(Arc::new(array))
     }
 }
 
@@ -453,6 +332,24 @@ pub(crate) struct GenericStringArrayBuilder<O: OffsetSizeTrait> {
     _phantom: PhantomData<O>,
 }
 
+fn offset_overflow_error<O: OffsetSizeTrait>() -> DataFusionError {
+    exec_datafusion_err!(
+        "byte array offset overflow: output size exceeds {} bytes",
+        O::MAX_OFFSET
+    )
+}
+
+fn string_view_overflow_error(field: &str) -> DataFusionError {
+    exec_datafusion_err!("byte array offset overflow: {field} exceeds i32::MAX")
+}
+
+fn try_offset<O: OffsetSizeTrait>(len: usize) -> Result<O> {
+    if len > O::MAX_OFFSET {
+        return Err(offset_overflow_error::<O>());
+    }
+    Ok(O::usize_as(len))
+}
+
 impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
         let capacity = item_capacity
@@ -470,29 +367,106 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
         }
     }
 
+    #[inline]
+    fn try_push_offset_for_len(&mut self, len: usize) -> Result<()> {
+        let next_offset = try_offset::<O>(len)?;
+        self.offsets_buffer.push(next_offset);
+        Ok(())
+    }
+
+    #[inline]
+    fn try_append_bytes<F>(&mut self, additional_len: usize, append: F) -> Result<()>
+    where
+        F: FnOnce(&mut MutableBuffer),
+    {
+        let next_len = self
+            .value_buffer
+            .len()
+            .checked_add(additional_len)
+            .ok_or_else(offset_overflow_error::<O>)?;
+        let next_offset = try_offset::<O>(next_len)?;
+        append(&mut self.value_buffer);
+        debug_assert_eq!(self.value_buffer.len(), next_len);
+        self.offsets_buffer.push(next_offset);
+        Ok(())
+    }
+
+    /// Fallible variant of [`Self::append_value`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the cumulative byte length exceeds this builder's
+    /// offset type limit.
+    #[inline]
+    pub fn try_append_value(&mut self, value: &str) -> Result<()> {
+        self.try_append_bytes(value.len(), |value_buffer| {
+            value_buffer.extend_from_slice(value.as_bytes());
+        })
+    }
+
+    /// Fallible variant of [`Self::append_placeholder`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the current cumulative byte length exceeds this
+    /// builder's offset type limit.
+    #[inline]
+    pub fn try_append_placeholder(&mut self) -> Result<()> {
+        self.try_push_offset_for_len(self.value_buffer.len())?;
+        self.placeholder_count += 1;
+        Ok(())
+    }
+
     /// See [`BulkNullStringArrayBuilder::append_value`].
+    ///
+    /// Note: new call sites that need recoverable overflow handling should
+    /// prefer [`Self::try_append_value`].
     ///
     /// # Panics
     ///
     /// Panics if the cumulative byte length exceeds `O::MAX`.
     #[inline]
     pub fn append_value(&mut self, value: &str) {
-        self.value_buffer.extend_from_slice(value.as_bytes());
-        let next_offset =
-            O::from_usize(self.value_buffer.len()).expect("byte array offset overflow");
-        self.offsets_buffer.push(next_offset);
+        self.try_append_value(value)
+            .expect("byte array offset overflow");
     }
 
     /// See [`BulkNullStringArrayBuilder::append_placeholder`].
+    ///
+    /// Note: new call sites that need recoverable overflow handling should
+    /// prefer [`Self::try_append_placeholder`].
     #[inline]
     pub fn append_placeholder(&mut self) {
-        let next_offset =
-            O::from_usize(self.value_buffer.len()).expect("byte array offset overflow");
-        self.offsets_buffer.push(next_offset);
-        self.placeholder_count += 1;
+        self.try_append_placeholder()
+            .expect("byte array offset overflow");
+    }
+
+    /// Fallible variant of [`Self::append_byte_map`].
+    ///
+    /// # Safety
+    ///
+    /// The bytes produced by applying `map` to each byte of `src`, in order,
+    /// must form valid UTF-8.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the cumulative byte length exceeds this builder's
+    /// offset type limit.
+    #[inline]
+    pub unsafe fn try_append_byte_map<F: FnMut(u8) -> u8>(
+        &mut self,
+        src: &[u8],
+        mut map: F,
+    ) -> Result<()> {
+        self.try_append_bytes(src.len(), |value_buffer| {
+            value_buffer.extend(src.iter().map(|&b| map(b)));
+        })
     }
 
     /// See [`BulkNullStringArrayBuilder::append_byte_map`].
+    ///
+    /// Note: new call sites that need recoverable overflow handling should
+    /// prefer [`Self::try_append_byte_map`].
     ///
     /// # Safety
     ///
@@ -503,14 +477,45 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     ///
     /// Panics if the cumulative byte length exceeds `O::MAX`.
     #[inline]
-    pub unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], mut map: F) {
-        self.value_buffer.extend(src.iter().map(|&b| map(b)));
-        let next_offset =
-            O::from_usize(self.value_buffer.len()).expect("byte array offset overflow");
+    pub unsafe fn append_byte_map<F: FnMut(u8) -> u8>(&mut self, src: &[u8], map: F) {
+        // SAFETY: caller upholds this method's UTF-8 contract.
+        unsafe { self.try_append_byte_map(src, map) }
+            .expect("byte array offset overflow");
+    }
+
+    /// Fallible variant of [`Self::append_with`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the cumulative byte length exceeds this builder's
+    /// offset type limit.
+    #[inline]
+    pub fn try_append_with<F>(&mut self, f: F) -> Result<()>
+    where
+        F: FnOnce(&mut GenericStringWriter<'_>),
+    {
+        let old_len = self.value_buffer.len();
+        let mut writer = GenericStringWriter {
+            value_buffer: &mut self.value_buffer,
+        };
+        f(&mut writer);
+        let next_offset = match try_offset::<O>(self.value_buffer.len()) {
+            Ok(offset) => offset,
+            Err(e) => {
+                // SAFETY: `old_len` was the initialized length before `f` wrote to
+                // this owned buffer, so shrinking back preserves initialized data.
+                unsafe { self.value_buffer.set_len(old_len) };
+                return Err(e);
+            }
+        };
         self.offsets_buffer.push(next_offset);
+        Ok(())
     }
 
     /// See [`BulkNullStringArrayBuilder::append_with`].
+    ///
+    /// Note: new call sites that need recoverable overflow handling should
+    /// prefer [`Self::try_append_with`].
     ///
     /// # Panics
     ///
@@ -520,6 +525,9 @@ impl<O: OffsetSizeTrait> GenericStringArrayBuilder<O> {
     where
         F: FnOnce(&mut GenericStringWriter<'_>),
     {
+        // Do not delegate to `try_append_with`: it rolls back value_buffer on
+        // overflow before returning Err, which would change this infallible
+        // method's state if its panic is caught.
         let mut writer = GenericStringWriter {
             value_buffer: &mut self.value_buffer,
         };
@@ -680,44 +688,100 @@ impl StringViewArrayBuilder {
         self.block_size
     }
 
+    /// Fallible variant of [`Self::append_value`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the value length, in-progress buffer offset, or
+    /// number of completed buffers exceeds `i32::MAX`. The ByteView spec uses
+    /// signed 32-bit integers for these fields; exceeding `i32::MAX` would
+    /// produce an array that does not round-trip through Arrow IPC (see
+    /// <https://github.com/apache/arrow-rs/issues/6172>).
+    #[inline]
+    pub fn try_append_value(&mut self, value: &str) -> Result<()> {
+        let v = value.as_bytes();
+        let length: u32 = i32::try_from(v.len())
+            .map_err(|_| string_view_overflow_error("value length"))?
+            as u32;
+        if length <= 12 {
+            self.views.push(make_view(v, 0, 0));
+            return Ok(());
+        }
+
+        self.try_ensure_long_capacity(length)?;
+
+        let offset: u32 = i32::try_from(self.in_progress.len())
+            .map_err(|_| string_view_overflow_error("offset"))?
+            as u32;
+        let buffer_index: u32 = i32::try_from(self.completed.len())
+            .map_err(|_| string_view_overflow_error("buffer count"))?
+            as u32;
+        self.in_progress.extend_from_slice(v);
+        self.views.push(Self::make_long_view_checked(
+            length,
+            buffer_index,
+            offset,
+            v,
+        ));
+        Ok(())
+    }
+
     /// See [`BulkNullStringArrayBuilder::append_value`].
+    ///
+    /// Note: new call sites that need recoverable overflow handling should
+    /// prefer [`Self::try_append_value`].
     ///
     /// # Panics
     ///
-    /// Panics if the value length, the in-progress buffer offset, or the
-    /// number of completed buffers exceeds `i32::MAX`. The ByteView spec
-    /// uses signed 32-bit integers for these fields; exceeding `i32::MAX`
-    /// would produce an array that does not round-trip through Arrow IPC
-    /// (see <https://github.com/apache/arrow-rs/issues/6172>).
+    /// Panics under the same conditions that [`Self::try_append_value`] returns
+    /// an error.
     #[inline]
     pub fn append_value(&mut self, value: &str) {
-        let v = value.as_bytes();
-        let length: u32 =
-            i32::try_from(v.len()).expect("value length exceeds i32::MAX") as u32;
-        if length <= 12 {
-            self.views.push(make_view(v, 0, 0));
-            return;
-        }
+        self.try_append_value(value)
+            .expect("byte array offset overflow");
+    }
 
-        let required_cap = self.in_progress.len() + length as usize;
-        if self.in_progress.capacity() < required_cap {
-            self.flush_in_progress();
-            let to_reserve = (length as usize).max(self.next_block_size() as usize);
-            self.in_progress.reserve(to_reserve);
-        }
-
-        let offset: u32 = i32::try_from(self.in_progress.len())
-            .expect("offset exceeds i32::MAX") as u32;
-        self.in_progress.extend_from_slice(v);
-        self.views.push(self.make_long_view(length, offset, v));
+    /// Fallible variant of [`Self::append_placeholder`].
+    ///
+    /// # Errors
+    ///
+    /// This currently cannot fail; it returns `Result` for API symmetry with
+    /// other fallible append methods.
+    #[inline]
+    pub fn try_append_placeholder(&mut self) -> Result<()> {
+        self.append_placeholder();
+        Ok(())
     }
 
     /// See [`BulkNullStringArrayBuilder::append_placeholder`].
+    ///
+    /// Note: new call sites that need recoverable overflow handling should
+    /// prefer [`Self::try_append_placeholder`].
     #[inline]
     pub fn append_placeholder(&mut self) {
         // Zero-length inline view — `length` field is 0, no buffer ref.
         self.views.push(0);
         self.placeholder_count += 1;
+    }
+
+    /// Fallible variant of [`Self::ensure_long_capacity`].
+    #[inline]
+    fn try_ensure_long_capacity(&mut self, length: u32) -> Result<()> {
+        let required_cap = self
+            .in_progress
+            .len()
+            .checked_add(length as usize)
+            .ok_or_else(|| string_view_overflow_error("string view block size"))?;
+        if self.in_progress.capacity() < required_cap {
+            self.flush_in_progress();
+            let to_reserve = (length as usize).max(self.next_block_size() as usize);
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "StringView's block size bounds growth, so reserve cannot overflow capacity arithmetically. This hot loop intentionally avoids the extra `try_reserve` checks. It remains subject to allocator failure/OOM, which must be managed externally."
+            )]
+            self.in_progress.reserve(to_reserve);
+        }
+        Ok(())
     }
 
     /// Ensure the in-progress block has room for `length` more bytes,
@@ -726,12 +790,8 @@ impl StringViewArrayBuilder {
     /// yet in `in_progress` — flushing mid-row would orphan partial data.
     #[inline]
     fn ensure_long_capacity(&mut self, length: u32) {
-        let required_cap = self.in_progress.len() + length as usize;
-        if self.in_progress.capacity() < required_cap {
-            self.flush_in_progress();
-            let to_reserve = (length as usize).max(self.next_block_size() as usize);
-            self.in_progress.reserve(to_reserve);
-        }
+        self.try_ensure_long_capacity(length)
+            .expect("byte array offset overflow");
     }
 
     /// Encode a long-form view referencing `length` bytes already written
@@ -742,10 +802,12 @@ impl StringViewArrayBuilder {
     /// function is `[inline(never)]` and has to handle short strings, so
     /// building the view here ourselves is faster.
     #[inline]
-    fn make_long_view(&self, length: u32, offset: u32, prefix_bytes: &[u8]) -> u128 {
-        let buffer_index: u32 = i32::try_from(self.completed.len())
-            .expect("buffer count exceeds i32::MAX")
-            as u32;
+    fn make_long_view_checked(
+        length: u32,
+        buffer_index: u32,
+        offset: u32,
+        prefix_bytes: &[u8],
+    ) -> u128 {
         ByteView {
             length,
             // length > 12, so prefix_bytes has at least 4 bytes.
@@ -754,6 +816,14 @@ impl StringViewArrayBuilder {
             offset,
         }
         .into()
+    }
+
+    #[inline]
+    fn make_long_view(&self, length: u32, offset: u32, prefix_bytes: &[u8]) -> u128 {
+        let buffer_index: u32 = i32::try_from(self.completed.len())
+            .expect("buffer count exceeds i32::MAX")
+            as u32;
+        Self::make_long_view_checked(length, buffer_index, offset, prefix_bytes)
     }
 
     /// See [`BulkNullStringArrayBuilder::append_byte_map`].
@@ -1157,6 +1227,10 @@ pub(crate) enum ColumnarValueRef<'a> {
     NonNullableStringViewArray(&'a StringViewArray),
     NullableBinaryArray(&'a BinaryArray),
     NonNullableBinaryArray(&'a BinaryArray),
+    NullableLargeBinaryArray(&'a LargeBinaryArray),
+    NonNullableLargeBinaryArray(&'a LargeBinaryArray),
+    NullableBinaryViewArray(&'a BinaryViewArray),
+    NonNullableBinaryViewArray(&'a BinaryViewArray),
 }
 
 impl ColumnarValueRef<'_> {
@@ -1167,11 +1241,15 @@ impl ColumnarValueRef<'_> {
             | Self::NonNullableArray(_)
             | Self::NonNullableLargeStringArray(_)
             | Self::NonNullableStringViewArray(_)
-            | Self::NonNullableBinaryArray(_) => true,
+            | Self::NonNullableBinaryArray(_)
+            | Self::NonNullableLargeBinaryArray(_)
+            | Self::NonNullableBinaryViewArray(_) => true,
             Self::NullableArray(array) => array.is_valid(i),
             Self::NullableStringViewArray(array) => array.is_valid(i),
             Self::NullableLargeStringArray(array) => array.is_valid(i),
             Self::NullableBinaryArray(array) => array.is_valid(i),
+            Self::NullableLargeBinaryArray(array) => array.is_valid(i),
+            Self::NullableBinaryViewArray(array) => array.is_valid(i),
         }
     }
 
@@ -1182,12 +1260,167 @@ impl ColumnarValueRef<'_> {
             | Self::NonNullableArray(_)
             | Self::NonNullableStringViewArray(_)
             | Self::NonNullableLargeStringArray(_)
-            | Self::NonNullableBinaryArray(_) => None,
+            | Self::NonNullableBinaryArray(_)
+            | Self::NonNullableLargeBinaryArray(_)
+            | Self::NonNullableBinaryViewArray(_) => None,
             Self::NullableArray(array) => array.nulls().cloned(),
             Self::NullableStringViewArray(array) => array.nulls().cloned(),
             Self::NullableLargeStringArray(array) => array.nulls().cloned(),
             Self::NullableBinaryArray(array) => array.nulls().cloned(),
+            Self::NullableLargeBinaryArray(array) => array.nulls().cloned(),
+            Self::NullableBinaryViewArray(array) => array.nulls().cloned(),
         }
+    }
+
+    /// Parse a [`ColumnarValue`] argument into `ColumnarValueRef`.
+    /// Returns `None` when the argument is null or null scalar
+    /// Returns an error when a columnar value type is not supported.
+    /// Shared by `concat` and `concat_ws`.
+    pub(crate) fn from_columnar_value<'a>(
+        col: &'a ColumnarValue,
+        data_size: &mut usize,
+        len: usize,
+        size_factor: usize,
+        convert_to_str: bool,
+    ) -> Result<Option<ColumnarValueRef<'a>>> {
+        match col {
+            ColumnarValue::Scalar(ScalarValue::Utf8(maybe_value))
+            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(maybe_value))
+            | ColumnarValue::Scalar(ScalarValue::Utf8View(maybe_value)) => {
+                if let Some(s) = maybe_value {
+                    *data_size += s.len() * len * size_factor;
+                    Ok(Some(ColumnarValueRef::Scalar(s.as_bytes())))
+                } else {
+                    Ok(None)
+                }
+            }
+            ColumnarValue::Scalar(ScalarValue::Binary(maybe_value))
+            | ColumnarValue::Scalar(ScalarValue::LargeBinary(maybe_value))
+            | ColumnarValue::Scalar(ScalarValue::BinaryView(maybe_value))
+            | ColumnarValue::Scalar(ScalarValue::FixedSizeBinary(_, maybe_value)) => {
+                if let Some(b) = maybe_value {
+                    *data_size += b.len() * len * size_factor;
+                    Ok(Some(ColumnarValueRef::Scalar(b.as_slice())))
+                } else {
+                    Ok(None)
+                }
+            }
+            ColumnarValue::Scalar(scalar) if scalar.is_null() => {
+                // null scalar is skipped
+                Ok(None)
+            }
+            ColumnarValue::Scalar(scalar) if convert_to_str => {
+                match scalar.try_as_str() {
+                    Some(Some(s)) => {
+                        *data_size += s.len() * len * size_factor;
+                        Ok(Some(ColumnarValueRef::Scalar(s.as_bytes())))
+                    }
+                    Some(None) => unreachable!("null handled above"),
+                    None => {
+                        internal_err!("Expected string or binary, got {scalar:?}")
+                    }
+                }
+            }
+            ColumnarValue::Array(array) => match array.data_type() {
+                DataType::Utf8 => {
+                    let string_array = as_string_array(array)?;
+                    *data_size += string_array.values().len() * size_factor;
+                    let column = if array.is_nullable() {
+                        ColumnarValueRef::NullableArray(string_array)
+                    } else {
+                        ColumnarValueRef::NonNullableArray(string_array)
+                    };
+                    Ok(Some(column))
+                }
+                DataType::LargeUtf8 => {
+                    let string_array = as_largestring_array(array);
+                    *data_size += string_array.values().len() * size_factor;
+                    let column = if array.is_nullable() {
+                        ColumnarValueRef::NullableLargeStringArray(string_array)
+                    } else {
+                        ColumnarValueRef::NonNullableLargeStringArray(string_array)
+                    };
+                    Ok(Some(column))
+                }
+                DataType::Utf8View => {
+                    let string_array = as_string_view_array(array)?;
+                    *data_size += string_array.total_buffer_bytes_used() * size_factor;
+                    let column = if array.is_nullable() {
+                        ColumnarValueRef::NullableStringViewArray(string_array)
+                    } else {
+                        ColumnarValueRef::NonNullableStringViewArray(string_array)
+                    };
+                    Ok(Some(column))
+                }
+                DataType::Binary => {
+                    let binary_array = as_binary_array(array)?;
+                    *data_size += binary_array.values().len() * size_factor;
+                    let column = if array.is_nullable() {
+                        ColumnarValueRef::NullableBinaryArray(binary_array)
+                    } else {
+                        ColumnarValueRef::NonNullableBinaryArray(binary_array)
+                    };
+                    Ok(Some(column))
+                }
+                DataType::LargeBinary => {
+                    let binary_array = as_large_binary_array(array)?;
+                    *data_size += binary_array.values().len() * size_factor;
+                    let column = if array.is_nullable() {
+                        ColumnarValueRef::NullableLargeBinaryArray(binary_array)
+                    } else {
+                        ColumnarValueRef::NonNullableLargeBinaryArray(binary_array)
+                    };
+                    Ok(Some(column))
+                }
+                DataType::BinaryView => {
+                    let binary_array = as_binary_view_array(array)?;
+                    *data_size += binary_array.total_buffer_bytes_used() * size_factor;
+                    let column = if array.is_nullable() {
+                        ColumnarValueRef::NullableBinaryViewArray(binary_array)
+                    } else {
+                        ColumnarValueRef::NonNullableBinaryViewArray(binary_array)
+                    };
+                    Ok(Some(column))
+                }
+                other => {
+                    plan_err!(
+                        "Input was {other} which is not a supported datatype for concat function"
+                    )
+                }
+            },
+            _ => {
+                plan_err!(
+                    "Input was {col} which is not a supported datatype for concat function"
+                )
+            }
+        }
+    }
+}
+
+/// Return the widest binary type found in `types`.
+/// Order: `BinaryView` > `LargeBinary` / `FixedSizeBinary` > `Binary`.
+pub(crate) fn widest_binary_type(types: &[DataType]) -> DataType {
+    if types.iter().any(|t| matches!(t, DataType::BinaryView)) {
+        DataType::BinaryView
+    } else if types
+        .iter()
+        .any(|t| matches!(t, DataType::LargeBinary | DataType::FixedSizeBinary(_)))
+    {
+        DataType::LargeBinary
+    } else {
+        DataType::Binary
+    }
+}
+
+/// Return the widest string type found in `types`.
+/// Order: `Utf8View` > `LargeUtf8` > `Utf8`.
+pub(crate) fn widest_string_type(types: &[DataType]) -> DataType {
+    if types.iter().any(|t| matches!(t, DataType::Utf8View)) {
+        DataType::Utf8View
+    } else if types.iter().any(|t| matches!(t, DataType::LargeUtf8)) {
+        DataType::LargeUtf8
+    } else {
+        DataType::Utf8
     }
 }
 
@@ -1378,6 +1611,90 @@ mod tests {
             GenericStringArrayBuilder::<i64>::with_capacity(2, 4),
         );
         assert_finish_errs_on_length_mismatch(StringViewArrayBuilder::with_capacity(2));
+    }
+
+    #[test]
+    fn generic_string_builder_try_append_success_path() {
+        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(4, 16);
+        builder.try_append_value("abc").unwrap();
+        builder.try_append_placeholder().unwrap();
+        // SAFETY: ASCII input and output.
+        unsafe {
+            builder
+                .try_append_byte_map(b"de", |b| b.to_ascii_uppercase())
+                .unwrap();
+        }
+        builder
+            .try_append_with(|w| {
+                w.write_str("f");
+                w.write_char('é');
+            })
+            .unwrap();
+
+        let nulls = Some(NullBuffer::from(vec![true, false, true, true]));
+        let array = builder.finish(nulls).unwrap();
+        assert_eq!(
+            &array,
+            &StringArray::from(vec![Some("abc"), None, Some("DE"), Some("fé")])
+        );
+    }
+
+    #[test]
+    fn generic_string_builder_mixed_append_success_path() {
+        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(4, 16);
+        builder.append_value("ab");
+        builder.try_append_value("cd").unwrap();
+        // SAFETY: ASCII input and output.
+        unsafe {
+            builder.append_byte_map(b"ef", |b| b.to_ascii_uppercase());
+            builder
+                .try_append_byte_map(b"gh", |b| b.to_ascii_uppercase())
+                .unwrap();
+        }
+
+        let array = builder.finish(None).unwrap();
+        assert_eq!(
+            &array,
+            &StringArray::from(vec![Some("ab"), Some("cd"), Some("EF"), Some("GH")])
+        );
+    }
+
+    #[test]
+    fn string_view_builder_try_append_success_path() {
+        let mut builder = StringViewArrayBuilder::with_capacity(3);
+        builder.try_append_value("abc").unwrap();
+        builder.try_append_placeholder().unwrap();
+        builder.try_append_value("a long string value").unwrap();
+
+        let nulls = Some(NullBuffer::from(vec![true, false, true]));
+        let array = builder.finish(nulls).unwrap();
+        assert_eq!(array.value(0), "abc");
+        assert!(array.is_null(1));
+        assert_eq!(array.value(2), "a long string value");
+    }
+
+    #[test]
+    fn generic_string_builder_try_offset_overflow() {
+        let err = try_offset::<i32>(i32::MAX as usize + 1)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("byte array offset overflow"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn generic_string_builder_try_append_bytes_overflow() {
+        let mut builder = GenericStringArrayBuilder::<i32>::with_capacity(0, 0);
+        let err = builder
+            .try_append_bytes(i32::MAX as usize + 1, |_| unreachable!())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("byte array offset overflow"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

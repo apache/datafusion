@@ -2835,7 +2835,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
 
         // Verify that a dynamic filter was created
         let dynamic_filter = hash_join
-            .dynamic_filter_for_test()
+            .dynamic_filter_expr()
             .expect("Dynamic filter should be created");
 
         // Verify that is_used() returns the expected value based on probe side support.
@@ -2940,111 +2940,6 @@ async fn test_filter_with_projection_pushdown() {
         "+------+", "| size |", "+------+", "| 10   |", "| 20   |", "+------+",
     ];
     assert_batches_eq!(expected, &result);
-}
-
-/// Test that ExecutionPlan::apply_expressions() can discover dynamic filters across the plan tree.
-///
-/// Not portable to sqllogictest: asserts by walking the plan tree with
-/// `apply_expressions` + `downcast_ref::<DynamicFilterPhysicalExpr>` and
-/// counting nodes. Neither API is observable from SQL.
-#[tokio::test]
-async fn test_discover_dynamic_filters_via_expressions_api() {
-    use datafusion_common::JoinType;
-    use datafusion_common::tree_node::TreeNodeRecursion;
-    use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
-    fn count_dynamic_filters(plan: &Arc<dyn ExecutionPlan>) -> usize {
-        let mut count = 0;
-
-        // Check expressions from this node using apply_expressions
-        let _ = plan.apply_expressions(&mut |expr| {
-            if let Some(_df) = expr.downcast_ref::<DynamicFilterPhysicalExpr>() {
-                count += 1;
-            }
-            Ok(TreeNodeRecursion::Continue)
-        });
-
-        // Recursively visit children
-        for child in plan.children() {
-            count += count_dynamic_filters(child);
-        }
-
-        count
-    }
-
-    // Create build side (left)
-    let build_batches =
-        vec![record_batch!(("a", Utf8, ["foo", "bar"]), ("b", Int32, [1, 2])).unwrap()];
-    let build_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Int32, false),
-    ]));
-    let build_scan = TestScanBuilder::new(build_schema.clone())
-        .with_support(true)
-        .with_batches(build_batches)
-        .build();
-
-    // Create probe side (right)
-    let probe_batches = vec![
-        record_batch!(
-            ("a", Utf8, ["foo", "bar", "baz", "qux"]),
-            ("c", Float64, [1.0, 2.0, 3.0, 4.0])
-        )
-        .unwrap(),
-    ];
-    let probe_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("c", DataType::Float64, false),
-    ]));
-    let probe_scan = TestScanBuilder::new(probe_schema.clone())
-        .with_support(true)
-        .with_batches(probe_batches)
-        .build();
-
-    // Create HashJoinExec
-    let plan = Arc::new(
-        HashJoinExec::try_new(
-            build_scan,
-            probe_scan,
-            vec![(
-                col("a", &build_schema).unwrap(),
-                col("a", &probe_schema).unwrap(),
-            )],
-            None,
-            &JoinType::Inner,
-            None,
-            PartitionMode::CollectLeft,
-            datafusion_common::NullEquality::NullEqualsNothing,
-            false,
-        )
-        .unwrap(),
-    ) as Arc<dyn ExecutionPlan>;
-
-    // Before optimization: no dynamic filters
-    let count_before = count_dynamic_filters(&plan);
-    assert_eq!(
-        count_before, 0,
-        "Before optimization, should have no dynamic filters"
-    );
-
-    // Apply filter pushdown optimization (this creates dynamic filters)
-    let mut config = ConfigOptions::default();
-    config.optimizer.enable_dynamic_filter_pushdown = true;
-    config.execution.parquet.pushdown_filters = true;
-    let optimized_plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
-        .unwrap();
-
-    // After optimization: should discover dynamic filters
-    // We expect 2 dynamic filters:
-    // 1. In the HashJoinExec (producer)
-    // 2. In the DataSourceExec (consumer, pushed down to the probe side)
-    let count_after = count_dynamic_filters(&optimized_plan);
-    assert_eq!(
-        count_after, 2,
-        "After optimization, should discover exactly 2 dynamic filters (1 in HashJoinExec, 1 in DataSourceExec), found {count_after}"
-    );
 }
 
 // ==== Filter pushdown through SortExec tests ====
@@ -3372,5 +3267,44 @@ fn test_filter_pushdown_through_sort_with_projection() {
           -     FilterExec: b@1 = bar
           -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     "
+    );
+}
+
+/// `FilterPushdown::new_post_optimization()` must be idempotent. When applied
+/// to a HashJoinExec, the rule installs a dynamic filter on the probe-side
+/// scan; before the fix in `HashJoinExec::gather_filters_for_pushdown`, every
+/// invocation created a *new* `DynamicFilterPhysicalExpr` and ANDed it onto
+/// the probe side's existing predicate, producing
+/// `DynamicFilter AND DynamicFilter AND ...` after N passes.
+///
+/// AQE (datafusion-ballista#1359) re-runs the optimizer chain after every
+/// completed stage, so this would compound indefinitely without the guard.
+#[test]
+fn post_phase_is_idempotent_on_hash_join() {
+    use crate::physical_optimizer::test_utils::{hash_join_exec, parquet_exec, schema};
+    use datafusion_common::JoinType;
+    use datafusion_physical_expr::expressions::Column;
+    use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
+    use datafusion_physical_plan::get_plan_string;
+    use datafusion_physical_plan::joins::utils::JoinOn;
+
+    let s = schema();
+    let left = parquet_exec(Arc::clone(&s));
+    let right = parquet_exec(Arc::clone(&s));
+    let join_on: JoinOn = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema()).unwrap()),
+        Arc::new(Column::new_with_schema("a", &right.schema()).unwrap()),
+    )];
+    let plan = hash_join_exec(left, right, join_on, None, &JoinType::Inner).unwrap();
+
+    let config = ConfigOptions::new();
+    let rule = FilterPushdown::new_post_optimization();
+    let once = rule.optimize(plan, &config).unwrap();
+    let twice = rule.optimize(Arc::clone(&once), &config).unwrap();
+
+    assert_eq!(
+        get_plan_string(&once),
+        get_plan_string(&twice),
+        "second invocation of FilterPushdown::new_post_optimization mutated the plan",
     );
 }

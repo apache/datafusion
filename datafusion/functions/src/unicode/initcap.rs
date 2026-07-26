@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, GenericStringArray, OffsetSizeTrait};
-use arrow::buffer::{Buffer, OffsetBuffer};
+use arrow::buffer::Buffer;
 use arrow::datatypes::DataType;
 
 use crate::strings::{GenericStringArrayBuilder, StringViewArrayBuilder};
@@ -166,12 +166,12 @@ fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     if let Some(ref n) = nulls {
         for i in 0..len {
             if n.is_null(i) {
-                builder.append_placeholder();
+                builder.try_append_placeholder()?;
             } else {
                 // SAFETY: not null per check above.
                 let s = unsafe { string_array.value_unchecked(i) };
                 initcap_string(s, &mut container);
-                builder.append_value(&container);
+                builder.try_append_value(&container)?;
             }
         }
     } else {
@@ -179,7 +179,7 @@ fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             // SAFETY: no null buffer means every index is valid.
             let s = unsafe { string_array.value_unchecked(i) };
             initcap_string(s, &mut container);
-            builder.append_value(&container);
+            builder.try_append_value(&container)?;
         }
     }
 
@@ -217,17 +217,10 @@ fn initcap_ascii_array<T: OffsetSizeTrait>(
     }
 
     let values = Buffer::from_vec(out);
-    let out_offsets = if first_offset == 0 {
-        offsets.clone()
-    } else {
-        // For sliced arrays, we need to rebase the offsets to reflect that the
-        // output only contains the bytes in the visible slice.
-        let rebased_offsets = offsets
-            .iter()
-            .map(|offset| T::usize_as(offset.as_usize() - first_offset))
-            .collect::<Vec<_>>();
-        OffsetBuffer::<T>::new(rebased_offsets.into())
-    };
+
+    // Rebase offsets for sliced arrays to reflect that the
+    // output only contains the bytes in the visible slice.
+    let out_offsets = offsets.clone().subtract(offsets[0]);
 
     // SAFETY: ASCII case conversion preserves byte length, so the original
     // string boundaries are preserved. `out_offsets` is either identical to

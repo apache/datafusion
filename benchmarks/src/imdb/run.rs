@@ -355,7 +355,7 @@ impl RunOpt {
 
     async fn register_tables(&self, ctx: &SessionContext) -> Result<()> {
         for table in IMDB_TABLES {
-            let table_provider = { self.get_table(ctx, table).await? };
+            let table_provider = { self.get_table(ctx, table)? };
 
             if self.mem_table {
                 println!("Loading table '{table}' into memory");
@@ -416,7 +416,7 @@ impl RunOpt {
         Ok(result)
     }
 
-    async fn get_table(
+    fn get_table(
         &self,
         ctx: &SessionContext,
         table: &str,
@@ -425,7 +425,6 @@ impl RunOpt {
         let table_format = self.file_format.as_str();
 
         // Obtain a snapshot of the SessionState
-        let state = ctx.state();
         let (format, path, extension): (Arc<dyn FileFormat>, String, &'static str) =
             match table_format {
                 // dbgen creates .tbl ('|' delimited) files without header
@@ -458,9 +457,7 @@ impl RunOpt {
                 }
             };
 
-        let options = ListingOptions::new(format)
-            .with_file_extension(extension)
-            .with_collect_stat(state.config().collect_statistics());
+        let options = ListingOptions::new(format).with_file_extension(extension);
 
         let table_path = ListingTableUrl::parse(path)?;
         let config = ListingTableConfig::new(table_path).with_listing_options(options);
@@ -470,7 +467,9 @@ impl RunOpt {
             _ => unreachable!(),
         };
 
-        Ok(Arc::new(ListingTable::try_new(config)?))
+        Ok(Arc::new(ListingTable::try_new(config)?.with_cache(
+            ctx.runtime_env().cache_manager.get_file_statistic_cache(),
+        )))
     }
 
     fn iterations(&self) -> usize {

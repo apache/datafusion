@@ -17,5 +17,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# The proto schema and code generation now live in `datafusion-proto-models`.
+# This script is kept as a convenience wrapper.
 repo_root=$(git rev-parse --show-toplevel)
-cd "$repo_root" && cargo run --manifest-path datafusion/proto/gen/Cargo.toml
+exec "$repo_root/datafusion/proto-models/regen.sh"

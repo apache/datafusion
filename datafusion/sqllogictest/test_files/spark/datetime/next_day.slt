@@ -36,6 +36,12 @@ SELECT next_day('2015-07-27'::DATE, 'Sat'::string);
 ----
 2015-08-01
 
+# Whitespace-padded day names should be rejected (return NULL) per Spark behavior
+query D
+SELECT next_day('2015-01-14'::DATE, ' MO '::string);
+----
+NULL
+
 query error Failed to coerce arguments to satisfy a call to 'next_day' function
 SELECT next_day('2015-07-27'::DATE);
 

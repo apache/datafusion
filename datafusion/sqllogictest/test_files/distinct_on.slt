@@ -195,3 +195,233 @@ RESET datafusion.explain.logical_plan_only;
 
 statement ok
 drop table t;
+
+# DISTINCT ON combined with GROUP BY + aggregation (issue #17256).
+# ON references a grouping column; ORDER BY uses an aggregate alias.
+query TII
+SELECT DISTINCT ON (c1) c1, c3, max(c4) AS agg2
+FROM aggregate_test_100 GROUP BY c1, c3 ORDER BY c1, agg2;
+----
+a 65 -28462
+b -60 -21739
+c 3 -30508
+d 102 -24558
+e -56 -31500
+
+# DISTINCT ON referencing a SELECT alias for an aggregate.
+query TI
+SELECT DISTINCT ON (agg2) c1, max(c4) AS agg2
+FROM aggregate_test_100 GROUP BY c1 ORDER BY agg2;
+----
+b 25286
+c 29106
+d 31106
+a 32064
+e 32514
+
+# DISTINCT ON with a scalar function over a grouping column.
+query TI
+SELECT DISTINCT ON (upper(c1)) c1, sum(c3) FROM aggregate_test_100
+GROUP BY c1 ORDER BY upper(c1);
+----
+a -385
+b -111
+c -28
+d 458
+e 847
+
+# Hidden ORDER BY tie-breaker: c3 is in GROUP BY and ORDER BY but
+# NOT in the SELECT list. PostgreSQL accepts this.
+query TI
+SELECT DISTINCT ON (c1) c1, max(c4) AS agg2
+FROM aggregate_test_100 GROUP BY c1, c3 ORDER BY c1, c3;
+----
+a 11640
+b 19316
+c -30187
+d 5613
+e 13611
+
+# Hidden DISTINCT ON key: ON references a grouping column that is
+# NOT in the SELECT list. ORDER BY adds a deterministic tie-breaker.
+query II
+SELECT DISTINCT ON (c1) c2 % 2, count(*) AS n
+FROM aggregate_test_100 GROUP BY c1, c2 % 2 ORDER BY c1, c2 % 2;
+----
+0 7
+0 9
+0 11
+0 6
+0 12
+
+# Raw aggregate expression in DISTINCT ON (not via an alias).
+query TI
+SELECT DISTINCT ON (sum(c3)) c1, sum(c3) AS total
+FROM aggregate_test_100 GROUP BY c1 ORDER BY sum(c3);
+----
+a -385
+b -111
+c -28
+d 458
+e 847
+
+# DISTINCT ON with HAVING.
+query TI
+SELECT DISTINCT ON (c1) c1, count(*) AS cnt FROM aggregate_test_100
+GROUP BY c1 HAVING count(*) > 10 ORDER BY c1, cnt DESC;
+----
+a 21
+b 19
+c 21
+d 18
+e 21
+
+# DISTINCT ON combined with a window function over a unique ordering
+# key, so the test is fully deterministic.
+query II
+WITH t(id, v) AS (VALUES (1, 10), (2, 20), (3, 10), (4, 30), (5, 20))
+SELECT DISTINCT ON (v) v, row_number() OVER (ORDER BY id) AS rn
+FROM t ORDER BY v, rn;
+----
+10 1
+20 2
+30 4
+
+# Raw window expression in DISTINCT ON (not via an alias). Uses a
+# unique ordering key so row_number is deterministic.
+query II
+WITH t(id, v) AS (VALUES (1, 10), (2, 20), (3, 30), (4, 40))
+SELECT DISTINCT ON (row_number() OVER (ORDER BY id)) id, v
+FROM t
+ORDER BY row_number() OVER (ORDER BY id);
+----
+1 10
+2 20
+3 30
+4 40
+
+# Qualified join columns with potential alias conflict.
+query TII
+WITH t1(k, v) AS (VALUES ('x', 1), ('x', 2), ('y', 3)),
+     t2(k, w) AS (VALUES ('x', 10), ('y', 20))
+SELECT DISTINCT ON (t1.k) t1.k, sum(t1.v) AS s, max(t2.w) AS mw
+FROM t1 JOIN t2 ON t1.k = t2.k
+GROUP BY t1.k ORDER BY t1.k;
+----
+x 3 10
+y 3 20
+
+# DISTINCT ON name conflicts with an input column of the same name.
+# PostgreSQL resolves `b` to the SELECT alias `a AS b`, not the input
+# column `t.b`. Groups should be keyed by `a`, not `t.b`.
+query TI
+WITH t(a, b) AS (VALUES ('x', 1), ('x', 2), ('y', 1))
+SELECT DISTINCT ON (b) a AS b, count(*) AS n
+FROM t GROUP BY a ORDER BY b;
+----
+x 2
+y 1
+
+# A bare alias resolves to the SELECT expression, but inside a larger
+# expression the same identifier refers to the input column. Postgres:
+#   ORDER BY a, b + 0 DESC
+# uses `a` (post-aggregate) and `t.b + 0`, so for a=100 the row with
+# t.b=2 wins (sum=2). DataFusion must not recursively swap `b` inside
+# `b + 0` for the alias.
+query II
+WITH t(a, b) AS (VALUES (100, 1), (100, 2), (200, 1))
+SELECT DISTINCT ON (a) a AS b, sum(b) AS s
+FROM t GROUP BY a, b ORDER BY a, b + 0 DESC;
+----
+100 2
+200 1
+
+# A nested ORDER BY expression over a SELECT alias is still rejected in
+# the post-aggregate DISTINCT ON path.
+query error No field named agg2
+WITH t(a, b) AS (VALUES (1, 10), (1, 20), (2, 30))
+SELECT DISTINCT ON (a) a, max(b) AS agg2
+FROM t GROUP BY a ORDER BY a, agg2 + 1;
+
+# DISTINCT ON after aggregation still needs the SELECT-list unnest
+# rewrite, and bare ORDER BY aliases should keep working against the
+# rewritten DistinctOn input.
+query II
+WITH t(a, b) AS (VALUES (1, 10), (1, 20), (2, 30))
+SELECT DISTINCT ON (a) a, unnest(array_agg(b)) AS b
+FROM t GROUP BY a ORDER BY a, b DESC;
+----
+1 20
+2 30
+
+# DISTINCT ON after aggregation also needs to keep multi-column SELECT
+# expansions from struct unnest working.
+query III
+WITH t(a, b) AS (VALUES (1, 10), (1, 20), (2, 30))
+SELECT DISTINCT ON (a) a, unnest(struct(max(b), min(b)))
+FROM t GROUP BY a ORDER BY a;
+----
+1 20 10
+2 30 30
+
+# DISTINCT ON keys that expand to multiple columns are rejected.
+query error DISTINCT ON expressions that expand to multiple columns are not supported with DISTINCT ON
+WITH t(a, b) AS (VALUES (1, 10), (2, 20))
+SELECT DISTINCT ON (unnest(struct(max(b), min(b)))) a
+FROM t GROUP BY a ORDER BY unnest(struct(max(b), min(b))), a;
+
+# ORDER BY tie-breakers that expand to multiple columns are rejected.
+query error ORDER BY expressions that expand to multiple columns are not supported with DISTINCT ON
+WITH t(a, b) AS (VALUES (1, 10), (2, 20))
+SELECT DISTINCT ON (a) a, max(b)
+FROM t GROUP BY a ORDER BY a, unnest(struct(max(b), min(b)));
+
+# Fast path (no aggregation): a bare ORDER BY alias must resolve to
+# its underlying SELECT expression so that the sort attached to
+# DistinctOn normalizes against the base plan.
+query T
+WITH t(a, b) AS (VALUES ('x', 1), ('x', 2), ('y', 3))
+SELECT DISTINCT ON (x) a AS x FROM t ORDER BY x;
+----
+x
+y
+
+# EXPLAIN for the post-aggregation case.
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+query TT
+explain SELECT DISTINCT ON (c1) c1, max(c4) AS agg2
+FROM aggregate_test_100 GROUP BY c1 ORDER BY c1, agg2;
+----
+logical_plan
+01)Projection: first_value(aggregate_test_100.c1) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, max(aggregate_test_100.c4) ASC NULLS LAST] AS c1, first_value(agg2) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, max(aggregate_test_100.c4) ASC NULLS LAST] AS agg2
+02)--Sort: aggregate_test_100.c1 ASC NULLS LAST
+03)----Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[first_value(aggregate_test_100.c1) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, max(aggregate_test_100.c4) ASC NULLS LAST], first_value(max(aggregate_test_100.c4) AS agg2) ORDER BY [aggregate_test_100.c1 ASC NULLS LAST, max(aggregate_test_100.c4) ASC NULLS LAST]]]
+04)------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[max(aggregate_test_100.c4)]]
+05)--------TableScan: aggregate_test_100 projection=[c1, c4]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+# Ordinal ORDER BY still works in the post-aggregate DISTINCT ON path.
+query TI
+SELECT DISTINCT ON (c1) c1, max(c4)
+FROM aggregate_test_100 GROUP BY c1 ORDER BY 1, 2;
+----
+a 32064
+b 25286
+c 29106
+d 31106
+e 32514
+
+# Synthetic repro for issue #17256.
+query TIR
+WITH t(a, b, c) AS (
+  VALUES ('x', 1, 10.0), ('x', 1, 20.0), ('y', 2, 30.0)
+)
+SELECT DISTINCT ON (a) a, b, sum(c) AS total
+FROM t GROUP BY a, b ORDER BY a, total DESC;
+----
+x 1 30
+y 2 30

@@ -52,9 +52,9 @@ Cargo.lock
 .history
 parquet-testing/*
 *rat.txt
-datafusion/proto/src/generated/datafusion_proto_common.rs
-datafusion/proto/src/generated/pbjson.rs
-datafusion/proto/src/generated/prost.rs
+datafusion/proto-models/src/generated/datafusion_proto_common.rs
+datafusion/proto-models/src/generated/pbjson.rs
+datafusion/proto-models/src/generated/prost.rs
 datafusion/proto-common/src/generated/pbjson.rs
 datafusion/proto-common/src/generated/prost.rs
 .github/ISSUE_TEMPLATE/bug_report.yml

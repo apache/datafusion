@@ -151,8 +151,8 @@ SELECT
 ----
 {outer_key1: {inner_a: 1, inner_b: 2}, outer_key2: {inner_x: 10, inner_y: 20, inner_z: 30}}
 
-# Test with duplicate keys
-query ?
+# Test with duplicate keys: raises DUPLICATED_MAP_KEY under Spark's default policy
+query error DataFusion error: Execution error: \[DUPLICATED_MAP_KEY\] Duplicate map key true was found
 SELECT map_from_entries(array(
     struct(true, 'a'), 
     struct(false, 'b'), 
@@ -160,5 +160,58 @@ SELECT map_from_entries(array(
     struct(false, cast(NULL as string)), 
     struct(true, 'd')
 ));
+
+# Integer keys with a duplicate also raise DUPLICATED_MAP_KEY.
+query error DataFusion error: Execution error: \[DUPLICATED_MAP_KEY\] Duplicate map key 1 was found
+SELECT map_from_entries(array(struct(1, 'a'), struct(2, 'b'), struct(1, 'c')));
+
+# String keys with triple occurrence also raise DUPLICATED_MAP_KEY.
+query error DataFusion error: Execution error: \[DUPLICATED_MAP_KEY\] Duplicate map key k was found
+SELECT map_from_entries(array(struct('k', 1), struct('k', 2), struct('k', 3)));
+
+# Multi-row: a clean row followed by a duplicate row still errors.
+query error DataFusion error: Execution error: \[DUPLICATED_MAP_KEY\] Duplicate map key 1 was found
+SELECT map_from_entries(data)
+FROM values
+    (array[struct(1, 'a'), struct(2, 'b')]),
+    (array[struct(1, 'x'), struct(1, 'y')])
+AS tab(data);
+
+# LAST_WIN policy: duplicates are allowed; later occurrences overwrite earlier ones.
+statement ok
+set datafusion.spark.map_key_dedup_policy = 'LAST_WIN';
+
+query ?
+SELECT map_from_entries(array(
+    struct(true, 'a'),
+    struct(false, 'b'),
+    struct(true, 'c'),
+    struct(false, cast(NULL as string)),
+    struct(true, 'd')
+));
 ----
-{false: NULL, true: d}
+{true: d, false: NULL}
+
+query ?
+SELECT map_from_entries(array(struct(1, 'a'), struct(2, 'b'), struct(1, 'c')));
+----
+{1: c, 2: b}
+
+query ?
+SELECT map_from_entries(array(struct('k', 1), struct('k', 2), struct('k', 3)));
+----
+{k: 3}
+
+# Multi-row mix under LAST_WIN: clean row + duplicate row both succeed.
+query ?
+SELECT map_from_entries(data)
+FROM values
+    (array[struct(1, 'a'), struct(2, 'b')]),
+    (array[struct(1, 'x'), struct(1, 'y')])
+AS tab(data);
+----
+{1: a, 2: b}
+{1: y}
+
+statement ok
+set datafusion.spark.map_key_dedup_policy = 'EXCEPTION';

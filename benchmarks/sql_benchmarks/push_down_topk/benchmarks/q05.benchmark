@@ -1,0 +1,23 @@
+-- Negative case: ORDER BY references the probe (non-preserved) side.
+-- The rule MUST NOT fire here -- orders is the right side of a LEFT JOIN
+-- so it isn't preserved (rows can be NULL when there's no match), and
+-- pushing a TopK onto orders would change semantics. Included so the
+-- bench captures the no-pushdown path alongside the positive cases.
+
+name Q05
+group push_down_topk
+
+load sql_benchmarks/push_down_topk/init/load.sql
+
+assert I
+SELECT COUNT(*) > 0 from orders;
+----
+true
+
+run
+SELECT c_custkey, o_totalprice
+FROM customer LEFT JOIN orders ON c_custkey = o_custkey
+ORDER BY o_totalprice
+LIMIT 10;
+
+cleanup sql_benchmarks/push_down_topk/init/cleanup.sql

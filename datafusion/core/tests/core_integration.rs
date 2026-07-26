@@ -63,6 +63,9 @@ mod tracing;
 /// Run all tests that are found in the `extension_types` directory
 mod extension_types;
 
+/// Helper functions for tests.
+mod helper;
+
 #[cfg(test)]
 #[ctor::ctor(unsafe)]
 fn init() {

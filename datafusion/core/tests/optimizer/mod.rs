@@ -216,7 +216,7 @@ impl ContextProvider for MyContextProvider {
         self.udfs.get(name).cloned()
     }
 
-    fn get_higher_order_meta(&self, _name: &str) -> Option<Arc<dyn HigherOrderUDF>> {
+    fn get_higher_order_meta(&self, _name: &str) -> Option<Arc<HigherOrderUDF>> {
         None
     }
 

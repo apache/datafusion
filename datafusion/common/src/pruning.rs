@@ -305,7 +305,7 @@ impl PruningStatistics for PartitionPruningStatistics {
 /// that has statistics of its columns.
 ///
 /// It is up to the caller to decide what each container represents. For
-/// example, they can come from a file (e.g. [`PartitionedFile`]) or a set of of
+/// example, they can come from a file (e.g. [`PartitionedFile`]) or a set of
 /// files (e.g. [`FileGroup`])
 ///
 /// [`PartitionedFile`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.PartitionedFile.html

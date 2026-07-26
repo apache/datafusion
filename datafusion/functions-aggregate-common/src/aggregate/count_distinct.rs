@@ -28,5 +28,6 @@ pub use native::Bitmap65536DistinctCountAccumulator;
 pub use native::Bitmap65536DistinctCountAccumulatorI16;
 pub use native::BoolArray256DistinctCountAccumulator;
 pub use native::BoolArray256DistinctCountAccumulatorI8;
+pub use native::BooleanDistinctCountAccumulator;
 pub use native::FloatDistinctCountAccumulator;
 pub use native::PrimitiveDistinctCountAccumulator;

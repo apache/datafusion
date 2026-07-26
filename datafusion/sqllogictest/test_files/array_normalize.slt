@@ -1,0 +1,146 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+## array_normalize
+
+# 3-4-5 right triangle: [3,4] / 5 = [0.6, 0.8]
+query ?
+select array_normalize([3.0, 4.0]);
+----
+[0.6, 0.8]
+
+# Already-unit vector along axis: [1,0] -> [1,0]
+query ?
+select array_normalize([1.0, 0.0]);
+----
+[1.0, 0.0]
+
+# 3D vector: [1,2,2] / 3 = [0.333..., 0.666..., 0.666...]
+query ?
+select array_normalize([1.0, 2.0, 2.0]);
+----
+[0.3333333333333333, 0.6666666666666666, 0.6666666666666666]
+
+# Negative components preserved
+query ?
+select array_normalize([-3.0, 4.0]);
+----
+[-0.6, 0.8]
+
+# Bare NULL input returns NULL
+query ?
+select array_normalize(NULL);
+----
+NULL
+
+# NULL element inside a list returns NULL for that row
+query ?
+select array_normalize([1.0, NULL, 2.0]);
+----
+NULL
+
+# Zero vector returns NULL (undefined normalization)
+query ?
+select array_normalize([0.0, 0.0]);
+----
+NULL
+
+# Single non-zero component: [5] -> [1]
+query ?
+select array_normalize([5.0]);
+----
+[1.0]
+
+# LargeList support
+query ?
+select array_normalize(arrow_cast([3.0, 4.0], 'LargeList(Float64)'));
+----
+[0.6, 0.8]
+
+# FixedSizeList input (coerced to List)
+query ?
+select array_normalize(arrow_cast([3.0, 4.0], 'FixedSizeList(2, Float64)'));
+----
+[0.6, 0.8]
+
+# Float32 inner type (coerced to Float64)
+query ?
+select array_normalize(arrow_cast([3.0, 4.0], 'List(Float32)'));
+----
+[0.6, 0.8]
+
+# Int64 inner type (coerced to Float64)
+query ?
+select array_normalize(arrow_cast([3, 4], 'List(Int64)'));
+----
+[0.6, 0.8]
+
+# Integer literals (coerced to Float64)
+query ?
+select array_normalize([3, 4]);
+----
+[0.6, 0.8]
+
+# Unsupported non-list input (plan error)
+query error array_normalize does not support type
+select array_normalize(1);
+
+# Multi-row query: normal row, NULL row, zero-vector row, NULL-element row
+query ?
+select array_normalize(column1) from (values
+    (make_array(3.0, 4.0)),
+    (NULL),
+    (make_array(0.0, 0.0)),
+    (make_array(1.0, NULL))
+) as t(column1);
+----
+[0.6, 0.8]
+NULL
+NULL
+NULL
+
+# Empty array: returns empty array (no normalization needed, no division by zero)
+query ?
+select array_normalize(arrow_cast(make_array(), 'List(Float64)'));
+----
+[]
+
+# No arguments error
+query error array_normalize function requires 1 argument, got 0
+select array_normalize();
+
+# Return type matches input variant (List of Float64)
+query ?T
+select array_normalize([3.0, 4.0]), arrow_typeof(array_normalize([3.0, 4.0]));
+----
+[0.6, 0.8] List(Float64)
+
+# list_normalize alias produces the same result
+query ?
+select list_normalize([3.0, 4.0]);
+----
+[0.6, 0.8]
+
+# list_normalize alias multi-row with NULL row
+query ?
+select list_normalize(column1) from (values
+    (make_array(3.0, 4.0)),
+    (NULL)
+) as t(column1);
+----
+[0.6, 0.8]
+NULL

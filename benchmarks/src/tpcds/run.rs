@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
 
+use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -34,7 +35,7 @@ use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
 use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
-use datafusion_common::{DEFAULT_PARQUET_EXTENSION, plan_err};
+use datafusion_common::{Constraint, Constraints, DEFAULT_PARQUET_EXTENSION, plan_err};
 
 use clap::Args;
 use log::info;
@@ -70,6 +71,61 @@ pub const TPCDS_TABLES: &[&str] = &[
     "warehouse",
     "web_site",
 ];
+
+static TPCDS_PRIMARY_KEYS: &[(&str, &[&str])] = &[
+    ("call_center", &["cc_call_center_sk"]),
+    ("catalog_page", &["cp_catalog_page_sk"]),
+    ("catalog_returns", &["cr_item_sk", "cr_order_number"]),
+    ("catalog_sales", &["cs_item_sk", "cs_order_number"]),
+    ("customer", &["c_customer_sk"]),
+    ("customer_address", &["ca_address_sk"]),
+    ("customer_demographics", &["cd_demo_sk"]),
+    ("date_dim", &["d_date_sk"]),
+    ("household_demographics", &["hd_demo_sk"]),
+    ("income_band", &["ib_income_band_sk"]),
+    (
+        "inventory",
+        &["inv_date_sk", "inv_item_sk", "inv_warehouse_sk"],
+    ),
+    ("item", &["i_item_sk"]),
+    ("promotion", &["p_promo_sk"]),
+    ("reason", &["r_reason_sk"]),
+    ("ship_mode", &["sm_ship_mode_sk"]),
+    ("store", &["s_store_sk"]),
+    ("store_returns", &["sr_item_sk", "sr_ticket_number"]),
+    ("store_sales", &["ss_item_sk", "ss_ticket_number"]),
+    ("time_dim", &["t_time_sk"]),
+    ("warehouse", &["w_warehouse_sk"]),
+    ("web_page", &["wp_web_page_sk"]),
+    ("web_returns", &["wr_item_sk", "wr_order_number"]),
+    ("web_sales", &["ws_item_sk", "ws_order_number"]),
+    ("web_site", &["web_site_sk"]),
+];
+
+/// Get the constraints for a TPC-DS table. Only primary keys are returned;
+/// TPC-DS also defines foreign keys, but those are currently unsupported.
+fn table_constraints(table: &str, schema: &Schema) -> Constraints {
+    let columns = TPCDS_PRIMARY_KEYS
+        .iter()
+        .find(|(name, _)| *name == table)
+        .map(|(_, columns)| *columns)
+        .unwrap_or_else(|| unimplemented!("unknown TPC-DS table: {table}"));
+
+    Constraints::new_unverified(vec![primary_key(schema, columns)])
+}
+
+fn primary_key(schema: &Schema, column_names: &[&str]) -> Constraint {
+    let indices = column_names
+        .iter()
+        .map(|column_name| {
+            schema.index_of(column_name).unwrap_or_else(|_| {
+                panic!("primary key column '{column_name}' not found in schema")
+            })
+        })
+        .collect();
+
+    Constraint::PrimaryKey(indices)
+}
 
 /// Get the SQL statements from the specified query file
 pub fn get_query_sql(base_query_path: &str, query: usize) -> Result<Vec<String>> {
@@ -308,7 +364,6 @@ impl RunOpt {
         table: &str,
     ) -> Result<Arc<dyn TableProvider>> {
         let path = self.path.to_str().unwrap();
-        let target_partitions = self.partitions();
 
         // Obtain a snapshot of the SessionState
         let state = ctx.state();
@@ -324,10 +379,10 @@ impl RunOpt {
 
         let table_path = ListingTableUrl::parse(path)?;
         let options = ListingOptions::new(Arc::new(format))
-            .with_file_extension(DEFAULT_PARQUET_EXTENSION)
-            .with_target_partitions(target_partitions)
-            .with_collect_stat(state.config().collect_statistics());
+            .with_file_extension(DEFAULT_PARQUET_EXTENSION);
+
         let schema = options.infer_schema(&state, &table_path).await?;
+        let constraints = table_constraints(table, schema.as_ref());
 
         if self.common.debug {
             println!(
@@ -347,7 +402,11 @@ impl RunOpt {
             .with_listing_options(options)
             .with_schema(schema);
 
-        Ok(Arc::new(ListingTable::try_new(config)?))
+        let provider = ListingTable::try_new(config)?
+            .with_constraints(constraints)
+            .with_cache(ctx.runtime_env().cache_manager.get_file_statistic_cache());
+
+        Ok(Arc::new(provider))
     }
 
     fn iterations(&self) -> usize {

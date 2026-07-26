@@ -1,0 +1,103 @@
+{
+  "extensionUris": [{
+    "extensionUriAnchor": 1,
+    "uri": "/functions_arithmetic.yaml"
+  }],
+  "extensions": [{
+    "extensionFunction": {
+      "extensionUriReference": 1,
+      "functionAnchor": 0,
+      "name": "sum:i64"
+    }
+  }],
+  "relations": [{
+    "root": {
+      "input": {
+        "aggregate": {
+          "common": {
+            "direct": {}
+          },
+          "input": {
+            "read": {
+              "common": {
+                "direct": {}
+              },
+              "baseSchema": {
+                "names": ["a"],
+                "struct": {
+                  "types": [{
+                    "i64": {
+                      "nullability": "NULLABILITY_NULLABLE"
+                    }
+                  }],
+                  "nullability": "NULLABILITY_REQUIRED"
+                }
+              },
+              "namedTable": {
+                "names": ["data"]
+              }
+            }
+          },
+          "groupings": [{
+            "groupingExpressions": []
+          }],
+          "measures": [
+            {
+              "measure": {
+                "functionReference": 0,
+                "phase": "AGGREGATION_PHASE_INITIAL_TO_RESULT",
+                "outputType": {
+                  "i64": {
+                    "nullability": "NULLABILITY_NULLABLE"
+                  }
+                },
+                "invocation": "AGGREGATION_INVOCATION_ALL",
+                "arguments": [{
+                  "value": {
+                    "selection": {
+                      "directReference": {
+                        "structField": {
+                          "field": 0
+                        }
+                      },
+                      "rootReference": {}
+                    }
+                  }
+                }]
+              }
+            },
+            {
+              "measure": {
+                "functionReference": 0,
+                "phase": "AGGREGATION_PHASE_INITIAL_TO_RESULT",
+                "outputType": {
+                  "i64": {
+                    "nullability": "NULLABILITY_NULLABLE"
+                  }
+                },
+                "invocation": "AGGREGATION_INVOCATION_ALL",
+                "arguments": [{
+                  "value": {
+                    "selection": {
+                      "directReference": {
+                        "structField": {
+                          "field": 0
+                        }
+                      },
+                      "rootReference": {}
+                    }
+                  }
+                }]
+              }
+            }
+          ]
+        }
+      },
+      "names": ["sum_a_1", "sum_a_2"]
+    }
+  }],
+  "version": {
+    "minorNumber": 54,
+    "producer": "manual"
+  }
+}

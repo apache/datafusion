@@ -142,7 +142,7 @@ WHERE int_col > 5
   AND float_col BETWEEN 1 AND 100;
 ----
 logical_plan
-01)Filter: test_data.str_col LIKE Utf8View("A%") AND test_data.float_col >= Float32(1) AND test_data.float_col <= Float32(100) AND test_data.int_col > Int32(10)
+01)Filter: test_data.float_col >= Float32(1) AND test_data.float_col <= Float32(100) AND test_data.int_col > Int32(10) AND test_data.str_col LIKE Utf8View("A%")
 02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
 
 statement ok

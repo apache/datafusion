@@ -40,7 +40,6 @@ use arrow::buffer::Buffer;
 use arrow::ipc::reader::{FileDecoder, FileReader, StreamReader};
 use datafusion_common::error::Result;
 use datafusion_common::exec_datafusion_err;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_datasource::PartitionedFile;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -341,7 +340,7 @@ impl FileSource for ArrowSource {
                 // The Arrow IPC stream format doesn't support range-based parallel reading
                 // because it lacks a footer with the information that would be needed to
                 // make range-based parallel reading practical. Without the data in the
-                // footer you would either need to read the the entire file and record the
+                // footer you would either need to read the entire file and record the
                 // offsets of the record batches and dictionaries, essentially recreating
                 // the footer's contents, or else each partition would need to read the
                 // entire file up to the correct offset which is a lot of duplicate I/O.
@@ -392,20 +391,6 @@ impl FileSource for ArrowSource {
 
     fn projection(&self) -> Option<&ProjectionExprs> {
         Some(&self.projection.source)
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(
-            &dyn datafusion_physical_plan::PhysicalExpr,
-        ) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Visit projection expressions
-        let mut tnr = TreeNodeRecursion::Continue;
-        for proj_expr in &self.projection.source {
-            tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
-        }
-        Ok(tnr)
     }
 }
 

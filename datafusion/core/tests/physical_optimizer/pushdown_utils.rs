@@ -18,7 +18,6 @@
 use arrow::datatypes::SchemaRef;
 use arrow::{array::RecordBatch, compute::concat_batches};
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, config::ConfigOptions, internal_err};
 use datafusion_datasource::{
     PartitionedFile, file::FileSource, file_scan_config::FileScanConfig,
@@ -112,7 +111,7 @@ pub struct TestSource {
 
 impl TestSource {
     pub fn new(schema: SchemaRef, support: bool, batches: Vec<RecordBatch>) -> Self {
-        let table_schema = datafusion_datasource::TableSchema::new(schema, vec![]);
+        let table_schema = datafusion_datasource::TableSchema::from(schema);
         Self {
             support,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -234,25 +233,6 @@ impl FileSource for TestSource {
 
     fn table_schema(&self) -> &datafusion_datasource::TableSchema {
         &self.table_schema
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Visit predicate (filter) expression if present
-        if let Some(predicate) = &self.predicate {
-            f(predicate.as_ref())?;
-        }
-
-        // Visit projection expressions if present
-        if let Some(projection) = &self.projection {
-            for proj_expr in projection {
-                f(proj_expr.expr.as_ref())?;
-            }
-        }
-
-        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -568,14 +548,5 @@ impl ExecutionPlan for TestNode {
             let res = FilterPushdownPropagation::if_all(child_pushdown_result);
             Ok(res)
         }
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Visit the predicate expression
-        f(self.predicate.as_ref())?;
-        Ok(TreeNodeRecursion::Continue)
     }
 }

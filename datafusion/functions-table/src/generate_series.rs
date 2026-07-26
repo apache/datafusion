@@ -18,6 +18,7 @@
 use arrow::array::timezone::Tz;
 use arrow::array::types::TimestampNanosecondType;
 use arrow::array::{ArrayRef, Int64Array, TimestampNanosecondArray};
+use arrow::compute::SortOptions;
 use arrow::datatypes::{
     DataType, Field, IntervalMonthDayNano, Schema, SchemaRef, TimeUnit,
 };
@@ -28,6 +29,8 @@ use datafusion_catalog::TableProvider;
 use datafusion_catalog::{Session, TableFunctionArgs};
 use datafusion_common::{Result, ScalarValue, plan_err};
 use datafusion_expr::{Expr, TableType};
+use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
 use parking_lot::RwLock;
@@ -333,6 +336,29 @@ impl GenerateSeriesTable {
 
         Ok(generator)
     }
+
+    /// Detects output sort order to potentially remove `SortExec`.
+    /// Only the `Int64` argument type is currently supported.
+    fn output_ordering(&self, schema: &Schema) -> Option<PhysicalSortExpr> {
+        let step = match &self.args {
+            GenSeriesArgs::Int64Args { step, .. } => *step,
+            _ => return None,
+        };
+
+        if schema.fields().is_empty() {
+            return None;
+        }
+
+        let descending = step < 0;
+        Some(PhysicalSortExpr::new(
+            Arc::new(Column::new(schema.field(0).name(), 0)),
+            SortOptions {
+                descending,
+                // this table function won't output nulls, so either is fine
+                nulls_first: false,
+            },
+        ))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -458,13 +484,16 @@ impl TableProvider for GenerateSeriesTable {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let batch_size = state.config_options().execution.batch_size;
+        let batch_size = state.config_options().execution.batch_size.get();
         let generator = self.as_generator(batch_size)?;
+        let mut exec = LazyMemoryExec::try_new(self.schema(), vec![generator])?
+            .with_projection(projection.cloned());
 
-        Ok(Arc::new(
-            LazyMemoryExec::try_new(self.schema(), vec![generator])?
-                .with_projection(projection.cloned()),
-        ))
+        if let Some(ordering) = self.output_ordering(exec.schema().as_ref()) {
+            exec.add_ordering([ordering]);
+        }
+
+        Ok(Arc::new(exec))
     }
 }
 

@@ -79,7 +79,7 @@ physical_plan
 
 
 # Deleting by columns that do not exist returns an error
-query error DataFusion error: Schema error: No field named e. Valid fields are t1.a, t1.b, t1.c, t1.d.
+query error DataFusion error: Schema error: No field named e\.\nValid fields are t1.a, t1.b, t1.c, t1.d.
 explain delete from t1 where e = 1;
 
 

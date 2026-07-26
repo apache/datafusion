@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::aggregates::group_values::HashValue;
 use crate::aggregates::group_values::multi_group_by::{
     GroupColumn, Nulls, nulls_equal_to,
 };
@@ -28,6 +29,7 @@ use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::DataType;
 use arrow::util::bit_util::apply_bitwise_binary_op;
 use datafusion_common::Result;
+use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use std::iter;
 use std::sync::Arc;
@@ -50,6 +52,7 @@ pub struct PrimitiveGroupValueBuilder<T: ArrowPrimitiveType, const NULLABLE: boo
 impl<T, const NULLABLE: bool> PrimitiveGroupValueBuilder<T, NULLABLE>
 where
     T: ArrowPrimitiveType,
+    T::Native: HashValue,
 {
     /// Create a new `PrimitiveGroupValueBuilder`
     pub fn new(data_type: DataType) -> Self {
@@ -80,6 +83,9 @@ where
 
         for (i, (&lhs_row, &rhs_row)) in lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
         {
+            if !equal_to_results.get_bit(i) {
+                continue;
+            }
             let left = if cfg!(debug_assertions) {
                 self.group_values[lhs_row]
             } else {
@@ -90,7 +96,9 @@ where
             } else {
                 unsafe { *array_values.get_unchecked(rhs_row) }
             };
-            if left.is_eq(right) {
+            // `left` was already canonicalized on append; canonicalize the
+            // input so ±0 (and any future equivalence class) compares equal.
+            if left.is_eq(right.canonicalize()) {
                 cmp_buf[i / 8] |= 1 << (i % 8);
             }
         }
@@ -122,7 +130,6 @@ where
             if !equal_to_results.get_bit(idx) {
                 continue;
             }
-
             let exist_null = self.nulls.is_null(lhs_row);
             let input_null = array.is_null(rhs_row);
             if let Some(result) = nulls_equal_to(exist_null, input_null) {
@@ -132,7 +139,7 @@ where
                 continue;
             }
 
-            if !self.group_values[lhs_row].is_eq(array.value(rhs_row)) {
+            if !self.group_values[lhs_row].is_eq(array.value(rhs_row).canonicalize()) {
                 equal_to_results.set_bit(idx, false);
             }
         }
@@ -141,6 +148,8 @@ where
 
 impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
     for PrimitiveGroupValueBuilder<T, NULLABLE>
+where
+    T::Native: HashValue,
 {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
         // Perf: skip null check (by short circuit) if input is not nullable
@@ -153,7 +162,8 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
             // Otherwise, we need to check their values
         }
 
-        self.group_values[lhs_row].is_eq(array.as_primitive::<T>().value(rhs_row))
+        self.group_values[lhs_row]
+            .is_eq(array.as_primitive::<T>().value(rhs_row).canonicalize())
     }
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()> {
@@ -164,10 +174,12 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
                 self.group_values.push(T::default_value());
             } else {
                 self.nulls.append(false);
-                self.group_values.push(array.as_primitive::<T>().value(row));
+                self.group_values
+                    .push(array.as_primitive::<T>().value(row).canonicalize());
             }
         } else {
-            self.group_values.push(array.as_primitive::<T>().value(row));
+            self.group_values
+                .push(array.as_primitive::<T>().value(row).canonicalize());
         }
 
         Ok(())
@@ -213,7 +225,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
                         self.group_values.push(T::default_value());
                     } else {
                         self.nulls.append(false);
-                        self.group_values.push(arr.value(row));
+                        self.group_values.push(arr.value(row).canonicalize());
                     }
                 }
             }
@@ -221,7 +233,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
             (true, Nulls::None) => {
                 self.nulls.append_n(rows.len(), false);
                 for &row in rows {
-                    self.group_values.push(arr.value(row));
+                    self.group_values.push(arr.value(row).canonicalize());
                 }
             }
 
@@ -233,7 +245,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
 
             (false, _) => {
                 for &row in rows {
-                    self.group_values.push(arr.value(row));
+                    self.group_values.push(arr.value(row).canonicalize());
                 }
             }
         }
@@ -267,8 +279,7 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
-        let first_n = self.group_values.drain(0..n).collect::<Vec<_>>();
-
+        let first_n = split_vec_min_alloc(&mut self.group_values, n);
         let first_n_nulls = if NULLABLE { self.nulls.take_n(n) } else { None };
 
         Arc::new(
@@ -284,9 +295,10 @@ mod tests {
 
     use crate::aggregates::group_values::multi_group_by::primitive::PrimitiveGroupValueBuilder;
     use arrow::array::{
-        ArrayRef, BooleanBufferBuilder, Float32Array, Int64Array, NullBufferBuilder,
+        ArrayRef, BooleanBufferBuilder, Float32Array, Int32Array, Int64Array,
+        NullBufferBuilder,
     };
-    use arrow::datatypes::{DataType, Float32Type, Int64Type};
+    use arrow::datatypes::{DataType, Float32Type, Int32Type, Int64Type};
 
     use super::GroupColumn;
 
@@ -583,5 +595,60 @@ mod tests {
         assert!(results[2]);
         assert!(results[3]);
         assert!(results[4]);
+    }
+
+    // All bits false: every row must be skipped; accessing any lhs/rhs index would panic.
+    #[test]
+    fn test_vectorized_equal_to_skips_false_rows() {
+        let mut builder =
+            PrimitiveGroupValueBuilder::<Int32Type, true>::new(DataType::Int32);
+        let array = Arc::new(Int32Array::from(vec![None::<i32>, None])) as ArrayRef;
+        builder.vectorized_append(&array, &[0, 1]).unwrap();
+
+        let mut results = BooleanBufferBuilder::new(2);
+        results.append_n(2, false);
+
+        builder.vectorized_equal_to(
+            &[usize::MAX, usize::MAX],
+            &array,
+            &[usize::MAX, usize::MAX],
+            &mut results,
+        );
+    }
+
+    #[test]
+    fn test_primitive_take_n() {
+        // drain branch: n * 2 <= len
+        let mut builder =
+            PrimitiveGroupValueBuilder::<Int64Type, true>::new(DataType::Int64);
+        let array = Arc::new(Int64Array::from(vec![
+            Some(10),
+            None,
+            Some(30),
+            Some(40),
+            Some(50),
+        ])) as ArrayRef;
+        for i in 0..5 {
+            builder.append_val(&array, i).unwrap();
+        }
+        // len=5, n=2, n*2=4 <= 5  →  drain branch
+        let out = builder.take_n(2);
+        let expected = Arc::new(Int64Array::from(vec![Some(10), None])) as ArrayRef;
+        assert_eq!(&out, &expected);
+        // remaining: [30, 40, 50]
+        assert_eq!(builder.len(), 3);
+
+        // split_off branch: remaining < n  (len=3, n=2, n*2=4 > 3)
+        let out2 = builder.take_n(2);
+        let expected2 = Arc::new(Int64Array::from(vec![Some(30), Some(40)])) as ArrayRef;
+        assert_eq!(&out2, &expected2);
+        // remaining: [50]
+        assert_eq!(builder.len(), 1);
+
+        // take the last element
+        let out3 = builder.take_n(1);
+        let expected3 = Arc::new(Int64Array::from(vec![Some(50)])) as ArrayRef;
+        assert_eq!(&out3, &expected3);
+        assert_eq!(builder.len(), 0);
     }
 }

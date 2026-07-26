@@ -141,6 +141,7 @@ mod tests {
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::dml::InsertOp;
+    use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
     use datafusion_physical_plan::{ExecutionPlan, collect};
 
@@ -715,12 +716,16 @@ mod tests {
 
         // test metadata
         assert_eq!(
-            exec.partition_statistics(None)?.num_rows,
+            StatisticsContext::new()
+                .compute(exec.as_ref(), &StatisticsArgs::new())?
+                .num_rows,
             Precision::Exact(8)
         );
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(
-            exec.partition_statistics(None)?.total_byte_size,
+            StatisticsContext::new()
+                .compute(exec.as_ref(), &StatisticsArgs::new())?
+                .total_byte_size,
             Precision::Absent,
         );
 
@@ -764,11 +769,15 @@ mod tests {
 
         // note: even if the limit is set, the executor rounds up to the batch size
         assert_eq!(
-            exec.partition_statistics(None)?.num_rows,
+            StatisticsContext::new()
+                .compute(exec.as_ref(), &StatisticsArgs::new())?
+                .num_rows,
             Precision::Exact(8)
         );
         assert_eq!(
-            exec.partition_statistics(None)?.total_byte_size,
+            StatisticsContext::new()
+                .compute(exec.as_ref(), &StatisticsArgs::new())?
+                .total_byte_size,
             Precision::Absent,
         );
         let batches = collect(exec, task_ctx).await?;

@@ -59,7 +59,7 @@ pub struct FFI_MetricsSet {
 pub struct FFI_Metric {
     pub value: FFI_MetricValue,
     pub labels: SVec<FFI_Label>,
-    pub partition: FFI_Option<u64>,
+    pub partition: FFI_Option<usize>,
     pub metric_type: FFI_MetricType,
     pub metric_category: FFI_Option<FFI_MetricCategory>,
 }
@@ -128,6 +128,9 @@ pub struct FFI_RatioMetrics {
 }
 
 /// FFI-stable mirror of [`MetricValue`].
+///
+/// This is part of the stable ABI and must not be reordered. New variants must be
+/// appended at the end.
 #[repr(C, u8)]
 #[derive(Debug, Clone)]
 pub enum FFI_MetricValue {
@@ -170,6 +173,10 @@ pub enum FFI_MetricValue {
         display: SString,
         as_usize_value: u64,
     },
+    PeakMemoryUsage {
+        name: SString,
+        gauge: u64,
+    },
 }
 
 // -----------------------------------------------------------------------------
@@ -203,7 +210,7 @@ impl From<&Metric> for FFI_Metric {
         Self {
             value: FFI_MetricValue::from(m.value()),
             labels: m.labels().iter().map(FFI_Label::from).collect(),
-            partition: m.partition().map(|p| p as u64).into(),
+            partition: m.partition().into(),
             metric_type: m.metric_type().into(),
             metric_category: m.metric_category().map(FFI_MetricCategory::from).into(),
         }
@@ -213,14 +220,10 @@ impl From<&Metric> for FFI_Metric {
 impl From<FFI_Metric> for Metric {
     fn from(m: FFI_Metric) -> Self {
         let labels: Vec<Label> = m.labels.into_iter().map(Label::from).collect();
-        let partition: Option<u64> = m.partition.into();
+        let partition: Option<usize> = m.partition.into();
         let category: Option<FFI_MetricCategory> = m.metric_category.into();
-        let mut metric = Metric::new_with_labels(
-            m.value.into(),
-            partition.map(|p| p as usize),
-            labels,
-        )
-        .with_type(m.metric_type.into());
+        let mut metric = Metric::new_with_labels(m.value.into(), partition, labels)
+            .with_type(m.metric_type.into());
         if let Some(c) = category {
             metric = metric.with_category(c.into());
         }
@@ -429,6 +432,10 @@ impl From<&MetricValue> for FFI_MetricValue {
                 name: SString::from(name.as_ref()),
                 gauge: gauge.value() as u64,
             },
+            MetricValue::PeakMemoryUsage { name, gauge } => Self::PeakMemoryUsage {
+                name: SString::from(name.as_ref()),
+                gauge: gauge.value() as u64,
+            },
             MetricValue::Time { name, time } => Self::Time {
                 name: SString::from(name.as_ref()),
                 time_ns: time.value() as u64,
@@ -482,6 +489,10 @@ impl From<FFI_MetricValue> for MetricValue {
                 count: count_from_value(count),
             },
             FFI_MetricValue::Gauge { name, gauge } => Self::Gauge {
+                name: Cow::Owned(name.into()),
+                gauge: gauge_from_value(gauge),
+            },
+            FFI_MetricValue::PeakMemoryUsage { name, gauge } => Self::PeakMemoryUsage {
                 name: Cow::Owned(name.into()),
                 gauge: gauge_from_value(gauge),
             },
@@ -626,6 +637,13 @@ mod tests {
         assert_value_roundtrip(MetricValue::Gauge {
             name: Cow::Borrowed("custom_gauge"),
             gauge,
+        });
+
+        let peak_memory = Gauge::new();
+        peak_memory.add(44);
+        assert_value_roundtrip(MetricValue::PeakMemoryUsage {
+            name: Cow::Borrowed("peak_mem_used"),
+            gauge: peak_memory,
         });
 
         let time = Time::new();

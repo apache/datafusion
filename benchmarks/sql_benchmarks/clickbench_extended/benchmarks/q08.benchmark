@@ -1,0 +1,19 @@
+name Q08
+group clickbench_extended
+subgroup ${CLICKBENCH_TYPE:-single}
+
+init sql_benchmarks/clickbench/init/set_config.sql
+
+load sql_benchmarks/clickbench/init/load-${CLICKBENCH_TYPE:-single}.sql
+
+assert I
+SELECT COUNT(*) > 0 from hits;
+----
+true
+
+run
+-- Must set for ClickBench hits_partitioned dataset. See https://github.com/apache/datafusion/issues/16591
+-- set datafusion.execution.parquet.binary_as_string = true
+SELECT "RegionID", "UserAgent", "OS", AVG(to_timestamp("ResponseEndTiming")-to_timestamp("ResponseStartTiming")) as avg_response_time, AVG(to_timestamp("ResponseEndTiming")-to_timestamp("ConnectTiming")) as avg_latency FROM hits GROUP BY "RegionID", "UserAgent", "OS" ORDER BY avg_latency DESC limit 10;
+
+result sql_benchmarks/clickbench_extended/results/q08.csv

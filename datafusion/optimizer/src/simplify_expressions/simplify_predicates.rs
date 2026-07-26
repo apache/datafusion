@@ -63,12 +63,14 @@ pub fn simplify_predicates(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
                     | Operator::Eq,
                 right,
             }) => {
-                let left_col = extract_column_from_expr(left);
-                let right_col = extract_column_from_expr(right);
-                if let (Some(col), Some(_)) = (&left_col, right.as_literal()) {
-                    column_predicates.entry(col.clone()).or_default().push(pred);
-                } else if let (Some(_), Some(col)) = (left.as_literal(), &right_col) {
-                    column_predicates.entry(col.clone()).or_default().push(pred);
+                if let (Some(col), Some(_)) =
+                    (extract_column_from_expr(left), right.as_literal())
+                {
+                    column_predicates.entry(col).or_default().push(pred);
+                } else if let (Some(_), Some(col)) =
+                    (left.as_literal(), extract_column_from_expr(right))
+                {
+                    column_predicates.entry(col).or_default().push(pred);
                 } else {
                     other_predicates.push(pred);
                 }

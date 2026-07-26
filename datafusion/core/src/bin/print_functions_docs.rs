@@ -287,7 +287,7 @@ impl DocProvider for WindowUDF {
     }
 }
 
-impl DocProvider for Arc<dyn HigherOrderUDF> {
+impl DocProvider for Arc<HigherOrderUDF> {
     fn get_name(&self) -> String {
         self.name().to_string()
     }

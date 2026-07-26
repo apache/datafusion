@@ -56,7 +56,7 @@ impl Display for MockCsvType {
 #[derive(Default)]
 pub(crate) struct MockSessionState {
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
-    higher_order_functions: HashMap<String, Arc<dyn HigherOrderUDF>>,
+    higher_order_functions: HashMap<String, Arc<HigherOrderUDF>>,
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
     type_planner: Option<Arc<dyn TypePlanner>>,
@@ -101,7 +101,7 @@ impl MockSessionState {
 
     pub fn with_higher_order_function(
         mut self,
-        higher_order_function: Arc<dyn HigherOrderUDF>,
+        higher_order_function: Arc<HigherOrderUDF>,
     ) -> Self {
         self.higher_order_functions.insert(
             higher_order_function.name().to_string(),
@@ -291,7 +291,7 @@ impl ContextProvider for MockContextProvider {
         self.state.scalar_functions.get(name).cloned()
     }
 
-    fn get_higher_order_meta(&self, name: &str) -> Option<Arc<dyn HigherOrderUDF>> {
+    fn get_higher_order_meta(&self, name: &str) -> Option<Arc<HigherOrderUDF>> {
         self.state.higher_order_functions.get(name).cloned()
     }
 

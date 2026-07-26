@@ -19,7 +19,9 @@ mod literal_lookup_table;
 
 use super::{Column, Literal};
 use crate::PhysicalExpr;
-use crate::expressions::{LambdaVariable, lit, try_cast};
+use crate::expressions::{
+    CastExpr, LambdaVariable, NegativeExpr, NotExpr, lit, try_cast,
+};
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
@@ -1278,7 +1280,11 @@ impl PhysicalExpr for CaseExpr {
                 // it would evaluate to null.
 
                 // Replace the `then` expression with `NULL` in the `when` expression
-                let with_null = match replace_with_null(w, t.as_ref(), input_schema) {
+                let with_null = match replace_with_null(
+                    w,
+                    unwrap_certainly_null_expr(t.as_ref()),
+                    input_schema,
+                ) {
                     Err(e) => return Some(Err(e)),
                     Ok(e) => e,
                 };
@@ -1410,6 +1416,86 @@ impl PhysicalExpr for CaseExpr {
         }
         write!(f, "END")
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::Case(Box::new(
+                protobuf::PhysicalCaseNode {
+                    expr: self
+                        .expr()
+                        .map(|expr| ctx.encode_child(expr).map(Box::new))
+                        .transpose()?,
+                    when_then_expr: self
+                        .when_then_expr()
+                        .iter()
+                        .map(|(when_expr, then_expr)| {
+                            Ok(protobuf::PhysicalWhenThen {
+                                when_expr: Some(ctx.encode_child(when_expr)?),
+                                then_expr: Some(ctx.encode_child(then_expr)?),
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                    else_expr: self
+                        .else_expr()
+                        .map(|expr| ctx.encode_child(expr).map(Box::new))
+                        .transpose()?,
+                },
+            ))),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl CaseExpr {
+    /// Reconstruct a [`CaseExpr`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_physical_expr_common::expect_expr_variant;
+        use datafusion_proto_models::protobuf;
+
+        let case = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::Case,
+            "CaseExpr",
+        );
+
+        Ok(Arc::new(CaseExpr::try_new(
+            case.expr
+                .as_deref()
+                .map(|expr| ctx.decode(expr))
+                .transpose()?,
+            case.when_then_expr
+                .iter()
+                .map(|when_then| {
+                    Ok((
+                        ctx.decode_required_expression(
+                            when_then.when_expr.as_ref(),
+                            "CaseExpr",
+                            "when_expr",
+                        )?,
+                        ctx.decode_required_expression(
+                            when_then.then_expr.as_ref(),
+                            "CaseExpr",
+                            "then_expr",
+                        )?,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?,
+            case.else_expr
+                .as_deref()
+                .map(|expr| ctx.decode(expr))
+                .transpose()?,
+        )?))
+    }
 }
 
 /// Attempts to const evaluate the given `predicate`.
@@ -1455,6 +1541,25 @@ fn replace_with_null(
         })?
         .data;
     Ok(with_null)
+}
+
+/// Returns the innermost [`PhysicalExpr`] that is provably null if `expr` is null.
+///
+/// Keep this in sync with the logical-plan equivalent, `unwrap_certainly_null_expr`
+/// in `datafusion/expr/src/expr_schema.rs`. If the two disagree on which wrappers
+/// are null-preserving, `CASE` nullability computed by the logical and physical
+/// planners can diverge and cause a schema mismatch during planning.
+/// See <https://github.com/apache/datafusion/pull/23844> for rationale.
+fn unwrap_certainly_null_expr(expr: &dyn PhysicalExpr) -> &dyn PhysicalExpr {
+    if let Some(expr) = expr.downcast_ref::<NotExpr>() {
+        unwrap_certainly_null_expr(expr.arg().as_ref())
+    } else if let Some(expr) = expr.downcast_ref::<NegativeExpr>() {
+        unwrap_certainly_null_expr(expr.arg().as_ref())
+    } else if let Some(expr) = expr.downcast_ref::<CastExpr>() {
+        unwrap_certainly_null_expr(expr.expr.as_ref())
+    } else {
+        expr
+    }
 }
 
 /// Create a CASE expression
@@ -2497,10 +2602,45 @@ mod tests {
         let zero = lit(0);
         let foo_eq_zero =
             binary(Arc::clone(&foo), Operator::Eq, Arc::clone(&zero), &schema)?;
+        let cast_foo = cast(Arc::clone(&foo), &schema, DataType::Int64)?;
+        let negative_foo = expressions::negative(Arc::clone(&foo), &schema)?;
 
         assert_not_nullable(when_then_else(&foo_is_not_null, &foo, &zero)?, &schema);
         assert_not_nullable(when_then_else(&not_foo_is_null, &foo, &zero)?, &schema);
         assert_not_nullable(when_then_else(&foo_eq_zero, &foo, &zero)?, &schema);
+        assert_not_nullable(
+            when_then_else(&foo_is_not_null, &cast_foo, &lit(0i64))?,
+            &schema,
+        );
+        assert_not_nullable(
+            when_then_else(&foo_is_not_null, &negative_foo, &zero)?,
+            &schema,
+        );
+
+        // Nested null-preserving wrappers must be unwrapped recursively. `CAST(-foo)`
+        // still collapses `foo IS NOT NULL` to `false`, so the branch is
+        // unreachable-as-null and the `CASE` is not nullable.
+        let cast_negative_foo = cast(
+            expressions::negative(Arc::clone(&foo), &schema)?,
+            &schema,
+            DataType::Int64,
+        )?;
+        assert_not_nullable(
+            when_then_else(&foo_is_not_null, &cast_negative_foo, &lit(0i64))?,
+            &schema,
+        );
+
+        // `TRY_CAST` is intentionally NOT treated as null-preserving: it yields
+        // NULL on a failed cast even for a non-null input, so a guarded `TRY_CAST`
+        // branch is still reachable-as-null and the `CASE` stays nullable. This must
+        // stay consistent with the logical planner (`unwrap_certainly_null_expr` in
+        // `datafusion/expr/src/expr_schema.rs`); unwrapping it on only one side would
+        // reintroduce a logical/physical schema mismatch.
+        let try_cast_foo = try_cast(Arc::clone(&foo), &schema, DataType::Int64)?;
+        assert_nullable(
+            when_then_else(&foo_is_not_null, &try_cast_foo, &lit(0i64))?,
+            &schema,
+        );
 
         assert_not_nullable(
             when_then_else(
@@ -2620,6 +2760,23 @@ mod tests {
                 &zero,
             )?,
             &schema,
+        );
+
+        let boolean_schema =
+            Schema::new(vec![Field::new("predicate", DataType::Boolean, true)]);
+        let predicate = col("predicate", &boolean_schema)?;
+        let predicate_is_not_null = is_not_null(Arc::clone(&predicate))?;
+        let not_predicate = expressions::not(Arc::clone(&predicate))?;
+        assert_not_nullable(
+            when_then_else(&predicate_is_not_null, &not_predicate, &lit(false))?,
+            &boolean_schema,
+        );
+
+        // Nested `NOT` is likewise unwrapped recursively.
+        let not_not_predicate = expressions::not(Arc::clone(&not_predicate))?;
+        assert_not_nullable(
+            when_then_else(&predicate_is_not_null, &not_not_predicate, &lit(false))?,
+            &boolean_schema,
         );
 
         Ok(())
@@ -3191,5 +3348,179 @@ mod tests {
         );
 
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::expressions::col;
+    use crate::proto_test_util::{
+        StubDecoder, StubEncoder, UnreachableDecoder, column_node,
+    };
+    use arrow::datatypes::Field;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_proto_models::protobuf;
+    use datafusion_proto_models::protobuf::{PhysicalExprNode, PhysicalWhenThen};
+
+    fn proto_case_fixture() -> CaseExpr {
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, true)]);
+        CaseExpr::try_new(
+            Some(col("a", &schema).unwrap()),
+            vec![(lit(true), lit(1_i32))],
+            Some(lit(0_i32)),
+        )
+        .unwrap()
+    }
+
+    fn proto_when_then(
+        when_expr: Option<PhysicalExprNode>,
+        then_expr: Option<PhysicalExprNode>,
+    ) -> PhysicalWhenThen {
+        PhysicalWhenThen {
+            when_expr,
+            then_expr,
+        }
+    }
+
+    fn proto_case_node(
+        expr: Option<Box<PhysicalExprNode>>,
+        when_then_expr: Vec<PhysicalWhenThen>,
+        else_expr: Option<Box<PhysicalExprNode>>,
+    ) -> PhysicalExprNode {
+        PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::Case(Box::new(
+                protobuf::PhysicalCaseNode {
+                    expr,
+                    when_then_expr,
+                    else_expr,
+                },
+            ))),
+        }
+    }
+
+    #[test]
+    fn try_to_proto_encodes_case_expr() {
+        let case = proto_case_fixture();
+        let encoder = StubEncoder::ok();
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let node = case
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("CaseExpr should encode to Some(node)");
+
+        assert!(node.expr_id.is_none());
+        let case_node = match node.expr_type {
+            Some(protobuf::physical_expr_node::ExprType::Case(boxed)) => *boxed,
+            other => panic!("expected a CaseExpr node, got {other:?}"),
+        };
+        assert!(case_node.expr.is_some());
+        assert_eq!(case_node.when_then_expr.len(), 1);
+        assert!(case_node.when_then_expr[0].when_expr.is_some());
+        assert!(case_node.when_then_expr[0].then_expr.is_some());
+        assert!(case_node.else_expr.is_some());
+    }
+
+    #[test]
+    fn try_to_proto_propagates_child_encode_error() {
+        let case = proto_case_fixture();
+        // Call 1 is the optional CASE expr, call 2 is the WHEN expr.
+        let encoder = StubEncoder::failing_on(2);
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let err = case.try_to_proto(&ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 2")));
+    }
+
+    #[test]
+    fn try_from_proto_decodes_case_expr() {
+        let node = proto_case_node(
+            Some(Box::new(column_node("case"))),
+            vec![proto_when_then(
+                Some(column_node("when")),
+                Some(column_node("then")),
+            )],
+            Some(Box::new(column_node("else"))),
+        );
+        let schema = Schema::empty();
+        let decoder = StubDecoder::ok();
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let decoded = CaseExpr::try_from_proto(&node, &ctx).unwrap();
+        let case = decoded
+            .downcast_ref::<CaseExpr>()
+            .expect("decoded expr should be a CaseExpr");
+
+        assert!(case.expr().is_some());
+        assert_eq!(case.when_then_expr().len(), 1);
+        assert!(case.else_expr().is_some());
+    }
+
+    #[test]
+    fn try_from_proto_rejects_non_case_node() {
+        let node = column_node("a");
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = CaseExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Internal(msg) if msg.contains("PhysicalExprNode is not a CaseExpr"))
+        );
+    }
+
+    #[test]
+    fn try_from_proto_rejects_missing_when_expr() {
+        let node = proto_case_node(
+            None,
+            vec![proto_when_then(None, Some(column_node("then")))],
+            None,
+        );
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = CaseExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Internal(msg) if msg.contains("CaseExpr is missing required field 'when_expr'"))
+        );
+    }
+
+    #[test]
+    fn try_from_proto_rejects_missing_then_expr() {
+        let node = proto_case_node(
+            None,
+            vec![proto_when_then(Some(column_node("when")), None)],
+            None,
+        );
+        let schema = Schema::empty();
+        let decoder = StubDecoder::ok();
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = CaseExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::Internal(msg) if msg.contains("CaseExpr is missing required field 'then_expr'"))
+        );
+    }
+
+    #[test]
+    fn try_from_proto_propagates_child_decode_error() {
+        let node = proto_case_node(
+            Some(Box::new(column_node("case"))),
+            vec![proto_when_then(
+                Some(column_node("when")),
+                Some(column_node("then")),
+            )],
+            Some(Box::new(column_node("else"))),
+        );
+        let schema = Schema::empty();
+        let decoder = StubDecoder::failing_on(2);
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err = CaseExpr::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 2")));
     }
 }

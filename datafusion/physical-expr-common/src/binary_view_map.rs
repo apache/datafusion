@@ -339,11 +339,28 @@ where
                 payload
             } else {
                 // no existing value, make a new one
-                let value: &[u8] = values.value(i).as_ref();
-                let payload = make_payload_fn(Some(value));
+                let (new_view, payload) = if len <= 12 {
+                    // Inline path: bytes are already packed in view_u128.
+                    // The inline ByteView format is [len:u32 LE][data:12 bytes zero-padded],
+                    // so extracting bytes from the u128 avoids a round-trip through
+                    // values.value(i) (which reads the views buffer and returns the same slice).
+                    let view_bytes = view_u128.to_le_bytes();
+                    let value = &view_bytes[4..4 + len as usize];
+                    let payload = make_payload_fn(Some(value));
+                    // For inline strings, the stored view is identical to the input view:
+                    // make_view(value, 0, 0) produces the same u128 as view_u128.
+                    //
+                    // SAFETY: view_u128 was a valid view, and the enclosing `len <= 12`
+                    // ensures it is inline
+                    let new_view = unsafe { self.append_inline_view(view_u128) };
+                    (new_view, payload)
+                } else {
+                    let value: &[u8] = values.value(i).as_ref();
+                    let payload = make_payload_fn(Some(value));
+                    let new_view = self.append_value(value);
+                    (new_view, payload)
+                };
 
-                // Create view pointing to our buffers
-                let new_view = self.append_value(value);
                 let new_header = Entry {
                     view: new_view,
                     hash,
@@ -387,6 +404,26 @@ where
             }
             _ => unreachable!("Utf8/Binary should use `ArrowBytesMap`"),
         }
+    }
+
+    /// Append an already-computed inline view (len <= 12) directly, bypassing
+    /// buffer allocation.
+    ///
+    /// Returns the view that was stored (identical to the argument).
+    ///
+    /// # Safety
+    ///
+    /// `view` must be a valid inline `ByteView`: the length field in the low
+    /// 32 bits must be <= 12, and the remaining 12 bytes must hold the
+    /// value's bytes (zero-padded if shorter). Calling with a non-inline view
+    /// would store a value that downstream `views` consumers interpret as
+    /// `[buffer_index, offset]` into the `completed`/`in_progress` buffers,
+    /// which is unsound for any view that didn't originate from a real
+    /// allocation in those buffers.
+    unsafe fn append_inline_view(&mut self, view: u128) -> u128 {
+        self.views.push(view);
+        self.nulls.append_non_null();
+        view
     }
 
     /// Append a value to our buffers and return the view pointing to it

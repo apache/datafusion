@@ -318,15 +318,15 @@ impl ExternalAggrConfig {
         );
         let extension = DEFAULT_PARQUET_EXTENSION;
 
-        let options = ListingOptions::new(format)
-            .with_file_extension(extension)
-            .with_collect_stat(state.config().collect_statistics());
+        let options = ListingOptions::new(format).with_file_extension(extension);
 
         let table_path = ListingTableUrl::parse(path)?;
         let config = ListingTableConfig::new(table_path).with_listing_options(options);
         let config = config.infer_schema(&state).await?;
 
-        Ok(Arc::new(ListingTable::try_new(config)?))
+        Ok(Arc::new(ListingTable::try_new(config)?.with_cache(
+            ctx.runtime_env().cache_manager.get_file_statistic_cache(),
+        )))
     }
 
     fn iterations(&self) -> usize {

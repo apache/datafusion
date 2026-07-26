@@ -1,0 +1,24 @@
+name Q02
+group hj
+
+load sql_benchmarks/hj/init/load.sql
+
+assert I
+SELECT count(*) > 0 FROM customer
+----
+true
+
+expect_plan HashJoinExec
+
+run
+-- Q2: Very Small Build Side (Sparse, range < 1024)
+-- Build Side: nation (25 rows, range 961) | Probe Side: customer (1.5M rows)
+-- density: 0.026,
+-- prob_hit: 1.0,
+-- build_size: "25",
+-- probe_size: "1.5M",
+SELECT l.k
+FROM (SELECT c_nationkey * 40 as k
+      FROM customer) l
+         JOIN (SELECT n_nationkey * 40 as k
+               FROM nation) s ON l.k = s.k;

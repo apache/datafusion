@@ -83,3 +83,7 @@ harness = false
 [[bench]]
 name = "optimize_projections"
 harness = false
+
+[[bench]]
+name = "unions_to_filter"
+harness = false

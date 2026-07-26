@@ -340,8 +340,16 @@ impl NamePreserver {
 
     pub fn save(&self, expr: &Expr) -> SavedName {
         if self.use_alias {
-            let (relation, name) = expr.qualified_name();
-            SavedName::Saved { relation, name }
+            match expr {
+                Expr::Alias(alias) => SavedName::Saved {
+                    relation: alias.relation.clone(),
+                    name: alias.name.clone(),
+                },
+                _ => {
+                    let (relation, name) = expr.qualified_name();
+                    SavedName::Saved { relation, name }
+                }
+            }
         } else {
             SavedName::None
         }
@@ -475,7 +483,7 @@ mod test {
             normalize_col_with_schemas_and_ambiguity_check(expr, &[&schemas], &[])
                 .unwrap_err()
                 .strip_backtrace();
-        let expected = "Schema error: No field named b. \
+        let expected = "Schema error: No field named b.\n\
             Valid fields are \"tableA\".a.";
         assert_eq!(error, expected);
     }

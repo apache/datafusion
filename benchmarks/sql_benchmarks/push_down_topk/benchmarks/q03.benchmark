@@ -1,0 +1,21 @@
+-- LEFT JOIN, multi-column ORDER BY (both columns from the preserved side).
+-- All sort exprs must come from the preserved side for the rule to fire;
+-- this checks that multi-column sorts are still pushed.
+
+name Q03
+group push_down_topk
+
+load sql_benchmarks/push_down_topk/init/load.sql
+
+assert I
+SELECT COUNT(*) > 0 from customer;
+----
+true
+
+run
+SELECT c_custkey, c_acctbal, c_nationkey
+FROM customer LEFT JOIN orders ON c_custkey = o_custkey
+ORDER BY c_acctbal, c_nationkey
+LIMIT 100;
+
+cleanup sql_benchmarks/push_down_topk/init/cleanup.sql

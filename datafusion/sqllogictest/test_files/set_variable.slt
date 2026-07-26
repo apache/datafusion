@@ -93,10 +93,10 @@ datafusion.execution.coalesce_batches false
 statement ok
 set datafusion.catalog.information_schema = true
 
-statement error DataFusion error: Error parsing '1' as bool
+statement error DataFusion error: Error setting config datafusion\.execution\.coalesce_batches\ncaused by\nError parsing '1' as bool
 SET datafusion.execution.coalesce_batches to 1
 
-statement error DataFusion error: Error parsing 'abc' as bool
+statement error DataFusion error: Error setting config datafusion\.execution\.coalesce_batches\ncaused by\nError parsing 'abc' as bool
 SET datafusion.execution.coalesce_batches to abc
 
 # set u64 variable
@@ -104,12 +104,12 @@ statement ok
 set datafusion.catalog.information_schema = true
 
 statement ok
-SET datafusion.execution.batch_size to 0
+SET datafusion.execution.batch_size to 310104
 
 query TT
 SHOW datafusion.execution.batch_size
 ----
-datafusion.execution.batch_size 0
+datafusion.execution.batch_size 310104
 
 statement ok
 SET datafusion.execution.batch_size to '1'
@@ -132,10 +132,10 @@ datafusion.execution.batch_size 2
 statement ok
 set datafusion.catalog.information_schema = true
 
-statement error DataFusion error: Error parsing '-1' as usize
+statement error DataFusion error: Error setting config datafusion\.execution\.batch_size\ncaused by\nError parsing '-1' as usize
 SET datafusion.execution.batch_size to -1
 
-statement error DataFusion error: Error parsing 'abc' as usize
+statement error DataFusion error: Error setting config datafusion\.execution\.batch_size\ncaused by\nError parsing 'abc' as usize
 SET datafusion.execution.batch_size to abc
 
 statement error External error: invalid digit found in string
@@ -342,14 +342,20 @@ SET datafusion.runtime.memory_limit = '1K'
 
 # This query should fail with low memory
 statement error Not enough memory to continue external sort
-EXPLAIN ANALYZE SELECT * FROM generate_series(1, 1000) AS t1(v1) ORDER BY v1
+EXPLAIN ANALYZE SELECT * FROM generate_series(1, 1000) AS t1(v1) ORDER BY v1 DESC
 
 statement ok
 RESET datafusion.runtime.memory_limit
 
 # This query should succeed after resetting memory limit
 statement ok
-EXPLAIN ANALYZE SELECT * FROM generate_series(1, 1000) AS t1(v1) ORDER BY v1
+EXPLAIN ANALYZE SELECT * FROM generate_series(1, 1000) AS t1(v1) ORDER BY v1 DESC
+
+statement ok
+SET datafusion.runtime.file_statistics_cache_limit = '1K'
+
+statement ok
+RESET datafusion.runtime.file_statistics_cache_limit
 
 statement ok
 SET datafusion.runtime.list_files_cache_limit = '1K'
@@ -376,7 +382,7 @@ statement error DataFusion error: Invalid or Unsupported Configuration: Config v
 RESET datafusion.execution.batches_size
 
 # reset invalid variable - extra suffix on valid field
-statement error DataFusion error: Invalid or Unsupported Configuration: Config field is a scalar usize and does not have nested field "bar"
+statement error DataFusion error: Invalid or Unsupported Configuration: Config field batch_size is a scalar ConfigNonZeroUsize and does not have nested field "bar"
 RESET datafusion.execution.batch_size.bar
 
 #############################################
@@ -574,7 +580,7 @@ SHOW datafusion.format.date_format
 datafusion.format.date_format %Y-%m-%d
 
 # Invalid format option name
-statement error DataFusion error: Invalid or Unsupported Configuration: Config value "unknown_option" not found on FormatOptions
+statement error DataFusion error: Error setting config datafusion\.format\.unknown_option\ncaused by\nInvalid or Unsupported Configuration: Config value "unknown_option" not found on FormatOptions
 SET datafusion.format.unknown_option = true
 
 ############
@@ -604,6 +610,30 @@ query TT
 SHOW datafusion.runtime.max_temp_directory_size
 ----
 datafusion.runtime.max_temp_directory_size 10G
+
+# Test SET and SHOW runtime.max_spill_merge_fan_in
+statement ok
+SET datafusion.runtime.max_spill_merge_fan_in = '16'
+
+query TT
+SHOW datafusion.runtime.max_spill_merge_fan_in
+----
+datafusion.runtime.max_spill_merge_fan_in 16
+
+statement ok
+RESET datafusion.runtime.max_spill_merge_fan_in
+
+# Test SET and SHOW runtime.file_statistics_cache_limit
+statement ok
+SET datafusion.runtime.file_statistics_cache_limit = '42M'
+
+query TT
+SHOW datafusion.runtime.file_statistics_cache_limit
+----
+datafusion.runtime.file_statistics_cache_limit 42M
+
+statement ok
+RESET datafusion.runtime.file_statistics_cache_limit
 
 # Test SET and SHOW runtime.metadata_cache_limit
 statement ok
@@ -648,8 +678,10 @@ datafusion.runtime.list_files_cache_limit 0
 query T
 SELECT name FROM information_schema.df_settings WHERE name LIKE 'datafusion.runtime.%' ORDER BY name
 ----
+datafusion.runtime.file_statistics_cache_limit
 datafusion.runtime.list_files_cache_limit
 datafusion.runtime.list_files_cache_ttl
+datafusion.runtime.max_spill_merge_fan_in
 datafusion.runtime.max_temp_directory_size
 datafusion.runtime.memory_limit
 datafusion.runtime.metadata_cache_limit
@@ -687,6 +719,45 @@ SET datafusion.runtime.list_files_cache_ttl = '1m18446744073709551555s'
 
 statement error DataFusion error: Error during planning: Duration has overflowed allowed maximum limit due to 'mins \* 60 \+ secs' when setting 'datafusion\.runtime\.list_files_cache_ttl'
 SET datafusion.runtime.list_files_cache_ttl = '1m18446744073709551556s'
+
+# Set invalid value and ensures error
+statement error DataFusion error: Error setting config datafusion\.execution\.batch_size\ncaused by\nInvalid or Unsupported Configuration: value must be greater than 0
+SET datafusion.execution.batch_size = 0
+
+statement error DataFusion error: Error setting config datafusion\.execution\.meta_fetch_concurrency\ncaused by\nInvalid or Unsupported Configuration: value must be greater than 0
+SET datafusion.execution.meta_fetch_concurrency = 0
+
+statement error
+SET datafusion.execution.minimum_parallel_output_files = 0
+----
+DataFusion error: Error setting config datafusion.execution.minimum_parallel_output_files
+caused by
+Invalid or Unsupported Configuration: value must be greater than 0
+
+
+statement error
+SET datafusion.execution.soft_max_rows_per_output_file = 0
+----
+DataFusion error: Error setting config datafusion.execution.soft_max_rows_per_output_file
+caused by
+Invalid or Unsupported Configuration: value must be greater than 0
+
+
+statement error
+SET datafusion.execution.max_spill_file_size_bytes = 0
+----
+DataFusion error: Error setting config datafusion.execution.max_spill_file_size_bytes
+caused by
+Invalid or Unsupported Configuration: value must be greater than 0
+
+
+statement error
+SET datafusion.sql_parser.recursion_limit = 0
+----
+DataFusion error: Error setting config datafusion.sql_parser.recursion_limit
+caused by
+Invalid or Unsupported Configuration: value must be greater than 0
+
 
 # Config reset
 statement ok

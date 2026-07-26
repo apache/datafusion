@@ -66,7 +66,7 @@ CREATE TABLE test("f.c1" TEXT, "test.c2" INT, "...." INT) AS VALUES
 ('foobar', 2, 20),
 ('foobaz', 3, 30);
 
-query error DataFusion error: Schema error: No field named f1\.c1\. Valid fields are test\."f\.c1", test\."test\.c2", test\."\.\.\.\."\.
+query error DataFusion error: Schema error: No field named f1\.c1\. Did you mean 'test\."f\.c1"'\?\nValid fields are test\."f\.c1", test\."test\.c2", test\."\.\.\.\."\.
 SELECT f1.c1 FROM test;
 
 query T
@@ -105,8 +105,8 @@ logical_plan
 02)--Projection: test....., test..... AS c3
 03)----TableScan: test projection=[....]
 physical_plan
-01)SortExec: expr=[....@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[....@0 as ...., ....@0 as c3]
+01)ProjectionExec: expr=[....@0 as ...., ....@0 as c3]
+02)--SortExec: expr=[....@0 ASC NULLS LAST], preserve_partitioning=[false]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 

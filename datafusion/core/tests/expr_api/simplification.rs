@@ -639,22 +639,29 @@ fn test_simplify_power() {
     // Power(c3, 0) ===> 1
     {
         let expr = power(col("c3_non_null"), lit(0));
-        let expected = lit(1i64);
+        let expected = lit(1.0f64);
         test_simplify(expr, expected)
     }
-    // Power(c3, 1) ===> c3
+    // Power(c3, 1) ===> cast(c3 AS Float64)
     {
         let expr = power(col("c3_non_null"), lit(1));
-        let expected = col("c3_non_null");
+        let expected =
+            Expr::Cast(Cast::new(Box::new(col("c3_non_null")), DataType::Float64));
         test_simplify(expr, expected)
     }
-    // Power(c3, Log(c3, c4)) ===> c4
+    // Power(c3, Log(c3, c4)) ===> cast(c4 AS Float64)
+    // The simplifier rewrites `power(b, log(b, x))` to `x`, but the
+    // rewritten expression must keep the same type as the original
+    // `power` call. `power` returns Float64, so the UInt32 c4 has to be cast
+    // to Float64 to preserve the output schema the optimizer already
+    // committed to.
     {
         let expr = power(
             col("c3_non_null"),
             log(col("c3_non_null"), col("c4_non_null")),
         );
-        let expected = col("c4_non_null");
+        let expected =
+            Expr::Cast(Cast::new(Box::new(col("c4_non_null")), DataType::Float64));
         test_simplify(expr, expected)
     }
     // Power(c3, c4) ===> Power(c3, c4)

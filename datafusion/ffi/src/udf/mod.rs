@@ -28,8 +28,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-    Signature,
+    ColumnarValue, ExpressionPlacement, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature,
 };
 use return_type_args::{
     FFI_ReturnFieldArgs, ForeignReturnFieldArgs, ForeignReturnFieldArgsOwned,
@@ -41,6 +41,7 @@ use stabby::vec::Vec as SVec;
 use crate::arrow_wrappers::{WrappedArray, WrappedSchema};
 use crate::config::FFI_ConfigOptions;
 use crate::expr::columnar_value::FFI_ColumnarValue;
+use crate::placement::FFI_ExpressionPlacement;
 use crate::util::{
     FFI_Result, rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped,
 };
@@ -90,6 +91,14 @@ pub struct FFI_ScalarUDF {
         udf: &Self,
         arg_types: SVec<WrappedSchema>,
     ) -> FFI_Result<SVec<WrappedSchema>>,
+
+    /// FFI equivalent to the `placement` of a [`ScalarUDFImpl`]. Returns the
+    /// placement hint for the underlying [`ScalarUDF`] given each argument's
+    /// placement. Infallible, so it returns the value directly, not an `FFI_Result`.
+    pub placement: unsafe extern "C" fn(
+        udf: &Self,
+        args: SVec<FFI_ExpressionPlacement>,
+    ) -> FFI_ExpressionPlacement,
 
     /// Used to create a clone on the provider of the udf. This should
     /// only need to be called by the receiver of the udf.
@@ -155,6 +164,18 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
             .collect::<Vec<_>>();
 
     sresult!(vec_datatype_to_rvec_wrapped(&return_types))
+}
+
+unsafe extern "C" fn placement_fn_wrapper(
+    udf: &FFI_ScalarUDF,
+    args: SVec<FFI_ExpressionPlacement>,
+) -> FFI_ExpressionPlacement {
+    let args = args
+        .into_iter()
+        .map(ExpressionPlacement::from)
+        .collect::<Vec<_>>();
+
+    udf.inner().placement(&args).into()
 }
 
 unsafe extern "C" fn invoke_with_args_fn_wrapper(
@@ -250,6 +271,7 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
             invoke_with_args: invoke_with_args_fn_wrapper,
             return_field_from_args: return_field_from_args_fn_wrapper,
             coerce_types: coerce_types_fn_wrapper,
+            placement: placement_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
@@ -427,11 +449,58 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             Ok(rvec_wrapped_to_vec_datatype(&result_types)?)
         }
     }
+
+    fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
+        let args = args
+            .iter()
+            .map(|p| FFI_ExpressionPlacement::from(*p))
+            .collect::<SVec<_>>();
+
+        let result = unsafe { (self.udf.placement)(&self.udf, args) };
+
+        result.into()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct PlacementUDF {
+        signature: Signature,
+    }
+
+    impl ScalarUDFImpl for PlacementUDF {
+        fn name(&self) -> &str {
+            "placement_udf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int64)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            internal_err!("placement_udf is not meant to be invoked")
+        }
+
+        fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
+            // Push to the leaves only for a (Column, Literal) pairing, so the
+            // test catches dropped, reordered, or truncated arguments.
+            if matches!(
+                args,
+                [ExpressionPlacement::Column, ExpressionPlacement::Literal]
+            ) {
+                ExpressionPlacement::MoveTowardsLeafNodes
+            } else {
+                ExpressionPlacement::KeepInPlace
+            }
+        }
+    }
 
     #[test]
     fn test_round_trip_scalar_udf() -> Result<()> {
@@ -464,6 +533,44 @@ mod tests {
         ffi_udf.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
         assert!(foreign_udf.is::<ForeignScalarUDF>());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_udf_placement_round_trip() -> Result<()> {
+        use datafusion_expr::Volatility;
+
+        let original_udf = Arc::new(ScalarUDF::from(PlacementUDF {
+            signature: Signature::uniform(
+                1,
+                vec![DataType::Int64],
+                Volatility::Immutable,
+            ),
+        }));
+
+        let mut ffi_udf = FFI_ScalarUDF::from(original_udf);
+
+        // Force the foreign path so the call travels through the FFI vtable
+        // rather than downcasting back to the original local type.
+        ffi_udf.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_udf: Arc<dyn ScalarUDFImpl> = (&ffi_udf).into();
+        assert!(foreign_udf.is::<ForeignScalarUDF>());
+
+        // Without the plumbing the override is dropped and every call is
+        // KeepInPlace. The three cases also check the arguments survive the
+        // round trip in order.
+        assert_eq!(
+            foreign_udf
+                .placement(&[ExpressionPlacement::Column, ExpressionPlacement::Literal]),
+            ExpressionPlacement::MoveTowardsLeafNodes
+        );
+        assert_eq!(
+            foreign_udf
+                .placement(&[ExpressionPlacement::Literal, ExpressionPlacement::Column]),
+            ExpressionPlacement::KeepInPlace
+        );
+        assert_eq!(foreign_udf.placement(&[]), ExpressionPlacement::KeepInPlace);
 
         Ok(())
     }

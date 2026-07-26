@@ -2078,3 +2078,26 @@ async fn test_limit_pruning_exceeds_fully_matched() -> datafusion_common::error:
         .await;
     Ok(())
 }
+
+#[tokio::test]
+async fn prune_like_prefix() {
+    // UTF8 scenario: 2 row groups (5 rows each)
+    //   RG1: ["a","b","c","d",NULL] => min="a", max="d"
+    //   RG2: ["e","f","g","h","i"]  => min="e", max="i"
+    //
+    // LIKE 'a%' => build_like_match produces: "a" <= max AND min <= "a" (actually min < "b")
+    //   RG1: "a" <= "d" ✓, "a" < "b" ✓ => matched
+    //   RG2: "a" <= "i" ✓, "e" < "b" ✗ => pruned
+    RowGroupPruningTest::new()
+        .with_scenario(Scenario::UTF8)
+        .with_query("SELECT * FROM t WHERE utf8 LIKE 'a%'")
+        .with_expected_errors(Some(0))
+        .with_matched_by_stats(Some(1))
+        .with_pruned_by_stats(Some(1))
+        .with_pruned_files(Some(0))
+        .with_matched_by_bloom_filter(Some(1))
+        .with_pruned_by_bloom_filter(Some(0))
+        .with_expected_rows(1) // only "a" matches LIKE 'a%'
+        .test_row_group_prune()
+        .await;
+}

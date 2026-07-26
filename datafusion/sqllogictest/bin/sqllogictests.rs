@@ -61,6 +61,7 @@ const DATAFUSION_TESTING_TEST_DIRECTORY: &str = "../../datafusion-testing/data/"
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
 const TPCH_PREFIX: &str = "tpch";
 const SQLITE_PREFIX: &str = "sqlite";
+const ENCRYPTED_PARQUET_FILE: &str = "encrypted_parquet.slt";
 const ERRS_PER_FILE_LIMIT: usize = 10;
 const TIMING_DEBUG_SLOW_FILES_ENV: &str = "SLT_TIMING_DEBUG_SLOW_FILES";
 
@@ -452,7 +453,7 @@ async fn run_test_file_substrait_round_trip(
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(format!("{:?}", &relative_path));
+    pb.set_message(format!("{relative_path:?}"));
 
     let mut runner = sqllogictest::Runner::new(|| async {
         Ok(DataFusionSubstraitRoundTrip::new(
@@ -472,6 +473,10 @@ async fn run_test_file_substrait_round_trip(
 }
 
 #[cfg(not(feature = "substrait"))]
+#[expect(
+    clippy::unused_async,
+    reason = "matches the substrait-enabled implementation"
+)]
 async fn run_test_file_substrait_round_trip(
     _test_file: TestFile,
     _validator: Validator,
@@ -507,7 +512,7 @@ async fn run_test_file(
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(format!("{:?}", &relative_path));
+    pb.set_message(format!("{relative_path:?}"));
 
     // If DataFusion configuration has changed during test file runs, errors will be
     // pushed to this vec.
@@ -626,7 +631,7 @@ async fn run_test_file_with_postgres(
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(format!("{:?}", &relative_path));
+    pb.set_message(format!("{relative_path:?}"));
 
     let mut runner = sqllogictest::Runner::new(|| {
         Postgres::connect_with_tracked_sql(
@@ -645,6 +650,10 @@ async fn run_test_file_with_postgres(
 }
 
 #[cfg(not(feature = "postgres"))]
+#[expect(
+    clippy::unused_async,
+    reason = "matches the postgres-enabled implementation"
+)]
 async fn run_test_file_with_postgres(
     _test_file: TestFile,
     _validator: Validator,
@@ -681,7 +690,7 @@ async fn run_complete_file(
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(format!("{:?}", &relative_path));
+    pb.set_message(format!("{relative_path:?}"));
 
     let config_change_errors = Arc::new(Mutex::new(Vec::new()));
     let mut runner = sqllogictest::Runner::new(|| async {
@@ -737,7 +746,7 @@ async fn run_complete_file_with_postgres(
     let pb = mp.add(ProgressBar::new(count));
 
     pb.set_style(mp_style);
-    pb.set_message(format!("{:?}", &relative_path));
+    pb.set_message(format!("{relative_path:?}"));
 
     let mut runner = sqllogictest::Runner::new(|| {
         Postgres::connect_with_tracked_sql(
@@ -770,6 +779,10 @@ async fn run_complete_file_with_postgres(
 }
 
 #[cfg(not(feature = "postgres"))]
+#[expect(
+    clippy::unused_async,
+    reason = "matches the postgres-enabled implementation"
+)]
 async fn run_complete_file_with_postgres(
     _test_file: TestFile,
     _validator: Validator,
@@ -805,6 +818,10 @@ fn read_test_files(options: &Options) -> Result<Vec<TestFile>> {
         .filter(|f| f.is_slt_file())
         .filter(|f| !f.relative_path_starts_with(TPCH_PREFIX) || options.include_tpch)
         .filter(|f| !f.relative_path_starts_with(SQLITE_PREFIX) || options.include_sqlite)
+        .filter(|f| {
+            !f.relative_path_starts_with(ENCRYPTED_PARQUET_FILE)
+                || cfg!(feature = "parquet_encryption")
+        })
         .filter(|f| options.check_pg_compat_file(f.path.as_path()))
         .collect::<Vec<_>>();
 

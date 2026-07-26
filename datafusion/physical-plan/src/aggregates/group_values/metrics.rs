@@ -19,6 +19,7 @@
 
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, Time};
 
+#[derive(Clone)]
 pub(crate) struct GroupByMetrics {
     /// Time spent calculating the group IDs from the evaluated grouping columns.
     pub(crate) time_calculating_group_ids: Time,
@@ -59,6 +60,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use datafusion_common::Result;
     use datafusion_execution::TaskContext;
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
@@ -135,7 +137,13 @@ mod tests {
             schema,
         )?);
 
-        let task_ctx = Arc::new(TaskContext::default());
+        // This test is for `GroupByMetrics`, which are maintained by
+        // `GroupedHashAggregateStream`. Use a finite memory pool so the partial
+        // aggregate does not take the initial-partial stream path.
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(10 * 1024 * 1024, 1.0)
+            .build_arc()?;
+        let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
         let _result =
             collect(Arc::clone(&aggregate_exec) as _, Arc::clone(&task_ctx)).await?;
 

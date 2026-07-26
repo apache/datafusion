@@ -107,9 +107,18 @@ pub(crate) fn simplify_const_expr_immediate(
     // Since transform visits bottom-up, children have already been simplified.
     // If all children are now Literals, this node can be const-evaluated.
     // This is O(k) where k = number of children, instead of O(subtree).
-    let all_children_literal = expr.children().iter().all(|child| child.is::<Literal>());
-
-    if !all_children_literal {
+    //
+    // Leaf nodes (zero children) are rejected here. Const-folding is only
+    // sound for a node whose value is fully determined by its child literals;
+    // a leaf has no children, so there is nothing to derive constness from.
+    // The known leaves that are constant (`Literal`) or known-non-constant
+    // (`Column`, volatile) are handled by the dedicated checks above. Any
+    // other leaf is opaque to the simplifier and must be preserved as-is,
+    // otherwise `all` over an empty child list would vacuously hold and the
+    // node would be evaluated against the dummy batch, producing a value
+    // unrelated to its real runtime semantics.
+    let children = expr.children();
+    if children.is_empty() || !children.iter().all(|c| c.is::<Literal>()) {
         return Ok(Transformed::no(expr));
     }
 

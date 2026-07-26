@@ -137,3 +137,18 @@ query ?
 SELECT slice(slice(make_array(NULL), 1, 2), 1, 2)
 ----
 [NULL]
+
+query ?
+SELECT slice(make_array(1), -2, 2)
+----
+[]
+
+query ?
+SELECT slice(make_array(1, 2, 3, 4), -5, 2)
+----
+[]
+
+query ?
+SELECT slice(make_array(1), 3, 4)
+----
+[]

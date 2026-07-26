@@ -376,7 +376,7 @@ id3 value3
 
 # Reset repartition_file_min_size to default value
 statement ok
-SET datafusion.optimizer.repartition_file_min_size = 10485760;
+RESET datafusion.optimizer.repartition_file_min_size;
 
 statement ok
 drop table stored_table_with_cr_terminator;

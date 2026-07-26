@@ -1,0 +1,1127 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for pushing a TopK (Sort with fetch) through an outer join.
+#
+# These queries exercise the scenarios handled by the PushDownTopKThroughJoin
+# rule. That rule lands in a follow-up PR; the EXPLAIN plans below capture
+# current behavior, so the follow-up's diff shows exactly which plans change.
+# The query-result checks hold whether or not the rule is enabled.
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+statement ok
+CREATE TABLE t1 (a INT, b INT, c VARCHAR) AS VALUES
+  (1, 10, 'one'),
+  (2, 20, 'two'),
+  (3, 30, 'three'),
+  (4, 40, 'four'),
+  (5, 50, 'five');
+
+statement ok
+CREATE TABLE t2 (x INT, y INT, z VARCHAR) AS VALUES
+  (1, 100, 'alpha'),
+  (2, 200, 'beta'),
+  (3, 300, 'gamma'),
+  (6, 600, 'delta'),
+  (7, 700, 'epsilon');
+
+###
+### Sort keys come entirely from the preserved side
+###
+
+query TT
+EXPLAIN SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+ORDER BY t1.b ASC LIMIT 3;
+----
+logical_plan
+01)Sort: t1.b ASC NULLS LAST, fetch=3
+02)--Left Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a, b]
+04)----TableScan: t2 projection=[x]
+
+query III
+SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+ORDER BY t1.b ASC LIMIT 3;
+----
+1 10 1
+2 20 2
+3 30 3
+
+# RIGHT JOIN: the right input is the preserved side
+query TT
+EXPLAIN SELECT t1.a, t2.x, t2.y
+FROM t1 RIGHT JOIN t2 ON t1.a = t2.x
+ORDER BY t2.y ASC LIMIT 3;
+----
+logical_plan
+01)Sort: t2.y ASC NULLS LAST, fetch=3
+02)--Right Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a]
+04)----TableScan: t2 projection=[x, y]
+
+query III
+SELECT t1.a, t2.x, t2.y
+FROM t1 RIGHT JOIN t2 ON t1.a = t2.x
+ORDER BY t2.y ASC LIMIT 3;
+----
+1 1 100
+2 2 200
+3 3 300
+
+###
+### Cases where pushdown does not apply
+###
+
+# INNER JOIN has no preserved side
+query TT
+EXPLAIN SELECT t1.a, t2.x
+FROM t1 INNER JOIN t2 ON t1.a = t2.x
+ORDER BY t1.b ASC LIMIT 3;
+----
+logical_plan
+01)Projection: t1.a, t2.x
+02)--Sort: t1.b ASC NULLS LAST, fetch=3
+03)----Projection: t1.a, t2.x, t1.b
+04)------Inner Join: t1.a = t2.x
+05)--------TableScan: t1 projection=[a, b]
+06)--------TableScan: t2 projection=[x]
+
+# LEFT JOIN sorted by a right-side (non-preserved) column
+query TT
+EXPLAIN SELECT t1.a, t2.x, t2.y
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+ORDER BY t2.y ASC LIMIT 3;
+----
+logical_plan
+01)Sort: t2.y ASC NULLS LAST, fetch=3
+02)--Left Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a]
+04)----TableScan: t2 projection=[x, y]
+
+# FULL OUTER JOIN preserves neither side
+query TT
+EXPLAIN SELECT t1.a, t2.x
+FROM t1 FULL OUTER JOIN t2 ON t1.a = t2.x
+ORDER BY t1.b ASC LIMIT 3;
+----
+logical_plan
+01)Projection: t1.a, t2.x
+02)--Sort: t1.b ASC NULLS LAST, fetch=3
+03)----Projection: t1.a, t2.x, t1.b
+04)------Full Join: t1.a = t2.x
+05)--------TableScan: t1 projection=[a, b]
+06)--------TableScan: t2 projection=[x]
+
+# Non-equijoin filter in the ON clause only controls matching, not which
+# preserved (left) rows appear, so all left rows are still emitted.
+query TT
+EXPLAIN SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x AND t1.b > t2.y
+ORDER BY t1.b ASC LIMIT 3;
+----
+logical_plan
+01)Sort: t1.b ASC NULLS LAST, fetch=3
+02)--Projection: t1.a, t1.b, t2.x
+03)----Left Join: t1.a = t2.x Filter: t1.b > t2.y
+04)------TableScan: t1 projection=[a, b]
+05)------TableScan: t2 projection=[x, y]
+
+query III
+SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x AND t1.b > t2.y
+ORDER BY t1.b ASC LIMIT 3;
+----
+1 10 NULL
+2 20 NULL
+3 30 NULL
+
+# Non-equijoin filter on the non-preserved side only
+query TT
+EXPLAIN SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x AND t2.y > 100
+ORDER BY t1.b ASC LIMIT 3;
+----
+logical_plan
+01)Sort: t1.b ASC NULLS LAST, fetch=3
+02)--Left Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a, b]
+04)----Projection: t2.x
+05)------Filter: t2.y > Int32(100)
+06)--------TableScan: t2 projection=[x, y]
+
+# A preserved-side filter in the ON clause suppresses matches, but the rows
+# still appear NULL-filled, so it does not change which rows are preserved.
+query TT
+EXPLAIN SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x AND t1.b > 20
+ORDER BY t1.b ASC LIMIT 3;
+----
+logical_plan
+01)Sort: t1.b ASC NULLS LAST, fetch=3
+02)--Left Join: t1.a = t2.x Filter: t1.b > Int32(20)
+03)----TableScan: t1 projection=[a, b]
+04)----TableScan: t2 projection=[x]
+
+query III
+SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x AND t1.b > 20
+ORDER BY t1.b ASC LIMIT 3;
+----
+1 10 NULL
+2 20 NULL
+3 30 3
+
+query III
+SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x AND t2.y > 100
+ORDER BY t1.b ASC LIMIT 3;
+----
+1 10 NULL
+2 20 2
+3 30 3
+
+# Sort without LIMIT is not a TopK
+query TT
+EXPLAIN SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+ORDER BY t1.b ASC;
+----
+logical_plan
+01)Sort: t1.b ASC NULLS LAST
+02)--Left Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a, b]
+04)----TableScan: t2 projection=[x]
+
+###
+### Preserved child already carries a Sort with a fetch
+###
+
+# Inner Sort limits to 5 rows; the outer query takes 2.
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT t1.a, t1.b, t2.x
+    FROM (SELECT * FROM t1 ORDER BY b ASC LIMIT 5) t1
+    LEFT JOIN t2 ON t1.a = t2.x
+) sub
+ORDER BY b ASC LIMIT 2;
+----
+logical_plan
+01)Sort: sub.b ASC NULLS LAST, fetch=2
+02)--SubqueryAlias: sub
+03)----Left Join: t1.a = t2.x
+04)------SubqueryAlias: t1
+05)--------Sort: t1.b ASC NULLS LAST, fetch=5
+06)----------TableScan: t1 projection=[a, b]
+07)------TableScan: t2 projection=[x]
+
+query III
+SELECT * FROM (
+    SELECT t1.a, t1.b, t2.x
+    FROM (SELECT * FROM t1 ORDER BY b ASC LIMIT 5) t1
+    LEFT JOIN t2 ON t1.a = t2.x
+) sub
+ORDER BY b ASC LIMIT 2;
+----
+1 10 1
+2 20 2
+
+# Inner Sort limits to 2 rows; the outer query takes 5 (already tighter).
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT t1.a, t1.b, t2.x
+    FROM (SELECT * FROM t1 ORDER BY b ASC LIMIT 2) t1
+    LEFT JOIN t2 ON t1.a = t2.x
+) sub
+ORDER BY b ASC LIMIT 5;
+----
+logical_plan
+01)Sort: sub.b ASC NULLS LAST, fetch=5
+02)--SubqueryAlias: sub
+03)----Left Join: t1.a = t2.x
+04)------SubqueryAlias: t1
+05)--------Sort: t1.b ASC NULLS LAST, fetch=2
+06)----------TableScan: t1 projection=[a, b]
+07)------TableScan: t2 projection=[x]
+
+query III
+SELECT * FROM (
+    SELECT t1.a, t1.b, t2.x
+    FROM (SELECT * FROM t1 ORDER BY b ASC LIMIT 2) t1
+    LEFT JOIN t2 ON t1.a = t2.x
+) sub
+ORDER BY b ASC LIMIT 5;
+----
+1 10 1
+2 20 2
+
+###
+### Semi/anti joins: not all preserved-side rows reach the output, so a
+### pushed fetch could drop rows that would have survived the join filter
+###
+
+query TT
+EXPLAIN SELECT t1.a, t1.b
+FROM t1 LEFT SEMI JOIN t2 ON t1.a = t2.x
+ORDER BY t1.b ASC LIMIT 3;
+----
+logical_plan
+01)Sort: t1.b ASC NULLS LAST, fetch=3
+02)--LeftSemi Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a, b]
+04)----TableScan: t2 projection=[x]
+
+query TT
+EXPLAIN SELECT t1.a, t1.b
+FROM t1 LEFT ANTI JOIN t2 ON t1.a = t2.x
+ORDER BY t1.b ASC LIMIT 3;
+----
+logical_plan
+01)Sort: t1.b ASC NULLS LAST, fetch=3
+02)--LeftAnti Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a, b]
+04)----TableScan: t2 projection=[x]
+
+query TT
+EXPLAIN SELECT t2.x, t2.y
+FROM t1 RIGHT SEMI JOIN t2 ON t1.a = t2.x
+ORDER BY t2.y ASC LIMIT 3;
+----
+logical_plan
+01)Sort: t2.y ASC NULLS LAST, fetch=3
+02)--RightSemi Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a]
+04)----TableScan: t2 projection=[x, y]
+
+query TT
+EXPLAIN SELECT t2.x, t2.y
+FROM t1 RIGHT ANTI JOIN t2 ON t1.a = t2.x
+ORDER BY t2.y ASC LIMIT 3;
+----
+logical_plan
+01)Sort: t2.y ASC NULLS LAST, fetch=3
+02)--RightAnti Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a]
+04)----TableScan: t2 projection=[x, y]
+
+###
+### Multi-column sort and OFFSET
+###
+
+# ORDER BY spans both sides (t1.b and t2.y), so the keys are not entirely
+# from the preserved side.
+query TT
+EXPLAIN SELECT t1.a, t1.b, t2.x, t2.y
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+ORDER BY t1.b ASC, t2.y ASC LIMIT 3;
+----
+logical_plan
+01)Sort: t1.b ASC NULLS LAST, t2.y ASC NULLS LAST, fetch=3
+02)--Left Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a, b]
+04)----TableScan: t2 projection=[x, y]
+
+query IIII
+SELECT t1.a, t1.b, t2.x, t2.y
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+ORDER BY t1.b ASC, t2.y ASC LIMIT 3;
+----
+1 10 1 100
+2 20 2 200
+3 30 3 300
+
+# LIMIT with OFFSET: the eligible fetch is limit + offset (2 + 1 = 3).
+query TT
+EXPLAIN SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+ORDER BY t1.b ASC LIMIT 2 OFFSET 1;
+----
+logical_plan
+01)Limit: skip=1, fetch=2
+02)--Sort: t1.b ASC NULLS LAST, fetch=3
+03)----Left Join: t1.a = t2.x
+04)------TableScan: t1 projection=[a, b]
+05)------TableScan: t2 projection=[x]
+
+query III
+SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+ORDER BY t1.b ASC LIMIT 2 OFFSET 1;
+----
+2 20 2
+3 30 3
+
+###
+### Resolving sort keys through a projection
+###
+
+# ORDER BY references a projected expression (neg_b = -t1.b); resolution must
+# map the alias back to the pre-projection expression.
+query TT
+EXPLAIN SELECT -t1.b AS neg_b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+ORDER BY neg_b ASC LIMIT 3;
+----
+logical_plan
+01)Sort: neg_b ASC NULLS LAST, fetch=3
+02)--Projection: (- t1.b) AS neg_b, t2.x
+03)----Left Join: t1.a = t2.x
+04)------TableScan: t1 projection=[a, b]
+05)------TableScan: t2 projection=[x]
+
+# -b ascending means largest b first
+query II
+SELECT -t1.b AS neg_b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+ORDER BY neg_b ASC LIMIT 3;
+----
+-50 NULL
+-40 NULL
+-30 3
+
+# A non-deterministic sort expression (random()) cannot be duplicated.
+query TT
+EXPLAIN SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+ORDER BY t1.b + random() ASC LIMIT 3;
+----
+logical_plan
+01)Sort: CAST(t1.b AS Float64) + random() ASC NULLS LAST, fetch=3
+02)--Left Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a, b]
+04)----TableScan: t2 projection=[x]
+
+# Sort references a column that resolves to random() through the projection.
+query TT
+EXPLAIN SELECT rand_col, t2.x
+FROM (
+    SELECT random() AS rand_col, t1.a, t2.x
+    FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+)
+ORDER BY rand_col ASC LIMIT 3;
+----
+logical_plan
+01)Sort: rand_col ASC NULLS LAST, fetch=3
+02)--Projection: random() AS rand_col, t2.x
+03)----Left Join: t1.a = t2.x
+04)------TableScan: t1 projection=[a]
+05)------TableScan: t2 projection=[x]
+
+###
+### SubqueryAlias edge cases
+###
+
+# Preserved child is a SubqueryAlias over a TableScan with no inner Sort.
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT t1.a, t1.b, t2.x
+    FROM (SELECT * FROM t1) t1
+    LEFT JOIN t2 ON t1.a = t2.x
+) sub
+ORDER BY b ASC LIMIT 2;
+----
+logical_plan
+01)Sort: sub.b ASC NULLS LAST, fetch=2
+02)--SubqueryAlias: sub
+03)----Left Join: t1.a = t2.x
+04)------SubqueryAlias: t1
+05)--------TableScan: t1 projection=[a, b]
+06)------TableScan: t2 projection=[x]
+
+query III
+SELECT * FROM (
+    SELECT t1.a, t1.b, t2.x
+    FROM (SELECT * FROM t1) t1
+    LEFT JOIN t2 ON t1.a = t2.x
+) sub
+ORDER BY b ASC LIMIT 2;
+----
+1 10 1
+2 20 2
+
+# RIGHT JOIN; the preserved (right) child already limits to 10 rows.
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT t1.a, t2.x, t2.y
+    FROM t1
+    RIGHT JOIN (SELECT * FROM t2 ORDER BY y ASC LIMIT 10) t2
+    ON t1.a = t2.x
+) sub
+ORDER BY y ASC LIMIT 3;
+----
+logical_plan
+01)Sort: sub.y ASC NULLS LAST, fetch=3
+02)--SubqueryAlias: sub
+03)----Right Join: t1.a = t2.x
+04)------TableScan: t1 projection=[a]
+05)------SubqueryAlias: t2
+06)--------Sort: t2.y ASC NULLS LAST, fetch=10
+07)----------TableScan: t2 projection=[x, y]
+
+query III
+SELECT * FROM (
+    SELECT t1.a, t2.x, t2.y
+    FROM t1
+    RIGHT JOIN (SELECT * FROM t2 ORDER BY y ASC LIMIT 10) t2
+    ON t1.a = t2.x
+) sub
+ORDER BY y ASC LIMIT 3;
+----
+1 1 100
+2 2 200
+3 3 300
+
+# Alias name (foo) differs from the table name; column resolution must follow
+# the SubqueryAlias renaming.
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT foo.a, foo.b, t2.x
+    FROM (SELECT * FROM t1) foo
+    LEFT JOIN t2 ON foo.a = t2.x
+) sub
+ORDER BY b ASC LIMIT 3;
+----
+logical_plan
+01)Sort: sub.b ASC NULLS LAST, fetch=3
+02)--SubqueryAlias: sub
+03)----Left Join: foo.a = t2.x
+04)------SubqueryAlias: foo
+05)--------TableScan: t1 projection=[a, b]
+06)------TableScan: t2 projection=[x]
+
+query III
+SELECT * FROM (
+    SELECT foo.a, foo.b, t2.x
+    FROM (SELECT * FROM t1) foo
+    LEFT JOIN t2 ON foo.a = t2.x
+) sub
+ORDER BY b ASC LIMIT 3;
+----
+1 10 1
+2 20 2
+3 30 3
+
+# ORDER BY a non-preserved-side column (t2.x) through a SubqueryAlias.
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT t1.a, t1.b, t2.x
+    FROM (SELECT * FROM t1) t1
+    LEFT JOIN t2 ON t1.a = t2.x
+) sub
+ORDER BY x ASC LIMIT 3;
+----
+logical_plan
+01)Sort: sub.x ASC NULLS LAST, fetch=3
+02)--SubqueryAlias: sub
+03)----Left Join: t1.a = t2.x
+04)------SubqueryAlias: t1
+05)--------TableScan: t1 projection=[a, b]
+06)------TableScan: t2 projection=[x]
+
+# INNER JOIN wrapped in a SubqueryAlias.
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT t1.a, t1.b, t2.x
+    FROM (SELECT * FROM t1) t1
+    INNER JOIN t2 ON t1.a = t2.x
+) sub
+ORDER BY b ASC LIMIT 3;
+----
+logical_plan
+01)Sort: sub.b ASC NULLS LAST, fetch=3
+02)--SubqueryAlias: sub
+03)----Inner Join: t1.a = t2.x
+04)------SubqueryAlias: t1
+05)--------TableScan: t1 projection=[a, b]
+06)------TableScan: t2 projection=[x]
+
+# Multiple sort columns, both from the preserved side, through a SubqueryAlias.
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT t1.a, t1.b, t2.x
+    FROM (SELECT * FROM t1) t1
+    LEFT JOIN t2 ON t1.a = t2.x
+) sub
+ORDER BY a ASC, b ASC LIMIT 3;
+----
+logical_plan
+01)Sort: sub.a ASC NULLS LAST, sub.b ASC NULLS LAST, fetch=3
+02)--SubqueryAlias: sub
+03)----Left Join: t1.a = t2.x
+04)------SubqueryAlias: t1
+05)--------TableScan: t1 projection=[a, b]
+06)------TableScan: t2 projection=[x]
+
+query III
+SELECT * FROM (
+    SELECT t1.a, t1.b, t2.x
+    FROM (SELECT * FROM t1) t1
+    LEFT JOIN t2 ON t1.a = t2.x
+) sub
+ORDER BY a ASC, b ASC LIMIT 3;
+----
+1 10 1
+2 20 2
+3 30 3
+
+# A WHERE filter on the preserved side is pushed below the join by
+# PushDownFilter before this scenario is considered.
+query TT
+EXPLAIN SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+WHERE t1.b > 10
+ORDER BY t1.b ASC LIMIT 3;
+----
+logical_plan
+01)Sort: t1.b ASC NULLS LAST, fetch=3
+02)--Left Join: t1.a = t2.x
+03)----Filter: t1.b > Int32(10)
+04)------TableScan: t1 projection=[a, b]
+05)----TableScan: t2 projection=[x]
+
+query III
+SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+WHERE t1.b > 10
+ORDER BY t1.b ASC LIMIT 3;
+----
+2 20 2
+3 30 3
+4 40 NULL
+
+###
+### Descending order and explicit NULLS placement
+###
+
+# DESC (NULLS FIRST by default)
+query TT
+EXPLAIN SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+ORDER BY t1.b DESC LIMIT 3;
+----
+logical_plan
+01)Sort: t1.b DESC NULLS FIRST, fetch=3
+02)--Left Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a, b]
+04)----TableScan: t2 projection=[x]
+
+query III
+SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+ORDER BY t1.b DESC LIMIT 3;
+----
+5 50 NULL
+4 40 NULL
+3 30 3
+
+# ASC NULLS FIRST
+query TT
+EXPLAIN SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+ORDER BY t1.b ASC NULLS FIRST LIMIT 3;
+----
+logical_plan
+01)Sort: t1.b ASC NULLS FIRST, fetch=3
+02)--Left Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a, b]
+04)----TableScan: t2 projection=[x]
+
+query III
+SELECT t1.a, t1.b, t2.x
+FROM t1 LEFT JOIN t2 ON t1.a = t2.x
+ORDER BY t1.b ASC NULLS FIRST LIMIT 3;
+----
+1 10 1
+2 20 2
+3 30 3
+
+# DESC NULLS LAST on the preserved (right) side of a RIGHT JOIN
+query TT
+EXPLAIN SELECT t1.a, t2.x, t2.y
+FROM t1 RIGHT JOIN t2 ON t1.a = t2.x
+ORDER BY t2.y DESC NULLS LAST LIMIT 3;
+----
+logical_plan
+01)Sort: t2.y DESC NULLS LAST, fetch=3
+02)--Right Join: t1.a = t2.x
+03)----TableScan: t1 projection=[a]
+04)----TableScan: t2 projection=[x, y]
+
+query III
+SELECT t1.a, t2.x, t2.y
+FROM t1 RIGHT JOIN t2 ON t1.a = t2.x
+ORDER BY t2.y DESC NULLS LAST LIMIT 3;
+----
+NULL 7 700
+NULL 6 600
+3 3 300
+
+###
+### CROSS JOIN
+###
+
+# Each left row appears |t2| times, so the top-N by left columns must come
+# from the top-N left rows.
+query TT
+EXPLAIN SELECT t1.a, t1.b, t2.x
+FROM t1 CROSS JOIN t2
+ORDER BY t1.b ASC LIMIT 3;
+----
+logical_plan
+01)Sort: t1.b ASC NULLS LAST, fetch=3
+02)--Cross Join:
+03)----TableScan: t1 projection=[a, b]
+04)----TableScan: t2 projection=[x]
+
+query III
+SELECT t1.a, t1.b, t2.x
+FROM t1 CROSS JOIN t2
+ORDER BY t1.b ASC, t2.x ASC LIMIT 3;
+----
+1 10 1
+1 10 2
+1 10 3
+
+# CROSS JOIN sorted by right-side columns.
+query TT
+EXPLAIN SELECT t1.a, t2.x, t2.y
+FROM t1 CROSS JOIN t2
+ORDER BY t2.y ASC LIMIT 3;
+----
+logical_plan
+01)Sort: t2.y ASC NULLS LAST, fetch=3
+02)--Cross Join:
+03)----TableScan: t1 projection=[a]
+04)----TableScan: t2 projection=[x, y]
+
+query III
+SELECT t1.a, t2.x, t2.y
+FROM t1 CROSS JOIN t2
+ORDER BY t2.y ASC, t1.a ASC LIMIT 3;
+----
+1 1 100
+2 1 100
+3 1 100
+
+# CROSS JOIN: ORDER BY spans both sides (t1.b + t2.y).
+query TT
+EXPLAIN SELECT t1.a, t1.b, t2.y
+FROM t1 CROSS JOIN t2
+ORDER BY t1.b + t2.y ASC LIMIT 3;
+----
+logical_plan
+01)Sort: t1.b + t2.y ASC NULLS LAST, fetch=3
+02)--Cross Join:
+03)----TableScan: t1 projection=[a, b]
+04)----TableScan: t2 projection=[y]
+
+# INNER JOIN with only a non-equi filter: the filter can drop rows from either
+# side, so a pushed fetch could select rows that get filtered out.
+query TT
+EXPLAIN SELECT t1.a, t1.b, t2.x
+FROM t1 INNER JOIN t2 ON t1.b > t2.y
+ORDER BY t1.b ASC LIMIT 3;
+----
+logical_plan
+01)Sort: t1.b ASC NULLS LAST, fetch=3
+02)--Projection: t1.a, t1.b, t2.x
+03)----Inner Join:  Filter: t1.b > t2.y
+04)------TableScan: t1 projection=[a, b]
+05)------TableScan: t2 projection=[x, y]
+
+###
+### Multi-level outer joins
+###
+
+# Chained LEFT JOINs share t1 as the preserved side.
+statement ok
+CREATE TABLE t3 (p INT, q INT) AS VALUES
+  (1, 1000),
+  (2, 2000),
+  (3, 3000);
+
+query TT
+EXPLAIN SELECT t1.a, t1.b, t2.x, t3.p
+FROM t1
+LEFT JOIN t2 ON t1.a = t2.x
+LEFT JOIN t3 ON t1.a = t3.p
+ORDER BY t1.b ASC LIMIT 2;
+----
+logical_plan
+01)Sort: t1.b ASC NULLS LAST, fetch=2
+02)--Left Join: t1.a = t3.p
+03)----Left Join: t1.a = t2.x
+04)------TableScan: t1 projection=[a, b]
+05)------TableScan: t2 projection=[x]
+06)----TableScan: t3 projection=[p]
+
+query IIII
+SELECT t1.a, t1.b, t2.x, t3.p
+FROM t1
+LEFT JOIN t2 ON t1.a = t2.x
+LEFT JOIN t3 ON t1.a = t3.p
+ORDER BY t1.b ASC LIMIT 2;
+----
+1 10 1 1
+2 20 2 2
+
+statement ok
+DROP TABLE t3;
+
+###
+### Tied sort keys
+###
+
+# Three preserved-side rows tie on b=10; all tied rows still appear.
+statement ok
+CREATE TABLE t_tied (a INT, b INT) AS VALUES
+  (1, 10),
+  (2, 10),
+  (3, 10),
+  (4, 20),
+  (5, 30);
+
+statement ok
+CREATE TABLE t_other (x INT) AS VALUES (1), (2), (3);
+
+query TT
+EXPLAIN SELECT t_tied.a, t_tied.b, t_other.x
+FROM t_tied LEFT JOIN t_other ON t_tied.a = t_other.x
+ORDER BY t_tied.b ASC, t_tied.a ASC LIMIT 3;
+----
+logical_plan
+01)Sort: t_tied.b ASC NULLS LAST, t_tied.a ASC NULLS LAST, fetch=3
+02)--Left Join: t_tied.a = t_other.x
+03)----TableScan: t_tied projection=[a, b]
+04)----TableScan: t_other projection=[x]
+
+query III
+SELECT t_tied.a, t_tied.b, t_other.x
+FROM t_tied LEFT JOIN t_other ON t_tied.a = t_other.x
+ORDER BY t_tied.b ASC, t_tied.a ASC LIMIT 3;
+----
+1 10 1
+2 10 2
+3 10 3
+
+statement ok
+DROP TABLE t_tied;
+
+statement ok
+DROP TABLE t_other;
+
+###
+### Nested SubqueryAlias
+###
+
+# Resolve the sort key through multiple alias layers.
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT inner_sub.a, inner_sub.b, t2.x
+    FROM (
+        SELECT * FROM (SELECT * FROM t1) inner_alias
+    ) inner_sub
+    LEFT JOIN t2 ON inner_sub.a = t2.x
+) outer_sub
+ORDER BY b ASC LIMIT 2;
+----
+logical_plan
+01)Sort: outer_sub.b ASC NULLS LAST, fetch=2
+02)--SubqueryAlias: outer_sub
+03)----Left Join: inner_sub.a = t2.x
+04)------SubqueryAlias: inner_sub
+05)--------SubqueryAlias: inner_alias
+06)----------TableScan: t1 projection=[a, b]
+07)------TableScan: t2 projection=[x]
+
+query III
+SELECT * FROM (
+    SELECT inner_sub.a, inner_sub.b, t2.x
+    FROM (
+        SELECT * FROM (SELECT * FROM t1) inner_alias
+    ) inner_sub
+    LEFT JOIN t2 ON inner_sub.a = t2.x
+) outer_sub
+ORDER BY b ASC LIMIT 2;
+----
+1 10 1
+2 20 2
+
+# Existing inner Sort(fetch=5) sits behind two SubqueryAlias layers.
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT inner_sub.a, inner_sub.b, t2.x
+    FROM (
+        SELECT * FROM (SELECT * FROM t1 ORDER BY b ASC LIMIT 5) inner_alias
+    ) inner_sub
+    LEFT JOIN t2 ON inner_sub.a = t2.x
+) outer_sub
+ORDER BY b ASC LIMIT 2;
+----
+logical_plan
+01)Sort: outer_sub.b ASC NULLS LAST, fetch=2
+02)--SubqueryAlias: outer_sub
+03)----Left Join: inner_sub.a = t2.x
+04)------SubqueryAlias: inner_sub
+05)--------SubqueryAlias: inner_alias
+06)----------Sort: t1.b ASC NULLS LAST, fetch=5
+07)------------TableScan: t1 projection=[a, b]
+08)------TableScan: t2 projection=[x]
+
+query III
+SELECT * FROM (
+    SELECT inner_sub.a, inner_sub.b, t2.x
+    FROM (
+        SELECT * FROM (SELECT * FROM t1 ORDER BY b ASC LIMIT 5) inner_alias
+    ) inner_sub
+    LEFT JOIN t2 ON inner_sub.a = t2.x
+) outer_sub
+ORDER BY b ASC LIMIT 2;
+----
+1 10 1
+2 20 2
+
+# Inner Sort already limits to 2 rows; the outer query takes 5.
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT inner_sub.a, inner_sub.b, t2.x
+    FROM (
+        SELECT * FROM (SELECT * FROM t1 ORDER BY b ASC LIMIT 2) inner_alias
+    ) inner_sub
+    LEFT JOIN t2 ON inner_sub.a = t2.x
+) outer_sub
+ORDER BY b ASC LIMIT 5;
+----
+logical_plan
+01)Sort: outer_sub.b ASC NULLS LAST, fetch=5
+02)--SubqueryAlias: outer_sub
+03)----Left Join: inner_sub.a = t2.x
+04)------SubqueryAlias: inner_sub
+05)--------SubqueryAlias: inner_alias
+06)----------Sort: t1.b ASC NULLS LAST, fetch=2
+07)------------TableScan: t1 projection=[a, b]
+08)------TableScan: t2 projection=[x]
+
+query III
+SELECT * FROM (
+    SELECT inner_sub.a, inner_sub.b, t2.x
+    FROM (
+        SELECT * FROM (SELECT * FROM t1 ORDER BY b ASC LIMIT 2) inner_alias
+    ) inner_sub
+    LEFT JOIN t2 ON inner_sub.a = t2.x
+) outer_sub
+ORDER BY b ASC LIMIT 5;
+----
+1 10 1
+2 20 2
+
+# Inner Sort orders by a (fetch=5); the outer query orders by a different
+# column (b).
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT inner_sub.a, inner_sub.b, t2.x
+    FROM (
+        SELECT * FROM (SELECT * FROM t1 ORDER BY a ASC LIMIT 5) inner_alias
+    ) inner_sub
+    LEFT JOIN t2 ON inner_sub.a = t2.x
+) outer_sub
+ORDER BY b ASC LIMIT 2;
+----
+logical_plan
+01)Sort: outer_sub.b ASC NULLS LAST, fetch=2
+02)--SubqueryAlias: outer_sub
+03)----Left Join: inner_sub.a = t2.x
+04)------SubqueryAlias: inner_sub
+05)--------SubqueryAlias: inner_alias
+06)----------Sort: t1.a ASC NULLS LAST, fetch=5
+07)------------TableScan: t1 projection=[a, b]
+08)------TableScan: t2 projection=[x]
+
+query III
+SELECT * FROM (
+    SELECT inner_sub.a, inner_sub.b, t2.x
+    FROM (
+        SELECT * FROM (SELECT * FROM t1 ORDER BY a ASC LIMIT 5) inner_alias
+    ) inner_sub
+    LEFT JOIN t2 ON inner_sub.a = t2.x
+) outer_sub
+ORDER BY b ASC LIMIT 2;
+----
+1 10 1
+2 20 2
+
+# Inner full sort (ORDER BY a, no fetch) under a different outer sort key.
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT inner_sub.a, inner_sub.b, t2.x
+    FROM (
+        SELECT * FROM (SELECT * FROM t1 ORDER BY a ASC) inner_alias
+    ) inner_sub
+    LEFT JOIN t2 ON inner_sub.a = t2.x
+) outer_sub
+ORDER BY b ASC LIMIT 2;
+----
+logical_plan
+01)Sort: outer_sub.b ASC NULLS LAST, fetch=2
+02)--SubqueryAlias: outer_sub
+03)----Left Join: inner_sub.a = t2.x
+04)------SubqueryAlias: inner_sub
+05)--------SubqueryAlias: inner_alias
+06)----------TableScan: t1 projection=[a, b]
+07)------TableScan: t2 projection=[x]
+
+query III
+SELECT * FROM (
+    SELECT inner_sub.a, inner_sub.b, t2.x
+    FROM (
+        SELECT * FROM (SELECT * FROM t1 ORDER BY a ASC) inner_alias
+    ) inner_sub
+    LEFT JOIN t2 ON inner_sub.a = t2.x
+) outer_sub
+ORDER BY b ASC LIMIT 2;
+----
+1 10 1
+2 20 2
+
+# Inner Sort sits behind SubqueryAlias -> Projection(rename b -> renamed_b) ->
+# SubqueryAlias; resolution must look through the Projection to find it.
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT inner_sub.a, inner_sub.renamed_b, t2.x
+    FROM (
+        SELECT a, b AS renamed_b FROM (SELECT * FROM t1 ORDER BY b ASC LIMIT 5) inner_alias
+    ) inner_sub
+    LEFT JOIN t2 ON inner_sub.a = t2.x
+) outer_sub
+ORDER BY renamed_b ASC LIMIT 2;
+----
+logical_plan
+01)Sort: outer_sub.renamed_b ASC NULLS LAST, fetch=2
+02)--SubqueryAlias: outer_sub
+03)----Left Join: inner_sub.a = t2.x
+04)------SubqueryAlias: inner_sub
+05)--------Projection: inner_alias.a, inner_alias.b AS renamed_b
+06)----------SubqueryAlias: inner_alias
+07)------------Sort: t1.b ASC NULLS LAST, fetch=5
+08)--------------TableScan: t1 projection=[a, b]
+09)------TableScan: t2 projection=[x]
+
+query III
+SELECT * FROM (
+    SELECT inner_sub.a, inner_sub.renamed_b, t2.x
+    FROM (
+        SELECT a, b AS renamed_b FROM (SELECT * FROM t1 ORDER BY b ASC LIMIT 5) inner_alias
+    ) inner_sub
+    LEFT JOIN t2 ON inner_sub.a = t2.x
+) outer_sub
+ORDER BY renamed_b ASC LIMIT 2;
+----
+1 10 1
+2 20 2
+
+# Sort sits above a Projection that selects a column subset.
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT t1.a, t1.renamed_b, t2.x
+    FROM (SELECT a, b AS renamed_b FROM t1) t1
+    LEFT JOIN t2 ON t1.a = t2.x
+) sub
+ORDER BY renamed_b ASC LIMIT 2;
+----
+logical_plan
+01)Sort: sub.renamed_b ASC NULLS LAST, fetch=2
+02)--SubqueryAlias: sub
+03)----Left Join: t1.a = t2.x
+04)------SubqueryAlias: t1
+05)--------Projection: t1.a, t1.b AS renamed_b
+06)----------TableScan: t1 projection=[a, b]
+07)------TableScan: t2 projection=[x]
+
+query III
+SELECT * FROM (
+    SELECT t1.a, t1.renamed_b, t2.x
+    FROM (SELECT a, b AS renamed_b FROM t1) t1
+    LEFT JOIN t2 ON t1.a = t2.x
+) sub
+ORDER BY renamed_b ASC LIMIT 2;
+----
+1 10 1
+2 20 2
+
+# random() is computed once in the Projection (as rand_col); ordering by the
+# precomputed column does not re-evaluate it, unlike random() in the sort expr.
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT t1.rand_col, t2.x
+    FROM (SELECT random() AS rand_col, a FROM t1) t1
+    LEFT JOIN t2 ON t1.a = t2.x
+) sub
+ORDER BY rand_col ASC LIMIT 2;
+----
+logical_plan
+01)Sort: sub.rand_col ASC NULLS LAST, fetch=2
+02)--SubqueryAlias: sub
+03)----Projection: t1.rand_col, t2.x
+04)------Left Join: t1.a = t2.x
+05)--------SubqueryAlias: t1
+06)----------Projection: random() AS rand_col, t1.a
+07)------------TableScan: t1 projection=[a]
+08)--------TableScan: t2 projection=[x]
+
+# The outer ORDER BY column resolves to random() through the Projection, and an
+# existing inner Sort is also on random() -- but they are independent random()
+# invocations producing different orderings, so they must not be treated as the
+# same expression.
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT t1.rand_col, t2.x
+    FROM (
+        SELECT random() AS rand_col, a
+        FROM (SELECT a FROM t1 ORDER BY random() LIMIT 10)
+    ) t1
+    LEFT JOIN t2 ON t1.a = t2.x
+) sub
+ORDER BY rand_col ASC LIMIT 2;
+----
+logical_plan
+01)Sort: sub.rand_col ASC NULLS LAST, fetch=2
+02)--SubqueryAlias: sub
+03)----Projection: t1.rand_col, t2.x
+04)------Left Join: t1.a = t2.x
+05)--------SubqueryAlias: t1
+06)----------Projection: random() AS rand_col, t1.a
+07)------------Sort: random() ASC NULLS LAST, fetch=10
+08)--------------TableScan: t1 projection=[a]
+09)--------TableScan: t2 projection=[x]
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+reset datafusion.explain.logical_plan_only;
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;

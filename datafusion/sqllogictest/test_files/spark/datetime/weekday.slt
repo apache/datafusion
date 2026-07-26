@@ -23,5 +23,109 @@
 
 ## Original Query: SELECT weekday('2009-07-30');
 ## PySpark 3.5.5 Result: {'weekday(2009-07-30)': 3, 'typeof(weekday(2009-07-30))': 'int', 'typeof(2009-07-30)': 'string'}
-#query
-#SELECT weekday('2009-07-30'::string);
+# Spark `weekday` is 0-indexed with Monday = 0 .. Sunday = 6.
+# 2009-07-30 is a Thursday -> 3.
+query I
+SELECT weekday('2009-07-30'::DATE);
+----
+3
+
+# All seven days of one week (2024-01-01 is a Monday).
+query I
+SELECT weekday('2024-01-01'::DATE);
+----
+0
+
+query I
+SELECT weekday('2024-01-02'::DATE);
+----
+1
+
+query I
+SELECT weekday('2024-01-03'::DATE);
+----
+2
+
+query I
+SELECT weekday('2024-01-04'::DATE);
+----
+3
+
+query I
+SELECT weekday('2024-01-05'::DATE);
+----
+4
+
+query I
+SELECT weekday('2024-01-06'::DATE);
+----
+5
+
+query I
+SELECT weekday('2024-01-07'::DATE);
+----
+6
+
+# NULL handling
+query I
+SELECT weekday(NULL::DATE);
+----
+NULL
+
+# Array input (mix of weekdays and NULL)
+query I
+SELECT weekday(d) FROM (VALUES ('2024-01-01'::DATE), ('2024-01-06'::DATE), ('2024-01-07'::DATE), (NULL::DATE)) AS t(d);
+----
+0
+5
+6
+NULL
+
+# Timestamp input: Spark coerces TIMESTAMP/TIMESTAMP_NTZ to DATE before evaluation
+query I
+SELECT weekday('2009-07-30 12:34:56'::TIMESTAMP);
+----
+3
+
+query I
+SELECT weekday(NULL::TIMESTAMP);
+----
+NULL
+
+# Timestamp array input
+query I
+SELECT weekday(ts) FROM (VALUES
+  ('2024-01-01 01:02:03'::TIMESTAMP),
+  ('2024-01-06 10:20:30'::TIMESTAMP),
+  ('2024-01-07 23:59:59'::TIMESTAMP),
+  (NULL::TIMESTAMP)
+) AS t(ts);
+----
+0
+5
+6
+NULL
+
+# TIMESTAMP_NTZ (Timestamp without timezone) — explicit Microsecond precision
+query I
+SELECT weekday(arrow_cast('2009-07-30 09:15:00', 'Timestamp(Microsecond, None)'));
+----
+3
+
+# TIMESTAMP with timezone (Spark TIMESTAMP / LTZ) — coerces to Date32
+query I
+SELECT weekday(arrow_cast('2024-01-07 03:00:00', 'Timestamp(Nanosecond, Some("UTC"))'));
+----
+6
+
+# Error: wrong argument type (string without cast)
+statement error Function 'weekday' requires Date, but received String
+SELECT weekday('not-a-date');
+
+# Error: wrong argument type (integer)
+statement error Function 'weekday' requires Date, but received Int64
+SELECT weekday(123);
+
+# Error: no arguments
+statement error 'weekday' does not support zero arguments
+SELECT weekday();

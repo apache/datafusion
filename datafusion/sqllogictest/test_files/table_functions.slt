@@ -100,6 +100,20 @@ SELECT * FROM generate_series(1, 5) t1(v1) ORDER BY v1 DESC
 2
 1
 
+# Ensures the physical plan doesn't include `SortExec`.
+# Tests that generate_series() on Int64 auto-detects output sort order.
+query TT
+EXPLAIN FORMAT INDENT SELECT * FROM generate_series(100000) AS t1(v1) ORDER BY v1
+----
+logical_plan
+01)Sort: t1.v1 ASC NULLS LAST
+02)--SubqueryAlias: t1
+03)----Projection: generate_series().value AS v1
+04)------TableScan: generate_series() projection=[value]
+physical_plan
+01)ProjectionExec: expr=[value@0 as v1]
+02)--LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=0, end=100000, batch_size=8192]
+
 # Test generate_series with LIMIT
 query I rowsort
 SELECT * FROM generate_series(1, 100) t1(v1) LIMIT 5

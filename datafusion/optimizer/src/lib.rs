@@ -70,6 +70,7 @@ pub mod rewrite_set_comparison;
 pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;
 pub mod single_distinct_to_groupby;
+pub mod unions_to_filter;
 pub mod utils;
 
 #[cfg(test)]

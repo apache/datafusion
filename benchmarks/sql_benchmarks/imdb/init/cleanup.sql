@@ -1,0 +1,41 @@
+DROP TABLE IF EXISTS aka_name;
+
+DROP TABLE IF EXISTS aka_title;
+
+DROP TABLE IF EXISTS cast_info;
+
+DROP TABLE IF EXISTS char_name;
+
+DROP TABLE IF EXISTS comp_cast_type;
+
+DROP TABLE IF EXISTS company_name;
+
+DROP TABLE IF EXISTS company_type;
+
+DROP TABLE IF EXISTS complete_cast;
+
+DROP TABLE IF EXISTS info_type;
+
+DROP TABLE IF EXISTS keyword;
+
+DROP TABLE IF EXISTS kind_type;
+
+DROP TABLE IF EXISTS link_type;
+
+DROP TABLE IF EXISTS movie_companies;
+
+DROP TABLE IF EXISTS movie_info;
+
+DROP TABLE IF EXISTS movie_info_idx;
+
+DROP TABLE IF EXISTS movie_keyword;
+
+DROP TABLE IF EXISTS movie_link;
+
+DROP TABLE IF EXISTS name;
+
+DROP TABLE IF EXISTS person_info;
+
+DROP TABLE IF EXISTS role_type;
+
+DROP TABLE IF EXISTS title;

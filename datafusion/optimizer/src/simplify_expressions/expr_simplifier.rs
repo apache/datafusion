@@ -40,6 +40,7 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_expr::expr::HigherOrderFunction;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{
     BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Like, Operator, Volatility,
     and, binary::BinaryTypeCoercer, lit, or, preimage::PreimageResult,
@@ -707,11 +708,15 @@ impl ConstEvaluator {
             return ConstSimplifyResult::NotSimplified(s, m);
         }
 
-        let phys_expr =
-            match create_physical_expr(&expr, &DUMMY_DF_SCHEMA, &self.execution_props) {
-                Ok(e) => e,
-                Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
-            };
+        let phys_expr = match create_physical_expr(
+            &expr,
+            &DUMMY_DF_SCHEMA,
+            &self.execution_props,
+            &PhysicalPlanningContext::default(),
+        ) {
+            Ok(e) => e,
+            Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
+        };
         let metadata = phys_expr
             .return_field(DUMMY_BATCH.schema_ref())
             .ok()
@@ -2920,6 +2925,21 @@ mod tests {
     }
 
     #[test]
+    fn test_simplify_concat_by_null() {
+        let null = Expr::Literal(ScalarValue::Utf8(None), None);
+        // A || null --> null
+        {
+            let expr = binary_expr(col("c1"), Operator::StringConcat, null.clone());
+            assert_eq!(simplify(expr), null);
+        }
+        // null || A --> null
+        {
+            let expr = binary_expr(null.clone(), Operator::StringConcat, col("c1"));
+            assert_eq!(simplify(expr), null);
+        }
+    }
+
+    #[test]
     fn test_simplify_composed_bitwise_and() {
         // ((c2 > 5) & (c1 < 6)) & (c2 > 5) --> (c2 > 5) & (c1 < 6)
 
@@ -3536,6 +3556,32 @@ mod tests {
         );
         // Too many patterns (MAX_REGEX_ALTERNATIONS_EXPANSION)
         assert_no_change(regex_match(col("c1"), lit("foo|bar|baz|blarg|bozo|etc")));
+    }
+
+    #[test]
+    fn test_simplify_not_regex_match() {
+        let pattern = || lit("foo.*");
+
+        // NOT (c1 ~ pattern)  --> c1 !~ pattern
+        assert_eq!(
+            simplify(regex_match(col("c1"), pattern()).not()),
+            regex_not_match(col("c1"), pattern()),
+        );
+        // NOT (c1 !~ pattern) --> c1 ~ pattern
+        assert_eq!(
+            simplify(regex_not_match(col("c1"), pattern()).not()),
+            regex_match(col("c1"), pattern()),
+        );
+        // NOT (c1 ~* pattern)  --> c1 !~* pattern
+        assert_eq!(
+            simplify(regex_imatch(col("c1"), pattern()).not()),
+            regex_not_imatch(col("c1"), pattern()),
+        );
+        // NOT (c1 !~* pattern) --> c1 ~* pattern
+        assert_eq!(
+            simplify(regex_not_imatch(col("c1"), pattern()).not()),
+            regex_imatch(col("c1"), pattern()),
+        );
     }
 
     #[track_caller]

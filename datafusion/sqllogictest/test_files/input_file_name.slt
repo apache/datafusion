@@ -1,0 +1,128 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## input_file_name() tests
+##########
+
+statement ok
+COPY  (VALUES (10), (20), (30))
+TO 'test_files/scratch/input_file_name/csv/first.csv'
+STORED AS CSV;
+
+statement ok
+COPY  (VALUES (40), (50), (60))
+TO 'test_files/scratch/input_file_name/csv/second.csv'
+STORED AS CSV;
+
+statement ok
+CREATE EXTERNAL TABLE csv_table(column1 int)
+STORED AS CSV
+LOCATION 'test_files/scratch/input_file_name/csv/';
+
+query TI
+SELECT
+  input_file_name(),
+  column1
+FROM csv_table
+ORDER BY column1
+----
+WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/input_file_name/csv/first.csv 10
+WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/input_file_name/csv/first.csv 20
+WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/input_file_name/csv/first.csv 30
+WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/input_file_name/csv/second.csv 40
+WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/input_file_name/csv/second.csv 50
+WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/input_file_name/csv/second.csv 60
+
+query I
+SELECT column1
+FROM csv_table
+WHERE input_file_name() LIKE '%/first.csv'
+ORDER BY column1;
+----
+10
+20
+30
+
+query TT
+EXPLAIN SELECT column1
+FROM csv_table
+WHERE input_file_name() LIKE '%/first.csv';
+----
+logical_plan
+01)Projection: csv_table.column1
+02)--Filter: __datafusion_extracted_1 LIKE Utf8("%/first.csv")
+03)----Projection: input_file_name() AS __datafusion_extracted_1, csv_table.column1
+04)------TableScan: csv_table projection=[column1]
+physical_plan
+01)FilterExec: __datafusion_extracted_1@0 LIKE %/first.csv, projection=[column1@1]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/input_file_name/csv/first.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/input_file_name/csv/second.csv]]}, projection=[input_file_name() as __datafusion_extracted_1, column1], file_type=csv, has_header=true
+
+
+query error Execution error: input_file_name\(\) is source dependent and cannot be evaluated directly
+SELECT input_file_name() FROM (VALUES (1)) v(x);
+
+statement ok
+DROP TABLE csv_table;
+
+# Parquet tests as it has its own implementation
+
+statement ok
+COPY  (VALUES (10), (20), (30))
+TO 'test_files/scratch/input_file_name/parquet/first.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY  (VALUES (40), (50), (60))
+TO 'test_files/scratch/input_file_name/parquet/second.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE pq_table(column1 int)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/input_file_name/parquet/';
+
+query I
+SELECT column1 FROM pq_table
+WHERE input_file_name() LIKE '%first.parquet'
+ORDER BY column1
+----
+10
+20
+30
+
+query TT
+EXPLAIN SELECT column1 FROM pq_table
+WHERE input_file_name() LIKE '%first.parquet'
+ORDER BY column1
+----
+logical_plan
+01)Sort: pq_table.column1 ASC NULLS LAST
+02)--Projection: pq_table.column1
+03)----Filter: __datafusion_extracted_1 LIKE Utf8("%first.parquet")
+04)------Projection: input_file_name() AS __datafusion_extracted_1, pq_table.column1
+05)--------TableScan: pq_table projection=[column1]
+physical_plan
+01)SortPreservingMergeExec: [column1@0 ASC NULLS LAST]
+02)--SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----FilterExec: __datafusion_extracted_1@0 LIKE %first.parquet, projection=[column1@1]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+05)--------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/input_file_name/parquet/first.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/input_file_name/parquet/second.parquet]]}, projection=[input_file_name() as __datafusion_extracted_1, column1], file_type=parquet, predicate=input_file_name() LIKE %first.parquet
+
+statement ok
+DROP TABLE pq_table;

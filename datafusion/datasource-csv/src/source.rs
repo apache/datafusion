@@ -17,25 +17,23 @@
 
 //! Execution plan for reading CSV files
 
+use datafusion_datasource::boundary_stream::AlignedBoundaryStream;
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_physical_plan::projection::ProjectionExprs;
 use std::fmt;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::Read;
 use std::sync::Arc;
-use std::task::Poll;
 
 use datafusion_datasource::decoder::{DecoderDeserializer, deserialize_stream};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::{
-    FileRange, ListingTableUrl, PartitionedFile, RangeCalculation, TableSchema,
-    as_file_source, calculate_range,
+    FileRange, ListingTableUrl, PartitionedFile, TableSchema, as_file_source,
 };
 
 use arrow::csv;
 use datafusion_common::config::CsvOptions;
-use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, exec_datafusion_err};
 use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -310,20 +308,6 @@ impl FileSource for CsvSource {
             DisplayFormatType::TreeRender => Ok(()),
         }
     }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(
-            &dyn datafusion_physical_plan::PhysicalExpr,
-        ) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Visit projection expressions
-        let mut tnr = TreeNodeRecursion::Continue;
-        for proj_expr in &self.projection.source {
-            tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
-        }
-        Ok(tnr)
-    }
 }
 
 impl FileOpener for CsvOpener {
@@ -382,43 +366,53 @@ impl FileOpener for CsvOpener {
 
         Ok(Box::pin(async move {
             // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
+            let file_size = partitioned_file.object_meta.size;
+            let location = partitioned_file.object_meta.location;
 
-            let calculated_range =
-                calculate_range(&partitioned_file, &store, terminator).await?;
+            if let Some(file_range) = partitioned_file.range.as_ref() {
+                let raw_start: u64 = file_range.start.try_into().map_err(|_| {
+                    exec_datafusion_err!(
+                        "Expected start range to fit in u64, got {}",
+                        file_range.start
+                    )
+                })?;
+                let raw_end: u64 = file_range.end.try_into().map_err(|_| {
+                    exec_datafusion_err!(
+                        "Expected end range to fit in u64, got {}",
+                        file_range.end
+                    )
+                })?;
 
-            let range = match calculated_range {
-                RangeCalculation::Range(None) => None,
-                RangeCalculation::Range(Some(range)) => Some(range.into()),
-                RangeCalculation::TerminateEarly => {
-                    return Ok(
-                        futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed()
-                    );
-                }
-            };
+                let aligned_stream = AlignedBoundaryStream::new(
+                    Arc::clone(&store),
+                    location.clone(),
+                    raw_start,
+                    raw_end,
+                    file_size,
+                    terminator.unwrap_or(b'\n'),
+                )
+                .await?
+                .map_err(DataFusionError::from);
 
-            let options = GetOptions {
-                range,
-                ..Default::default()
-            };
+                let decoder = config.builder().build_decoder();
+                let input = file_compression_type
+                    .convert_stream(aligned_stream.boxed())?
+                    .fuse();
+                let stream = deserialize_stream(
+                    input,
+                    DecoderDeserializer::new(CsvDecoder::new(decoder)),
+                );
+                return Ok(stream.map_err(Into::into).boxed());
+            }
 
-            let result = store
-                .get_opts(&partitioned_file.object_meta.location, options)
-                .await?;
+            // No range specified — read the entire file
+            let options = GetOptions::default();
+            let result = store.get_opts(&location, options).await?;
 
             match result.payload {
                 #[cfg(not(target_arch = "wasm32"))]
-                GetResultPayload::File(mut file, _) => {
-                    let is_whole_file_scanned = partitioned_file.range.is_none();
-                    let decoder = if is_whole_file_scanned {
-                        // Don't seek if no range as breaks FIFO files
-                        file_compression_type.convert_read(file)?
-                    } else {
-                        file.seek(SeekFrom::Start(result.range.start as _))?;
-                        file_compression_type.convert_read(
-                            file.take((result.range.end - result.range.start) as u64),
-                        )?
-                    };
-
+                GetResultPayload::File(file, _) => {
+                    let decoder = file_compression_type.convert_read(file)?;
                     let mut reader = config.open(decoder)?;
 
                     // Use std::iter::from_fn to wrap execution of iterator's next() method.
