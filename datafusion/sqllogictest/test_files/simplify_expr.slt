@@ -179,3 +179,255 @@ physical_plan
 
 statement ok
 drop table dates;
+
+# ------------------------------------------------------------------------
+# Unwrapping Date32 <-> Date64 casts in comparison predicates.
+#
+# `Date32` counts whole days since the epoch; `Date64` counts milliseconds.
+# Widening a `Date32` column up to `Date64` (`date32_col -> Date64`) is
+# injective, so a comparison against a whole-day `Date64` literal can be
+# rewritten onto the bare `Date32` column. Narrowing a `Date64` column down to
+# `Date32` truncates the milliseconds to the day (many-to-one) and must NOT be
+# rewritten: `CAST(date64 AS Date32) = <day>` matches any millisecond within
+# that day. Arrow does not require `Date64` values to fall on a day boundary
+# (arrow-rs#5288), so the table below intentionally stores sub-day `Date64`
+# values (ids 2 and 4) to exercise that hazard.
+#
+# The `Date64` column is built from raw millisecond values with `arrow_cast`;
+# `2025-01-01 00:00` = 1735689600000 ms (day 20089), `2025-01-01 12:00` adds
+# 43200000 ms. `1969-12-31 00:00` = -86400000 ms (day -1); `1969-12-31 12:00`
+# = -43200000 ms (a pre-epoch sub-day value).
+statement ok
+create table date_unwrap as
+select
+  c.id,
+  arrow_cast(c.d32, 'Date32') as d32,
+  arrow_cast(c.d64ms, 'Date64') as d64
+from (values
+  (1, '2025-01-01', 1735689600000),
+  (2, '2025-01-01', 1735732800000),
+  (3, '1969-12-31', -86400000),
+  (4, '1969-12-31', -43200000),
+  (5, NULL,         NULL)
+) as c(id, d32, d64ms);
+
+query IDD
+select id, d32, d64 from date_unwrap order by id;
+----
+1 2025-01-01 2025-01-01T00:00:00
+2 2025-01-01 2025-01-01T12:00:00
+3 1969-12-31 1969-12-31T00:00:00
+4 1969-12-31 1969-12-31T12:00:00
+5 NULL NULL
+
+# --- Widening Date32 -> Date64: folds onto the bare column ---------------
+# The plan for these widening queries is what changes when the optimization is
+# enabled: the CAST moves off the column and onto the (whole-day) literal.
+query TT
+explain select id from date_unwrap where arrow_cast(d32, 'Date64') = arrow_cast(1735689600000, 'Date64');
+----
+logical_plan
+01)Projection: date_unwrap.id
+02)--Filter: date_unwrap.d32 = Date32("2025-01-01")
+03)----TableScan: date_unwrap projection=[id, d32]
+physical_plan
+01)FilterExec: d32@1 = 2025-01-01, projection=[id@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+select id from date_unwrap where arrow_cast(d32, 'Date64') = arrow_cast(1735689600000, 'Date64') order by id;
+----
+1
+2
+
+# Range operators fold too (Date32 -> Date64 is monotonic).
+query TT
+explain select id from date_unwrap where arrow_cast(d32, 'Date64') < arrow_cast(1735689600000, 'Date64');
+----
+logical_plan
+01)Projection: date_unwrap.id
+02)--Filter: date_unwrap.d32 < Date32("2025-01-01")
+03)----TableScan: date_unwrap projection=[id, d32]
+physical_plan
+01)FilterExec: d32@1 < 2025-01-01, projection=[id@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select id from date_unwrap where arrow_cast(d32, 'Date64') >= arrow_cast(1735689600000, 'Date64');
+----
+logical_plan
+01)Projection: date_unwrap.id
+02)--Filter: date_unwrap.d32 >= Date32("2025-01-01")
+03)----TableScan: date_unwrap projection=[id, d32]
+physical_plan
+01)FilterExec: d32@1 >= 2025-01-01, projection=[id@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+select id from date_unwrap where arrow_cast(d32, 'Date64') < arrow_cast(1735689600000, 'Date64') order by id;
+----
+3
+4
+
+query I
+select id from date_unwrap where arrow_cast(d32, 'Date64') <= arrow_cast(1735689600000, 'Date64') order by id;
+----
+1
+2
+3
+4
+
+query I
+select id from date_unwrap where arrow_cast(d32, 'Date64') > arrow_cast(1735689600000, 'Date64') order by id;
+----
+
+query I
+select id from date_unwrap where arrow_cast(d32, 'Date64') >= arrow_cast(1735689600000, 'Date64') order by id;
+----
+1
+2
+
+# Reversed operands fold too: with the Date64 literal on the LEFT, logical
+# simplification moves the bare column to the left and swaps the operator
+# (`literal < CAST(col)` becomes `col > literal`).
+query TT
+explain select id from date_unwrap where arrow_cast(-86400000, 'Date64') < arrow_cast(d32, 'Date64');
+----
+logical_plan
+01)Projection: date_unwrap.id
+02)--Filter: date_unwrap.d32 > Date32("1969-12-31")
+03)----TableScan: date_unwrap projection=[id, d32]
+physical_plan
+01)FilterExec: d32@1 > 1969-12-31, projection=[id@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+select id from date_unwrap where arrow_cast(-86400000, 'Date64') < arrow_cast(d32, 'Date64') order by id;
+----
+1
+2
+
+# IN-list widening also folds.
+query TT
+explain select id from date_unwrap where arrow_cast(d32, 'Date64') in (arrow_cast(1735689600000, 'Date64'), arrow_cast(-86400000, 'Date64'));
+----
+logical_plan
+01)Projection: date_unwrap.id
+02)--Filter: date_unwrap.d32 = Date32("2025-01-01") OR date_unwrap.d32 = Date32("1969-12-31")
+03)----TableScan: date_unwrap projection=[id, d32]
+physical_plan
+01)FilterExec: d32@1 = 2025-01-01 OR d32@1 = 1969-12-31, projection=[id@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+select id from date_unwrap where arrow_cast(d32, 'Date64') in (arrow_cast(1735689600000, 'Date64'), arrow_cast(-86400000, 'Date64')) order by id;
+----
+1
+2
+3
+4
+
+# A NON-whole-day literal is NOT foldable: a Date32-derived Date64 is always at
+# midnight, so it can never equal a sub-day literal. The plan keeps the CAST and
+# the query returns zero rows.
+query TT
+explain select id from date_unwrap where arrow_cast(d32, 'Date64') = arrow_cast(1735732800000, 'Date64');
+----
+logical_plan
+01)Projection: date_unwrap.id
+02)--Filter: CAST(date_unwrap.d32 AS Date64) = Date64("2025-01-01")
+03)----TableScan: date_unwrap projection=[id, d32]
+physical_plan
+01)FilterExec: CAST(d32@1 AS Date64) = 2025-01-01, projection=[id@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+select id from date_unwrap where arrow_cast(d32, 'Date64') = arrow_cast(1735732800000, 'Date64') order by id;
+----
+
+# NULL comparison semantics are unchanged by the rewrite (three-valued logic:
+# the NULL row yields NULL, not a dropped row).
+query IB
+select id, arrow_cast(d32, 'Date64') = arrow_cast(1735689600000, 'Date64') as eq from date_unwrap order by id;
+----
+1 true
+2 true
+3 false
+4 false
+5 NULL
+
+# --- Narrowing Date64 -> Date32: must NOT fold (soundness) ---------------
+# The plan for these queries is invariant: the CAST stays on the column. If it
+# were unwrapped, the sub-day rows (ids 2 and 4) would be dropped.
+query TT
+explain select id from date_unwrap where cast(d64 as date) = DATE '2025-01-01';
+----
+logical_plan
+01)Projection: date_unwrap.id
+02)--Filter: CAST(date_unwrap.d64 AS Date32) = Date32("2025-01-01")
+03)----TableScan: date_unwrap projection=[id, d64]
+physical_plan
+01)FilterExec: CAST(d64@1 AS Date32) = 2025-01-01, projection=[id@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# id 2 is 2025-01-01 12:00 - it truncates to 2025-01-01 and MUST be returned.
+query I
+select id from date_unwrap where cast(d64 as date) = DATE '2025-01-01' order by id;
+----
+1
+2
+
+query TT
+explain select id from date_unwrap where cast(d64 as date) < DATE '2025-01-01';
+----
+logical_plan
+01)Projection: date_unwrap.id
+02)--Filter: CAST(date_unwrap.d64 AS Date32) < Date32("2025-01-01")
+03)----TableScan: date_unwrap projection=[id, d64]
+physical_plan
+01)FilterExec: CAST(d64@1 AS Date32) < 2025-01-01, projection=[id@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# IN-list narrowing is guarded as well.
+query TT
+explain select id from date_unwrap where cast(d64 as date) in (DATE '2025-01-01');
+----
+logical_plan
+01)Projection: date_unwrap.id
+02)--Filter: CAST(date_unwrap.d64 AS Date32) = Date32("2025-01-01")
+03)----TableScan: date_unwrap projection=[id, d64]
+physical_plan
+01)FilterExec: CAST(d64@1 AS Date32) = 2025-01-01, projection=[id@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+select id from date_unwrap where cast(d64 as date) in (DATE '2025-01-01') order by id;
+----
+1
+2
+
+# Pre-epoch dates. Arrow's Date64 -> Date32 cast divides by 86_400_000 and
+# truncates toward zero, so the pre-epoch sub-day value (id 4, -43200000 ms)
+# truncates to day 0 (1970-01-01), not to 1969-12-31. This is arrow's runtime
+# behavior; `scale_date_literal` only ever folds on exact whole-day multiples,
+# so it can never disagree with the value the cast actually produces.
+query ID
+select id, cast(d64 as date) as truncated from date_unwrap where d64 is not null order by id;
+----
+1 2025-01-01
+2 2025-01-01
+3 1969-12-31
+4 1970-01-01
+
+query I
+select id from date_unwrap where cast(d64 as date) = DATE '1969-12-31' order by id;
+----
+3
+
+query I
+select id from date_unwrap where cast(d64 as date) = DATE '1970-01-01' order by id;
+----
+4
+
+statement ok
+drop table date_unwrap;
