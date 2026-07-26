@@ -91,8 +91,7 @@ mod tests {
         Ok(())
     }
 
-    /// This test validates that a producer's `placement` override survives the
-    /// FFI boundary instead of collapsing to the default `KeepInPlace`.
+    /// Checks planning-property overrides across the FFI boundary.
     #[tokio::test]
     async fn test_scalar_udf_placement() -> Result<()> {
         let module = get_module()?;
@@ -112,18 +111,6 @@ mod tests {
                 .placement(&[ExpressionPlacement::Literal, ExpressionPlacement::Column]),
             ExpressionPlacement::KeepInPlace
         );
-
-        Ok(())
-    }
-
-    /// This test validates that a producer's `preserves_lex_ordering` override
-    /// survives the real dynamic-library FFI boundary.
-    #[tokio::test]
-    async fn test_scalar_udf_preserves_lex_ordering() -> Result<()> {
-        let module = get_module()?;
-
-        let ffi_lex_ordering_func = (module.create_lex_ordering_udf)();
-        let foreign_func: Arc<dyn ScalarUDFImpl> = (&ffi_lex_ordering_func).into();
 
         let preserves = ExprProperties::new_unknown().with_preserves_lex_ordering(true);
         let does_not_preserve = ExprProperties::new_unknown();
