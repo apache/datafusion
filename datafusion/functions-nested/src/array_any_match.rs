@@ -18,17 +18,11 @@
 //! [`datafusion_expr::HigherOrderUDF`] definitions for array_any_match function.
 
 use arrow::{
-    array::{Array, AsArray, BooleanArray, BooleanBuilder, new_null_array},
+    array::{Array, BooleanArray, BooleanBuilder},
     buffer::NullBuffer,
-    compute::take_arrays,
-    datatypes::{ArrowNativeType, DataType, Field, FieldRef},
+    datatypes::{DataType, Field, FieldRef},
 };
-use datafusion_common::{
-    Result, exec_datafusion_err, exec_err, plan_err,
-    utils::{
-        adjust_offsets_for_slice, list_values, list_values_row_number, take_function_args,
-    },
-};
+use datafusion_common::{Result, plan_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
     HigherOrderSignature, HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda,
@@ -37,7 +31,9 @@ use datafusion_expr::{
 use datafusion_macros::user_doc;
 use std::{fmt::Debug, sync::Arc};
 
-use crate::lambda_utils::coerce_single_list_arg;
+use crate::lambda_utils::{
+    SingleListLambdaResult, coerce_single_list_arg, evaluate_single_list_predicate,
+};
 
 make_higher_order_function_expr_and_func!(
     ArrayAnyMatch,
@@ -160,75 +156,25 @@ impl HigherOrderUDFImpl for ArrayAnyMatch {
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
-        let [ValueOrLambda::Value(list), ValueOrLambda::Lambda(lambda)] =
-            take_function_args(self.name(), &args.args)?
-        else {
-            return exec_err!("{} expects a value followed by a lambda", self.name());
+        let evaluated = match evaluate_single_list_predicate(self.name(), &args)? {
+            SingleListLambdaResult::EarlyReturn(v) => return Ok(v),
+            SingleListLambdaResult::Ready(v) => v,
         };
 
-        let list_array = list.to_array(args.number_rows)?;
+        let predicate = evaluated.boolean_predicate(self.name())?;
 
-        // fast path: fully null input — also required for FixedSizeList which can't be
-        // handled by clear_null_values when fully null
-        if list_array.null_count() == list_array.len() {
-            return Ok(ColumnarValue::Array(new_null_array(
-                args.return_type(),
-                list_array.len(),
-            )));
-        }
-
-        let list_values = list_values(&list_array)?;
-
-        let values_param = || Ok(Arc::clone(&list_values));
-
-        let predicate_results = lambda
-            .evaluate(&[&values_param], |arrays| {
-                let indices = list_values_row_number(&list_array)?;
-                Ok(take_arrays(arrays, &indices, None)?)
-            })?
-            .into_array(list_values.len())?;
-
-        let predicate_bool = predicate_results
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .ok_or_else(|| {
-                exec_datafusion_err!(
-                    "{} predicate must return boolean array",
-                    self.name()
-                )
-            })?;
-
-        let mut values = BooleanBuilder::with_capacity(list_array.len());
-
-        // Maps predicate results (flat over all elements) back to one Boolean per row.
-        // Uses adjusted offsets so sliced lists index correctly into the predicate array.
-        macro_rules! process_list {
-            ($list_typed:expr) => {{
-                let offsets = adjust_offsets_for_slice($list_typed);
-                for i in 0..$list_typed.len() {
-                    let start = offsets[i].as_usize();
-                    let end = offsets[i + 1].as_usize();
-                    // any_match_for_range returns None when nulls poison the result;
-                    // null rows produce an empty range and return Some(false), but their
-                    // null bit is preserved by attaching the original null bitmap below.
-                    values.append_option(any_match_for_range(predicate_bool, start, end));
-                }
-            }};
-        }
-
-        match list_array.data_type() {
-            DataType::List(_) => {
-                process_list!(list_array.as_list::<i32>());
-            }
-            DataType::LargeList(_) => {
-                process_list!(list_array.as_list::<i64>());
-            }
-            other => return exec_err!("expected list, got {other}"),
+        let mut values = BooleanBuilder::with_capacity(evaluated.len());
+        for i in 0..evaluated.len() {
+            let (start, end) = evaluated.row_range(i);
+            // any_match_for_range returns None when nulls poison the result;
+            // null rows produce an empty range and return Some(false), but their
+            // null bit is preserved by attaching the original null bitmap below.
+            values.append_option(any_match_for_range(&predicate, start, end));
         }
 
         let (boolean_buffer, predicate_nulls) = values.finish().into_parts();
         // Merge: a row is null if the input list row was null or the predicate returned null.
-        let nulls = NullBuffer::union(list_array.nulls(), predicate_nulls.as_ref());
+        let nulls = NullBuffer::union(evaluated.nulls(), predicate_nulls.as_ref());
         Ok(ColumnarValue::Array(Arc::new(BooleanArray::new(
             boolean_buffer,
             nulls,

@@ -23,13 +23,10 @@ use arrow::{
         OffsetSizeTrait, new_empty_array,
     },
     buffer::{OffsetBuffer, ScalarBuffer},
-    compute::{filter as arrow_filter, take_arrays},
+    compute::filter as arrow_filter,
     datatypes::{DataType, Field, FieldRef},
 };
-use datafusion_common::{
-    Result, ScalarValue, exec_err,
-    utils::{adjust_offsets_for_slice, list_values_row_number},
-};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
     HigherOrderSignature, HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda,
@@ -39,7 +36,7 @@ use datafusion_macros::user_doc;
 use std::sync::Arc;
 
 use crate::lambda_utils::{
-    ListValuesResult, coerce_single_list_arg, extract_list_values,
+    SingleListLambdaResult, coerce_single_list_arg, evaluate_single_list_predicate,
     single_list_lambda_parameters, value_lambda_pair,
 };
 
@@ -130,12 +127,9 @@ impl HigherOrderUDFImpl for ArrayFilter {
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
-        let (list, lambda) = value_lambda_pair(self.name(), &args.args)?;
-        let list_array = list.to_array(args.number_rows)?;
-
-        let list_values = match extract_list_values(&list_array, args.return_type())? {
-            ListValuesResult::EarlyReturn(v) => return Ok(v),
-            ListValuesResult::Values(v) => v,
+        let evaluated = match evaluate_single_list_predicate(self.name(), &args)? {
+            SingleListLambdaResult::EarlyReturn(v) => return Ok(v),
+            SingleListLambdaResult::Ready(v) => v,
         };
 
         let field = match args.return_field.data_type() {
@@ -149,56 +143,47 @@ impl HigherOrderUDFImpl for ArrayFilter {
             }
         };
 
-        let values_param = || Ok(Arc::clone(&list_values));
-        let predicate_output = lambda.evaluate(&[&values_param], |arrays| {
-            let indices = list_values_row_number(&list_array)?;
-            Ok(take_arrays(arrays, &indices, None)?)
-        })?;
-
         // Scalar predicate short-circuit: x -> true or x -> false/null
-        if let ColumnarValue::Scalar(ScalarValue::Boolean(b)) = &predicate_output {
+        if let ColumnarValue::Scalar(ScalarValue::Boolean(b)) =
+            &evaluated.evaluated_result
+        {
             return match b {
-                Some(true) => Ok(ColumnarValue::Array(list_array)),
+                Some(true) => Ok(ColumnarValue::Array(evaluated.original_list)),
                 _ => Ok(ColumnarValue::Array(empty_filtered_list(
-                    &list_array,
+                    &evaluated.original_list,
                     field,
                 )?)),
             };
         }
 
-        let predicate = predicate_output.into_array(list_values.len())?;
-        let Some(predicate) = predicate.as_any().downcast_ref::<BooleanArray>() else {
-            return exec_err!(
-                "{} lambda must return boolean, got {}",
-                self.name(),
-                predicate.data_type()
-            );
-        };
+        let predicate = evaluated.boolean_predicate(self.name())?;
 
         // ListView and LargeListView are coerced to List/LargeList by coerce_value_types.
-        let filtered_list = match list_array.data_type() {
+        let filtered_list = match evaluated.original_list.data_type() {
             DataType::List(_) => {
-                let list = list_array.as_list::<i32>();
-                let adjusted_offsets = adjust_offsets_for_slice(list);
-                let (filtered_values, new_offsets) =
-                    filter_list_values(&list_values, predicate, &adjusted_offsets)?;
+                let (filtered_values, new_offsets) = filter_list_values(
+                    &evaluated.flattened_values,
+                    &predicate,
+                    &evaluated.adjusted_offsets::<i32>(),
+                )?;
                 Arc::new(ListArray::new(
                     field,
                     new_offsets,
                     filtered_values,
-                    list.nulls().cloned(),
+                    evaluated.nulls().cloned(),
                 )) as ArrayRef
             }
             DataType::LargeList(_) => {
-                let large_list = list_array.as_list::<i64>();
-                let adjusted_offsets = adjust_offsets_for_slice(large_list);
-                let (filtered_values, new_offsets) =
-                    filter_list_values(&list_values, predicate, &adjusted_offsets)?;
+                let (filtered_values, new_offsets) = filter_list_values(
+                    &evaluated.flattened_values,
+                    &predicate,
+                    &evaluated.adjusted_offsets::<i64>(),
+                )?;
                 Arc::new(LargeListArray::new(
                     field,
                     new_offsets,
                     filtered_values,
-                    large_list.nulls().cloned(),
+                    evaluated.nulls().cloned(),
                 ))
             }
             other => exec_err!("expected list, got {other}")?,

@@ -149,8 +149,6 @@ impl EvaluatedListLambda {
         self.original_list.len()
     }
 
-    // Used by array_any_match / array_filter once migrated onto this helper.
-    #[allow(dead_code)]
     pub(crate) fn nulls(&self) -> Option<&NullBuffer> {
         self.original_list.nulls()
     }
@@ -159,8 +157,6 @@ impl EvaluatedListLambda {
         (self.row_offsets[i], self.row_offsets[i + 1])
     }
 
-    // Used by array_filter once migrated onto this helper.
-    #[allow(dead_code)]
     pub(crate) fn adjusted_offsets<O: OffsetSizeTrait>(&self) -> OffsetBuffer<O> {
         OffsetBuffer::from_lengths(self.row_offsets.windows(2).map(|w| w[1] - w[0]))
     }
