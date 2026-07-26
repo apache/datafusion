@@ -33,7 +33,7 @@ use arrow::compute::{SortOptions};
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::config::{ConfigOptions, CsvOptions};
 use datafusion_common::tree_node::{TreeNode, TransformedResult};
-use datafusion_common::{create_array, Result, TableReference};
+use datafusion_common::{create_array, NullEquality, Result, TableReference};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr_common::operator::Operator;
@@ -44,6 +44,7 @@ use datafusion_physical_expr_common::sort_expr::{
 };
 use datafusion_physical_expr::{Distribution, Partitioning, PhysicalExpr};
 use datafusion_physical_expr::expressions::{col, BinaryExpr, Column, NotExpr};
+use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -238,6 +239,48 @@ async fn test_remove_unnecessary_sort5() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_hash_join_interleaved_projection_preserves_parent_sort() -> Result<()> {
+    let left_schema = create_test_schema()?;
+    let right_schema = create_test_schema2()?;
+    let left = parquet_exec(left_schema.clone());
+    let right = parquet_exec(right_schema.clone());
+    let on = vec![(
+        Arc::new(Column::new_with_schema("nullable_col", &left_schema)?) as _,
+        Arc::new(Column::new_with_schema("col_a", &right_schema)?) as _,
+    )];
+    let join = Arc::new(HashJoinExec::try_new(
+        left,
+        right,
+        on,
+        None,
+        &JoinType::Right,
+        // Interleave a right-side column before a left-side column.
+        Some(vec![2, 0]),
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+        false,
+    )?);
+    let ordering = [sort_expr("nullable_col", &join.schema())].into();
+    let physical_plan = sort_exec(ordering, join);
+
+    let mut config = ConfigOptions::new();
+    config.execution.target_partitions = 10;
+    let optimized_plan =
+        EnsureRequirements::new().optimize(Arc::clone(&physical_plan), &config)?;
+    let optimized_plan = SanityCheckPlan::new().optimize(optimized_plan, &config)?;
+
+    assert_snapshot!(displayable(optimized_plan.as_ref()).indent(true), @r"
+    SortPreservingMergeExec: [nullable_col@1 ASC]
+      SortExec: expr=[nullable_col@1 ASC], preserve_partitioning=[true]
+        HashJoinExec: mode=CollectLeft, join_type=Right, on=[(nullable_col@0, col_a@0)], projection=[col_a@2, nullable_col@0]
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
+    ");
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_do_not_remove_sort_with_limit() -> Result<()> {
     let schema = create_test_schema()?;
     let source1 = parquet_exec(schema.clone());
@@ -382,12 +425,12 @@ async fn test_union_inputs_different_sorted2() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[test]
 // Test with `repartition_sorts` enabled to preserve pre-sorted partitions and avoid resorting
-async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true()
+fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true()
 -> Result<()> {
     assert_snapshot!(
-        union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true).await?,
+        union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true)?,
         @r"
     Input Plan:
     OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
@@ -408,12 +451,12 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
     Ok(())
 }
 
-#[tokio::test]
+#[test]
 // Test with `repartition_sorts` disabled, causing a full resort of the data
-async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_false()
+fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_false()
 -> Result<()> {
     assert_snapshot!(
-        union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false).await?,
+        union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false)?,
         @r"
     Input Plan:
     OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
@@ -434,7 +477,7 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
     Ok(())
 }
 
-async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(
+fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(
     repartition_sorts: bool,
 ) -> Result<String> {
     let schema = create_test_schema()?;

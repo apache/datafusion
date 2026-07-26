@@ -43,8 +43,8 @@ DataFusion is currently governed by the following individuals
 The following table can be updated by running the following script:
 
 ```bash
-python 3 docs/scripts/update_committer_list.py
-prettier -w docs/scripts/update_committer_list.py
+python3 docs/scripts/update_committer_list.py
+ci/scripts/doc_prettier_check.sh --write --allow-dirty
 ```
 
 Notes:
@@ -71,6 +71,7 @@ Notes:
 | Jeffrey Vo                | jeffreyvo        | [Jefffrey](https://github.com/Jefffrey)                 |                | PMC       |
 | Jonah Gao                 | jonah            | [jonahgao](https://github.com/jonahgao)                 |                | PMC       |
 | Kun Liu                   | liukun           | [liukun4515](https://github.com/liukun4515)             |                | PMC       |
+| Matt Butrovich            | mbutrovich       | [mbutrovich](https://github.com/mbutrovich)             | Apple          | PMC       |
 | Marko Milenković          | milenkovicm      | [milenkovicm](https://github.com/milenkovicm)           |                | PMC       |
 | Mehmet Ozan Kabak         | ozankabak        | [ozankabak](https://github.com/ozankabak)               | Synnada, Inc   | PMC       |
 | Tim Saucer                | timsaucer        | [timsaucer](https://github.com/timsaucer)               |                | PMC       |
@@ -95,14 +96,14 @@ Notes:
 | Siew Kam Onn              | kosiew           | [kosiew](https://github.com/kosiew)                     |                | Committer |
 | Kumar Ujjawal             | kumarujjawal     | [kumarUjjawal](https://github.com/kumarUjjawal)         |                | Committer |
 | Lewis Zhang               | linwei           | [lewiszlw](https://github.com/lewiszlw)                 | diit.cn        | Committer |
-| Matt Butrovich            | mbutrovich       | [mbutrovich](https://github.com/mbutrovich)             | Apple          | Committer |
 | Metehan Yildirim          | mete             | [metegenez](https://github.com/metegenez)               |                | Committer |
-| Martin Tzvetanov Grigorov | mgrigorov        |                                                         |                | Committer |
+| Martin Tzvetanov Grigorov | mgrigorov        | [martin-g](https://github.com/martin-g)                 |                | Committer |
 | Wang Mingming             | mingmwang        | [mingmwang](https://github.com/mingmwang)               |                | Committer |
 | Michael Ward              | mjward           | [Michael-J-Ward ](https://github.com/Michael-J-Ward)    |                | Committer |
 | Marco Neumann             | mneumann         | [crepererum](https://github.com/crepererum)             | InfluxData     | Committer |
+| Neil Conway               | neilc            | [neilconway](https://github.com/neilconway)             |                | Committer |
 | Zhong Yanghong            | nju_yaho         | [yahoNanJing](https://github.com/yahoNanJing)           |                | Committer |
-| Nuno Faria                | nunofaria        |                                                         |                | Committer |
+| Nuno Faria                | nunofaria        | [nuno-faria](https://github.com/nuno-faria)             |                | Committer |
 | Paddy Horan               | paddyhoran       | [paddyhoran](https://github.com/paddyhoran)             | Assured Allies | Committer |
 | Parth Chandra             | parthc           | [parthchandra](https://github.com/parthchandra)         | Apple          | Committer |
 | Rémi Dettai               | rdettai          | [rdettai](https://github.com/rdettai)                   |                | Committer |

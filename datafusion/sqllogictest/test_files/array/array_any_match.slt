@@ -103,6 +103,12 @@ SELECT list_any_match([1, 2, 3], x -> x > 2);
 ----
 true
 
+# null arg
+query B
+SELECT array_any_match(NULL, x -> x > 2);
+----
+NULL
+
 statement ok
 drop table t;
 

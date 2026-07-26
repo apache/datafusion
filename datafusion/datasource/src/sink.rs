@@ -31,8 +31,9 @@ use datafusion_physical_expr_common::sort_expr::{LexRequirement, OrderingRequire
 use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
-    PlanProperties, SendableRecordBatchStream, execute_input_stream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
+    InputDistributionRequirements, Partitioning, PlanProperties,
+    SendableRecordBatchStream, execute_input_stream,
 };
 
 use async_trait::async_trait;
@@ -189,9 +190,16 @@ impl ExecutionPlan for DataSinkExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
         // DataSink is responsible for dynamically partitioning its
         // own input at execution time, and so requires a single input partition.
-        vec![Distribution::SinglePartition; self.children().len()]
+        InputDistributionRequirements::new(vec![
+            Distribution::SinglePartition;
+            self.children().len()
+        ])
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {

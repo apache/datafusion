@@ -2071,9 +2071,115 @@ SELECT s, id FROM simple_struct WHERE s['value'] > 100 AND id < 4;
 {value: 200, label: beta} 2
 {value: 150, label: gamma} 3
 
+#####################
+# Section 9: Join key extraction with pruned outputs
+#####################
+
+statement ok
+CREATE TABLE issue_22895_rt2 AS SELECT * FROM (VALUES
+  (named_struct('msg','user auth failed','sid','a'), 1, 'svc1'),
+  (named_struct('msg','login token','sid','b'), 2, 'svc2')
+) v(attributes, id, name);
+
+query IT
+SELECT a.id, b.name
+FROM issue_22895_rt2 a JOIN issue_22895_rt2 b
+  ON a.attributes['sid'] = b.attributes['sid']
+WHERE a.attributes['msg'] LIKE '%auth%'
+ORDER BY a.id, b.name;
+----
+1 svc1
+
+statement ok
+CREATE TABLE issue_22895_rt AS SELECT * FROM (VALUES
+  (named_struct('uid','u1','t','t1'), TIMESTAMP '2026-06-08T10:00:00', 'a'),
+  (named_struct('uid','u2','t','t2'), TIMESTAMP '2026-06-08T11:00:00', 'b')
+) v(attributes, start_timestamp, span_name);
+
+query P
+SELECT r.start_timestamp
+FROM issue_22895_rt r
+JOIN (SELECT attributes['uid'] AS uid FROM issue_22895_rt) f
+  ON f.uid = r.attributes['uid']
+WHERE r.attributes['t'] IN (SELECT attributes['t'] FROM issue_22895_rt)
+ORDER BY r.start_timestamp;
+----
+2026-06-08T10:00:00
+2026-06-08T11:00:00
+
 # Config reset
 
 # The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+#####################
+# Section: volatile expressions are not duplicated by projection pushdown
+#
+# Regression test for #23220: a volatile expression (e.g. `random()`) aliased
+# once in a subquery and referenced multiple times must be evaluated once and
+# reused. Projection pushdown must not merge the outer projection into the file
+# scan when doing so would inline and duplicate the volatile expression.
+# Reproduces only against a file scan (not an in-memory table); if the volatile
+# expression is duplicated, the two references diverge and `x = y` is false.
+#####################
+
+statement ok
+COPY (SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3)
+TO 'test_files/scratch/projection_pushdown/volatile.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE volatile_scan STORED AS PARQUET
+LOCATION 'test_files/scratch/projection_pushdown/volatile.parquet';
+
+# The two references to the aliased `random()` value must be equal on every
+# row: the expression is evaluated once and reused, not inlined twice.
+query B rowsort
+SELECT s.x = s.y
+FROM (SELECT r AS x, r AS y FROM (SELECT random() AS r FROM volatile_scan) AS t) AS s;
+----
+true
+true
+true
+
+#####################
+# Section: expensive expressions are not re-inlined by projection pushdown
+#
+# A repeated expensive expression (e.g. `power(a, 2)`) is extracted by CSE into
+# a single intermediate projection. Projection pushdown must keep it as one
+# `ProjectionExec` above the scan (`power(a, 2)` computed once) rather than
+# inlining it into the `DataSourceExec` projection and re-evaluating it at each
+# reference site.
+#####################
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+COPY (SELECT 1.0::double AS a, 2.0::double AS b, 3::bigint AS c
+      UNION ALL SELECT 4.0, 5.0, 6
+      UNION ALL SELECT 7.0, 8.0, 9)
+TO 'test_files/scratch/projection_pushdown/cse.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE cse_scan STORED AS PARQUET
+LOCATION 'test_files/scratch/projection_pushdown/cse.parquet';
+
+query TT
+EXPLAIN SELECT power(a, 2) + b AS x, power(a, 2) - b AS y, power(a, 2) * c AS z
+FROM cse_scan;
+----
+logical_plan
+01)Projection: __common_expr_1 + cse_scan.b AS x, __common_expr_1 - cse_scan.b AS y, __common_expr_1 * CAST(cse_scan.c AS Float64) AS z
+02)--Projection: power(cse_scan.a, Float64(2)) AS __common_expr_1, cse_scan.b, cse_scan.c
+03)----TableScan: cse_scan projection=[a, b, c]
+physical_plan
+01)ProjectionExec: expr=[__common_expr_1@0 + b@1 as x, __common_expr_1@0 - b@1 as y, __common_expr_1@0 * CAST(c@2 AS Float64) as z]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/cse.parquet]]}, projection=[power(a@0, 2) as __common_expr_1, b, c], file_type=parquet
+
+# Reset the config changed above (the SLT runner expects target_partitions = 4).
 statement ok
 SET datafusion.execution.target_partitions = 4;
