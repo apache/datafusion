@@ -816,7 +816,7 @@ impl<T: PartialOrd> MovingMin<T> {
     }
 
     /// Returns the number of elements stored in the sliding window.
-    #[inline]
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         (self.push_seq - self.pop_seq) as usize
     }
@@ -925,7 +925,7 @@ impl<T: PartialOrd> MovingMax<T> {
     }
 
     /// Returns the number of elements stored in the sliding window.
-    #[inline]
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         (self.push_seq - self.pop_seq) as usize
     }
