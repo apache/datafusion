@@ -96,7 +96,7 @@ name = "percentile_cont"
 harness = false
 
 [[bench]]
-name = "sliding_min_max"
+name = "sliding_max"
 harness = false
 
 [features]
