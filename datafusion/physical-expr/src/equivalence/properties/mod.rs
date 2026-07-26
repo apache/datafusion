@@ -870,7 +870,7 @@ impl EquivalenceProperties {
     ///       sorted, `atan(x + 1000)` should also be substituted. For now, we
     ///       consider widening `CAST` expressions and single-child expressions
     ///       that declare themselves one-to-one order-preserving via
-    ///       [`PhysicalExpr::is_strictly_order_preserving`].
+    ///       [`ExprProperties::strictly_order_preserving`].
     fn substitute_oeq_class(
         schema: &SchemaRef,
         mapping: &ProjectionMapping,

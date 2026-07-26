@@ -3301,16 +3301,12 @@ impl PhysicalExpr for AssertNotNull {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let child = self.inner.evaluate(batch)?;
         match child {
-            ColumnarValue::Array(a) if a.logical_null_count() > 0 => {
-                return Err(DataFusionError::Internal(
-                    "AssertNotNull evaluated to null".to_string(),
-                ));
-            }
-            ColumnarValue::Scalar(s) if s.is_null() => {
-                return Err(DataFusionError::Internal(
-                    "AssertNotNull evaluated to null".to_string(),
-                ));
-            }
+            ColumnarValue::Array(a) if a.logical_null_count() > 0 => Err(
+                DataFusionError::Internal("AssertNotNull evaluated to null".to_string()),
+            ),
+            ColumnarValue::Scalar(s) if s.is_null() => Err(DataFusionError::Internal(
+                "AssertNotNull evaluated to null".to_string(),
+            )),
             child => Ok(child),
         }
     }

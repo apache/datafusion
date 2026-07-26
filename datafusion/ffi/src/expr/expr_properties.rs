@@ -29,6 +29,7 @@ pub struct FFI_ExprProperties {
     sort_properties: FFI_SortProperties,
     range: FFI_Interval,
     preserves_lex_ordering: bool,
+    strictly_order_preserving: bool,
 }
 
 impl TryFrom<&ExprProperties> for FFI_ExprProperties {
@@ -41,6 +42,7 @@ impl TryFrom<&ExprProperties> for FFI_ExprProperties {
             sort_properties,
             range,
             preserves_lex_ordering: value.preserves_lex_ordering,
+            strictly_order_preserving: value.strictly_order_preserving,
         })
     }
 }
@@ -54,9 +56,7 @@ impl TryFrom<FFI_ExprProperties> for ExprProperties {
             sort_properties,
             range,
             preserves_lex_ordering: value.preserves_lex_ordering,
-            // Not carried over the FFI boundary (it would break the ABI);
-            // stay conservative.
-            strictly_order_preserving: false,
+            strictly_order_preserving: value.strictly_order_preserving,
         })
     }
 }
