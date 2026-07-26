@@ -25,11 +25,11 @@ use std::sync::Arc;
 fn create_string_array(rows: usize) -> ArrayRef {
     let strings: Vec<String> = (0..rows)
         .map(|i| match i % 5 {
-            0 => format!("Robert{}", i),
-            1 => format!("Rupert{}", i),
-            2 => format!("Washington{}", i),
-            3 => format!("123Invalid{}", i),
-            _ => format!("Short{}", i),
+            0 => format!("Robert{i}"),
+            1 => format!("Rupert{i}"),
+            2 => format!("Washington{i}"),
+            3 => format!("123Invalid{i}"),
+            _ => format!("Short{i}"),
         })
         .collect();
 
