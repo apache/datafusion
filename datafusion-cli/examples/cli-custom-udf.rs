@@ -31,6 +31,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 #[derive(Debug, Parser, PartialEq)]
 #[clap(author, version, about, long_about= None)]
 struct CustomArgs {
+    // Shown is one way to avoid clashing arguments between datafusion and the custom command.
     #[arg(
         long,
         allow_hyphen_values = true,
@@ -45,12 +46,13 @@ struct CustomArgs {
     register_hello: bool,
 }
 
-/// In this example we want to reuse the datafusion-cli binary argument, hen extend the `SessionContext` with custom udf.
+/// In this example we want to reuse the datafusion-cli binary argument, then extend the `SessionContext` with custom udf.
 ///
 /// 1. Declares a `hello`` udf function.
-/// 2. Construct a `CliSession`
-/// 3. Registers the udf function with the `SessionContext` so the user can input `select hello(1)` at the prompt.
-/// 4. Runs the cli using [`dataframe_cli::CliSession::run`], printing any errors then exits.
+/// 2. Handle argument parsing.
+/// 3. Construct a `CliSession`
+/// 4. Registers the udf function with the `SessionContext` so the user can input `select hello(1)` at the prompt.
+/// 5. Runs the cli using [`dataframe_cli::CliSession::run`], printing any errors then exits.
 #[tokio::main]
 pub async fn main() -> Result<(), CliError> {
     let hello_udf = create_udf(
@@ -69,6 +71,8 @@ pub async fn main() -> Result<(), CliError> {
             Ok(ColumnarValue::from(Arc::new(array) as ArrayRef))
         }),
     );
+
+    // Append the datafusion help text to ours
     let cli_args_help = CliArgs::command()
         .name("DATAFUSION_ARGS")
         .no_binary_name(true)
@@ -82,6 +86,7 @@ pub async fn main() -> Result<(), CliError> {
         .after_help(cli_args_help)
         .get_matches();
     let args = CustomArgs::from_arg_matches(&matches)?;
+    // Pass the executable name along with the datafusion cli args.
     let mut cli_args_input = vec![std::env::args().next().unwrap()];
     if let Some(datafusion_args) = args.datafusion_cli_start {
         cli_args_input.extend(datafusion_args);
