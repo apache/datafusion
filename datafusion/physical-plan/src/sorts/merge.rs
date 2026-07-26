@@ -32,7 +32,7 @@ use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, assert_or_internal_err, internal_err};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::{TryEmitter, async_try_stream};
 use futures::Stream;
@@ -243,12 +243,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
     fn create_stream(mut self) -> impl Stream<Item = Result<RecordBatch>> {
         async_try_stream(|mut emitter| async move {
-            assert!(
-                self.fetch.is_none_or(|fetch| fetch != 0),
-                "fetch {:?} must not be 0",
-                self.fetch
-            );
-
             // 1. Make sure we have data from each stream so we can initialize the loser tree
             {
                 // This vector contains the indices of the partitions that have not started emitting yet.
@@ -284,7 +278,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 if self.in_progress.len() >= self.batch_size {
                     // 3.3.1 build pending record batch and reset builder
                     let Some(batch) = self.emit_in_progress_batch()? else {
-                        unreachable!("must have batch in progress to emit")
+                        return internal_err!("must have batch in progress to emit");
                     };
 
                     // 3.3.2 emit pending record batch
@@ -302,7 +296,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                     // plumbing) unless the winner's cursor is exhausted and needs a
                     // fresh batch — it is live for almost every row.
                     if should_poll_next_batch_for_stream {
-                        assert!(
+                        assert_or_internal_err!(
                             self.cursors[winner_stream].is_none(),
                             "cursor should be exhausted"
                         );
@@ -324,9 +318,15 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         })
     }
 
+    /// Returns `true` once every input stream is exhausted.
+    ///
+    /// Should only be called for valid adjusted tree, i.e. the initial tree or after [`Self::update_loser_tree`] call
     fn is_exhausted(&self) -> bool {
         let winner = self.loser_tree[0];
 
+        // Checking only the tree root suffices for valid tree
+        // since the winner of the tree cannot be an exhausted stream for a valid tree
+        // as what value is winning over the non exhausted stream?
         self.cursors[winner].is_none()
     }
 
@@ -418,16 +418,15 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     fn advance_cursors(&mut self, stream_idx: usize) -> bool {
         if let Some(cursor) = &mut self.cursors[stream_idx] {
             let _ = cursor.advance();
-            return if cursor.is_finished() {
+            let finished = cursor.is_finished();
+            if finished {
                 // Take the current cursor, leaving `None` in its place
                 self.prev_cursors[stream_idx] = self.cursors[stream_idx].take();
-
-                true
-            } else {
-                false
-            };
+            }
+            return finished;
         }
 
+        // the entire stream is exhausted, so return true (poll won't help here anyway)
         true
     }
 
