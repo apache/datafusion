@@ -162,7 +162,9 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation, PushedDownPredicate,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+#[cfg(test)]
 use crate::repartition::ExpressionHasher;
+use crate::repartition::HashingConfig;
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputDistributionRequirements,
@@ -907,6 +909,9 @@ pub struct AggregateExec {
     required_input_ordering: Option<OrderingRequirements>,
     /// Describes how the input is ordered relative to the group by columns
     input_order_mode: InputOrderMode,
+    /// Immutable planning-time configuration for group hashing and private
+    /// hash-column output.
+    hashing_config: HashingConfig,
     cache: Arc<PlanProperties>,
     /// During initialization, if the plan supports dynamic filtering (see [`AggrDynFilter`]),
     /// it is set to `Some(..)` regardless of whether it can be pushed down to a child node.
@@ -931,6 +936,7 @@ impl AggregateExec {
             required_input_ordering: self.required_input_ordering.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode: self.input_order_mode.clone(),
+            hashing_config: self.hashing_config.clone(),
             cache: Arc::clone(&self.cache),
             mode: self.mode,
             group_by: Arc::clone(&self.group_by),
@@ -951,6 +957,7 @@ impl AggregateExec {
             required_input_ordering: self.required_input_ordering.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode: self.input_order_mode.clone(),
+            hashing_config: self.hashing_config.clone(),
             cache: Arc::clone(&self.cache),
             mode: self.mode,
             group_by: Arc::clone(&self.group_by),
@@ -977,7 +984,14 @@ impl AggregateExec {
         input_schema: SchemaRef,
     ) -> Result<Self> {
         let group_by = group_by.into();
-        let schema = create_schema(&input.schema(), &group_by, &aggr_expr, mode)?;
+        let hashing_config = HashingConfig::new(group_by.input_exprs());
+        let schema = create_schema(
+            &input.schema(),
+            &group_by,
+            &aggr_expr,
+            mode,
+            &hashing_config,
+        )?;
 
         let schema = Arc::new(schema);
         AggregateExec::try_new_with_schema(
@@ -988,6 +1002,7 @@ impl AggregateExec {
             input,
             input_schema,
             schema,
+            hashing_config,
         )
     }
 
@@ -999,6 +1014,10 @@ impl AggregateExec {
     /// a rule may re-write aggregate expressions (e.g. reverse them) during
     /// initialization, field names may change inadvertently if one re-creates
     /// the schema in such cases.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The hashing configuration must be preserved alongside the explicit schema"
+    )]
     fn try_new_with_schema(
         mode: AggregateMode,
         group_by: impl Into<Arc<PhysicalGroupBy>>,
@@ -1007,6 +1026,7 @@ impl AggregateExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
         schema: SchemaRef,
+        hashing_config: HashingConfig,
     ) -> Result<Self> {
         let group_by = group_by.into();
         let filter_expr = filter_expr.into();
@@ -1093,6 +1113,7 @@ impl AggregateExec {
             required_input_ordering,
             limit_options: None,
             input_order_mode,
+            hashing_config,
             cache: Arc::new(cache),
             dynamic_filter: None,
         };
@@ -1105,6 +1126,45 @@ impl AggregateExec {
     /// Aggregation mode (full, partial)
     pub fn mode(&self) -> &AggregateMode {
         &self.mode
+    }
+
+    /// Configures whether this aggregate should emit reusable group hashes.
+    ///
+    /// Physical planning calls this after distribution enforcement has
+    /// determined that a downstream operator can consume the hashes.
+    pub fn with_hash_reuse(mut self, enabled: bool) -> Result<Self> {
+        self.hashing_config = self.hashing_config.with_hash_output(enabled);
+        // Schema changes, because now this node will output one new extra internal column
+        // containing the hashes, so both schema and PlanProperties need to be recomputed.
+        self.schema = Arc::new(create_schema(
+            &self.input.schema(),
+            &self.group_by,
+            &self.aggr_expr,
+            self.mode,
+            &self.hashing_config,
+        )?);
+
+        let group_expr_mapping =
+            ProjectionMapping::try_new(self.group_by.expr.clone(), &self.input.schema())?;
+        self.cache = Arc::new(Self::compute_properties(
+            &self.input,
+            Arc::clone(&self.schema),
+            &group_expr_mapping,
+            self.group_by.is_true_no_grouping(),
+            &self.mode,
+            &self.input_order_mode,
+            self.aggr_expr.as_ref(),
+        )?);
+        Ok(self)
+    }
+
+    pub(crate) fn hashing_config(&self) -> &HashingConfig {
+        &self.hashing_config
+    }
+
+    /// Returns whether this plan emits group hashes in a private output column.
+    pub fn emits_hashes(&self) -> bool {
+        self.hashing_config.should_output_hashes()
     }
 
     /// Set the limit options for this AggExec
@@ -2026,6 +2086,7 @@ impl ExecutionPlan for AggregateExec {
             Arc::clone(&children[0]),
             Arc::clone(&self.input_schema),
             Arc::clone(&self.schema),
+            self.hashing_config.clone(),
         )?;
         me.limit_options = self.limit_options;
         me.dynamic_filter.clone_from(&self.dynamic_filter);
@@ -2303,6 +2364,7 @@ impl ExecutionPlan for AggregateExec {
                         limit,
                         has_grouping_set: group_by.has_grouping_set(),
                         dynamic_filter,
+                        emit_hashes: self.emits_hashes(),
                     },
                 )),
             ),
@@ -2568,7 +2630,8 @@ impl AggregateExec {
             filter_expr,
             input,
             Arc::clone(&input_schema),
-        )?;
+        )?
+        .with_hash_reuse(hash_agg.emit_hashes)?;
         let aggregate = if let Some(limit) = &hash_agg.limit {
             let options = match limit.descending {
                 Some(descending) => {
@@ -2607,9 +2670,9 @@ fn create_schema(
     group_by: &PhysicalGroupBy,
     aggr_expr: &[Arc<AggregateFunctionExpr>],
     mode: AggregateMode,
+    hashing_config: &HashingConfig,
 ) -> Result<Schema> {
-    let input_hasher = ExpressionHasher::new(group_by.input_exprs());
-    let output_hashes = input_hasher.should_output_hashes(input_schema)?
+    let output_hashes = hashing_config.should_output_hashes()
         && mode.output_mode() == AggregateOutputMode::Partial;
     let mut fields = Vec::with_capacity(
         group_by.num_output_exprs() + aggr_expr.len() + output_hashes as usize,
@@ -2632,10 +2695,8 @@ fn create_schema(
     }
 
     if output_hashes {
-        let hasher = ExpressionHasher::new(group_by.output_exprs());
-        fields.push(
-            Field::new(hasher.internal_hash_col_name(), DataType::UInt64, false).into(),
-        );
+        let output_hashing_config = HashingConfig::new(group_by.output_exprs());
+        fields.push(output_hashing_config.hash_field());
     }
 
     Ok(Schema::new_with_metadata(
@@ -3189,7 +3250,8 @@ mod tests {
         batches: &[RecordBatch],
         hash_exprs: &[Arc<dyn PhysicalExpr>],
     ) -> Result<Vec<RecordBatch>> {
-        let mut hasher = ExpressionHasher::new(hash_exprs.to_vec());
+        let metrics = ExecutionPlanMetricsSet::new();
+        let mut hasher = ExpressionHasher::new(hash_exprs.to_vec(), &metrics, 0);
         let hash_name = hasher.internal_hash_col_name();
         batches
             .iter()
@@ -3218,7 +3280,8 @@ mod tests {
         columns: Vec<ArrayRef>,
     ) -> Result<RecordBatch> {
         let hash_exprs = group_by.output_exprs();
-        let mut hasher = ExpressionHasher::new(hash_exprs.clone());
+        let metrics = ExecutionPlanMetricsSet::new();
+        let mut hasher = ExpressionHasher::new(hash_exprs.clone(), &metrics, 0);
         let hash_name = hasher.internal_hash_col_name();
         if schema.index_of(&hash_name).is_err() {
             return RecordBatch::try_new(schema, columns).map_err(Into::into);
@@ -3245,7 +3308,8 @@ mod tests {
         let group_by =
             PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
         let hash_exprs = group_by.input_exprs();
-        let hasher = ExpressionHasher::new(hash_exprs);
+        let metrics = ExecutionPlanMetricsSet::new();
+        let hasher = ExpressionHasher::new(hash_exprs, &metrics, 0);
         let hash_schema = Arc::new(Schema::new(vec![
             schema.field(0).clone(),
             Field::new(hasher.internal_hash_col_name(), DataType::UInt64, false),
@@ -4093,19 +4157,25 @@ mod tests {
                 .alias("COUNT(value)")
                 .build()?,
         )];
-        let partial = Arc::new(AggregateExec::try_new(
-            AggregateMode::Partial,
-            group_by.clone(),
-            aggregate_exprs.clone(),
-            vec![None],
-            Arc::clone(&input),
-            Arc::clone(&schema),
-        )?);
+        let partial = Arc::new(
+            AggregateExec::try_new(
+                AggregateMode::Partial,
+                group_by.clone(),
+                aggregate_exprs.clone(),
+                vec![None],
+                Arc::clone(&input),
+                Arc::clone(&schema),
+            )?
+            .with_hash_reuse(true)?,
+        );
         let hash_exprs = group_by.output_exprs();
-        let repartition = Arc::new(RepartitionExec::try_new(
-            Arc::clone(&partial) as Arc<dyn ExecutionPlan>,
-            Partitioning::Hash(hash_exprs.clone(), 2),
-        )?);
+        let repartition = Arc::new(
+            RepartitionExec::try_new(
+                Arc::clone(&partial) as Arc<dyn ExecutionPlan>,
+                Partitioning::Hash(hash_exprs.clone(), 2),
+            )?
+            .with_hash_reuse(true),
+        );
         let task_ctx = new_migrated_hash_ctx(1024);
 
         let repartition_output = crate::collect_partitioned(
@@ -4130,18 +4200,24 @@ mod tests {
 
         // A RepartitionExec can only be consumed once, so build an equivalent
         // pipeline for the end-to-end final aggregation assertion.
-        let partial = Arc::new(AggregateExec::try_new(
-            AggregateMode::Partial,
-            group_by.clone(),
-            aggregate_exprs.clone(),
-            vec![None],
-            input,
-            Arc::clone(&schema),
-        )?);
-        let repartition = Arc::new(RepartitionExec::try_new(
-            Arc::clone(&partial) as Arc<dyn ExecutionPlan>,
-            Partitioning::Hash(hash_exprs, 2),
-        )?);
+        let partial = Arc::new(
+            AggregateExec::try_new(
+                AggregateMode::Partial,
+                group_by.clone(),
+                aggregate_exprs.clone(),
+                vec![None],
+                input,
+                Arc::clone(&schema),
+            )?
+            .with_hash_reuse(true)?,
+        );
+        let repartition = Arc::new(
+            RepartitionExec::try_new(
+                Arc::clone(&partial) as Arc<dyn ExecutionPlan>,
+                Partitioning::Hash(hash_exprs, 2),
+            )?
+            .with_hash_reuse(true),
+        );
         let final_aggregate = Arc::new(AggregateExec::try_new(
             AggregateMode::FinalPartitioned,
             group_by.as_final(),
@@ -5914,11 +5990,13 @@ mod tests {
             ],
             true,
         );
+        let hashing_config = HashingConfig::new(grouping_set.input_exprs());
         let aggr_schema = create_schema(
             &input_schema,
             &grouping_set,
             &aggr_expr,
             AggregateMode::Final,
+            &hashing_config,
         )?;
         let expected_schema = Schema::new(vec![
             Field::new("a", DataType::Float32, false),

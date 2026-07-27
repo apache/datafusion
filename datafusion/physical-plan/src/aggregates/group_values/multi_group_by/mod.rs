@@ -1248,10 +1248,12 @@ mod tests {
     use arrow::{compute::concat_batches, util::pretty::pretty_format_batches};
     use datafusion_common::utils::proxy::HashTableAllocExt;
     use datafusion_expr::EmitTo;
+    use datafusion_physical_expr_common::metrics::ExecutionPlanMetricsSet;
 
     use crate::aggregates::group_values::{
         GroupValues, multi_group_by::GroupValuesColumn,
     };
+    use crate::repartition::ExpressionHasher;
 
     use super::{
         GroupIndexView, group_column_supported_type, make_group_column, supported_schema,
@@ -1861,7 +1863,8 @@ mod tests {
         }
 
         fn load_to_group_values(&self, group_values: &mut impl GroupValues) {
-            let mut hasher = crate::repartition::ExpressionHasher::new(vec![]);
+            let metrics = ExecutionPlanMetricsSet::new();
+            let mut hasher = ExpressionHasher::new(vec![], &metrics, 0);
             for batch in self.test_batches.iter() {
                 let hashes = hasher.compute_hashes(batch).unwrap();
                 group_values.intern(batch, &mut vec![], hashes).unwrap();

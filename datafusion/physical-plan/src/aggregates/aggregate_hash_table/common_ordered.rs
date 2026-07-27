@@ -37,7 +37,7 @@ use crate::aggregates::{
     AggregateExec, AggregateMode, AggregateOutputMode, GroupHashTracker, PhysicalGroupBy,
     aggregate_expressions, evaluate_group_by,
 };
-use crate::repartition::{ExpressionHasher, HashMetrics};
+use crate::repartition::ExpressionHasher;
 
 use super::common::{AggregateAccumulator, EvaluatedAggregateBatch};
 
@@ -179,11 +179,8 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             })
             .collect::<Result<_>>()?;
 
-        let hasher = ExpressionHasher::new_with_metrics(
-            agg.group_by.input_exprs(),
-            HashMetrics::new(&agg.metrics, partition),
-        );
-        let should_output_hashes = hasher.should_output_hashes(input_schema)?
+        let hasher = agg.hashing_config().create_hasher(&agg.metrics, partition);
+        let should_output_hashes = agg.emits_hashes()
             && aggregate_mode.output_mode() == AggregateOutputMode::Partial;
 
         Ok(Self {

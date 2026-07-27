@@ -81,7 +81,7 @@ mod distributor_channels;
 mod hash;
 
 use crate::repartition::distributor_channels::SendError;
-pub(crate) use crate::repartition::hash::{ExpressionHasher, HashMetrics};
+pub(crate) use crate::repartition::hash::{ExpressionHasher, HashingConfig};
 #[cfg(test)]
 pub(crate) use crate::repartition::hash::{HASH_ROWS_COMPUTED, HASH_ROWS_REUSED};
 use distributor_channels::{
@@ -414,18 +414,14 @@ impl RepartitionExecState {
         let mut streams_and_metrics = Vec::with_capacity(num_input_partitions);
 
         for i in 0..num_input_partitions {
-            let metrics = RepartitionMetrics::new(
-                i,
-                output_partitions,
-                matches!(partitioning, Partitioning::Hash(..)),
-                metrics,
-            );
+            let partition_metrics =
+                RepartitionMetrics::new(i, output_partitions, metrics);
 
-            let timer = metrics.fetch_time.timer();
+            let timer = partition_metrics.fetch_time.timer();
             let stream = input.execute(i, Arc::clone(ctx))?;
             timer.done();
 
-            streams_and_metrics.push((stream, metrics));
+            streams_and_metrics.push((stream, partition_metrics));
         }
         *self = RepartitionExecState::InputStreamsInitialized(streams_and_metrics);
         Ok(())
@@ -437,6 +433,7 @@ impl RepartitionExecState {
         input: &Arc<dyn ExecutionPlan>,
         metrics: &ExecutionPlanMetricsSet,
         partitioning: &Partitioning,
+        hashing_config: &HashingConfig,
         preserve_order: bool,
         name: &str,
         context: &Arc<TaskContext>,
@@ -558,7 +555,7 @@ impl RepartitionExecState {
 
         // launch one async task per *input* partition
         let mut spawned_tasks = Vec::with_capacity(num_input_partitions);
-        for (i, (stream, metrics)) in
+        for (i, (stream, partition_metrics)) in
             std::mem::take(streams_and_metrics).into_iter().enumerate()
         {
             let txs: HashMap<_, _> = channels
@@ -589,7 +586,8 @@ impl RepartitionExecState {
                 stream,
                 txs,
                 partitioning.clone(),
-                metrics,
+                hashing_config.clone(),
+                partition_metrics,
                 // preserve_order depends on partition index to start from 0
                 if preserve_order { 0 } else { i },
                 num_input_partitions,
@@ -719,12 +717,6 @@ impl StrengthReducedU64 {
 }
 
 impl BatchPartitioner {
-    fn set_hash_metrics(&mut self, metrics: HashMetrics) {
-        if let BatchPartitionerState::Hash { hasher, .. } = &mut self.state {
-            hasher.set_metrics(metrics);
-        }
-    }
-
     /// Create a new [`BatchPartitioner`] for hash-based repartitioning.
     ///
     /// # Parameters
@@ -742,6 +734,23 @@ impl BatchPartitioner {
         num_partitions: usize,
         timer: metrics::Time,
     ) -> Result<Self> {
+        let metrics = ExecutionPlanMetricsSet::new();
+        Self::new_from_hashing_config(
+            &HashingConfig::new(exprs),
+            num_partitions,
+            timer,
+            &metrics,
+            0,
+        )
+    }
+
+    fn new_from_hashing_config(
+        hashing_config: &HashingConfig,
+        num_partitions: usize,
+        timer: metrics::Time,
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+    ) -> Result<Self> {
         if num_partitions == 0 {
             return internal_err!("Hash repartition requires at least one partition");
         }
@@ -749,7 +758,7 @@ impl BatchPartitioner {
         Ok(Self {
             state: BatchPartitionerState::Hash {
                 partition_reducer: StrengthReducedU64::new(num_partitions as u64),
-                hasher: ExpressionHasher::new(exprs),
+                hasher: hashing_config.create_hasher(metrics, partition),
                 indices: vec![vec![]; num_partitions],
             },
             timer,
@@ -832,6 +841,39 @@ impl BatchPartitioner {
             Partitioning::Hash(exprs, num_partitions) => {
                 Self::new_hash_partitioner(exprs, num_partitions, timer)
             }
+            Partitioning::RoundRobinBatch(num_partitions) => {
+                Ok(Self::new_round_robin_partitioner(
+                    num_partitions,
+                    timer,
+                    input_partition,
+                    num_input_partitions,
+                ))
+            }
+            Partitioning::Range(range_repartitioning) => {
+                Ok(Self::new_range_partitioner(&range_repartitioning, timer))
+            }
+            other => {
+                not_impl_err!("Unsupported repartitioning scheme {other:?}")
+            }
+        }
+    }
+
+    fn try_new_with_hashing_config(
+        partitioning: Partitioning,
+        timer: metrics::Time,
+        input_partition: usize,
+        num_input_partitions: usize,
+        hashing_config: &HashingConfig,
+        metrics: &ExecutionPlanMetricsSet,
+    ) -> Result<Self> {
+        match partitioning {
+            Partitioning::Hash(_, num_partitions) => Self::new_from_hashing_config(
+                hashing_config,
+                num_partitions,
+                timer,
+                metrics,
+                input_partition,
+            ),
             Partitioning::RoundRobinBatch(num_partitions) => {
                 Ok(Self::new_round_robin_partitioner(
                     num_partitions,
@@ -1210,12 +1252,17 @@ pub struct RepartitionExec {
     /// Boolean flag to decide whether to preserve ordering. If true means
     /// `SortPreservingRepartitionExec`, false means `RepartitionExec`.
     preserve_order: bool,
+    /// Immutable planning-time configuration for partition hashing and private
+    /// hash-column output.
+    hashing_config: HashingConfig,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: Arc<PlanProperties>,
 }
 
 #[derive(Debug, Clone)]
 struct RepartitionMetrics {
+    /// Registry shared by all metrics for this operator.
+    execution_metrics: ExecutionPlanMetricsSet,
     /// Time in nanos to execute child operator and fetch batches
     fetch_time: metrics::Time,
     /// Repartitioning elapsed time in nanos
@@ -1224,15 +1271,12 @@ struct RepartitionMetrics {
     ///
     /// One metric per output partition.
     send_time: Vec<metrics::Time>,
-    /// Rows whose hash values were computed or reused from an internal column.
-    hash_metrics: Option<HashMetrics>,
 }
 
 impl RepartitionMetrics {
     pub fn new(
         input_partition: usize,
         num_output_partitions: usize,
-        track_hashes: bool,
         metrics: &ExecutionPlanMetricsSet,
     ) -> Self {
         // Time in nanos to execute child operator and fetch batches
@@ -1255,11 +1299,10 @@ impl RepartitionMetrics {
             .collect();
 
         Self {
+            execution_metrics: metrics.clone(),
             fetch_time,
             repartition_time,
             send_time,
-            hash_metrics: track_hashes
-                .then(|| HashMetrics::new(metrics, input_partition)),
         }
     }
 }
@@ -1353,14 +1396,9 @@ impl ExecutionPlan for RepartitionExec {
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         check_if_same_properties!(self, children);
-        let mut repartition = RepartitionExec::try_new(
-            children.swap_remove(0),
-            self.partitioning().clone(),
-        )?;
-        if self.preserve_order {
-            repartition = repartition.with_preserve_order();
-        }
-        Ok(Arc::new(repartition))
+        Ok(Arc::new(
+            (*self).clone().with_new_input(children.swap_remove(0))?,
+        ))
     }
 
     fn with_new_children_and_same_properties(
@@ -1398,6 +1436,7 @@ impl ExecutionPlan for RepartitionExec {
 
         let input = Arc::clone(&self.input);
         let partitioning = self.partitioning().clone();
+        let hashing_config = self.hashing_config.clone();
         let metrics = self.metrics.clone();
         let preserve_order = self.sort_exprs().is_some();
         let name = self.name().to_owned();
@@ -1434,6 +1473,7 @@ impl ExecutionPlan for RepartitionExec {
                     &input,
                     &metrics,
                     &partitioning,
+                    &hashing_config,
                     preserve_order,
                     &name,
                     &context,
@@ -1683,6 +1723,7 @@ impl ExecutionPlan for RepartitionExec {
         self.input.try_pushdown_sort(order)?.try_map(|new_input| {
             let mut new_repartition =
                 RepartitionExec::try_new(new_input, self.partitioning().clone())?;
+            new_repartition = new_repartition.with_hash_reuse(self.emits_hashes());
             if self.preserve_order {
                 new_repartition = new_repartition.with_preserve_order();
             }
@@ -1711,6 +1752,7 @@ impl ExecutionPlan for RepartitionExec {
             state: Arc::clone(&self.state),
             metrics: self.metrics.clone(),
             preserve_order: self.preserve_order,
+            hashing_config: self.hashing_config.clone(),
             cache: new_properties.into(),
         })))
     }
@@ -1783,6 +1825,7 @@ impl ExecutionPlan for RepartitionExec {
                             partition_method: Some(partition_method),
                         }),
                         preserve_order: self.preserve_order(),
+                        emit_hashes: self.emits_hashes(),
                     },
                 )),
             ),
@@ -1889,7 +1932,8 @@ impl RepartitionExec {
             }
         };
 
-        let mut repart_exec = RepartitionExec::try_new(input, partitioning)?;
+        let mut repart_exec = RepartitionExec::try_new(input, partitioning)?
+            .with_hash_reuse(repart.emit_hashes);
         if repart.preserve_order {
             repart_exec = repart_exec.with_preserve_order();
         }
@@ -1906,14 +1950,53 @@ impl RepartitionExec {
         partitioning: Partitioning,
     ) -> Result<Self> {
         let preserve_order = false;
+        let hash_exprs = match &partitioning {
+            Partitioning::Hash(exprs, _) => exprs.clone(),
+            _ => vec![],
+        };
         let cache = Self::compute_properties(&input, partitioning, preserve_order);
         Ok(RepartitionExec {
             input,
             state: Default::default(),
             metrics: ExecutionPlanMetricsSet::new(),
             preserve_order,
+            hashing_config: HashingConfig::new(hash_exprs),
             cache: Arc::new(cache),
         })
+    }
+
+    /// Configures whether this repartition should propagate reusable hashes.
+    ///
+    /// Enabling this only takes effect when the input schema contains the
+    /// internal hash column for this repartition's expressions. Repartition
+    /// therefore never manufactures a private output column that planning did
+    /// not arrange upstream.
+    pub fn with_hash_reuse(mut self, enabled: bool) -> Self {
+        let hash_column_available = self
+            .hashing_config
+            .input_has_hash_column(&self.input.schema());
+        self.hashing_config = self
+            .hashing_config
+            .with_hash_output(enabled && hash_column_available);
+        self
+    }
+
+    /// Replaces this repartition's input while preserving its planned
+    /// partitioning, ordering, and hash-output configuration.
+    pub fn with_new_input(self, input: Arc<dyn ExecutionPlan>) -> Result<Self> {
+        let emit_hashes = self.emits_hashes();
+        let preserve_order = self.preserve_order;
+        let mut repartition = Self::try_new(input, self.partitioning().clone())?
+            .with_hash_reuse(emit_hashes);
+        if preserve_order {
+            repartition = repartition.with_preserve_order();
+        }
+        Ok(repartition)
+    }
+
+    /// Returns whether this plan propagates hashes in a private output column.
+    pub fn emits_hashes(&self) -> bool {
+        self.hashing_config.should_output_hashes()
     }
 
     fn maintains_input_order_helper(
@@ -1994,19 +2077,19 @@ impl RepartitionExec {
         mut stream: SendableRecordBatchStream,
         mut output_channels: HashMap<usize, OutputChannel>,
         partitioning: Partitioning,
+        hashing_config: HashingConfig,
         metrics: RepartitionMetrics,
         input_partition: usize,
         num_input_partitions: usize,
     ) -> Result<()> {
-        let mut partitioner = BatchPartitioner::try_new(
+        let mut partitioner = BatchPartitioner::try_new_with_hashing_config(
             partitioning,
             metrics.repartition_time.clone(),
             input_partition,
             num_input_partitions,
+            &hashing_config,
+            &metrics.execution_metrics,
         )?;
-        if let Some(hash_metrics) = &metrics.hash_metrics {
-            partitioner.set_hash_metrics(hash_metrics.clone());
-        }
 
         // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioner.num_partitions();

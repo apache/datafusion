@@ -27,7 +27,7 @@
 //! covers a `(FixedSizeBinary, Int32)` key to exercise the
 //! `FixedSizeBinaryGroupValueBuilder`.
 
-use arrow::array::{ArrayRef, Int32Array, UInt32Array, UInt64Array};
+use arrow::array::{ArrayRef, Int32Array, UInt32Array};
 use arrow::compute::take;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::util::bench_util::create_fsb_array;

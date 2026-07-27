@@ -32,7 +32,7 @@ use crate::aggregates::{
     group_id_array, max_duplicate_ordinal,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput};
-use crate::repartition::{ExpressionHasher, HashMetrics};
+use crate::repartition::ExpressionHasher;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
 use crate::stream::EmptyRecordBatchStream;
@@ -451,6 +451,7 @@ impl GroupedHashAggregateStream {
             &agg_group_by,
             &aggregate_exprs,
             AggregateMode::Partial,
+            agg.hashing_config(),
         )?);
 
         // Need to update the GROUP BY expressions to point to the correct column after schema change
@@ -589,13 +590,10 @@ impl GroupedHashAggregateStream {
             None
         };
 
-        let hasher = ExpressionHasher::new_with_metrics(
-            agg_group_by.input_exprs(),
-            HashMetrics::new(&agg.metrics, partition),
-        );
+        let hasher = agg.hashing_config().create_hasher(&agg.metrics, partition);
         // Spilled batches contain partial state that a later aggregate merges,
         // so they use the same hash-output policy as regular partial output.
-        let should_output_hashes = hasher.should_output_hashes(&agg.input().schema())?
+        let should_output_hashes = agg.emits_hashes()
             && (agg.mode.output_mode() == AggregateOutputMode::Partial
                 || oom_mode == OutOfMemoryMode::Spill);
 

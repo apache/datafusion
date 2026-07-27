@@ -251,10 +251,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repartition::ExpressionHasher;
     use arrow::array::types::Int32Type;
     use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::DataType;
     use datafusion_expr::EmitTo;
+    use datafusion_physical_expr_common::metrics::ExecutionPlanMetricsSet;
     use std::sync::Arc;
 
     /// Mirror of the `EmitTo::take_needed` regression test, applied to the
@@ -275,7 +277,8 @@ mod tests {
         let arr: ArrayRef = Arc::new(Int32Array::from_iter_values(0..20i32));
         let mut groups = vec![];
         let cols = [arr];
-        let mut hasher = crate::repartition::ExpressionHasher::new(vec![]);
+        let metrics = ExecutionPlanMetricsSet::new();
+        let mut hasher = ExpressionHasher::new(vec![], &metrics, 0);
         let hashes = hasher.compute_hashes(&cols)?;
         gv.intern(&cols, &mut groups, hashes)?;
         let capacity_before = gv.values.capacity(); // 128

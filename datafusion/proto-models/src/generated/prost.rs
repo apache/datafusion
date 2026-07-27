@@ -2171,6 +2171,9 @@ pub struct AggregateExecNode {
     /// Optional dynamic filter expression for pushing down to the child.
     #[prost(message, optional, tag = "13")]
     pub dynamic_filter: ::core::option::Option<PhysicalExprNode>,
+    /// Whether the partial aggregate should emit reusable group hashes.
+    #[prost(bool, tag = "14")]
+    pub emit_hashes: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GlobalLimitExecNode {
@@ -2276,6 +2279,9 @@ pub struct RepartitionExecNode {
     pub partitioning: ::core::option::Option<Partitioning>,
     #[prost(bool, tag = "6")]
     pub preserve_order: bool,
+    /// Whether hash repartitioning should propagate reusable group hashes.
+    #[prost(bool, tag = "7")]
+    pub emit_hashes: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Partitioning {

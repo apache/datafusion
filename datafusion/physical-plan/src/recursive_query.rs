@@ -204,12 +204,23 @@ impl ExecutionPlan for RecursiveQueryExec {
 
         let static_stream = self.static_term.execute(partition, Arc::clone(&context))?;
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+        let distinct_deduplicator = self
+            .is_distinct
+            .then(|| {
+                DistinctDeduplicator::new(
+                    static_stream.schema(),
+                    &context,
+                    &self.metrics,
+                    partition,
+                )
+            })
+            .transpose()?;
         Ok(Box::pin(RecursiveQueryStream::new(
             context,
             Arc::clone(&self.work_table),
             Arc::clone(&self.recursive_term),
             static_stream,
-            self.is_distinct,
+            distinct_deduplicator,
             baseline_metrics,
         )?))
     }
@@ -291,15 +302,12 @@ impl RecursiveQueryStream {
         work_table: Arc<WorkTable>,
         recursive_term: Arc<dyn ExecutionPlan>,
         static_stream: SendableRecordBatchStream,
-        is_distinct: bool,
+        distinct_deduplicator: Option<DistinctDeduplicator>,
         baseline_metrics: BaselineMetrics,
     ) -> Result<Self> {
         let schema = static_stream.schema();
         let reservation =
             MemoryConsumer::new("RecursiveQuery").register(task_context.memory_pool());
-        let distinct_deduplicator = is_distinct
-            .then(|| DistinctDeduplicator::new(Arc::clone(&schema), &task_context))
-            .transpose()?;
         Ok(Self {
             task_context,
             work_table,
@@ -446,7 +454,12 @@ struct DistinctDeduplicator {
 }
 
 impl DistinctDeduplicator {
-    fn new(schema: SchemaRef, task_context: &TaskContext) -> Result<Self> {
+    fn new(
+        schema: SchemaRef,
+        task_context: &TaskContext,
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+    ) -> Result<Self> {
         let hash_exprs = schema
             .fields()
             .iter()
@@ -462,7 +475,7 @@ impl DistinctDeduplicator {
             group_values,
             reservation,
             intern_output_buffer: Vec::new(),
-            hasher: ExpressionHasher::new(hash_exprs),
+            hasher: ExpressionHasher::new(hash_exprs, metrics, partition),
         })
     }
 

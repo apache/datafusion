@@ -34,7 +34,7 @@ use crate::aggregates::{
     AggregateExec, AggregateOutputMode, GroupHashTracker, PhysicalGroupBy,
     aggregate_expressions, evaluate_group_by,
 };
-use crate::repartition::{ExpressionHasher, HashMetrics};
+use crate::repartition::ExpressionHasher;
 
 /// Marker for raw rows -> partial state aggregation.
 pub(in crate::aggregates) struct PartialMarker;
@@ -131,12 +131,9 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         let group_schema = agg.group_by.group_schema(&input_schema)?;
         let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
 
-        let hasher = ExpressionHasher::new_with_metrics(
-            agg.group_by.input_exprs(),
-            HashMetrics::new(&agg.metrics, partition),
-        );
-        let should_output_hashes = hasher.should_output_hashes(&input_schema)?
-            && agg.mode.output_mode() == AggregateOutputMode::Partial;
+        let hasher = agg.hashing_config().create_hasher(&agg.metrics, partition);
+        let should_output_hashes =
+            agg.emits_hashes() && agg.mode.output_mode() == AggregateOutputMode::Partial;
 
         Ok(Self {
             group_by_metrics: GroupByMetrics::new(&agg.metrics, partition),

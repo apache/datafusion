@@ -157,6 +157,9 @@ impl serde::Serialize for AggregateExecNode {
         if self.dynamic_filter.is_some() {
             len += 1;
         }
+        if self.emit_hashes {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.AggregateExecNode", len)?;
         if !self.group_expr.is_empty() {
             struct_ser.serialize_field("groupExpr", &self.group_expr)?;
@@ -199,6 +202,9 @@ impl serde::Serialize for AggregateExecNode {
         if let Some(v) = self.dynamic_filter.as_ref() {
             struct_ser.serialize_field("dynamicFilter", v)?;
         }
+        if self.emit_hashes {
+            struct_ser.serialize_field("emitHashes", &self.emit_hashes)?;
+        }
         struct_ser.end()
     }
 }
@@ -231,6 +237,8 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
             "hasGroupingSet",
             "dynamic_filter",
             "dynamicFilter",
+            "emit_hashes",
+            "emitHashes",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -248,6 +256,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
             Limit,
             HasGroupingSet,
             DynamicFilter,
+            EmitHashes,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -282,6 +291,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                             "limit" => Ok(GeneratedField::Limit),
                             "hasGroupingSet" | "has_grouping_set" => Ok(GeneratedField::HasGroupingSet),
                             "dynamicFilter" | "dynamic_filter" => Ok(GeneratedField::DynamicFilter),
+                            "emitHashes" | "emit_hashes" => Ok(GeneratedField::EmitHashes),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -314,6 +324,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                 let mut limit__ = None;
                 let mut has_grouping_set__ = None;
                 let mut dynamic_filter__ = None;
+                let mut emit_hashes__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::GroupExpr => {
@@ -394,6 +405,12 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                             }
                             dynamic_filter__ = map_.next_value()?;
                         }
+                        GeneratedField::EmitHashes => {
+                            if emit_hashes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("emitHashes"));
+                            }
+                            emit_hashes__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(AggregateExecNode {
@@ -410,6 +427,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                     limit: limit__,
                     has_grouping_set: has_grouping_set__.unwrap_or_default(),
                     dynamic_filter: dynamic_filter__,
+                    emit_hashes: emit_hashes__.unwrap_or_default(),
                 })
             }
         }
@@ -23674,6 +23692,9 @@ impl serde::Serialize for RepartitionExecNode {
         if self.preserve_order {
             len += 1;
         }
+        if self.emit_hashes {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.RepartitionExecNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
@@ -23683,6 +23704,9 @@ impl serde::Serialize for RepartitionExecNode {
         }
         if self.preserve_order {
             struct_ser.serialize_field("preserveOrder", &self.preserve_order)?;
+        }
+        if self.emit_hashes {
+            struct_ser.serialize_field("emitHashes", &self.emit_hashes)?;
         }
         struct_ser.end()
     }
@@ -23698,6 +23722,8 @@ impl<'de> serde::Deserialize<'de> for RepartitionExecNode {
             "partitioning",
             "preserve_order",
             "preserveOrder",
+            "emit_hashes",
+            "emitHashes",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -23705,6 +23731,7 @@ impl<'de> serde::Deserialize<'de> for RepartitionExecNode {
             Input,
             Partitioning,
             PreserveOrder,
+            EmitHashes,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -23729,6 +23756,7 @@ impl<'de> serde::Deserialize<'de> for RepartitionExecNode {
                             "input" => Ok(GeneratedField::Input),
                             "partitioning" => Ok(GeneratedField::Partitioning),
                             "preserveOrder" | "preserve_order" => Ok(GeneratedField::PreserveOrder),
+                            "emitHashes" | "emit_hashes" => Ok(GeneratedField::EmitHashes),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -23751,6 +23779,7 @@ impl<'de> serde::Deserialize<'de> for RepartitionExecNode {
                 let mut input__ = None;
                 let mut partitioning__ = None;
                 let mut preserve_order__ = None;
+                let mut emit_hashes__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -23771,12 +23800,19 @@ impl<'de> serde::Deserialize<'de> for RepartitionExecNode {
                             }
                             preserve_order__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::EmitHashes => {
+                            if emit_hashes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("emitHashes"));
+                            }
+                            emit_hashes__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(RepartitionExecNode {
                     input: input__,
                     partitioning: partitioning__,
                     preserve_order: preserve_order__.unwrap_or_default(),
+                    emit_hashes: emit_hashes__.unwrap_or_default(),
                 })
             }
         }

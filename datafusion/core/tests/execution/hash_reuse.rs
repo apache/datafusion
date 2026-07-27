@@ -16,10 +16,14 @@
 // under the License.
 
 use datafusion::error::Result;
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
+use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use insta::assert_snapshot;
+use std::sync::Arc;
 
 #[tokio::test]
 async fn grouped_tpch_aggregate_reuses_hashes_after_repartition() -> Result<()> {
@@ -216,6 +220,56 @@ async fn primitive_grouped_tpch_aggregate_does_not_propagate_hashes() -> Result<
     Ok(())
 }
 
+#[tokio::test]
+async fn hash_output_is_configured_during_physical_planning() -> Result<()> {
+    let string_test = HashReuseTest::new(
+        r"SELECT l_returnflag, COUNT(*) AS row_count
+         FROM lineitem
+         GROUP BY l_returnflag",
+    );
+    let (_, string_plan) = string_test.create_plan().await?;
+    let (partial_hashes, repartition_hashes) = hash_output_flags(&string_plan);
+    assert_eq!(partial_hashes, vec![true]);
+    assert_eq!(repartition_hashes, vec![true]);
+
+    let primitive_test = HashReuseTest::new(
+        r"SELECT l_linenumber, COUNT(*) AS row_count
+         FROM lineitem
+         GROUP BY l_linenumber",
+    );
+    let (_, primitive_plan) = primitive_test.create_plan().await?;
+    let (partial_hashes, repartition_hashes) = hash_output_flags(&primitive_plan);
+    assert_eq!(partial_hashes, vec![false]);
+    assert_eq!(repartition_hashes, vec![false]);
+
+    Ok(())
+}
+
+fn hash_output_flags(plan: &Arc<dyn ExecutionPlan>) -> (Vec<bool>, Vec<bool>) {
+    fn visit(
+        plan: &Arc<dyn ExecutionPlan>,
+        partial_hashes: &mut Vec<bool>,
+        repartition_hashes: &mut Vec<bool>,
+    ) {
+        if let Some(aggregate) = plan.downcast_ref::<AggregateExec>()
+            && aggregate.mode() == &AggregateMode::Partial
+        {
+            partial_hashes.push(aggregate.emits_hashes());
+        }
+        if let Some(repartition) = plan.downcast_ref::<RepartitionExec>() {
+            repartition_hashes.push(repartition.emits_hashes());
+        }
+        for child in plan.children() {
+            visit(child, partial_hashes, repartition_hashes);
+        }
+    }
+
+    let mut partial_hashes = vec![];
+    let mut repartition_hashes = vec![];
+    visit(plan, &mut partial_hashes, &mut repartition_hashes);
+    (partial_hashes, repartition_hashes)
+}
+
 struct HashReuseTest<'a> {
     sql: &'a str,
     batch_size: usize,
@@ -241,7 +295,7 @@ impl<'a> HashReuseTest<'a> {
         self
     }
 
-    async fn run(self) -> Result<String> {
+    async fn create_plan(&self) -> Result<(SessionContext, Arc<dyn ExecutionPlan>)> {
         let config = SessionConfig::new()
             .with_target_partitions(3)
             .with_batch_size(self.batch_size)
@@ -258,6 +312,11 @@ impl<'a> HashReuseTest<'a> {
         .await?;
         let dataframe = ctx.sql(self.sql).await?;
         let plan = dataframe.create_physical_plan().await?;
+        Ok((ctx, plan))
+    }
+
+    async fn run(self) -> Result<String> {
+        let (ctx, plan) = self.create_plan().await?;
         let output = collect(plan.clone(), ctx.task_ctx()).await?;
         assert!(!output.is_empty());
 

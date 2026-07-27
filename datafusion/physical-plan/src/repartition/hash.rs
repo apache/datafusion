@@ -19,7 +19,7 @@ use crate::aggregates::PhysicalGroupBy;
 use crate::joins::SeededRandomState;
 use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory};
 use arrow::array::{ArrayRef, RecordBatch};
-use arrow::datatypes::Schema;
+use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion_common::Result;
 use datafusion_common::cast::as_uint64_array;
 use datafusion_common::hash_utils::create_hashes;
@@ -33,6 +33,58 @@ use std::sync::Arc;
 const INTERNAL_HASH_COL_PREFIX: &str = "__datafusion_internal_hash";
 pub(crate) const HASH_ROWS_COMPUTED: &str = "hash_rows_computed";
 pub(crate) const HASH_ROWS_REUSED: &str = "hash_rows_reused";
+
+/// Immutable planning-time configuration for expression hashing.
+///
+/// This configuration determines whether a plan node exposes an internal hash
+/// column and constructs the mutable [`ExpressionHasher`] used by each runtime
+/// stream. It deliberately contains no hash buffer, random state, or metrics.
+#[derive(Debug, Clone)]
+pub(crate) struct HashingConfig {
+    hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    emit_hashes: bool,
+}
+
+impl HashingConfig {
+    pub(crate) fn new(hash_exprs: Vec<Arc<dyn PhysicalExpr>>) -> Self {
+        Self {
+            hash_exprs,
+            emit_hashes: false,
+        }
+    }
+
+    /// Records the hash-output decision made during physical planning.
+    pub(crate) fn with_hash_output(mut self, enabled: bool) -> Self {
+        self.emit_hashes = enabled;
+        self
+    }
+
+    pub(crate) fn should_output_hashes(&self) -> bool {
+        self.emit_hashes
+    }
+
+    pub(crate) fn internal_hash_col_name(&self) -> String {
+        internal_hash_col_name(&self.hash_exprs)
+    }
+
+    pub(crate) fn hash_field(&self) -> FieldRef {
+        Field::new(self.internal_hash_col_name(), DataType::UInt64, false).into()
+    }
+
+    pub(crate) fn input_has_hash_column(&self, input_schema: &Schema) -> bool {
+        input_schema
+            .field_with_name(&self.internal_hash_col_name())
+            .is_ok()
+    }
+
+    pub(crate) fn create_hasher(
+        &self,
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+    ) -> ExpressionHasher {
+        ExpressionHasher::new(self.hash_exprs.clone(), metrics, partition)
+    }
+}
 
 /// Execution metrics for expression hashing.
 ///
@@ -66,61 +118,42 @@ impl HashMetrics {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct ExpressionHasher {
     hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
     hash_buffer: Vec<u64>,
     random_state: SeededRandomState,
-    metrics: Option<HashMetrics>,
+    metrics: HashMetrics,
+}
+
+impl Clone for ExpressionHasher {
+    fn clone(&self) -> Self {
+        self.new_for_exprs(self.hash_exprs.clone())
+    }
 }
 
 impl ExpressionHasher {
-    pub(crate) fn new(hash_exprs: Vec<Arc<dyn PhysicalExpr>>) -> Self {
+    pub(crate) fn new(
+        hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+    ) -> Self {
         Self {
             hash_exprs,
             hash_buffer: vec![],
             random_state: SeededRandomState::with_seed(0),
-            metrics: None,
+            metrics: HashMetrics::new(metrics, partition),
         }
-    }
-
-    pub(crate) fn new_with_metrics(
-        hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
-        metrics: HashMetrics,
-    ) -> Self {
-        Self {
-            metrics: Some(metrics),
-            ..Self::new(hash_exprs)
-        }
-    }
-
-    pub(crate) fn set_metrics(&mut self, metrics: HashMetrics) {
-        self.metrics = Some(metrics);
     }
 
     /// Creates a hasher for another expression list while preserving metrics.
     pub(crate) fn new_for_exprs(&self, hash_exprs: Vec<Arc<dyn PhysicalExpr>>) -> Self {
         Self {
+            hash_exprs,
+            hash_buffer: vec![],
+            random_state: SeededRandomState::with_seed(0),
             metrics: self.metrics.clone(),
-            ..Self::new(hash_exprs)
         }
-    }
-
-    /// Returns whether propagating hashes is worthwhile for these expressions.
-    ///
-    /// Hashing primitive values is inexpensive, so the cost of propagating an
-    /// additional `UInt64` column outweighs avoiding a later hash computation.
-    /// Variable-width and nested values are more expensive to hash, and retain
-    /// the propagated hashes when at least one expression has a non-primitive
-    /// type. Callers combine this policy with their output mode, such as
-    /// whether they are emitting partial aggregation state.
-    pub(crate) fn should_output_hashes(&self, input_schema: &Schema) -> Result<bool> {
-        for expr in &self.hash_exprs {
-            if !expr.data_type(input_schema)?.is_primitive() {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
     }
 
     /// Builds the name for the column that will carry hashes across [`ExecutionPlan`]s.
@@ -132,18 +165,14 @@ impl ExpressionHasher {
     ///
     /// [`ExecutionPlan`]: crate::ExecutionPlan
     pub(crate) fn internal_hash_col_name(&self) -> String {
-        let mut hasher = DefaultHasher::new();
-        self.hash_exprs.hash(&mut hasher);
-        format!("{INTERNAL_HASH_COL_PREFIX}_{:016x}", hasher.finish())
+        internal_hash_col_name(&self.hash_exprs)
     }
 
     pub(crate) fn precomputed<'a>(&self, batch: &'a RecordBatch) -> Option<&'a [u64]> {
         let internal_hash_col_name = self.internal_hash_col_name();
         let hash_column = batch.column_by_name(&internal_hash_col_name)?;
         let hash_array = as_uint64_array(hash_column.as_ref()).ok()?;
-        if let Some(metrics) = &self.metrics {
-            metrics.record_reused(hash_array.len());
-        }
+        self.metrics.record_reused(hash_array.len());
         Some(hash_array.values())
     }
 
@@ -170,9 +199,7 @@ impl ExpressionHasher {
             &mut self.hash_buffer,
         )?;
 
-        if let Some(metrics) = &self.metrics {
-            metrics.record_computed(num_rows);
-        }
+        self.metrics.record_computed(num_rows);
 
         Ok(&self.hash_buffer)
     }
@@ -193,4 +220,10 @@ impl ExpressionHasher {
         self.hash_buffer.clear();
         self.hash_buffer.shrink_to(capacity);
     }
+}
+
+fn internal_hash_col_name(hash_exprs: &[Arc<dyn PhysicalExpr>]) -> String {
+    let mut hasher = DefaultHasher::new();
+    hash_exprs.hash(&mut hasher);
+    format!("{INTERNAL_HASH_COL_PREFIX}_{:016x}", hasher.finish())
 }

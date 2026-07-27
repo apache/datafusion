@@ -18,11 +18,13 @@
 use std::mem::size_of;
 
 use crate::aggregates::group_values::GroupValues;
+use crate::repartition::ExpressionHasher;
 
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use datafusion_common::Result;
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr_common::binary_map::{ArrowBytesMap, OutputType};
+use datafusion_physical_expr_common::metrics::ExecutionPlanMetricsSet;
 
 /// A [`GroupValues`] storing single column of Utf8/LargeUtf8/Binary/LargeBinary values
 ///
@@ -115,7 +117,8 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
                 self.num_groups = 0;
                 let mut group_indexes = vec![];
                 let cols = [remaining_group_values];
-                let mut hasher = crate::repartition::ExpressionHasher::new(vec![]);
+                let metrics = ExecutionPlanMetricsSet::new();
+                let mut hasher = ExpressionHasher::new(vec![], &metrics, 0);
                 let hashes = hasher.compute_hashes(&cols)?;
                 self.intern(&cols, &mut group_indexes, hashes)?;
 

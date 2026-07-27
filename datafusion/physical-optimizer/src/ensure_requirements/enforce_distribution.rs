@@ -52,7 +52,7 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::aggregates::{
-    AggregateExec, AggregateMode, PhysicalGroupBy,
+    AggregateExec, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::EmissionType;
@@ -726,6 +726,63 @@ fn partial_aggregate_output_satisfies_final_partitioning(
             allow_subset_satisfy_partitioning,
         )
         .is_satisfied()
+}
+
+/// Returns whether avoiding repeated hashing is expected to offset the cost of
+/// propagating an additional `UInt64` column.
+fn aggregate_hash_output_is_worthwhile(aggregate: &AggregateExec) -> Result<bool> {
+    let input_schema = aggregate.input().schema();
+    for expr in aggregate.group_expr().input_exprs() {
+        if !expr.data_type(&input_schema)?.is_primitive() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Configures the partial aggregate below distribution-preserving operators to
+/// emit reusable group hashes.
+///
+/// This runs while enforcing the final aggregate's distribution, when the
+/// complete partial -> exchange -> final shape is known. Keeping the decision
+/// here avoids runtime operators independently inferring whether a private hash
+/// column should be part of their output.
+fn configure_partial_aggregate_hash_output(
+    mut ctx: DistributionContext,
+) -> Result<DistributionContext> {
+    if let Some(aggregate) = ctx.plan.downcast_ref::<AggregateExec>() {
+        if aggregate.mode() == &AggregateMode::Partial {
+            let emit_hashes = aggregate_hash_output_is_worthwhile(aggregate)?;
+            ctx.plan = Arc::new(aggregate.clone().with_hash_reuse(emit_hashes)?);
+        }
+        return Ok(ctx);
+    }
+
+    if ctx.children.len() != 1 {
+        return Ok(ctx);
+    }
+
+    if let Some(repartition) = ctx.plan.downcast_ref::<RepartitionExec>() {
+        let child = configure_partial_aggregate_hash_output(ctx.children.swap_remove(0))?;
+        ctx.plan = Arc::new(
+            repartition
+                .clone()
+                .with_new_input(Arc::clone(&child.plan))?
+                .with_hash_reuse(true),
+        );
+        ctx.children.push(child);
+        return Ok(ctx);
+    }
+
+    if ctx.plan.is::<CoalescePartitionsExec>() || ctx.plan.is::<SortPreservingMergeExec>()
+    {
+        let child = configure_partial_aggregate_hash_output(ctx.children.swap_remove(0))?;
+        ctx.plan =
+            Arc::clone(&ctx.plan).with_new_children(vec![Arc::clone(&child.plan)])?;
+        ctx.children.push(child);
+    }
+
+    Ok(ctx)
 }
 
 /// Adds a [`SortPreservingMergeExec`] or a [`CoalescePartitionsExec`] operator
@@ -1407,7 +1464,7 @@ pub fn ensure_distribution(
         target_partitions,
     )?;
 
-    let children = children
+    let mut children = children
         .into_iter()
         .map(
             |DistributionChildState {
@@ -1482,6 +1539,16 @@ pub fn ensure_distribution(
             },
         )
         .collect::<Result<Vec<_>>>()?;
+
+    if plan
+        .downcast_ref::<AggregateExec>()
+        .is_some_and(|aggregate| {
+            matches!(aggregate.mode().output_mode(), AggregateOutputMode::Final)
+        })
+    {
+        let child = children.swap_remove(0);
+        children.push(configure_partial_aggregate_hash_output(child)?);
+    }
 
     let children_plans = children
         .iter()

@@ -16,10 +16,12 @@
 // under the License.
 
 use crate::aggregates::group_values::GroupValues;
+use crate::repartition::ExpressionHasher;
 use arrow::array::{Array, ArrayRef};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
 use datafusion_physical_expr_common::binary_view_map::ArrowBytesViewMap;
+use datafusion_physical_expr_common::metrics::ExecutionPlanMetricsSet;
 use std::mem::size_of;
 
 /// A [`GroupValues`] storing single column of Utf8View/BinaryView values
@@ -113,7 +115,8 @@ impl GroupValues for GroupValuesBytesView {
                 self.num_groups = 0;
                 let mut group_indexes = vec![];
                 let cols = [remaining_group_values];
-                let mut hasher = crate::repartition::ExpressionHasher::new(vec![]);
+                let metrics = ExecutionPlanMetricsSet::new();
+                let mut hasher = ExpressionHasher::new(vec![], &metrics, 0);
                 let hashes = hasher.compute_hashes(&cols)?;
                 self.intern(&cols, &mut group_indexes, hashes)?;
 

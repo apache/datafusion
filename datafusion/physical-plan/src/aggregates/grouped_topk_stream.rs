@@ -26,7 +26,7 @@ use crate::aggregates::{
     evaluate_group_by, evaluate_many,
 };
 use crate::metrics::BaselineMetrics;
-use crate::repartition::{ExpressionHasher, HashMetrics};
+use crate::repartition::ExpressionHasher;
 use crate::stream::EmptyRecordBatchStream;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::{Array, ArrayRef, RecordBatch, new_null_array};
@@ -112,13 +112,12 @@ impl GroupedTopKAggregateStream {
         // Note: Null values in aggregate columns are filtered by the aggregation layer
         // before reaching the heap, so the heap implementations don't need explicit null handling.
         let priority_map = PriorityMap::new(kt, vt, limit, desc)?;
-        let output_group_hashes = ExpressionHasher::new(group_by.input_exprs())
-            .should_output_hashes(&aggr.input().schema())?
+        let output_group_hashes = aggr.emits_hashes()
             && aggr.mode.output_mode() == AggregateOutputMode::Partial;
-        let output_hasher = ExpressionHasher::new_with_metrics(
-            group_by.output_exprs(),
-            HashMetrics::new(&aggr.metrics, partition),
-        );
+        // aggr.hashing_config was created based on group_by.input_exprs(), but we need an
+        // ExpressionHasher created based on group_by.output_exprs(), so create on from scratch.
+        let output_hasher =
+            ExpressionHasher::new(group_by.output_exprs(), &aggr.metrics, partition);
 
         Ok(GroupedTopKAggregateStream {
             partition,

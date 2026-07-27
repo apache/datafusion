@@ -1446,6 +1446,8 @@ message AggregateExecNode {
   bool has_grouping_set = 12;
   // Optional dynamic filter expression for pushing down to the child.
   PhysicalExprNode dynamic_filter = 13;
+  // Whether the partial aggregate should emit reusable group hashes.
+  bool emit_hashes = 14;
 }
 
 message GlobalLimitExecNode {
@@ -1520,6 +1522,8 @@ message RepartitionExecNode{
   // New partitioning variants are stored in `partitioning`.
   Partitioning partitioning = 5;
   bool preserve_order = 6;
+  // Whether hash repartitioning should propagate reusable group hashes.
+  bool emit_hashes = 7;
 }
 
 message Partitioning {
