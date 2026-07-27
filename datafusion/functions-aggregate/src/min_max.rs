@@ -419,8 +419,8 @@ impl Accumulator for SlidingMaxAccumulator {
         // the retracted values must be the oldest elements of `moving_max`.
         // NULLs are never pushed, so be sure to only pop once per non-NULL
         // value.
-        let non_null = values[0].len() - values[0].logical_null_count();
-        for _ in 0..non_null {
+        let valid_count = values[0].len() - values[0].logical_null_count();
+        for _ in 0..valid_count {
             self.moving_max.pop();
         }
         Ok(())
@@ -717,8 +717,8 @@ impl Accumulator for SlidingMinAccumulator {
         // the retracted values must be the oldest elements of `moving_min`.
         // NULLs are never pushed, so be sure to only pop once per non-NULL
         // value.
-        let non_null = values[0].len() - values[0].logical_null_count();
-        for _ in 0..non_null {
+        let valid_count = values[0].len() - values[0].logical_null_count();
+        for _ in 0..valid_count {
             self.moving_min.pop();
         }
         Ok(())
