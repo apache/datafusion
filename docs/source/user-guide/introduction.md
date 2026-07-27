@@ -103,6 +103,7 @@ Here are some active projects using DataFusion:
 - [Comet](https://github.com/apache/datafusion-comet) Apache Spark native query execution plugin
 - [Cube Store] Cube’s universal semantic layer platform is the next evolution of OLAP technology for AI, BI, spreadsheets, and embedded analytics
 - [datafusion-dft](https://github.com/datafusion-contrib/datafusion-dft) Batteries included CLI, TUI, and server implementations for DataFusion.
+- [datapress](https://docs.datap-rs.org) An opinionated small and fast data server on parquet and delta tables.
 - [dbt Fusion engine](https://github.com/dbt-labs/dbt-fusion) The dbt Fusion engine, written in Rust, designed for speed and correctness with a native SQL understanding across DWH SQL dialects.
 - [delta-rs] Native Rust implementation of Delta Lake
 - [EDB Postgres Lakehouse] built with [Seafowl]
