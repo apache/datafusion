@@ -785,8 +785,8 @@ pub fn validate_data_type_compatibility(
 /// Maps are always Struct-backed: their entries field is a Struct containing key
 /// and value children. Therefore a compatible Map-to-Map adaptation can return
 /// true even when the user-visible key and value types are primitive. This
-/// deliberately routes Map adaptation through [`cast_map_column`] so key/value
-/// semantics, sorted flags, and entry compaction are enforced.
+/// deliberately routes Map adaptation through the specialized Map casting path
+/// so key/value semantics, sorted flags, and entry compaction are enforced.
 ///
 /// Use this predicate at both planning time (to decide whether to apply nested
 /// compatibility validation) and execution time (to decide whether to route
