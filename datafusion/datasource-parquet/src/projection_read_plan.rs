@@ -30,6 +30,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_functions::core::input_file_name::InputFileNameFunc;
 use parquet::arrow::ProjectionMask;
 use parquet::schema::types::SchemaDescriptor;
 
@@ -313,8 +314,10 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
             return Ok(recursion);
         }
 
-        if ScalarFunctionExpr::try_downcast_func::<FileRowIndexFunc>(node.as_ref())
+        if ScalarFunctionExpr::try_downcast_func::<InputFileNameFunc>(node.as_ref())
             .is_some()
+            || ScalarFunctionExpr::try_downcast_func::<FileRowIndexFunc>(node.as_ref())
+                .is_some()
         {
             self.has_unpushable_udfs = true;
             return Ok(TreeNodeRecursion::Jump);
