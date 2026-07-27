@@ -58,8 +58,7 @@ fn schema() -> SchemaRef {
     ]))
 }
 
-fn generate_strings(len: usize) -> ArrayRef {
-    let mut rng = StdRng::seed_from_u64(0);
+fn generate_strings(rng: &mut StdRng, len: usize) -> ArrayRef {
     Arc::new(StringArray::from_iter((0..len).map(|_| {
         let string_len = rng.random_range(STRING_LENGTH_RANGE.clone());
         Some(
@@ -70,7 +69,7 @@ fn generate_strings(len: usize) -> ArrayRef {
     })))
 }
 
-fn generate_batch(batch_id: usize) -> RecordBatch {
+fn generate_batch(rng: &mut StdRng, batch_id: usize) -> RecordBatch {
     let schema = schema();
     let len = WRITE_RECORD_BATCH_SIZE;
 
@@ -83,7 +82,7 @@ fn generate_batch(batch_id: usize) -> RecordBatch {
     let struct_id_array = Arc::new(Int32Array::from(id_values));
 
     // Generate random strings for struct value field
-    let value_array = generate_strings(len);
+    let value_array = generate_strings(rng, len);
 
     // Construct StructArray
     let struct_array = StructArray::from(vec![
@@ -119,8 +118,9 @@ fn generate_file() -> NamedTempFile {
     let mut writer =
         ArrowWriter::try_new(&mut named_file, schema, Some(properties)).unwrap();
 
+    let mut rng = StdRng::seed_from_u64(0);
     for batch_id in 0..NUM_BATCHES {
-        let batch = generate_batch(batch_id);
+        let batch = generate_batch(&mut rng, batch_id);
         writer.write(&batch).unwrap();
     }
 

@@ -214,7 +214,8 @@ async fn find_or_generate_files(
 
     if files_on_disk.is_empty() {
         println!("No data files found, generating (this will take a bit)");
-        generate_data(data_dir.as_ref(), num_files, num_rows_per_file).await?;
+        let mut rng = StdRng::seed_from_u64(0);
+        generate_data(&mut rng, data_dir.as_ref(), num_files, num_rows_per_file).await?;
         println!("Done generating files");
         let files_on_disk = find_files_on_disk(data_dir)?;
 
@@ -268,6 +269,7 @@ async fn load_data(
 }
 
 async fn generate_data(
+    rng: &mut StdRng,
     data_dir: impl AsRef<Path>,
     num_files: usize,
     num_rows_per_file: usize,
@@ -294,7 +296,7 @@ async fn generate_data(
     for file_num in 1..=num_files {
         println!("Generating file {file_num} of {num_files}");
         let data = columns.iter().map(|(column_name, column_type)| {
-            let column = random_data(column_type, num_rows_per_file);
+            let column = random_data(rng, column_type, num_rows_per_file);
             (column_name, column)
         });
         let to_write = RecordBatch::try_from_iter(data).unwrap();
@@ -310,9 +312,8 @@ async fn generate_data(
     Ok(())
 }
 
-fn random_data(column_type: &DataType, rows: usize) -> Arc<dyn Array> {
-    let mut rng = StdRng::seed_from_u64(0);
-    let values = (0..rows).map(|_| random_value(&mut rng, column_type));
+fn random_data(rng: &mut StdRng, column_type: &DataType, rows: usize) -> Arc<dyn Array> {
+    let values = (0..rows).map(|_| random_value(rng, column_type));
     ScalarValue::iter_to_array(values).unwrap()
 }
 

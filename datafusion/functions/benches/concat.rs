@@ -48,17 +48,20 @@ fn create_array_args_view(size: usize) -> Vec<ColumnarValue> {
     ]
 }
 
-fn generate_random_string(str_len: usize) -> String {
-    StdRng::seed_from_u64(0)
-        .sample_iter(&Alphanumeric)
+fn generate_random_string(rng: &mut StdRng, str_len: usize) -> String {
+    rng.sample_iter(&Alphanumeric)
         .take(str_len)
         .map(char::from)
         .collect()
 }
 
-fn create_scalar_args(count: usize, str_len: usize) -> Vec<ColumnarValue> {
+fn create_scalar_args(
+    rng: &mut StdRng,
+    count: usize,
+    str_len: usize,
+) -> Vec<ColumnarValue> {
     std::iter::repeat_with(|| {
-        let s = generate_random_string(str_len);
+        let s = generate_random_string(rng, str_len);
         ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))
     })
     .take(count)
@@ -67,6 +70,7 @@ fn create_scalar_args(count: usize, str_len: usize) -> Vec<ColumnarValue> {
 
 fn criterion_benchmark(c: &mut Criterion) {
     // Benchmark for array concat
+    let mut rng = StdRng::seed_from_u64(0);
     for size in [1024, 4096, 8192] {
         let args = create_array_args(size, 32);
         let arg_fields = args
@@ -138,7 +142,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     }
 
     // Benchmark for scalar concat
-    let scalar_args = create_scalar_args(10, 100);
+    let scalar_args = create_scalar_args(&mut rng, 10, 100);
     let scalar_arg_fields = scalar_args
         .iter()
         .enumerate()
