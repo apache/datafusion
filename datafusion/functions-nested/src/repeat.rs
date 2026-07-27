@@ -40,6 +40,7 @@ use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 use std::mem::size_of;
 use std::sync::Arc;
+use datafusion_expr_common::sort_properties::ExprProperties;
 
 const ARRAY_REPEAT_LENGTH_EXCEEDED: &str =
     "array_repeat: requested length exceeds maximum array size";
@@ -135,6 +136,12 @@ impl ScalarUDFImpl for ArrayRepeat {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(array_repeat_inner)(&args.args)
+    }
+
+    fn strictly_order_preserving(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+        // this is not strictly order preserving
+        // since array_repeat(NULL, 2) = [NULL, NULL] and not NULL
+        Ok(false)
     }
 
     fn aliases(&self) -> &[String] {
