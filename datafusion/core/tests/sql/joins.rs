@@ -302,7 +302,7 @@ async fn unparse_cross_join() -> Result<()> {
     Ok(())
 }
 
-async fn register_asof_test_tables(ctx: &SessionContext) -> Result<()> {
+fn register_asof_test_tables(ctx: &SessionContext) -> Result<()> {
     let trades_schema = Arc::new(Schema::new(vec![
         Field::new("symbol", DataType::Utf8, true),
         Field::new("ts", DataType::Int64, true),
@@ -328,7 +328,10 @@ async fn register_asof_test_tables(ctx: &SessionContext) -> Result<()> {
     ];
     ctx.register_table(
         "trades",
-        Arc::new(MemTable::try_new(trades_schema, vec![trades])?),
+        Arc::new(MemTable::try_new(
+            trades_schema,
+            trades.into_iter().map(|batch| vec![batch]).collect(),
+        )?),
     )?;
 
     let prices_schema = Arc::new(Schema::new(vec![
@@ -374,7 +377,7 @@ async fn asof_join_all_match_directions_across_batches() -> Result<()> {
         .with_batch_size(2)
         .with_target_partitions(2);
     let ctx = SessionContext::new_with_config(config);
-    register_asof_test_tables(&ctx).await?;
+    register_asof_test_tables(&ctx)?;
 
     for (op, expected) in [
         (
@@ -480,10 +483,10 @@ async fn asof_join_coerces_equality_and_match_types() -> Result<()> {
 }
 
 #[tokio::test]
-async fn asof_join_without_equality_keys_is_single_partition() -> Result<()> {
+async fn asof_join_without_equality_keys_broadcasts_right_input() -> Result<()> {
     let config = SessionConfig::new().with_target_partitions(4);
     let ctx = SessionContext::new_with_config(config);
-    register_asof_test_tables(&ctx).await?;
+    register_asof_test_tables(&ctx)?;
     let df = ctx
         .sql(
             "SELECT t.trade_id, p.price FROM trades t ASOF JOIN prices p \
@@ -496,11 +499,26 @@ async fn asof_join_without_equality_keys_is_single_partition() -> Result<()> {
     ctx.sql(&sql).await?;
     let plan = df.create_physical_plan().await?;
     let asof = find_asof_exec(&plan).expect("physical ASOF join must be present");
-    assert_eq!(asof.output_partitioning().partition_count(), 1);
+    let output_partitions = asof.output_partitioning().partition_count();
+    assert_eq!(
+        output_partitions,
+        asof.children()[0].output_partitioning().partition_count()
+    );
+    assert!(
+        output_partitions > 1,
+        "ASOF join did not preserve left-side parallelism"
+    );
+    assert_eq!(
+        asof.children()[1].output_partitioning().partition_count(),
+        1
+    );
     assert!(asof.output_ordering().is_some());
     assert!(matches!(
         &asof.input_distribution_requirements().into_per_child()[..],
-        [Distribution::SinglePartition, Distribution::SinglePartition]
+        [
+            Distribution::UnspecifiedDistribution,
+            Distribution::SinglePartition
+        ]
     ));
     let batches = collect(plan, ctx.task_ctx()).await?;
     assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 6);
@@ -510,7 +528,7 @@ async fn asof_join_without_equality_keys_is_single_partition() -> Result<()> {
 #[tokio::test]
 async fn asof_join_explain_names_equality_and_match_conditions() -> Result<()> {
     let ctx = SessionContext::new();
-    register_asof_test_tables(&ctx).await?;
+    register_asof_test_tables(&ctx)?;
     let batches = ctx
         .sql(
             "EXPLAIN SELECT t.trade_id, p.price FROM trades t \
@@ -568,7 +586,7 @@ async fn asof_join_rejects_unbounded_inputs_during_physical_planning() -> Result
 #[tokio::test]
 async fn asof_join_using_merges_key_and_unparser_round_trips() -> Result<()> {
     let ctx = SessionContext::new();
-    register_asof_test_tables(&ctx).await?;
+    register_asof_test_tables(&ctx)?;
     let df = ctx
         .sql(
             "SELECT * FROM trades t ASOF JOIN prices p \
@@ -594,7 +612,7 @@ async fn asof_join_using_merges_key_and_unparser_round_trips() -> Result<()> {
 #[tokio::test]
 async fn asof_join_unparser_preserves_right_preselection() -> Result<()> {
     let ctx = SessionContext::new();
-    register_asof_test_tables(&ctx).await?;
+    register_asof_test_tables(&ctx)?;
     for query in [
         "SELECT t.trade_id, p.price FROM trades t \
          ASOF JOIN (SELECT * FROM prices WHERE price < 100) p \
@@ -630,7 +648,7 @@ async fn asof_join_unparser_preserves_right_preselection() -> Result<()> {
 #[tokio::test]
 async fn asof_join_rejects_invalid_contracts() -> Result<()> {
     let ctx = SessionContext::new();
-    register_asof_test_tables(&ctx).await?;
+    register_asof_test_tables(&ctx)?;
     for sql in [
         "SELECT * FROM trades t ASOF JOIN prices p MATCH_CONDITION (t.ts = p.ts) ON t.symbol = p.symbol",
         "SELECT * FROM trades t ASOF JOIN prices p MATCH_CONDITION (p.ts >= t.ts) ON t.symbol = p.symbol",
