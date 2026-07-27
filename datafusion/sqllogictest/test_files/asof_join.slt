@@ -104,7 +104,7 @@ ORDER BY l.id;
 6 3 NULL NULL
 7 NULL NULL NULL
 
-# USING merges the equality key into one output column.
+# USING exposes one unqualified equality key.
 query TIIT
 SELECT grp, l.id, r.ts, r.val
 FROM asof_left l
@@ -120,6 +120,23 @@ B 4 1 b1
 B 5 6 b6
 NULL 6 NULL NULL
 A 7 NULL NULL
+
+# Both qualified equality keys remain addressable.
+query ITT
+SELECT l.id, l.grp, r.grp
+FROM asof_left l
+ASOF JOIN asof_right r
+MATCH_CONDITION (l.ts >= r.ts)
+USING (grp)
+ORDER BY l.id;
+----
+1 A NULL
+2 A A
+3 A A
+4 B B
+5 B B
+6 NULL NULL
+7 A NULL
 
 # Equality keys are optional.
 query IT

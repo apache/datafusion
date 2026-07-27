@@ -62,6 +62,7 @@ use arrow::compute::{SortOptions, interleave};
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
+use datafusion_common::utils::memory::RecordBatchMemoryCounter;
 use datafusion_common::utils::{
     compare_rows, get_row_at_idx, normalize_float_zero_scalar,
 };
@@ -93,7 +94,6 @@ use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder,
     MetricCategory, MetricsSet, RecordOutput, Time,
 };
-use crate::spill::get_record_batch_memory_size;
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
@@ -752,9 +752,10 @@ async fn collect_right_input(
     metrics: AsOfJoinMetrics,
 ) -> Result<BroadcastRightInput> {
     let schema = input.schema();
+    let mut memory_counter = RecordBatchMemoryCounter::new();
     let batches = input
         .try_fold(Vec::new(), |mut batches, batch| {
-            let batch_size = get_record_batch_memory_size(&batch);
+            let batch_size = memory_counter.count_batch(&batch);
             futures::future::ready(reservation.try_grow(batch_size).map(|_| {
                 metrics.build_mem_used.add(batch_size);
                 metrics.build_input_batches.add(1);
@@ -1213,6 +1214,7 @@ mod tests {
     };
     use arrow::datatypes::{DataType, Field, Int8Type};
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::ColumnarValue;
     use datafusion_physical_expr_common::metrics::MetricValue;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -1541,6 +1543,90 @@ mod tests {
             Some(2)
         );
         assert_eq!(metrics.output_rows(), Some(4));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shared_right_buffers_are_reserved_once() -> Result<()> {
+        let left_schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("ts", DataType::Int64, false),
+            Field::new("id", DataType::Int32, false),
+        ]));
+        let left = TestMemoryExec::try_new_exec(
+            &[vec![make_batch(
+                &left_schema,
+                vec![Some("A")],
+                vec![Some(4095)],
+                vec![0],
+            )?]],
+            Arc::clone(&left_schema),
+            None,
+        )?;
+
+        let right_schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("ts", DataType::Int64, false),
+            Field::new("price", DataType::Int32, false),
+        ]));
+        let row_count = 4096;
+        let parent = make_batch(
+            &right_schema,
+            vec![Some("A"); row_count],
+            (0..row_count).map(|value| Some(value as i64)).collect(),
+            (0..row_count as i32).collect(),
+        )?;
+        let mut memory_counter = RecordBatchMemoryCounter::new();
+        let retained_size = memory_counter.count_batch(&parent);
+        let right_batches = (0..16)
+            .map(|index| parent.slice(index * 256, 256))
+            .collect();
+        let right = TestMemoryExec::try_new_exec(
+            &[right_batches],
+            Arc::clone(&right_schema),
+            None,
+        )?;
+
+        let exec = Arc::new(AsOfJoinExec::try_new(
+            left,
+            right,
+            vec![(
+                Arc::new(PhysicalColumn::new("key", 0)),
+                Arc::new(PhysicalColumn::new("key", 0)),
+            )],
+            AsOfMatchExpr::new(
+                Arc::new(PhysicalColumn::new("ts", 1)),
+                Operator::GtEq,
+                Arc::new(PhysicalColumn::new("ts", 1)),
+            ),
+            vec![2],
+        )?);
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(retained_size, 1.0)
+            .build_arc()?;
+        let context = Arc::new(TaskContext::default().with_runtime(runtime));
+
+        let batches = collect(Arc::clone(&exec) as _, context).await?;
+        let prices = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(3)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .iter()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(prices, vec![Some(4095)]);
+
+        let metrics = exec.metrics().expect("ASOF metrics must be present");
+        assert_eq!(
+            metrics
+                .sum_by_name("build_mem_used")
+                .map(|value| value.as_usize()),
+            Some(retained_size)
+        );
         Ok(())
     }
 

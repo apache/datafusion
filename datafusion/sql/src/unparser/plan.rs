@@ -1885,25 +1885,6 @@ impl Unparser<'_> {
             let right_projection = right_projection.ok_or_else(|| {
                 internal_datafusion_err!("ASOF right projection is missing")
             })?;
-            let omitted_right = if join.join_constraint == JoinConstraint::Using {
-                join.on
-                    .iter()
-                    .filter_map(|(_, right)| right.get_as_join_column())
-                    .collect::<Vec<_>>()
-            } else {
-                vec![]
-            };
-            let right_projection = right_projection.into_iter().filter(|item| {
-                let ast::SelectItem::UnnamedExpr(ast::Expr::CompoundIdentifier(ids)) =
-                    item
-                else {
-                    return true;
-                };
-                let Some(name) = ids.last() else {
-                    return true;
-                };
-                !omitted_right.iter().any(|column| column.name == name.value)
-            });
             select.projection(
                 left_projection
                     .into_iter()
