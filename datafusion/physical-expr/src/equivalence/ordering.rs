@@ -385,36 +385,33 @@ mod tests {
         let col_a = col("a", &schema)?;
         let col_b = col("b", &schema)?;
         let asc = SortOptions::default();
-        let ordering = vec![
-            PhysicalSortExpr::new(Arc::clone(&col_a), asc),
-            PhysicalSortExpr::new(Arc::clone(&col_b), asc),
-        ];
-        let eq_properties =
-            EquivalenceProperties::new_with_orderings(Arc::clone(&schema), [ordering]);
+        let sort_a = PhysicalSortExpr::new(Arc::clone(&col_a), asc);
+        let sort_b = PhysicalSortExpr::new(Arc::clone(&col_b), asc);
+        let eq_properties = EquivalenceProperties::new_with_orderings(
+            Arc::clone(&schema),
+            [vec![sort_a.clone(), sort_b.clone()]],
+        );
+
+        assert!(eq_properties.ordering_satisfy(vec![sort_a.clone(), sort_b.clone()])?);
+        assert!(eq_properties.ordering_satisfy(vec![sort_a.clone()])?);
 
         // A widening cast is strictly order-preserving: `a` is constant
         // within each group of equal `CAST(a AS BIGINT)` values, so `b`
         // remains sorted within those groups.
         let widening = Arc::new(CastExpr::new(Arc::clone(&col_a), DataType::Int64, None))
             as PhysicalExprRef;
-        assert!(eq_properties.ordering_satisfy(vec![
-            PhysicalSortExpr::new(widening, asc),
-            PhysicalSortExpr::new(Arc::clone(&col_b), asc),
-        ])?);
+        let sort_widening = PhysicalSortExpr::new(widening, asc);
+        assert!(eq_properties.ordering_satisfy(vec![sort_widening, sort_b.clone()])?);
 
         // A narrowing cast is only monotonic: it satisfies as a leading key,
         // but it may collapse distinct `a` values, so `b` is not guaranteed
         // to be sorted within its tie groups.
         let narrowing = Arc::new(CastExpr::new(Arc::clone(&col_a), DataType::Int16, None))
             as PhysicalExprRef;
-        assert!(eq_properties.ordering_satisfy(vec![PhysicalSortExpr::new(
-            Arc::clone(&narrowing),
-            asc
-        )])?);
-        assert!(!eq_properties.ordering_satisfy(vec![
-            PhysicalSortExpr::new(narrowing, asc),
-            PhysicalSortExpr::new(Arc::clone(&col_b), asc),
-        ])?);
+        let sort_narrowing = PhysicalSortExpr::new(narrowing, asc);
+        assert!(eq_properties.ordering_satisfy(vec![sort_narrowing.clone()])?);
+        assert!(!eq_properties.ordering_satisfy(vec![sort_narrowing, sort_b.clone()])?);
+
         Ok(())
     }
 
