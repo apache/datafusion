@@ -58,6 +58,15 @@ mod tests {
         assert!(results.contains(&create_record_batch(6, 1)));
         assert!(results.contains(&create_record_batch(7, 5)));
 
+        if !synchronous {
+            assert!(
+                ctx.state()
+                    .catalog_list()
+                    .catalog("ffi_registered")
+                    .is_some()
+            );
+        }
+
         Ok(())
     }
 

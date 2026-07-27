@@ -24,6 +24,7 @@ use datafusion_common::cast::{
     as_large_binary_array,
 };
 use datafusion_common::types::{NativeType, logical_string};
+use datafusion_common::utils::hex::{HexCase, encode_bytes};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
@@ -89,18 +90,9 @@ impl ScalarUDFImpl for SparkSha1 {
     }
 }
 
-/// Hex encoding lookup table for fast byte-to-hex conversion
-const HEX_CHARS_LOWER: &[u8; 16] = b"0123456789abcdef";
-
 #[inline]
 fn spark_sha1_digest(value: &[u8]) -> String {
-    let result = Sha1::digest(value);
-    let mut s = String::with_capacity(result.len() * 2);
-    for &b in result.as_slice() {
-        s.push(HEX_CHARS_LOWER[(b >> 4) as usize] as char);
-        s.push(HEX_CHARS_LOWER[(b & 0x0f) as usize] as char);
-    }
-    s
+    encode_bytes(&Sha1::digest(value), HexCase::Lower)
 }
 
 fn spark_sha1_impl<'a>(input: impl Iterator<Item = Option<&'a [u8]>>) -> ArrayRef {

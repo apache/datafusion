@@ -15,7 +15,42 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Ordered, left-preserving ASOF join execution.
+//! Broadcast, left-preserving ASOF join execution.
+//!
+//! An ASOF join emits exactly one output row for every left row. Within an
+//! optional equality-key group, it selects the closest right row that satisfies
+//! one ordered comparison:
+//!
+//! ```text
+//! left.ts >= right.ts  => greatest eligible right.ts
+//! left.ts <= right.ts  => smallest eligible right.ts
+//! ```
+//!
+//! The right input is collected and shared by all output partitions. The left
+//! input remains partitioned, and each partition performs an independent
+//! monotonic scan over the ordered right input:
+//!
+//! ```text
+//! AsOfJoinExec
+//!   SortExec(left equality keys, left match key)
+//!     RepartitionExec(RoundRobinBatch)
+//!       left
+//!   SortExec(right equality keys, right match key)
+//!     CoalescePartitionsExec
+//!       right
+//! ```
+//!
+//! Both inputs must be ordered by their equality keys followed by the match
+//! key. For `<` and `<=`, the match ordering is reversed so all directions use
+//! the same forward-only state machine. Each left partition owns its cursors,
+//! equality-group state, and current candidate, while the collected right
+//! batches are immutable and shared.
+//!
+//! This mode preserves probe-side parallelism when there are no equality keys
+//! or when equality keys have low cardinality or skew. It retains the complete
+//! right input in the memory pool and may scan it once per left partition, so a
+//! repartitioned streaming mode remains a useful future alternative for large
+//! right inputs.
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -35,27 +70,30 @@ use datafusion_common::{
     assert_eq_or_internal_err, internal_err, plan_err,
 };
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::Operator;
+use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::expressions::Column as PhysicalColumn;
 use datafusion_physical_expr::projection::ProjectionMapping;
 use datafusion_physical_expr::utils::collect_columns;
-use datafusion_physical_expr::{Partitioning, PhysicalSortExpr};
 use datafusion_physical_expr_common::physical_expr::{
     PhysicalExprRef, fmt_sql, is_volatile,
 };
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
-use futures::{StreamExt, stream};
+use futures::{StreamExt, TryStreamExt, future::poll_fn, stream};
 
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
-use crate::joins::utils::{JoinOn, build_join_schema};
+use crate::joins::utils::{JoinOn, OnceAsync, build_join_schema};
+use crate::memory::MemoryStream;
 use crate::metrics::{
-    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
-    MetricsSet, RecordOutput, Time,
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder,
+    MetricCategory, MetricsSet, RecordOutput, Time,
 };
+use crate::spill::get_record_batch_memory_size;
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
@@ -82,8 +120,8 @@ impl AsOfMatchExpr {
     }
 }
 
-/// A sort-merge ASOF join that emits exactly one row for every left row.
-#[derive(Debug, Clone)]
+/// A broadcast sort-merge ASOF join that emits one row for every left row.
+#[derive(Debug)]
 pub struct AsOfJoinExec {
     left: Arc<dyn ExecutionPlan>,
     right: Arc<dyn ExecutionPlan>,
@@ -94,6 +132,7 @@ pub struct AsOfJoinExec {
     metrics: ExecutionPlanMetricsSet,
     left_ordering: LexOrdering,
     right_ordering: LexOrdering,
+    right_fut: OnceAsync<BroadcastRightInput>,
     cache: Arc<PlanProperties>,
 }
 
@@ -216,7 +255,7 @@ impl AsOfJoinExec {
                 "ASOF right ordering must not be empty"
             )
         })?;
-        let cache = Arc::new(Self::compute_properties(&left, &schema, on.is_empty())?);
+        let cache = Arc::new(Self::compute_properties(&left, &schema)?);
 
         Ok(Self {
             left,
@@ -228,6 +267,7 @@ impl AsOfJoinExec {
             metrics: ExecutionPlanMetricsSet::new(),
             left_ordering,
             right_ordering,
+            right_fut: Default::default(),
             cache,
         })
     }
@@ -235,7 +275,6 @@ impl AsOfJoinExec {
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
         schema: &SchemaRef,
-        single_partition: bool,
     ) -> Result<PlanProperties> {
         let left_schema = left.schema();
         let mapping = ProjectionMapping::try_new(
@@ -254,12 +293,9 @@ impl AsOfJoinExec {
         )?;
         let input_eq_properties = left.equivalence_properties();
         let eq_properties = input_eq_properties.project(&mapping, Arc::clone(schema));
-        let output_partitioning = if single_partition {
-            Partitioning::UnknownPartitioning(1)
-        } else {
-            left.output_partitioning()
-                .project(&mapping, input_eq_properties)
-        };
+        let output_partitioning = left
+            .output_partitioning()
+            .project(&mapping, input_eq_properties);
         Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
@@ -364,22 +400,10 @@ impl ExecutionPlan for AsOfJoinExec {
     }
 
     fn input_distribution_requirements(&self) -> InputDistributionRequirements {
-        if self.on.is_empty() {
-            InputDistributionRequirements::new(vec![
-                Distribution::SinglePartition,
-                Distribution::SinglePartition,
-            ])
-        } else {
-            let (left, right) = self
-                .on
-                .iter()
-                .map(|(left, right)| (Arc::clone(left), Arc::clone(right)))
-                .unzip();
-            InputDistributionRequirements::co_partitioned(vec![
-                Distribution::KeyPartitioned(left),
-                Distribution::KeyPartitioned(right),
-            ])
-        }
+        InputDistributionRequirements::new(vec![
+            Distribution::UnspecifiedDistribution,
+            Distribution::SinglePartition,
+        ])
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
@@ -428,8 +452,15 @@ impl ExecutionPlan for AsOfJoinExec {
         Ok(Arc::new(Self {
             left,
             right,
+            on: self.on.clone(),
+            match_condition: self.match_condition.clone(),
+            right_output_indices: self.right_output_indices.clone(),
+            schema: Arc::clone(&self.schema),
             metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&self)
+            left_ordering: self.left_ordering.clone(),
+            right_ordering: self.right_ordering.clone(),
+            right_fut: Default::default(),
+            cache: Arc::clone(&self.cache),
         }))
     }
 
@@ -438,41 +469,62 @@ impl ExecutionPlan for AsOfJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
         assert_eq_or_internal_err!(
-            left_partitions,
             right_partitions,
-            "AsOfJoinExec partition count mismatch: {left_partitions} != {right_partitions}"
+            1,
+            "AsOfJoinExec requires one right partition, found {right_partitions}"
         );
         let left_stream = self.left.execute(partition, Arc::clone(&context))?;
-        let right_stream = self.right.execute(partition, Arc::clone(&context))?;
-        let (left_keys, right_keys) = self.on.iter().cloned().unzip();
-        let state = AsOfJoinStreamState::new(
-            Arc::clone(&self.schema),
-            InputCursor::new(
-                left_stream,
-                left_keys,
-                Arc::clone(&self.match_condition.left),
-            ),
-            InputCursor::new(
+        let metrics = AsOfJoinMetrics::new(partition, &self.metrics);
+        let build_metrics = metrics.clone();
+        let right_fut = self.right_fut.try_once(|| {
+            let right_stream = self.right.execute(0, Arc::clone(&context))?;
+            let reservation =
+                MemoryConsumer::new("AsOfJoinInput").register(context.memory_pool());
+            Ok(collect_right_input(
                 right_stream,
-                right_keys,
-                Arc::clone(&self.match_condition.right),
-            ),
-            self.match_condition.op,
-            self.right_output_indices.clone(),
-            context.session_config().batch_size(),
-            AsOfJoinMetrics::new(partition, &self.metrics),
-        );
-        let stream = stream::try_unfold(state, |mut state| async move {
-            match state.next_batch().await? {
-                Some(batch) => Ok(Some((batch, state))),
-                None => Ok(None),
-            }
-        });
+                reservation,
+                build_metrics,
+            ))
+        })?;
+        let (left_keys, right_keys) = self.on.iter().cloned().unzip();
+        let output_schema = Arc::clone(&self.schema);
+        let stream_schema = Arc::clone(&output_schema);
+        let left_match = Arc::clone(&self.match_condition.left);
+        let right_match = Arc::clone(&self.match_condition.right);
+        let match_op = self.match_condition.op;
+        let right_output_indices = self.right_output_indices.clone();
+        let batch_size = context.session_config().batch_size();
+        let stream = stream::once(async move {
+            let mut right_fut = right_fut;
+            let right_input = poll_fn(|cx| right_fut.get_shared(cx)).await?;
+            let right_stream = right_input.stream()?;
+            let state = AsOfJoinStreamState::new(
+                Arc::clone(&stream_schema),
+                InputCursor::new(left_stream, left_keys, left_match),
+                InputCursor::new(right_stream, right_keys, right_match),
+                match_op,
+                right_output_indices,
+                batch_size,
+                metrics,
+            );
+            let stream = stream::try_unfold(
+                (state, right_input),
+                |(mut state, right_input)| async {
+                    match state.next_batch().await? {
+                        Some(batch) => Ok(Some((batch, (state, right_input)))),
+                        None => Ok(None),
+                    }
+                },
+            );
+            Ok::<SendableRecordBatchStream, datafusion_common::DataFusionError>(Box::pin(
+                RecordBatchStreamAdapter::new(stream_schema, stream),
+            ))
+        })
+        .try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(
-            Arc::clone(&self.schema),
+            output_schema,
             stream,
         )))
     }
@@ -533,6 +585,190 @@ impl ExecutionPlan for AsOfJoinExec {
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         Ok(FilterPushdownPropagation::if_any(child_pushdown_result))
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        let left = ctx.encode_child(self.left())?;
+        let right = ctx.encode_child(self.right())?;
+        let on = self
+            .on()
+            .iter()
+            .map(|(left, right)| {
+                Ok(protobuf::JoinOn {
+                    left: Some(ctx.encode_expr(left)?),
+                    right: Some(ctx.encode_expr(right)?),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let match_operator = match self.match_condition().op {
+            Operator::Lt => protobuf::AsOfMatchOperator::Lt,
+            Operator::LtEq => protobuf::AsOfMatchOperator::LtEq,
+            Operator::Gt => protobuf::AsOfMatchOperator::Gt,
+            Operator::GtEq => protobuf::AsOfMatchOperator::GtEq,
+            op => {
+                return internal_err!(
+                    "AsOfJoinExec cannot serialize unsupported match operator {op}"
+                );
+            }
+        };
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::AsOfJoin(Box::new(
+                    protobuf::AsOfJoinExecNode {
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
+                        on,
+                        left_match_expr: Some(
+                            ctx.encode_expr(&self.match_condition().left)?,
+                        ),
+                        right_match_expr: Some(
+                            ctx.encode_expr(&self.match_condition().right)?,
+                        ),
+                        match_operator: match_operator.into(),
+                        right_output_indices: self
+                            .right_output_indices()
+                            .iter()
+                            .map(|index| *index as u32)
+                            .collect(),
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl AsOfJoinExec {
+    /// Reconstruct an [`AsOfJoinExec`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let asof_join = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::AsOfJoin,
+            "AsOfJoinExec",
+        );
+        let left =
+            ctx.decode_required_child(asof_join.left.as_deref(), "AsOfJoinExec", "left")?;
+        let right = ctx.decode_required_child(
+            asof_join.right.as_deref(),
+            "AsOfJoinExec",
+            "right",
+        )?;
+        let left_schema = left.schema();
+        let right_schema = right.schema();
+        let on = asof_join
+            .on
+            .iter()
+            .map(|pair| {
+                let left = ctx.decode_required_expr(
+                    pair.left.as_ref(),
+                    left_schema.as_ref(),
+                    "AsOfJoinExec",
+                    "on.left",
+                )?;
+                let right = ctx.decode_required_expr(
+                    pair.right.as_ref(),
+                    right_schema.as_ref(),
+                    "AsOfJoinExec",
+                    "on.right",
+                )?;
+                Ok((left, right))
+            })
+            .collect::<Result<_>>()?;
+        let left_match = ctx.decode_required_expr(
+            asof_join.left_match_expr.as_ref(),
+            left_schema.as_ref(),
+            "AsOfJoinExec",
+            "left_match_expr",
+        )?;
+        let right_match = ctx.decode_required_expr(
+            asof_join.right_match_expr.as_ref(),
+            right_schema.as_ref(),
+            "AsOfJoinExec",
+            "right_match_expr",
+        )?;
+        let match_operator = protobuf::AsOfMatchOperator::try_from(
+            asof_join.match_operator,
+        )
+        .map_err(|_| {
+            datafusion_common::internal_datafusion_err!(
+                "AsOfJoinExec: unknown AsOfMatchOperator {}",
+                asof_join.match_operator
+            )
+        })?;
+        let op = match match_operator {
+            protobuf::AsOfMatchOperator::Lt => Operator::Lt,
+            protobuf::AsOfMatchOperator::LtEq => Operator::LtEq,
+            protobuf::AsOfMatchOperator::Gt => Operator::Gt,
+            protobuf::AsOfMatchOperator::GtEq => Operator::GtEq,
+            protobuf::AsOfMatchOperator::Unspecified => {
+                return internal_err!("AsOfJoinExec match operator must be specified");
+            }
+        };
+
+        Ok(Arc::new(Self::try_new(
+            left,
+            right,
+            on,
+            AsOfMatchExpr::new(left_match, op, right_match),
+            asof_join
+                .right_output_indices
+                .iter()
+                .map(|index| *index as usize)
+                .collect(),
+        )?))
+    }
+}
+
+struct BroadcastRightInput {
+    schema: SchemaRef,
+    batches: Vec<RecordBatch>,
+    _reservation: MemoryReservation,
+}
+
+impl BroadcastRightInput {
+    fn stream(&self) -> Result<SendableRecordBatchStream> {
+        Ok(Box::pin(MemoryStream::try_new(
+            self.batches.clone(),
+            Arc::clone(&self.schema),
+            None,
+        )?))
+    }
+}
+
+async fn collect_right_input(
+    input: SendableRecordBatchStream,
+    reservation: MemoryReservation,
+    metrics: AsOfJoinMetrics,
+) -> Result<BroadcastRightInput> {
+    let schema = input.schema();
+    let batches = input
+        .try_fold(Vec::new(), |mut batches, batch| {
+            let batch_size = get_record_batch_memory_size(&batch);
+            futures::future::ready(reservation.try_grow(batch_size).map(|_| {
+                metrics.build_mem_used.add(batch_size);
+                metrics.build_input_batches.add(1);
+                metrics.build_input_rows.add(batch.num_rows());
+                batches.push(batch);
+                batches
+            }))
+        })
+        .await?;
+    Ok(BroadcastRightInput {
+        schema,
+        batches,
+        _reservation: reservation,
+    })
 }
 
 #[derive(Clone)]
@@ -632,10 +868,14 @@ impl InputCursor {
     }
 }
 
+#[derive(Clone)]
 struct AsOfJoinMetrics {
     baseline: BaselineMetrics,
     matched_rows: Count,
     unmatched_left_rows: Count,
+    build_input_batches: Count,
+    build_input_rows: Count,
+    build_mem_used: Gauge,
 }
 
 impl AsOfJoinMetrics {
@@ -648,6 +888,14 @@ impl AsOfJoinMetrics {
             unmatched_left_rows: MetricBuilder::new(metrics)
                 .with_category(MetricCategory::Rows)
                 .counter("unmatched_left_rows", partition),
+            build_input_batches: MetricBuilder::new(metrics)
+                .with_category(MetricCategory::Rows)
+                .counter("build_input_batches", partition),
+            build_input_rows: MetricBuilder::new(metrics)
+                .with_category(MetricCategory::Rows)
+                .counter("build_input_rows", partition),
+            build_mem_used: MetricBuilder::new(metrics)
+                .peak_memory_usage("build_mem_used", partition),
         }
     }
 }
@@ -958,8 +1206,8 @@ fn is_eligible(op: Operator, left: &ScalarValue, right: &ScalarValue) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::collect;
     use crate::test::TestMemoryExec;
+    use crate::{collect, collect_partitioned};
     use arrow::array::{
         DictionaryArray, Int32Array, Int64Array, StringArray, StringDictionaryBuilder,
     };
@@ -1201,6 +1449,102 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn broadcasts_right_input_to_all_left_partitions() -> Result<()> {
+        let left_schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("ts", DataType::Int64, false),
+            Field::new("id", DataType::Int32, false),
+        ]));
+        let left = TestMemoryExec::try_new_exec(
+            &[
+                vec![make_batch(
+                    &left_schema,
+                    vec![Some("A"), Some("A")],
+                    vec![Some(1), Some(4)],
+                    vec![0, 1],
+                )?],
+                vec![make_batch(
+                    &left_schema,
+                    vec![Some("A"), Some("A")],
+                    vec![Some(2), Some(5)],
+                    vec![2, 3],
+                )?],
+            ],
+            Arc::clone(&left_schema),
+            None,
+        )?;
+        let right_schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("ts", DataType::Int64, false),
+            Field::new("price", DataType::Int32, false),
+        ]));
+        let right = TestMemoryExec::try_new_exec(
+            &[vec![
+                make_batch(&right_schema, vec![Some("A")], vec![Some(1)], vec![10])?,
+                make_batch(&right_schema, vec![Some("A")], vec![Some(3)], vec![30])?,
+            ]],
+            Arc::clone(&right_schema),
+            None,
+        )?;
+        let exec = Arc::new(AsOfJoinExec::try_new(
+            left,
+            right,
+            vec![],
+            AsOfMatchExpr::new(
+                Arc::new(PhysicalColumn::new("ts", 1)),
+                Operator::GtEq,
+                Arc::new(PhysicalColumn::new("ts", 1)),
+            ),
+            vec![2],
+        )?);
+        assert_eq!(exec.properties().output_partitioning().partition_count(), 2);
+        assert!(matches!(
+            &exec.input_distribution_requirements().into_per_child()[..],
+            [
+                Distribution::UnspecifiedDistribution,
+                Distribution::SinglePartition
+            ]
+        ));
+
+        let partitions = collect_partitioned(
+            Arc::clone(&exec) as Arc<dyn ExecutionPlan>,
+            Arc::new(TaskContext::default()),
+        )
+        .await?;
+        assert_eq!(partitions.len(), 2);
+        for batches in partitions {
+            let prices = batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(3)
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .unwrap()
+                        .iter()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(prices, vec![Some(10), Some(30)]);
+        }
+
+        let metrics = exec.metrics().expect("ASOF metrics must be present");
+        assert_eq!(
+            metrics
+                .sum_by_name("build_input_batches")
+                .map(|value| value.as_usize()),
+            Some(2)
+        );
+        assert_eq!(
+            metrics
+                .sum_by_name("build_input_rows")
+                .map(|value| value.as_usize()),
+            Some(2)
+        );
+        assert_eq!(metrics.output_rows(), Some(4));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn preserves_dictionary_outputs_across_large_flush() -> Result<()> {
         let dictionary_type =
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
@@ -1333,8 +1677,8 @@ mod tests {
         assert!(matches!(
             &exec.input_distribution_requirements().into_per_child()[..],
             [
-                Distribution::KeyPartitioned(_),
-                Distribution::KeyPartitioned(_)
+                Distribution::UnspecifiedDistribution,
+                Distribution::SinglePartition
             ]
         ));
         for ordering in exec.required_input_ordering() {
@@ -1367,10 +1711,16 @@ mod tests {
             ),
             vec![2],
         )?);
-        assert_eq!(no_keys.output_partitioning().partition_count(), 1);
+        assert_eq!(
+            no_keys.output_partitioning().partition_count(),
+            exec.left().output_partitioning().partition_count()
+        );
         assert!(matches!(
             &no_keys.input_distribution_requirements().into_per_child()[..],
-            [Distribution::SinglePartition, Distribution::SinglePartition]
+            [
+                Distribution::UnspecifiedDistribution,
+                Distribution::SinglePartition
+            ]
         ));
         for ordering in no_keys.required_input_ordering() {
             let requirement = ordering.expect("ASOF ordering is required").into_single();
