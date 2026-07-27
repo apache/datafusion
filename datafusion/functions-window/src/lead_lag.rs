@@ -270,7 +270,12 @@ impl WindowUDFImpl for WindowShift {
 
         let main_expr =
             parse_expr(expr_args.input_exprs(), expr_args.input_fields()).unwrap();
-        let main_expr_nullable = expr_args.input_fields().first().unwrap().data_type().is_null();
+        let main_expr_nullable = expr_args
+            .input_fields()
+            .first()
+            .unwrap()
+            .data_type()
+            .is_null();
         let main_expr_type = input_fields[0].data_type();
         result.push(main_expr);
 
@@ -287,7 +292,7 @@ impl WindowUDFImpl for WindowShift {
                     result.push(Arc::clone(&input_exprs[2]));
                 } else {
                     result.push(Arc::new(CastExpr::new(
-                        input_exprs[2].clone(),
+                        Arc::clone(&input_exprs[2]),
                         main_expr_type.to_owned(),
                         None,
                     )))
