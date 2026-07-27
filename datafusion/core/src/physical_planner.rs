@@ -94,8 +94,8 @@ use datafusion_expr::physical_planning_context::{
 use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{
     Analyze, BinaryExpr, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension,
-    FetchType, Filter, JoinConstraint, JoinType, Operator, RecursiveQuery, SkipType,
-    StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
+    FetchType, Filter, JoinType, Operator, RecursiveQuery, SkipType, StringifiedPlan,
+    WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{
     AggregateFunctionExpr, LoweredAggregate, LoweredAggregateBuilder,
@@ -1903,22 +1903,8 @@ impl DefaultPhysicalPlanner {
                         planning_ctx,
                     )?,
                 );
-                let omitted_right = if join.join_constraint == JoinConstraint::Using {
-                    join.on
-                        .iter()
-                        .map(|(_, right)| {
-                            let column = right.get_as_join_column().ok_or_else(|| {
-                                internal_datafusion_err!("ASOF USING key is not a column")
-                            })?;
-                            join.right.schema().index_of_column(column)
-                        })
-                        .collect::<Result<HashSet<_>>>()?
-                } else {
-                    HashSet::new()
-                };
-                let right_output_indices = (0..join.right.schema().fields().len())
-                    .filter(|index| !omitted_right.contains(index))
-                    .collect();
+                let right_output_indices =
+                    (0..join.right.schema().fields().len()).collect();
                 Arc::new(AsOfJoinExec::try_new(
                     physical_left,
                     physical_right,

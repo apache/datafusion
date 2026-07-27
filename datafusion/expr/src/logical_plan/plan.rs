@@ -240,9 +240,6 @@ pub enum LogicalPlan {
     /// Join two logical plans on one or more join columns.
     /// This is used to implement SQL `JOIN`
     Join(Join),
-    /// Match each left row with at most one ordered row from the right input.
-    /// This is used to implement SQL `ASOF JOIN`.
-    AsOfJoin(AsOfJoin),
     /// Repartitions the input based on a partitioning scheme. This is
     /// used to add parallelism and is sometimes referred to as an
     /// "exchange" operator in other systems
@@ -299,6 +296,9 @@ pub enum LogicalPlan {
     Unnest(Unnest),
     /// A variadic query (e.g. "Recursive CTEs")
     RecursiveQuery(RecursiveQuery),
+    /// Match each left row with at most one ordered row from the right input.
+    /// This is used to implement SQL `ASOF JOIN`.
+    AsOfJoin(AsOfJoin),
 }
 
 impl Default for LogicalPlan {
@@ -4455,8 +4455,7 @@ impl AsOfJoin {
             return plan_err!("ASOF USING keys must be columns");
         }
 
-        let schema =
-            build_asof_join_schema(left.schema(), right.schema(), &on, join_constraint)?;
+        let schema = build_asof_join_schema(left.schema(), right.schema())?;
         Ok(Self {
             left,
             right,
@@ -6864,6 +6863,32 @@ mod tests {
             assert_eq!(join.null_equality, NullEquality::NullEqualsNull);
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_asof_using_preserves_qualified_keys() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("ts", DataType::Int64, false),
+        ]);
+        let left = Arc::new(table_scan(Some("t1"), &schema, None)?.build()?);
+        let right = Arc::new(table_scan(Some("t2"), &schema, None)?.build()?);
+        let join = AsOfJoin::try_new(
+            left,
+            right,
+            vec![(col("t1.id"), col("t2.id"))],
+            AsOfMatch::new(col("t1.ts"), Operator::GtEq, col("t2.ts")),
+            JoinConstraint::Using,
+        )?;
+
+        assert_eq!(join.schema.fields().len(), 4);
+        assert_eq!(
+            join.schema
+                .index_of_column(&Column::from_qualified_name("t2.id"))?,
+            2
+        );
+        assert!(join.schema.field(2).is_nullable());
         Ok(())
     }
 
