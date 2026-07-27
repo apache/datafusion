@@ -584,7 +584,7 @@ async fn asof_join_rejects_unbounded_inputs_during_physical_planning() -> Result
 }
 
 #[tokio::test]
-async fn asof_join_using_merges_key_and_unparser_round_trips() -> Result<()> {
+async fn asof_join_using_preserves_key_access_and_unparser_round_trips() -> Result<()> {
     let ctx = SessionContext::new();
     register_asof_test_tables(&ctx)?;
     let df = ctx
@@ -599,13 +599,39 @@ async fn asof_join_using_merges_key_and_unparser_round_trips() -> Result<()> {
             .iter()
             .map(|field| field.name())
             .collect::<Vec<_>>(),
-        vec!["symbol", "ts", "trade_id", "ts", "price"]
+        vec!["ts", "trade_id", "symbol", "ts", "price"]
     );
     let sql = plan_to_sql(df.logical_plan())?.to_string();
     assert!(sql.contains("ASOF JOIN"));
     assert!(sql.contains("MATCH_CONDITION"));
     assert!(sql.contains("USING(symbol)"), "unexpected SQL: {sql}");
     ctx.sql(&sql).await?;
+
+    let batches = ctx
+        .sql(
+            "SELECT t.trade_id, t.symbol AS left_symbol, p.symbol AS right_symbol \
+             FROM trades t ASOF JOIN prices p \
+             MATCH_CONDITION (t.ts >= p.ts) USING (symbol) \
+             ORDER BY t.trade_id",
+        )
+        .await?
+        .collect()
+        .await?;
+    assert_batches_eq!(
+        [
+            "+----------+-------------+--------------+",
+            "| trade_id | left_symbol | right_symbol |",
+            "+----------+-------------+--------------+",
+            "| 1        | A           |              |",
+            "| 2        | A           | A            |",
+            "| 3        | A           | A            |",
+            "| 4        | B           | B            |",
+            "| 5        | B           | B            |",
+            "| 6        |             |              |",
+            "+----------+-------------+--------------+",
+        ],
+        &batches
+    );
     Ok(())
 }
 

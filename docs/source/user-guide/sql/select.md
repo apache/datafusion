@@ -404,8 +404,14 @@ expression from the right input using one of the following operators:
 
 An optional `ON` clause containing equality conditions combined with `AND`, or
 a `USING` clause, divides rows into equality groups before the ordered match.
-Without equality keys, all rows belong to one group and DataFusion executes the
-join in a single partition.
+An unqualified `USING` key appears once in wildcard output, while both qualified
+input keys remain addressable.
+
+Without equality keys, all rows belong to one group. The initial execution
+strategy collects one ordered right partition and shares it across every left
+partition, so output partitioning follows the left input. The complete right
+input must fit in memory and may be scanned once per left partition; spilling
+and repartitioned ASOF execution are not yet supported.
 
 A `NULL` in either ordered expression or in any equality key does not match.
 Both inputs must be bounded. If multiple right rows have the same equality keys
