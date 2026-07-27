@@ -988,6 +988,15 @@ mod tests {
         MetricBuilder::new(&metrics).output_rows(0);
         MetricBuilder::new(&metrics).counter("custom_counter", 0);
 
+        assert!(
+            metrics
+                .clone_inner()
+                .filter_by_names(&[])
+                .iter()
+                .next()
+                .is_none()
+        );
+
         let names = vec!["output_rows".to_string()];
         let filtered = metrics.clone_inner().filter_by_names(&names);
 

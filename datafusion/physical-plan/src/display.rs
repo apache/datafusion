@@ -1751,6 +1751,40 @@ mod tests {
             assert_eq!(root["Actual Rows"].as_u64(), Some(42));
             assert_eq!(root["Actual Total Time"].as_f64(), Some(5.0));
             assert_eq!(root["Extras"]["output_batches"].as_u64(), Some(7));
+
+            let metric_names = vec!["output_rows".to_string()];
+            for rendered in [
+                DisplayableExecutionPlan::with_metrics(plan.as_ref())
+                    .set_metric_names(metric_names.clone())
+                    .indent(false)
+                    .to_string(),
+                DisplayableExecutionPlan::with_full_metrics(plan.as_ref())
+                    .set_metric_names(metric_names.clone())
+                    .indent(false)
+                    .to_string(),
+                DisplayableExecutionPlan::with_metrics(plan.as_ref())
+                    .set_metric_names(metric_names.clone())
+                    .graphviz()
+                    .to_string(),
+                DisplayableExecutionPlan::with_full_metrics(plan.as_ref())
+                    .set_metric_names(metric_names.clone())
+                    .graphviz()
+                    .to_string(),
+            ] {
+                assert!(rendered.contains("output_rows"));
+                assert!(!rendered.contains("elapsed_compute"));
+                assert!(!rendered.contains("output_batches"));
+            }
+
+            let out = DisplayableExecutionPlan::with_metrics(plan.as_ref())
+                .set_metric_names(metric_names)
+                .pgjson(false)
+                .to_string();
+            let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+            let root = value[0].get("Plan").expect("plan");
+            assert_eq!(root["Actual Rows"].as_u64(), Some(42));
+            assert!(root.get("Actual Total Time").is_none());
+            assert!(root.get("Extras").is_none());
         }
 
         #[test]
