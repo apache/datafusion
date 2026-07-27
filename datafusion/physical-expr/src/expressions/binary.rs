@@ -5045,7 +5045,7 @@ mod tests {
         let result = as_boolean_array(&result_array).unwrap();
         assert!(result.value(0)); // "abc" ~ ^(?:a(?s:.*))$
         assert!(!result.value(1)); // "ab"  ~ ^(?:a\.)$
-        assert!(result.value(2)); // "x"   ~ ^(?:a(?s:.))$
+        assert!(result.value(2)); // "x"   ~ ^(?:(?s:.))$
     }
 
     #[test]
