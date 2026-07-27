@@ -29,7 +29,7 @@ use arrow::array::{
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::{SortOptions, cast, filter};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
-use arrow::row::{Row, RowConverter, Rows, SortField};
+use arrow::row::{OwnedRow, Row, RowConverter, Rows, SortField};
 
 use datafusion_common::cast::as_list_array;
 use datafusion_common::hash_utils::{RandomState, create_hashes};
@@ -827,9 +827,16 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
 struct DistinctState {
     /// Converts Arrow arrays to/from the comparable row format.
     converter: RowConverter,
-    /// Contiguous buffer of one encoded row per distinct value ever inserted.
-    /// Dead slots (where `counts[i] == 0`) may exist after `retract_batch`.
-    group_values: Rows,
+    /// One owned encoded row per live distinct value, indexed by group index.
+    /// Compacted via swap-remove on eviction so there are never dead slots.
+    group_rows: Vec<OwnedRow>,
+    /// Live refcount per group index. `counts[i]` is how many times the value
+    /// at `group_rows[i]` is currently present in the window frame.
+    counts: Vec<u64>,
+    /// Hash of the encoded row at group index `i`, kept in sync with
+    /// `group_rows` and `counts`. Needed to patch the map on swap-remove
+    /// eviction without re-encoding the moved row.
+    row_hashes: Vec<u64>,
     /// Temporary buffer for encoding an incoming batch; reused across calls.
     rows_buffer: Rows,
 }
@@ -838,9 +845,6 @@ struct DistinctState {
 pub struct DistinctArrayAggAccumulator {
     /// Lazily allocated on the first `update_batch`; `None` until then.
     state: Option<DistinctState>,
-    /// Live refcount per group index. `counts[i]` is how many times the value
-    /// at `state.group_values.row(i)` is currently present in the window frame.
-    counts: Vec<u64>,
     /// Hash table storing `(hash, group_index)`. Only contains live entries
     /// (those whose count is > 0). Evicted on `retract_batch` when count
     /// drops to zero.
@@ -864,7 +868,6 @@ impl DistinctArrayAggAccumulator {
     ) -> Result<Self> {
         Ok(Self {
             state: None,
-            counts: Vec::new(),
             map: HashTable::new(),
             map_size: 0,
             hashes_buffer: Vec::new(),
@@ -884,11 +887,12 @@ impl DistinctArrayAggAccumulator {
                 None => SortField::new(data_type.clone()),
             };
             let converter = RowConverter::new(vec![sort_field])?;
-            let group_values = converter.empty_rows(0, 0);
             let rows_buffer = converter.empty_rows(0, 0);
             self.state = Some(DistinctState {
                 converter,
-                group_values,
+                group_rows: Vec::new(),
+                counts: Vec::new(),
+                row_hashes: Vec::new(),
                 rows_buffer,
             });
         }
@@ -936,8 +940,10 @@ impl Accumulator for DistinctArrayAggAccumulator {
         // Encode the entire incoming batch into rows_buffer in one pass.
         let DistinctState {
             converter,
+            group_rows,
+            counts,
+            row_hashes,
             rows_buffer,
-            group_values,
         } = self.state.as_mut().unwrap();
         rows_buffer.clear();
         converter.append(rows_buffer, std::slice::from_ref(col))?;
@@ -954,19 +960,19 @@ impl Accumulator for DistinctArrayAggAccumulator {
         for (row_idx, &hash) in self.hashes_buffer.iter().enumerate() {
             let row = rows_buffer.row(row_idx);
             let entry = self.map.find_mut(hash, |&(h, group_idx)| {
-                h == hash && group_values.row(group_idx) == row
+                h == hash && group_rows[group_idx].row() == row
             });
             match entry {
                 Some((_, group_idx)) => {
                     // Already known: just increment the live refcount.
-                    self.counts[*group_idx] += 1;
+                    counts[*group_idx] += 1;
                 }
                 None => {
-                    // New distinct value: append to the contiguous buffer and
-                    // record it in the map.
-                    let new_group_idx = group_values.num_rows();
-                    group_values.push(row);
-                    self.counts.push(1);
+                    // New distinct value: own the encoded row, record it.
+                    let new_group_idx = group_rows.len();
+                    group_rows.push(row.owned());
+                    counts.push(1);
+                    row_hashes.push(hash);
                     self.map.insert_accounted(
                         (hash, new_group_idx),
                         |&(h, _)| h,
@@ -999,8 +1005,8 @@ impl Accumulator for DistinctArrayAggAccumulator {
         }
 
         let DistinctState {
-            group_values,
             converter,
+            group_rows,
             ..
         } = self
             .state
@@ -1015,12 +1021,12 @@ impl Accumulator for DistinctArrayAggAccumulator {
         // into the row bytes, so lexicographic sort gives the correct order.
         if self.sort_options.is_some() {
             live_indices
-                .sort_unstable_by(|&a, &b| group_values.row(a).cmp(&group_values.row(b)));
+                .sort_unstable_by(|&a, &b| group_rows[a].row().cmp(&group_rows[b].row()));
         }
 
         // Decode the selected rows back into an Arrow array.
         let rows: Vec<Row<'_>> =
-            live_indices.iter().map(|&i| group_values.row(i)).collect();
+            live_indices.iter().map(|&i| group_rows[i].row()).collect();
         let arrays = converter.convert_rows(rows)?;
 
         // `convert_rows` always returns the physical (non-dictionary) type.
@@ -1076,8 +1082,10 @@ impl Accumulator for DistinctArrayAggAccumulator {
 
         let DistinctState {
             converter,
+            group_rows,
+            counts,
+            row_hashes,
             rows_buffer,
-            group_values,
         } = self
             .state
             .as_mut()
@@ -1097,7 +1105,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
         for (row_idx, &hash) in self.hashes_buffer.iter().enumerate() {
             let row = rows_buffer.row(row_idx);
             match self.map.find_entry(hash, |&(h, group_idx)| {
-                h == hash && group_values.row(group_idx) == row
+                h == hash && group_rows[group_idx].row() == row
             }) {
                 Err(_) => {
                     return internal_err!(
@@ -1106,10 +1114,32 @@ impl Accumulator for DistinctArrayAggAccumulator {
                     );
                 }
                 Ok(occupied) => {
-                    let (_, group_idx) = *occupied.get();
-                    self.counts[group_idx] -= 1;
-                    if self.counts[group_idx] == 0 {
+                    let (_, dead_idx) = *occupied.get();
+                    counts[dead_idx] -= 1;
+                    if counts[dead_idx] == 0 {
                         occupied.remove();
+                        // Compact via swap-remove: move the last slot into the
+                        // dead slot so group_rows / counts / row_hashes stay
+                        // dense with no dead entries.
+                        let last_idx = group_rows.len() - 1;
+                        if dead_idx != last_idx {
+                            // Patch the map entry that points to last_idx so
+                            // it points to dead_idx instead.
+                            let last_hash = row_hashes[last_idx];
+                            self.map
+                                .find_mut(last_hash, |&(_, idx)| idx == last_idx)
+                                .ok_or_else(|| {
+                                    datafusion_common::internal_datafusion_err!(
+                                        "DistinctArrayAggAccumulator: map is missing \
+                                         group index {last_idx} during swap-remove \
+                                         compaction"
+                                    )
+                                })?
+                                .1 = dead_idx;
+                        }
+                        group_rows.swap_remove(dead_idx);
+                        counts.swap_remove(dead_idx);
+                        row_hashes.swap_remove(dead_idx);
                     }
                 }
             }
@@ -1127,11 +1157,18 @@ impl Accumulator for DistinctArrayAggAccumulator {
                 .state
                 .as_ref()
                 .map(|s| {
-                    s.group_values.size() + s.rows_buffer.size() + s.converter.size()
+                    s.group_rows
+                        .iter()
+                        .map(|r| r.row().data().len())
+                        .sum::<usize>()
+                        + s.group_rows.capacity() * size_of::<OwnedRow>()
+                        + s.counts.capacity() * size_of::<u64>()
+                        + s.row_hashes.capacity() * size_of::<u64>()
+                        + s.rows_buffer.size()
+                        + s.converter.size()
                 })
                 .unwrap_or(0)
             + self.map_size
-            + self.counts.capacity() * size_of::<u64>()
             + self.hashes_buffer.capacity() * size_of::<u64>()
             + self.datatype.size()
             - size_of_val(&self.datatype)
@@ -1706,7 +1743,7 @@ mod tests {
         acc2.update_batch(&[string_list_data([vec!["e", "f", "g"]])])?;
         acc1 = merge(acc1, acc2)?;
 
-        assert_eq!(acc1.size(), 2268);
+        assert_eq!(acc1.size(), 2274);
 
         Ok(())
     }
@@ -2903,6 +2940,54 @@ mod tests {
         values.sort_unstable();
 
         assert_eq!(values, vec![100i32, 200, 300, 400]);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_retract_memory_is_bounded() -> Result<()> {
+        use arrow::array::Int64Array;
+
+        // Emulates a sliding window where each value enters and immediately
+        // leaves. Only CARDINALITY distinct values are ever live at once;
+        // memory must not grow with the number of rows processed.
+        const CARDINALITY: i64 = 10;
+        const WARMUP_ROWS: i64 = 1_000;
+        const EXTRA_ROWS: i64 = 20_000;
+
+        let mut acc =
+            DistinctArrayAggAccumulator::try_new(&DataType::Int64, None, false)?;
+
+        let slide = |acc: &mut DistinctArrayAggAccumulator, rows: i64| -> Result<()> {
+            for i in 0..rows {
+                let value: ArrayRef = Arc::new(Int64Array::from(vec![i % CARDINALITY]));
+                acc.update_batch(std::slice::from_ref(&value))?;
+                acc.retract_batch(std::slice::from_ref(&value))?;
+            }
+            Ok(())
+        };
+
+        // Let every buffer reach its steady state before taking a baseline.
+        slide(&mut acc, WARMUP_ROWS)?;
+        let baseline = acc.size();
+
+        slide(&mut acc, EXTRA_ROWS)?;
+        let grown = acc.size();
+
+        assert!(
+            grown <= 2 * baseline,
+            "size() must not grow with the number of retracted rows: \
+             {baseline} bytes after {WARMUP_ROWS} rows, \
+             {grown} bytes after {} rows",
+            WARMUP_ROWS + EXTRA_ROWS
+        );
+
+        // Everything was retracted so evaluate must return null.
+        let result = acc.evaluate()?;
+        assert!(
+            matches!(&result, ScalarValue::List(arr) if arr.is_null(0)),
+            "expected null list after retracting every row, got {result:?}"
+        );
+
         Ok(())
     }
 }
