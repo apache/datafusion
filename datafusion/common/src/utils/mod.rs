@@ -19,6 +19,7 @@
 
 pub(crate) mod aggregate;
 pub mod expr;
+pub mod hex;
 pub mod memory;
 pub mod proxy;
 pub mod string_utils;
