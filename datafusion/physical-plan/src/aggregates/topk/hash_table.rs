@@ -141,7 +141,6 @@ where
     owned: PrimitiveArray<VAL>,
     map: TopKHashTable<Option<VAL::Native>>,
     rnd: RandomState,
-    kt: DataType,
 }
 
 impl StringHashTable {
@@ -200,13 +199,12 @@ where
 {
     pub fn new(limit: usize, kt: DataType) -> Self {
         let owned = PrimitiveArray::<VAL>::builder(0)
-            .with_data_type(kt.clone())
+            .with_data_type(kt)
             .finish();
         Self {
             owned,
             map: TopKHashTable::new(limit, limit * 10),
             rnd: RandomState::default(),
-            kt,
         }
     }
 }
@@ -233,8 +231,8 @@ where
 
     fn take_all(&mut self, indexes: Vec<usize>) -> ArrayRef {
         let ids = self.map.take_all(indexes);
-        let mut builder: PrimitiveBuilder<VAL> =
-            PrimitiveArray::builder(ids.len()).with_data_type(self.kt.clone());
+        let mut builder: PrimitiveBuilder<VAL> = PrimitiveArray::builder(ids.len())
+            .with_data_type(self.owned.data_type().clone());
         for id in ids.into_iter() {
             match id {
                 None => builder.append_null(),
