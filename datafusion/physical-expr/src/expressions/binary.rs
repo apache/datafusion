@@ -121,16 +121,29 @@ impl BinaryExpr {
 
     /// Wrapping on overflow breaks monotonicity (e.g. the sum of two
     /// ascending `UInt8` columns can wrap back to small values), so the
-    /// derived ordering is kept only when overflow is impossible.
+    /// derived ordering is kept only when overflow is impossible. `time ±
+    /// interval` wraps around the 24-hour clock even in checked mode, so it
+    /// never preserves ordering.
     fn arithmetic_sort_properties(
         &self,
         sort_properties: SortProperties,
+        l_range: &Interval,
+        r_range: &Interval,
         range: &Interval,
     ) -> SortProperties {
-        if self.fail_on_overflow
-            || sort_properties == SortProperties::Singleton
-            || !range.is_unbounded()
-        {
+        if sort_properties == SortProperties::Singleton {
+            return sort_properties;
+        }
+        let wraps_in_domain = match self.op {
+            Operator::Plus => {
+                is_time_plus_interval(&l_range.data_type(), &r_range.data_type())
+            }
+            Operator::Minus => {
+                is_time_minus_interval(&l_range.data_type(), &r_range.data_type())
+            }
+            _ => false,
+        };
+        if !wraps_in_domain && (self.fail_on_overflow || !range.is_unbounded()) {
             sort_properties
         } else {
             SortProperties::Unordered
@@ -781,8 +794,12 @@ impl PhysicalExpr for BinaryExpr {
             Operator::Plus => {
                 let range = l_range.add(r_range)?;
                 Ok(ExprProperties {
-                    sort_properties: self
-                        .arithmetic_sort_properties(l_order.add(&r_order), &range),
+                    sort_properties: self.arithmetic_sort_properties(
+                        l_order.add(&r_order),
+                        l_range,
+                        r_range,
+                        &range,
+                    ),
                     range,
                     preserves_lex_ordering: false,
                 })
@@ -790,8 +807,12 @@ impl PhysicalExpr for BinaryExpr {
             Operator::Minus => {
                 let range = l_range.sub(r_range)?;
                 Ok(ExprProperties {
-                    sort_properties: self
-                        .arithmetic_sort_properties(l_order.sub(&r_order), &range),
+                    sort_properties: self.arithmetic_sort_properties(
+                        l_order.sub(&r_order),
+                        l_range,
+                        r_range,
+                        &range,
+                    ),
                     range,
                     preserves_lex_ordering: false,
                 })
@@ -1325,6 +1346,67 @@ mod tests {
     use crate::planner::logical2physical;
     use arrow::array::BooleanArray;
     use datafusion_expr::col as logical_col;
+
+    #[test]
+    fn test_arithmetic_ordering_overflow() -> Result<()> {
+        let asc = SortProperties::Ordered(Default::default());
+        let ordered = |range: Interval| ExprProperties {
+            sort_properties: asc,
+            range,
+            preserves_lex_ordering: false,
+        };
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let a_plus_b =
+            BinaryExpr::new(col("a", &schema)?, Operator::Plus, col("b", &schema)?);
+        let unbounded = [
+            ordered(Interval::make_unbounded(&DataType::Int32)?),
+            ordered(Interval::make_unbounded(&DataType::Int32)?),
+        ];
+        let bounded = [
+            ordered(Interval::make(Some(0), Some(10))?),
+            ordered(Interval::make(Some(0), Some(10))?),
+        ];
+
+        // Unknown ranges: the sum may overflow and wrap, so it is unordered.
+        assert_eq!(
+            a_plus_b.get_properties(&unbounded)?.sort_properties,
+            SortProperties::Unordered
+        );
+        // Bounded ranges that cannot overflow keep the ordering, as does
+        // checked arithmetic, which errors instead of wrapping.
+        assert_eq!(a_plus_b.get_properties(&bounded)?.sort_properties, asc);
+        let checked = a_plus_b.with_fail_on_overflow(true);
+        assert_eq!(checked.get_properties(&unbounded)?.sort_properties, asc);
+
+        // `time + interval` wraps around the 24-hour clock even in checked
+        // mode, so it never preserves ordering.
+        let time = DataType::Time64(TimeUnit::Nanosecond);
+        let interval = DataType::Interval(IntervalUnit::MonthDayNano);
+        let schema = Schema::new(vec![
+            Field::new("t", time.clone(), false),
+            Field::new("i", interval.clone(), false),
+        ]);
+        let time_plus_interval =
+            BinaryExpr::new(col("t", &schema)?, Operator::Plus, col("i", &schema)?)
+                .with_fail_on_overflow(true);
+        let time_props = [
+            ordered(Interval::make_unbounded(&time)?),
+            ordered(Interval::make_unbounded(&interval)?),
+        ];
+        assert_eq!(
+            time_plus_interval
+                .get_properties(&time_props)?
+                .sort_properties,
+            SortProperties::Unordered
+        );
+
+        Ok(())
+    }
+
     /// Performs a binary operation, applying any type coercion necessary
     fn binary_op(
         left: Arc<dyn PhysicalExpr>,

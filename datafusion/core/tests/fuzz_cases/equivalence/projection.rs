@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::fuzz_cases::equivalence::utils::{
-    TestScalarUDF, apply_projection, create_random_schema,
-    generate_table_for_eq_properties, is_table_same_after_sort,
+    TestScalarUDF, apply_projection, contains_overflowable_arithmetic,
+    create_random_schema, generate_table_for_eq_properties, is_table_same_after_sort,
 };
 use arrow::compute::SortOptions;
 use datafusion_common::Result;
@@ -179,13 +179,22 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
                         let err_msg = format!(
                             "Error in test case requirement:{ordering:?}, expected: {expected:?}, eq_properties: {eq_properties}, projected_eq: {projected_eq}, projection_mapping: {projection_mapping:?}"
                         );
-                        // Check whether ordering_satisfy API result and
-                        // experimental result matches.
-                        assert_eq!(
-                            projected_eq.ordering_satisfy(ordering)?,
-                            expected,
-                            "{err_msg}"
-                        );
+                        let may_overflow = ordering.iter().any(|sort_expr| {
+                            projection_mapping.iter().any(|(source, targets)| {
+                                targets
+                                    .iter()
+                                    .any(|(target, _)| target.eq(&sort_expr.expr))
+                                    && contains_overflowable_arithmetic(source)
+                            })
+                        });
+                        if projected_eq.ordering_satisfy(ordering)? {
+                            assert!(expected, "{err_msg}");
+                        } else if !may_overflow {
+                            // A rejection is only conclusive without `+`/`-`:
+                            // the sample can be sorted even when possible
+                            // overflow makes the ordering underivable.
+                            assert!(!expected, "{err_msg}");
+                        }
                     }
                 }
             }
