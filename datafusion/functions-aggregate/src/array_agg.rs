@@ -817,13 +817,29 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
     }
 }
 
+/// Resources that are allocated lazily on the first `update_batch` call,
+/// once the concrete runtime Arrow type is known.
+///
+/// Grouping all three fields together makes the "either all present or all
+/// absent" invariant explicit in the type system, replacing the scattered
+/// `.expect()` calls that would otherwise be needed.
 #[derive(Debug)]
-pub struct DistinctArrayAggAccumulator {
+struct DistinctState {
+    /// Converts Arrow arrays to/from the comparable row format.
+    converter: RowConverter,
     /// Contiguous buffer of one encoded row per distinct value ever inserted.
     /// Dead slots (where `counts[i] == 0`) may exist after `retract_batch`.
-    group_values: Option<Rows>,
+    group_values: Rows,
+    /// Temporary buffer for encoding an incoming batch; reused across calls.
+    rows_buffer: Rows,
+}
+
+#[derive(Debug)]
+pub struct DistinctArrayAggAccumulator {
+    /// Lazily allocated on the first `update_batch`; `None` until then.
+    state: Option<DistinctState>,
     /// Live refcount per group index. `counts[i]` is how many times the value
-    /// at `group_values.row(i)` is currently present in the window frame.
+    /// at `state.group_values.row(i)` is currently present in the window frame.
     counts: Vec<u64>,
     /// Hash table storing `(hash, group_index)`. Only contains live entries
     /// (those whose count is > 0). Evicted on `retract_batch` when count
@@ -831,15 +847,10 @@ pub struct DistinctArrayAggAccumulator {
     map: HashTable<(u64, usize)>,
     /// Heap size of `map` in bytes, tracked for `size()` reporting.
     map_size: usize,
-    /// Temporary buffer for encoding an incoming batch; reused across calls.
-    rows_buffer: Option<Rows>,
     /// Reused buffer for batch hashes.
     hashes_buffer: Vec<u64>,
     /// Random state used by `create_hashes`.
     random_state: RandomState,
-    /// Lazily initialised converter — set on the first `update_batch` call
-    /// using the actual runtime column type.
-    converter: Option<RowConverter>,
     datatype: DataType,
     sort_options: Option<SortOptions>,
     ignore_nulls: bool,
@@ -852,32 +863,34 @@ impl DistinctArrayAggAccumulator {
         ignore_nulls: bool,
     ) -> Result<Self> {
         Ok(Self {
-            group_values: None,
+            state: None,
             counts: Vec::new(),
             map: HashTable::new(),
             map_size: 0,
-            rows_buffer: None,
             hashes_buffer: Vec::new(),
             random_state: RandomState::default(),
-            converter: None,
             datatype: datatype.clone(),
             sort_options,
             ignore_nulls,
         })
     }
 
-    /// Lazily initialises the `RowConverter`, `rows_buffer`, and `group_values`
-    /// on the first call, using the actual runtime column type.
-    fn ensure_converter(&mut self, data_type: &DataType) -> Result<()> {
-        if self.converter.is_none() {
+    /// Lazily initialises the `DistinctState` on the first call, using the
+    /// actual runtime column type.
+    fn ensure_state(&mut self, data_type: &DataType) -> Result<()> {
+        if self.state.is_none() {
             let sort_field = match self.sort_options {
                 Some(opts) => SortField::new_with_options(data_type.clone(), opts),
                 None => SortField::new(data_type.clone()),
             };
             let converter = RowConverter::new(vec![sort_field])?;
-            self.rows_buffer = Some(converter.empty_rows(0, 0));
-            self.group_values = Some(converter.empty_rows(0, 0));
-            self.converter = Some(converter);
+            let group_values = converter.empty_rows(0, 0);
+            let rows_buffer = converter.empty_rows(0, 0);
+            self.state = Some(DistinctState {
+                converter,
+                group_values,
+                rows_buffer,
+            });
         }
         Ok(())
     }
@@ -918,12 +931,14 @@ impl Accumulator for DistinctArrayAggAccumulator {
             return Ok(());
         }
 
-        self.ensure_converter(col.data_type())?;
+        self.ensure_state(col.data_type())?;
 
         // Encode the entire incoming batch into rows_buffer in one pass.
-        let converter = self.converter.as_ref().unwrap();
-        let rows_buffer = self.rows_buffer.as_mut().unwrap();
-        let group_values = self.group_values.as_mut().unwrap();
+        let DistinctState {
+            converter,
+            rows_buffer,
+            group_values,
+        } = self.state.as_mut().unwrap();
         rows_buffer.clear();
         converter.append(rows_buffer, std::slice::from_ref(col))?;
 
@@ -983,14 +998,11 @@ impl Accumulator for DistinctArrayAggAccumulator {
             return Ok(ScalarValue::new_null_list(self.datatype.clone(), true, 1));
         }
 
-        let group_values = self
-            .group_values
-            .as_ref()
-            .expect("group_values must be set when map is non-empty");
-        let converter = self
-            .converter
-            .as_ref()
-            .expect("converter must be set when map is non-empty");
+        let DistinctState {
+            group_values,
+            converter,
+            ..
+        } = self.state.as_ref().expect("state must be set when map is non-empty");
 
         // Collect the group indices of all live entries.
         let mut live_indices: Vec<usize> =
@@ -1048,18 +1060,14 @@ impl Accumulator for DistinctArrayAggAccumulator {
             return Ok(());
         }
 
-        let converter = self
-            .converter
-            .as_ref()
-            .expect("retract_batch called before update_batch");
-        let rows_buffer = self
-            .rows_buffer
+        let DistinctState {
+            converter,
+            rows_buffer,
+            group_values,
+        } = self
+            .state
             .as_mut()
-            .expect("rows_buffer must be initialised");
-        let group_values = self
-            .group_values
-            .as_ref()
-            .expect("group_values must be initialised");
+            .expect("retract_batch called before update_batch");
 
         rows_buffer.clear();
         converter.append(rows_buffer, std::slice::from_ref(col))?;
@@ -1101,9 +1109,11 @@ impl Accumulator for DistinctArrayAggAccumulator {
 
     fn size(&self) -> usize {
         size_of_val(self)
-            + self.group_values.as_ref().map(|r| r.size()).unwrap_or(0)
-            + self.rows_buffer.as_ref().map(|r| r.size()).unwrap_or(0)
-            + self.converter.as_ref().map(|c| c.size()).unwrap_or(0)
+            + self
+                .state
+                .as_ref()
+                .map(|s| s.group_values.size() + s.rows_buffer.size() + s.converter.size())
+                .unwrap_or(0)
             + self.map_size
             + self.counts.capacity() * size_of::<u64>()
             + self.hashes_buffer.capacity() * size_of::<u64>()
