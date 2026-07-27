@@ -624,7 +624,13 @@ fn evaluate_all_with_ignore_null_and_array_default(
     default_values: &ArrayRef,
     is_lag: bool,
 ) -> Result<ArrayRef> {
-    let valid_indices: Vec<usize> = array.nulls().unwrap().valid_indices().collect();
+    // Arrays without NULLs do not necessarily have a null bitmap.
+    // Note: https://arrow.apache.org/docs/format/Columnar.html#validity-bitmaps
+    let Some(nulls) = array.nulls() else {
+        return shift_with_array_default(array, offset, default_values);
+    };
+
+    let valid_indices: Vec<usize> = nulls.valid_indices().collect::<Vec<_>>();
     let direction = !is_lag;
     let results: Result<Vec<_>> = (0..array.len())
         .map(|id| {
