@@ -17,14 +17,13 @@
 
 use std::sync::Arc;
 
-use arrow::array::RecordBatch;
+use arrow::array::{RecordBatch, record_batch};
 use arrow_schema::{DataType, Field, Schema};
 use async_provider::create_async_table_provider;
 use async_trait::async_trait;
 use catalog::create_catalog_provider;
 use datafusion_catalog::MemTable;
 use datafusion_catalog::{Session, TableProvider};
-use datafusion_common::record_batch;
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Statistics};
 use datafusion_common::{Result, ScalarValue};

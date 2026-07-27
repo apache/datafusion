@@ -21,12 +21,16 @@
 //! Motivated by <https://github.com/apache/datafusion/issues/17850> which
 //! showed vectorized can regress for low-cardinality, high-row-count scenarios.
 //!
-//! Uses the direct `GroupValues::intern()` API with identical Int32 data for
-//! both implementations — a fair apples-to-apples comparison with the same
-//! hashing and data layout.
+//! Uses the direct `GroupValues::intern()` API with identical data for both
+//! implementations — a fair apples-to-apples comparison with the same hashing
+//! and data layout. Most experiments use `Int32` columns; `bench_fixed_size_binary`
+//! covers a `(FixedSizeBinary, Int32)` key to exercise the
+//! `FixedSizeBinaryGroupValueBuilder`.
 
-use arrow::array::{ArrayRef, Int32Array};
+use arrow::array::{ArrayRef, Int32Array, UInt32Array};
+use arrow::compute::take;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::util::bench_util::create_fsb_array;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_physical_plan::aggregates::group_values::GroupValues;
 use datafusion_physical_plan::aggregates::group_values::GroupValuesRows;
@@ -344,6 +348,102 @@ fn bench_group_count_sweep(c: &mut Criterion) {
     group.finish();
 }
 
+/// Width in bytes of the FixedSizeBinary group column (UUID-sized).
+const FSB_WIDTH: usize = 16;
+
+/// Schema for the FixedSizeBinary experiment: a `FixedSizeBinary` group column
+/// paired with an `Int32` column, exercising a multi-column GROUP BY that
+/// includes a fixed-width binary key (e.g. grouping on a UUID).
+fn make_fsb_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("fsb", DataType::FixedSizeBinary(FSB_WIDTH as i32), false),
+        Field::new("id", DataType::Int32, false),
+    ]))
+}
+
+/// Generate `(FixedSizeBinary, Int32)` batches with exactly
+/// `num_distinct_groups` distinct keys.
+///
+/// The distinct FixedSizeBinary values come from arrow-rs's `create_fsb_array`
+/// benchmark generator; rows cycle through that pool (mirroring how
+/// `generate_batches` controls Int32 cardinality) so the group count is
+/// controlled. The `Int32` column is keyed identically, keeping the combined
+/// cardinality equal to `num_distinct_groups`.
+fn generate_fsb_batches(
+    num_distinct_groups: usize,
+    num_rows: usize,
+    batch_size: usize,
+) -> Vec<Vec<ArrayRef>> {
+    // Pool of distinct FixedSizeBinary values (fixed seed, no nulls).
+    let pool = create_fsb_array(num_distinct_groups, 0.0, FSB_WIDTH);
+
+    let num_full_batches = num_rows / batch_size;
+    let remainder = num_rows % batch_size;
+    let num_batches = num_full_batches + if remainder > 0 { 1 } else { 0 };
+
+    (0..num_batches)
+        .map(|batch_idx| {
+            let batch_start = batch_idx * batch_size;
+            let current_batch_size = if batch_idx == num_batches - 1 && remainder > 0 {
+                remainder
+            } else {
+                batch_size
+            };
+
+            let group_ids = (0..current_batch_size)
+                .map(|row| (batch_start + row) % num_distinct_groups);
+
+            let indices: UInt32Array = group_ids.clone().map(|g| g as u32).collect();
+            let fsb = take(&pool, &indices, None).unwrap();
+            let id: Int32Array = group_ids.map(|g| g as i32).collect();
+
+            vec![fsb, Arc::new(id) as ArrayRef]
+        })
+        .collect()
+}
+
+/// Experiment 7: Group count sweep for a `(FixedSizeBinary, Int32)` key.
+///
+/// Exercises the `FixedSizeBinaryGroupValueBuilder` used by multi-column
+/// GROUP BY. Before FixedSizeBinary support, such a schema fell back to the
+/// row-based `GroupValuesRows`; this compares the vectorized columnar path
+/// (`vectorized`) against that baseline (`row_based`).
+fn bench_fixed_size_binary(c: &mut Criterion) {
+    let mut group = c.benchmark_group("fixed_size_binary");
+    group.sample_size(15);
+
+    let schema = make_fsb_schema();
+
+    for num_groups in [1_000, 1_000_000] {
+        let batches = generate_fsb_batches(num_groups, 1_000_000, DEFAULT_BATCH_SIZE);
+
+        for vectorized in [true, false] {
+            let label = if vectorized {
+                "vectorized"
+            } else {
+                "row_based"
+            };
+            group.bench_with_input(
+                BenchmarkId::new(label, format!("grp_{num_groups}")),
+                &batches,
+                |b, batches| {
+                    b.iter_batched_ref(
+                        || {
+                            (
+                                create_group_values(&schema, vectorized),
+                                Vec::<usize>::with_capacity(DEFAULT_BATCH_SIZE),
+                            )
+                        },
+                        |(gv, groups)| bench_intern(gv, batches, groups),
+                        criterion::BatchSize::LargeInput,
+                    );
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_issue_17850_regression,
@@ -352,5 +452,6 @@ criterion_group!(
     bench_column_scaling,
     bench_high_cardinality_scaling,
     bench_group_count_sweep,
+    bench_fixed_size_binary,
 );
 criterion_main!(benches);
