@@ -652,11 +652,6 @@ where
 
         Ok(vec![Arc::new(converted_list_array)])
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn size(&self) -> usize {
         self.group_values
             .iter()

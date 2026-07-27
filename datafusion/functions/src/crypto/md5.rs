@@ -21,6 +21,7 @@ use datafusion_common::{
     cast::as_binary_array,
     internal_err,
     types::{logical_binary, logical_string},
+    utils::hex::{HexCase, encode_bytes},
     utils::take_function_args,
 };
 use datafusion_expr::{
@@ -98,22 +99,6 @@ impl ScalarUDFImpl for Md5Func {
     }
 }
 
-/// Hex encoding lookup table for fast byte-to-hex conversion
-const HEX_CHARS_LOWER: &[u8; 16] = b"0123456789abcdef";
-
-/// Fast hex encoding using a lookup table instead of format strings.
-/// This is significantly faster than using `write!("{:02x}")` for each byte.
-#[inline]
-fn hex_encode(data: impl AsRef<[u8]>) -> String {
-    let bytes = data.as_ref();
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        s.push(HEX_CHARS_LOWER[(b >> 4) as usize] as char);
-        s.push(HEX_CHARS_LOWER[(b & 0x0f) as usize] as char);
-    }
-    s
-}
-
 fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let [data] = take_function_args("md5", args)?;
     let value = digest_process(data, DigestAlgorithm::Md5)?;
@@ -122,13 +107,15 @@ fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(match value {
         ColumnarValue::Array(array) => {
             let binary_array = as_binary_array(&array)?;
-            let string_array: StringViewArray =
-                binary_array.iter().map(|opt| opt.map(hex_encode)).collect();
+            let string_array: StringViewArray = binary_array
+                .iter()
+                .map(|opt| opt.map(|b| encode_bytes(b, HexCase::Lower)))
+                .collect();
             ColumnarValue::Array(Arc::new(string_array))
         }
-        ColumnarValue::Scalar(ScalarValue::Binary(opt)) => {
-            ColumnarValue::Scalar(ScalarValue::Utf8View(opt.map(hex_encode)))
-        }
+        ColumnarValue::Scalar(ScalarValue::Binary(opt)) => ColumnarValue::Scalar(
+            ScalarValue::Utf8View(opt.map(|b| encode_bytes(&b, HexCase::Lower))),
+        ),
         _ => return internal_err!("Impossibly got invalid results from digest"),
     })
 }

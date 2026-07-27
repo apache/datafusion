@@ -672,48 +672,13 @@ impl ExecutionPlan for SortMergeJoinExec {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let join_type = match self.join_type() {
-            JoinType::Inner => protobuf::JoinType::Inner,
-            JoinType::Left => protobuf::JoinType::Left,
-            JoinType::Right => protobuf::JoinType::Right,
-            JoinType::Full => protobuf::JoinType::Full,
-            JoinType::LeftSemi => protobuf::JoinType::Leftsemi,
-            JoinType::RightSemi => protobuf::JoinType::Rightsemi,
-            JoinType::LeftAnti => protobuf::JoinType::Leftanti,
-            JoinType::RightAnti => protobuf::JoinType::Rightanti,
-            JoinType::LeftMark => protobuf::JoinType::Leftmark,
-            JoinType::RightMark => protobuf::JoinType::Rightmark,
-        };
-        let null_equality = match self.null_equality() {
-            NullEquality::NullEqualsNothing => protobuf::NullEquality::NullEqualsNothing,
-            NullEquality::NullEqualsNull => protobuf::NullEquality::NullEqualsNull,
-        };
+        let join_type = crate::joins::proto::join_type_to_proto(self.join_type());
+        let null_equality =
+            crate::joins::proto::null_equality_to_proto(self.null_equality());
         let filter = self
             .filter()
             .as_ref()
-            .map(|filter| -> Result<protobuf::JoinFilter> {
-                let expression = ctx.encode_expr(filter.expression())?;
-                let column_indices = filter
-                    .column_indices()
-                    .iter()
-                    .map(|column_index| {
-                        let side = match column_index.side {
-                            JoinSide::Left => protobuf::JoinSide::LeftSide,
-                            JoinSide::Right => protobuf::JoinSide::RightSide,
-                            JoinSide::None => protobuf::JoinSide::None,
-                        };
-                        protobuf::ColumnIndex {
-                            index: column_index.index as u32,
-                            side: side.into(),
-                        }
-                    })
-                    .collect();
-                Ok(protobuf::JoinFilter {
-                    expression: Some(expression),
-                    column_indices,
-                    schema: Some(filter.schema().as_ref().try_into()?),
-                })
-            })
+            .map(|filter| crate::joins::proto::join_filter_to_proto(filter, ctx))
             .transpose()?;
         let sort_options = self
             .sort_options()
@@ -754,9 +719,6 @@ impl SortMergeJoinExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        use crate::joins::utils::ColumnIndex;
-        use arrow::datatypes::Schema;
-        use datafusion_common::internal_datafusion_err;
         use datafusion_proto_models::protobuf;
 
         let sort_join = crate::expect_plan_variant!(
@@ -796,82 +758,23 @@ impl SortMergeJoinExec {
             })
             .collect::<Result<JoinOn>>()?;
 
-        let join_type =
-            match protobuf::JoinType::try_from(sort_join.join_type).map_err(|_| {
-                internal_datafusion_err!(
-                    "SortMergeJoinExec: unknown JoinType {}",
-                    sort_join.join_type
-                )
-            })? {
-                protobuf::JoinType::Inner => JoinType::Inner,
-                protobuf::JoinType::Left => JoinType::Left,
-                protobuf::JoinType::Right => JoinType::Right,
-                protobuf::JoinType::Full => JoinType::Full,
-                protobuf::JoinType::Leftsemi => JoinType::LeftSemi,
-                protobuf::JoinType::Rightsemi => JoinType::RightSemi,
-                protobuf::JoinType::Leftanti => JoinType::LeftAnti,
-                protobuf::JoinType::Rightanti => JoinType::RightAnti,
-                protobuf::JoinType::Leftmark => JoinType::LeftMark,
-                protobuf::JoinType::Rightmark => JoinType::RightMark,
-            };
-        let null_equality = match protobuf::NullEquality::try_from(
+        let join_type = crate::joins::proto::join_type_from_proto(
+            sort_join.join_type,
+            "SortMergeJoinExec",
+        )?;
+        let null_equality = crate::joins::proto::null_equality_from_proto(
             sort_join.null_equality,
-        )
-        .map_err(|_| {
-            internal_datafusion_err!(
-                "SortMergeJoinExec: unknown NullEquality {}",
-                sort_join.null_equality
-            )
-        })? {
-            protobuf::NullEquality::NullEqualsNothing => NullEquality::NullEqualsNothing,
-            protobuf::NullEquality::NullEqualsNull => NullEquality::NullEqualsNull,
-        };
+            "SortMergeJoinExec",
+        )?;
         let filter = sort_join
             .filter
             .as_ref()
-            .map(|filter| -> Result<JoinFilter> {
-                let schema: Schema = filter
-                    .schema
-                    .as_ref()
-                    .ok_or_else(|| {
-                        internal_datafusion_err!(
-                            "SortMergeJoinExec: JoinFilter missing schema"
-                        )
-                    })?
-                    .try_into()?;
-                let expression = ctx.decode_required_expr(
-                    filter.expression.as_ref(),
-                    &schema,
+            .map(|filter| {
+                crate::joins::proto::join_filter_from_proto(
+                    filter,
+                    ctx,
                     "SortMergeJoinExec",
-                    "filter.expression",
-                )?;
-                let column_indices = filter
-                    .column_indices
-                    .iter()
-                    .map(|column_index| {
-                        let side = protobuf::JoinSide::try_from(column_index.side)
-                            .map_err(|_| {
-                                internal_datafusion_err!(
-                                    "SortMergeJoinExec: unknown JoinSide {}",
-                                    column_index.side
-                                )
-                            })?;
-                        let side = match side {
-                            protobuf::JoinSide::LeftSide => JoinSide::Left,
-                            protobuf::JoinSide::RightSide => JoinSide::Right,
-                            protobuf::JoinSide::None => JoinSide::None,
-                        };
-                        Ok(ColumnIndex {
-                            index: column_index.index as usize,
-                            side,
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(JoinFilter::new(
-                    expression,
-                    column_indices,
-                    Arc::new(schema),
-                ))
+                )
             })
             .transpose()?;
         let sort_options = sort_join
