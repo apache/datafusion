@@ -25,6 +25,7 @@ on:
   push:
     branches-ignore:
       - 'gh-readonly-queue/**'
+      - 'dependabot/**'
   pull_request:
   merge_group:
   # manual trigger
@@ -41,7 +42,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
           fetch-depth: 1
@@ -60,8 +61,10 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Install cargo-machete
-        run: cargo install cargo-machete --version ^0.9 --locked
+        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9  # v2.84.0
+        with:
+          tool: cargo-machete@0.9
       - name: Detect unused dependencies
         run: cargo machete --with-metadata

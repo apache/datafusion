@@ -965,6 +965,61 @@ select round(a), round(b), round(c) from small_floats;
 0 0 1
 1 0 0
 
+# round int64 should preserve exact values above Float64 precision range
+query TI
+select arrow_typeof(round(arrow_cast(9007199254740993, 'Int64'))),
+       round(arrow_cast(9007199254740993, 'Int64'));
+----
+Int64 9007199254740993
+
+# round int64 with positive decimal_places should preserve exact values above Float64 precision range
+query TI
+select arrow_typeof(round(arrow_cast(9007199254740993, 'Int64'), 2)),
+       round(arrow_cast(9007199254740993, 'Int64'), 2);
+----
+Int64 9007199254740993
+
+# round int64 with negative decimal_places
+query TI
+select arrow_typeof(round(arrow_cast(125, 'Int64'), -1)),
+       round(arrow_cast(125, 'Int64'), -1);
+----
+Int64 130
+
+# round int64 with column decimal_places
+query I
+select round(v, dp)
+from (values (arrow_cast(125, 'Int64'), 1),
+             (arrow_cast(125, 'Int64'), -1)) as t(v, dp);
+----
+125
+130
+
+# round int64 overflow with negative decimal_places
+query error Overflow while rounding Int64
+select round(arrow_cast(9223372036854775807, 'Int64'), -1);
+
+# round uint64 should preserve exact values
+query TI
+select arrow_typeof(round(arrow_cast(18446744073709551615, 'UInt64'))),
+       round(arrow_cast(18446744073709551615, 'UInt64'));
+----
+UInt64 18446744073709551615
+
+# round uint64 with positive decimal_places should preserve exact values
+query TI
+select arrow_typeof(round(arrow_cast(18446744073709551615, 'UInt64'), 2)),
+       round(arrow_cast(18446744073709551615, 'UInt64'), 2);
+----
+UInt64 18446744073709551615
+
+# round int64 to place larger than the number itself
+query TI
+select arrow_typeof(round(arrow_cast(125, 'Int64'), -5)),
+       round(arrow_cast(125, 'Int64'), -5);
+----
+Int64 0
+
 # round with too large
 #  max Int32 is 2147483647
 query error round decimal_places 2147483648 is out of supported i32 range
@@ -1277,6 +1332,57 @@ from small_floats;
 0.707 0.7 0.707
 0.836 0.8 0.836
 1 1 1
+
+# trunc with decimals
+query RT
+select trunc(arrow_cast(3.1415, 'Decimal128(10,4)')), arrow_typeof(trunc(arrow_cast(3.1415, 'Decimal128(10,4)')));
+----
+3 Decimal128(10, 4)
+
+# trunc with precision - decimals
+query RRRRR rowsort
+select
+  trunc(arrow_cast(4.267, 'Decimal32(8,3)'), 3),
+  trunc(arrow_cast(1.1234, 'Decimal64(18,6)'), 2),
+  trunc(arrow_cast(-1.1231, 'Decimal128(15,4)'), 6),
+  trunc(arrow_cast(1.2837284, 'Decimal256(35,7)'), 2),
+  trunc(arrow_cast(1.1, 'Decimal128(10,1)'), 0);
+----
+4.267 1.12 -1.1231 1.28 1
+
+# trunc with negative precision should truncate digits left of decimal - decimal types
+query RT
+select trunc(arrow_cast(12345.678, 'Decimal128(10,3)'), -3),
+       arrow_typeof(trunc(arrow_cast(12345.678, 'Decimal128(10,3)'), -3));
+----
+12000 Decimal128(10, 3)
+
+# trunc: coercion with a decimal argument and a non-int64 precision argument
+query RT
+select trunc(arrow_cast(1.2345678, 'Decimal128(20,14)'), arrow_cast(2, 'Int32')),
+       arrow_typeof(trunc(arrow_cast(1.2345678, 'Decimal128(20,14)'), arrow_cast(2, 'Int32')));
+----
+1.23 Decimal128(20, 14)
+
+# trunc with columns and precision - decimal128
+query RRR rowsort
+select
+  trunc(arrow_cast(a, 'Decimal128(10,4)'), 0) as a0,
+  trunc(arrow_cast(b, 'Decimal128(10,4)'), 0) as b0,
+  trunc(arrow_cast(c, 'Decimal128(10,4)'), 0) as c0
+from small_floats;
+----
+-1 NULL NULL
+0 0 -1
+0 0 0
+0 0 1
+
+# trunc issue #22512
+query R
+select trunc(CAST(9007199254740993 AS DECIMAL(20,0)));
+----
+9007199254740993
+
 
 ## bitwise and
 

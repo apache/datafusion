@@ -19,9 +19,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::{ParquetAccessPlan, ParquetFileMetrics, RowGroupAccess};
-// Re-exported so the existing `crate::row_group_filter::BloomFilterStatistics`
-// path keeps resolving for in-crate callers (e.g. `opener`).
-pub(crate) use crate::bloom_filter::BloomFilterStatistics;
+use crate::bloom_filter::BloomFilterStatistics;
 use arrow::array::{ArrayRef, BooleanArray, UInt64Array};
 use arrow::datatypes::Schema;
 use datafusion_common::pruning::PruningStatistics;
@@ -420,7 +418,7 @@ impl RowGroupAccessPlanFilter {
     ///
     /// # Panics
     /// if `row_group_bloom_filters` does not have the same number of row groups as this set
-    pub(crate) fn prune_by_bloom_filters(
+    pub fn prune_by_bloom_filters(
         &mut self,
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,

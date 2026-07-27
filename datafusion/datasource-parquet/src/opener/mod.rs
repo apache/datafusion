@@ -30,10 +30,11 @@ use crate::push_decoder::{
     DecoderBuilderConfig, PushDecoderStreamState, RgPlanEntry, RowGroupPruner,
 };
 use crate::row_filter::RowFilterGenerator;
-use crate::row_group_filter::{BloomFilterStatistics, RowGroupAccessPlanFilter};
+use crate::row_group_filter::RowGroupAccessPlanFilter;
 use crate::{
-    Int96Coercer, ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
-    ParquetRowSelection, ParquetVirtualColumn, apply_file_schema_type_coercions,
+    BloomFilterStatistics, Int96Coercer, ParquetAccessPlan, ParquetFileMetrics,
+    ParquetFileReaderFactory, ParquetRowSelection, ParquetVirtualColumn,
+    apply_file_schema_type_coercions,
 };
 use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
@@ -1695,12 +1696,12 @@ mod test {
         CachedParquetFileReaderFactory, DefaultParquetFileReaderFactory,
         ParquetFileReaderFactory, ParquetRowSelection, RowGroupAccess,
     };
-    use arrow::array::RecordBatch;
+    use arrow::array::{RecordBatch, record_batch};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
         ColumnStatistics, ScalarValue, Statistics, assert_contains, internal_err,
-        record_batch, stats::Precision,
+        stats::Precision,
     };
     use datafusion_datasource::morsel::{Morsel, Morselizer};
     use datafusion_datasource::{PartitionedFile, TableSchema, TableSchemaBuilder};

@@ -412,8 +412,9 @@ logical_plan
 02)--Projection: three_cols.col_a, three_cols.col_b, three_cols.col_c, three_cols.col_b AS col_b_dup
 03)----TableScan: three_cols projection=[col_a, col_b, col_c]
 physical_plan
-01)SortExec: expr=[col_a@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/three_cols.parquet]]}, projection=[col_a, col_b, col_c, col_b@1 as col_b_dup], file_type=parquet, sort_order_for_reorder=[col_a@0 ASC NULLS LAST]
+01)ProjectionExec: expr=[col_a@0 as col_a, col_b@1 as col_b, col_c@2 as col_c, col_b@1 as col_b_dup]
+02)--SortExec: expr=[col_a@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/three_cols.parquet]]}, projection=[col_a, col_b, col_c], file_type=parquet, sort_order_for_reorder=[col_a@0 ASC NULLS LAST]
 
 # Verify correctness
 query IIII
@@ -564,8 +565,8 @@ logical_plan
 04)------Projection: get_field(simple_struct.s, Utf8("value")) AS __datafusion_extracted_1, simple_struct.id
 05)--------TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(1)]
 physical_plan
-01)SortExec: expr=[simple_struct.s[value]@1 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[id@1 as id, __datafusion_extracted_1@0 as simple_struct.s[value]]
+01)ProjectionExec: expr=[id@1 as id, __datafusion_extracted_1@0 as simple_struct.s[value]]
+02)--SortExec: expr=[__datafusion_extracted_1@0 ASC NULLS LAST], preserve_partitioning=[false]
 03)----FilterExec: id@1 > 1
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[get_field(s@1, value) as __datafusion_extracted_1, id], file_type=parquet, predicate=id@0 > 1, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 1, required_guarantees=[]
 
@@ -592,8 +593,8 @@ logical_plan
 04)------Projection: get_field(simple_struct.s, Utf8("value")) AS __datafusion_extracted_1, simple_struct.id
 05)--------TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(1)]
 physical_plan
-01)SortExec: TopK(fetch=2), expr=[simple_struct.s[value]@1 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[id@1 as id, __datafusion_extracted_1@0 as simple_struct.s[value]]
+01)ProjectionExec: expr=[id@1 as id, __datafusion_extracted_1@0 as simple_struct.s[value]]
+02)--SortExec: TopK(fetch=2), expr=[__datafusion_extracted_1@0 ASC NULLS LAST], preserve_partitioning=[false]
 03)----FilterExec: id@1 > 1
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[get_field(s@1, value) as __datafusion_extracted_1, id], file_type=parquet, predicate=id@0 > 1 AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 1, required_guarantees=[]
 
@@ -762,8 +763,8 @@ logical_plan
 05)--------TableScan: multi_struct projection=[id, s], partial_filters=[multi_struct.id > Int64(2)]
 physical_plan
 01)SortPreservingMergeExec: [id@0 ASC NULLS LAST]
-02)--SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[id@1 as id, __datafusion_extracted_1@0 as multi_struct.s[value]]
+02)--ProjectionExec: expr=[id@1 as id, __datafusion_extracted_1@0 as multi_struct.s[value]]
+03)----SortExec: expr=[id@1 ASC NULLS LAST], preserve_partitioning=[true]
 04)------FilterExec: id@1 > 2
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
 06)----------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/multi/part1.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/multi/part2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/multi/part3.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/multi/part4.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/multi/part5.parquet]]}, projection=[get_field(s@1, value) as __datafusion_extracted_1, id], file_type=parquet, predicate=id@0 > 2, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 2, required_guarantees=[]
@@ -1688,8 +1689,9 @@ logical_plan
 04)------Projection: get_field(simple_struct.s, Utf8("value")) AS __datafusion_extracted_1, get_field(simple_struct.s, Utf8("label")) AS __datafusion_extracted_2
 05)--------TableScan: simple_struct projection=[s]
 physical_plan
-01)SortExec: expr=[t.s[value]@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[get_field(s@1, value) as t.s[value], get_field(s@1, label) as t.s[label]], file_type=parquet
+01)ProjectionExec: expr=[__datafusion_extracted_1@0 as t.s[value], __datafusion_extracted_2@1 as t.s[label]]
+02)--SortExec: expr=[__datafusion_extracted_1@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[get_field(s@1, value) as __datafusion_extracted_1, get_field(s@1, label) as __datafusion_extracted_2], file_type=parquet
 
 # Verify correctness
 query IT
@@ -1816,13 +1818,14 @@ logical_plan
 12)--------------TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(3)]
 physical_plan
 01)SortPreservingMergeExec: [t.s[value]@0 ASC NULLS LAST]
-02)--SortExec: expr=[t.s[value]@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[__datafusion_extracted_1@0 as t.s[value], __datafusion_extracted_2@1 as t.s[label]]
-04)------UnionExec
+02)--ProjectionExec: expr=[__datafusion_extracted_1@0 as t.s[value], __datafusion_extracted_2@1 as t.s[label]]
+03)----UnionExec
+04)------SortExec: expr=[__datafusion_extracted_1@0 ASC NULLS LAST], preserve_partitioning=[false]
 05)--------FilterExec: id@2 <= 3, projection=[__datafusion_extracted_1@0, __datafusion_extracted_2@1]
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[get_field(s@1, value) as __datafusion_extracted_1, get_field(s@1, label) as __datafusion_extracted_2, id], file_type=parquet, predicate=id@0 <= 3, pruning_predicate=id_null_count@1 != row_count@2 AND id_min@0 <= 3, required_guarantees=[]
-07)--------FilterExec: id@2 > 3, projection=[__datafusion_extracted_1@0, __datafusion_extracted_2@1]
-08)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[get_field(s@1, value) as __datafusion_extracted_1, get_field(s@1, label) as __datafusion_extracted_2, id], file_type=parquet, predicate=id@0 > 3, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 3, required_guarantees=[]
+07)------SortExec: expr=[__datafusion_extracted_1@0 ASC NULLS LAST], preserve_partitioning=[false]
+08)--------FilterExec: id@2 > 3, projection=[__datafusion_extracted_1@0, __datafusion_extracted_2@1]
+09)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[get_field(s@1, value) as __datafusion_extracted_1, get_field(s@1, label) as __datafusion_extracted_2, id], file_type=parquet, predicate=id@0 > 3, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 3, required_guarantees=[]
 
 # Verify correctness
 query IT
@@ -2068,9 +2071,115 @@ SELECT s, id FROM simple_struct WHERE s['value'] > 100 AND id < 4;
 {value: 200, label: beta} 2
 {value: 150, label: gamma} 3
 
+#####################
+# Section 9: Join key extraction with pruned outputs
+#####################
+
+statement ok
+CREATE TABLE issue_22895_rt2 AS SELECT * FROM (VALUES
+  (named_struct('msg','user auth failed','sid','a'), 1, 'svc1'),
+  (named_struct('msg','login token','sid','b'), 2, 'svc2')
+) v(attributes, id, name);
+
+query IT
+SELECT a.id, b.name
+FROM issue_22895_rt2 a JOIN issue_22895_rt2 b
+  ON a.attributes['sid'] = b.attributes['sid']
+WHERE a.attributes['msg'] LIKE '%auth%'
+ORDER BY a.id, b.name;
+----
+1 svc1
+
+statement ok
+CREATE TABLE issue_22895_rt AS SELECT * FROM (VALUES
+  (named_struct('uid','u1','t','t1'), TIMESTAMP '2026-06-08T10:00:00', 'a'),
+  (named_struct('uid','u2','t','t2'), TIMESTAMP '2026-06-08T11:00:00', 'b')
+) v(attributes, start_timestamp, span_name);
+
+query P
+SELECT r.start_timestamp
+FROM issue_22895_rt r
+JOIN (SELECT attributes['uid'] AS uid FROM issue_22895_rt) f
+  ON f.uid = r.attributes['uid']
+WHERE r.attributes['t'] IN (SELECT attributes['t'] FROM issue_22895_rt)
+ORDER BY r.start_timestamp;
+----
+2026-06-08T10:00:00
+2026-06-08T11:00:00
+
 # Config reset
 
 # The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+#####################
+# Section: volatile expressions are not duplicated by projection pushdown
+#
+# Regression test for #23220: a volatile expression (e.g. `random()`) aliased
+# once in a subquery and referenced multiple times must be evaluated once and
+# reused. Projection pushdown must not merge the outer projection into the file
+# scan when doing so would inline and duplicate the volatile expression.
+# Reproduces only against a file scan (not an in-memory table); if the volatile
+# expression is duplicated, the two references diverge and `x = y` is false.
+#####################
+
+statement ok
+COPY (SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3)
+TO 'test_files/scratch/projection_pushdown/volatile.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE volatile_scan STORED AS PARQUET
+LOCATION 'test_files/scratch/projection_pushdown/volatile.parquet';
+
+# The two references to the aliased `random()` value must be equal on every
+# row: the expression is evaluated once and reused, not inlined twice.
+query B rowsort
+SELECT s.x = s.y
+FROM (SELECT r AS x, r AS y FROM (SELECT random() AS r FROM volatile_scan) AS t) AS s;
+----
+true
+true
+true
+
+#####################
+# Section: expensive expressions are not re-inlined by projection pushdown
+#
+# A repeated expensive expression (e.g. `power(a, 2)`) is extracted by CSE into
+# a single intermediate projection. Projection pushdown must keep it as one
+# `ProjectionExec` above the scan (`power(a, 2)` computed once) rather than
+# inlining it into the `DataSourceExec` projection and re-evaluating it at each
+# reference site.
+#####################
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+COPY (SELECT 1.0::double AS a, 2.0::double AS b, 3::bigint AS c
+      UNION ALL SELECT 4.0, 5.0, 6
+      UNION ALL SELECT 7.0, 8.0, 9)
+TO 'test_files/scratch/projection_pushdown/cse.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE cse_scan STORED AS PARQUET
+LOCATION 'test_files/scratch/projection_pushdown/cse.parquet';
+
+query TT
+EXPLAIN SELECT power(a, 2) + b AS x, power(a, 2) - b AS y, power(a, 2) * c AS z
+FROM cse_scan;
+----
+logical_plan
+01)Projection: __common_expr_1 + cse_scan.b AS x, __common_expr_1 - cse_scan.b AS y, __common_expr_1 * CAST(cse_scan.c AS Float64) AS z
+02)--Projection: power(cse_scan.a, Float64(2)) AS __common_expr_1, cse_scan.b, cse_scan.c
+03)----TableScan: cse_scan projection=[a, b, c]
+physical_plan
+01)ProjectionExec: expr=[__common_expr_1@0 + b@1 as x, __common_expr_1@0 - b@1 as y, __common_expr_1@0 * CAST(c@2 AS Float64) as z]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/cse.parquet]]}, projection=[power(a@0, 2) as __common_expr_1, b, c], file_type=parquet
+
+# Reset the config changed above (the SLT runner expects target_partitions = 4).
 statement ok
 SET datafusion.execution.target_partitions = 4;

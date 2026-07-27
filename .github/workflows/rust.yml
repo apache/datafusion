@@ -27,6 +27,7 @@ on:
   push:
     branches-ignore:
       - 'gh-readonly-queue/**'
+      - 'dependabot/**'
     paths-ignore:
       - "docs/**"
       - "**.md"
@@ -50,8 +51,8 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -79,7 +80,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -104,7 +105,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -141,8 +142,8 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -161,6 +162,26 @@ jobs:
       - name: Check datafusion-proto (avro)
         run: cargo check --profile ci --no-default-features -p datafusion-proto --features=avro
 
+  # Check datafusion-ffi features
+  #
+  # Ensure via `cargo check` that the crate can be built with a
+  # subset of the features packages enabled.
+  linux-datafusion-ffi-features:
+    name: cargo check datafusion-ffi features
+    needs: linux-build-lib
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    container:
+      image: amd64/rust
+    steps:
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Check datafusion-ffi (no-default-features)
+        run: cargo check --profile ci --no-default-features -p datafusion-ffi
+
 
   # Check datafusion crate features
   #
@@ -173,8 +194,8 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -239,7 +260,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -276,8 +297,8 @@ jobs:
       volumes:
         - /usr/local:/host/usr/local
     steps:
-      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
           fetch-depth: 1
@@ -285,16 +306,22 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Install llvm-tools-preview
+        run: rustup component add llvm-tools-preview
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9  # v2.84.0
+        with:
+          tool: cargo-llvm-cov
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-         save-if: ${{ github.ref_name == 'main' }}
-         shared-key: "amd-ci"
+          save-if: ${{ github.ref_name == 'main' }}
+          shared-key: "amd-ci"
       - name: Run tests (excluding doctests and datafusion-cli)
         env:
           RUST_BACKTRACE: 1
         run: |
-          cargo test \
+          cargo llvm-cov \
             --profile ci \
             --exclude datafusion-examples \
             --exclude ffi_example_table_provider \
@@ -303,18 +330,27 @@ jobs:
             --lib \
             --tests \
             --bins \
-            --features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait
-      - name: Verify Working Directory Clean
-        run: git diff --exit-code
-        # Check no temporary directories created during test.
-        # `false/` folder is excuded for rust cache.
-      - name: Verify Working Directory Clean (No Untracked Files)
-        run: |
-          STATUS="$(git status --porcelain | sed -e '/^?? false\/$/d' -e '/^?? false$/d')"
-          if [ -n "$STATUS" ]; then
-            echo "$STATUS"
-            exit 1
-          fi
+            --features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait \
+            --codecov \
+            --output-path target/codecov.json
+      - parallel:
+          - name: Verify Working Directory Clean
+            run: git diff --exit-code
+          # Check no temporary directories created during test.
+          # `false/` folder is excuded for rust cache.
+          - name: Verify Working Directory Clean (No Untracked Files)
+            run: |
+              STATUS="$(git status --porcelain | sed -e '/^?? false\/$/d' -e '/^?? false$/d')"
+              if [ -n "$STATUS" ]; then
+                echo "$STATUS"
+                exit 1
+              fi
+      - name: Upload coverage to codecov.io
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
+        with:
+          files: target/codecov.json
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   # datafusion-cli tests
   linux-test-datafusion-cli:
@@ -322,8 +358,8 @@ jobs:
     needs: linux-build-lib
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     steps:
-      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
           fetch-depth: 1
@@ -354,8 +390,8 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
           fetch-depth: 1
@@ -385,8 +421,8 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
           fetch-depth: 1
@@ -407,8 +443,8 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -420,18 +456,19 @@ jobs:
     name: build and run with wasm-pack
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
-      - name: Setup for wasm32
-        run: |
-          rustup target add wasm32-unknown-unknown
-      - name: Install dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq clang
-      - name: Setup wasm-pack
-        uses: taiki-e/install-action@9e1e5806d4a4822de933115878265be9aaa786d9  # v2.82.2
-        with:
-          tool: wasm-pack
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - parallel:
+          - name: Setup for wasm32
+            run: |
+              rustup target add wasm32-unknown-unknown
+          - name: Install dependencies
+            run: |
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq clang
+          - name: Setup wasm-pack
+            uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9  # v2.84.0
+            with:
+              tool: wasm-pack
       - name: Run tests with headless mode
         working-directory: ./datafusion/wasmtest
         run: |
@@ -448,23 +485,24 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
           fetch-depth: 1
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Generate benchmark data and expected query results
-        run: |
-          mkdir -p datafusion/sqllogictest/test_files/tpch/data
-          git clone https://github.com/databricks/tpch-dbgen.git
-          cd tpch-dbgen
-          make
-          ./dbgen -f -s 0.1
-          mv *.tbl ../datafusion/sqllogictest/test_files/tpch/data
+      - parallel:
+          - name: Setup Rust toolchain
+            uses: ./.github/actions/setup-builder
+            with:
+              rust-version: stable
+          - name: Generate benchmark data and expected query results
+            run: |
+              mkdir -p datafusion/sqllogictest/test_files/tpch/data
+              git clone https://github.com/databricks/tpch-dbgen.git
+              cd tpch-dbgen
+              make
+              ./dbgen -f -s 0.1
+              mv *.tbl ../datafusion/sqllogictest/test_files/tpch/data
       - name: Verify that benchmark queries return expected results
         run: |
           # increase stack size to fix stack overflow
@@ -496,8 +534,8 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
           fetch-depth: 1
@@ -521,8 +559,8 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
           fetch-depth: 1
@@ -565,7 +603,7 @@ jobs:
     name: cargo test (macos-aarch64)
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
           fetch-depth: 1
@@ -581,7 +619,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -598,7 +636,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -607,47 +645,14 @@ jobs:
         run: |
           ci/scripts/rust_fmt.sh
 
-  # Coverage job disabled due to
-  # https://github.com/apache/datafusion/issues/3678
+  check-workflow-tool-installs:
+    name: Check GitHub Actions install tooling
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Check workflow tool installs
+        run: ci/scripts/check_no_cargo_install_in_workflows.sh
 
-  # coverage:
-  #   name: coverage
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #       with:
-  #         submodules: true
-  #     - name: Install protobuf compiler
-  #       shell: bash
-  #       run: |
-  #         mkdir -p $HOME/d/protoc
-  #         cd $HOME/d/protoc
-  #         export PROTO_ZIP="protoc-21.4-linux-x86_64.zip"
-  #         curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/$PROTO_ZIP
-  #         unzip $PROTO_ZIP
-  #         export PATH=$PATH:$HOME/d/protoc/bin
-  #         protoc --version
-  #     - name: Setup Rust toolchain
-  #       run: |
-  #         rustup toolchain install stable
-  #         rustup default stable
-  #         rustup component add rustfmt clippy
-  #     - name: Cache Cargo
-  #       uses: actions/cache@v4
-  #       with:
-  #         path: /home/runner/.cargo
-  #         # this key is not equal because the user is different than on a container (runner vs github)
-  #         key: cargo-coverage-cache3-
-  #     - name: Run coverage
-  #       run: |
-  #         export PATH=$PATH:$HOME/d/protoc/bin
-  #         rustup toolchain install stable
-  #         rustup default stable
-  #         cargo install --version 0.20.1 cargo-tarpaulin
-  #         cargo tarpaulin --all --out Xml
-  #     - name: Report coverage
-  #       continue-on-error: true
-  #       run: bash <(curl -s https://codecov.io/bash)
 
   clippy:
     name: clippy
@@ -656,8 +661,8 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
           fetch-depth: 1
@@ -665,13 +670,14 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Install Clippy
-        run: rustup component add clippy
-      - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
-        with:
-          save-if: ${{ github.ref_name == 'main' }}
-          shared-key: "amd-ci-clippy"
+      - parallel:
+          - name: Install Clippy
+            run: rustup component add clippy
+          - name: Rust Dependency Cache
+            uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+            with:
+              save-if: ${{ github.ref_name == 'main' }}
+              shared-key: "amd-ci-clippy"
       - name: Run clippy
         run: ci/scripts/rust_clippy.sh
 
@@ -682,7 +688,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
           fetch-depth: 1
@@ -691,7 +697,9 @@ jobs:
         with:
           rust-version: stable
       - name: Install taplo
-        run: cargo +stable install taplo-cli --version ^0.9 --locked
+        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9  # v2.84.0
+        with:
+          tool: taplo-cli@0.9
       # if you encounter an error, try running 'taplo format' to fix the formatting automatically.
       - name: Check Cargo.toml formatting
         run: taplo format --check
@@ -703,8 +711,8 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@d141ef83eb66d096ce8afc767e09115a65c63b60  # v2.1.2
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: runs-on/action@4e5f72399b6b17f2e79c511c1b38a315a64d22dc  # v2.2.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
           fetch-depth: 1
@@ -712,7 +720,7 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238  # v6.2.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: "20"
       - name: Check if configs.md has been modified
@@ -739,20 +747,21 @@ jobs:
       image: amd64/rust
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
           fetch-depth: 1
 
-      - name: Mark repository as safe for git
-        # Required for git commands inside container (avoids "dubious ownership" error)
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - parallel:
+          - name: Mark repository as safe for git
+            # Required for git commands inside container (avoids "dubious ownership" error)
+            run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Set up Node.js (required for prettier)
-        # doc_prettier_check.sh uses npx to run prettier for Markdown formatting
-        uses: actions/setup-node@v6
-        with:
-          node-version: '18'
+          - name: Set up Node.js (required for prettier)
+            # doc_prettier_check.sh uses npx to run prettier for Markdown formatting
+            uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+            with:
+              node-version: '18'
 
       - name: Run examples docs check script
         run: |
@@ -769,11 +778,11 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@9e1e5806d4a4822de933115878265be9aaa786d9  # v2.82.2
+        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9  # v2.84.0
         with:
           tool: cargo-msrv
 

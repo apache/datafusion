@@ -39,6 +39,9 @@
 //! - `async_udf`
 //!   (file: async_udf.rs, desc: Asynchronous User Defined Scalar Function)
 //!
+//! - `struct_udaf`
+//!   (file: struct_returning_udaf.rs, desc: Struct-returning UDAF with window metadata)
+//!
 //! - `udaf`
 //!   (file: simple_udaf.rs, desc: Simple UDAF example)
 //!
@@ -62,6 +65,7 @@ mod simple_udaf;
 mod simple_udf;
 mod simple_udtf;
 mod simple_udwf;
+mod struct_returning_udaf;
 mod table_list_udtf;
 
 use datafusion::error::{DataFusionError, Result};
@@ -76,6 +80,7 @@ enum ExampleKind {
     AdvUdf,
     AdvUdwf,
     AsyncUdf,
+    StructUdaf,
     Udf,
     Udaf,
     Udwf,
@@ -102,6 +107,9 @@ impl ExampleKind {
             ExampleKind::AdvUdf => advanced_udf::advanced_udf().await?,
             ExampleKind::AdvUdwf => advanced_udwf::advanced_udwf().await?,
             ExampleKind::AsyncUdf => async_udf::async_udf().await?,
+            ExampleKind::StructUdaf => {
+                struct_returning_udaf::struct_returning_udaf().await?
+            }
             ExampleKind::Udaf => simple_udaf::simple_udaf().await?,
             ExampleKind::Udf => simple_udf::simple_udf().await?,
             ExampleKind::Udtf => simple_udtf::simple_udtf().await?,

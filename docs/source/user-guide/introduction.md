@@ -123,7 +123,7 @@ Here are some active projects using DataFusion:
 - [OpenObserve] Distributed cloud native observability platform
 - [ParadeDB](https://github.com/paradedb/paradedb) PostgreSQL for Search & Analytics
 - [Parseable] Log storage and observability platform
-- [Polygon.io](https://polygon.io/) Stock Market API
+- [Massive.com](https://massive.com/) Stock Market API
 - [qv] Quickly view your data
 - [R2 Query Engine](https://blog.cloudflare.com/r2-sql-deep-dive/) Cloudflare's distributed engine for querying data in Iceberg Catalogs
 - [rerun.io](https://rerun.io/) Visualize and query robotics logs and transform them into training data.
@@ -133,12 +133,14 @@ Here are some active projects using DataFusion:
 - [SedonaDB](https://github.com/apache/sedona-db) A single-node analytical database engine with geospatial as a first-class citizen
 - [Sleeper](https://github.com/gchq/sleeper) Serverless, cloud-native, log-structured merge tree based, scalable key-value store
 - [Spice.ai] Building blocks for data-driven AI applications
+- [Supermetal](https://supermetal.io/) is a change data capture (CDC) platform that synchronizes data between databases, data warehouses, and lakehouses
 - [Synnada] Streaming-first framework for data products
 - [VegaFusion] Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
 - [Vortex] An extensible, state of the art columnar file format
 - [Telemetry](https://telemetry.sh/) Structured logging made easy
 - [Xorq](https://github.com/xorq-labs/xorq/) Xorq is a multi-engine batch transformation framework built on Ibis, DataFusion and Arrow
 - [KalamDB](https://github.com/jamals86/KalamDB) SQL-first realtime state database for AI agents, chat products, and multi-tenant SaaS.
+- [Infino](https://github.com/infino-ai/infino) Fast retrieval engine for SQL, full-text search, and vector search over Parquet on object storage
 
 Here are some less active projects that used DataFusion:
 

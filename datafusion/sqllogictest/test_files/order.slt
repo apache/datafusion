@@ -272,8 +272,8 @@ logical_plan
 04)------TableScan: aggregate_test_100 projection=[c2, c3]
 physical_plan
 01)SortPreservingMergeExec: [c2@0 ASC NULLS LAST]
-02)--SortExec: expr=[c2@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[c2@0 as c2, sum(aggregate_test_100.c3)@1 as total_sal]
+02)--ProjectionExec: expr=[c2@0 as c2, sum(aggregate_test_100.c3)@1 as total_sal]
+03)----SortExec: expr=[c2@0 ASC NULLS LAST], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)]
 05)--------RepartitionExec: partitioning=Hash([c2@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)]
@@ -291,8 +291,8 @@ logical_plan
 04)------TableScan: aggregate_test_100 projection=[c2, c3]
 physical_plan
 01)SortPreservingMergeExec: [total_sal@1 ASC NULLS LAST, c2@0 ASC NULLS LAST]
-02)--SortExec: expr=[total_sal@1 ASC NULLS LAST, c2@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[c2@0 as c2, sum(aggregate_test_100.c3)@1 as total_sal]
+02)--ProjectionExec: expr=[c2@0 as c2, sum(aggregate_test_100.c3)@1 as total_sal]
+03)----SortExec: expr=[sum(aggregate_test_100.c3)@1 ASC NULLS LAST, c2@0 ASC NULLS LAST], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)]
 05)--------RepartitionExec: partitioning=Hash([c2@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[sum(aggregate_test_100.c3)]
@@ -1770,3 +1770,71 @@ reset datafusion.sql_parser.default_null_ordering;
 
 statement ok
 reset datafusion.sql_parser.dialect;
+
+# A global sort feeding a sink (CopyTo) must keep a leading key that is constant
+# within each partition but differs across them ("a" is 2 on one union branch,
+# 1 on the other). The merge above the union has to reorder rows across branches,
+# so the physical plan must keep "a" in its ordering; dropping it (leaving only
+# [b@1 ASC]) silently loses the global order under the sink.
+statement ok
+CREATE TABLE t2(b INT) AS VALUES (10), (20);
+
+query TT
+EXPLAIN COPY (
+  SELECT 2 AS a, b FROM t2
+  UNION ALL
+  SELECT 1 AS a, b FROM t2
+  ORDER BY a, b
+) TO 'test_files/scratch/order/sort_key_sink.parquet';
+----
+logical_plan
+01)CopyTo: format=parquet output_url=test_files/scratch/order/sort_key_sink.parquet options: ()
+02)--Sort: a ASC NULLS LAST, b ASC NULLS LAST
+03)----Union
+04)------Projection: Int64(2) AS a, t2.b
+05)--------TableScan: t2 projection=[b]
+06)------Projection: Int64(1) AS a, t2.b
+07)--------TableScan: t2 projection=[b]
+physical_plan
+01)DataSinkExec: sink=ParquetSink(file_groups=[])
+02)--SortPreservingMergeExec: [a@0 ASC NULLS LAST, b@1 ASC NULLS LAST]
+03)----UnionExec
+04)------SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------ProjectionExec: expr=[2 as a, b@0 as b]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)------SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
+08)--------ProjectionExec: expr=[1 as a, b@0 as b]
+09)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Actually execute the COPY and verify the rows written to the file are in
+# global (a, b) order, interleaving the two union branches. If "a" were
+# dropped from the sort, the file would instead contain rows ordered only
+# by "b" within each branch.
+query I
+COPY (
+  SELECT 2 AS a, b FROM t2
+  UNION ALL
+  SELECT 1 AS a, b FROM t2
+  ORDER BY a, b
+) TO 'test_files/scratch/order/sort_key_sink.parquet';
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE sort_key_sink STORED AS PARQUET
+LOCATION 'test_files/scratch/order/sort_key_sink.parquet';
+
+# Note: no ORDER BY here, so this checks the order rows were written in
+query II
+SELECT * FROM sort_key_sink;
+----
+1 10
+1 20
+2 10
+2 20
+
+statement ok
+DROP TABLE sort_key_sink;
+
+statement ok
+DROP TABLE t2;

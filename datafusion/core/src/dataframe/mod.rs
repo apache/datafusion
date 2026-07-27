@@ -2439,7 +2439,7 @@ impl DataFrame {
     }
 
     /// Fill null values in specified columns with a given value
-    /// If no columns are specified (empty vector), applies to all columns
+    /// If no columns are specified (empty slice), applies to all columns
     /// Only fills if the value can be cast to the column's type
     ///
     /// # Arguments
@@ -2458,19 +2458,14 @@ impl DataFrame {
     ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
     ///     .await?;
     /// // Fill nulls in only columns "a" and "c":
-    /// let df = df.fill_null(ScalarValue::from(0), vec!["a".to_owned(), "c".to_owned()])?;
+    /// let df = df.fill_null(&ScalarValue::from(0), &["a", "c"])?;
     /// // Fill nulls across all columns:
-    /// let df = df.fill_null(ScalarValue::from(0), vec![])?;
+    /// let df = df.fill_null(&ScalarValue::from(0), &[])?;
     /// # Ok(())
     /// # }
     /// ```
-    #[expect(clippy::needless_pass_by_value)]
-    pub fn fill_null(
-        &self,
-        value: ScalarValue,
-        columns: Vec<String>,
-    ) -> Result<DataFrame> {
-        self.fill_columns(&value, &columns, &coalesce(), |_| true)
+    pub fn fill_null(&self, value: &ScalarValue, columns: &[&str]) -> Result<DataFrame> {
+        self.fill_columns(value, columns, &coalesce(), |_| true)
     }
 
     // Helper to find columns from names

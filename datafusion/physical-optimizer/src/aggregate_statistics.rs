@@ -25,7 +25,7 @@ use datafusion_physical_plan::aggregates::{
 };
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
-use datafusion_physical_plan::statistics::StatisticsArgs;
+use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion_physical_plan::udaf::{
     AggregateFunctionExpr, StatisticsArgs as PlanStatisticsArgs,
 };
@@ -58,9 +58,8 @@ impl PhysicalOptimizerRule for AggregateStatistics {
             let partial_agg_exec = partial_agg_exec
                 .downcast_ref::<AggregateExec>()
                 .expect("take_optimizable() ensures that this is a AggregateExec");
-            let stats = partial_agg_exec
-                .input()
-                .statistics_with_args(&StatisticsArgs::new())?;
+            let stats = StatisticsContext::new()
+                .compute(partial_agg_exec.input().as_ref(), &StatisticsArgs::new())?;
             let mut projections = vec![];
             for expr in partial_agg_exec.aggr_expr() {
                 let field = expr.field();

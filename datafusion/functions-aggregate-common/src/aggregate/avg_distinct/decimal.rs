@@ -16,14 +16,14 @@
 // under the License.
 
 use arrow::{
-    array::{ArrayRef, ArrowNumericType},
-    datatypes::{
-        Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, DecimalType, i256,
-    },
+    array::{ArrayRef, ArrowNativeTypeOp, ArrowNumericType},
+    compute::DecimalCast,
+    datatypes::{ArrowNativeType, DecimalType},
 };
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr_common::accumulator::Accumulator;
 use std::fmt::Debug;
+use std::marker::PhantomData;
 use std::mem::size_of_val;
 
 use crate::aggregate::sum_distinct::DistinctSumAccumulator;
@@ -31,33 +31,46 @@ use crate::utils::DecimalAverager;
 
 /// Generic implementation of `AVG DISTINCT` for Decimal types.
 /// Handles both all Arrow decimal types (32, 64, 128 and 256 bits).
+///
+/// The distinct values are stored in the input type `I`; only the intermediate
+/// sum is computed in the (never narrower) sum type `S` so it cannot overflow
+/// `I`'s native type.
 #[derive(Debug)]
-pub struct DecimalDistinctAvgAccumulator<T: DecimalType + Debug> {
-    sum_accumulator: DistinctSumAccumulator<T>,
+pub struct DecimalDistinctAvgAccumulator<
+    I: DecimalType + Debug,
+    S: DecimalType + Debug = I,
+> {
+    sum_accumulator: DistinctSumAccumulator<I>,
     sum_scale: i8,
     target_precision: u8,
     target_scale: i8,
+    _sum_type: PhantomData<S>,
 }
 
-impl<T: DecimalType + Debug> DecimalDistinctAvgAccumulator<T> {
+impl<I: DecimalType + Debug, S: DecimalType + Debug> DecimalDistinctAvgAccumulator<I, S> {
     pub fn with_decimal_params(
         sum_scale: i8,
         target_precision: u8,
         target_scale: i8,
     ) -> Self {
-        let data_type = T::TYPE_CONSTRUCTOR(T::MAX_PRECISION, sum_scale);
+        let data_type = I::TYPE_CONSTRUCTOR(I::MAX_PRECISION, sum_scale);
 
         Self {
             sum_accumulator: DistinctSumAccumulator::new(&data_type),
             sum_scale,
             target_precision,
             target_scale,
+            _sum_type: PhantomData,
         }
     }
 }
 
-impl<T: DecimalType + ArrowNumericType + Debug> Accumulator
-    for DecimalDistinctAvgAccumulator<T>
+impl<I, S> Accumulator for DecimalDistinctAvgAccumulator<I, S>
+where
+    I: DecimalType + ArrowNumericType + Debug,
+    S: DecimalType + ArrowNumericType + Debug,
+    I::Native: Into<S::Native> + DecimalCast,
+    S::Native: DecimalCast,
 {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         self.sum_accumulator.state()
@@ -72,78 +85,43 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        if self.sum_accumulator.distinct_count() == 0 {
-            return ScalarValue::new_primitive::<T>(
-                None,
-                &T::TYPE_CONSTRUCTOR(self.target_precision, self.target_scale),
+        let out_type = I::TYPE_CONSTRUCTOR(self.target_precision, self.target_scale);
+        let count = self.sum_accumulator.distinct_count();
+        if count == 0 {
+            return ScalarValue::new_primitive::<I>(None, &out_type);
+        }
+
+        // Sum the distinct input values in the wider `S` so the total cannot
+        // overflow the input's native width (mirrors the non-distinct path).
+        let mut sum = S::Native::usize_as(0);
+        for value in self.sum_accumulator.distinct_values() {
+            sum = sum.add_wrapping(value.into());
+        }
+
+        let Some(count) = S::Native::from_usize(count) else {
+            return exec_err!(
+                "Arithmetic overflow in avg: the distinct count {count} cannot \
+                 be represented in the sum type"
             );
-        }
+        };
 
-        let sum_scalar = self.sum_accumulator.evaluate()?;
-
-        match sum_scalar {
-            ScalarValue::Decimal32(Some(sum), _, _) => {
-                let decimal_averager = DecimalAverager::<Decimal32Type>::try_new(
-                    self.sum_scale,
-                    self.target_precision,
-                    self.target_scale,
-                )?;
-                let avg = decimal_averager
-                    .avg(sum, self.sum_accumulator.distinct_count() as i32)?;
-                Ok(ScalarValue::Decimal32(
-                    Some(avg),
-                    self.target_precision,
-                    self.target_scale,
-                ))
-            }
-            ScalarValue::Decimal64(Some(sum), _, _) => {
-                let decimal_averager = DecimalAverager::<Decimal64Type>::try_new(
-                    self.sum_scale,
-                    self.target_precision,
-                    self.target_scale,
-                )?;
-                let avg = decimal_averager
-                    .avg(sum, self.sum_accumulator.distinct_count() as i64)?;
-                Ok(ScalarValue::Decimal64(
-                    Some(avg),
-                    self.target_precision,
-                    self.target_scale,
-                ))
-            }
-            ScalarValue::Decimal128(Some(sum), _, _) => {
-                let decimal_averager = DecimalAverager::<Decimal128Type>::try_new(
-                    self.sum_scale,
-                    self.target_precision,
-                    self.target_scale,
-                )?;
-                let avg = decimal_averager
-                    .avg(sum, self.sum_accumulator.distinct_count() as i128)?;
-                Ok(ScalarValue::Decimal128(
-                    Some(avg),
-                    self.target_precision,
-                    self.target_scale,
-                ))
-            }
-            ScalarValue::Decimal256(Some(sum), _, _) => {
-                let decimal_averager = DecimalAverager::<Decimal256Type>::try_new(
-                    self.sum_scale,
-                    self.target_precision,
-                    self.target_scale,
-                )?;
-                // `distinct_count` returns `u64`, but `avg` expects `i256`
-                // first convert `u64` to `i128`, then convert `i128` to `i256` to avoid overflow
-                let distinct_cnt: i128 = self.sum_accumulator.distinct_count() as i128;
-                let count: i256 = i256::from_i128(distinct_cnt);
-                let avg = decimal_averager.avg(sum, count)?;
-                Ok(ScalarValue::Decimal256(
-                    Some(avg),
-                    self.target_precision,
-                    self.target_scale,
-                ))
-            }
-
-            _ => unreachable!("Unsupported decimal type: {:?}", sum_scalar),
-        }
+        let averager = DecimalAverager::<S>::try_new(
+            self.sum_scale,
+            self.target_precision,
+            self.target_scale,
+        )?;
+        // Narrowing the average back to the (never wider) output type cannot
+        // fail in practice: `DecimalAverager::avg` validates the average
+        // against the output precision, whose bound fits the output's native
+        // type by construction
+        let avg =
+            I::Native::from_decimal(averager.avg(sum, count)?).ok_or_else(|| {
+                exec_datafusion_err!(
+                    "Arithmetic overflow in avg: the computed average does not fit \
+                 the output type"
+                )
+            })?;
+        ScalarValue::new_primitive::<I>(Some(avg), &out_type)
     }
 
     fn size(&self) -> usize {
@@ -159,6 +137,9 @@ mod tests {
     use super::*;
     use arrow::array::{
         Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+    };
+    use arrow::datatypes::{
+        Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, i256,
     };
     use std::sync::Arc;
 
@@ -276,6 +257,96 @@ mod tests {
         let expected_result =
             ScalarValue::Decimal256(Some(i256::from_i128(180_000000)), 54, 6);
         assert_eq!(result, expected_result);
+
+        Ok(())
+    }
+
+    // The overflow regression tests below use odd-count ranges symmetric
+    // around a center value, so the exact sum is `count * center` and the
+    // average is exactly `center`.
+
+    #[test]
+    fn test_decimal32_distinct_avg_widens_to_decimal64() -> Result<()> {
+        // 42951 distinct values centered on 50000:
+        // sum = 42951 * 50000 = 2,147,550,000 > i32::MAX
+        let array = Decimal32Array::from_iter_values(28525..=71475)
+            .with_precision_and_scale(5, 0)?;
+
+        let mut accumulator = DecimalDistinctAvgAccumulator::<
+            Decimal32Type,
+            Decimal64Type,
+        >::with_decimal_params(0, 9, 4);
+        accumulator.update_batch(&[Arc::new(array)])?;
+
+        assert_eq!(
+            accumulator.evaluate()?,
+            ScalarValue::Decimal32(Some(500_000_000), 9, 4)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal32_distinct_avg_widens_to_decimal128() -> Result<()> {
+        // 21477 distinct values centered on 99999:
+        // sum = 21477 * 99999 = 2,147,678,523 > i32::MAX
+        let array = Decimal32Array::from_iter_values(89261..=110737)
+            .with_precision_and_scale(9, 0)?;
+
+        let mut accumulator = DecimalDistinctAvgAccumulator::<
+            Decimal32Type,
+            Decimal128Type,
+        >::with_decimal_params(0, 9, 4);
+        accumulator.update_batch(&[Arc::new(array)])?;
+
+        assert_eq!(
+            accumulator.evaluate()?,
+            ScalarValue::Decimal32(Some(999_990_000), 9, 4)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal64_distinct_avg_widens_to_decimal128() -> Result<()> {
+        // 92235 distinct values centered on 10^14 - 1:
+        // sum = 92235 * (10^14 - 1) ~= 9.22e18 > i64::MAX
+        let center: i64 = 100_000_000_000_000 - 1;
+        let array = Decimal64Array::from_iter_values(center - 46117..=center + 46117)
+            .with_precision_and_scale(18, 0)?;
+
+        let mut accumulator = DecimalDistinctAvgAccumulator::<
+            Decimal64Type,
+            Decimal128Type,
+        >::with_decimal_params(0, 18, 4);
+        accumulator.update_batch(&[Arc::new(array)])?;
+
+        assert_eq!(
+            accumulator.evaluate()?,
+            ScalarValue::Decimal64(Some(999_999_999_999_990_000), 18, 4)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal128_distinct_avg_widens_to_decimal256() -> Result<()> {
+        // 21477 distinct values ending at 10^34 - 1, centered on 10^34 - 10739:
+        // sum = 21477 * (10^34 - 10739) ~= 2.15e38 > i128::MAX
+        let center: i128 = 10_i128.pow(34) - 10739;
+        let array = Decimal128Array::from_iter_values(center - 10738..=center + 10738)
+            .with_precision_and_scale(34, 0)?;
+
+        let mut accumulator = DecimalDistinctAvgAccumulator::<
+            Decimal128Type,
+            Decimal256Type,
+        >::with_decimal_params(0, 38, 4);
+        accumulator.update_batch(&[Arc::new(array)])?;
+
+        assert_eq!(
+            accumulator.evaluate()?,
+            ScalarValue::Decimal128(Some(center * 10_000), 38, 4)
+        );
 
         Ok(())
     }
