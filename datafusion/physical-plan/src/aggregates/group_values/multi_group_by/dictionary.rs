@@ -283,14 +283,6 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
         let dict_values = dict.values();
         let num_distinct = dict_values.len();
 
-        // The lookup-table path pays O(num_distinct) upfront — hashing every
-        // dictionary value and probing value_dedup for each — so each row check
-        // becomes a single integer compare. That only pays for itself when the
-        // rows to check outnumber the distinct values (low-cardinality dicts
-        // under high repetition). For high-cardinality dicts with few rows to
-        // check (e.g. only null rows matched), the table build dominates: fall
-        // back to per-row value comparison instead.
-        //
         // The fallback is in a separate #[cold] function so its code does not
         // appear inline here and cannot prevent LLVM from pipelining / unrolling
         // the hot lookup-table loops below.
