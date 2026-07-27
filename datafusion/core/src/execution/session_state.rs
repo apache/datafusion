@@ -1046,10 +1046,10 @@ pub struct SessionStateBuilder {
     query_planner: Option<Arc<dyn QueryPlanner + Send + Sync>>,
     catalog_list: Option<Arc<dyn CatalogProviderList>>,
     table_functions: Option<HashMap<String, Arc<TableFunction>>>,
-    scalar_functions: Option<Vec<Arc<ScalarUDF>>>,
-    higher_order_functions: Option<Vec<Arc<HigherOrderUDF>>>,
-    aggregate_functions: Option<Vec<Arc<AggregateUDF>>>,
-    window_functions: Option<Vec<Arc<WindowUDF>>>,
+    scalar_functions: Option<HashMap<String, Arc<ScalarUDF>>>,
+    higher_order_functions: Option<HashMap<String, Arc<HigherOrderUDF>>>,
+    aggregate_functions: Option<HashMap<String, Arc<AggregateUDF>>>,
+    window_functions: Option<HashMap<String, Arc<WindowUDF>>>,
     extension_types: Option<ExtensionTypeRegistryRef>,
     serializer_registry: Option<Arc<dyn SerializerRegistry>>,
     file_formats: Option<Vec<Arc<dyn FileFormatFactory>>>,
@@ -1065,6 +1065,83 @@ pub struct SessionStateBuilder {
     analyzer_rules: Option<Vec<Arc<dyn AnalyzerRule + Send + Sync>>>,
     optimizer_rules: Option<Vec<Arc<dyn OptimizerRule + Send + Sync>>>,
     physical_optimizer_rules: Option<Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>>,
+}
+
+/// A function registrable under its primary name plus every alias.
+pub trait NamedFunction {
+    /// The function's primary name.
+    fn name(&self) -> &str;
+    /// The function's aliases, if any.
+    fn aliases(&self) -> &[String];
+}
+
+impl NamedFunction for ScalarUDF {
+    fn name(&self) -> &str {
+        ScalarUDF::name(self)
+    }
+    fn aliases(&self) -> &[String] {
+        ScalarUDF::aliases(self)
+    }
+}
+
+impl NamedFunction for HigherOrderUDF {
+    fn name(&self) -> &str {
+        HigherOrderUDF::name(self)
+    }
+    fn aliases(&self) -> &[String] {
+        HigherOrderUDF::aliases(self)
+    }
+}
+
+impl NamedFunction for AggregateUDF {
+    fn name(&self) -> &str {
+        AggregateUDF::name(self)
+    }
+    fn aliases(&self) -> &[String] {
+        AggregateUDF::aliases(self)
+    }
+}
+
+impl NamedFunction for WindowUDF {
+    fn name(&self) -> &str {
+        WindowUDF::name(self)
+    }
+    fn aliases(&self) -> &[String] {
+        WindowUDF::aliases(self)
+    }
+}
+
+/// Key each function by its primary name and every alias (last-writer-wins) into a registry map.
+pub fn index_by_name_and_aliases<T: NamedFunction>(
+    functions: Vec<Arc<T>>,
+) -> HashMap<String, Arc<T>> {
+    let mut map = HashMap::new();
+    for function in functions {
+        for alias in function.aliases() {
+            map.insert(alias.clone(), Arc::clone(&function));
+        }
+        map.insert(function.name().to_string(), function);
+    }
+    map
+}
+
+/// Re-specialize `udf` for `config` (only datetime funcs do; others keep the same `Arc`).
+fn refresh_udf(udf: Arc<ScalarUDF>, config: &ConfigOptions) -> Arc<ScalarUDF> {
+    match udf.inner().with_updated_config(config) {
+        Some(new_udf) => Arc::new(new_udf),
+        None => udf,
+    }
+}
+
+/// Re-specialize the config-dependent entries of a scalar registry, preserving every name/alias key.
+fn refresh_scalar_functions(
+    functions: HashMap<String, Arc<ScalarUDF>>,
+    config: &ConfigOptions,
+) -> HashMap<String, Arc<ScalarUDF>> {
+    functions
+        .into_iter()
+        .map(|(key, udf)| (key, refresh_udf(udf, config)))
+        .collect()
 }
 
 impl SessionStateBuilder {
@@ -1145,14 +1222,10 @@ impl SessionStateBuilder {
             query_planner: Some(existing.query_planner),
             catalog_list: Some(existing.catalog_list),
             table_functions: Some(existing.table_functions),
-            scalar_functions: Some(existing.scalar_functions.into_values().collect_vec()),
-            higher_order_functions: Some(
-                existing.higher_order_functions.into_values().collect_vec(),
-            ),
-            aggregate_functions: Some(
-                existing.aggregate_functions.into_values().collect_vec(),
-            ),
-            window_functions: Some(existing.window_functions.into_values().collect_vec()),
+            scalar_functions: Some(existing.scalar_functions),
+            higher_order_functions: Some(existing.higher_order_functions),
+            aggregate_functions: Some(existing.aggregate_functions),
+            window_functions: Some(existing.window_functions),
             extension_types: Some(existing.extension_types),
             serializer_registry: Some(existing.serializer_registry),
             file_formats: Some(existing.file_formats.into_values().collect_vec()),
@@ -1189,20 +1262,28 @@ impl SessionStateBuilder {
             .extend(SessionStateDefaults::default_expr_planners());
 
         self.scalar_functions
-            .get_or_insert_with(Vec::new)
-            .extend(SessionStateDefaults::default_scalar_functions());
+            .get_or_insert_with(HashMap::new)
+            .extend(index_by_name_and_aliases(
+                SessionStateDefaults::default_scalar_functions(),
+            ));
 
         self.higher_order_functions
-            .get_or_insert_with(Vec::new)
-            .extend(SessionStateDefaults::default_higher_order_functions());
+            .get_or_insert_with(HashMap::new)
+            .extend(index_by_name_and_aliases(
+                SessionStateDefaults::default_higher_order_functions(),
+            ));
 
         self.aggregate_functions
-            .get_or_insert_with(Vec::new)
-            .extend(SessionStateDefaults::default_aggregate_functions());
+            .get_or_insert_with(HashMap::new)
+            .extend(index_by_name_and_aliases(
+                SessionStateDefaults::default_aggregate_functions(),
+            ));
 
         self.window_functions
-            .get_or_insert_with(Vec::new)
-            .extend(SessionStateDefaults::default_window_functions());
+            .get_or_insert_with(HashMap::new)
+            .extend(index_by_name_and_aliases(
+                SessionStateDefaults::default_window_functions(),
+            ));
 
         self.extension_types
             .get_or_insert_with(|| Arc::new(MemoryExtensionTypeRegistry::new_empty()))
@@ -1377,7 +1458,7 @@ impl SessionStateBuilder {
         mut self,
         scalar_functions: Vec<Arc<ScalarUDF>>,
     ) -> Self {
-        self.scalar_functions = Some(scalar_functions);
+        self.scalar_functions = Some(index_by_name_and_aliases(scalar_functions));
         self
     }
 
@@ -1386,7 +1467,8 @@ impl SessionStateBuilder {
         mut self,
         higher_order_functions: Vec<Arc<HigherOrderUDF>>,
     ) -> Self {
-        self.higher_order_functions = Some(higher_order_functions);
+        self.higher_order_functions =
+            Some(index_by_name_and_aliases(higher_order_functions));
         self
     }
 
@@ -1395,7 +1477,7 @@ impl SessionStateBuilder {
         mut self,
         aggregate_functions: Vec<Arc<AggregateUDF>>,
     ) -> Self {
-        self.aggregate_functions = Some(aggregate_functions);
+        self.aggregate_functions = Some(index_by_name_and_aliases(aggregate_functions));
         self
     }
 
@@ -1404,7 +1486,7 @@ impl SessionStateBuilder {
         mut self,
         window_functions: Vec<Arc<WindowUDF>>,
     ) -> Self {
-        self.window_functions = Some(window_functions);
+        self.window_functions = Some(index_by_name_and_aliases(window_functions));
         self
     }
 
@@ -1630,73 +1712,19 @@ impl SessionStateBuilder {
             }
         }
 
-        if let Some(scalar_functions) = scalar_functions {
-            for udf in scalar_functions {
-                let config_options = state.config().options();
-                match udf.inner().with_updated_config(config_options) {
-                    Some(new_udf) => {
-                        if let Err(err) = state.register_udf(Arc::new(new_udf)) {
-                            debug!(
-                                "Failed to re-register updated UDF '{}': {}",
-                                udf.name(),
-                                err
-                            );
-                        }
-                    }
-                    None => match state.register_udf(Arc::clone(&udf)) {
-                        Ok(Some(existing)) => {
-                            debug!("Overwrote existing UDF '{}'", existing.name());
-                        }
-                        Ok(None) => {
-                            debug!("Registered UDF '{}'", udf.name());
-                        }
-                        Err(err) => {
-                            debug!("Failed to register UDF '{}': {}", udf.name(), err);
-                        }
-                    },
-                }
-            }
+        // Install each registry verbatim (deterministic); scalar re-specializes for the config.
+        if let Some(functions) = scalar_functions {
+            state.scalar_functions =
+                refresh_scalar_functions(functions, state.config.options());
         }
-
-        if let Some(higher_order_functions) = higher_order_functions {
-            for function in higher_order_functions {
-                match state.register_higher_order_function(Arc::clone(&function)) {
-                    Ok(Some(existing)) => {
-                        debug!(
-                            "Overwrote existing higher-order function '{}'",
-                            existing.name()
-                        );
-                    }
-                    Ok(None) => {
-                        debug!("Registered higher-order function '{}'", function.name());
-                    }
-                    Err(err) => {
-                        debug!(
-                            "Failed to register higher-order function '{}': {}",
-                            function.name(),
-                            err
-                        );
-                    }
-                }
-            }
+        if let Some(functions) = higher_order_functions {
+            state.higher_order_functions = functions;
         }
-
-        if let Some(aggregate_functions) = aggregate_functions {
-            aggregate_functions.into_iter().for_each(|udaf| {
-                let existing_udf = state.register_udaf(udaf);
-                if let Ok(Some(existing_udf)) = existing_udf {
-                    debug!("Overwrote an existing UDF: {}", existing_udf.name());
-                }
-            });
+        if let Some(functions) = aggregate_functions {
+            state.aggregate_functions = functions;
         }
-
-        if let Some(window_functions) = window_functions {
-            window_functions.into_iter().for_each(|udwf| {
-                let existing_udf = state.register_udwf(udwf);
-                if let Ok(Some(existing_udf)) = existing_udf {
-                    debug!("Overwrote an existing UDF: {}", existing_udf.name());
-                }
-            });
+        if let Some(functions) = window_functions {
+            state.window_functions = functions;
         }
 
         if let Some(extension_types) = extension_types {
@@ -1799,22 +1827,26 @@ impl SessionStateBuilder {
     }
 
     /// Returns the current scalar_functions value
-    pub fn scalar_functions(&mut self) -> &mut Option<Vec<Arc<ScalarUDF>>> {
+    pub fn scalar_functions(&mut self) -> &mut Option<HashMap<String, Arc<ScalarUDF>>> {
         &mut self.scalar_functions
     }
 
-    /// Returns the current scalar_functions value
-    pub fn higher_order_functions(&mut self) -> &mut Option<Vec<Arc<HigherOrderUDF>>> {
+    /// Returns the current higher_order_functions value
+    pub fn higher_order_functions(
+        &mut self,
+    ) -> &mut Option<HashMap<String, Arc<HigherOrderUDF>>> {
         &mut self.higher_order_functions
     }
 
     /// Returns the current aggregate_functions value
-    pub fn aggregate_functions(&mut self) -> &mut Option<Vec<Arc<AggregateUDF>>> {
+    pub fn aggregate_functions(
+        &mut self,
+    ) -> &mut Option<HashMap<String, Arc<AggregateUDF>>> {
         &mut self.aggregate_functions
     }
 
     /// Returns the current window_functions value
-    pub fn window_functions(&mut self) -> &mut Option<Vec<Arc<WindowUDF>>> {
+    pub fn window_functions(&mut self) -> &mut Option<HashMap<String, Arc<WindowUDF>>> {
         &mut self.window_functions
     }
 
@@ -2373,6 +2405,10 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Expr;
     use datafusion_expr::HigherOrderUDF;
+    use datafusion_expr::registry::FunctionRegistry;
+    use datafusion_functions::datetime::now::NowFunc;
+    use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_functions_aggregate::sum::sum_udaf;
     use datafusion_optimizer::Optimizer;
     use datafusion_optimizer::optimizer::OptimizerRule;
     use datafusion_physical_plan::display::DisplayableExecutionPlan;
@@ -2522,6 +2558,95 @@ mod tests {
         let new_state =
             SessionStateBuilder::new_from_existing(without_default_state).build();
         assert!(new_state.catalog_list().catalog(&default_catalog).is_none());
+        Ok(())
+    }
+
+    fn simple_udf(
+        name: &str,
+        aliases: impl IntoIterator<Item = &'static str>,
+    ) -> Arc<ScalarUDF> {
+        let udf = datafusion_expr::create_udf(
+            name,
+            vec![DataType::Utf8],
+            DataType::Utf8,
+            datafusion_expr::Volatility::Immutable,
+            Arc::new(|_| {
+                Ok(datafusion_expr::ColumnarValue::Scalar(
+                    datafusion_common::ScalarValue::Utf8(None),
+                ))
+            }),
+        )
+        .with_aliases(aliases);
+        Arc::new(udf)
+    }
+
+    #[test]
+    fn test_from_existing_preserves_alias_override() -> Result<()> {
+        let mut state = SessionStateBuilder::new().build();
+        // `postgres_to_char` reclaims the `to_char` name via an alias; the override must survive.
+        state.register_udf(simple_udf("to_char", ["date_format"]))?;
+        state.register_udf(simple_udf("postgres_to_char", ["to_char"]))?;
+
+        let roundtrip = SessionStateBuilder::new_from_existing(state.clone()).build();
+        assert_eq!(state.scalar_functions(), roundtrip.scalar_functions());
+        assert_eq!(
+            roundtrip.scalar_functions()["to_char"].name(),
+            "postgres_to_char"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_existing_preserves_aggregate_alias_override() -> Result<()> {
+        let mut state = SessionStateBuilder::new().build();
+        // Parity for a non-scalar registry: `count` reclaims the `sum` name via an alias.
+        let sum = Arc::unwrap_or_clone(sum_udaf()).with_aliases(["running_total"]);
+        let count = Arc::unwrap_or_clone(count_udaf()).with_aliases(["sum"]);
+        state.register_udaf(Arc::new(sum))?;
+        state.register_udaf(Arc::new(count))?;
+
+        let roundtrip = SessionStateBuilder::new_from_existing(state.clone()).build();
+        assert_eq!(state.aggregate_functions(), roundtrip.aggregate_functions());
+        assert_eq!(roundtrip.aggregate_functions()["sum"].name(), "count");
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_existing_refreshes_config_dependent_udf() -> Result<()> {
+        // `now()` specializes to the session time zone; a config override must re-specialize the inherited instance.
+        let mut state = SessionStateBuilder::new().build();
+        state.register_udf(Arc::new(ScalarUDF::new_from_impl(NowFunc::default())))?;
+
+        let config =
+            SessionConfig::new().set_str("datafusion.execution.time_zone", "+09:00");
+        let rebuilt = SessionStateBuilder::new_from_existing(state.clone())
+            .with_config(config)
+            .build();
+
+        assert_ne!(
+            rebuilt.scalar_functions()["now"],
+            state.scalar_functions()["now"]
+        );
+        // Name and alias are re-specialized consistently.
+        assert_eq!(
+            rebuilt.scalar_functions()["now"],
+            rebuilt.scalar_functions()["current_timestamp"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_existing_with_scalar_functions_replaces() -> Result<()> {
+        let mut base = SessionStateBuilder::new().build();
+        base.register_udf(simple_udf("inherited_only", Vec::<&str>::new()))?;
+
+        // Setting scalar functions after `new_from_existing` replaces the inherited registry, not extends it.
+        let rebuilt = SessionStateBuilder::new_from_existing(base)
+            .with_scalar_functions(vec![simple_udf("added", Vec::<&str>::new())])
+            .build();
+
+        assert!(rebuilt.scalar_functions().contains_key("added"));
+        assert!(!rebuilt.scalar_functions().contains_key("inherited_only"));
         Ok(())
     }
 
