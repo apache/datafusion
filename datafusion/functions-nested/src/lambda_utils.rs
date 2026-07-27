@@ -248,7 +248,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::{
-        array::{Array, ArrayRef},
+        array::ArrayRef,
         buffer::{NullBuffer, OffsetBuffer},
         datatypes::{DataType, Field},
     };
