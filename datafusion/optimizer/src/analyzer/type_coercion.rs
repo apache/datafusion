@@ -43,7 +43,7 @@ use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
-    comparison_coercion, like_coercion, type_union_coercion,
+    comparison_coercion, like_coercion, regex_coercion, type_union_coercion,
 };
 use datafusion_expr::type_coercion::functions::{
     UDFCoercionExt, fields_with_udf, value_fields_with_higher_order_udf_and_lambdas,
@@ -613,6 +613,34 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     case_insensitive,
                 ))))
             }
+            Expr::SimilarTo(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                case_insensitive,
+            }) => {
+                let left_type = expr.get_type(self.schema)?;
+                let right_type = pattern.get_type(self.schema)?;
+                // `SIMILAR TO` lowers to a regex binary operator, so coerce both
+                // sides the same way `Operator::RegexMatch` does. Without this the
+                // physical regex kernel receives mismatched string types and fails
+                // to downcast the pattern array.
+                let coerced_type = regex_coercion(&left_type, &right_type).ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "There isn't a common type to coerce {left_type} and {right_type} in SIMILAR TO expression"
+                    )
+                })?;
+                let expr = Box::new(expr.cast_to(&coerced_type, self.schema)?);
+                let pattern = Box::new(pattern.cast_to(&coerced_type, self.schema)?);
+                Ok(Transformed::yes(Expr::SimilarTo(Like::new(
+                    negated,
+                    expr,
+                    pattern,
+                    escape_char,
+                    case_insensitive,
+                ))))
+            }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let (left, right) =
                     self.coerce_binary_op(*left, self.schema, op, *right, self.schema)?;
@@ -812,7 +840,6 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             | Expr::Column(_)
             | Expr::ScalarVariable(_, _)
             | Expr::Literal(_, _)
-            | Expr::SimilarTo(_)
             | Expr::IsNotNull(_)
             | Expr::IsNull(_)
             | Expr::Cast(_)
@@ -2235,6 +2262,75 @@ mod test {
         assert_type_coercion_error(
             plan,
             "There isn't a common type to coerce Int64 and Utf8 in ILIKE expression",
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn similar_to_for_type_coercion() -> Result<()> {
+        // A matching value and pattern type needs no cast.
+        let expr = Box::new(col("a"));
+        let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
+        let similar_to_expr =
+            Expr::SimilarTo(Like::new(false, expr, pattern, None, false));
+        let empty = empty_with_type(Utf8);
+        let plan =
+            LogicalPlan::Projection(Projection::try_new(vec![similar_to_expr], empty)?);
+
+        assert_analyzed_plan_eq!(
+            plan,
+            @r#"
+        Projection: a SIMILAR TO Utf8("abc")
+          EmptyRelation: rows=0
+        "#
+        )?;
+
+        // Mismatched string types are coerced to a common type, so the regex
+        // kernel never sees a pattern array of a different type than the value.
+        let expr = Box::new(col("a"));
+        let pattern = Box::new(lit(ScalarValue::LargeUtf8(Some("abc".to_string()))));
+        let similar_to_expr =
+            Expr::SimilarTo(Like::new(false, expr, pattern, None, false));
+        let empty = empty_with_type(Utf8);
+        let plan =
+            LogicalPlan::Projection(Projection::try_new(vec![similar_to_expr], empty)?);
+
+        assert_analyzed_plan_eq!(
+            plan,
+            @r#"
+        Projection: CAST(a AS LargeUtf8) SIMILAR TO LargeUtf8("abc")
+          EmptyRelation: rows=0
+        "#
+        )?;
+
+        // A NULL pattern is cast to the value's string type.
+        let expr = Box::new(col("a"));
+        let pattern = Box::new(lit(ScalarValue::Null));
+        let similar_to_expr =
+            Expr::SimilarTo(Like::new(false, expr, pattern, None, false));
+        let empty = empty_with_type(DataType::Utf8View);
+        let plan =
+            LogicalPlan::Projection(Projection::try_new(vec![similar_to_expr], empty)?);
+
+        assert_analyzed_plan_eq!(
+            plan,
+            @r"
+        Projection: a SIMILAR TO CAST(NULL AS Utf8View)
+          EmptyRelation: rows=0
+        "
+        )?;
+
+        let expr = Box::new(col("a"));
+        let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
+        let similar_to_expr =
+            Expr::SimilarTo(Like::new(false, expr, pattern, None, false));
+        let empty = empty_with_type(DataType::Int64);
+        let plan =
+            LogicalPlan::Projection(Projection::try_new(vec![similar_to_expr], empty)?);
+        assert_type_coercion_error(
+            plan,
+            "There isn't a common type to coerce Int64 and Utf8 in SIMILAR TO expression",
         )?;
 
         Ok(())

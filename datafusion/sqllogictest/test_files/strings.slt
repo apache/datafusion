@@ -260,6 +260,18 @@ SELECT 'X' SIMILAR TO lower('X');
 ----
 false
 
+# NOT SIMILAR TO with a literal pattern.
+query T rowsort
+SELECT s FROM test WHERE s NOT SIMILAR TO 'p1%';
+----
+P1
+P1e1
+P1m1e1
+e1
+p2
+p2e1
+p2m1e1
+
 # SIMILAR TO NULL pattern returns NULL.
 query B
 SELECT 'a' SIMILAR TO NULL;
@@ -269,6 +281,59 @@ NULL
 # SIMILAR TO with a non-string pattern is rejected at plan time.
 statement error Invalid pattern in SIMILAR TO expression
 SELECT 'a' SIMILAR TO 1;
+
+# The value and the pattern are coerced to a common string type, so mixing
+# `Utf8`, `LargeUtf8` and `Utf8View` works instead of failing in the regex
+# kernel.
+query B
+SELECT 'abc' SIMILAR TO arrow_cast('a%', 'LargeUtf8');
+----
+true
+
+query B
+SELECT arrow_cast('ab', 'Utf8View') SIMILAR TO arrow_cast('a.', 'LargeUtf8');
+----
+false
+
+query B
+SELECT arrow_cast('a', 'Utf8View') SIMILAR TO NULL;
+----
+NULL
+
+query B
+SELECT arrow_cast('a', 'LargeUtf8') SIMILAR TO arrow_cast(NULL, 'Utf8View');
+----
+NULL
+
+statement ok
+CREATE TABLE mixed_patterns(text TEXT, pattern TEXT) AS VALUES ('abc', 'a%');
+
+query B
+SELECT text SIMILAR TO arrow_cast(pattern, 'LargeUtf8') FROM mixed_patterns;
+----
+true
+
+query B
+SELECT arrow_cast(text, 'Utf8View') SIMILAR TO arrow_cast(pattern, 'LargeUtf8')
+FROM mixed_patterns;
+----
+true
+
+# Dictionary-encoded values are coerced to their value type.
+query B
+SELECT arrow_cast(text, 'Dictionary(Int32, Utf8)') SIMILAR TO 'a%'
+FROM mixed_patterns;
+----
+true
+
+query B
+SELECT arrow_cast(text, 'Dictionary(Int32, Utf8)') SIMILAR TO pattern
+FROM mixed_patterns;
+----
+true
+
+statement ok
+DROP TABLE mixed_patterns;
 
 # NOT LIKE
 query T rowsort
