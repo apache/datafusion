@@ -418,9 +418,10 @@ impl StatisticsRegistry {
     /// Provider extensions are preserved; see [`StatisticsContext`] for how they
     /// propagate up the tree.
     ///
-    /// Children are resolved via [`ExecutionPlan::child_stats_requests`] (default
-    /// `Skip`), so a custom operator whose provider reads `child_stats` must
-    /// declare `At` for those children to receive their computed statistics.
+    /// Each provider's `child_stats` come from its own
+    /// [`StatisticsProvider::child_stats_requests`], so a provider can read child
+    /// statistics for an existing operator without that operator declaring
+    /// anything.
     #[deprecated(
         since = "55.0.0",
         note = "use `StatisticsContext::new_with_registry(registry).compute_extended(plan, &StatisticsArgs::new())`"
@@ -1087,7 +1088,7 @@ mod tests {
     };
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::stats::Precision;
-    use datafusion_common::{ColumnStatistics, ScalarValue};
+    use datafusion_common::{ColumnStatistics, ScalarValue, internal_err};
     use datafusion_execution::TaskContext;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::PhysicalExpr;
@@ -1384,6 +1385,106 @@ mod tests {
         // rather than the source's row count.
         let stats = compute(&registry, custom.as_ref())?;
         assert!(stats.base.num_rows.get_value().is_none());
+        Ok(())
+    }
+
+    /// Errors when its statistics are computed, so resolving it is detectable.
+    #[derive(Debug)]
+    struct ErroringExec {
+        input: Arc<dyn ExecutionPlan>,
+    }
+
+    impl DisplayAs for ErroringExec {
+        fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "ErroringExec")
+        }
+    }
+
+    impl ExecutionPlan for ErroringExec {
+        fn name(&self) -> &str {
+            "ErroringExec"
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![&self.input]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(Arc::new(ErroringExec {
+                input: Arc::clone(&children[0]),
+            }))
+        }
+
+        fn properties(&self) -> &Arc<PlanProperties> {
+            self.input.properties()
+        }
+
+        fn statistics_from_inputs(
+            &self,
+            _input_stats: &[Arc<Statistics>],
+            _args: &StatisticsArgs,
+        ) -> Result<Arc<Statistics>> {
+            internal_err!("child statistics should not be computed")
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unimplemented!()
+        }
+    }
+
+    /// Computes a fixed row count for `ProjectionExec`, requesting no children.
+    #[derive(Debug)]
+    struct SkipComputeProvider;
+
+    impl StatisticsProvider for SkipComputeProvider {
+        fn child_stats_requests(
+            &self,
+            plan: &dyn ExecutionPlan,
+            _partition: Option<usize>,
+        ) -> Vec<ChildStats> {
+            plan.children().iter().map(|_| ChildStats::Skip).collect()
+        }
+
+        fn compute_statistics(
+            &self,
+            plan: &dyn ExecutionPlan,
+            _child_stats: &[ExtendedStatistics],
+        ) -> Result<StatisticsResult> {
+            if plan.downcast_ref::<ProjectionExec>().is_some() {
+                let mut stats = Statistics::new_unknown(plan.schema().as_ref());
+                stats.num_rows = Precision::Exact(7);
+                Ok(StatisticsResult::Computed(ExtendedStatistics::from(stats)))
+            } else {
+                Ok(StatisticsResult::Delegate)
+            }
+        }
+    }
+
+    #[test]
+    fn test_provider_override_skips_operator_child_walk() -> Result<()> {
+        // ProjectionExec requests At for a child that errors when computed; the
+        // overriding provider requests Skip, so the child is never resolved and
+        // its error never surfaces.
+        let schema = make_schema();
+        let child: Arc<dyn ExecutionPlan> = Arc::new(ErroringExec {
+            input: make_source(1000),
+        });
+        let parent: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            vec![(col("a", &schema)?, "a".to_string())],
+            child,
+        )?);
+        let mut registry = StatisticsRegistry::new();
+        registry.register(Arc::new(SkipComputeProvider));
+
+        let stats = compute(&registry, parent.as_ref())?;
+        assert!(matches!(stats.base.num_rows, Precision::Exact(7)));
         Ok(())
     }
 

@@ -221,13 +221,16 @@ impl StatisticsContext {
         }
 
         let children = plan.children();
-        let requests = plan.child_stats_requests(partition);
-        // Resolved for the built-in `statistics_from_inputs` fallback below.
-        let child_statistics = self.resolve_children(plan, &children, &requests)?;
-
+        // Try providers before resolving the operator's own children, so a
+        // provider that overrides this node is not blocked by the fallback walk.
         let statistics = match self.try_provider_stats(plan, &children, args)? {
             Some(statistics) => statistics,
-            None => plan.statistics_from_inputs(&child_statistics, args)?,
+            None => {
+                let requests = plan.child_stats_requests(partition);
+                let child_statistics =
+                    self.resolve_children(plan, &children, &requests)?;
+                plan.statistics_from_inputs(&child_statistics, args)?
+            }
         };
         self.store_statistics(plan, partition, Arc::clone(&statistics));
         Ok(statistics)
