@@ -50,7 +50,7 @@ use datafusion_datasource_parquet::source::ParquetSource;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::physical_planning_context::{ScalarSubqueryResults, SubqueryIndex};
-use datafusion_expr::{AggregateUDF, HigherOrderUDF, Operator, ScalarUDF, WindowUDF};
+use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::{
     Empty, GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, TimestampValue,
 };
