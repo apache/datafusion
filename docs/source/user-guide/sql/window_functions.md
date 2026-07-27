@@ -403,17 +403,18 @@ lag(expression, offset, default)
 -- Example usage of the lag window function:
 SELECT employee_id,
     salary,
-    lag(salary, 1, 0) OVER (ORDER BY employee_id) AS prev_salary
+    lag(salary, 1, 0) OVER (ORDER BY employee_id) AS prev_salary,
+    lag(salary, 1, salary) OVER (ORDER BY employee_id) AS prev_salary_or_current
 FROM employees;
 
-+-------------+--------+-------------+
-| employee_id | salary | prev_salary |
-+-------------+--------+-------------+
-| 1           | 30000  | 0           |
-| 2           | 50000  | 30000       |
-| 3           | 70000  | 50000       |
-| 4           | 60000  | 70000       |
-+-------------+--------+-------------+
++-------------+--------+-------------+------------------------+
+| employee_id | salary | prev_salary | prev_salary_or_current |
++-------------+--------+-------------+------------------------+
+| 1           | 30000  | 0           | 30000                  |
+| 2           | 50000  | 30000       | 30000                  |
+| 3           | 70000  | 50000       | 50000                  |
+| 4           | 60000  | 70000       | 70000                  |
++-------------+--------+-------------+------------------------+
 ```
 
 ### `last_value`
@@ -471,18 +472,19 @@ SELECT
     employee_id,
     department,
     salary,
-    lead(salary, 1, 0) OVER (PARTITION BY department ORDER BY salary) AS next_salary
+    lead(salary, 1, 0) OVER (PARTITION BY department ORDER BY salary) AS next_salary,
+    lead(salary, 1, salary) OVER (PARTITION BY department ORDER BY salary) AS next_salary_or_current
 FROM employees;
 
-+-------------+-------------+--------+--------------+
-| employee_id | department  | salary | next_salary  |
-+-------------+-------------+--------+--------------+
-| 1           | Sales       | 30000  | 50000        |
-| 2           | Sales       | 50000  | 70000        |
-| 3           | Sales       | 70000  | 0            |
-| 4           | Engineering | 40000  | 60000        |
-| 5           | Engineering | 60000  | 0            |
-+-------------+-------------+--------+--------------+
++-------------+-------------+--------+--------------+------------------------+
+| employee_id | department  | salary | next_salary  | next_salary_or_current |
++-------------+-------------+--------+--------------+------------------------+
+| 1           | Sales       | 30000  | 50000        | 50000                  |
+| 2           | Sales       | 50000  | 70000        | 70000                  |
+| 3           | Sales       | 70000  | 0            | 70000                  |
+| 4           | Engineering | 40000  | 60000        | 60000                  |
+| 5           | Engineering | 60000  | 0            | 60000                  |
++-------------+-------------+--------+--------------+------------------------+
 ```
 
 ### `nth_value`
