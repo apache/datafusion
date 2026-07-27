@@ -23,7 +23,7 @@ use std::ops::Deref;
 use std::vec::IntoIter;
 
 use crate::utils::{merge_and_order_indices, set_difference};
-use crate::{DFSchema, HashSet, JoinType};
+use crate::{DFSchema, HashSet, JoinType, NullEquality};
 
 /// This object defines a constraint on a table.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -183,18 +183,40 @@ impl FunctionalDependence {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionalDependencies {
     deps: Vec<FunctionalDependence>,
+    null_equalities: Vec<NullEquality>,
 }
 
 impl FunctionalDependencies {
     /// Creates an empty `FunctionalDependencies` object.
     pub fn empty() -> Self {
-        Self { deps: vec![] }
+        Self {
+            deps: vec![],
+            null_equalities: vec![],
+        }
     }
 
     /// Creates a new `FunctionalDependencies` object from a vector of
     /// `FunctionalDependence` objects.
     pub fn new(dependencies: Vec<FunctionalDependence>) -> Self {
-        Self { deps: dependencies }
+        let null_equalities = vec![NullEquality::NullEqualsNothing; dependencies.len()];
+        Self::new_with_null_equalities(dependencies, null_equalities)
+    }
+
+    fn new_with_null_equalities(
+        dependencies: Vec<FunctionalDependence>,
+        null_equalities: Vec<NullEquality>,
+    ) -> Self {
+        debug_assert_eq!(dependencies.len(), null_equalities.len());
+        Self {
+            deps: dependencies,
+            null_equalities,
+        }
+    }
+
+    fn iter_with_null_equality(
+        &self,
+    ) -> impl Iterator<Item = (&FunctionalDependence, NullEquality)> {
+        self.deps.iter().zip(self.null_equalities.iter().copied())
     }
 
     /// Creates a new `FunctionalDependencies` object from the given constraints.
@@ -241,6 +263,7 @@ impl FunctionalDependencies {
     /// Merges the given functional dependencies with these.
     pub fn extend(&mut self, other: FunctionalDependencies) {
         self.deps.extend(other.deps);
+        self.null_equalities.extend(other.null_equalities);
     }
 
     /// Sanity checks if functional dependencies are valid. For example, if
@@ -297,12 +320,16 @@ impl FunctionalDependencies {
         n_out: usize,
     ) -> FunctionalDependencies {
         let mut projected_func_dependencies = vec![];
-        for FunctionalDependence {
-            source_indices,
-            target_indices,
-            nullable,
-            mode,
-        } in &self.deps
+        let mut projected_null_equalities = vec![];
+        for (
+            FunctionalDependence {
+                source_indices,
+                target_indices,
+                nullable,
+                mode,
+            },
+            null_equality,
+        ) in self.iter_with_null_equality()
         {
             let new_source_indices =
                 update_elements_with_matching_indices(source_indices, proj_indices);
@@ -323,9 +350,13 @@ impl FunctionalDependencies {
                 )
                 .with_mode(*mode);
                 projected_func_dependencies.push(new_func_dependence);
+                projected_null_equalities.push(null_equality);
             }
         }
-        FunctionalDependencies::new(projected_func_dependencies)
+        FunctionalDependencies::new_with_null_equalities(
+            projected_func_dependencies,
+            projected_null_equalities,
+        )
     }
 
     /// This function joins this set of functional dependencies with the `other`
@@ -384,9 +415,24 @@ impl FunctionalDependencies {
     /// - If the dependency in question is PRIMARY KEY (i.e. not nullable), a new
     ///   null value turns it into UNIQUE mode.
     fn downgrade_dependencies(&mut self) {
-        // Delete nullable dependencies, since they are no longer valid:
-        self.deps.retain(|item| !item.nullable);
-        self.deps.iter_mut().for_each(|item| item.nullable = true);
+        let dependencies = std::mem::take(&mut self.deps);
+        let null_equalities = std::mem::take(&mut self.null_equalities);
+        let mut retained_dependencies = Vec::with_capacity(dependencies.len());
+        let mut retained_null_equalities = Vec::with_capacity(null_equalities.len());
+
+        for (mut dependency, _) in dependencies.into_iter().zip(null_equalities) {
+            // A dependency whose determinant was already nullable becomes
+            // invalid. A non-nullable determinant becomes nullable, and NULL
+            // values introduced by the join are not equal to one another.
+            if !dependency.nullable {
+                dependency.nullable = true;
+                retained_dependencies.push(dependency);
+                retained_null_equalities.push(NullEquality::NullEqualsNothing);
+            }
+        }
+
+        self.deps = retained_dependencies;
+        self.null_equalities = retained_null_equalities;
     }
 
     /// This function ensures that functional dependencies involving uniquely
@@ -423,18 +469,22 @@ pub fn aggregate_functional_dependencies(
     aggr_schema: &DFSchema,
 ) -> FunctionalDependencies {
     let mut aggregate_func_dependencies = vec![];
+    let mut aggregate_null_equalities = vec![];
     let aggr_input_fields = aggr_input_schema.field_names();
     let aggr_fields = aggr_schema.fields();
     // Association covers the whole table:
     let target_indices = (0..aggr_schema.fields().len()).collect::<Vec<_>>();
     // Get functional dependencies of the schema:
     let func_dependencies = aggr_input_schema.functional_dependencies();
-    for FunctionalDependence {
-        source_indices,
-        nullable,
-        mode,
-        ..
-    } in &func_dependencies.deps
+    for (
+        FunctionalDependence {
+            source_indices,
+            nullable,
+            mode,
+            ..
+        },
+        input_null_equality,
+    ) in func_dependencies.iter_with_null_equality()
     {
         // Keep source indices in a `HashSet` to prevent duplicate entries:
         let mut new_source_indices = vec![];
@@ -470,6 +520,15 @@ pub fn aggregate_functional_dependencies(
         };
         // All of the composite indices occur in the GROUP BY expression:
         if new_source_indices.len() == source_indices.len() {
+            // GROUP BY treats NULL values as equal. When this determinant
+            // covers the complete grouping key, at most one output row exists
+            // for its NULL value too.
+            let output_null_equality =
+                if new_source_indices.len() == group_by_expr_names.len() {
+                    NullEquality::NullEqualsNull
+                } else {
+                    input_null_equality
+                };
             aggregate_func_dependencies.push(
                 FunctionalDependence::new(
                     new_source_indices,
@@ -478,6 +537,7 @@ pub fn aggregate_functional_dependencies(
                 )
                 .with_mode(mode),
             );
+            aggregate_null_equalities.push(output_null_equality);
         }
     }
 
@@ -501,13 +561,16 @@ pub fn aggregate_functional_dependencies(
             // Add a new functional dependency associated with the whole table:
             // Use nullable property of the GROUP BY expression:
             aggregate_func_dependencies.push(
-                // Use nullable property of the GROUP BY expression:
                 FunctionalDependence::new(source_indices, target_indices, nullable)
                     .with_mode(Dependency::Single),
             );
+            aggregate_null_equalities.push(NullEquality::NullEqualsNull);
         }
     }
-    FunctionalDependencies::new(aggregate_func_dependencies)
+    FunctionalDependencies::new_with_null_equalities(
+        aggregate_func_dependencies,
+        aggregate_null_equalities,
+    )
 }
 
 /// Returns target indices, for the determinant keys that are inside
@@ -617,16 +680,24 @@ pub fn get_required_sort_exprs_indices(
         };
 
         // A sort expression is removable if its value is functionally determined
-        // by fields that already appear earlier in the sort order: if the earlier
-        // fields are fixed, this one's value is fixed too, so it adds no ordering
-        // information.
-        let removable = dependencies.deps.iter().any(|dependency| {
-            dependency.target_indices.contains(&field_idx)
-                && dependency
-                    .source_indices
-                    .iter()
-                    .all(|source_idx| known_field_indices.contains(source_idx))
-        });
+        // by fields that already appear earlier in the sort order. A nullable
+        // dependency is only valid here when its determinant treats NULLs as
+        // equal (for example, a GROUP BY key), or no determinant field can be NULL.
+        let removable =
+            dependencies
+                .iter_with_null_equality()
+                .any(|(dependency, null_equality)| {
+                    dependency.target_indices.contains(&field_idx)
+                        && dependency
+                            .source_indices
+                            .iter()
+                            .all(|source_idx| known_field_indices.contains(source_idx))
+                        && (null_equality == NullEquality::NullEqualsNull
+                            || !dependency.nullable
+                            || dependency.source_indices.iter().all(|&source_idx| {
+                                !schema.field(source_idx).is_nullable()
+                            }))
+                });
 
         if removable {
             continue;
