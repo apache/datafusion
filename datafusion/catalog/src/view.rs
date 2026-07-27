@@ -59,17 +59,6 @@ impl ViewTable {
         }
     }
 
-    #[deprecated(
-        since = "47.0.0",
-        note = "Use `ViewTable::new` instead and apply TypeCoercion to the logical plan if needed"
-    )]
-    pub fn try_new(
-        logical_plan: LogicalPlan,
-        definition: Option<String>,
-    ) -> Result<Self> {
-        Ok(Self::new(logical_plan, definition))
-    }
-
     /// Get definition ref
     pub fn definition(&self) -> Option<&String> {
         self.definition.as_ref()

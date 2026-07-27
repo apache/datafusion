@@ -249,6 +249,23 @@ impl<'a> MetricBuilder<'a> {
         gauge
     }
 
+    /// Consumes self and creates a new [`Gauge`] for recording peak memory
+    /// usage in bytes.
+    pub fn peak_memory_usage(
+        self,
+        gauge_name: impl Into<Cow<'static, str>>,
+        partition: usize,
+    ) -> Gauge {
+        let gauge = Gauge::new();
+        self.with_category(MetricCategory::Bytes)
+            .with_partition(partition)
+            .build(MetricValue::PeakMemoryUsage {
+                name: gauge_name.into(),
+                gauge: gauge.clone(),
+            });
+        gauge
+    }
+
     /// Consume self and create a new Timer for recording the elapsed
     /// CPU time spent by an operator
     pub fn elapsed_compute(self, partition: usize) -> Time {

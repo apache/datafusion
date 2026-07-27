@@ -61,6 +61,7 @@ async fn datasource_splits_large_batches() -> datafusion_common::Result<()> {
             .options()
             .execution
             .batch_size
+            .get()
     );
     let total: usize = batches.iter().map(|b| b.num_rows()).sum();
     assert_eq!(total, batch_size);
@@ -70,7 +71,7 @@ async fn datasource_splits_large_batches() -> datafusion_common::Result<()> {
 #[tokio::test]
 async fn datasource_exact_batch_size_no_split() -> datafusion_common::Result<()> {
     let session_config = datafusion_execution::config::SessionConfig::new();
-    let configured_batch_size = session_config.options().execution.batch_size;
+    let configured_batch_size = session_config.options().execution.batch_size.get();
 
     let batches = create_and_collect_batches(configured_batch_size).await?;
 

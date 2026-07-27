@@ -65,6 +65,7 @@ use datafusion_catalog::memory::MemorySchemaProvider;
 use datafusion_catalog::{
     DynamicFileCatalog, TableFunction, TableFunctionImpl, UrlTableFactory,
 };
+use datafusion_catalog_listing::SchemaSource;
 use datafusion_common::config::{ConfigField, ConfigOptions};
 use datafusion_common::metadata::ScalarAndMetadata;
 use datafusion_common::{
@@ -76,12 +77,12 @@ use datafusion_common::{
 };
 pub use datafusion_execution::TaskContext;
 use datafusion_execution::cache::cache_manager::{
-    DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, DEFAULT_LIST_FILES_CACHE_TTL,
-    DEFAULT_METADATA_CACHE_LIMIT,
+    DEFAULT_FILE_STATISTICS_MEMORY_LIMIT, DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT,
+    DEFAULT_LIST_FILES_CACHE_TTL, DEFAULT_METADATA_CACHE_LIMIT,
 };
 pub use datafusion_execution::config::SessionConfig;
 use datafusion_execution::disk_manager::{
-    DEFAULT_MAX_TEMP_DIRECTORY_SIZE, DiskManagerBuilder,
+    DEFAULT_MAX_SPILL_MERGE_FAN_IN, DEFAULT_MAX_TEMP_DIRECTORY_SIZE, DiskManagerBuilder,
 };
 use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::HigherOrderUDF;
@@ -103,7 +104,6 @@ use datafusion_session::SessionStore;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_execution::cache::file_statistics_cache::DEFAULT_FILE_STATISTICS_MEMORY_LIMIT;
 use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
@@ -167,7 +167,7 @@ where
 /// * Create a [`DataFrame`] from a CSV or Parquet data source.
 /// * Register a CSV or Parquet data source as a table that can be referenced from a SQL query.
 /// * Register a custom data source that can be referenced from a SQL query.
-/// * Execution a SQL query
+/// * Execute a SQL query
 ///
 /// # Example: DataFrame API
 ///
@@ -687,8 +687,8 @@ impl SessionContext {
     pub async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame> {
         match plan {
             LogicalPlan::Ddl(ddl) => {
-                // Box::pin avoids allocating the stack space within this function's frame
-                // for every one of these individual async functions, decreasing the risk of
+                // Box async DDL handlers to avoid reserving space for all of their
+                // futures in this function's state machine, decreasing the risk of
                 // stack overflows.
                 match ddl {
                     DdlStatement::CreateExternalTable(cmd) => {
@@ -703,32 +703,26 @@ impl SessionContext {
                         Box::pin(self.create_view(cmd)).await
                     }
                     DdlStatement::CreateCatalogSchema(cmd) => {
-                        Box::pin(self.create_catalog_schema(cmd)).await
+                        self.create_catalog_schema(cmd)
                     }
-                    DdlStatement::CreateCatalog(cmd) => {
-                        Box::pin(self.create_catalog(cmd)).await
-                    }
+                    DdlStatement::CreateCatalog(cmd) => self.create_catalog(cmd),
                     DdlStatement::DropTable(cmd) => Box::pin(self.drop_table(cmd)).await,
                     DdlStatement::DropView(cmd) => Box::pin(self.drop_view(cmd)).await,
-                    DdlStatement::DropCatalogSchema(cmd) => {
-                        Box::pin(self.drop_schema(cmd)).await
-                    }
+                    DdlStatement::DropCatalogSchema(cmd) => self.drop_schema(cmd),
                     DdlStatement::CreateFunction(cmd) => {
                         Box::pin(self.create_function(*cmd)).await
                     }
-                    DdlStatement::DropFunction(cmd) => {
-                        Box::pin(self.drop_function(cmd)).await
-                    }
+                    DdlStatement::DropFunction(cmd) => self.drop_function(&cmd),
                     ddl => Ok(DataFrame::new(self.state(), LogicalPlan::Ddl(ddl))),
                 }
             }
             // TODO what about the other statements (like TransactionStart and TransactionEnd)
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
-                self.set_variable(stmt).await?;
+                self.set_variable(stmt)?;
                 self.return_empty_dataframe()
             }
             LogicalPlan::Statement(Statement::ResetVariable(stmt)) => {
-                self.reset_variable(stmt).await?;
+                self.reset_variable(stmt)?;
                 self.return_empty_dataframe()
             }
             LogicalPlan::Statement(Statement::Prepare(Prepare {
@@ -987,7 +981,7 @@ impl SessionContext {
         Ok(())
     }
 
-    async fn create_catalog_schema(&self, cmd: CreateCatalogSchema) -> Result<DataFrame> {
+    fn create_catalog_schema(&self, cmd: CreateCatalogSchema) -> Result<DataFrame> {
         let CreateCatalogSchema {
             schema_name,
             if_not_exists,
@@ -1028,7 +1022,7 @@ impl SessionContext {
         }
     }
 
-    async fn create_catalog(&self, cmd: CreateCatalog) -> Result<DataFrame> {
+    fn create_catalog(&self, cmd: CreateCatalog) -> Result<DataFrame> {
         let CreateCatalog {
             catalog_name,
             if_not_exists,
@@ -1078,7 +1072,7 @@ impl SessionContext {
         }
     }
 
-    async fn drop_schema(&self, cmd: DropCatalogSchema) -> Result<DataFrame> {
+    fn drop_schema(&self, cmd: DropCatalogSchema) -> Result<DataFrame> {
         let DropCatalogSchema {
             name,
             if_exists: allow_missing,
@@ -1113,7 +1107,7 @@ impl SessionContext {
         exec_err!("Schema '{schema_ref}' doesn't exist.")
     }
 
-    async fn set_variable(&self, stmt: SetVariable) -> Result<()> {
+    fn set_variable(&self, stmt: SetVariable) -> Result<()> {
         let SetVariable {
             variable, value, ..
         } = stmt;
@@ -1148,7 +1142,7 @@ impl SessionContext {
         Ok(())
     }
 
-    async fn reset_variable(&self, stmt: ResetVariable) -> Result<()> {
+    fn reset_variable(&self, stmt: ResetVariable) -> Result<()> {
         let variable = stmt.variable;
         if variable.starts_with("datafusion.runtime.") {
             return self.reset_runtime_variable(&variable);
@@ -1208,6 +1202,14 @@ impl SessionContext {
                 let limit = Self::parse_capacity_limit(variable, value)?;
                 builder.with_file_statistics_cache_limit(limit)
             }
+            "max_spill_merge_fan_in" => {
+                let fan_in = value.parse::<usize>().map_err(|e| {
+                    DataFusionError::Plan(format!(
+                        "Failed to parse non-negative integer from '{variable}', value '{value}': {e}"
+                    ))
+                })?;
+                builder.with_max_spill_merge_fan_in(fan_in)
+            }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
             // Remember to update `reset_runtime_variable()` when adding new options
         };
@@ -1252,6 +1254,10 @@ impl SessionContext {
                     DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
                 );
             }
+            "max_spill_merge_fan_in" => {
+                builder =
+                    builder.with_max_spill_merge_fan_in(DEFAULT_MAX_SPILL_MERGE_FAN_IN);
+            }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
         };
         *state = SessionStateBuilder::from(state.clone())
@@ -1285,7 +1291,11 @@ impl SessionContext {
         if limit.trim().is_empty() {
             return Err(plan_datafusion_err!("Empty limit value found!"));
         }
-        let (number, unit) = limit.split_at(limit.len() - 1);
+        let (unit_start, unit) = limit
+            .char_indices()
+            .next_back()
+            .ok_or_else(|| plan_datafusion_err!("Empty limit value found!"))?;
+        let number = &limit[..unit_start];
         let number: f64 = number.parse().map_err(|_| {
             plan_datafusion_err!("Failed to parse number from memory limit '{limit}'")
         })?;
@@ -1296,9 +1306,9 @@ impl SessionContext {
         }
 
         match unit {
-            "K" => Ok((number * 1024.0) as usize),
-            "M" => Ok((number * 1024.0 * 1024.0) as usize),
-            "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
+            'K' => Ok((number * 1024.0) as usize),
+            'M' => Ok((number * 1024.0 * 1024.0) as usize),
+            'G' => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
             _ => plan_err!("Unsupported unit '{unit}' in memory limit '{limit}'"),
         }
     }
@@ -1328,7 +1338,10 @@ impl SessionContext {
         if limit == "0" {
             return Ok(0);
         }
-        let (number, unit) = limit.split_at(limit.len() - 1);
+        let (unit_start, unit) = limit.char_indices().next_back().ok_or_else(|| {
+            plan_datafusion_err!("Empty limit value found for '{config_name}'")
+        })?;
+        let number = &limit[..unit_start];
         let number: f64 = number.parse().map_err(|_| {
             plan_datafusion_err!(
                 "Failed to parse number from '{config_name}', limit '{limit}'"
@@ -1341,9 +1354,9 @@ impl SessionContext {
         }
 
         match unit {
-            "K" => Ok((number * 1024.0) as usize),
-            "M" => Ok((number * 1024.0 * 1024.0) as usize),
-            "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
+            'K' => Ok((number * 1024.0) as usize),
+            'M' => Ok((number * 1024.0 * 1024.0) as usize),
+            'G' => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
             _ => plan_err!(
                 "Unsupported unit '{unit}' in '{config_name}', limit '{limit}'. \
             Unit must be one of: 'K', 'M', 'G'"
@@ -1362,14 +1375,20 @@ impl SessionContext {
         let mut seconds = None;
 
         for duration in duration.split_inclusive(&['m', 's']) {
-            let (number, unit) = duration.split_at(duration.len() - 1);
+            let (unit_start, unit) =
+                duration.char_indices().next_back().ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "Duration should not be empty or blank for '{config_name}'"
+                    )
+                })?;
+            let number = &duration[..unit_start];
             let number: u64 = number.parse().map_err(|_| {
                 plan_datafusion_err!("Failed to parse number from duration '{duration}' for '{config_name}'")
             })?;
 
             match unit {
-                "m" if minutes.is_none() && seconds.is_none() => minutes = Some(number),
-                "s" if seconds.is_none() => seconds = Some(number),
+                'm' if minutes.is_none() && seconds.is_none() => minutes = Some(number),
+                's' if seconds.is_none() => seconds = Some(number),
                 other => plan_err!(
                     "Invalid duration unit: '{other}'. The unit must be either 'm' (minutes), or 's' (seconds), and be in the correct order for '{config_name}'"
                 )?,
@@ -1449,7 +1468,7 @@ impl SessionContext {
             && table_provider.table_type() == table_type
         {
             schema.deregister_table(&table)?;
-            self.invalidate_caches(&Some(table_ref.clone()), table_type)?;
+            self.invalidate_caches(&table_ref, table_type)?;
             return Ok(true);
         }
         Ok(false)
@@ -1457,7 +1476,7 @@ impl SessionContext {
 
     fn invalidate_caches(
         &self,
-        table_ref: &Option<TableReference>,
+        table_ref: &TableReference,
         table_type: TableType,
     ) -> Result<()> {
         if table_type == TableType::Base {
@@ -1506,7 +1525,7 @@ impl SessionContext {
         self.return_empty_dataframe()
     }
 
-    async fn drop_function(&self, stmt: DropFunction) -> Result<DataFrame> {
+    fn drop_function(&self, stmt: &DropFunction) -> Result<DataFrame> {
         // we don't know function type at this point
         // decision has been made to drop all functions
         let mut dropped = false;
@@ -1726,12 +1745,20 @@ impl SessionContext {
             }
         }
 
-        let resolved_schema = options
-            .get_resolved_schema(&session_config, self.state(), table_paths[0].clone())
-            .await?;
+        let schema_table_path = table_paths[0].clone();
         let config = ListingTableConfig::new_with_multi_paths(table_paths)
-            .with_listing_options(listing_options)
-            .with_schema(resolved_schema);
+            .with_listing_options(listing_options);
+        let config = match options.schema_source() {
+            SchemaSource::Inferred | SchemaSource::Unset => {
+                config.infer_schema(&self.state()).await?
+            }
+            SchemaSource::Specified => {
+                let resolved_schema = options
+                    .get_resolved_schema(&session_config, self.state(), schema_table_path)
+                    .await?;
+                config.with_schema(resolved_schema)
+            }
+        };
         let provider = ListingTable::try_new(config)?
             .with_cache(self.runtime_env().cache_manager.get_file_statistic_cache());
         self.read_table(Arc::new(provider))
@@ -1943,7 +1970,7 @@ impl SessionContext {
             .deregister_table(&table);
 
         if let Ok(Some(ref table_provider)) = result {
-            self.invalidate_caches(&Some(table_ref), table_provider.table_type())?;
+            self.invalidate_caches(&table_ref, table_provider.table_type())?;
         }
 
         result
@@ -2350,6 +2377,7 @@ mod tests {
     use arrow_schema::FieldRef;
     use datafusion_common::DataFusionError;
     use datafusion_common::datatype::DataTypeExt;
+    use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
     use std::error::Error;
     use std::path::PathBuf;
 
@@ -2531,7 +2559,7 @@ mod tests {
         let ctx = SessionContext::new_with_state(session_state).enable_url_table();
         let result = plan_and_collect(
             &ctx,
-            format!("select c_name from '{}' limit 3;", &url).as_str(),
+            format!("select c_name from '{url}' limit 3;").as_str(),
         )
         .await?;
 
@@ -2818,6 +2846,7 @@ mod tests {
             _expr: &Expr,
             _input_dfschema: &DFSchema,
             _session_state: &SessionState,
+            _planning_ctx: &PhysicalPlanningContext,
         ) -> Result<Arc<dyn PhysicalExpr>> {
             unimplemented!()
         }
@@ -2949,7 +2978,7 @@ mod tests {
         // Invalid durations
         for duration in [
             "0s", "0m", "1s0m", "1s1m", "XYZ", "1h", "XYZm2s", "", " ", "-1m", "1m 1s",
-            "1m1s ", " 1m1s",
+            "1m1s ", " 1m1s", "1\u{b5}",
         ] {
             let have = SessionContext::parse_duration(LIST_FILES_CACHE_TTL, duration);
             assert!(have.is_err());
@@ -3045,6 +3074,7 @@ mod tests {
             "G",
             "1024B",
             "invalid_size",
+            "1\u{b5}",
         ] {
             #[expect(deprecated)]
             let have = SessionContext::parse_memory_limit(limit);
@@ -3080,6 +3110,7 @@ mod tests {
             "G",
             "1024B",
             "invalid_size",
+            "1\u{b5}",
         ] {
             let have = SessionContext::parse_capacity_limit(MEMORY_LIMIT, limit);
             assert!(have.is_err());

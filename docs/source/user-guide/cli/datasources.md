@@ -132,6 +132,30 @@ select count(*) from hits;
 1 row in set. Query took 0.344 seconds.
 ```
 
+## Reading from standard input
+
+On Unix-like systems you can pipe data into the CLI and query it by pointing the
+`LOCATION` at the `/dev/stdin` pseudo-file:
+
+```console
+$ cat hits.csv | datafusion-cli -c "
+CREATE EXTERNAL TABLE hits STORED AS CSV LOCATION '/dev/stdin' OPTIONS ('format.has_header' 'true');
+SELECT count(*) FROM hits;"
+```
+
+This works for CSV, JSON, and Parquet. Because standard input is not seekable
+(and Parquet stores its metadata at the end of the file), the CLI buffers the
+entire input into memory before querying it, so the data must fit in memory.
+Standard input is read only once: the buffered contents are reused for any
+further tables backed by `/dev/stdin` in the same session. Those tables must
+declare the same `STORED AS` format as the first one; a differing format is
+rejected with an error.
+
+The SQL must be passed with `-c`/`--command` or `-f`/`--file` so that standard
+input is free to carry the data. In the interactive shell (and when SQL is
+piped to the CLI without `-c`/`-f`) standard input carries the SQL itself, and
+`LOCATION '/dev/stdin'` returns an error.
+
 **Why Wildcards Are Not Supported**
 
 Although wildcards (e.g., _.parquet or \*\*/_.parquet) may work for local

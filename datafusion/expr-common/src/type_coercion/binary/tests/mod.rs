@@ -27,12 +27,18 @@ use super::*;
 /// - op: The binary operator (e.g., "+", "-", etc.)
 /// - expected_type: The type both sides should be coerced to
 macro_rules! test_coercion_binary_rule {
-    ($LHS_TYPE:expr, $RHS_TYPE:expr, $OP:expr, $RESULT_TYPE:expr) => {{
+    ($LHS_TYPE:expr, $RHS_TYPE:expr, $OP:expr, $RESULT_TYPE:expr) => {
         let (lhs, rhs) =
             BinaryTypeCoercer::new(&$LHS_TYPE, &$OP, &$RHS_TYPE).get_input_types()?;
         assert_eq!(lhs, $RESULT_TYPE);
         assert_eq!(rhs, $RESULT_TYPE);
-    }};
+    };
+    ($LHS_TYPE:expr, $RHS_TYPE:expr, $OP:expr, $L_RESULT_TYPE:expr, $R_RESULT_TYPE:expr) => {
+        let (lhs, rhs) =
+            BinaryTypeCoercer::new(&$LHS_TYPE, &$OP, &$RHS_TYPE).get_input_types()?;
+        assert_eq!(lhs, $L_RESULT_TYPE);
+        assert_eq!(rhs, $R_RESULT_TYPE);
+    };
 }
 
 /// Tests that coercion for a binary operator between one type and multiple right-hand side types

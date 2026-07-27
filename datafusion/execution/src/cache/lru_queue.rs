@@ -212,6 +212,12 @@ impl<K: Eq + Hash + Clone, V> LruQueue<K, V> {
     pub fn list_entries(&self) -> HashMap<&K, &V> {
         self.data.iter().map(|(k, (_, v))| (k, v)).collect()
     }
+
+    /// Returns an iterator over references to the keys currently in the queue.
+    /// The order is unspecified and does not reflect the LRU order.
+    pub fn keys(&self) -> impl Iterator<Item = &K> {
+        self.data.keys()
+    }
 }
 
 #[cfg(test)]

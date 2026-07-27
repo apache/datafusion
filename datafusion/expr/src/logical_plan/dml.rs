@@ -25,7 +25,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{DFSchemaRef, TableReference};
 
-use crate::{LogicalPlan, TableSource};
+use crate::{Expr, LogicalPlan, TableSource};
 
 /// Operator that copies the contents of a database to file(s)
 #[derive(Clone)]
@@ -227,7 +227,11 @@ impl PartialOrd for DmlStatement {
 /// The type of DML operation to perform.
 ///
 /// See [`DmlStatement`] for more details.
+///
+/// Marked `#[non_exhaustive]` so adding new variants in future releases is
+/// not a SemVer break for downstream matchers.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+#[non_exhaustive]
 pub enum WriteOp {
     /// `INSERT INTO` operation
     Insert(InsertOp),
@@ -239,6 +243,8 @@ pub enum WriteOp {
     Ctas,
     /// `TRUNCATE` operation
     Truncate,
+    /// `MERGE INTO` operation
+    MergeInto(Box<MergeIntoOp>),
 }
 
 impl WriteOp {
@@ -250,6 +256,7 @@ impl WriteOp {
             WriteOp::Update => "Update",
             WriteOp::Ctas => "Ctas",
             WriteOp::Truncate => "Truncate",
+            WriteOp::MergeInto(_) => "MergeInto",
         }
     }
 }
@@ -291,10 +298,151 @@ impl Display for InsertOp {
     }
 }
 
+/// Describes a MERGE INTO operation's parameters.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct MergeIntoOp {
+    /// The join condition from `ON <expr>`.
+    pub on: Expr,
+    /// The WHEN clauses, in the order they appeared in the SQL.
+    pub clauses: Vec<MergeIntoClause>,
+}
+
+/// A single WHEN clause within a MERGE INTO statement.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct MergeIntoClause {
+    /// Whether this fires on matched or unmatched rows.
+    pub kind: MergeIntoClauseKind,
+    /// Optional additional predicate (`AND <expr>`).
+    pub predicate: Option<Expr>,
+    /// The action to take.
+    pub action: MergeIntoAction,
+}
+
+/// Which rows a MERGE WHEN clause applies to.
+///
+/// Mirrors `sqlparser::ast::MergeClauseKind` so that the SQL spelling is
+/// preserved through the logical plan.
+///
+/// **Note on `NotMatched` vs `NotMatchedByTarget`:** these two variants are
+/// semantically identical — both describe a source row that has no matching
+/// target row. `NotMatched` is the SQL standard short form (used by
+/// Snowflake, Postgres, SQL Server); `NotMatchedByTarget` is BigQuery's
+/// explicit form added for symmetry with `NotMatchedBySource`. Downstream
+/// consumers (planners, table providers, optimizers) MUST treat the two
+/// variants identically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
+pub enum MergeIntoClauseKind {
+    /// `WHEN MATCHED`
+    Matched,
+    /// `WHEN NOT MATCHED` — see type-level note for the equivalence with
+    /// [`NotMatchedByTarget`](Self::NotMatchedByTarget).
+    NotMatched,
+    /// `WHEN NOT MATCHED BY TARGET` — see type-level note for the
+    /// equivalence with [`NotMatched`](Self::NotMatched).
+    NotMatchedByTarget,
+    /// `WHEN NOT MATCHED BY SOURCE`
+    NotMatchedBySource,
+}
+
+impl MergeIntoClauseKind {
+    /// True if this clause fires on a source row that has no matching target
+    /// row. Returns `true` for both [`NotMatched`](Self::NotMatched) and
+    /// [`NotMatchedByTarget`](Self::NotMatchedByTarget) (see the type-level
+    /// note explaining why those two variants are semantically identical).
+    ///
+    /// Prefer this predicate over hand-written `matches!` arms so the
+    /// `NotMatched`/`NotMatchedByTarget` equivalence is enforced in one place.
+    pub fn is_not_matched_by_target(&self) -> bool {
+        matches!(self, Self::NotMatched | Self::NotMatchedByTarget)
+    }
+
+    /// Collapse the SQL-spelling variants into the canonical three semantic
+    /// categories: [`Matched`](Self::Matched),
+    /// [`NotMatchedByTarget`](Self::NotMatchedByTarget) (covering both
+    /// "NOT MATCHED" spellings), and
+    /// [`NotMatchedBySource`](Self::NotMatchedBySource).
+    ///
+    /// Use this in downstream `match` expressions when the SQL spelling
+    /// distinction does not matter — e.g. in planners, optimizers, or
+    /// table-provider dispatch.
+    pub fn canonical(self) -> Self {
+        match self {
+            Self::NotMatched => Self::NotMatchedByTarget,
+            other => other,
+        }
+    }
+}
+
+/// The action for a single WHEN clause.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub enum MergeIntoAction {
+    /// `UPDATE SET col1 = expr1, col2 = expr2, ...`, stored as
+    /// `(column_name, value_expr)` pairs.
+    Update(Vec<(String, Expr)>),
+    /// `INSERT (col1, col2, ...) VALUES (expr1, expr2, ...)`. `columns` may
+    /// be empty, meaning all columns.
+    Insert {
+        columns: Vec<String>,
+        values: Vec<Expr>,
+    },
+    Delete,
+}
+
 fn make_count_schema() -> DFSchemaRef {
     Arc::new(
         Schema::new(vec![Field::new("count", DataType::UInt64, false)])
             .try_into()
             .unwrap(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{col, lit};
+
+    #[test]
+    fn write_op_merge_into_name_and_display() {
+        let op = WriteOp::MergeInto(Box::new(MergeIntoOp {
+            on: col("id").eq(col("source_id")),
+            clauses: vec![MergeIntoClause {
+                kind: MergeIntoClauseKind::Matched,
+                predicate: Some(col("qty").gt(lit(0_i64))),
+                action: MergeIntoAction::Update(vec![(
+                    "qty".to_string(),
+                    col("source_qty"),
+                )]),
+            }],
+        }));
+        assert_eq!(op.name(), "MergeInto");
+        assert_eq!(format!("{op}"), "MergeInto");
+    }
+
+    #[test]
+    fn merge_into_clause_kind_is_not_matched_by_target() {
+        assert!(!MergeIntoClauseKind::Matched.is_not_matched_by_target());
+        assert!(MergeIntoClauseKind::NotMatched.is_not_matched_by_target());
+        assert!(MergeIntoClauseKind::NotMatchedByTarget.is_not_matched_by_target());
+        assert!(!MergeIntoClauseKind::NotMatchedBySource.is_not_matched_by_target());
+    }
+
+    #[test]
+    fn merge_into_clause_kind_canonical_collapses_not_matched() {
+        assert_eq!(
+            MergeIntoClauseKind::NotMatched.canonical(),
+            MergeIntoClauseKind::NotMatchedByTarget
+        );
+        assert_eq!(
+            MergeIntoClauseKind::NotMatchedByTarget.canonical(),
+            MergeIntoClauseKind::NotMatchedByTarget
+        );
+        assert_eq!(
+            MergeIntoClauseKind::Matched.canonical(),
+            MergeIntoClauseKind::Matched
+        );
+        assert_eq!(
+            MergeIntoClauseKind::NotMatchedBySource.canonical(),
+            MergeIntoClauseKind::NotMatchedBySource
+        );
+    }
 }

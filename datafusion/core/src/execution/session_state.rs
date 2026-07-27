@@ -55,6 +55,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::TableSource;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::planner::ExprPlanner;
 #[cfg(feature = "sql")]
 use datafusion_expr::planner::{RelationPlanner, TypePlanner};
@@ -269,6 +270,10 @@ impl Session for SessionState {
         self.config()
     }
 
+    fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
+        Arc::clone(self.catalog_list())
+    }
+
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -349,9 +354,10 @@ impl SessionState {
         let resolved_ref = self.resolve_table_ref(table_ref);
         if self.config.information_schema() && *resolved_ref.schema == *INFORMATION_SCHEMA
         {
-            return Ok(Arc::new(InformationSchemaProvider::new(Arc::clone(
-                &self.catalog_list,
-            ))));
+            return Ok(Arc::new(
+                InformationSchemaProvider::new(Arc::clone(&self.catalog_list))
+                    .with_table_functions(self.table_functions.clone()),
+            ));
         }
 
         self.catalog_list
@@ -444,7 +450,7 @@ impl SessionState {
             )
         })?;
 
-        let recursion_limit = self.config.options().sql_parser.recursion_limit;
+        let recursion_limit = self.config.options().sql_parser.recursion_limit.get();
 
         let mut statements = DFParserBuilder::new(sql)
             .with_dialect(dialect.as_ref())
@@ -492,7 +498,7 @@ impl SessionState {
             )
         })?;
 
-        let recursion_limit = self.config.options().sql_parser.recursion_limit;
+        let recursion_limit = self.config.options().sql_parser.recursion_limit.get();
         let expr = DFParserBuilder::new(sql)
             .with_dialect(dialect.as_ref())
             .with_recursion_limit(recursion_limit)
@@ -798,7 +804,12 @@ impl SessionState {
                 .transform_up(|expr| rewrite.rewrite(expr, df_schema, config_options))?
                 .data;
         }
-        create_physical_expr(&expr, df_schema, self.execution_props())
+        create_physical_expr(
+            &expr,
+            df_schema,
+            self.execution_props(),
+            &PhysicalPlanningContext::default(),
+        )
     }
 
     /// Return the session ID
@@ -2354,19 +2365,18 @@ mod tests {
     use crate::logical_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
     use crate::physical_plan::ExecutionPlan;
     use crate::sql::planner::ContextProvider;
-    use crate::sql::{ResolvedTableReference, TableReference};
     use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_catalog::MemoryCatalogProviderList;
-    use datafusion_common::DFSchema;
-    use datafusion_common::Result;
     use datafusion_common::config::Dialect;
+    use datafusion_common::{DFSchema, ResolvedTableReference, Result, TableReference};
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::Expr;
     use datafusion_expr::HigherOrderUDF;
     use datafusion_optimizer::Optimizer;
     use datafusion_optimizer::optimizer::OptimizerRule;
     use datafusion_physical_plan::display::DisplayableExecutionPlan;
+    use datafusion_session::Session;
     use datafusion_sql::planner::{PlannerContext, SqlToRel};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -2458,6 +2468,9 @@ mod tests {
         let session_state = SessionStateBuilder::new()
             .with_catalog_list(Arc::new(MemoryCatalogProviderList::new()))
             .build();
+        let session_catalogs = Session::catalog_list(&session_state);
+        assert!(Arc::ptr_eq(&session_catalogs, session_state.catalog_list()));
+
         let table_ref = session_state.resolve_table_ref("employee").to_string();
         session_state
             .schema_for_ref(&table_ref)?

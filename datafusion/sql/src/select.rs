@@ -198,6 +198,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let having_expr_opt = select
             .having
             .map::<Result<Expr>, _>(|having_expr| {
+                self.warn_on_null_equality_predicate(&having_expr);
                 let having_expr = self.sql_expr_to_logical_expr(
                     having_expr,
                     &combined_schema,
@@ -865,6 +866,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Some(predicate_expr) => {
                 let fallback_schemas = plan.fallback_normalize_schemas();
 
+                self.warn_on_null_equality_predicate(&predicate_expr);
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, plan.schema(), planner_context)?;
 

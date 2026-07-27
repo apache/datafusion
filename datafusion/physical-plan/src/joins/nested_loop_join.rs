@@ -40,8 +40,9 @@ use crate::metrics::{
 };
 use crate::projection::{
     EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
-    try_pushdown_through_join,
+    try_pushdown_through_join_with_column_indices,
 };
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, RecordBatchStream, SendableRecordBatchStream,
@@ -65,9 +66,8 @@ use datafusion_common::{
     assert_eq_or_internal_err, internal_datafusion_err, internal_err, project_schema,
     unwrap_or_internal_err,
 };
-use datafusion_execution::TaskContext;
-use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::{SpillFile, TaskContext};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
@@ -489,28 +489,6 @@ impl NestedLoopJoinExec {
 
         Ok(plan)
     }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        let left = children.swap_remove(0);
-        let right = children.swap_remove(0);
-
-        Self {
-            left,
-            right,
-            metrics: ExecutionPlanMetricsSet::new(),
-            build_side_data: Default::default(),
-            left_spill_data: Arc::new(OnceAsync::default()),
-            cache: Arc::clone(&self.cache),
-            filter: self.filter.clone(),
-            join_type: self.join_type,
-            join_schema: Arc::clone(&self.join_schema),
-            column_indices: self.column_indices.clone(),
-            projection: self.projection.clone(),
-        }
-    }
 }
 
 impl DisplayAs for NestedLoopJoinExec {
@@ -566,10 +544,14 @@ impl ExecutionPlan for NestedLoopJoinExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+        crate::InputDistributionRequirements::new(vec![
             Distribution::SinglePartition,
             Distribution::UnspecifiedDistribution,
-        ]
+        ])
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -595,6 +577,28 @@ impl ExecutionPlan for NestedLoopJoinExec {
             .with_projection_ref(self.projection.clone())
             .build()?,
         ))
+    }
+
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let left = children.swap_remove(0);
+        let right = children.swap_remove(0);
+
+        Ok(Arc::new(Self {
+            left,
+            right,
+            metrics: ExecutionPlanMetricsSet::new(),
+            build_side_data: Default::default(),
+            left_spill_data: Arc::new(OnceAsync::default()),
+            cache: Arc::clone(&self.cache),
+            filter: self.filter.clone(),
+            join_type: self.join_type,
+            join_schema: Arc::clone(&self.join_schema),
+            column_indices: self.column_indices.clone(),
+            projection: self.projection.clone(),
+        }))
     }
 
     fn execute(
@@ -690,7 +694,17 @@ impl ExecutionPlan for NestedLoopJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        // Left side is always broadcast, so it always needs overall stats.
+        // Right side is partitioned, so it needs per-partition stats.
+        vec![ChildStats::At(None), ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
         // NestedLoopJoinExec is designed for joins without equijoin keys in the
         // ON clause (e.g., `t1 JOIN t2 ON (t1.v1 + t2.v1) % 2 = 0`). Any join
         // predicates are stored in `self.filter`, but `estimate_join_statistics`
@@ -700,15 +714,8 @@ impl ExecutionPlan for NestedLoopJoinExec {
         // unknown row counts.
         let join_columns = Vec::new();
 
-        // Left side is always a single partition (Distribution::SinglePartition),
-        // so we always request overall stats with `None`. Right side can have
-        // multiple partitions, so we forward the partition parameter to get
-        // partition-specific statistics when requested.
-        let left_stats = Arc::unwrap_or_clone(self.left.partition_statistics(None)?);
-        let right_stats = Arc::unwrap_or_clone(match partition {
-            Some(partition) => self.right.partition_statistics(Some(partition))?,
-            None => self.right.partition_statistics(None)?,
-        });
+        let left_stats = input_stats[0].as_ref().clone();
+        let right_stats = input_stats[1].as_ref().clone();
 
         let stats = estimate_join_statistics(
             left_stats,
@@ -740,13 +747,14 @@ impl ExecutionPlan for NestedLoopJoinExec {
             projected_right_child,
             join_filter,
             ..
-        }) = try_pushdown_through_join(
+        }) = try_pushdown_through_join_with_column_indices(
             projection,
             self.left(),
             self.right(),
             &[],
             &schema,
             self.filter(),
+            self.column_indices.as_slice(),
         )? {
             Ok(Some(Arc::new(NestedLoopJoinExec::try_new(
                 Arc::new(projected_left_child),
@@ -759,6 +767,91 @@ impl ExecutionPlan for NestedLoopJoinExec {
         } else {
             try_embed_projection(projection, self)
         }
+    }
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        let left = ctx.encode_child(self.left())?;
+        let right = ctx.encode_child(self.right())?;
+
+        let join_type = crate::joins::proto::join_type_to_proto(*self.join_type());
+
+        let filter = self
+            .filter()
+            .map(|f| crate::joins::proto::join_filter_to_proto(f, ctx))
+            .transpose()?;
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::NestedLoopJoin(Box::new(
+                    protobuf::NestedLoopJoinExecNode {
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
+                        join_type: join_type.into(),
+                        filter,
+                        projection: match self.projection.as_ref() {
+                            None => Vec::new(),
+                            Some(v) if v.is_empty() => vec![u32::MAX],
+                            Some(v) => v.iter().map(|x| *x as u32).collect(),
+                        },
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl NestedLoopJoinExec {
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let join = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::NestedLoopJoin,
+            "NestedLoopJoinExec",
+        );
+
+        let left = ctx.decode_required_child(
+            join.left.as_deref(),
+            "NestedLoopJoinExec",
+            "left",
+        )?;
+        let right = ctx.decode_required_child(
+            join.right.as_deref(),
+            "NestedLoopJoinExec",
+            "right",
+        )?;
+
+        let join_type = crate::joins::proto::join_type_from_proto(
+            join.join_type,
+            "NestedLoopJoinExec",
+        )?;
+
+        let filter = join
+            .filter
+            .as_ref()
+            .map(|f| {
+                crate::joins::proto::join_filter_from_proto(f, ctx, "NestedLoopJoinExec")
+            })
+            .transpose()?;
+
+        let projection = match join.projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Vec::new()),
+            indices => Some(indices.iter().map(|i| *i as usize).collect()),
+        };
+
+        Ok(Arc::new(NestedLoopJoinExec::try_new(
+            left, right, filter, &join_type, projection,
+        )?))
     }
 }
 
@@ -901,7 +994,7 @@ pub(crate) struct LeftSpillData {
     /// SpillManager used to read the spill file (has the left schema)
     spill_manager: SpillManager,
     /// The spill file containing all left-side batches
-    spill_file: RefCountedTempFile,
+    spill_file: Arc<dyn SpillFile>,
     /// Left-side schema
     schema: SchemaRef,
 }
@@ -1579,7 +1672,7 @@ impl NestedLoopJoinStream {
                 Poll::Ready(Ok(spill_data)) => {
                     match spill_data
                         .spill_manager
-                        .read_spill_as_stream(spill_data.spill_file.clone(), None)
+                        .read_spill_as_stream(Arc::clone(&spill_data.spill_file), None)
                     {
                         Ok(stream) => {
                             active.left_schema = Some(Arc::clone(&spill_data.schema));
@@ -3061,6 +3154,7 @@ fn build_unmatched_batch(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::statistics::{StatisticsArgs, StatisticsContext};
     use crate::test::{TestMemoryExec, assert_join_metrics};
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
@@ -3440,7 +3534,8 @@ pub(crate) mod tests {
             &JoinType::Left,
             Some(vec![1, 2]),
         )?;
-        let stats = nested_loop_join.partition_statistics(None)?;
+        let stats = StatisticsContext::new()
+            .compute(&nested_loop_join, &StatisticsArgs::new())?;
         assert_eq!(
             nested_loop_join.schema().fields().len(),
             stats.column_statistics.len(),

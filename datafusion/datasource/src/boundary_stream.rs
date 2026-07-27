@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Streaming boundary-aligned wrapper for newline-delimited JSON range reads.
+//! Streaming boundary-aligned wrapper for newline-delimited JSON and CSV range reads.
 //!
 //! [`AlignedBoundaryStream`] wraps a raw byte stream and lazily aligns to
 //! record (newline) boundaries, avoiding the need for separate `get_opts`
@@ -398,7 +398,7 @@ impl Stream for AlignedBoundaryStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{CHUNK_SIZES, make_chunked_store};
+    use crate::test_util::{CHUNK_SIZES, make_chunked_store};
     use futures::TryStreamExt;
 
     async fn collect_stream(stream: AlignedBoundaryStream) -> Vec<u8> {

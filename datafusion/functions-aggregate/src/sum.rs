@@ -24,7 +24,8 @@ use arrow::datatypes::{
     DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType, Decimal32Type,
     Decimal64Type, Decimal128Type, Decimal256Type, DurationMicrosecondType,
     DurationMillisecondType, DurationNanosecondType, DurationSecondType, FieldRef,
-    Float64Type, Int64Type, TimeUnit, UInt64Type,
+    Float64Type, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+    IntervalYearMonthType, TimeUnit, UInt64Type,
 };
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::internal_err;
@@ -117,6 +118,21 @@ macro_rules! downcast_sum {
                     $args.return_field.data_type().clone()
                 )
             }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                $helper!(
+                    IntervalYearMonthType,
+                    $args.return_field.data_type().clone()
+                )
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                $helper!(IntervalDayTimeType, $args.return_field.data_type().clone())
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                $helper!(
+                    IntervalMonthDayNanoType,
+                    $args.return_field.data_type().clone()
+                )
+            }
             _ => {
                 not_impl_err!(
                     "Sum not supported for {}: {}",
@@ -186,6 +202,9 @@ impl Sum {
                     TypeSignature::Coercible(vec![Coercion::new_exact(
                         TypeSignatureClass::Duration,
                     )]),
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Interval,
+                    )]),
                 ],
                 Volatility::Immutable,
             ),
@@ -232,6 +251,7 @@ impl AggregateUDFImpl for Sum {
                 Ok(DataType::Decimal256(new_precision, *scale))
             }
             DataType::Duration(time_unit) => Ok(DataType::Duration(*time_unit)),
+            DataType::Interval(interval_unit) => Ok(DataType::Interval(*interval_unit)),
             other => {
                 exec_err!("[return_type] SUM not supported for {}", other)
             }

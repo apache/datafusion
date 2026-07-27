@@ -17,10 +17,9 @@
 
 use std::{collections::HashSet, sync::Arc};
 
-use arrow::datatypes::Schema;
 use datafusion_common::tree_node::TreeNodeContainer;
 use datafusion_common::{
-    Column, HashMap, Result, TableReference,
+    Column, DFSchema, HashMap, Result, TableReference,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_expr::expr::{Alias, UNNEST_COLUMN_PREFIX};
@@ -502,20 +501,24 @@ fn find_projection(logical_plan: &LogicalPlan) -> Option<&Projection> {
 }
 
 /// A `TreeNodeRewriter` implementation that rewrites `Expr::Column` expressions by
-/// replacing the column's name with an alias if the column exists in the provided schema.
+/// replacing the column's qualifier with an alias if the column resolves to a
+/// qualified field in the provided schema.
 ///
 /// This is typically used to apply table aliases in query plans, ensuring that
 /// the column references in the expressions use the correct table alias.
 ///
 /// # Fields
 ///
-/// * `table_schema`: The schema (`SchemaRef`) representing the table structure
-///   from which the columns are referenced. This is used to look up columns by their names.
+/// * `table_schema`: The schema representing the table structure from which the
+///   columns are referenced. This is used to look up columns by their names and qualifiers.
 /// * `alias_name`: The alias (`TableReference`) that will replace the table name
 ///   in the column references when applicable.
+/// * `rewrite_unqualified`: Whether columns that resolve to unqualified fields
+///   in `table_schema` should also be rewritten to `alias_name`.
 pub struct TableAliasRewriter<'a> {
-    pub table_schema: &'a Schema,
+    pub table_schema: &'a DFSchema,
     pub alias_name: TableReference,
+    pub rewrite_unqualified: bool,
 }
 
 impl TreeNodeRewriter for TableAliasRewriter<'_> {
@@ -524,12 +527,23 @@ impl TreeNodeRewriter for TableAliasRewriter<'_> {
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         match expr {
             Expr::Column(column) => {
-                if let Ok(field) = self.table_schema.field_with_name(&column.name) {
-                    let new_column =
-                        Column::new(Some(self.alias_name.clone()), field.name().clone());
-                    Ok(Transformed::yes(Expr::Column(new_column)))
-                } else {
-                    Ok(Transformed::no(Expr::Column(column)))
+                match self
+                    .table_schema
+                    .qualified_field_from_column(&column)
+                    .or_else(|_| {
+                        self.table_schema
+                            .qualified_field_with_unqualified_name(&column.name)
+                    }) {
+                    Ok((qualifier, field))
+                        if qualifier.is_some() || self.rewrite_unqualified =>
+                    {
+                        let new_column = Column::new(
+                            Some(self.alias_name.clone()),
+                            field.name().clone(),
+                        );
+                        Ok(Transformed::yes(Expr::Column(new_column)))
+                    }
+                    Ok(_) | Err(_) => Ok(Transformed::no(Expr::Column(column))),
                 }
             }
             _ => Ok(Transformed::no(expr)),
@@ -540,7 +554,7 @@ impl TreeNodeRewriter for TableAliasRewriter<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::{LogicalPlanBuilder, col, table_scan};
 
     // this is a regression test: when the outer projection has fewer expressions than

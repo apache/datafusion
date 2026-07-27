@@ -128,8 +128,8 @@ logical_plan
 03)----Values: (Int64(5), Int64(1)), (Int64(4), Int64(2)), (Int64(7), Int64(7)), (Int64(7), Int64(8)), (Int64(7), Int64(9))...
 physical_plan
 01)DataSinkExec: sink=CsvSink(file_groups=[])
-02)--SortExec: expr=[a@0 ASC NULLS LAST, b@1 DESC], preserve_partitioning=[false]
-03)----ProjectionExec: expr=[column1@0 as a, column2@1 as b]
+02)--ProjectionExec: expr=[column1@0 as a, column2@1 as b]
+03)----SortExec: expr=[column1@0 ASC NULLS LAST, column2@1 DESC], preserve_partitioning=[false]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query I
@@ -696,7 +696,7 @@ LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q7/';
 
 # Config reset
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;

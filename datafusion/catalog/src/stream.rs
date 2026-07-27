@@ -53,7 +53,15 @@ impl TableProviderFactory for StreamTableFactory {
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
         let schema: SchemaRef = Arc::clone(cmd.schema.inner());
-        let location = cmd.location.clone();
+        let location = match cmd.locations.as_slice() {
+            [single] => single.clone(),
+            _ => {
+                return config_err!(
+                    "Stream tables support exactly one location; \
+                     use a listing table to read multiple files"
+                );
+            }
+        };
         let encoding = cmd.file_type.parse()?;
         let header = if let Ok(opt) = cmd
             .options

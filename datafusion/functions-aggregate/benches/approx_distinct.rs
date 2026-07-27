@@ -19,10 +19,13 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, Int8Array, Int16Array, Int64Array, StringArray, StringViewArray,
-    UInt8Array, UInt16Array,
+    ArrayRef, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+    Int8Array, Int16Array, Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
+    IntervalYearMonthArray, StringArray, StringViewArray, UInt8Array, UInt16Array,
 };
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{
+    DataType, Field, IntervalDayTime, IntervalMonthDayNano, IntervalUnit, Schema, i256,
+};
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
@@ -44,6 +47,12 @@ const N_GROUPS: usize = 50_000;
 const AVG_ROWS_PER_GROUP: usize = 8;
 const STRING_POOL_SIZE: usize = 100_000;
 
+const DECIMAL32_PRECISION: u8 = 9;
+const DECIMAL64_PRECISION: u8 = 18;
+const DECIMAL128_PRECISION: u8 = 10;
+const DECIMAL256_PRECISION: u8 = 40;
+const DECIMAL_SCALE: i8 = 2;
+
 fn prepare_accumulator(data_type: DataType) -> Box<dyn Accumulator> {
     let schema = Arc::new(Schema::new(vec![Field::new("f", data_type, true)]));
     let expr = col("f", &schema).unwrap();
@@ -59,6 +68,52 @@ fn prepare_accumulator(data_type: DataType) -> Box<dyn Accumulator> {
         exprs: &[expr],
     };
     ApproxDistinct::new().accumulator(accumulator_args).unwrap()
+}
+
+/// Creates a `Decimal32Array` from a pool of `n_distinct` values.
+fn create_decimal32_array(n_distinct: usize) -> Decimal32Array {
+    let mut rng = StdRng::seed_from_u64(42);
+    let pool: Vec<i32> = (0..n_distinct).map(|i| i as i32 * 50).collect();
+    (0..BATCH_SIZE)
+        .map(|_| Some(pool[rng.random_range(0..pool.len())]))
+        .collect::<Decimal32Array>()
+        .with_precision_and_scale(DECIMAL32_PRECISION, DECIMAL_SCALE)
+        .unwrap()
+}
+
+/// Creates a `Decimal64Array` from a pool of `n_distinct` values.
+fn create_decimal64_array(n_distinct: usize) -> Decimal64Array {
+    let mut rng = StdRng::seed_from_u64(42);
+    let pool: Vec<i64> = (0..n_distinct).map(|i| i as i64 * 50).collect();
+    (0..BATCH_SIZE)
+        .map(|_| Some(pool[rng.random_range(0..pool.len())]))
+        .collect::<Decimal64Array>()
+        .with_precision_and_scale(DECIMAL64_PRECISION, DECIMAL_SCALE)
+        .unwrap()
+}
+
+/// Creates a `Decimal128Array` from a pool of `n_distinct` values.
+fn create_decimal128_array(n_distinct: usize) -> Decimal128Array {
+    let mut rng = StdRng::seed_from_u64(42);
+    let pool: Vec<i128> = (0..n_distinct).map(|i| i as i128 * 50).collect();
+    (0..BATCH_SIZE)
+        .map(|_| Some(pool[rng.random_range(0..pool.len())]))
+        .collect::<Decimal128Array>()
+        .with_precision_and_scale(DECIMAL128_PRECISION, DECIMAL_SCALE)
+        .unwrap()
+}
+
+/// Creates a `Decimal256Array` from a pool of `n_distinct` values.
+fn create_decimal256_array(n_distinct: usize) -> Decimal256Array {
+    let mut rng = StdRng::seed_from_u64(42);
+    let pool: Vec<i256> = (0..n_distinct)
+        .map(|i| i256::from_i128(i as i128 * 50))
+        .collect();
+    (0..BATCH_SIZE)
+        .map(|_| Some(pool[rng.random_range(0..pool.len())]))
+        .collect::<Decimal256Array>()
+        .with_precision_and_scale(DECIMAL256_PRECISION, DECIMAL_SCALE)
+        .unwrap()
 }
 
 /// Creates an Int64Array where values are drawn from `0..n_distinct`.
@@ -98,6 +153,38 @@ fn create_i16_array(n_distinct: usize) -> Int16Array {
     let max_val = (n_distinct.min(65536) / 2) as i16;
     (0..BATCH_SIZE)
         .map(|_| Some(rng.random_range(-max_val..max_val)))
+        .collect()
+}
+
+/// Creates an `IntervalYearMonthArray` where values are drawn from `0..n_distinct`.
+fn create_interval_year_month_array(n_distinct: usize) -> IntervalYearMonthArray {
+    let mut rng = StdRng::seed_from_u64(42);
+    (0..BATCH_SIZE)
+        .map(|_| Some(rng.random_range(0..n_distinct as i32)))
+        .collect()
+}
+
+/// Creates an `IntervalDayTimeArray` where values are drawn from a pool of
+/// `n_distinct` values.
+fn create_interval_day_time_array(n_distinct: usize) -> IntervalDayTimeArray {
+    let mut rng = StdRng::seed_from_u64(42);
+    let pool: Vec<IntervalDayTime> = (0..n_distinct)
+        .map(|i| IntervalDayTime::new(i as i32, i as i32 * 100))
+        .collect();
+    (0..BATCH_SIZE)
+        .map(|_| Some(pool[rng.random_range(0..pool.len())]))
+        .collect()
+}
+
+/// Creates an `IntervalMonthDayNanoArray` where values are drawn from a pool of
+/// `n_distinct` values.
+fn create_interval_month_day_nano_array(n_distinct: usize) -> IntervalMonthDayNanoArray {
+    let mut rng = StdRng::seed_from_u64(42);
+    let pool: Vec<IntervalMonthDayNano> = (0..n_distinct)
+        .map(|i| IntervalMonthDayNano::new(i as i32, i as i32, i as i64 * 1_000))
+        .collect();
+    (0..BATCH_SIZE)
+        .map(|_| Some(pool[rng.random_range(0..pool.len())]))
         .collect()
 }
 
@@ -224,6 +311,114 @@ fn approx_distinct_benchmark(c: &mut Criterion) {
                 .unwrap()
         })
     });
+
+    // Decimal32
+    let values = Arc::new(create_decimal32_array(200)) as ArrayRef;
+    c.bench_function("approx_distinct decimal32", |b| {
+        b.iter(|| {
+            let mut accumulator = prepare_accumulator(DataType::Decimal32(
+                DECIMAL32_PRECISION,
+                DECIMAL_SCALE,
+            ));
+            accumulator
+                .update_batch(std::slice::from_ref(&values))
+                .unwrap()
+        })
+    });
+
+    // Decimal64
+    let values = Arc::new(create_decimal64_array(200)) as ArrayRef;
+    c.bench_function("approx_distinct decimal64", |b| {
+        b.iter(|| {
+            let mut accumulator = prepare_accumulator(DataType::Decimal64(
+                DECIMAL64_PRECISION,
+                DECIMAL_SCALE,
+            ));
+            accumulator
+                .update_batch(std::slice::from_ref(&values))
+                .unwrap()
+        })
+    });
+
+    // Decimal128
+    let values = Arc::new(create_decimal128_array(200)) as ArrayRef;
+    c.bench_function("approx_distinct decimal128", |b| {
+        b.iter(|| {
+            let mut accumulator = prepare_accumulator(DataType::Decimal128(
+                DECIMAL128_PRECISION,
+                DECIMAL_SCALE,
+            ));
+            accumulator
+                .update_batch(std::slice::from_ref(&values))
+                .unwrap()
+        })
+    });
+
+    // Decimal256
+    let values = Arc::new(create_decimal256_array(200)) as ArrayRef;
+    c.bench_function("approx_distinct decimal256", |b| {
+        b.iter(|| {
+            let mut accumulator = prepare_accumulator(DataType::Decimal256(
+                DECIMAL256_PRECISION,
+                DECIMAL_SCALE,
+            ));
+            accumulator
+                .update_batch(std::slice::from_ref(&values))
+                .unwrap()
+        })
+    });
+
+    // Interval benchmarks
+    for pct in [80, 99] {
+        let n_distinct = BATCH_SIZE * pct / 100;
+
+        // IntervalYearMonth
+        let values = Arc::new(create_interval_year_month_array(n_distinct)) as ArrayRef;
+        c.bench_function(
+            &format!("approx_distinct interval year_month {pct}% distinct"),
+            |b| {
+                b.iter(|| {
+                    let mut accumulator =
+                        prepare_accumulator(DataType::Interval(IntervalUnit::YearMonth));
+                    accumulator
+                        .update_batch(std::slice::from_ref(&values))
+                        .unwrap()
+                })
+            },
+        );
+
+        // IntervalDayTime
+        let values = Arc::new(create_interval_day_time_array(n_distinct)) as ArrayRef;
+        c.bench_function(
+            &format!("approx_distinct interval day_time {pct}% distinct"),
+            |b| {
+                b.iter(|| {
+                    let mut accumulator =
+                        prepare_accumulator(DataType::Interval(IntervalUnit::DayTime));
+                    accumulator
+                        .update_batch(std::slice::from_ref(&values))
+                        .unwrap()
+                })
+            },
+        );
+
+        // IntervalMonthDayNano
+        let values =
+            Arc::new(create_interval_month_day_nano_array(n_distinct)) as ArrayRef;
+        c.bench_function(
+            &format!("approx_distinct interval month_day_nano {pct}% distinct"),
+            |b| {
+                b.iter(|| {
+                    let mut accumulator = prepare_accumulator(DataType::Interval(
+                        IntervalUnit::MonthDayNano,
+                    ));
+                    accumulator
+                        .update_batch(std::slice::from_ref(&values))
+                        .unwrap()
+                })
+            },
+        );
+    }
 }
 
 /// Build a `GroupsAccumulator` the same way the aggregate operator does: use the
@@ -287,6 +482,60 @@ fn build_grouped_batches(data_type: &DataType) -> Vec<(ArrayRef, Vec<usize>)> {
                         .map(|_| Some(pool[rng.random_range(0..pool.len())].as_str()))
                         .collect::<StringViewArray>(),
                 ),
+                DataType::Decimal32(p, s) => Arc::new(
+                    (0..BATCH_SIZE)
+                        .map(|_| Some(rng.random::<i32>()))
+                        .collect::<Decimal32Array>()
+                        .with_precision_and_scale(*p, *s)
+                        .unwrap(),
+                ),
+                DataType::Decimal64(p, s) => Arc::new(
+                    (0..BATCH_SIZE)
+                        .map(|_| Some(rng.random::<i64>()))
+                        .collect::<Decimal64Array>()
+                        .with_precision_and_scale(*p, *s)
+                        .unwrap(),
+                ),
+                DataType::Decimal128(p, s) => Arc::new(
+                    (0..BATCH_SIZE)
+                        .map(|_| Some(rng.random::<i64>() as i128))
+                        .collect::<Decimal128Array>()
+                        .with_precision_and_scale(*p, *s)
+                        .unwrap(),
+                ),
+                DataType::Decimal256(p, s) => Arc::new(
+                    (0..BATCH_SIZE)
+                        .map(|_| Some(i256::from_i128(rng.random::<i64>() as i128)))
+                        .collect::<Decimal256Array>()
+                        .with_precision_and_scale(*p, *s)
+                        .unwrap(),
+                ),
+                DataType::Interval(IntervalUnit::YearMonth) => Arc::new(
+                    (0..BATCH_SIZE)
+                        .map(|_| Some(rng.random::<i32>()))
+                        .collect::<IntervalYearMonthArray>(),
+                ),
+                DataType::Interval(IntervalUnit::DayTime) => Arc::new(
+                    (0..BATCH_SIZE)
+                        .map(|_| {
+                            Some(IntervalDayTime::new(
+                                rng.random::<i32>(),
+                                rng.random::<i32>(),
+                            ))
+                        })
+                        .collect::<IntervalDayTimeArray>(),
+                ),
+                DataType::Interval(IntervalUnit::MonthDayNano) => Arc::new(
+                    (0..BATCH_SIZE)
+                        .map(|_| {
+                            Some(IntervalMonthDayNano::new(
+                                rng.random::<i32>(),
+                                rng.random::<i32>(),
+                                rng.random::<i64>(),
+                            ))
+                        })
+                        .collect::<IntervalMonthDayNanoArray>(),
+                ),
                 other => panic!("unsupported grouped bench type: {other}"),
             };
             (values, group_indices)
@@ -300,7 +549,18 @@ fn approx_distinct_grouped_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("approx_distinct_grouped");
     group.sample_size(10);
 
-    for data_type in [DataType::Int64, DataType::Utf8, DataType::Utf8View] {
+    for data_type in [
+        DataType::Int64,
+        DataType::Utf8,
+        DataType::Utf8View,
+        DataType::Decimal32(DECIMAL32_PRECISION, DECIMAL_SCALE),
+        DataType::Decimal64(DECIMAL64_PRECISION, DECIMAL_SCALE),
+        DataType::Decimal128(DECIMAL128_PRECISION, DECIMAL_SCALE),
+        DataType::Decimal256(DECIMAL256_PRECISION, DECIMAL_SCALE),
+        DataType::Interval(IntervalUnit::YearMonth),
+        DataType::Interval(IntervalUnit::DayTime),
+        DataType::Interval(IntervalUnit::MonthDayNano),
+    ] {
         let batches = build_grouped_batches(&data_type);
         let label = format!("{data_type:?} {N_GROUPS} groups");
         group.bench_function(&label, |b| {

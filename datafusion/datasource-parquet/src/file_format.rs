@@ -24,11 +24,12 @@ use std::sync::Arc;
 
 // Re-export so the historical `file_format::*` paths still resolve.
 #[expect(deprecated)]
+pub use crate::schema_coercion::coerce_int96_to_resolution;
 pub use crate::schema_coercion::{
-    Int96Coercer, apply_file_schema_type_coercions, coerce_file_schema_to_string_type,
-    coerce_file_schema_to_view_type, coerce_int96_to_resolution,
-    transform_binary_to_string, transform_schema_to_view,
+    Int96Coercer, apply_file_schema_type_coercions, transform_binary_to_string,
+    transform_schema_to_view,
 };
+
 pub use crate::sink::ParquetSink;
 
 use arrow::datatypes::{Fields, Schema, SchemaRef};
@@ -366,7 +367,13 @@ impl FileFormat for ParquetFormat {
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
             // fetch schemas concurrently, if requested
-            .buffer_unordered(state.config_options().execution.meta_fetch_concurrency)
+            .buffer_unordered(
+                state
+                    .config_options()
+                    .execution
+                    .meta_fetch_concurrency
+                    .get(),
+            )
             .try_collect()
             .await?;
 
@@ -626,7 +633,7 @@ pub async fn fetch_parquet_metadata(
     object_meta: &ObjectMeta,
     size_hint: Option<usize>,
     decryption_properties: Option<&FileDecryptionProperties>,
-    file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
+    file_metadata_cache: Option<Arc<FileMetadataCache>>,
 ) -> Result<Arc<ParquetMetaData>> {
     let decryption_properties = decryption_properties.cloned().map(Arc::new);
     DFParquetMetadata::new(store, object_meta)
@@ -650,7 +657,7 @@ pub async fn fetch_statistics(
     file: &ObjectMeta,
     metadata_size_hint: Option<usize>,
     decryption_properties: Option<&FileDecryptionProperties>,
-    file_metadata_cache: Option<Arc<dyn FileMetadataCache>>,
+    file_metadata_cache: Option<Arc<FileMetadataCache>>,
 ) -> Result<Statistics> {
     let decryption_properties = decryption_properties.cloned().map(Arc::new);
     DFParquetMetadata::new(store, file)

@@ -18,12 +18,11 @@
 use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit, UnionFields};
 use datafusion::common::{
-    DFSchema, DFSchemaRef, exec_err, not_impl_err, substrait_datafusion_err,
-    substrait_err,
+    DFSchema, DFSchemaRef, TableReference, exec_err, not_impl_err,
+    substrait_datafusion_err, substrait_err,
 };
 use datafusion::logical_expr::expr::Sort;
 use datafusion::logical_expr::{Cast, Expr, ExprSchemable};
-use datafusion::sql::TableReference;
 use std::collections::HashSet;
 use std::sync::Arc;
 use substrait::proto::SortField;
@@ -570,12 +569,11 @@ pub(crate) mod tests {
     use crate::extensions::Extensions;
     use crate::logical_plan::consumer::DefaultSubstraitConsumer;
     use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema};
-    use datafusion::common::DFSchema;
+    use datafusion::common::{DFSchema, TableReference};
     use datafusion::error::Result;
     use datafusion::execution::SessionState;
     use datafusion::logical_expr::{Expr, col};
     use datafusion::prelude::SessionContext;
-    use datafusion::sql::TableReference;
     use std::collections::HashMap;
     use std::sync::{Arc, LazyLock};
 

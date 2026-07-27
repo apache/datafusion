@@ -1,0 +1,7 @@
+subgroup correlation
+
+template sql_benchmarks/predicate_eval/predicate_eval.benchmark.template
+SUBGROUP=correlation
+QPAD=73
+DATASET=corrproxy
+NAME=correlation_q73_redundant_proxy
