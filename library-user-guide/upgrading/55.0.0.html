@@ -1207,6 +1207,15 @@ on a non-future value does not compile:</p>
 </pre></div>
 </div>
 </section>
+<section id="movingmin-and-movingmax-changed-to-pub-crate">
+<h3><code class="docutils literal notranslate"><span class="pre">MovingMin</span></code> and <code class="docutils literal notranslate"><span class="pre">MovingMax</span></code> changed to <code class="docutils literal notranslate"><span class="pre">pub(crate)</span></code><a class="headerlink" href="#movingmin-and-movingmax-changed-to-pub-crate" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">MovingMin</span></code> and <code class="docutils literal notranslate"><span class="pre">MovingMax</span></code> in <code class="docutils literal notranslate"><span class="pre">datafusion_functions_aggregate::min_max</span></code> have been changed from <code class="docutils literal notranslate"><span class="pre">pub</span></code> to <code class="docutils literal notranslate"><span class="pre">pub(crate)</span></code> visibility as they are internal helper data structures for DataFusion’s sliding window aggregators.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Code that directly imported <code class="docutils literal notranslate"><span class="pre">MovingMin</span></code> or <code class="docutils literal notranslate"><span class="pre">MovingMax</span></code> from <code class="docutils literal notranslate"><span class="pre">datafusion_functions_aggregate</span></code>. Standard SQL window functions (<code class="docutils literal notranslate"><span class="pre">MIN(...)</span> <span class="pre">OVER</span> <span class="pre">(...)</span></code> / <code class="docutils literal notranslate"><span class="pre">MAX(...)</span> <span class="pre">OVER</span> <span class="pre">(...)</span></code>) are unaffected.</p></li>
+</ul>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/23827">PR #23827</a> for details.</p>
+</section>
 <section id="msrv-updated-to-1-94-0">
 <h3><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.94.0<a class="headerlink" href="#msrv-updated-to-1-94-0" title="Link to this heading">#</a></h3>
 <p>The Minimum Supported Rust Version (MSRV) has been updated to <a class="reference external" href="https://releases.rs/docs/1.94.0/"><code class="docutils literal notranslate"><span class="pre">1.94.0</span></code></a>.</p>
@@ -1287,6 +1296,7 @@ on a non-future value does not compile:</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#catalog-traits-moved-to-datafusion-session">Catalog traits moved to <code class="docutils literal notranslate"><span class="pre">datafusion-session</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#session-gains-a-required-catalog-list-method"><code class="docutils literal notranslate"><span class="pre">Session</span></code> gains a required <code class="docutils literal notranslate"><span class="pre">catalog_list</span></code> method</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#unused-async-removed-from-several-public-functions">Unused <code class="docutils literal notranslate"><span class="pre">async</span></code> removed from several public functions</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#movingmin-and-movingmax-changed-to-pub-crate"><code class="docutils literal notranslate"><span class="pre">MovingMin</span></code> and <code class="docutils literal notranslate"><span class="pre">MovingMax</span></code> changed to <code class="docutils literal notranslate"><span class="pre">pub(crate)</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#msrv-updated-to-1-94-0"><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.94.0</a></li>
 </ul>
 </li>
