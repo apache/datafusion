@@ -61,9 +61,9 @@ use crate::sorts::sort::sort_batch;
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
-    check_if_same_properties,
+    ChildrenPropertiesHint, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
+    Statistics, validate_child_count,
 };
 
 use arrow::compute::concat_batches;
@@ -307,31 +307,44 @@ impl ExecutionPlan for PartialSortExec {
         vec![&self.input]
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        hint: ChildrenPropertiesHint,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        match hint {
+            ChildrenPropertiesHint::SameProperties => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics_set: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesHint::Recompute => {
+                let new_partial_sort = PartialSortExec::new(
+                    self.expr.clone(),
+                    Arc::clone(&children[0]),
+                    self.common_prefix_length,
+                )
+                .with_fetch(self.fetch)
+                .with_preserve_partitioning(self.preserve_partitioning);
+
+                Ok(Arc::new(new_partial_sort))
+            }
+        }
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        let new_partial_sort = PartialSortExec::new(
-            self.expr.clone(),
-            Arc::clone(&children[0]),
-            self.common_prefix_length,
-        )
-        .with_fetch(self.fetch)
-        .with_preserve_partitioning(self.preserve_partitioning);
-
-        Ok(Arc::new(new_partial_sort))
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            metrics_set: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(children, ChildrenPropertiesHint::SameProperties)
     }
 
     fn execute(

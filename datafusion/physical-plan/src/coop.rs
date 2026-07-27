@@ -86,8 +86,9 @@ use crate::filter_pushdown::{
 use crate::projection::ProjectionExec;
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, SortOrderPushdownResult, check_if_same_properties,
+    ChildrenPropertiesHint, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    RecordBatchStream, SendableRecordBatchStream, SortOrderPushdownResult,
+    validate_child_count,
 };
 use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
@@ -267,27 +268,35 @@ impl ExecutionPlan for CooperativeExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        hint: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        assert_eq_or_internal_err!(
-            children.len(),
-            1,
-            "CooperativeExec requires exactly one child"
-        );
-        check_if_same_properties!(self, children);
-        Ok(Arc::new(CooperativeExec::new(children.swap_remove(0))))
+        validate_child_count!(self, children);
+        match hint {
+            ChildrenPropertiesHint::SameProperties => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesHint::Recompute => {
+                Ok(Arc::new(CooperativeExec::new(children.swap_remove(0))))
+            }
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(children, ChildrenPropertiesHint::SameProperties)
     }
 
     fn execute(

@@ -31,7 +31,10 @@ use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::projection::{ProjectionExec, make_with_child};
 use crate::sort_pushdown::SortOrderPushdownResult;
 use crate::statistics::{ChildStats, StatisticsArgs};
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning, check_if_same_properties};
+use crate::{
+    ChildrenPropertiesHint, DisplayFormatType, ExecutionPlan, Partitioning,
+    validate_child_count,
+};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 use datafusion_common::config::ConfigOptions;
@@ -143,25 +146,38 @@ impl ExecutionPlan for CoalescePartitionsExec {
         vec![false]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        hint: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        let mut plan = CoalescePartitionsExec::new(children.swap_remove(0));
-        plan.fetch = self.fetch;
-        Ok(Arc::new(plan))
+        validate_child_count!(self, children);
+        match hint {
+            ChildrenPropertiesHint::SameProperties => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesHint::Recompute => {
+                let mut plan = CoalescePartitionsExec::new(children.swap_remove(0));
+                plan.fetch = self.fetch;
+                Ok(Arc::new(plan))
+            }
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(children, ChildrenPropertiesHint::SameProperties)
     }
 
     fn execute(

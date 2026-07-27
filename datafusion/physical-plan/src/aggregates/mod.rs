@@ -146,16 +146,6 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
-use crate::aggregates::{
-    aggregate_stream::AggregateStream,
-    grouped_hash_stream::GroupedHashAggregateStream,
-    grouped_topk_stream::GroupedTopKAggregateStream,
-    hash_stream::{FinalHashAggregateStream, PartialHashAggregateStream},
-    ordered_final_stream::OrderedFinalAggregateStream,
-    ordered_partial_stream::OrderedPartialAggregateStream,
-    partial_reduce_stream::PartialReduceHashAggregateStream,
-    single_stream::SingleHashAggregateStream,
-};
 use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
@@ -164,8 +154,22 @@ use crate::filter_pushdown::{
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
+    ChildrenPropertiesHint,
+    aggregates::{
+        aggregate_stream::AggregateStream,
+        grouped_hash_stream::GroupedHashAggregateStream,
+        grouped_topk_stream::GroupedTopKAggregateStream,
+        hash_stream::{FinalHashAggregateStream, PartialHashAggregateStream},
+        ordered_final_stream::OrderedFinalAggregateStream,
+        ordered_partial_stream::OrderedPartialAggregateStream,
+        partial_reduce_stream::PartialReduceHashAggregateStream,
+        single_stream::SingleHashAggregateStream,
+    },
+    validate_child_count,
+};
+use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputDistributionRequirements,
-    InputOrderMode, SendableRecordBatchStream, Statistics, check_if_same_properties,
+    InputOrderMode, SendableRecordBatchStream, Statistics,
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_physical_expr::utils::collect_columns;
@@ -1961,36 +1965,47 @@ impl ExecutionPlan for AggregateExec {
         vec![&self.input]
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        hint: ChildrenPropertiesHint,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        match hint {
+            ChildrenPropertiesHint::SameProperties => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesHint::Recompute => {
+                let mut me = AggregateExec::try_new_with_schema(
+                    self.mode,
+                    Arc::clone(&self.group_by),
+                    self.aggr_expr.to_vec(),
+                    Arc::clone(&self.filter_expr),
+                    Arc::clone(&children[0]),
+                    Arc::clone(&self.input_schema),
+                    Arc::clone(&self.schema),
+                )?;
+                me.limit_options = self.limit_options;
+                me.dynamic_filter.clone_from(&self.dynamic_filter);
+                Ok(Arc::new(me))
+            }
+        }
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-
-        let mut me = AggregateExec::try_new_with_schema(
-            self.mode,
-            Arc::clone(&self.group_by),
-            self.aggr_expr.to_vec(),
-            Arc::clone(&self.filter_expr),
-            Arc::clone(&children[0]),
-            Arc::clone(&self.input_schema),
-            Arc::clone(&self.schema),
-        )?;
-        me.limit_options = self.limit_options;
-        me.dynamic_filter.clone_from(&self.dynamic_filter);
-
-        Ok(Arc::new(me))
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(children, ChildrenPropertiesHint::SameProperties)
     }
 
     fn execute(

@@ -35,10 +35,10 @@ use crate::windows::{
     window_equivalence_properties,
 };
 use crate::{
-    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    ExecutionPlanProperties, InputDistributionRequirements, InputOrderMode,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
-    check_if_same_properties,
+    ChildrenPropertiesHint, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
+    ExecutionPlan, ExecutionPlanProperties, InputDistributionRequirements,
+    InputOrderMode, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    Statistics, WindowExpr, validate_child_count,
 };
 
 use arrow::compute::take_record_batch;
@@ -340,28 +340,41 @@ impl ExecutionPlan for BoundedWindowAggExec {
         vec![true]
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        hint: ChildrenPropertiesHint,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        match hint {
+            ChildrenPropertiesHint::SameProperties => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesHint::Recompute => {
+                Ok(Arc::new(BoundedWindowAggExec::try_new(
+                    self.window_expr.clone(),
+                    Arc::clone(&children[0]),
+                    self.input_order_mode.clone(),
+                    self.can_repartition,
+                )?))
+            }
+        }
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        Ok(Arc::new(BoundedWindowAggExec::try_new(
-            self.window_expr.clone(),
-            Arc::clone(&children[0]),
-            self.input_order_mode.clone(),
-            self.can_repartition,
-        )?))
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(children, ChildrenPropertiesHint::SameProperties)
     }
 
     fn execute(

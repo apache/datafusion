@@ -34,7 +34,10 @@ use crate::filter_pushdown::{
 };
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
 use crate::statistics::{ChildStats, StatisticsArgs};
-use crate::{DisplayFormatType, ExecutionPlan, PhysicalExpr, check_if_same_properties};
+use crate::{
+    ChildrenPropertiesHint, DisplayFormatType, ExecutionPlan, PhysicalExpr,
+    validate_child_count,
+};
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -302,27 +305,38 @@ impl ExecutionPlan for ProjectionExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        hint: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        ProjectionExec::try_from_projector(
-            self.projector.clone(),
-            children.swap_remove(0),
-        )
-        .map(|p| Arc::new(p) as _)
+        validate_child_count!(self, children);
+        match hint {
+            ChildrenPropertiesHint::SameProperties => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesHint::Recompute => ProjectionExec::try_from_projector(
+                self.projector.clone(),
+                children.swap_remove(0),
+            )
+            .map(|p| Arc::new(p) as _),
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(children, ChildrenPropertiesHint::SameProperties)
     }
 
     fn execute(

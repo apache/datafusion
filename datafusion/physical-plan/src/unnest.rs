@@ -29,7 +29,7 @@ use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
     ChildrenPropertiesHint, DisplayFormatType, Distribution, ExecutionPlan,
-    RecordBatchStream, SendableRecordBatchStream,
+    RecordBatchStream, SendableRecordBatchStream, validate_child_count,
 };
 
 use arrow::array::{
@@ -232,6 +232,7 @@ impl ExecutionPlan for UnnestExec {
         mut children: Vec<Arc<dyn ExecutionPlan>>,
         hint: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
         match hint {
             ChildrenPropertiesHint::SameProperties => Ok(Arc::new(Self {
                 input: children.swap_remove(0),

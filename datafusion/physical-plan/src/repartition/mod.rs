@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This file implements the [`RepartitionExec`]  operator, which maps N input
+//! This file implements the [`RepartitionExec`] operator, which maps N input
 //! partitions to M output partitions based on a partitioning scheme, optionally
 //! maintaining the order of the input rows in the output.
 
@@ -43,8 +43,8 @@ use crate::spill::spill_pool::{self, SpillPoolSink, SpillPoolWriter};
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
 use crate::{
-    DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics,
-    check_if_same_properties,
+    ChildrenPropertiesHint, DisplayFormatType, ExecutionPlan, Partitioning,
+    PlanProperties, Statistics, validate_child_count,
 };
 
 use arrow::array::{Array, PrimitiveArray, RecordBatch, RecordBatchOptions};
@@ -1337,31 +1337,44 @@ impl ExecutionPlan for RepartitionExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        hint: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        let mut repartition = RepartitionExec::try_new(
-            children.swap_remove(0),
-            self.partitioning().clone(),
-        )?;
-        if self.preserve_order {
-            repartition = repartition.with_preserve_order();
+        validate_child_count!(self, children);
+        match hint {
+            ChildrenPropertiesHint::SameProperties => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                state: Default::default(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesHint::Recompute => {
+                let mut repartition = RepartitionExec::try_new(
+                    children.swap_remove(0),
+                    self.partitioning().clone(),
+                )?;
+                if self.preserve_order {
+                    repartition = repartition.with_preserve_order();
+                }
+                Ok(Arc::new(repartition))
+            }
         }
-        Ok(Arc::new(repartition))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            state: Default::default(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(children, ChildrenPropertiesHint::SameProperties)
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {

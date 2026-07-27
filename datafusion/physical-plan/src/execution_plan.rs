@@ -1707,6 +1707,23 @@ macro_rules! check_if_same_properties {
     };
 }
 
+/// Helper macro to validate that replacement children match a plan's existing
+/// child count.
+///
+/// This is useful for [`ExecutionPlan::replace_children`] implementations that
+/// no longer call [`check_if_same_properties`] but still need to preserve the
+/// same child-count validation behavior.
+#[macro_export]
+macro_rules! validate_child_count {
+    ($plan: expr, $children: expr) => {
+        datafusion_common::assert_eq_or_internal_err!(
+            $children.len(),
+            $plan.children().len(),
+            "Wrong number of children"
+        );
+    };
+}
+
 /// Utility function yielding a string representation of the given [`ExecutionPlan`].
 pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
     let formatted = displayable(plan.as_ref()).indent(true).to_string();

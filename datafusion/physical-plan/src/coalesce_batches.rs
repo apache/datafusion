@@ -27,8 +27,8 @@ use crate::projection::ProjectionExec;
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
-    DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
-    check_if_same_properties,
+    ChildrenPropertiesHint, DisplayFormatType, ExecutionPlan, RecordBatchStream,
+    SendableRecordBatchStream, validate_child_count,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -173,26 +173,37 @@ impl ExecutionPlan for CoalesceBatchesExec {
         vec![false]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        hint: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        Ok(Arc::new(
-            CoalesceBatchesExec::new(children.swap_remove(0), self.target_batch_size)
-                .with_fetch(self.fetch),
-        ))
+        validate_child_count!(self, children);
+        match hint {
+            ChildrenPropertiesHint::SameProperties => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesHint::Recompute => Ok(Arc::new(
+                CoalesceBatchesExec::new(children.swap_remove(0), self.target_batch_size)
+                    .with_fetch(self.fetch),
+            )),
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(children, ChildrenPropertiesHint::SameProperties)
     }
 
     fn execute(

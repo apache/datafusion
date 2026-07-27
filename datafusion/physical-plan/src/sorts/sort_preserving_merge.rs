@@ -28,7 +28,7 @@ use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
     ChildrenPropertiesHint, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
-    Statistics,
+    Statistics, validate_child_count,
 };
 
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
@@ -286,6 +286,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         mut children: Vec<Arc<dyn ExecutionPlan>>,
         hint: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
         match hint {
             ChildrenPropertiesHint::SameProperties => Ok(Arc::new(Self {
                 input: children.swap_remove(0),
