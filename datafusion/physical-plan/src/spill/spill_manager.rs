@@ -25,8 +25,8 @@ use arrow::datatypes::{ByteViewType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result, config::SpillCompression};
 use datafusion_execution::SendableRecordBatchStream;
-use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::runtime_env::RuntimeEnv;
+use datafusion_execution::spill_file::SpillFile;
 use std::borrow::Borrow;
 use std::sync::Arc;
 
@@ -76,6 +76,10 @@ impl SpillManager {
         &self.schema
     }
 
+    pub(crate) fn env(&self) -> &RuntimeEnv {
+        &self.env
+    }
+
     /// Creates a temporary file for in-progress operations, returning an error
     /// message if file creation fails. The file can be used to append batches
     /// incrementally and then finish the file when done.
@@ -99,7 +103,7 @@ impl SpillManager {
         &self,
         batches: &[RecordBatch],
         request_msg: &str,
-    ) -> Result<Option<RefCountedTempFile>> {
+    ) -> Result<Option<Arc<dyn SpillFile>>> {
         let mut in_progress_file = self.create_in_progress_file(request_msg)?;
 
         for batch in batches {
@@ -115,7 +119,7 @@ impl SpillManager {
         &self,
         mut iter: impl Iterator<Item = Result<impl Borrow<RecordBatch>>>,
         request_description: &str,
-    ) -> Result<Option<(RefCountedTempFile, usize)>> {
+    ) -> Result<Option<(Arc<dyn SpillFile>, usize)>> {
         let mut in_progress_file = self.create_in_progress_file(request_description)?;
 
         let mut max_record_batch_size = 0;
@@ -141,7 +145,7 @@ impl SpillManager {
         &self,
         stream: &mut SendableRecordBatchStream,
         request_description: &str,
-    ) -> Result<Option<(RefCountedTempFile, usize)>> {
+    ) -> Result<Option<(Arc<dyn SpillFile>, usize)>> {
         use futures::StreamExt;
 
         let mut in_progress_file = self.create_in_progress_file(request_description)?;
@@ -178,14 +182,14 @@ impl SpillManager {
     /// the merge degree when merging multiple sorted runs.
     pub fn read_spill_as_stream(
         &self,
-        spill_file_path: RefCountedTempFile,
+        spill_file_path: Arc<dyn SpillFile>,
         max_record_batch_memory: Option<usize>,
     ) -> Result<SendableRecordBatchStream> {
         let stream = Box::pin(cooperative(SpillReaderStream::new(
             Arc::clone(&self.schema),
             spill_file_path,
             max_record_batch_memory,
-        )));
+        )?));
 
         Ok(spawn_buffered(stream, self.batch_read_buffer_capacity))
     }
@@ -193,14 +197,14 @@ impl SpillManager {
     /// Same as `read_spill_as_stream`, but without buffering.
     pub fn read_spill_as_stream_unbuffered(
         &self,
-        spill_file_path: RefCountedTempFile,
+        spill_file_path: Arc<dyn SpillFile>,
         max_record_batch_memory: Option<usize>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(cooperative(SpillReaderStream::new(
             Arc::clone(&self.schema),
             spill_file_path,
             max_record_batch_memory,
-        ))))
+        )?)))
     }
 }
 

@@ -32,7 +32,7 @@ use datafusion_physical_expr::LexOrdering;
 use crate::metrics::{MetricCategory, MetricType, MetricValue};
 use crate::render_tree::RenderTree;
 
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{StatisticsArgs, StatisticsContext};
 
 use super::{ExecutionPlan, ExecutionPlanVisitor, accept};
 
@@ -581,8 +581,8 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
             }
         }
         if self.show_statistics {
-            let stats = plan
-                .statistics_with_args(&StatisticsArgs::default())
+            let stats = StatisticsContext::new()
+                .compute(plan, &StatisticsArgs::new())
                 .map_err(|_e| fmt::Error)?;
             write!(self.f, ", statistics=[{stats}]")?;
         }
@@ -679,8 +679,8 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
         };
 
         let statistics = if self.show_statistics {
-            let stats = plan
-                .statistics_with_args(&StatisticsArgs::new())
+            let stats = StatisticsContext::new()
+                .compute(plan, &StatisticsArgs::new())
                 .map_err(|_e| fmt::Error)?;
             format!("statistics=[{stats}]")
         } else {
@@ -775,6 +775,9 @@ impl PgJsonExecutionPlanVisitor<'_> {
             }
             MetricValue::Count { count, .. } => serde_json::Value::from(count.value()),
             MetricValue::Gauge { gauge, .. } => serde_json::Value::from(gauge.value()),
+            MetricValue::PeakMemoryUsage { gauge, .. } => {
+                serde_json::Value::from(gauge.value())
+            }
             MetricValue::Time { time, .. } => {
                 let ms = (time.value() as f64) / 1_000_000.0;
                 serde_json::Value::from(ms)
@@ -1008,7 +1011,7 @@ impl TreeRenderVisitor<'_, '_> {
                     continue;
                 }
                 // there are nodes next to this, fill the space
-                write!(self.f, "{}", &" ".repeat(Self::NODE_RENDER_WIDTH))?;
+                write!(self.f, "{}", " ".repeat(Self::NODE_RENDER_WIDTH))?;
             }
         }
         writeln!(self.f)?;
@@ -1198,13 +1201,13 @@ impl TreeRenderVisitor<'_, '_> {
                 )?;
                 write!(self.f, "{}", Self::RDCORNER)?;
             } else if root.has_node(x, y + 1) {
-                write!(self.f, "{}", &" ".repeat(Self::NODE_RENDER_WIDTH / 2))?;
+                write!(self.f, "{}", " ".repeat(Self::NODE_RENDER_WIDTH / 2))?;
                 write!(self.f, "{}", Self::VERTICAL)?;
                 if has_adjacent_nodes || Self::should_render_whitespace(root, x, y) {
-                    write!(self.f, "{}", &" ".repeat(Self::NODE_RENDER_WIDTH / 2))?;
+                    write!(self.f, "{}", " ".repeat(Self::NODE_RENDER_WIDTH / 2))?;
                 }
             } else if has_adjacent_nodes || Self::should_render_whitespace(root, x, y) {
-                write!(self.f, "{}", &" ".repeat(Self::NODE_RENDER_WIDTH))?;
+                write!(self.f, "{}", " ".repeat(Self::NODE_RENDER_WIDTH))?;
             }
         }
         writeln!(self.f)?;
@@ -1501,7 +1504,11 @@ mod tests {
             todo!()
         }
 
-        fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        fn statistics_from_inputs(
+            &self,
+            _input_stats: &[Arc<Statistics>],
+            args: &StatisticsArgs,
+        ) -> Result<Arc<Statistics>> {
             if args.partition().is_some() {
                 return Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())));
             }

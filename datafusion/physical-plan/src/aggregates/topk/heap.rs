@@ -334,10 +334,7 @@ impl<VAL: ValueType> TopKHeap<VAL> {
 
     pub fn worst_val(&self) -> Option<&VAL> {
         let root = self.heap.first()?;
-        let hi = match root {
-            None => return None,
-            Some(hi) => hi,
-        };
+        let hi = root.as_ref()?;
         Some(&hi.val)
     }
 

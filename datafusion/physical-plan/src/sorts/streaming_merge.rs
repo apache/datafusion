@@ -24,12 +24,12 @@ use crate::sorts::{
     merge::SortPreservingMergeStream,
     stream::{FieldCursorStream, RowCursorStream},
 };
-use crate::{SendableRecordBatchStream, SpillManager};
+use crate::{EmptyRecordBatchStream, SendableRecordBatchStream, SpillManager};
 use arrow::array::*;
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::human_readable_size;
 use datafusion_common::{Result, assert_or_internal_err, internal_err};
-use datafusion_execution::disk_manager::RefCountedTempFile;
+use datafusion_execution::SpillFile;
 use datafusion_execution::memory_pool::{
     MemoryConsumer, MemoryPool, MemoryReservation, UnboundedMemoryPool,
 };
@@ -46,7 +46,7 @@ macro_rules! merge_helper {
     ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident, $reservation:ident, $enable_round_robin_tie_breaker:ident) => {{
         let streams =
             FieldCursorStream::<$t>::new($sort, $streams, $reservation.new_empty());
-        return Ok(Box::pin(SortPreservingMergeStream::new(
+        return Ok(SortPreservingMergeStream::new(
             Box::new(streams),
             $schema,
             $tracking_metrics,
@@ -54,12 +54,13 @@ macro_rules! merge_helper {
             $fetch,
             $reservation,
             $enable_round_robin_tie_breaker,
-        )));
+        )
+        .into_stream());
     }};
 }
 
 pub struct SortedSpillFile {
-    pub file: RefCountedTempFile,
+    pub file: Arc<dyn SpillFile>,
 
     /// how much memory the largest memory batch is taking
     pub max_record_batch_memory: usize,
@@ -67,12 +68,19 @@ pub struct SortedSpillFile {
 
 impl std::fmt::Debug for SortedSpillFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "SortedSpillFile({:?}) takes {}",
-            self.file.path(),
-            human_readable_size(self.max_record_batch_memory)
-        )
+        match self.file.path() {
+            Some(path) => write!(
+                f,
+                "SortedSpillFile({:?}) takes {}",
+                path,
+                human_readable_size(self.max_record_batch_memory)
+            ),
+            None => write!(
+                f,
+                "SortedSpillFile(<custom_backend>) takes {}",
+                human_readable_size(self.max_record_batch_memory)
+            ),
+        }
     }
 }
 
@@ -187,13 +195,22 @@ impl<'a> StreamingMergeBuilder<'a> {
         let Some(expressions) = expressions else {
             return internal_err!("Sort expressions cannot be empty for streaming merge");
         };
+        let schema = schema.expect("Schema cannot be empty for streaming merge");
+
+        if fetch.is_some_and(|fetch| fetch == 0) {
+            return Ok(Box::pin(EmptyRecordBatchStream::new(schema)));
+        }
+
+        let batch_size =
+            batch_size.expect("Batch size cannot be empty for streaming merge");
+
+        if batch_size == 0 {
+            return internal_err!("Batch size cannot be zero for streaming merge");
+        }
 
         if !sorted_spill_files.is_empty() {
             // Unwrapping mandatory fields
-            let schema = schema.expect("Schema cannot be empty for streaming merge");
             let metrics = metrics.expect("Metrics cannot be empty for streaming merge");
-            let batch_size =
-                batch_size.expect("Batch size cannot be empty for streaming merge");
             let reservation =
                 reservation.expect("Reservation cannot be empty for streaming merge");
 
@@ -219,10 +236,7 @@ impl<'a> StreamingMergeBuilder<'a> {
         );
 
         // Unwrapping mandatory fields
-        let schema = schema.expect("Schema cannot be empty for streaming merge");
         let metrics = metrics.expect("Metrics cannot be empty for streaming merge");
-        let batch_size =
-            batch_size.expect("Batch size cannot be empty for streaming merge");
         let reservation =
             reservation.expect("Reservation cannot be empty for streaming merge");
 
@@ -247,7 +261,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             streams,
             reservation.new_empty(),
         )?;
-        Ok(Box::pin(SortPreservingMergeStream::new(
+        Ok(SortPreservingMergeStream::new(
             Box::new(streams),
             schema,
             metrics,
@@ -255,6 +269,114 @@ impl<'a> StreamingMergeBuilder<'a> {
             fetch,
             reservation,
             enable_round_robin_tie_breaker,
-        )))
+        )
+        .into_stream())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{common::collect, stream::RecordBatchStreamAdapter};
+    use std::sync::Arc;
+
+    use super::*;
+
+    use arrow::array::{ArrayRef, RecordBatch};
+    use arrow_schema::SortOptions;
+    use datafusion_common::Result;
+    use datafusion_execution::TaskContext;
+    use datafusion_physical_expr::{PhysicalSortExpr, expressions::col};
+    use datafusion_physical_expr_common::metrics::{
+        ExecutionPlanMetricsSet, SpillMetrics,
+    };
+
+    #[tokio::test]
+    async fn test_sort_merge_fetch_zero_with_only_1_stream() {
+        test_fetch_0_should_output_0_rows(1, 0).await.unwrap();
+    }
+    #[tokio::test]
+    async fn test_sort_merge_fetch_zero_with_2_streams() {
+        test_fetch_0_should_output_0_rows(2, 0).await.unwrap();
+    }
+    #[tokio::test]
+    async fn test_sort_merge_fetch_zero_with_only_1_spill_file() {
+        test_fetch_0_should_output_0_rows(0, 1).await.unwrap();
+    }
+    #[tokio::test]
+    async fn test_sort_merge_fetch_zero_with_2_spill_files() {
+        test_fetch_0_should_output_0_rows(0, 2).await.unwrap();
+    }
+    #[tokio::test]
+    async fn test_sort_merge_fetch_zero_with_1_stream_and_1_spill_file() {
+        test_fetch_0_should_output_0_rows(1, 1).await.unwrap();
+    }
+
+    async fn test_fetch_0_should_output_0_rows(
+        number_of_streams: usize,
+        number_of_spilled_files: usize,
+    ) -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
+        let b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"]));
+        let batch = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
+        let schema = batch.schema();
+
+        let sort: LexOrdering = [PhysicalSortExpr {
+            expr: col("b", &schema).unwrap(),
+            options: SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        }]
+        .into();
+
+        let streams = (0..number_of_streams)
+            .map(|_| {
+                Box::pin(RecordBatchStreamAdapter::new(
+                    Arc::clone(&schema),
+                    futures::stream::iter(vec![Ok(batch.clone())]),
+                )) as SendableRecordBatchStream
+            })
+            .collect::<Vec<SendableRecordBatchStream>>();
+
+        let spill_manager = SpillManager::new(
+            task_ctx.runtime_env(),
+            SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+            Arc::clone(&schema),
+        );
+
+        let mut sorted_spill_files: Vec<SortedSpillFile> = vec![];
+
+        for _ in 0..number_of_spilled_files {
+            let file = spill_manager
+                .spill_record_batch_and_finish(std::slice::from_ref(&batch), "spill")
+                .unwrap()
+                .unwrap();
+            sorted_spill_files.push(SortedSpillFile {
+                file,
+                max_record_batch_memory: batch.get_array_memory_size(),
+            });
+        }
+
+        let sorted_output_stream = StreamingMergeBuilder::new()
+            .with_batch_size(100)
+            .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0))
+            // Just to avoid having to provide memory pool
+            .with_bypass_mempool()
+            .with_schema(schema)
+            .with_streams(streams)
+            .with_sorted_spill_files(sorted_spill_files)
+            .with_spill_manager(spill_manager)
+            .with_expressions(&sort)
+            // The whole point of the test - fetch is 0
+            .with_fetch(Some(0))
+            .build()
+            .unwrap();
+
+        let collected = collect(sorted_output_stream).await.unwrap();
+        let total: usize = collected.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total, 0, "fetch=Some(0) must emit zero rows, got {total}");
+
+        Ok(())
     }
 }

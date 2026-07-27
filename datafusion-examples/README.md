@@ -93,6 +93,7 @@ cargo run --example dataframe -- dataframe
 | catalog                 | [`data_io/catalog.rs`](examples/data_io/catalog.rs)                                       | Register tables into a custom catalog                                     |
 | in_memory_object_store  | [`data_io/in_memory_object_store.rs`](examples/data_io/in_memory_object_store.rs)         | Read CSV from an in-memory object store (pattern applies to JSON/Parquet) |
 | json_shredding          | [`data_io/json_shredding.rs`](examples/data_io/json_shredding.rs)                         | Implement filter rewriting for JSON shredding                             |
+| object_store_spill      | [`data_io/object_store_spill.rs`](examples/data_io/object_store_spill.rs)                 | Use ObjectStore-backed spill files                                        |
 | parquet_adv_idx         | [`data_io/parquet_advanced_index.rs`](examples/data_io/parquet_advanced_index.rs)         | Create a secondary index across multiple parquet files                    |
 | parquet_emb_idx         | [`data_io/parquet_embedded_index.rs`](examples/data_io/parquet_embedded_index.rs)         | Store a custom index inside Parquet files                                 |
 | parquet_enc             | [`data_io/parquet_encrypted.rs`](examples/data_io/parquet_encrypted.rs)                   | Read & write encrypted Parquet files                                      |
@@ -219,14 +220,15 @@ cargo run --example dataframe -- dataframe
 
 #### Category: Single Process
 
-| Subcommand      | File Path                                                   | Description                                     |
-| --------------- | ----------------------------------------------------------- | ----------------------------------------------- |
-| adv_udaf        | [`udf/advanced_udaf.rs`](examples/udf/advanced_udaf.rs)     | Advanced User Defined Aggregate Function (UDAF) |
-| adv_udf         | [`udf/advanced_udf.rs`](examples/udf/advanced_udf.rs)       | Advanced User Defined Scalar Function (UDF)     |
-| adv_udwf        | [`udf/advanced_udwf.rs`](examples/udf/advanced_udwf.rs)     | Advanced User Defined Window Function (UDWF)    |
-| async_udf       | [`udf/async_udf.rs`](examples/udf/async_udf.rs)             | Asynchronous User Defined Scalar Function       |
-| udaf            | [`udf/simple_udaf.rs`](examples/udf/simple_udaf.rs)         | Simple UDAF example                             |
-| udf             | [`udf/simple_udf.rs`](examples/udf/simple_udf.rs)           | Simple UDF example                              |
-| udtf            | [`udf/simple_udtf.rs`](examples/udf/simple_udtf.rs)         | Simple UDTF example                             |
-| udwf            | [`udf/simple_udwf.rs`](examples/udf/simple_udwf.rs)         | Simple UDWF example                             |
-| table_list_udtf | [`udf/table_list_udtf.rs`](examples/udf/table_list_udtf.rs) | Session-aware UDTF table list example           |
+| Subcommand      | File Path                                                               | Description                                     |
+| --------------- | ----------------------------------------------------------------------- | ----------------------------------------------- |
+| adv_udaf        | [`udf/advanced_udaf.rs`](examples/udf/advanced_udaf.rs)                 | Advanced User Defined Aggregate Function (UDAF) |
+| adv_udf         | [`udf/advanced_udf.rs`](examples/udf/advanced_udf.rs)                   | Advanced User Defined Scalar Function (UDF)     |
+| adv_udwf        | [`udf/advanced_udwf.rs`](examples/udf/advanced_udwf.rs)                 | Advanced User Defined Window Function (UDWF)    |
+| async_udf       | [`udf/async_udf.rs`](examples/udf/async_udf.rs)                         | Asynchronous User Defined Scalar Function       |
+| struct_udaf     | [`udf/struct_returning_udaf.rs`](examples/udf/struct_returning_udaf.rs) | Struct-returning UDAF with window metadata      |
+| udaf            | [`udf/simple_udaf.rs`](examples/udf/simple_udaf.rs)                     | Simple UDAF example                             |
+| udf             | [`udf/simple_udf.rs`](examples/udf/simple_udf.rs)                       | Simple UDF example                              |
+| udtf            | [`udf/simple_udtf.rs`](examples/udf/simple_udtf.rs)                     | Simple UDTF example                             |
+| udwf            | [`udf/simple_udwf.rs`](examples/udf/simple_udwf.rs)                     | Simple UDWF example                             |
+| table_list_udtf | [`udf/table_list_udtf.rs`](examples/udf/table_list_udtf.rs)             | Session-aware UDTF table list example           |

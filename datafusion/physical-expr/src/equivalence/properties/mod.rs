@@ -1314,7 +1314,18 @@ impl EquivalenceProperties {
             if let (Some(data_type), Some(AcrossPartitions::Uniform(Some(value)))) =
                 (data_type, &mut eq_class.constant)
             {
-                *value = value.cast_to(&data_type)?;
+                match value.cast_to(&data_type) {
+                    Ok(cast_value) => *value = cast_value,
+                    Err(_) => {
+                        // This is optimizer metadata. If a stale constant
+                        // value cannot be represented after schema rewrite,
+                        // drop the constant instead of failing planning.
+                        eq_class.constant = None;
+                    }
+                }
+            }
+            if eq_class.is_trivial() {
+                continue;
             }
             eq_classes.push(eq_class);
         }

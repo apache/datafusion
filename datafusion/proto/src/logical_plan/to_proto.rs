@@ -21,13 +21,14 @@
 
 use std::collections::HashMap;
 
-use datafusion_common::{NullEquality, TableReference, UnnestOptions};
+use datafusion_common::{NullEquality, SplitPoint, TableReference, UnnestOptions};
 use datafusion_expr::dml::{
     MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
 };
 use datafusion_expr::expr::{
-    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Cast, GroupingSet, InList,
-    Like, NullTreatment, Placeholder, ScalarFunction, Unnest,
+    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Cast, GroupingSet,
+    HigherOrderFunction, InList, Lambda, LambdaVariable, Like, NullTreatment,
+    Placeholder, ScalarFunction, Unnest,
 };
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::{
@@ -413,6 +414,19 @@ pub fn serialize_expr(
                 })),
             }
         }
+        Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
+            let mut buf = Vec::new();
+            let _ = codec.try_encode_higher_order_function(func.as_ref(), &mut buf);
+            protobuf::LogicalExprNode {
+                expr_type: Some(ExprType::HigherOrderUdfExpr(
+                    protobuf::HigherOrderUdfExprNode {
+                        fun_name: func.name().to_string(),
+                        fun_definition: (!buf.is_empty()).then_some(buf),
+                        args: serialize_exprs(args, codec)?,
+                    },
+                )),
+            }
+        }
         Expr::Not(expr) => {
             let expr = Box::new(protobuf::Not {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
@@ -640,11 +654,22 @@ pub fn serialize_expr(
                     .unwrap_or(HashMap::new()),
             })),
         },
-        Expr::HigherOrderFunction(_) | Expr::Lambda(_) | Expr::LambdaVariable(_) => {
-            return Err(Error::General(
-                "Proto serialization error: Lambda not implemented".to_string(),
-            ));
-        }
+        Expr::Lambda(Lambda { params, body }) => protobuf::LogicalExprNode {
+            expr_type: Some(ExprType::Lambda(Box::new(protobuf::Lambda {
+                params: params.clone(),
+                body: Some(Box::new(serialize_expr(body, codec)?)),
+            }))),
+        },
+        Expr::LambdaVariable(LambdaVariable {
+            name,
+            field,
+            spans: _,
+        }) => protobuf::LogicalExprNode {
+            expr_type: Some(ExprType::LambdaVariable(protobuf::LambdaVariable {
+                name: name.clone(),
+                field: field.as_deref().map(|v| v.try_into()).transpose()?,
+            })),
+        },
     };
 
     Ok(expr_node)
@@ -685,6 +710,18 @@ where
             })
         })
         .collect::<Result<Vec<_>, Error>>()
+}
+
+pub(super) fn serialize_range_split_point(
+    split_point: &SplitPoint,
+) -> Result<protobuf::RangeSplitPoint, Error> {
+    Ok(protobuf::RangeSplitPoint {
+        value: split_point
+            .values()
+            .iter()
+            .map(TryInto::<datafusion_proto_common::ScalarValue>::try_into)
+            .collect::<Result<_, Error>>()?,
+    })
 }
 
 impl FromProto<TableReference> for protobuf::TableReference {

@@ -132,6 +132,16 @@ enum OutOfMemoryMode {
 
 /// HashTable based Grouping Aggregator
 ///
+/// # Development Note
+///
+/// This implementation is being incrementally refactored. See the tracking issue
+/// for details.
+///
+/// New features and improvements should go directly into the new implementation.
+/// Please coordinate through the tracking issue.
+///
+/// Issue: <https://github.com/apache/datafusion/issues/22710>
+///
 /// # Design Goals
 ///
 /// This structure is designed so that updating the aggregates can be
@@ -207,8 +217,7 @@ enum OutOfMemoryMode {
 /// aggregator must store the intermediate state for each group.
 ///
 /// If the ratio of the number of groups to the number of input rows exceeds a
-/// threshold, and [`GroupsAccumulator::supports_convert_to_state`] is
-/// supported, this operator will stop applying Partial aggregation and directly
+/// threshold, this operator will stop applying Partial aggregation and directly
 /// pass the input rows to the next aggregation phase.
 ///
 /// [`Accumulator::state`]: datafusion_expr::Accumulator::state
@@ -527,8 +536,7 @@ impl GroupedHashAggregateStream {
             merging_aggregate_arguments,
             merging_group_by: PhysicalGroupBy::new_single(merging_group_by_expr),
             peak_mem_used: MetricBuilder::new(&agg.metrics)
-                .with_category(MetricCategory::Bytes)
-                .gauge("peak_mem_used", partition),
+                .peak_memory_usage("peak_mem_used", partition),
             spill_manager,
         };
 
@@ -536,14 +544,9 @@ impl GroupedHashAggregateStream {
         // - aggregation mode is Partial
         // - input is not ordered by GROUP BY expressions,
         //   since Final mode expects unique group values as its input
-        // - all accumulators support input batch to intermediate
-        //   aggregate state conversion
         // - there is only one GROUP BY expressions set
         let skip_aggregation_probe = if agg.mode == AggregateMode::Partial
             && matches!(group_ordering, GroupOrdering::None)
-            && accumulators
-                .iter()
-                .all(|acc| acc.supports_convert_to_state())
             && agg_group_by.is_single()
         {
             let options = &context.session_config().options().execution;
@@ -1404,7 +1407,7 @@ mod tests {
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
 
-    // Migrated to PartialHashAggregateStream coverage in hash_aggregate.rs;
+    // Migrated to PartialHashAggregateStream coverage in hash_stream.rs;
     // kept here for the legacy GroupedHashAggregateStream implementation.
     #[tokio::test]
     async fn test_double_emission_race_condition_bug() -> Result<()> {
@@ -1512,9 +1515,8 @@ mod tests {
         Ok(())
     }
 
-    // TODO: migrate to PartialHashAggregateStream when it supports
-    // InputOrderMode::PartiallySorted; kept here for the legacy
-    // GroupedHashAggregateStream implementation.
+    // Migrated to OrderedPartialAggregateStream coverage in aggregates/mod.rs;
+    // kept here for the legacy GroupedHashAggregateStream implementation.
     #[tokio::test]
     async fn test_emit_early_with_partially_sorted() -> Result<()> {
         // Reproducer for #20445: EmitEarly with PartiallySorted panics in

@@ -22,15 +22,22 @@ use tokio::sync::watch;
 
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
+#[cfg(feature = "proto")]
+use datafusion_common::internal_datafusion_err;
 use datafusion_common::{
-    Result, internal_datafusion_err,
+    Result,
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
+
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::DynHash;
 
 mod tracker;
 pub use tracker::{DynamicFilterTracker, DynamicFilterTracking};
+
+/// Per-generation cache of the remapped current expression for
+/// [`DynamicFilterPhysicalExpr::current`]. See the field docs there.
+type CurrentExprCache = Arc<RwLock<Option<(u64, Arc<dyn PhysicalExpr>)>>>;
 
 /// State of a dynamic filter, tracking both updates and completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,7 +66,6 @@ impl FilterState {
 /// For more background, please also see the [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]
 ///
 /// [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
-#[derive(Debug)]
 pub struct DynamicFilterPhysicalExpr {
     /// The original children of this PhysicalExpr, if any.
     /// This is necessary because the dynamic filter may be initialized with a placeholder (e.g. `lit(true)`)
@@ -69,6 +75,16 @@ pub struct DynamicFilterPhysicalExpr {
     /// If any of the children were remapped / modified (e.g. to adjust for projections) we need to keep track of the new children
     /// so that when we update `current()` in subsequent iterations we can re-apply the replacements.
     remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
+    /// Cache of the last (generation, remapped-expression) pair returned by
+    /// [`Self::current`]. `current()` is hot on the per-batch RowFilter path;
+    /// when the inner generation hasn't changed (common — updates fire once
+    /// per HashJoin build or once per TopK threshold refresh, but `evaluate`
+    /// is called per batch), the cache serves the remapped expression
+    /// without re-running the `transform_up` tree walk in
+    /// [`Self::remap_children`]. Reset on `update()` (by generation bump)
+    /// and populated with `None` on `with_new_children` (each derived
+    /// filter owns its own cache).
+    current_cache: CurrentExprCache,
     /// The source of dynamic filters.
     inner: Arc<RwLock<Inner>>,
     /// Broadcasts filter state (updates and completion) to all waiters.
@@ -80,27 +96,40 @@ pub struct DynamicFilterPhysicalExpr {
     nullable: Arc<RwLock<Option<bool>>>,
 }
 
+impl std::fmt::Debug for DynamicFilterPhysicalExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Manual impl deliberately omits `current_cache`: it is a pure
+        // optimization artifact whose contents depend on whether
+        // `current()` has been called, and roundtrip tests (e.g. in
+        // `datafusion-proto`) compare `format!("{:?}", ..)` output.
+        f.debug_struct("DynamicFilterPhysicalExpr")
+            .field("children", &self.children)
+            .field("remapped_children", &self.remapped_children)
+            .field("inner", &self.inner)
+            .field("state_watch", &self.state_watch)
+            .field("data_type", &self.data_type)
+            .field("nullable", &self.nullable)
+            .finish()
+    }
+}
+
 /// Atomic internal state of a [`DynamicFilterPhysicalExpr`].
 ///
 /// `expression_id` lives here because it identifies the actual filter expression `expr`.
 /// Derived `DynamicFilterPhysicalExpr`s (e.g. via [`PhysicalExpr::with_new_children`]) are
 /// the same logical filter and must report the same `expression_id`.
-///
-/// **Warning:** exposed publicly solely so that proto (de)serialization in
-/// `datafusion-proto` can read and rebuild this state. Do not treat this type
-/// or its layout as a stable API.
 #[derive(Clone, Debug)]
-pub struct Inner {
+struct Inner {
     /// A unique identifier for the expression.
-    pub expression_id: u64,
+    expression_id: u64,
     /// A counter that gets incremented every time the expression is updated so that we can track changes cheaply.
     /// This is used for [`PhysicalExpr::snapshot_generation`] to have a cheap check for changes.
-    pub generation: u64,
-    pub expr: Arc<dyn PhysicalExpr>,
+    generation: u64,
+    expr: Arc<dyn PhysicalExpr>,
     /// Flag for quick synchronous check if filter is complete.
     /// This is redundant with the watch channel state, but allows us to return immediately
     /// from `wait_complete()` without subscribing if already complete.
-    pub is_complete: bool,
+    is_complete: bool,
 }
 
 impl Inner {
@@ -190,6 +219,7 @@ impl DynamicFilterPhysicalExpr {
             children,
             remapped_children: None, // Initially no remapped children
             inner: Arc::new(RwLock::new(Inner::new(inner))),
+            current_cache: Arc::new(RwLock::new(None)),
             state_watch,
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
@@ -233,9 +263,48 @@ impl DynamicFilterPhysicalExpr {
     /// Get the current expression.
     /// This will return the current expression with any children
     /// remapped to match calls to [`PhysicalExpr::with_new_children`].
+    ///
+    /// Called per batch on the RowFilter path (via
+    /// [`PhysicalExpr::evaluate`]). The remap walk is O(tree size) and, for
+    /// dynamic filters that carry a large `InListExpr` (join key IN list),
+    /// dominated by `InListExpr::with_new_children` cloning the whole list.
+    /// The inner generation only changes when [`Self::update`] fires, so we
+    /// cache the remapped expression per generation and return it directly
+    /// on subsequent per-batch calls.
     pub fn current(&self) -> Result<Arc<dyn PhysicalExpr>> {
-        let expr = Arc::clone(self.inner.read().expr());
-        Self::remap_children(&self.children, self.remapped_children.as_ref(), expr)
+        // Fast path: cache hit for the current generation.
+        let (expr, generation) = {
+            let inner = self.inner.read();
+            (Arc::clone(inner.expr()), inner.generation)
+        };
+        if let Some((cached_gen, cached_expr)) = self.current_cache.read().as_ref()
+            && *cached_gen == generation
+        {
+            return Ok(Arc::clone(cached_expr));
+        }
+        // Slow path: (re)compute the remap and store it under a write lock.
+        let remapped =
+            Self::remap_children(&self.children, self.remapped_children.as_ref(), expr)?;
+        // Only publish our result if it is strictly newer than whatever is
+        // currently cached. Without this guard a slow computation that
+        // observed an older `inner` could clobber a newer entry that a
+        // concurrent caller has already published (see #23532 review), which
+        // would force subsequent readers to redo the remap for the newer
+        // generation. Same-generation writes are also skipped: the cached
+        // and about-to-write remaps are semantically identical (same input
+        // expression, same remapped_children), so overwriting is redundant
+        // and only wastes a write-lock take.
+        {
+            let mut cache = self.current_cache.write();
+            let should_write = match cache.as_ref() {
+                Some((cached_gen, _)) => generation > *cached_gen,
+                None => true,
+            };
+            if should_write {
+                *cache = Some((generation, Arc::clone(&remapped)));
+            }
+        }
+        Ok(remapped)
     }
 
     /// Update the current expression and notify all waiters.
@@ -390,29 +459,9 @@ impl DynamicFilterPhysicalExpr {
         write!(f, " ]")
     }
 
-    /// Return the filter's original children (before any remapping).
-    ///
-    /// **Warning:** intended only for `datafusion-proto` (de)serialization.
-    /// Not a stable API.
-    pub fn original_children(&self) -> &[Arc<dyn PhysicalExpr>] {
-        &self.children
-    }
-
-    /// Return the filter's remapped children, if any have been set via
-    /// [`PhysicalExpr::with_new_children`].
-    ///
-    /// **Warning:** intended only for `datafusion-proto` (de)serialization.
-    /// Not a stable API.
-    pub fn remapped_children(&self) -> Option<&[Arc<dyn PhysicalExpr>]> {
-        self.remapped_children.as_deref()
-    }
-
     /// Rebuild a `DynamicFilterPhysicalExpr` from its stored parts. Used by
     /// proto deserialization.
-    ///
-    /// **Warning:** intended only for `datafusion-proto` (de)serialization.
-    /// Not a stable API.
-    pub fn from_parts(
+    fn from_parts(
         children: Vec<Arc<dyn PhysicalExpr>>,
         remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,
         inner: Inner,
@@ -432,18 +481,11 @@ impl DynamicFilterPhysicalExpr {
             children,
             remapped_children,
             inner: Arc::new(RwLock::new(inner)),
+            current_cache: Arc::new(RwLock::new(None)),
             state_watch,
             data_type: Arc::new(RwLock::new(None)),
             nullable: Arc::new(RwLock::new(None)),
         }
-    }
-
-    /// Return a clone of the atomically-captured `Inner` state.
-    ///
-    /// **Warning:** intended only for `datafusion-proto` (de)serialization.
-    /// Not a stable API.
-    pub fn inner(&self) -> Inner {
-        self.inner.read().clone()
     }
 }
 
@@ -465,6 +507,9 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
             remapped_children: Some(children),
             // Note: expression_id is preserved
             inner: Arc::clone(&self.inner),
+            // Fresh cache per derived filter — remap depends on this
+            // instance's `remapped_children`, which just changed.
+            current_cache: Arc::new(RwLock::new(None)),
             state_watch: self.state_watch.clone(),
             data_type: Arc::clone(&self.data_type),
             nullable: Arc::clone(&self.nullable),
@@ -749,6 +794,25 @@ impl ExpressionIdAtomicCounter {
 /// Currently, no other [`PhysicalExpr`]s use this source. If needed, it can be moved out of this
 /// file and be made public for other expressions to use.
 static EXPR_ID_SOURCE: ExpressionIdAtomicCounter = ExpressionIdAtomicCounter::new();
+
+#[cfg(test)]
+impl DynamicFilterPhysicalExpr {
+    /// Test-only clone that produces a fresh outer instance sharing the
+    /// same `inner`. Used by the concurrent stress test to obtain a
+    /// standalone `Arc<Self>` without going through `with_new_children`
+    /// (which would clear `remapped_children`).
+    fn clone_with_remapped_children_for_test(&self) -> Self {
+        Self {
+            children: self.children.clone(),
+            remapped_children: self.remapped_children.clone(),
+            inner: Arc::clone(&self.inner),
+            current_cache: Arc::new(RwLock::new(None)),
+            state_watch: self.state_watch.clone(),
+            data_type: Arc::clone(&self.data_type),
+            nullable: Arc::clone(&self.nullable),
+        }
+    }
+}
 
 #[cfg(test)]
 mod test {
@@ -1207,22 +1271,19 @@ mod test {
 
         // Capture the parts and reconstruct. `expression_id` rides in `inner`.
         let reconstructed = DynamicFilterPhysicalExpr::from_parts(
-            reassigned.original_children().to_vec(),
-            reassigned.remapped_children().map(|r| r.to_vec()),
-            reassigned.inner(),
+            reassigned.children.to_vec(),
+            reassigned.remapped_children.as_ref().map(|r| r.to_vec()),
+            reassigned.inner.read().clone(),
         );
 
+        assert_eq!(reassigned.children, reconstructed.children);
         assert_eq!(
-            reassigned.original_children(),
-            reconstructed.original_children(),
-        );
-        assert_eq!(
-            reassigned.remapped_children(),
-            reconstructed.remapped_children(),
+            reassigned.remapped_children,
+            reconstructed.remapped_children,
         );
         assert_eq!(reassigned.expression_id(), reconstructed.expression_id());
-        let r = reassigned.inner();
-        let c = reconstructed.inner();
+        let r = reassigned.inner.read().clone();
+        let c = reconstructed.inner.read().clone();
         assert_eq!(r.generation, c.generation);
         assert_eq!(r.is_complete, c.is_complete);
         assert_eq!(format!("{:?}", r.expr), format!("{:?}", c.expr));
@@ -1290,5 +1351,239 @@ mod test {
             source_expression_id,
             "mark_complete() must not change expression_id",
         );
+    }
+
+    /// Repeated `current()` at the same generation must return the exact same
+    /// `Arc` — the cache serves without re-running `remap_children`.
+    #[test]
+    fn test_current_cache_hits_within_generation() {
+        let table_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let col_a = col("a", &table_schema).unwrap();
+        let expr = Arc::new(BinaryExpr::new(
+            Arc::clone(&col_a),
+            datafusion_expr::Operator::Gt,
+            lit(10) as Arc<dyn PhysicalExpr>,
+        ));
+        // Force the remap path to actually run: give the filter a distinct
+        // `remapped_children`. Without this, `remap_children` returns the
+        // input Arc unchanged and every call is trivially pointer-equal.
+        let filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&col_a)],
+            expr as Arc<dyn PhysicalExpr>,
+        ));
+        let remapped_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let derived = reassign_expr_columns(
+            Arc::clone(&filter) as Arc<dyn PhysicalExpr>,
+            &remapped_schema,
+        )
+        .unwrap();
+        let derived = derived
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .expect("derived filter must be a DynamicFilterPhysicalExpr");
+
+        // First call populates the cache. Second and third must return the
+        // *same* Arc — proving `remap_children` did not run again.
+        let first = derived.current().unwrap();
+        let second = derived.current().unwrap();
+        let third = derived.current().unwrap();
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "current() should return the cached Arc within a generation",
+        );
+        assert!(Arc::ptr_eq(&second, &third));
+    }
+
+    /// `update()` bumps the generation; the next `current()` must return a
+    /// fresh remapped expression, not the stale cached one.
+    #[test]
+    fn test_current_cache_invalidates_on_update() {
+        let table_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let col_a = col("a", &table_schema).unwrap();
+        let filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&col_a)],
+            lit(10) as Arc<dyn PhysicalExpr>,
+        ));
+        // Remap to force the cache path.
+        let derived = reassign_expr_columns(
+            Arc::clone(&filter) as Arc<dyn PhysicalExpr>,
+            &table_schema,
+        )
+        .unwrap();
+        let derived = derived
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .expect("derived filter must be a DynamicFilterPhysicalExpr");
+
+        let before = derived.current().unwrap();
+        // Bump the generation with a distinct expression.
+        filter
+            .update(Arc::new(BinaryExpr::new(
+                Arc::clone(&col_a),
+                datafusion_expr::Operator::Gt,
+                lit(42) as Arc<dyn PhysicalExpr>,
+            )) as Arc<dyn PhysicalExpr>)
+            .unwrap();
+        let after = derived.current().unwrap();
+        assert!(
+            !Arc::ptr_eq(&before, &after),
+            "current() must return a fresh Arc after update() bumps the generation",
+        );
+        assert_ne!(format!("{before:?}"), format!("{after:?}"));
+    }
+
+    /// `with_new_children` produces a derived filter with its own cache slot;
+    /// populating one filter's cache must not leak into the other.
+    #[test]
+    fn test_current_cache_is_per_derived_filter() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+        // Original expression references `a`. Each derived filter remaps `a`
+        // to a *different* column so remap_children returns distinct exprs
+        // per filter (and thus distinct cached Arcs).
+        let col_a = col("a", &schema).unwrap();
+        let expr = Arc::new(BinaryExpr::new(
+            Arc::clone(&col_a),
+            datafusion_expr::Operator::Gt,
+            lit(10) as Arc<dyn PhysicalExpr>,
+        ));
+        let filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&col_a)],
+            expr as Arc<dyn PhysicalExpr>,
+        ));
+
+        let d1 = Arc::clone(&filter)
+            .with_new_children(vec![col("b", &schema).unwrap()])
+            .unwrap();
+        let d2 = Arc::clone(&filter)
+            .with_new_children(vec![col("c", &schema).unwrap()])
+            .unwrap();
+        let d1 = d1.downcast_ref::<DynamicFilterPhysicalExpr>().unwrap();
+        let d2 = d2.downcast_ref::<DynamicFilterPhysicalExpr>().unwrap();
+
+        let d1_first = d1.current().unwrap();
+        let d2_first = d2.current().unwrap();
+        // Distinct remap_children paths produce distinct cached Arcs.
+        assert!(!Arc::ptr_eq(&d1_first, &d2_first));
+        assert_ne!(format!("{d1_first:?}"), format!("{d2_first:?}"));
+        // Subsequent calls each hit their own cache.
+        assert!(Arc::ptr_eq(&d1_first, &d1.current().unwrap()));
+        assert!(Arc::ptr_eq(&d2_first, &d2.current().unwrap()));
+    }
+
+    /// Stress-test the cache under concurrent readers and periodic writes.
+    ///
+    /// Motivation: prod scans run with tens/hundreds of partitions, each
+    /// calling `current()` on the same `Arc<DynamicFilterPhysicalExpr>` per
+    /// batch, while the producer (HashJoin build / TopK) fires `update()`
+    /// on a separate task. A caching bug that only shows up under
+    /// contention (torn read, ABA-style Arc lifetime issue, cache monotonicity
+    /// violation) would be invisible in single-threaded tests. This test
+    /// hot-loops many readers against a writer and asserts the invariants
+    /// that matter:
+    ///   1. `current()` never panics and always returns a valid `Arc`.
+    ///   2. Cache generation never regresses (monotonic non-decreasing).
+    ///   3. After the writer stops, the cache eventually converges to the
+    ///      final `inner.generation`.
+    #[test]
+    fn test_current_cache_concurrent_readers_and_writer() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::thread;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let col_a = col("a", &schema).unwrap();
+        let filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&col_a)],
+            lit(true) as Arc<dyn PhysicalExpr>,
+        ));
+        // Force the remap path: give the derived filter distinct
+        // remapped_children so `current()` actually runs `remap_children`
+        // instead of the short-circuit `Arc::clone(&expr)`.
+        let derived =
+            reassign_expr_columns(Arc::clone(&filter) as Arc<dyn PhysicalExpr>, &schema)
+                .unwrap();
+        // Re-wrap in Arc for cross-thread sharing.
+        let derived: Arc<DynamicFilterPhysicalExpr> = Arc::new(
+            derived
+                .downcast_ref::<DynamicFilterPhysicalExpr>()
+                .expect("derived is DynamicFilterPhysicalExpr")
+                .clone_with_remapped_children_for_test(),
+        );
+
+        let stop = Arc::new(AtomicBool::new(false));
+        const READERS: usize = 8;
+        const READER_ITERS: usize = 5_000;
+        const WRITER_ITERS: i32 = 200;
+
+        let mut readers = Vec::with_capacity(READERS);
+        for _ in 0..READERS {
+            let d = Arc::clone(&derived);
+            let stop = Arc::clone(&stop);
+            readers.push(thread::spawn(move || {
+                let mut last_seen_gen: u64 = 0;
+                for _ in 0..READER_ITERS {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let expr = d.current().expect("current must not fail");
+                    // Cheap sanity: the returned Arc's Debug must be
+                    // formattable — proves it's a valid PhysicalExpr.
+                    let _ = format!("{expr:?}");
+                    // Cache generation observed by this reader must never
+                    // decrease across successive calls on the same filter.
+                    let cached = d
+                        .current_cache
+                        .read()
+                        .as_ref()
+                        .map(|(g, _)| *g)
+                        .unwrap_or(0);
+                    assert!(
+                        cached >= last_seen_gen,
+                        "cache generation regressed: {cached} < {last_seen_gen}",
+                    );
+                    last_seen_gen = cached;
+                }
+            }));
+        }
+
+        let f_writer = Arc::clone(&filter);
+        let writer = thread::spawn(move || {
+            for i in 0..WRITER_ITERS {
+                f_writer
+                    .update(lit(i) as Arc<dyn PhysicalExpr>)
+                    .expect("update must succeed");
+                // Yield to give readers a chance to see intermediate states.
+                thread::yield_now();
+            }
+        });
+
+        writer.join().expect("writer thread panicked");
+        stop.store(true, Ordering::Relaxed);
+        for h in readers {
+            h.join().expect("reader thread panicked");
+        }
+
+        // After the writer is done, one final `current()` should sync the
+        // cache to the latest generation.
+        let _ = derived.current().unwrap();
+        let (cache_gen, _) = derived
+            .current_cache
+            .read()
+            .as_ref()
+            .expect("cache populated after final current()")
+            .clone();
+        let inner_gen = derived.inner.read().generation;
+        assert_eq!(
+            cache_gen, inner_gen,
+            "final cache generation must match inner.generation",
+        );
+        // Writer bumps generation once per update, so final generation is
+        // starting-generation + WRITER_ITERS. Starting is 1, so final is
+        // WRITER_ITERS + 1.
+        assert_eq!(inner_gen, WRITER_ITERS as u64 + 1);
     }
 }

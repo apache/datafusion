@@ -264,6 +264,9 @@ impl SelectBuilder {
     pub fn pop_from(&mut self) -> Option<TableWithJoinsBuilder> {
         self.from.pop()
     }
+    pub fn has_selection(&self) -> bool {
+        self.selection.is_some()
+    }
     pub fn lateral_views(&mut self, value: Vec<ast::LateralView>) -> &mut Self {
         self.lateral_views = value;
         self
@@ -483,6 +486,7 @@ pub struct RelationBuilder {
 enum TableFactorBuilder {
     Table(TableRelationBuilder),
     Derived(DerivedRelationBuilder),
+    NestedJoin(ast::TableWithJoins, Option<ast::TableAlias>),
     Unnest(UnnestRelationBuilder),
     Flatten(FlattenRelationBuilder),
     Empty,
@@ -498,6 +502,15 @@ impl RelationBuilder {
     }
     pub fn derived(&mut self, value: DerivedRelationBuilder) -> &mut Self {
         self.relation = Some(TableFactorBuilder::Derived(value));
+        self
+    }
+
+    pub fn nested_join(
+        &mut self,
+        value: ast::TableWithJoins,
+        alias: Option<ast::TableAlias>,
+    ) -> &mut Self {
+        self.relation = Some(TableFactorBuilder::NestedJoin(value, alias));
         self
     }
 
@@ -524,6 +537,9 @@ impl RelationBuilder {
             Some(TableFactorBuilder::Derived(ref mut rel_builder)) => {
                 rel_builder.alias = value;
             }
+            Some(TableFactorBuilder::NestedJoin(_, ref mut alias)) => {
+                *alias = value;
+            }
             Some(TableFactorBuilder::Unnest(ref mut rel_builder)) => {
                 rel_builder.alias = value;
             }
@@ -539,6 +555,12 @@ impl RelationBuilder {
         Ok(match self.relation {
             Some(TableFactorBuilder::Table(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Derived(ref value)) => Some(value.build()?),
+            Some(TableFactorBuilder::NestedJoin(ref table_with_joins, ref alias)) => {
+                Some(ast::TableFactor::NestedJoin {
+                    table_with_joins: Box::new(table_with_joins.clone()),
+                    alias: alias.clone(),
+                })
+            }
             Some(TableFactorBuilder::Unnest(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Flatten(ref value)) => Some(value.build()?),
             Some(TableFactorBuilder::Empty) => None,

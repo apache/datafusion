@@ -41,8 +41,9 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
-    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
-    grouping_set_expr_count, grouping_set_to_exprlist, merge_schema, split_conjunction,
+    check_aggregate_and_window_nesting, enumerate_grouping_sets, exprlist_to_fields,
+    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
+    merge_schema, split_conjunction,
 };
 use crate::{
     BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, GroupingSet,
@@ -1733,7 +1734,7 @@ impl LogicalPlan {
     /// ```
     pub fn display_indent(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
-        // that that can be formatted
+        // that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -1779,7 +1780,7 @@ impl LogicalPlan {
     /// ```
     pub fn display_indent_schema(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
-        // that that can be formatted
+        // that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -1799,7 +1800,7 @@ impl LogicalPlan {
     /// Users can use this format to visualize the plan in existing plan visualization tools, for example [dalibo](https://explain.dalibo.com/)
     pub fn display_pg_json(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
-        // that that can be formatted
+        // that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -1845,7 +1846,7 @@ impl LogicalPlan {
     /// ```
     pub fn display_graphviz(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
-        // that that can be formatted
+        // that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -1896,7 +1897,7 @@ impl LogicalPlan {
     /// ```
     pub fn display(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
-        // that that can be formatted
+        // that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -2222,8 +2223,7 @@ impl LogicalPlan {
                             .map(|(i, unnest_info)| {
                                 format!(
                                     "{}|depth={}",
-                                    &input_columns[*i].to_string(),
-                                    unnest_info.depth
+                                    input_columns[*i], unnest_info.depth
                                 )
                             })
                             .collect::<Vec<String>>();
@@ -2655,13 +2655,6 @@ impl Filter {
         Self::try_new_internal(predicate, input)
     }
 
-    /// Create a new filter operator for a having clause.
-    /// This is similar to a filter, but its having flag is set to true.
-    #[deprecated(since = "48.0.0", note = "Use `try_new` instead")]
-    pub fn try_new_with_having(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
-        Self::try_new_internal(predicate, input)
-    }
-
     fn is_allowed_filter_type(data_type: &DataType) -> bool {
         match data_type {
             // Interpret NULL as a missing boolean value.
@@ -2787,6 +2780,11 @@ pub struct Window {
 impl Window {
     /// Create a new window operator.
     pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
+        // Reject e.g. `sum(sum(x) OVER ()) OVER ()` here rather than letting it
+        // reach physical planning, which has no equivalent for a nested window
+        // function.
+        check_aggregate_and_window_nesting(window_expr.iter())?;
+
         let fields: Vec<(Option<TableReference>, Arc<Field>)> = input
             .schema()
             .iter()
@@ -3900,6 +3898,10 @@ impl Aggregate {
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
     ) -> Result<Self> {
+        // Reject e.g. `sum(sum(x))` here rather than letting it reach physical
+        // planning, which has no equivalent for a nested aggregate.
+        check_aggregate_and_window_nesting(group_expr.iter().chain(aggr_expr.iter()))?;
+
         let group_expr = enumerate_grouping_sets(group_expr)?;
 
         let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
@@ -4144,8 +4146,12 @@ fn calc_func_dependencies_for_project(
     exprs: &[Expr],
     input: &LogicalPlan,
 ) -> Result<FunctionalDependencies> {
+    // Sentinel for projection outputs that do not map back to any input field.
+    const COMPUTED_EXPR_INDEX: usize = usize::MAX;
+
     let input_fields = input.schema().field_names();
-    // Calculate expression indices (if present) in the input schema.
+    // Map each projection output position to its input column index.
+    // A projection expression can produce multiple output columns, such as `*`.
     let proj_indices = exprs
         .iter()
         .map(|expr| match expr {
@@ -4161,30 +4167,33 @@ fn calc_func_dependencies_for_project(
                 Ok::<_, DataFusionError>(
                     wildcard_fields
                         .into_iter()
-                        .filter_map(|(qualifier, f)| {
+                        .map(|(qualifier, f)| {
                             let flat_name = qualifier
                                 .map(|t| format!("{}.{}", t, f.name()))
                                 .unwrap_or_else(|| f.name().clone());
-                            input_fields.iter().position(|item| *item == flat_name)
+                            input_fields
+                                .iter()
+                                .position(|item| *item == flat_name)
+                                .unwrap_or(COMPUTED_EXPR_INDEX)
                         })
                         .collect::<Vec<_>>(),
                 )
             }
             Expr::Alias(alias) => {
                 let name = format!("{}", alias.expr);
-                Ok(input_fields
+                let input_index = input_fields
                     .iter()
                     .position(|item| *item == name)
-                    .map(|i| vec![i])
-                    .unwrap_or(vec![]))
+                    .unwrap_or(COMPUTED_EXPR_INDEX);
+                Ok(vec![input_index])
             }
             _ => {
                 let name = format!("{expr}");
-                Ok(input_fields
+                let input_index = input_fields
                     .iter()
                     .position(|item| *item == name)
-                    .map(|i| vec![i])
-                    .unwrap_or(vec![]))
+                    .unwrap_or(COMPUTED_EXPR_INDEX);
+                Ok(vec![input_index])
             }
         })
         .collect::<Result<Vec<_>>>()?
@@ -4945,6 +4954,82 @@ mod tests {
             Field::new("state", DataType::Utf8, false),
             Field::new("salary", DataType::Int32, false),
         ])
+    }
+
+    #[test]
+    fn projection_with_leading_computed_column_preserves_pk() -> Result<()> {
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+        let source = Arc::new(
+            LogicalTableSource::new(Arc::new(employee_schema()))
+                .with_constraints(constraints),
+        );
+        let plan = LogicalPlanBuilder::scan("employee_csv", source, None)?
+            .project(vec![
+                lit(1i32).alias("__common_expr_1"),
+                col("id"),
+                col("first_name"),
+                col("salary"),
+            ])?
+            .build()?;
+
+        let deps = plan.schema().functional_dependencies();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].source_indices, vec![1]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn projection_with_leading_computed_column_and_wildcard_preserves_pk() -> Result<()> {
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+        let source = Arc::new(
+            LogicalTableSource::new(Arc::new(employee_schema()))
+                .with_constraints(constraints),
+        );
+        let plan = LogicalPlanBuilder::scan("employee_csv", source, None)?
+            .project(vec![
+                SelectExpr::Expression(lit(1i32).alias("__common_expr_1")),
+                SelectExpr::Wildcard(Default::default()),
+            ])?
+            .build()?;
+
+        let deps = plan.schema().functional_dependencies();
+        assert_eq!(plan.schema().fields().len(), 6);
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].source_indices, vec![1]);
+        assert_eq!(deps[0].target_indices, vec![0, 1, 2, 3, 4, 5]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn projection_with_wildcard_expr_before_pk_preserves_pk() -> Result<()> {
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+        let source = Arc::new(
+            LogicalTableSource::new(Arc::new(employee_schema()))
+                .with_constraints(constraints),
+        );
+        let input = LogicalPlanBuilder::scan("employee_csv", source, None)?.build()?;
+        #[expect(deprecated)]
+        let projection = Projection::try_new(
+            vec![
+                Expr::Wildcard {
+                    qualifier: None,
+                    options: Box::new(crate::expr::WildcardOptions::default()),
+                },
+                col("employee_csv.id"),
+            ],
+            Arc::new(input),
+        )?;
+
+        let deps = projection.schema.functional_dependencies();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].source_indices, vec![1]);
+
+        Ok(())
     }
 
     fn i32_split_point(value: i32) -> SplitPoint {

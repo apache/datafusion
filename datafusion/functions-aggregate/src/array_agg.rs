@@ -793,11 +793,6 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
 
         Ok(vec![Arc::new(list_array)])
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn size(&self) -> usize {
         self.batches
             .iter()
@@ -2586,6 +2581,179 @@ mod tests {
         acc1.merge_batch(&state_arrs)?;
 
         assert_eq!(print_nulls(str_arr(acc1.evaluate()?)?), vec!["A", "B", "C"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_array_agg_utf8_deduplicates() -> Result<()> {
+        use arrow::array::StringArray;
+
+        // 7 rows with 4 distinct values, each duplicate appearing twice.
+        let input: ArrayRef = Arc::new(StringArray::from(vec![
+            "postgres", "mysql", "postgres", "redis", "mysql", "duckdb", "redis",
+        ]));
+
+        let mut acc = DistinctArrayAggAccumulator::try_new(&DataType::Utf8, None, false)?;
+        acc.update_batch(&[input])?;
+
+        let result = acc.evaluate()?;
+        let ScalarValue::List(arr) = &result else {
+            panic!("expected ScalarValue::List, got {result:?}");
+        };
+
+        let inner = arr.value(0);
+        let strings = inner
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("inner array should be StringArray");
+
+        // HashSet ordering is nondeterministic — sort before asserting.
+        let mut values: Vec<&str> =
+            (0..strings.len()).map(|i| strings.value(i)).collect();
+        values.sort_unstable();
+
+        assert_eq!(values, vec!["duckdb", "mysql", "postgres", "redis"]);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_array_agg_int64_deduplicates() -> Result<()> {
+        use arrow::array::Int64Array;
+
+        // 7 rows with 4 distinct values, each duplicate appearing twice.
+        let input: ArrayRef = Arc::new(Int64Array::from(vec![1i64, 2, 1, 3, 2, 4, 3]));
+
+        let mut acc =
+            DistinctArrayAggAccumulator::try_new(&DataType::Int64, None, false)?;
+        acc.update_batch(&[input])?;
+
+        let result = acc.evaluate()?;
+        let ScalarValue::List(arr) = &result else {
+            panic!("expected ScalarValue::List, got {result:?}");
+        };
+
+        let inner = arr.value(0);
+        let ints = inner
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("inner array should be Int64Array");
+
+        let mut values: Vec<i64> = (0..ints.len()).map(|i| ints.value(i)).collect();
+        values.sort_unstable();
+
+        assert_eq!(values, vec![1i64, 2, 3, 4]);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_array_agg_float64_deduplicates() -> Result<()> {
+        use arrow::array::Float64Array;
+
+        // 7 rows with 4 distinct values, each duplicate appearing twice.
+        let input: ArrayRef = Arc::new(Float64Array::from(vec![
+            1.0f64, 2.5, 1.0, 3.75, 2.5, 4.0, 3.75,
+        ]));
+
+        let mut acc =
+            DistinctArrayAggAccumulator::try_new(&DataType::Float64, None, false)?;
+        acc.update_batch(&[input])?;
+
+        let result = acc.evaluate()?;
+        let ScalarValue::List(arr) = &result else {
+            panic!("expected ScalarValue::List, got {result:?}");
+        };
+
+        let inner = arr.value(0);
+        let floats = inner
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .expect("inner array should be Float64Array");
+
+        // f64 has no Ord — use total_cmp for a stable sort.
+        let mut values: Vec<f64> = (0..floats.len()).map(|i| floats.value(i)).collect();
+        values.sort_unstable_by(|a, b| a.total_cmp(b));
+
+        assert_eq!(values, vec![1.0f64, 2.5, 3.75, 4.0]);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_array_agg_date32_deduplicates() -> Result<()> {
+        use arrow::array::Date32Array;
+
+        // 7 rows with 4 distinct dates (days since epoch), each duplicate appearing twice.
+        let input: ArrayRef = Arc::new(Date32Array::from(vec![
+            100i32, 200, 100, 300, 200, 400, 300,
+        ]));
+
+        let mut acc =
+            DistinctArrayAggAccumulator::try_new(&DataType::Date32, None, false)?;
+        acc.update_batch(&[input])?;
+
+        let result = acc.evaluate()?;
+        let ScalarValue::List(arr) = &result else {
+            panic!("expected ScalarValue::List, got {result:?}");
+        };
+
+        let inner = arr.value(0);
+        let dates = inner
+            .as_any()
+            .downcast_ref::<Date32Array>()
+            .expect("inner array should be Date32Array");
+
+        let mut values: Vec<i32> = (0..dates.len()).map(|i| dates.value(i)).collect();
+        values.sort_unstable();
+
+        assert_eq!(values, vec![100i32, 200, 300, 400]);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_retract_memory_is_bounded() -> Result<()> {
+        use arrow::array::Int64Array;
+
+        // Emulates `ROWS BETWEEN CURRENT ROW AND CURRENT ROW`: every row enters
+        // the frame and immediately leaves it again. Only `CARDINALITY` distinct
+        // values are ever seen and the live set never holds more than one of
+        // them
+        const CARDINALITY: i64 = 10;
+        const WARMUP_ROWS: i64 = 1_000;
+        const EXTRA_ROWS: i64 = 20_000;
+
+        let mut acc =
+            DistinctArrayAggAccumulator::try_new(&DataType::Int64, None, false)?;
+
+        let slide = |acc: &mut DistinctArrayAggAccumulator, rows: i64| -> Result<()> {
+            for i in 0..rows {
+                let value: ArrayRef = Arc::new(Int64Array::from(vec![i % CARDINALITY]));
+                acc.update_batch(std::slice::from_ref(&value))?;
+                acc.retract_batch(std::slice::from_ref(&value))?;
+            }
+            Ok(())
+        };
+
+        // Let every buffer reach its steady state before taking a baseline.
+        slide(&mut acc, WARMUP_ROWS)?;
+        let baseline = acc.size();
+
+        slide(&mut acc, EXTRA_ROWS)?;
+        let grown = acc.size();
+
+        assert!(
+            grown <= 2 * baseline,
+            "size() must not grow with the number of retracted rows: \
+             {baseline} bytes after {WARMUP_ROWS} rows, \
+             {grown} bytes after {} rows",
+            WARMUP_ROWS + EXTRA_ROWS
+        );
+
+        // Everything was retracted, so nothing is left in the frame.
+        let result = acc.evaluate()?;
+        assert!(
+            matches!(&result, ScalarValue::List(arr) if arr.is_null(0)),
+            "expected null list after retracting every row, got {result:?}"
+        );
 
         Ok(())
     }

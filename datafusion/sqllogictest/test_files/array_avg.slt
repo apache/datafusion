@@ -1,0 +1,165 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+## array_avg
+
+# Basic case
+query R
+select array_avg([1.0, 2.0, 3.0]);
+----
+2
+
+# Single element
+query R
+select array_avg([5.0]);
+----
+5
+
+# Negative values
+query R
+select array_avg([-1.0, -2.0, -3.0]);
+----
+-2
+
+# Positive and negative cancel
+query R
+select array_avg([1.0, -1.0, 2.0, -2.0]);
+----
+0
+
+# Non-integer mean (sum / count)
+query R
+select array_avg([1.0, 2.0]);
+----
+1.5
+
+# Empty array returns NULL (matches PostgreSQL AVG, DuckDB list_avg, SQL Standard AVG-of-empty-set)
+query R
+select array_avg(arrow_cast(make_array(), 'List(Float64)'));
+----
+NULL
+
+# Bare NULL input returns NULL row
+query R
+select array_avg(NULL);
+----
+NULL
+
+# NULL elements are skipped from BOTH the sum and the count (SQL aggregate convention).
+# avg([1, NULL, 3]) = (1 + 3) / 2 = 2 — not (1 + 3) / 3.
+query R
+select array_avg([1.0, NULL, 3.0]);
+----
+2
+
+# Single NULL among numeric: skip the NULL, divide by 1
+query R
+select array_avg([NULL, 10.0]);
+----
+10
+
+# All-NULL array returns NULL row (matches SQL AVG over all-NULL)
+query R
+select array_avg(arrow_cast([NULL, NULL], 'List(Float64)'));
+----
+NULL
+
+# LargeList support
+query R
+select array_avg(arrow_cast([1.0, 2.0, 3.0], 'LargeList(Float64)'));
+----
+2
+
+# FixedSizeList input (coerced to List)
+query R
+select array_avg(arrow_cast([1.0, 2.0, 3.0], 'FixedSizeList(3, Float64)'));
+----
+2
+
+# Float32 inner type (coerced to Float64)
+query R
+select array_avg(arrow_cast([1.0, 2.0, 3.0], 'List(Float32)'));
+----
+2
+
+# Int64 inner type (coerced to Float64) — integer mean returned as Float64
+query R
+select array_avg(arrow_cast([1, 2, 3], 'List(Int64)'));
+----
+2
+
+# Integer literals (coerced to Float64)
+query R
+select array_avg([1, 2, 3]);
+----
+2
+
+# Integer mean that is NOT an integer (3 / 2 = 1.5)
+query R
+select array_avg([1, 2]);
+----
+1.5
+
+# Unsupported non-list input (plan error)
+query error array_avg does not support type
+select array_avg(1);
+
+# Multi-row query with mix of normal, partial-NULL, all-NULL elements, empty, NULL row
+query R
+select array_avg(column1) from (values
+    (make_array(1.0, 2.0, 3.0)),
+    (make_array(0.0)),
+    (make_array(1.0, NULL, 4.0)),
+    (arrow_cast(make_array(), 'List(Float64)')),
+    (NULL)
+) as t(column1);
+----
+2
+0
+2.5
+NULL
+NULL
+
+# Wrong arity (zero args)
+query error array_avg function requires 1 argument, got 0
+select array_avg();
+
+# Wrong arity (two args)
+query error array_avg function requires 1 argument, got 2
+select array_avg([1.0], [2.0]);
+
+# Return type is Float64
+query RT
+select array_avg([1.0, 2.0, 3.0]), arrow_typeof(array_avg([1.0, 2.0, 3.0]));
+----
+2 Float64
+
+# list_avg alias produces the same result
+query R
+select list_avg([1.0, 2.0, 3.0]);
+----
+2
+
+# list_avg alias with NULL row propagates correctly
+query R
+select list_avg(column1) from (values
+    (make_array(1.0, 2.0)),
+    (NULL)
+) as t(column1);
+----
+1.5
+NULL

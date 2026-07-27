@@ -33,7 +33,9 @@ use datafusion_common::utils::{
 use datafusion_common::{
     Result, exec_err, internal_err, plan_err, types::NativeType, utils::list_ndims,
 };
-use datafusion_expr_common::signature::ArrayFunctionArgument;
+use datafusion_expr_common::signature::{
+    ArrayFunctionArgument, EncodingPreservation, TypeSignatureClass,
+};
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 use datafusion_expr_common::{
     signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
@@ -873,9 +875,56 @@ fn get_valid_types(
         TypeSignature::Coercible(param_types) => {
             function_length_check(function_name, current_types.len(), param_types.len())?;
 
+            fn coercion_value_type<'a>(
+                current_type: &'a DataType,
+                desired_type: &TypeSignatureClass,
+            ) -> &'a DataType {
+                if matches!(desired_type, TypeSignatureClass::Any) {
+                    return current_type;
+                }
+
+                match current_type {
+                    DataType::Dictionary(_, value_type) => {
+                        coercion_value_type(value_type, desired_type)
+                    }
+                    _ => current_type,
+                }
+            }
+
+            fn preserve_encoding(
+                current_type: &DataType,
+                casted_type: DataType,
+                desired_type: &TypeSignatureClass,
+                encoding_preservation: EncodingPreservation,
+            ) -> DataType {
+                if matches!(desired_type, TypeSignatureClass::Any) {
+                    return casted_type;
+                }
+
+                match current_type {
+                    DataType::Dictionary(key_type, value_type) => {
+                        let casted_type = preserve_encoding(
+                            value_type,
+                            casted_type,
+                            desired_type,
+                            encoding_preservation,
+                        );
+                        if encoding_preservation.preserve_dictionary() {
+                            DataType::Dictionary(key_type.clone(), Box::new(casted_type))
+                        } else {
+                            casted_type
+                        }
+                    }
+                    _ => casted_type,
+                }
+            }
+
             let mut new_types = Vec::with_capacity(current_types.len());
             for (current_type, param) in current_types.iter().zip(param_types.iter()) {
                 let current_native_type: NativeType = current_type.into();
+                let encoding_preservation = param.encoding_preservation();
+                let coercion_value_type =
+                    coercion_value_type(current_type, param.desired_type());
 
                 if param
                     .desired_type()
@@ -883,9 +932,14 @@ fn get_valid_types(
                 {
                     let casted_type = param
                         .desired_type()
-                        .default_casted_type(&current_native_type, current_type)?;
+                        .default_casted_type(&current_native_type, coercion_value_type)?;
 
-                    new_types.push(casted_type);
+                    new_types.push(preserve_encoding(
+                        current_type,
+                        casted_type,
+                        param.desired_type(),
+                        encoding_preservation,
+                    ));
                 } else if param
                     .allowed_source_types()
                     .iter()
@@ -894,8 +948,13 @@ fn get_valid_types(
                     // If the condition is met which means `implicit coercion`` is provided so we can safely unwrap
                     let default_casted_type = param.default_casted_type().unwrap();
                     let casted_type =
-                        default_casted_type.default_cast_for(current_type)?;
-                    new_types.push(casted_type);
+                        default_casted_type.default_cast_for(coercion_value_type)?;
+                    new_types.push(preserve_encoding(
+                        current_type,
+                        casted_type,
+                        param.desired_type(),
+                        encoding_preservation,
+                    ));
                 } else {
                     let hint = if matches!(current_native_type, NativeType::Binary) {
                         "\n\nHint: Binary types are not automatically coerced to String. Use CAST(column AS VARCHAR) to convert Binary data to String."
@@ -1025,12 +1084,8 @@ fn maybe_data_types(
             // attempt to coerce.
             // TODO: Replace with `can_cast_types` after failing cases are resolved
             // (they need new signature that returns exactly valid types instead of list of possible valid types).
-            if let Some(coerced_type) = coerced_from(valid_type, current_type) {
-                new_type.push(coerced_type)
-            } else {
-                // not possible
-                return None;
-            }
+            let coerced_type = coerced_from(valid_type, current_type)?;
+            new_type.push(coerced_type)
         }
     }
     Some(new_type)
@@ -1214,11 +1269,11 @@ mod tests {
     use arrow::datatypes::IntervalUnit;
     use datafusion_common::{
         assert_contains,
-        types::{logical_binary, logical_int64},
+        types::{logical_binary, logical_int64, logical_string},
     };
     use datafusion_expr_common::{
         columnar_value::ColumnarValue,
-        signature::{Coercion, TypeSignatureClass},
+        signature::{Coercion, EncodingPreservation, TypeSignatureClass},
     };
 
     #[test]
@@ -1817,16 +1872,196 @@ mod tests {
         ))?;
         assert_eq!(vec![DataType::Int64], output);
 
-        // Dictionary gets passed through if we use TypeSignatureClass apart from Native
-        let output = dictionary_input(Coercion::new_exact(TypeSignatureClass::Integer))?;
+        // Any always preserves the original physical type
+        let output = dictionary_input(Coercion::new_exact(TypeSignatureClass::Any))?;
         assert_eq!(vec![dictionary.clone()], output);
+
+        let output = dictionary_input(
+            Coercion::new_exact(TypeSignatureClass::Any)
+                .with_encoding_preservation(EncodingPreservation::dictionary()),
+        )?;
+        assert_eq!(vec![dictionary.clone()], output);
+
+        // Typed non-Native classes materialize dictionaries by default
+        let output = dictionary_input(Coercion::new_exact(TypeSignatureClass::Integer))?;
+        assert_eq!(vec![DataType::Int64], output);
 
         let output = dictionary_input(Coercion::new_implicit(
             TypeSignatureClass::Integer,
             vec![],
             NativeType::Int64,
         ))?;
-        assert_eq!(vec![dictionary.clone()], output);
+        assert_eq!(vec![DataType::Int64], output);
+
+        // Typed non-Native classes preserve dictionaries only when requested
+        let output = dictionary_input(
+            Coercion::new_exact(TypeSignatureClass::Integer)
+                .with_encoding_preservation(EncodingPreservation::dictionary()),
+        )?;
+        assert_eq!(vec![dictionary], output);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_coercible_dictionary_preserves_encoding() -> Result<()> {
+        fn dictionary_input(
+            value_type: DataType,
+            coercion: Coercion,
+        ) -> Result<Vec<DataType>> {
+            fields_with_udf(
+                &[Field::new(
+                    "field",
+                    DataType::Dictionary(Box::new(DataType::Int8), Box::new(value_type)),
+                    true,
+                )
+                .into()],
+                &MockUdf(Signature::coercible(vec![coercion], Volatility::Immutable)),
+            )
+            .map(|v| v.into_iter().map(|f| f.data_type().clone()).collect())
+        }
+
+        let coercion = Coercion::new_exact(TypeSignatureClass::Native(logical_string()))
+            .with_encoding_preservation(EncodingPreservation::dictionary());
+
+        assert_eq!(
+            dictionary_input(DataType::LargeUtf8, coercion.clone())?,
+            vec![DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::LargeUtf8),
+            )]
+        );
+        assert_eq!(
+            dictionary_input(
+                DataType::BinaryView,
+                Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_string()),
+                    vec![TypeSignatureClass::Native(logical_binary())],
+                    NativeType::String,
+                )
+                .with_encoding_preservation(EncodingPreservation::dictionary()),
+            )?,
+            vec![DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Utf8View),
+            )]
+        );
+        // Contrast: without encoding_preservation, Native strips dictionary entirely
+        assert_eq!(
+            dictionary_input(
+                DataType::Int32,
+                Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_int64()),
+                    vec![TypeSignatureClass::Integer],
+                    NativeType::Int64,
+                ),
+            )?,
+            vec![DataType::Int64]
+        );
+        // With encoding_preservation, dictionary wrapper is preserved, value coerced
+        assert_eq!(
+            dictionary_input(
+                DataType::Int32,
+                Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_int64()),
+                    vec![TypeSignatureClass::Integer],
+                    NativeType::Int64,
+                )
+                .with_encoding_preservation(EncodingPreservation::dictionary()),
+            )?,
+            vec![DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Int64),
+            )]
+        );
+        // Without encoding_preservation, non-Native classes materialize dictionaries
+        assert_eq!(
+            dictionary_input(
+                DataType::Int32,
+                Coercion::new_implicit(
+                    TypeSignatureClass::Integer,
+                    vec![],
+                    NativeType::Int64,
+                ),
+            )?,
+            vec![DataType::Int32]
+        );
+        // With encoding_preservation, non-Native classes preserve dictionaries
+        assert_eq!(
+            dictionary_input(
+                DataType::Int32,
+                Coercion::new_implicit(
+                    TypeSignatureClass::Integer,
+                    vec![],
+                    NativeType::Int64,
+                )
+                .with_encoding_preservation(EncodingPreservation::dictionary()),
+            )?,
+            vec![DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Int32),
+            )]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_coercible_nested_dictionary() -> Result<()> {
+        let nested_dictionary = DataType::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(DataType::Dictionary(
+                Box::new(DataType::Int16),
+                Box::new(DataType::Int32),
+            )),
+        );
+        let nested_dictionary_input = |coercion| -> Result<Vec<DataType>> {
+            fields_with_udf(
+                &[Field::new("field", nested_dictionary.clone(), true).into()],
+                &MockUdf(Signature::coercible(vec![coercion], Volatility::Immutable)),
+            )
+            .map(|v| v.into_iter().map(|f| f.data_type().clone()).collect())
+        };
+
+        // Without preservation, recursively unwrap dictionaries to the unchanged leaf.
+        let output =
+            nested_dictionary_input(Coercion::new_exact(TypeSignatureClass::Integer))?;
+        assert_eq!(vec![DataType::Int32], output);
+
+        // With preservation, restore the complete dictionary stack around the leaf.
+        let output = nested_dictionary_input(
+            Coercion::new_exact(TypeSignatureClass::Integer)
+                .with_encoding_preservation(EncodingPreservation::dictionary()),
+        )?;
+        assert_eq!(vec![nested_dictionary.clone()], output);
+
+        let int64_coercion = || {
+            Coercion::new_implicit(
+                TypeSignatureClass::Native(logical_int64()),
+                vec![TypeSignatureClass::Integer],
+                NativeType::Int64,
+            )
+        };
+
+        // Without preservation, materialize the coerced leaf type.
+        let output = nested_dictionary_input(int64_coercion())?;
+        assert_eq!(vec![DataType::Int64], output);
+
+        // With preservation, restore the complete dictionary stack around the coerced leaf.
+        let output = nested_dictionary_input(
+            int64_coercion()
+                .with_encoding_preservation(EncodingPreservation::dictionary()),
+        )?;
+        assert_eq!(
+            vec![DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Dictionary(
+                    Box::new(DataType::Int16),
+                    Box::new(DataType::Int64),
+                )),
+            )],
+            output
+        );
 
         Ok(())
     }

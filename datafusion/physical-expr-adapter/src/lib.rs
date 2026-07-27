@@ -24,11 +24,11 @@
 
 //! Physical expression schema adaptation utilities for DataFusion
 
+pub mod rewrite;
 pub mod schema_rewriter;
 
 pub use schema_rewriter::{
     BatchAdapter, BatchAdapterFactory, DefaultPhysicalExprAdapter,
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
-    expr_references_scalar_udf, replace_columns_with_literals,
-    rewrite_file_row_index_expr, rewrite_file_row_index_projection,
+    replace_columns_with_literals,
 };
