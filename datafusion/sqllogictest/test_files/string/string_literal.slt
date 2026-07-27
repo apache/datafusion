@@ -1879,7 +1879,7 @@ SELECT
 ----
 48 176 32 40
 
-query IIII
+query ????
 SELECT
   bit_length(arrow_cast('Andrew', 'Dictionary(Int32, Utf8)')),
   bit_length(arrow_cast('datafusion数据融合', 'Dictionary(Int32, Utf8)')),

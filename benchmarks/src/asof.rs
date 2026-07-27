@@ -25,8 +25,9 @@ use futures::StreamExt;
 
 /// Run end-to-end ASOF join benchmarks.
 ///
-/// The cases cover ordered-input reuse, optimizer-inserted sort/repartition,
-/// wide payload materialization, and descending successor matching.
+/// The cases cover broadcast build reuse, left-side parallelism,
+/// optimizer-inserted ordering, wide payload materialization, and descending
+/// successor matching.
 #[derive(Debug, Args, Clone)]
 #[command(verbatim_doc_comment)]
 pub struct RunOpt {
@@ -44,7 +45,7 @@ pub struct RunOpt {
 }
 
 const ASOF_QUERIES: &[&str] = &[
-    // Q1: predecessor without equality keys, ordered range input can be reused
+    // Q1: predecessor without equality keys broadcasts right across left partitions
     r#"
         WITH left_input AS (
             SELECT value AS ts, value AS payload FROM range(1000000)
@@ -56,7 +57,7 @@ const ASOF_QUERIES: &[&str] = &[
         FROM left_input l
         ASOF JOIN right_input r MATCH_CONDITION (l.ts >= r.ts)
     "#,
-    // Q2: grouped predecessor, optimizer supplies repartitioning and ordering
+    // Q2: grouped predecessor, optimizer partitions left and coalesces right
     r#"
         WITH left_input AS (
             SELECT value % 10000 AS key,

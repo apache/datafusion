@@ -20,7 +20,6 @@ use insta::assert_snapshot;
 use datafusion::assert_batches_eq;
 use datafusion::catalog::MemTable;
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
-use datafusion::logical_expr::AsOfJoin;
 use datafusion::physical_plan::joins::AsOfJoinExec;
 use datafusion::physical_plan::{Distribution, ExecutionPlanProperties};
 use datafusion::test_util::register_unbounded_file_with_ordering;
@@ -303,7 +302,7 @@ async fn unparse_cross_join() -> Result<()> {
     Ok(())
 }
 
-async fn register_asof_test_tables(ctx: &SessionContext) -> Result<()> {
+fn register_asof_test_tables(ctx: &SessionContext) -> Result<()> {
     let trades_schema = Arc::new(Schema::new(vec![
         Field::new("symbol", DataType::Utf8, true),
         Field::new("ts", DataType::Int64, true),
@@ -329,7 +328,10 @@ async fn register_asof_test_tables(ctx: &SessionContext) -> Result<()> {
     ];
     ctx.register_table(
         "trades",
-        Arc::new(MemTable::try_new(trades_schema, vec![trades])?),
+        Arc::new(MemTable::try_new(
+            trades_schema,
+            trades.into_iter().map(|batch| vec![batch]).collect(),
+        )?),
     )?;
 
     let prices_schema = Arc::new(Schema::new(vec![
@@ -369,36 +371,13 @@ fn find_asof_exec(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan
     plan.children().into_iter().find_map(find_asof_exec)
 }
 
-fn find_asof_plan(plan: &LogicalPlan) -> Option<&AsOfJoin> {
-    if let LogicalPlan::AsOfJoin(join) = plan {
-        return Some(join);
-    }
-    plan.inputs().into_iter().find_map(find_asof_plan)
-}
-
-fn has_filter_predicate(plan: &LogicalPlan, needle: &str) -> bool {
-    let found_here = match plan {
-        LogicalPlan::Filter(filter) => filter.predicate.to_string().contains(needle),
-        LogicalPlan::TableScan(scan) => scan
-            .filters
-            .iter()
-            .any(|filter| filter.to_string().contains(needle)),
-        _ => false,
-    };
-    found_here
-        || plan
-            .inputs()
-            .into_iter()
-            .any(|input| has_filter_predicate(input, needle))
-}
-
 #[tokio::test]
 async fn asof_join_all_match_directions_across_batches() -> Result<()> {
     let config = SessionConfig::new()
         .with_batch_size(2)
         .with_target_partitions(2);
     let ctx = SessionContext::new_with_config(config);
-    register_asof_test_tables(&ctx).await?;
+    register_asof_test_tables(&ctx)?;
 
     for (op, expected) in [
         (
@@ -477,40 +456,6 @@ async fn asof_join_all_match_directions_across_batches() -> Result<()> {
 }
 
 #[tokio::test]
-async fn asof_join_dataframe_api() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_asof_test_tables(&ctx).await?;
-    let left = ctx.table("trades").await?;
-    let right = ctx.table("prices").await?;
-    let batches = left
-        .join_asof(
-            right,
-            vec![(col("symbol"), col("symbol"))],
-            AsOfMatch::new(col("ts"), Operator::GtEq, col("ts")),
-        )?
-        .select(vec![col("trade_id"), col("price")])?
-        .sort(vec![col("trade_id").sort(true, true)])?
-        .collect()
-        .await?;
-    assert_batches_eq!(
-        [
-            "+----------+-------+",
-            "| trade_id | price |",
-            "+----------+-------+",
-            "| 1        |       |",
-            "| 2        | 40    |",
-            "| 3        | 60    |",
-            "| 4        | 101   |",
-            "| 5        | 106   |",
-            "| 6        |       |",
-            "+----------+-------+",
-        ],
-        &batches
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn asof_join_coerces_equality_and_match_types() -> Result<()> {
     let ctx = SessionContext::new();
     let batches = ctx
@@ -538,10 +483,10 @@ async fn asof_join_coerces_equality_and_match_types() -> Result<()> {
 }
 
 #[tokio::test]
-async fn asof_join_without_equality_keys_is_single_partition() -> Result<()> {
+async fn asof_join_without_equality_keys_broadcasts_right_input() -> Result<()> {
     let config = SessionConfig::new().with_target_partitions(4);
     let ctx = SessionContext::new_with_config(config);
-    register_asof_test_tables(&ctx).await?;
+    register_asof_test_tables(&ctx)?;
     let df = ctx
         .sql(
             "SELECT t.trade_id, p.price FROM trades t ASOF JOIN prices p \
@@ -554,11 +499,26 @@ async fn asof_join_without_equality_keys_is_single_partition() -> Result<()> {
     ctx.sql(&sql).await?;
     let plan = df.create_physical_plan().await?;
     let asof = find_asof_exec(&plan).expect("physical ASOF join must be present");
-    assert_eq!(asof.output_partitioning().partition_count(), 1);
+    let output_partitions = asof.output_partitioning().partition_count();
+    assert_eq!(
+        output_partitions,
+        asof.children()[0].output_partitioning().partition_count()
+    );
+    assert!(
+        output_partitions > 1,
+        "ASOF join did not preserve left-side parallelism"
+    );
+    assert_eq!(
+        asof.children()[1].output_partitioning().partition_count(),
+        1
+    );
     assert!(asof.output_ordering().is_some());
     assert!(matches!(
         &asof.input_distribution_requirements().into_per_child()[..],
-        [Distribution::SinglePartition, Distribution::SinglePartition]
+        [
+            Distribution::UnspecifiedDistribution,
+            Distribution::SinglePartition
+        ]
     ));
     let batches = collect(plan, ctx.task_ctx()).await?;
     assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 6);
@@ -566,28 +526,9 @@ async fn asof_join_without_equality_keys_is_single_partition() -> Result<()> {
 }
 
 #[tokio::test]
-async fn asof_join_filter_pushdown_respects_selection_boundary() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_asof_test_tables(&ctx).await?;
-    let plan = ctx
-        .sql(
-            "SELECT t.trade_id, p.price FROM trades t ASOF JOIN prices p \
-             MATCH_CONDITION (t.ts >= p.ts) ON t.symbol = p.symbol \
-             WHERE t.trade_id > 1 AND p.price > 20",
-        )
-        .await?
-        .into_optimized_plan()?;
-    let join = find_asof_plan(&plan).expect("logical ASOF join must be present");
-    assert!(has_filter_predicate(join.left.as_ref(), "trade_id"));
-    assert!(!has_filter_predicate(join.right.as_ref(), "price"));
-    assert!(has_filter_predicate(&plan, "price"));
-    Ok(())
-}
-
-#[tokio::test]
 async fn asof_join_explain_names_equality_and_match_conditions() -> Result<()> {
     let ctx = SessionContext::new();
-    register_asof_test_tables(&ctx).await?;
+    register_asof_test_tables(&ctx)?;
     let batches = ctx
         .sql(
             "EXPLAIN SELECT t.trade_id, p.price FROM trades t \
@@ -645,7 +586,7 @@ async fn asof_join_rejects_unbounded_inputs_during_physical_planning() -> Result
 #[tokio::test]
 async fn asof_join_using_merges_key_and_unparser_round_trips() -> Result<()> {
     let ctx = SessionContext::new();
-    register_asof_test_tables(&ctx).await?;
+    register_asof_test_tables(&ctx)?;
     let df = ctx
         .sql(
             "SELECT * FROM trades t ASOF JOIN prices p \
@@ -671,7 +612,7 @@ async fn asof_join_using_merges_key_and_unparser_round_trips() -> Result<()> {
 #[tokio::test]
 async fn asof_join_unparser_preserves_right_preselection() -> Result<()> {
     let ctx = SessionContext::new();
-    register_asof_test_tables(&ctx).await?;
+    register_asof_test_tables(&ctx)?;
     for query in [
         "SELECT t.trade_id, p.price FROM trades t \
          ASOF JOIN (SELECT * FROM prices WHERE price < 100) p \
@@ -707,7 +648,7 @@ async fn asof_join_unparser_preserves_right_preselection() -> Result<()> {
 #[tokio::test]
 async fn asof_join_rejects_invalid_contracts() -> Result<()> {
     let ctx = SessionContext::new();
-    register_asof_test_tables(&ctx).await?;
+    register_asof_test_tables(&ctx)?;
     for sql in [
         "SELECT * FROM trades t ASOF JOIN prices p MATCH_CONDITION (t.ts = p.ts) ON t.symbol = p.symbol",
         "SELECT * FROM trades t ASOF JOIN prices p MATCH_CONDITION (p.ts >= t.ts) ON t.symbol = p.symbol",

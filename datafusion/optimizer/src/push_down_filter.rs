@@ -576,6 +576,17 @@ fn infer_join_predicates(
     predicates: &[Expr],
     on_filters: &[Expr],
 ) -> Result<Vec<Expr>> {
+    // Null-aware joins (e.g. `NOT IN` with a nullable subquery) rely on SQL
+    // three-valued logic: a NULL join key on the right/subquery side makes the
+    // predicate UNKNOWN and empties the result, so those NULLs must reach the
+    // join. Inferring an equi-key predicate here would rewrite a left-side
+    // predicate onto the right side and, because the inferred predicate must be
+    // null-rejecting, drop the subquery's NULL rows and produce wrong results.
+    // Skip inference entirely for null-aware joins.
+    if join.null_aware {
+        return Ok(vec![]);
+    }
+
     // Only allow both side key is column.
     let join_col_keys = join
         .on
@@ -3851,6 +3862,51 @@ mod tests {
               TableScan: test1, full_filters=[test1.a > UInt32(2)]
             Projection: test2.a, test2.b
               TableScan: test2
+        "
+        )
+    }
+
+    /// Regression test: for a null-aware LeftAnti join (the shape produced by
+    /// `NOT IN` with a nullable subquery), a right-side predicate must NOT be
+    /// inferred onto the join. Inference would push a null-rejecting predicate
+    /// to the subquery side, dropping its NULL rows and breaking the
+    /// three-valued `NOT IN` semantics.
+    #[test]
+    fn null_aware_left_anti_join_no_inferred_pushdown() -> Result<()> {
+        let table_scan = test_table_scan_with_name("test1")?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join_detailed_with_options(
+                right,
+                JoinType::LeftAnti,
+                (
+                    vec![Column::from_qualified_name("test1.a")],
+                    vec![Column::from_qualified_name("test2.a")],
+                ),
+                None,
+                datafusion_common::NullEquality::NullEqualsNothing,
+                true,
+            )?
+            .filter(col("test1.a").gt(lit(2u32)))?
+            .build()?;
+
+        // The left-side filter is pushed to the left input, but — unlike the
+        // non-null-aware `left_anti_join` test — no `test2.a > 2` predicate is
+        // inferred onto the right/subquery side.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        LeftAnti Join: test1.a = test2.a null_aware
+          Projection: test1.a, test1.b
+            TableScan: test1, full_filters=[test1.a > UInt32(2)]
+          Projection: test2.a, test2.b
+            TableScan: test2
         "
         )
     }
