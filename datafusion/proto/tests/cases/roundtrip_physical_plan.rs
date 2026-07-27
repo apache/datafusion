@@ -66,6 +66,7 @@ use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::coop::CooperativeExec;
 use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::explain::ExplainExec;
 use datafusion::physical_plan::expressions::{
     BinaryExpr, Column, DynamicFilterPhysicalExpr, NotExpr, PhysicalSortExpr, binary,
     cast, col, in_list, like, lit,
@@ -77,6 +78,7 @@ use datafusion::physical_plan::joins::{
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion::physical_plan::metrics::MetricCategory;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::repartition::RepartitionExec;
@@ -98,8 +100,10 @@ use datafusion::physical_plan::{
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion::scalar::ScalarValue;
 use datafusion_common::config::{ConfigOptions, TableParquetOptions};
+use datafusion_common::display::{PlanType, StringifiedPlan};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
+use datafusion_common::format::ExplainFormat;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
@@ -129,12 +133,7 @@ use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_proto_converter,
     physical_plan_to_bytes_with_proto_converter,
 };
-use datafusion_proto::physical_plan::from_proto::{
-    parse_protobuf_file_scan_config, parse_table_schema_from_proto,
-};
-use datafusion_proto::physical_plan::to_proto::{
-    serialize_file_scan_config, serialize_physical_expr_with_converter,
-};
+use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DeduplicatingProtoConverter, DefaultPhysicalExtensionCodec,
     DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
@@ -1947,14 +1946,112 @@ fn roundtrip_like() -> Result<()> {
 
 #[test]
 fn roundtrip_analyze() -> Result<()> {
-    let field_a = Field::new("plan_type", DataType::Utf8, false);
-    let field_b = Field::new("plan", DataType::Utf8, false);
-    let schema = Schema::new(vec![field_a, field_b]);
-    let input = Arc::new(PlaceholderRowExec::new(Arc::new(schema.clone())));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("plan_type", DataType::Utf8, false),
+        Field::new("plan", DataType::Utf8, false),
+    ]));
+    let input = Arc::new(PlaceholderRowExec::new(Arc::clone(&schema)));
+    let metric_categories = vec![MetricCategory::Rows, MetricCategory::Timing];
+    let analyze = Arc::new(
+        AnalyzeExec::builder(true, true, input, Arc::clone(&schema))
+            .with_metric_categories(Some(metric_categories.clone()))
+            .with_format(ExplainFormat::Tree)
+            .build(),
+    );
 
-    roundtrip_test(Arc::new(
-        AnalyzeExec::builder(false, false, input, Arc::new(schema)).build(),
-    ))
+    let ctx = SessionContext::new();
+    let roundtripped = roundtrip_test_and_return(
+        analyze,
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let roundtripped = roundtripped.downcast_ref::<AnalyzeExec>().unwrap();
+
+    assert_eq!(roundtripped.schema(), schema);
+    assert!(roundtripped.verbose());
+    assert!(roundtripped.show_statistics());
+    assert_eq!(
+        roundtripped.metric_categories(),
+        Some(metric_categories.as_slice())
+    );
+    assert_eq!(roundtripped.format(), &ExplainFormat::Tree);
+    assert!(
+        roundtripped
+            .input()
+            .downcast_ref::<PlaceholderRowExec>()
+            .is_some()
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_explain() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("plan_type", DataType::Utf8, false),
+        Field::new("plan", DataType::Utf8, false),
+    ]));
+    let stringified_plans = vec![
+        StringifiedPlan::new(PlanType::InitialLogicalPlan, "initial logical"),
+        StringifiedPlan::new(
+            PlanType::AnalyzedLogicalPlan {
+                analyzer_name: "analyzer".to_string(),
+            },
+            "analyzed logical",
+        ),
+        StringifiedPlan::new(PlanType::FinalAnalyzedLogicalPlan, "final analyzed"),
+        StringifiedPlan::new(
+            PlanType::OptimizedLogicalPlan {
+                optimizer_name: "logical optimizer".to_string(),
+            },
+            "optimized logical",
+        ),
+        StringifiedPlan::new(PlanType::FinalLogicalPlan, "final logical"),
+        StringifiedPlan::new(PlanType::InitialPhysicalPlan, "initial physical"),
+        StringifiedPlan::new(
+            PlanType::InitialPhysicalPlanWithStats,
+            "initial physical with stats",
+        ),
+        StringifiedPlan::new(
+            PlanType::InitialPhysicalPlanWithSchema,
+            "initial physical with schema",
+        ),
+        StringifiedPlan::new(
+            PlanType::OptimizedPhysicalPlan {
+                optimizer_name: "physical optimizer".to_string(),
+            },
+            "optimized physical",
+        ),
+        StringifiedPlan::new(PlanType::FinalPhysicalPlan, "final physical"),
+        StringifiedPlan::new(
+            PlanType::FinalPhysicalPlanWithStats,
+            "final physical with stats",
+        ),
+        StringifiedPlan::new(
+            PlanType::FinalPhysicalPlanWithSchema,
+            "final physical with schema",
+        ),
+        StringifiedPlan::new(PlanType::PhysicalPlanError, "physical plan error"),
+    ];
+    let explain = Arc::new(ExplainExec::new(
+        Arc::clone(&schema),
+        stringified_plans.clone(),
+        true,
+    ));
+
+    let ctx = SessionContext::new();
+    let roundtripped = roundtrip_test_and_return(
+        explain,
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let roundtripped = roundtripped.downcast_ref::<ExplainExec>().unwrap();
+
+    assert_eq!(roundtripped.schema(), schema);
+    assert_eq!(roundtripped.stringified_plans(), stringified_plans);
+    assert!(roundtripped.verbose());
+    Ok(())
 }
 
 #[tokio::test]
@@ -4679,62 +4776,6 @@ fn roundtrip_parquet_exec_output_partitioning() -> Result<()> {
         roundtrip_file_scan_config(scan_config)?.output_partitioning,
         Some(output_partitioning)
     );
-
-    Ok(())
-}
-
-#[test]
-fn parse_legacy_partitioned_by_file_group_as_output_partitioning() -> Result<()> {
-    let file_schema =
-        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
-    let table_schema = TableSchema::builder(Arc::clone(&file_schema))
-        .with_table_partition_cols(vec![Arc::new(Field::new(
-            "part",
-            DataType::Utf8,
-            false,
-        ))])
-        .build();
-    let file_source = Arc::new(ParquetSource::new(table_schema));
-    let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
-            .with_file_groups(vec![
-                FileGroup::new(vec![PartitionedFile::new(
-                    "/path/to/file1.parquet".to_string(),
-                    1024,
-                )]),
-                FileGroup::new(vec![PartitionedFile::new(
-                    "/path/to/file2.parquet".to_string(),
-                    1024,
-                )]),
-            ])
-            .build();
-
-    let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter {};
-    let mut proto = serialize_file_scan_config(&scan_config, &codec, &proto_converter)?;
-    proto.partitioned_by_file_group = Some(true);
-    proto.output_partitioning = None;
-
-    let ctx = SessionContext::new();
-    let task_ctx = ctx.task_ctx();
-    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
-    let parsed = parse_protobuf_file_scan_config(
-        &proto,
-        &decode_ctx,
-        &proto_converter,
-        Arc::new(ParquetSource::new(parse_table_schema_from_proto(&proto)?)),
-    )?;
-
-    match parsed.output_partitioning {
-        Some(Partitioning::Hash(exprs, partition_count)) => {
-            assert_eq!(partition_count, 2);
-            assert_eq!(exprs.len(), 1);
-            let column = exprs[0].downcast_ref::<Column>().unwrap();
-            assert_eq!(column.name(), "part");
-            assert_eq!(column.index(), 1);
-        }
-        other => panic!("Expected legacy hash output partitioning, got {other:?}"),
-    }
 
     Ok(())
 }
