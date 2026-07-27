@@ -1,0 +1,228 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Memory-limited (spilling) grouped hash aggregation.
+#
+# High-cardinality GROUP BY under a tight memory limit: the aggregate spills to
+# disk, re-groups the spilled state, and must still return the right answer.
+#
+# The group key is scrambled with `(v * 7) % 100000` because generate_series is
+# sorted, which would take the streaming path that never spills. gcd(7, 100000)
+# = 1, so it's a bijection over 1..100000. Still 100000 groups, just unsorted,
+# so the hash table grows and spills.
+#
+# Each query aggregates over the grouped result, so the expected output is one
+# row. sum(1..100000) = 5000050000, and every v lands in one group, so the
+# per-group sums always add back to that total.
+
+# Single partition keeps the aggregation in one operator (no repartition).
+statement ok
+SET datafusion.execution.target_partitions = 1
+
+statement ok
+SET datafusion.runtime.memory_limit = '1M'
+
+# --- Case A: single-column high-cardinality GROUP BY ---
+query II
+SELECT count(*), sum(total)
+FROM (
+  SELECT (v * 7) % 100000 AS k, sum(v) AS total
+  FROM generate_series(1, 100000) AS t(v)
+  GROUP BY (v * 7) % 100000
+)
+----
+100000 5000050000
+
+# Prove the inner aggregate actually spills (else these tests would silently stop covering the spill path). 
+# Only `spill_count` is pinned; the other metrics vary per run.
+query TT
+EXPLAIN ANALYZE
+SELECT count(*), sum(total)
+FROM (
+  SELECT (v * 7) % 100000 AS k, sum(v) AS total
+  FROM generate_series(1, 100000) AS t(v)
+  GROUP BY (v * 7) % 100000
+)
+----
+Plan with Metrics
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*), sum(total)@1 as sum(total)], metrics=[<slt:ignore>]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), sum(total)], metrics=[<slt:ignore>]
+03)----ProjectionExec: expr=[sum(t.v)@1 as total], metrics=[<slt:ignore>]
+04)------AggregateExec: mode=Single, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000)], aggr=[sum(t.v)], metrics=[<slt:ignore>spill_count=9,<slt:ignore>]
+05)--------ProjectionExec: expr=[value@0 as v], metrics=[<slt:ignore>]
+06)----------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192], metrics=[<slt:ignore>]
+
+# --- Case B: multi-column GROUP BY (is_single() = false) ---
+# Both keys are bijections of v, so each (a, b) pair is unique: 100000 groups.
+query II
+SELECT count(*), sum(total)
+FROM (
+  SELECT (v * 7) % 100000 AS a, (v * 13) % 100000 AS b, sum(v) AS total
+  FROM generate_series(1, 100000) AS t(v)
+  GROUP BY (v * 7) % 100000, (v * 13) % 100000
+)
+----
+100000 5000050000
+
+# Assert this case spills too.
+query TT
+EXPLAIN ANALYZE
+SELECT count(*), sum(total)
+FROM (
+  SELECT (v * 7) % 100000 AS a, (v * 13) % 100000 AS b, sum(v) AS total
+  FROM generate_series(1, 100000) AS t(v)
+  GROUP BY (v * 7) % 100000, (v * 13) % 100000
+)
+----
+Plan with Metrics
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*), sum(total)@1 as sum(total)], metrics=[<slt:ignore>]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), sum(total)], metrics=[<slt:ignore>]
+03)----ProjectionExec: expr=[sum(t.v)@2 as total], metrics=[<slt:ignore>]
+04)------AggregateExec: mode=Single, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000), v@0 * 13 % 100000 as t.v * Int64(13) % Int64(100000)], aggr=[sum(t.v)], metrics=[<slt:ignore>spill_count=11,<slt:ignore>]
+05)--------ProjectionExec: expr=[value@0 as v], metrics=[<slt:ignore>]
+06)----------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192], metrics=[<slt:ignore>]
+
+# --- Case C: DISTINCT aggregate under memory limit ---
+# One distinct value per group, so each count(DISTINCT v) = 1.
+query II
+SELECT count(*), sum(d)
+FROM (
+  SELECT (v * 7) % 100000 AS k, count(DISTINCT v) AS d
+  FROM generate_series(1, 100000) AS t(v)
+  GROUP BY (v * 7) % 100000
+)
+----
+100000 100000
+
+# Assert this case spills too.
+query TT
+EXPLAIN ANALYZE
+SELECT count(*), sum(d)
+FROM (
+  SELECT (v * 7) % 100000 AS k, count(DISTINCT v) AS d
+  FROM generate_series(1, 100000) AS t(v)
+  GROUP BY (v * 7) % 100000
+)
+----
+Plan with Metrics
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*), sum(d)@1 as sum(d)], metrics=[<slt:ignore>]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), sum(d)], metrics=[<slt:ignore>]
+03)----ProjectionExec: expr=[count(alias1)@1 as d], metrics=[<slt:ignore>]
+04)------AggregateExec: mode=Single, gby=[group_alias_0@0 as group_alias_0], aggr=[count(alias1)], metrics=[<slt:ignore>spill_count=18,<slt:ignore>]
+05)--------AggregateExec: mode=Single, gby=[v@0 * 7 % 100000 as group_alias_0, v@0 as alias1], aggr=[], ordering_mode=Sorted, metrics=[<slt:ignore>]
+06)----------ProjectionExec: expr=[value@0 as v], metrics=[<slt:ignore>]
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192], metrics=[<slt:ignore>]
+
+# --- Case D: multiple aggregates (sum/min/max) under memory limit ---
+# Each group holds a single v, so min(v) = max(v) = v within the group.
+query IIII
+SELECT count(*), sum(s), min(mn), max(mx)
+FROM (
+  SELECT (v * 7) % 100000 AS k, sum(v) AS s, min(v) AS mn, max(v) AS mx
+  FROM generate_series(1, 100000) AS t(v)
+  GROUP BY (v * 7) % 100000
+)
+----
+100000 5000050000 1 100000
+
+# Assert this case spills too.
+query TT
+EXPLAIN ANALYZE
+SELECT count(*), sum(s), min(mn), max(mx)
+FROM (
+  SELECT (v * 7) % 100000 AS k, sum(v) AS s, min(v) AS mn, max(v) AS mx
+  FROM generate_series(1, 100000) AS t(v)
+  GROUP BY (v * 7) % 100000
+)
+----
+Plan with Metrics
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*), sum(s)@1 as sum(s), min(mn)@2 as min(mn), max(mx)@3 as max(mx)], metrics=[<slt:ignore>]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), sum(s), min(mn), max(mx)], metrics=[<slt:ignore>]
+03)----ProjectionExec: expr=[sum(t.v)@1 as s, min(t.v)@2 as mn, max(t.v)@3 as mx], metrics=[<slt:ignore>]
+04)------AggregateExec: mode=Single, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000)], aggr=[sum(t.v), min(t.v), max(t.v)], metrics=[<slt:ignore>spill_count=27,<slt:ignore>]
+05)--------ProjectionExec: expr=[value@0 as v], metrics=[<slt:ignore>]
+06)----------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192], metrics=[<slt:ignore>]
+
+# --- Case E: avg() aggregate (Float64 output) under memory limit ---
+# Each group holds a single v, so avg(v) = v within the group.
+query IRR
+SELECT count(*), min(a), max(a)
+FROM (
+  SELECT (v * 7) % 100000 AS k, avg(v) AS a
+  FROM generate_series(1, 100000) AS t(v)
+  GROUP BY (v * 7) % 100000
+)
+----
+100000 1 100000
+
+# Assert this case spills too.
+query TT
+EXPLAIN ANALYZE
+SELECT count(*), min(a), max(a)
+FROM (
+  SELECT (v * 7) % 100000 AS k, avg(v) AS a
+  FROM generate_series(1, 100000) AS t(v)
+  GROUP BY (v * 7) % 100000
+)
+----
+Plan with Metrics
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*), min(a)@1 as min(a), max(a)@2 as max(a)], metrics=[<slt:ignore>]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), min(a), max(a)], metrics=[<slt:ignore>]
+03)----ProjectionExec: expr=[avg(t.v)@1 as a], metrics=[<slt:ignore>]
+04)------AggregateExec: mode=Single, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000)], aggr=[avg(t.v)], metrics=[<slt:ignore>spill_count=11,<slt:ignore>]
+05)--------ProjectionExec: expr=[value@0 as v], metrics=[<slt:ignore>]
+06)----------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192], metrics=[<slt:ignore>]
+
+# --- Case F: array_agg() aggregate (growable state) under memory limit ---
+# Each group holds a single v, so array_length(array_agg(v)) = 1.
+query II
+SELECT count(*), sum(l)
+FROM (
+  SELECT (v * 7) % 100000 AS k, array_length(array_agg(v)) AS l
+  FROM generate_series(1, 100000) AS t(v)
+  GROUP BY (v * 7) % 100000
+)
+----
+100000 100000
+
+# Assert this case spills too.
+query TT
+EXPLAIN ANALYZE
+SELECT count(*), sum(l)
+FROM (
+  SELECT (v * 7) % 100000 AS k, array_length(array_agg(v)) AS l
+  FROM generate_series(1, 100000) AS t(v)
+  GROUP BY (v * 7) % 100000
+)
+----
+Plan with Metrics
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*), sum(l)@1 as sum(l)], metrics=[<slt:ignore>]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), sum(l)], metrics=[<slt:ignore>]
+03)----ProjectionExec: expr=[array_length(array_agg(t.v)@1) as l], metrics=[<slt:ignore>]
+04)------AggregateExec: mode=Single, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000)], aggr=[array_agg(t.v)], metrics=[<slt:ignore>spill_count=10,<slt:ignore>]
+05)--------ProjectionExec: expr=[value@0 as v], metrics=[<slt:ignore>]
+06)----------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=8192], metrics=[<slt:ignore>]
+
+# Restore settings to slt runner defaults
+statement ok
+RESET datafusion.runtime.memory_limit
+
+statement ok
+SET datafusion.execution.target_partitions = 4
+
+statement ok
+RESET datafusion.catalog.create_default_catalog_and_schema
