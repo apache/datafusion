@@ -306,8 +306,19 @@ impl ExecutionPlan for UnnestExec {
             .iter()
             .map(|index| *index as _)
             .collect();
+        let null_handling = {
+            use datafusion_common::NullHandling;
+            use protobuf::unnest_options::NullHandling as ProtoNullHandling;
+            match self.options().null_handling {
+                NullHandling::Preserve => ProtoNullHandling::Preserve,
+                NullHandling::Drop => ProtoNullHandling::Drop,
+                NullHandling::PreserveAndExpandEmpty => {
+                    ProtoNullHandling::PreserveAndExpandEmpty
+                }
+            }
+        } as i32;
         let options = protobuf::UnnestOptions {
-            preserve_nulls: self.options().preserve_nulls,
+            null_handling,
             recursions: self
                 .options()
                 .recursions
@@ -383,8 +394,22 @@ impl UnnestExec {
                 "UnnestExec is missing required field 'options'"
             )
         })?;
+        let null_handling = {
+            use datafusion_common::NullHandling;
+            use protobuf::unnest_options::NullHandling as ProtoNullHandling;
+            match ProtoNullHandling::try_from(options.null_handling) {
+                Ok(ProtoNullHandling::Preserve) => NullHandling::Preserve,
+                Ok(ProtoNullHandling::Drop) => NullHandling::Drop,
+                Ok(ProtoNullHandling::PreserveAndExpandEmpty) => {
+                    NullHandling::PreserveAndExpandEmpty
+                }
+                // Unknown enum values fall back to the default (Preserve),
+                // matching DataFusion's historical behavior.
+                Err(_) => NullHandling::Preserve,
+            }
+        };
         let options = UnnestOptions {
-            preserve_nulls: options.preserve_nulls,
+            null_handling,
             recursions: options
                 .recursions
                 .iter()
