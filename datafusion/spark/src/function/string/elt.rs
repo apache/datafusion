@@ -24,7 +24,7 @@ use arrow::compute::{can_cast_types, cast};
 use arrow::datatypes::DataType::{Int64, Utf8};
 use arrow::datatypes::{DataType, Int64Type};
 use datafusion_common::cast::as_string_array;
-use datafusion_common::{DataFusionError, Result, plan_datafusion_err};
+use datafusion_common::{DataFusionError, Result, exec_err, plan_datafusion_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -63,7 +63,11 @@ impl ScalarUDFImpl for SparkElt {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(elt, vec![])(&args.args)
+        let enable_ansi_mode = args.config_options.execution.enable_ansi_mode;
+        make_scalar_function(
+            move |arrays: &[ArrayRef]| elt(arrays, enable_ansi_mode),
+            vec![],
+        )(&args.args)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -80,18 +84,13 @@ impl ScalarUDFImpl for SparkElt {
                 "ELT index must be Int64 (or castable to Int64), got {idx_dt:?}"
             )));
         }
-        let mut coerced = Vec::with_capacity(arg_types.len());
-        coerced.push(Int64);
-
-        for _ in 1..length {
-            coerced.push(Utf8);
-        }
-
+        let mut coerced = vec![Utf8; length];
+        coerced[0] = Int64;
         Ok(coerced)
     }
 }
 
-fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
+fn elt(args: &[ArrayRef], enable_ansi_mode: bool) -> Result<ArrayRef> {
     let n_rows = args[0].len();
 
     let idx: &PrimitiveArray<Int64Type> =
@@ -103,11 +102,10 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         })?;
 
     let num_values = args.len() - 1;
-    let mut cols: Vec<Arc<StringArray>> = Vec::with_capacity(num_values);
+    let mut cols: Vec<StringArray> = Vec::with_capacity(num_values);
     for a in args.iter().skip(1) {
         let casted = cast(a, &Utf8)?;
-        let sa = as_string_array(&casted)?;
-        cols.push(Arc::new(sa.clone()));
+        cols.push(as_string_array(&casted)?.clone());
     }
 
     let mut builder = StringBuilder::new();
@@ -120,10 +118,12 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
 
         let index = idx.value(i);
 
-        // TODO: if spark.sql.ansi.enabled is true,
-        //  throw ArrayIndexOutOfBoundsException for invalid indices;
-        //  if false, return NULL instead (current behavior).
         if index < 1 || (index as usize) > num_values {
+            if enable_ansi_mode {
+                return exec_err!(
+                    "The index {index} is out of bounds. The array has {num_values} elements."
+                );
+            }
             builder.append_null();
             continue;
         }
@@ -146,13 +146,17 @@ mod tests {
     use super::*;
     use arrow::array::Int64Array;
 
-    fn run_elt_arrays(arrs: Vec<ArrayRef>) -> Result<Arc<StringArray>> {
-        let arr = elt(&arrs)?;
-        let string_array = arr
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| DataFusionError::Internal("expected Utf8".into()))?;
-        Ok(Arc::new(string_array.clone()))
+    fn run_elt_arrays(arrs: Vec<ArrayRef>) -> Result<StringArray> {
+        run_elt_arrays_with(arrs, false)
+    }
+
+    fn run_elt_arrays_ansi(arrs: Vec<ArrayRef>) -> Result<StringArray> {
+        run_elt_arrays_with(arrs, true)
+    }
+
+    fn run_elt_arrays_with(arrs: Vec<ArrayRef>, ansi: bool) -> Result<StringArray> {
+        let arr = elt(&arrs, ansi)?;
+        Ok(as_string_array(&arr)?.clone())
     }
 
     #[test]
@@ -237,5 +241,74 @@ mod tests {
         let out = run_elt_arrays(vec![idx, v1, v2])?;
         assert_eq!(out.data_type(), &Utf8);
         Ok(())
+    }
+
+    #[test]
+    fn elt_ansi_valid_indices_ok() -> Result<()> {
+        let idx = Arc::new(Int64Array::from(vec![Some(1), Some(2), Some(3)]));
+        let v1 = Arc::new(StringArray::from(vec![Some("a1"), Some("a2"), Some("a3")]));
+        let v2 = Arc::new(StringArray::from(vec![Some("b1"), Some("b2"), Some("b3")]));
+        let v3 = Arc::new(StringArray::from(vec![Some("c1"), Some("c2"), Some("c3")]));
+
+        let out = run_elt_arrays_ansi(vec![idx, v1, v2, v3])?;
+        assert_eq!(out.value(0), "a1");
+        assert_eq!(out.value(1), "b2");
+        assert_eq!(out.value(2), "c3");
+        Ok(())
+    }
+
+    #[test]
+    fn elt_ansi_null_index_returns_null() -> Result<()> {
+        // NULL index does not raise an error even in ANSI mode; returns NULL.
+        let idx = Arc::new(Int64Array::from(vec![Some(1), None]));
+        let v1 = Arc::new(StringArray::from(vec![Some("a1"), Some("a2")]));
+        let v2 = Arc::new(StringArray::from(vec![Some("b1"), Some("b2")]));
+
+        let out = run_elt_arrays_ansi(vec![idx, v1, v2])?;
+        assert_eq!(out.value(0), "a1");
+        assert!(out.is_null(1));
+        Ok(())
+    }
+
+    #[test]
+    fn elt_ansi_index_too_large_errors() {
+        let idx = Arc::new(Int64Array::from(vec![Some(3)]));
+        let v1 = Arc::new(StringArray::from(vec![Some("a1")]));
+        let v2 = Arc::new(StringArray::from(vec![Some("b1")]));
+
+        let err = run_elt_arrays_ansi(vec![idx, v1, v2]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("The index 3 is out of bounds. The array has 2 elements."),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn elt_ansi_index_zero_errors() {
+        let idx = Arc::new(Int64Array::from(vec![Some(0)]));
+        let v1 = Arc::new(StringArray::from(vec![Some("a1")]));
+        let v2 = Arc::new(StringArray::from(vec![Some("b1")]));
+
+        let err = run_elt_arrays_ansi(vec![idx, v1, v2]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("The index 0 is out of bounds. The array has 2 elements."),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn elt_ansi_index_negative_errors() {
+        let idx = Arc::new(Int64Array::from(vec![Some(-1)]));
+        let v1 = Arc::new(StringArray::from(vec![Some("a1")]));
+        let v2 = Arc::new(StringArray::from(vec![Some("b1")]));
+
+        let err = run_elt_arrays_ansi(vec![idx, v1, v2]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("The index -1 is out of bounds. The array has 2 elements."),
+            "unexpected error: {msg}"
+        );
     }
 }
