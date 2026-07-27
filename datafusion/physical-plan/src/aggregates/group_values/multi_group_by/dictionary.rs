@@ -290,7 +290,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
             self.equal_to_per_row(
                 lhs_rows,
                 dict_values,
-                &dict,
+                dict,
                 rhs_rows,
                 equal_to_results,
             );
