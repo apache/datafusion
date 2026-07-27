@@ -93,8 +93,13 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
     // Null groups emit a null key, not a key index into the values array, so the
     // null inner slot does not consume a key index.
     fn check_key_overflow(&self) -> Result<()> {
-        let non_null_slots = self.inner.len() - self.null_inner_slot.is_some() as usize;
-        if !Self::key_type_fits(non_null_slots) {
+        // Keys are raw slot indices; the null slot is excluded only when it is
+        // last (null groups emit None, not an index).
+        let inner_len = self.inner.len();
+        let null_is_last = self.null_inner_slot.is_some_and(|s| s + 1 == inner_len);
+        let max_key_count = inner_len - null_is_last as usize;
+        if !Self::key_type_fits(max_key_count) {
+            let non_null_slots = inner_len - self.null_inner_slot.is_some() as usize;
             return exec_err!(
                 "Dictionary key type {:?} cannot represent {} distinct values",
                 K::DATA_TYPE,
@@ -194,6 +199,43 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
         table[num_distinct] = self.null_inner_slot.unwrap_or(usize::MAX);
         table
     }
+
+    /// Per-row fallback for `vectorized_equal_to` used when the number of rows
+    /// to check is smaller than the dictionary cardinality, making the O(D)
+    /// lookup-table build more expensive than direct value comparison.
+    ///
+    /// `#[cold]` + `#[inline(never)]` keeps this code out of the hot
+    /// lookup-table loops in `vectorized_equal_to` so LLVM can pipeline them.
+    #[cold]
+    #[inline(never)]
+    fn equal_to_per_row(
+        &self,
+        lhs_rows: &[usize],
+        dict_values: &ArrayRef,
+        dict: &DictionaryArray<K>,
+        rhs_rows: &[usize],
+        equal_to_results: &mut BooleanBufferBuilder,
+    ) {
+        let group_to_inner = self.group_to_inner.as_slice();
+        for (idx, (&lhs_row, &rhs_row)) in
+            lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
+        {
+            if !equal_to_results.get_bit(idx) {
+                continue;
+            }
+            let lhs_slot = group_to_inner[lhs_row];
+            let equal = match dict.key(rhs_row) {
+                None => self.inner.equal_to(lhs_slot, &self.null_array, 0),
+                Some(val_idx) if dict_values.is_null(val_idx) => {
+                    self.inner.equal_to(lhs_slot, &self.null_array, 0)
+                }
+                Some(val_idx) => self.inner.equal_to(lhs_slot, dict_values, val_idx),
+            };
+            if !equal {
+                equal_to_results.set_bit(idx, false);
+            }
+        }
+    }
 }
 
 impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
@@ -241,6 +283,28 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
         let dict_values = dict.values();
         let num_distinct = dict_values.len();
 
+        // The lookup-table path pays O(num_distinct) upfront — hashing every
+        // dictionary value and probing value_dedup for each — so each row check
+        // becomes a single integer compare. That only pays for itself when the
+        // rows to check outnumber the distinct values (low-cardinality dicts
+        // under high repetition). For high-cardinality dicts with few rows to
+        // check (e.g. only null rows matched), the table build dominates: fall
+        // back to per-row value comparison instead.
+        //
+        // The fallback is in a separate #[cold] function so its code does not
+        // appear inline here and cannot prevent LLVM from pipelining / unrolling
+        // the hot lookup-table loops below.
+        if rhs_rows.len() < num_distinct {
+            self.equal_to_per_row(
+                lhs_rows,
+                dict_values,
+                &dict,
+                rhs_rows,
+                equal_to_results,
+            );
+            return;
+        }
+
         let mut val_hashes = vec![0u64; dict_values.len()];
         create_hashes(
             std::slice::from_ref(dict_values),
@@ -253,7 +317,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
         let group_to_inner = self.group_to_inner.as_slice();
 
         if dict_keys.null_count() == 0 {
-            // No null keys — skip the get_bit guard: we only ever write false,
+            // No null keys : skip the get_bit guard: we only ever write false,
             // so overwriting an already-false bit is a no-op.
             let raw_keys = dict_keys.values();
             for (idx, (&lhs_row, &rhs_row)) in
@@ -369,7 +433,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
         // `inner` is a trait object — the only way to extract its data is via `take_n`.
-        // Because group→inner slot mappings are non-contiguous, we drain all of `inner`
+        // Because group->inner slot mappings are non-contiguous, we drain all of `inner`
         // at once, then re-append only the slots still referenced by the remaining groups.
         let old_inner_len = self.inner.len();
         let all_inner_values = self.inner.take_n(old_inner_len);
@@ -393,6 +457,9 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
         self.value_dedup_size = 0;
         self.null_inner_slot = None;
 
+        // Hash all surviving values in one vectorized pass
+        self.hash_values(&all_inner_values);
+
         for (new_slot, &old_slot) in new_to_old.iter().enumerate() {
             if all_inner_values.is_null(old_slot) {
                 self.inner
@@ -403,10 +470,8 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
                 self.inner
                     .append_val(&all_inner_values, old_slot)
                     .expect("append value failed in take_n");
-                let single = all_inner_values.slice(old_slot, 1);
-                self.hash_values(&single);
                 self.value_dedup.insert_accounted(
-                    (self.val_hashes[0], new_slot),
+                    (self.val_hashes[old_slot], new_slot),
                     |&(entry_hash, _)| entry_hash,
                     &mut self.value_dedup_size,
                 );
@@ -596,6 +661,113 @@ mod tests {
             Arc::new(StringArray::from(vec![Some("overflow")])),
         ));
         assert!(col.append_val(&extra, 0).is_err());
+    }
+
+    // Regression: null mid-array means the last slot is non-null, so the max
+    // emitted key equals inner.len()-1, not inner.len()-2.
+    #[test]
+    fn key_overflow_null_slot_mid_array() {
+        use arrow::array::Int8Array;
+        use arrow::datatypes::Int8Type;
+
+        let field = Field::new("", DataType::Utf8, true);
+        let mut col = DictionaryGroupValuesColumn::<Int8Type>::new(
+            Box::new(ByteGroupValueBuilder::<i32>::new(OutputType::Utf8)),
+            &field,
+        );
+
+        // 100 non-null values in slots 0..99
+        let strs100: Vec<String> = (0u8..100).map(|i| format!("s{i}")).collect();
+        let refs100: Vec<Option<&str>> =
+            strs100.iter().map(|s| Some(s.as_str())).collect();
+        let b1: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::new(
+            Int8Array::from((0i8..100).map(Some).collect::<Vec<_>>()),
+            Arc::new(StringArray::from(refs100)),
+        ));
+        col.vectorized_append(&b1, &(0usize..100).collect::<Vec<_>>())
+            .unwrap();
+
+        // null lands at slot 100 (mid-array)
+        let null_batch: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::new(
+            Int8Array::from(vec![None]),
+            Arc::new(StringArray::from(vec![Some("x")])),
+        ));
+        col.append_val(&null_batch, 0).unwrap();
+
+        // 28 more non-null values fill slots 101..128; slot 128 exceeds Int8::MAX
+        let strs28: Vec<String> = (100u8..128).map(|i| format!("s{i}")).collect();
+        let refs28: Vec<Option<&str>> = strs28.iter().map(|s| Some(s.as_str())).collect();
+        let b2: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::new(
+            Int8Array::from((0i8..28).map(Some).collect::<Vec<_>>()),
+            Arc::new(StringArray::from(refs28)),
+        ));
+        assert!(
+            col.vectorized_append(&b2, &(0usize..28).collect::<Vec<_>>())
+                .is_err()
+        );
+    }
+
+    // Helpers shared by the three overflow boundary tests below.
+    fn int8_utf8_col() -> DictionaryGroupValuesColumn<arrow::datatypes::Int8Type> {
+        use arrow::datatypes::Int8Type;
+        let field = Field::new("", DataType::Utf8, true);
+        DictionaryGroupValuesColumn::<Int8Type>::new(
+            Box::new(ByteGroupValueBuilder::<i32>::new(OutputType::Utf8)),
+            &field,
+        )
+    }
+
+    fn int8_dict(keys: &[Option<i8>], values: &[Option<&str>]) -> ArrayRef {
+        use arrow::array::Int8Array;
+        use arrow::datatypes::Int8Type;
+        Arc::new(DictionaryArray::<Int8Type>::new(
+            Int8Array::from(keys.to_vec()),
+            Arc::new(StringArray::from(values.to_vec())),
+        ))
+    }
+
+    fn distinct_strs(start: usize, end: usize) -> ArrayRef {
+        let strs: Vec<String> = (start..end).map(|i| format!("v{i}")).collect();
+        let refs: Vec<Option<&str>> = strs.iter().map(|s| Some(s.as_str())).collect();
+        int8_dict(
+            &(0..strs.len()).map(|i| Some(i as i8)).collect::<Vec<_>>(),
+            &refs,
+        )
+    }
+
+    // null mid-array: last slot is non-null, so slot 128 overflows Int8
+    #[test]
+    fn overflow_null_mid_pushes_over() {
+        let mut col = int8_utf8_col();
+        // 100 non-null, then null at slot 100, then 28 more non-null (slots 101..128)
+        col.vectorized_append(&distinct_strs(0, 100), &(0..100).collect::<Vec<_>>())
+            .unwrap();
+        col.append_val(&int8_dict(&[None], &[Some("x")]), 0)
+            .unwrap();
+        assert!(
+            col.vectorized_append(&distinct_strs(100, 128), &(0..28).collect::<Vec<_>>())
+                .is_err()
+        );
+    }
+
+    // null last: 128 non-null values fill slots 0..127 (Int8::MAX), null at 128 is ok
+    #[test]
+    fn overflow_null_last_at_max() {
+        let mut col = int8_utf8_col();
+        col.vectorized_append(&distinct_strs(0, 128), &(0..128).collect::<Vec<_>>())
+            .unwrap();
+        col.append_val(&int8_dict(&[None], &[Some("x")]), 0)
+            .unwrap();
+    }
+
+    // null last: 127 non-null values, one below the limit
+    #[test]
+    fn overflow_null_last_just_below_max() {
+        let mut col = int8_utf8_col();
+        col.vectorized_append(&distinct_strs(0, 127), &(0..127).collect::<Vec<_>>())
+            .unwrap();
+        col.append_val(&int8_dict(&[None], &[Some("x")]), 0)
+            .unwrap();
     }
 
     // build_lookup_table must use the incoming batch's hashes, not
