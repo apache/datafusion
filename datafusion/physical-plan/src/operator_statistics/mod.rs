@@ -1079,12 +1079,16 @@ impl StatisticsProvider for ClosureStatisticsProvider {
 mod tests {
     use super::*;
     use crate::filter::FilterExec;
+    use crate::joins::JoinOn;
     use crate::projection::ProjectionExec;
     use crate::statistics::{ChildStats, StatisticsArgs, StatisticsContext};
-    use crate::{DisplayAs, DisplayFormatType, PlanProperties};
+    use crate::{
+        DisplayAs, DisplayFormatType, PlanProperties, SendableRecordBatchStream,
+    };
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::stats::Precision;
     use datafusion_common::{ColumnStatistics, ScalarValue};
+    use datafusion_execution::TaskContext;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal, col, lit};
@@ -1185,8 +1189,8 @@ mod tests {
         fn execute(
             &self,
             _partition: usize,
-            _context: Arc<datafusion_execution::TaskContext>,
-        ) -> Result<crate::SendableRecordBatchStream> {
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
         }
 
@@ -1306,8 +1310,8 @@ mod tests {
         fn execute(
             &self,
             _partition: usize,
-            _context: Arc<datafusion_execution::TaskContext>,
-        ) -> Result<crate::SendableRecordBatchStream> {
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
         }
     }
@@ -1873,7 +1877,7 @@ mod tests {
         right: Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let _schema = make_schema();
-        let on: crate::joins::JoinOn = vec![(
+        let on: JoinOn = vec![(
             Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
             Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
         )];
@@ -1934,7 +1938,7 @@ mod tests {
         let right = make_source_ndv_b(500, 25);
 
         // Join on column "b" (index 1)
-        let on: crate::joins::JoinOn = vec![(
+        let on: JoinOn = vec![(
             Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>,
             Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>,
         )];
@@ -1988,7 +1992,7 @@ mod tests {
         let left = make_source_2ndv(1000, 100, 20);
         let right = make_source_2ndv(500, 50, 10);
 
-        let on: crate::joins::JoinOn = vec![
+        let on: JoinOn = vec![
             (
                 Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
                 Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
@@ -2063,7 +2067,7 @@ mod tests {
         right: Arc<dyn ExecutionPlan>,
         join_type: JoinType,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let on: crate::joins::JoinOn = vec![(
+        let on: JoinOn = vec![(
             Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
             Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
         )];
