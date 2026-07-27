@@ -46,7 +46,8 @@ use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion_physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
-    LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
+    LikeExpr, Literal, NegativeExpr, NotExpr, SqlSimilarToPattern, TryCastExpr,
+    UnKnownColumn,
 };
 use datafusion_physical_plan::joins::HashExpr;
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
@@ -359,6 +360,9 @@ pub fn parse_physical_expr_with_converter(
         }
         ExprType::DynamicFilter(_) => {
             DynamicFilterPhysicalExpr::try_from_proto(proto, &decode_ctx)?
+        }
+        ExprType::SqlSimilarToPattern(_) => {
+            SqlSimilarToPattern::try_from_proto(proto, &decode_ctx)?
         }
         ExprType::Extension(extension) => {
             let inputs: Vec<Arc<dyn PhysicalExpr>> = extension

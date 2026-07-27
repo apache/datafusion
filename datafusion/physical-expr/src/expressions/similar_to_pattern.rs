@@ -128,6 +128,55 @@ impl PhysicalExpr for SqlSimilarToPattern {
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "sql_similar_to_regex({})", fmt_sql(self.expr.as_ref()))
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_proto_models::protobuf;
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::SqlSimilarToPattern(
+                Box::new(protobuf::PhysicalSqlSimilarToPatternNode {
+                    expr: Some(Box::new(ctx.encode_child(&self.expr)?)),
+                }),
+            )),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl SqlSimilarToPattern {
+    /// Reconstruct a [`SqlSimilarToPattern`] from its protobuf representation.
+    ///
+    /// Takes the whole [`PhysicalExprNode`] so the decode signature matches
+    /// other migrated expressions and can inspect outer-node metadata if
+    /// needed in the future.
+    ///
+    /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_physical_expr_common::expect_expr_variant;
+        use datafusion_proto_models::protobuf;
+
+        let pattern = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::SqlSimilarToPattern,
+            "SqlSimilarToPattern",
+        );
+
+        Ok(Arc::new(SqlSimilarToPattern::new(
+            ctx.decode_required_expression(
+                pattern.expr.as_deref(),
+                "SqlSimilarToPattern",
+                "expr",
+            )?,
+        )))
+    }
 }
 
 pub(crate) fn translate_scalar(scalar: &ScalarValue) -> Result<ScalarValue> {
@@ -141,10 +190,13 @@ pub(crate) fn translate_scalar(scalar: &ScalarValue) -> Result<ScalarValue> {
         ScalarValue::Utf8View(Some(s)) => {
             Ok(ScalarValue::Utf8View(Some(sql_similar_to_regex(s))))
         }
-        ScalarValue::Utf8(None)
-        | ScalarValue::LargeUtf8(None)
-        | ScalarValue::Utf8View(None)
-        | ScalarValue::Null => Ok(ScalarValue::Utf8(None)),
+        // A NULL pattern makes the whole predicate NULL, but the string variant
+        // still has to survive the translation: the regex kernel dispatches on
+        // the left-hand type and downcasts the pattern to the same array type.
+        ScalarValue::Utf8(None) => Ok(ScalarValue::Utf8(None)),
+        ScalarValue::LargeUtf8(None) => Ok(ScalarValue::LargeUtf8(None)),
+        ScalarValue::Utf8View(None) => Ok(ScalarValue::Utf8View(None)),
+        ScalarValue::Null => Ok(ScalarValue::Utf8(None)),
         other => exec_err!("SIMILAR TO pattern must be a string type, got {other:?}"),
     }
 }
@@ -205,6 +257,25 @@ mod tests {
             translate_scalar(&ScalarValue::Null).unwrap(),
             ScalarValue::Utf8(None)
         );
+        // A NULL pattern keeps its string variant: the regex kernel dispatches
+        // on the left-hand type and downcasts the pattern to the same type.
+        assert_eq!(
+            translate_scalar(&ScalarValue::LargeUtf8(None))?,
+            ScalarValue::LargeUtf8(None)
+        );
+        assert_eq!(
+            translate_scalar(&ScalarValue::Utf8View(None))?,
+            ScalarValue::Utf8View(None)
+        );
+        // Non-`Utf8` patterns keep their variant when translated too.
+        assert_eq!(
+            translate_scalar(&ScalarValue::LargeUtf8(Some("a%".to_string())))?,
+            ScalarValue::LargeUtf8(Some(r"^(?:a(?s:.*))$".to_string()))
+        );
+        assert_eq!(
+            translate_scalar(&ScalarValue::Utf8View(Some("a%".to_string())))?,
+            ScalarValue::Utf8View(Some(r"^(?:a(?s:.*))$".to_string()))
+        );
         assert!(translate_scalar(&ScalarValue::Int32(Some(1))).is_err());
         Ok(())
     }
@@ -228,5 +299,119 @@ mod tests {
         let expr = SqlSimilarToPattern::new(lit("a%"));
         assert_eq!("sql_similar_to_regex(a%)", format!("{expr}"));
         Ok(())
+    }
+}
+
+/// Tests for the `try_to_proto` / `try_from_proto` hooks.
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::expressions::{Column, col};
+    use crate::proto_test_util::{
+        StubDecoder, StubEncoder, UnreachableDecoder, column_node,
+    };
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::DataFusionError;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_proto_models::protobuf::{
+        PhysicalExprNode, PhysicalSqlSimilarToPatternNode, physical_expr_node,
+    };
+
+    /// Build a `SqlSimilarToPattern` proto node with the given child.
+    fn pattern_node(expr: Option<Box<PhysicalExprNode>>) -> PhysicalExprNode {
+        PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(physical_expr_node::ExprType::SqlSimilarToPattern(Box::new(
+                PhysicalSqlSimilarToPatternNode { expr },
+            ))),
+        }
+    }
+
+    /// A `SqlSimilarToPattern` over a `Utf8` column.
+    fn pattern_fixture() -> SqlSimilarToPattern {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        SqlSimilarToPattern::new(col("a", &schema).unwrap())
+    }
+
+    #[test]
+    fn try_to_proto_encodes_sql_similar_to_pattern() {
+        let pattern = pattern_fixture();
+        let encoder = StubEncoder::ok();
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+
+        let node = pattern
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("SqlSimilarToPattern should encode to Some(node)");
+
+        // Built-in exprs never set expr_id; only dynamic filters do.
+        assert!(node.expr_id.is_none());
+        let pattern_node = match node.expr_type {
+            Some(physical_expr_node::ExprType::SqlSimilarToPattern(boxed)) => *boxed,
+            other => panic!("expected a SqlSimilarToPattern node, got {other:?}"),
+        };
+        assert!(pattern_node.expr.is_some());
+    }
+
+    #[test]
+    fn try_to_proto_propagates_expr_encode_error() {
+        let pattern = pattern_fixture();
+        let encoder = StubEncoder::failing_on(1);
+        let ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let err = pattern.try_to_proto(&ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
+    }
+
+    #[test]
+    fn try_from_proto_decodes_sql_similar_to_pattern() {
+        let node = pattern_node(Some(Box::new(column_node("a"))));
+        let schema = Schema::empty();
+        let decoder = StubDecoder::ok();
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let decoded = SqlSimilarToPattern::try_from_proto(&node, &ctx).unwrap();
+        let pattern = decoded
+            .downcast_ref::<SqlSimilarToPattern>()
+            .expect("decoded expr should be a SqlSimilarToPattern");
+        assert!(pattern.expr().downcast_ref::<Column>().is_some());
+    }
+
+    #[test]
+    fn try_from_proto_rejects_non_sql_similar_to_pattern_node() {
+        let node = column_node("a");
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = SqlSimilarToPattern::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg)
+                if msg.contains("PhysicalExprNode is not a SqlSimilarToPattern")
+        ));
+    }
+
+    #[test]
+    fn try_from_proto_rejects_missing_expr() {
+        let node = pattern_node(None);
+        let schema = Schema::empty();
+        let decoder = UnreachableDecoder;
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = SqlSimilarToPattern::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg)
+                if msg.contains("SqlSimilarToPattern is missing required field 'expr'")
+        ));
+    }
+
+    #[test]
+    fn try_from_proto_propagates_expr_decode_error() {
+        let node = pattern_node(Some(Box::new(column_node("a"))));
+        let schema = Schema::empty();
+        let decoder = StubDecoder::failing_on(1);
+        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = SqlSimilarToPattern::try_from_proto(&node, &ctx).unwrap_err();
+        assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
     }
 }
