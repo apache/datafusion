@@ -2162,13 +2162,14 @@ fn file_sink_config_conversion_preserves_compatibility_api() -> Result<()> {
         file_output_mode: FileOutputMode::Directory,
     };
 
-    let direct = config.to_proto()?;
-    let compatibility = protobuf::FileSinkConfig::try_from_proto(&config)?;
-    assert_eq!(direct, compatibility);
+    let encoded = config.to_proto()?;
+    let compatibility_encoded = protobuf::FileSinkConfig::try_from_proto(&config)?;
+    assert_eq!(encoded, compatibility_encoded);
 
-    let direct = FileSinkConfig::from_proto(&direct)?;
-    let compatibility = FileSinkConfig::try_from_proto(&compatibility)?;
-    assert_eq!(direct.to_proto()?, compatibility.to_proto()?);
+    let decoded = FileSinkConfig::from_proto(&encoded)?;
+    let compatibility_decoded = FileSinkConfig::try_from_proto(&encoded)?;
+    assert_eq!(decoded.to_proto()?, encoded);
+    assert_eq!(compatibility_decoded.to_proto()?, encoded);
     Ok(())
 }
 

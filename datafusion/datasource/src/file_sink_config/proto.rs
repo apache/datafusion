@@ -29,9 +29,9 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_plan::proto::ExecutionPlanDecodeCtx;
 use datafusion_proto_models::protobuf;
 
+use crate::ListingTableUrl;
 use crate::file_groups::FileGroup;
 use crate::file_sink_config::{FileOutputMode, FileSinkConfig};
-use crate::ListingTableUrl;
 
 impl FileSinkConfig {
     /// Serialize this shared file-sink configuration without format-specific
@@ -104,12 +104,25 @@ impl FileSinkConfig {
                 Ok((name.clone(), data_type))
             })
             .collect::<Result<Vec<_>>>()?;
-        let insert_op = match conf.insert_op() {
+        let insert_op = protobuf::InsertOp::try_from(conf.insert_op).map_err(|_| {
+            internal_datafusion_err!(
+                "Received a FileSinkConfig message with unknown InsertOp {}",
+                conf.insert_op
+            )
+        })?;
+        let insert_op = match insert_op {
             protobuf::InsertOp::Append => InsertOp::Append,
             protobuf::InsertOp::Overwrite => InsertOp::Overwrite,
             protobuf::InsertOp::Replace => InsertOp::Replace,
         };
-        let file_output_mode = match conf.file_output_mode() {
+        let file_output_mode = protobuf::FileOutputMode::try_from(conf.file_output_mode)
+            .map_err(|_| {
+                internal_datafusion_err!(
+                    "Received a FileSinkConfig message with unknown FileOutputMode {}",
+                    conf.file_output_mode
+                )
+            })?;
+        let file_output_mode = match file_output_mode {
             protobuf::FileOutputMode::Automatic => FileOutputMode::Automatic,
             protobuf::FileOutputMode::SingleFile => FileOutputMode::SingleFile,
             protobuf::FileOutputMode::Directory => FileOutputMode::Directory,
@@ -161,4 +174,87 @@ pub fn parse_sink_sort_order(
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(LexRequirement::new(sort_exprs.into_iter().map(Into::into)))
+}
+#[cfg(test)]
+mod tests {
+    use datafusion_common::DataFusionError;
+
+    use super::*;
+
+    fn valid_file_sink_config() -> protobuf::FileSinkConfig {
+        protobuf::FileSinkConfig {
+            object_store_url: ObjectStoreUrl::local_filesystem().to_string(),
+            output_schema: Some(
+                (&Schema::empty())
+                    .try_into()
+                    .expect("empty schema should serialize"),
+            ),
+            insert_op: protobuf::InsertOp::Append.into(),
+            file_output_mode: protobuf::FileOutputMode::Automatic.into(),
+            ..Default::default()
+        }
+    }
+
+    fn assert_decode_error(
+        mutate: impl FnOnce(&mut protobuf::FileSinkConfig),
+        expected: impl AsRef<str>,
+    ) {
+        let mut conf = valid_file_sink_config();
+        mutate(&mut conf);
+
+        let error =
+            FileSinkConfig::from_proto(&conf).expect_err("invalid config should fail");
+        match error {
+            DataFusionError::Internal(message) => {
+                let message = message
+                    .split_once(DataFusionError::BACK_TRACE_SEP)
+                    .map_or(message.as_str(), |(message, _)| message);
+                assert_eq!(message, expected.as_ref());
+            }
+            error => panic!("expected internal error, got {error}"),
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_insert_op() {
+        assert_decode_error(
+            |conf| conf.insert_op = i32::MAX,
+            format!(
+                "Received a FileSinkConfig message with unknown InsertOp {}",
+                i32::MAX
+            ),
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_file_output_mode() {
+        assert_decode_error(
+            |conf| conf.file_output_mode = i32::MAX,
+            format!(
+                "Received a FileSinkConfig message with unknown FileOutputMode {}",
+                i32::MAX
+            ),
+        );
+    }
+
+    #[test]
+    fn rejects_missing_output_schema() {
+        assert_decode_error(
+            |conf| conf.output_schema = None,
+            "FileSinkConfig is missing required field 'output_schema'",
+        );
+    }
+
+    #[test]
+    fn rejects_partition_column_without_arrow_type() {
+        assert_decode_error(
+            |conf| {
+                conf.table_partition_cols.push(protobuf::PartitionColumn {
+                    name: "partition".to_string(),
+                    arrow_type: None,
+                });
+            },
+            "PartitionColumn is missing required field 'arrow_type'",
+        );
+    }
 }
