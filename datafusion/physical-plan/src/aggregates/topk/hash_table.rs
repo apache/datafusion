@@ -218,7 +218,7 @@ where
     Option<<VAL as ArrowPrimitiveType>::Native>: Comparable + HashValue,
 {
     fn set_batch(&mut self, ids: ArrayRef) {
-        self.owned = PrimitiveArray::from(ids.to_data());
+        self.owned = ids.as_primitive().clone();
     }
 
     fn len(&self) -> usize {
