@@ -33,7 +33,7 @@ use datafusion_expr::{
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
-use datafusion_physical_expr::expressions::{self};
+use datafusion_physical_expr::expressions::{self, CastExpr};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::cmp::min;
 use std::collections::VecDeque;
@@ -265,15 +265,34 @@ impl WindowUDFImpl for WindowShift {
     /// For more details see: <https://github.com/apache/datafusion/issues/12717>
     fn expressions(&self, expr_args: ExpressionArgs) -> Vec<Arc<dyn PhysicalExpr>> {
         let input_exprs = expr_args.input_exprs();
+        let input_fields = expr_args.input_fields();
         let mut result = Vec::new();
 
         let main_expr =
             parse_expr(expr_args.input_exprs(), expr_args.input_fields()).unwrap();
+        let main_expr_nullable = expr_args.input_fields().first().unwrap().data_type().is_null();
+        let main_expr_type = input_fields[0].data_type();
         result.push(main_expr);
 
         // Pushing the expression (not a literal value) to the result, so it would be executed
-        if input_exprs.len() >= 3 {
-            result.push(Arc::clone(&input_exprs[2]));
+        // If our main (first argument) expression is nullable => no type casting involved
+        if main_expr_nullable {
+            if input_exprs.len() >= 3 {
+                result.push(Arc::clone(&input_exprs[2]));
+            }
+        } else {
+            if input_exprs.len() >= 3 {
+                let default_expr_type = input_fields[2].data_type();
+                if default_expr_type == main_expr_type {
+                    result.push(Arc::clone(&input_exprs[2]));
+                } else {
+                    result.push(Arc::new(CastExpr::new(
+                        input_exprs[2].clone(),
+                        main_expr_type.to_owned(),
+                        None,
+                    )))
+                }
+            }
         }
         result
     }
@@ -894,12 +913,6 @@ impl PartitionEvaluator for WindowShiftEvaluator {
                 let default_array = values.get(1).cloned().unwrap_or_else(|| {
                     Arc::new(arrow::array::NullArray::new(value.len()))
                 });
-                let default_array = if default_array.data_type() != value.data_type() {
-                    arrow::compute::kernels::cast::cast(&default_array, value.data_type())
-                        .map_err(|e| arrow_datafusion_err!(e))?
-                } else {
-                    default_array
-                };
                 if !self.ignore_nulls {
                     shift_with_array_default(value, self.shift_offset, &default_array)
                 } else {
