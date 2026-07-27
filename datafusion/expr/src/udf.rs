@@ -979,8 +979,6 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
 
     /// Returns true if the function preserves lexicographical ordering based on
     /// the input ordering.
-    ///
-    /// For example, `concat(a || b)` preserves lexicographical ordering, but `abs(a)` does not.
     fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
         Ok(false)
     }

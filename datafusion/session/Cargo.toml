@@ -31,6 +31,7 @@ version.workspace = true
 all-features = true
 
 [dependencies]
+arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
