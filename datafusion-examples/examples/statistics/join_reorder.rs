@@ -93,7 +93,7 @@ fn mem_table(fields: &[(&str, Arc<Int32Array>)]) -> Result<Arc<MemTable>> {
     Ok(Arc::new(MemTable::try_new(schema, vec![vec![batch]])?))
 }
 
-async fn build_ctx(with_registry: bool) -> Result<SessionContext> {
+fn build_ctx(with_registry: bool) -> Result<SessionContext> {
     let config = SessionConfig::new()
         .with_target_partitions(4)
         .set_bool("datafusion.explain.physical_plan_only", true)
@@ -157,12 +157,7 @@ pub async fn join_reorder() -> Result<()> {
     let truth_query = "SELECT count(DISTINCT user_id) AS true_distinct_users \
          FROM events WHERE amount < 50";
     println!("-- Ground truth --\n{truth_query}\n");
-    let truth = build_ctx(false)
-        .await?
-        .sql(truth_query)
-        .await?
-        .collect()
-        .await?;
+    let truth = build_ctx(false)?.sql(truth_query).await?.collect().await?;
     println!("{}\n", pretty_format_batches(&truth)?);
 
     println!("-- Query --\n{QUERY}\n");
@@ -175,8 +170,8 @@ pub async fn join_reorder() -> Result<()> {
          confirms `events` really is the smaller, cheaper side.\n"
     );
     println!("-- Without the registry (default estimation) --");
-    println!("{}\n", explain(&build_ctx(false).await?).await?);
+    println!("{}\n", explain(&build_ctx(false)?).await?);
     println!("-- With the registry (built-in refinement) --");
-    println!("{}", explain(&build_ctx(true).await?).await?);
+    println!("{}", explain(&build_ctx(true)?).await?);
     Ok(())
 }
