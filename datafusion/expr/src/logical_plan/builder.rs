@@ -1840,38 +1840,10 @@ pub fn build_join_schema(
 
 /// Creates the schema for a left-preserving ASOF join.
 ///
-/// `ON` emits all left fields followed by nullable right fields. `USING` emits
-/// each equality key once by omitting the corresponding right field.
-pub fn build_asof_join_schema(
-    left: &DFSchema,
-    right: &DFSchema,
-    on: &[(Expr, Expr)],
-    join_constraint: JoinConstraint,
-) -> Result<DFSchema> {
-    let omitted_right_indices = if join_constraint == JoinConstraint::Using {
-        on.iter()
-            .map(|(_, right_expr)| {
-                let column = right_expr.get_as_join_column().ok_or_else(|| {
-                    plan_datafusion_err!("ASOF USING keys must be columns")
-                })?;
-                right.index_of_column(column)
-            })
-            .collect::<Result<HashSet<_>>>()?
-    } else {
-        HashSet::new()
-    };
-
-    let full_schema = build_join_schema(left, right, &JoinType::Left)?;
-    let left_len = left.fields().len();
-    let fields = full_schema
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| {
-            *index < left_len || !omitted_right_indices.contains(&(*index - left_len))
-        })
-        .map(|(_, (qualifier, field))| (qualifier.cloned(), Arc::clone(field)))
-        .collect();
-    DFSchema::new_with_metadata(fields, full_schema.metadata().clone())?
+/// Both `ON` and `USING` preserve all qualified input fields. SQL wildcard
+/// expansion handles the unqualified `USING` key as a single column.
+pub fn build_asof_join_schema(left: &DFSchema, right: &DFSchema) -> Result<DFSchema> {
+    build_join_schema(left, right, &JoinType::Left)?
         .with_functional_dependencies(left.functional_dependencies().clone())
 }
 
