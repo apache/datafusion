@@ -457,6 +457,56 @@ impl ExecutionPlan for CrossJoinExec {
             Arc::new(new_right),
         ))))
     }
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        let left = ctx.encode_child(self.left())?;
+        let right = ctx.encode_child(self.right())?;
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::CrossJoin(Box::new(
+                    protobuf::CrossJoinExecNode {
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl CrossJoinExec {
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let crossjoin = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::CrossJoin,
+            "CrossJoinExec",
+        );
+
+        let left = ctx.decode_required_child(
+            crossjoin.left.as_deref(),
+            "CrossJoinExec",
+            "left",
+        )?;
+        let right = ctx.decode_required_child(
+            crossjoin.right.as_deref(),
+            "CrossJoinExec",
+            "right",
+        )?;
+
+        Ok(Arc::new(CrossJoinExec::new(left, right)))
+    }
 }
 
 /// [left/right]_col_count are required in case the column statistics are None

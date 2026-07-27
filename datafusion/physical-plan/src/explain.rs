@@ -185,6 +185,188 @@ impl ExecutionPlan for ExplainExec {
             futures::stream::iter(vec![Ok(record_batch)]),
         )))
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Explain(
+                    protobuf::ExplainExecNode {
+                        schema: Some(self.schema().as_ref().try_into()?),
+                        stringified_plans: self
+                            .stringified_plans()
+                            .iter()
+                            .map(stringified_plan_to_proto)
+                            .collect(),
+                        verbose: self.verbose(),
+                    },
+                ),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl ExplainExec {
+    /// Reconstruct an [`ExplainExec`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        _ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let explain = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Explain,
+            "ExplainExec",
+        );
+        let schema = explain.schema.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "ExplainExec is missing required field 'schema'"
+            )
+        })?;
+        Ok(Arc::new(ExplainExec::new(
+            Arc::new(arrow::datatypes::Schema::try_from(schema)?),
+            explain
+                .stringified_plans
+                .iter()
+                .map(stringified_plan_from_proto)
+                .collect(),
+            explain.verbose,
+        )))
+    }
+}
+
+#[cfg(feature = "proto")]
+fn stringified_plan_to_proto(
+    stringified_plan: &StringifiedPlan,
+) -> datafusion_proto_models::protobuf::StringifiedPlan {
+    use datafusion_common::display::PlanType;
+    use datafusion_proto_models::datafusion_common::EmptyMessage;
+    use datafusion_proto_models::protobuf;
+    use protobuf::plan_type::PlanTypeEnum::{
+        AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
+        FinalPhysicalPlan, FinalPhysicalPlanWithSchema, FinalPhysicalPlanWithStats,
+        InitialLogicalPlan, InitialPhysicalPlan, InitialPhysicalPlanWithSchema,
+        InitialPhysicalPlanWithStats, OptimizedLogicalPlan, OptimizedPhysicalPlan,
+        PhysicalPlanError,
+    };
+
+    protobuf::StringifiedPlan {
+        plan_type: match stringified_plan.clone().plan_type {
+            PlanType::InitialLogicalPlan => Some(protobuf::PlanType {
+                plan_type_enum: Some(InitialLogicalPlan(EmptyMessage {})),
+            }),
+            PlanType::AnalyzedLogicalPlan { analyzer_name } => Some(protobuf::PlanType {
+                plan_type_enum: Some(AnalyzedLogicalPlan(
+                    protobuf::AnalyzedLogicalPlanType { analyzer_name },
+                )),
+            }),
+            PlanType::FinalAnalyzedLogicalPlan => Some(protobuf::PlanType {
+                plan_type_enum: Some(FinalAnalyzedLogicalPlan(EmptyMessage {})),
+            }),
+            PlanType::OptimizedLogicalPlan { optimizer_name } => {
+                Some(protobuf::PlanType {
+                    plan_type_enum: Some(OptimizedLogicalPlan(
+                        protobuf::OptimizedLogicalPlanType { optimizer_name },
+                    )),
+                })
+            }
+            PlanType::FinalLogicalPlan => Some(protobuf::PlanType {
+                plan_type_enum: Some(FinalLogicalPlan(EmptyMessage {})),
+            }),
+            PlanType::InitialPhysicalPlan => Some(protobuf::PlanType {
+                plan_type_enum: Some(InitialPhysicalPlan(EmptyMessage {})),
+            }),
+            PlanType::OptimizedPhysicalPlan { optimizer_name } => {
+                Some(protobuf::PlanType {
+                    plan_type_enum: Some(OptimizedPhysicalPlan(
+                        protobuf::OptimizedPhysicalPlanType { optimizer_name },
+                    )),
+                })
+            }
+            PlanType::FinalPhysicalPlan => Some(protobuf::PlanType {
+                plan_type_enum: Some(FinalPhysicalPlan(EmptyMessage {})),
+            }),
+            PlanType::InitialPhysicalPlanWithStats => Some(protobuf::PlanType {
+                plan_type_enum: Some(InitialPhysicalPlanWithStats(EmptyMessage {})),
+            }),
+            PlanType::InitialPhysicalPlanWithSchema => Some(protobuf::PlanType {
+                plan_type_enum: Some(InitialPhysicalPlanWithSchema(EmptyMessage {})),
+            }),
+            PlanType::FinalPhysicalPlanWithStats => Some(protobuf::PlanType {
+                plan_type_enum: Some(FinalPhysicalPlanWithStats(EmptyMessage {})),
+            }),
+            PlanType::FinalPhysicalPlanWithSchema => Some(protobuf::PlanType {
+                plan_type_enum: Some(FinalPhysicalPlanWithSchema(EmptyMessage {})),
+            }),
+            PlanType::PhysicalPlanError => Some(protobuf::PlanType {
+                plan_type_enum: Some(PhysicalPlanError(EmptyMessage {})),
+            }),
+        },
+        plan: stringified_plan.plan.to_string(),
+    }
+}
+
+#[cfg(feature = "proto")]
+fn stringified_plan_from_proto(
+    stringified_plan: &datafusion_proto_models::protobuf::StringifiedPlan,
+) -> StringifiedPlan {
+    use datafusion_common::display::PlanType;
+    use datafusion_proto_models::protobuf::plan_type::PlanTypeEnum::{
+        AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
+        FinalPhysicalPlan, FinalPhysicalPlanWithSchema, FinalPhysicalPlanWithStats,
+        InitialLogicalPlan, InitialPhysicalPlan, InitialPhysicalPlanWithSchema,
+        InitialPhysicalPlanWithStats, OptimizedLogicalPlan, OptimizedPhysicalPlan,
+        PhysicalPlanError,
+    };
+    use datafusion_proto_models::protobuf::{
+        AnalyzedLogicalPlanType, OptimizedLogicalPlanType, OptimizedPhysicalPlanType,
+    };
+
+    StringifiedPlan {
+        plan_type: match stringified_plan
+            .plan_type
+            .as_ref()
+            .and_then(|plan_type| plan_type.plan_type_enum.as_ref())
+            .unwrap_or_else(|| {
+                panic!(
+                    "Cannot create protobuf::StringifiedPlan from {stringified_plan:?}"
+                )
+            }) {
+            InitialLogicalPlan(_) => PlanType::InitialLogicalPlan,
+            AnalyzedLogicalPlan(AnalyzedLogicalPlanType { analyzer_name }) => {
+                PlanType::AnalyzedLogicalPlan {
+                    analyzer_name: analyzer_name.clone(),
+                }
+            }
+            FinalAnalyzedLogicalPlan(_) => PlanType::FinalAnalyzedLogicalPlan,
+            OptimizedLogicalPlan(OptimizedLogicalPlanType { optimizer_name }) => {
+                PlanType::OptimizedLogicalPlan {
+                    optimizer_name: optimizer_name.clone(),
+                }
+            }
+            FinalLogicalPlan(_) => PlanType::FinalLogicalPlan,
+            InitialPhysicalPlan(_) => PlanType::InitialPhysicalPlan,
+            InitialPhysicalPlanWithStats(_) => PlanType::InitialPhysicalPlanWithStats,
+            InitialPhysicalPlanWithSchema(_) => PlanType::InitialPhysicalPlanWithSchema,
+            OptimizedPhysicalPlan(OptimizedPhysicalPlanType { optimizer_name }) => {
+                PlanType::OptimizedPhysicalPlan {
+                    optimizer_name: optimizer_name.clone(),
+                }
+            }
+            FinalPhysicalPlan(_) => PlanType::FinalPhysicalPlan,
+            FinalPhysicalPlanWithStats(_) => PlanType::FinalPhysicalPlanWithStats,
+            FinalPhysicalPlanWithSchema(_) => PlanType::FinalPhysicalPlanWithSchema,
+            PhysicalPlanError(_) => PlanType::PhysicalPlanError,
+        },
+        plan: Arc::new(stringified_plan.plan.clone()),
+    }
 }
 
 /// If this plan should be shown, given the previous plan that was
