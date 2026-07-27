@@ -388,6 +388,7 @@ mod test {
     async fn unit_emit_in_select() {
         use tokio::select;
 
+        #[expect(clippy::unused_async)]
         async fn do_stuff_async() {}
 
         let s = async_stream(|mut emitter| async move {
@@ -405,7 +406,9 @@ mod test {
     async fn emit_with_select() {
         use tokio::select;
 
+        #[expect(clippy::unused_async)]
         async fn do_stuff_async() {}
+        #[expect(clippy::unused_async)]
         async fn more_async_work() {}
 
         let s = async_stream(|mut emitter| async move {
@@ -556,6 +559,7 @@ mod test {
     fn inner_try_stream() {
         use tokio::select;
 
+        #[expect(clippy::unused_async)]
         async fn do_stuff_async() {}
 
         let _ = async_stream(|mut emitter| async move {
