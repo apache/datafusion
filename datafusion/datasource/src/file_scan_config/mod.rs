@@ -2484,14 +2484,14 @@ mod tests {
     }
 
     #[test]
-    fn test_partition_statistics_filter() {
+    fn test_statistics_with_filter() {
         assert_num_rows_with_filter(Precision::Absent, Precision::Absent);
         assert_num_rows_with_filter(Precision::Exact(100), Precision::Inexact(100));
         assert_num_rows_with_filter(Precision::Inexact(100), Precision::Inexact(100));
         assert_num_rows_with_filter(Precision::Exact(0), Precision::Exact(0));
 
-        /// Creates a file scan with filter and checks the output num_rows stats, given the input
-        /// num_rows stats.
+        /// Creates a [`FileScanConfig`] with a filter and calls [`FileScanConfig::statistics`].
+        /// Then we check the output num_rows stats, given the input num_rows stats.
         fn assert_num_rows_with_filter(
             input_num_rows: Precision<usize>,
             expected_num_rows: Precision<usize>,
