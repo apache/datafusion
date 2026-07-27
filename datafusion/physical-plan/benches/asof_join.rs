@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Criterion benchmarks for the pre-sorted ASOF join kernel.
+//! Criterion benchmarks for the pre-sorted broadcast ASOF join kernel.
 
 use std::sync::Arc;
 
@@ -128,8 +128,22 @@ fn build_sorted_batches(
     batches
 }
 
-fn make_exec(batches: &[RecordBatch], schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
-    TestMemoryExec::try_new_exec(&[batches.to_vec()], Arc::clone(schema), None).unwrap()
+fn partition_batches(
+    batches: &[RecordBatch],
+    partition_count: usize,
+) -> Vec<Vec<RecordBatch>> {
+    let mut partitions = vec![Vec::new(); partition_count];
+    for (index, batch) in batches.iter().enumerate() {
+        partitions[index % partition_count].push(batch.clone());
+    }
+    partitions
+}
+
+fn make_exec(
+    partitions: &[Vec<RecordBatch>],
+    schema: &SchemaRef,
+) -> Arc<dyn ExecutionPlan> {
+    TestMemoryExec::try_new_exec(partitions, Arc::clone(schema), None).unwrap()
 }
 
 fn do_join(
@@ -177,16 +191,25 @@ fn bench_asof_join(c: &mut Criterion) {
             build_sorted_batches(num_rows, num_groups, 1, payload, &schema);
         let right_batches =
             build_sorted_batches(num_rows, num_groups, 0, payload, &schema);
-        group.bench_function(
-            BenchmarkId::new(payload.name(), format!("{num_rows}_rows_10_per_key")),
-            |b| {
-                b.iter(|| {
-                    let left = make_exec(&left_batches, &schema);
-                    let right = make_exec(&right_batches, &schema);
-                    do_join(left, right, &rt)
-                })
-            },
-        );
+        let right_partitions = vec![right_batches];
+        for left_partition_count in [1, 4] {
+            let left_partitions = partition_batches(&left_batches, left_partition_count);
+            group.bench_function(
+                BenchmarkId::new(
+                    payload.name(),
+                    format!(
+                        "{num_rows}_rows_10_per_key_{left_partition_count}_left_partitions"
+                    ),
+                ),
+                |b| {
+                    b.iter(|| {
+                        let left = make_exec(&left_partitions, &schema);
+                        let right = make_exec(&right_partitions, &schema);
+                        do_join(left, right, &rt)
+                    })
+                },
+            );
+        }
     }
 
     group.finish();
