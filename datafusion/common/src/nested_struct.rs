@@ -381,8 +381,7 @@ fn cast_map_column(
     let needs_compaction = has_unreachable_entries
         || source_map.offsets().has_non_empty_nulls(source_map.nulls());
     let compacted_map = if needs_compaction {
-        let indices = UInt64Array::from_iter_values(0..source_map.len() as u64);
-        Some(take(source_map, &indices, None)?.as_map().clone())
+        Some(compact_map_entries(source_map)?)
     } else {
         None
     };
@@ -406,6 +405,18 @@ fn cast_map_column(
         source_map.nulls().cloned(),
         target_sorted,
     )?))
+}
+
+/// Returns an equivalent MapArray whose entries contain only values reachable
+/// from visible Map rows.
+///
+/// Arrow Map arrays can contain unreachable entries after slicing, or entries
+/// hidden behind null parent rows. An identity `take` rebuilds the Map through
+/// Arrow's selection kernel, normalizing offsets and dropping those unreachable
+/// child entries before recursive key/value casts are applied.
+fn compact_map_entries(map: &MapArray) -> Result<MapArray> {
+    let indices = UInt64Array::from_iter_values(0..map.len() as u64);
+    Ok(take(map, &indices, None)?.as_map().clone())
 }
 
 fn cast_dictionary_column(
@@ -564,10 +575,8 @@ fn validate_map_compatibility<'a>(
     target_entries: &'a Field,
     target_sorted: bool,
 ) -> Result<(&'a FieldRef, &'a FieldRef)> {
-    if !source_sorted && target_sorted {
-        return _plan_err!(
-            "Cannot change Map sorted flag from unsorted to sorted during schema adaptation"
-        );
+    if source_sorted != target_sorted {
+        return _plan_err!("Cannot change Map sorted flag during schema adaptation");
     }
     let (source_key, source_value) = validate_map_entries_field(source_entries)?;
     let (target_key, target_value) = validate_map_entries_field(target_entries)?;
@@ -643,20 +652,43 @@ fn validate_map_key_data_type(
             }
             Ok(())
         }
-        (DataType::Int8, DataType::Int16 | DataType::Int32 | DataType::Int64)
-        | (DataType::Int16, DataType::Int32 | DataType::Int64)
-        | (DataType::Int32, DataType::Int64)
-        | (DataType::UInt8, DataType::UInt16 | DataType::UInt32 | DataType::UInt64)
-        | (DataType::UInt16, DataType::UInt32 | DataType::UInt64)
-        | (DataType::UInt32, DataType::UInt64)
-        | (DataType::Utf8, DataType::LargeUtf8 | DataType::Utf8View)
-        | (DataType::Binary, DataType::LargeBinary | DataType::BinaryView) => Ok(()),
+        _ if is_injective_map_key_cast(source_type, target_type) => Ok(()),
         _ => _plan_err!(
             "Cannot safely evolve Map key type from {} to {}",
             source_type,
             target_type
         ),
     }
+}
+
+/// Returns true when casting a Map key from `source_type` to `target_type` is
+/// known to preserve key identity.
+///
+/// Keep this list conservative. Map keys define equality/lookup identity, so
+/// only representation widenings that cannot merge distinct source keys belong
+/// here. Other Arrow-supported casts, including decimal/timestamp widening and
+/// dictionaries, should stay rejected until their identity semantics are
+/// deliberately reviewed.
+fn is_injective_map_key_cast(source_type: &DataType, target_type: &DataType) -> bool {
+    matches!(
+        (source_type, target_type),
+        (
+            DataType::Int8,
+            DataType::Int16 | DataType::Int32 | DataType::Int64
+        ) | (DataType::Int16, DataType::Int32 | DataType::Int64)
+            | (DataType::Int32, DataType::Int64)
+            | (
+                DataType::UInt8,
+                DataType::UInt16 | DataType::UInt32 | DataType::UInt64
+            )
+            | (DataType::UInt16, DataType::UInt32 | DataType::UInt64)
+            | (DataType::UInt32, DataType::UInt64)
+            | (DataType::Utf8, DataType::LargeUtf8 | DataType::Utf8View)
+            | (
+                DataType::Binary,
+                DataType::LargeBinary | DataType::BinaryView
+            )
+    )
 }
 
 fn validate_map_entries_field(entries: &Field) -> Result<(&FieldRef, &FieldRef)> {
@@ -691,8 +723,8 @@ fn validate_map_entries_field(entries: &Field) -> Result<(&FieldRef, &FieldRef)>
 ///
 /// Unsorted Struct keys may add nullable fields and use only injective primitive
 /// widening casts, but may not remove source fields. Sorted Maps require an
-/// unchanged key type. Map entries and keys must remain non-nullable. A sorted
-/// source may become unsorted, but an unsorted source cannot become sorted.
+/// unchanged key type. Map entries and keys must remain non-nullable. Source
+/// and target sorted flags must match.
 pub fn validate_data_type_compatibility(
     field_name: &str,
     source_type: &DataType,
@@ -743,15 +775,20 @@ pub fn validate_data_type_compatibility(
 }
 
 /// Returns true if casting from `source_type` to `target_type` requires
-/// name-based nested struct casting logic, rather than Arrow's standard cast.
+/// DataFusion's specialized nested/container casting logic rather than Arrow's
+/// standard cast.
 ///
 /// This is the case when both types are struct types, or both are the same
 /// container type (List, LargeList, equal-width FixedSizeList, ListView,
 /// LargeListView, Map, Dictionary) wrapping types that recursively contain structs.
 ///
-/// For maps, recursion includes both the key and value fields of the entries struct.
+/// Maps are always Struct-backed: their entries field is a Struct containing key
+/// and value children. Therefore a compatible Map-to-Map adaptation can return
+/// true even when the user-visible key and value types are primitive. This
+/// deliberately routes Map adaptation through [`cast_map_column`] so key/value
+/// semantics, sorted flags, and entry compaction are enforced.
 ///
-/// Use this predicate at both planning time (to decide whether to apply struct
+/// Use this predicate at both planning time (to decide whether to apply nested
 /// compatibility validation) and execution time (to decide whether to route
 /// through [`cast_column`] instead of Arrow's generic cast).
 pub fn requires_nested_struct_cast(
@@ -1783,7 +1820,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sorted_map_value_struct_schema_evolution_to_unsorted() {
+    fn test_sorted_map_value_struct_schema_evolution_to_unsorted_rejected() {
         let source_col = struct_map_array_with_sorted(true);
         let target_type = map_type_with_entry_names(
             struct_type(vec![
@@ -1799,24 +1836,11 @@ mod tests {
             false,
         );
 
-        assert!(
-            validate_data_type_compatibility(
-                "map_col",
-                source_col.data_type(),
-                &target_type
-            )
-            .is_ok()
+        assert_map_planning_runtime_error(
+            &source_col,
+            &target_type,
+            "Cannot change Map sorted flag",
         );
-        let result =
-            cast_column(&source_col, &target_type, &DEFAULT_CAST_OPTIONS).unwrap();
-        assert_eq!(result.data_type(), &target_type);
-        let map = result.as_any().downcast_ref::<MapArray>().unwrap();
-        let keys = map.keys().as_struct();
-        assert_eq!(get_column_as!(keys, "id", Int32Array).value(0), 1);
-        assert!(get_column_as!(keys, "label", StringArray).is_null(0));
-        let values = map.values().as_struct();
-        assert_eq!(get_column_as!(values, "amount", Int64Array).value(0), 10);
-        assert!(get_column_as!(values, "currency", StringArray).is_null(0));
     }
 
     #[test]
