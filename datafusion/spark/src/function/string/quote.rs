@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, ArrayRef, OffsetSizeTrait, StringBuilder};
+use arrow::array::{ArrayRef, OffsetSizeTrait, StringBuilder};
 use arrow::datatypes::DataType;
 use datafusion::logical_expr::{Coercion, ColumnarValue, Signature, TypeSignatureClass};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
@@ -89,15 +89,22 @@ fn spark_quote_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
 
 fn quote_array<T: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
     let str_array = as_generic_string_array::<T>(array)?;
-    Ok(quote_impl(str_array.iter(), str_array.value_data().len()))
+    // Slicing an array keeps the whole value buffer and narrows only the
+    // offsets, so measure the data through the offsets rather than through
+    // `value_data()`.
+    let offsets = str_array.value_offsets();
+    let data_len = match (offsets.first(), offsets.last()) {
+        (Some(first), Some(last)) => last.as_usize() - first.as_usize(),
+        _ => 0,
+    };
+    Ok(quote_impl(str_array.iter(), data_len))
 }
 
 fn quote_view(str_view: &ArrayRef) -> Result<ArrayRef> {
     let str_array = as_string_view_array(str_view)?;
-    Ok(quote_impl(
-        str_array.iter(),
-        str_array.get_buffer_memory_size(),
-    ))
+    // `total_bytes_len` walks the (sliced) views and counts inlined values,
+    // unlike the buffer capacities reported by `get_buffer_memory_size`.
+    Ok(quote_impl(str_array.iter(), str_array.total_bytes_len()))
 }
 
 const QUOTE_CHAR: char = '\'';
