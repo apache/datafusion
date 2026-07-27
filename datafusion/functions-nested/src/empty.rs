@@ -123,7 +123,6 @@ fn array_empty_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 fn general_array_empty<O: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
     let result = as_generic_list_array::<O>(array)?;
-    // No nulls, just look at the offsets
     let is_empty_iter = result.offsets().lengths().map(|n| n == 0);
     // SAFETY: this is safe since the iterator lengths is exact size and
     // trusted - it maps over fixed known number of elements
