@@ -145,7 +145,7 @@ impl Debug for CustomDataSource {
 }
 
 impl CustomDataSource {
-    pub(crate) async fn create_physical_plan(
+    pub(crate) fn create_physical_plan(
         &self,
         projections: Option<&Vec<usize>>,
         schema: SchemaRef,
@@ -207,7 +207,7 @@ impl TableProvider for CustomDataSource {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        return self.create_physical_plan(projection, self.schema()).await;
+        self.create_physical_plan(projection, self.schema())
     }
 }
 

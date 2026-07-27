@@ -150,7 +150,7 @@ impl TestParquetFile {
     /// ```
     ///
     /// Otherwise if `maybe_filter` is None, return just a `DataSourceExec`
-    pub async fn create_scan(
+    pub fn create_scan(
         &self,
         ctx: &SessionContext,
         maybe_filter: Option<Expr>,
