@@ -2491,7 +2491,7 @@ mod tests {
         assert_num_rows_with_filter(Precision::Exact(0), Precision::Exact(0));
 
         /// Creates a [`FileScanConfig`] with a filter and calls [`FileScanConfig::statistics`].
-        /// Then we check the output num_rows stats, given the input num_rows stats.
+        /// Then the function checks the output num_rows stats, given the input num_rows stats.
         fn assert_num_rows_with_filter(
             input_num_rows: Precision<usize>,
             expected_num_rows: Precision<usize>,
