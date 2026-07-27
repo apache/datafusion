@@ -23,12 +23,11 @@ use arrow::{
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion::prelude::SessionContext;
 use datafusion::{datasource::MemTable, error::Result};
-use futures::executor::block_on;
 use std::hint::black_box;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-async fn query(ctx: &SessionContext, rt: &Runtime, sql: &str) {
+fn query(ctx: &SessionContext, rt: &Runtime, sql: &str) {
     // execute the query
     let df = rt.block_on(ctx.sql(sql)).unwrap();
     black_box(rt.block_on(df.collect()).unwrap());
@@ -71,28 +70,28 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("filter_array", |b| {
         let ctx = create_context(array_len, batch_size).unwrap();
-        b.iter(|| block_on(query(&ctx, &rt, "select f32, f64 from t where f32 >= f64")))
+        b.iter(|| query(&ctx, &rt, "select f32, f64 from t where f32 >= f64"))
     });
 
     c.bench_function("filter_scalar", |b| {
         let ctx = create_context(array_len, batch_size).unwrap();
         b.iter(|| {
-            block_on(query(
+            query(
                 &ctx,
                 &rt,
                 "select f32, f64 from t where f32 >= 250 and f64 > 250",
-            ))
+            )
         })
     });
 
     c.bench_function("filter_scalar in list", |b| {
         let ctx = create_context(array_len, batch_size).unwrap();
         b.iter(|| {
-            block_on(query(
+            query(
                 &ctx,
                 &rt,
                 "select f32, f64 from t where f32 in (10, 20, 30, 40)",
-            ))
+            )
         })
     });
 }

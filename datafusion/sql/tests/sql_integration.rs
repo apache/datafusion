@@ -1772,6 +1772,81 @@ fn select_simple_aggregate_with_groupby_position_out_of_range() {
 }
 
 #[test]
+fn select_nested_aggregate() {
+    // https://github.com/apache/datafusion/issues/23812
+    let err = logical_plan("SELECT sum(sum(age)) FROM person")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Aggregate function calls cannot be nested: 'sum(person.age)' is nested inside 'sum(sum(person.age))'"
+    );
+
+    let err = logical_plan("SELECT state, sum(count(age)) FROM person GROUP BY state")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Aggregate function calls cannot be nested: 'count(person.age)' is nested inside 'sum(count(person.age))'"
+    );
+
+    let err =
+        logical_plan("SELECT state FROM person GROUP BY state HAVING sum(sum(age)) > 0")
+            .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Aggregate function calls cannot be nested: 'sum(person.age)' is nested inside 'sum(sum(person.age))'"
+    );
+}
+
+#[test]
+fn select_window_function_inside_aggregate() {
+    // https://github.com/apache/datafusion/issues/23812
+    let err = logical_plan("SELECT sum(sum(age) OVER ()) FROM person")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Aggregate function calls cannot contain window function calls: 'sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is nested inside 'sum(sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)'"
+    );
+}
+
+#[test]
+fn select_nested_window_function() {
+    // https://github.com/apache/datafusion/issues/23812
+    let err = logical_plan("SELECT sum(sum(age) OVER ()) OVER () FROM person")
+        .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls cannot be nested: 'sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is nested inside 'sum(sum(person.age) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+    );
+
+    let err = logical_plan(
+        "SELECT rank() OVER (ORDER BY rank() OVER (ORDER BY age)) FROM person",
+    )
+    .expect_err("query should have failed");
+    assert_snapshot!(
+        err.strip_backtrace(),
+        @"Error during planning: Window function calls cannot be nested: 'rank() ORDER BY [person.age ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW' is nested inside 'rank() ORDER BY [rank() ORDER BY [person.age ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW'"
+    );
+}
+
+#[test]
+fn select_aggregate_inside_window_function() {
+    // an aggregate as the argument of a window function is legal: the window
+    // function is evaluated on top of the aggregate
+    let plan =
+        logical_plan("SELECT state, sum(sum(age)) OVER () FROM person GROUP BY state")
+            .unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: person.state, sum(sum(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+      WindowAggr: windowExpr=[[sum(sum(person.age)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+        Aggregate: groupBy=[[person.state]], aggr=[[sum(person.age)]]
+          TableScan: person
+    "
+    );
+}
+
+#[test]
 fn select_simple_aggregate_with_groupby_can_use_alias() {
     let plan =
         logical_plan("SELECT state AS a, MIN(age) AS b FROM person GROUP BY a").unwrap();
