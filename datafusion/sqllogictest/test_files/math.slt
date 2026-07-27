@@ -1109,6 +1109,12 @@ SELECT log(arrow_cast(2.5, 'Float16'), arrow_cast(10.9, 'Float16')), arrow_typeo
 ----
 2.6074219 Float16
 
+# Unary Float16 log uses a Float16 default base.
+query RT
+SELECT log(arrow_cast(100.0, 'Float16')), arrow_typeof(log(arrow_cast(100.0, 'Float16')));
+----
+2 Float16
+
 query RT
 SELECT log(2.5::float, 10.9::float), arrow_typeof(log(2.5::float, 10.9::float));
 ----

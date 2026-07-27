@@ -264,6 +264,9 @@ impl ScalarUDFImpl for LogFunc {
                 .cast_to(args.return_type(), None);
         }
 
+        // Keep execution aligned with the type resolved during planning.
+        let target = args.return_type().clone();
+
         let (base, value) = if args.args.len() == 2 {
             (args.args[0].clone(), &args.args[1])
         } else {
@@ -277,10 +280,6 @@ impl ScalarUDFImpl for LogFunc {
 
         let output: ArrayRef = match value.data_type() {
             DataType::Float16 | DataType::Float32 | DataType::Float64 => {
-                // Compute in the widest float of base and value so a wider base
-                // is not narrowed to the value's type (issue #22581).
-                let target =
-                    log_float_type(&[base.data_type(), value.data_type().clone()]);
                 let value = if value.data_type() == &target {
                     value
                 } else {
