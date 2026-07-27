@@ -970,9 +970,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
 
         assert_eq_or_internal_err!(states.len(), 1, "expects single state");
 
-        // The DISTINCT state is `List<value>`. Partial accumulators ship the
-        // set of live values, not multiplicities. Re-ingesting them here is
-        // correct: `evaluate` reads only the map keys.
+        // The DISTINCT state is `List<value>`.
         states[0]
             .as_list::<i32>()
             .iter()
@@ -1682,9 +1680,6 @@ mod tests {
         acc2.update_batch(&[string_list_data([vec!["e", "f", "g"]])])?;
         acc1 = merge(acc1, acc2)?;
 
-        // The GroupValuesRows-based implementation uses a contiguous Rows
-        // buffer + HashTable instead of individual ScalarValue allocations,
-        // so the reported size differs from the previous implementation (was 1684).
         assert_eq!(acc1.size(), 2268);
 
         Ok(())
