@@ -27,7 +27,7 @@ use arrow::array::{
     UInt32Array, new_empty_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-use arrow::compute::{SortOptions, filter};
+use arrow::compute::{SortOptions, cast, filter};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use arrow::row::{Row, RowConverter, Rows, SortField};
 
@@ -1002,7 +1002,10 @@ impl Accumulator for DistinctArrayAggAccumulator {
             group_values,
             converter,
             ..
-        } = self.state.as_ref().expect("state must be set when map is non-empty");
+        } = self
+            .state
+            .as_ref()
+            .expect("state must be set when map is non-empty");
 
         // Collect the group indices of all live entries.
         let mut live_indices: Vec<usize> =
@@ -1020,8 +1023,19 @@ impl Accumulator for DistinctArrayAggAccumulator {
             live_indices.iter().map(|&i| group_values.row(i)).collect();
         let arrays = converter.convert_rows(rows)?;
 
-        let values: Vec<ScalarValue> = (0..arrays[0].len())
-            .map(|i| ScalarValue::try_from_array(arrays[0].as_ref(), i))
+        // `convert_rows` always returns the physical (non-dictionary) type.
+        // Cast back to the declared logical type when they differ so that
+        // e.g. Dictionary columns round-trip correctly through the RowConverter.
+        let decoded = if arrays[0].data_type() != &self.datatype
+            && matches!(self.datatype, DataType::Dictionary(_, _))
+        {
+            cast(arrays[0].as_ref(), &self.datatype)?
+        } else {
+            Arc::clone(&arrays[0])
+        };
+
+        let values: Vec<ScalarValue> = (0..decoded.len())
+            .map(|i| ScalarValue::try_from_array(decoded.as_ref(), i))
             .collect::<Result<_>>()?;
 
         let arr = ScalarValue::new_list(&values, &self.datatype, true);
@@ -1112,7 +1126,9 @@ impl Accumulator for DistinctArrayAggAccumulator {
             + self
                 .state
                 .as_ref()
-                .map(|s| s.group_values.size() + s.rows_buffer.size() + s.converter.size())
+                .map(|s| {
+                    s.group_values.size() + s.rows_buffer.size() + s.converter.size()
+                })
                 .unwrap_or(0)
             + self.map_size
             + self.counts.capacity() * size_of::<u64>()
@@ -2823,6 +2839,39 @@ mod tests {
         values.sort_unstable_by(|a, b| a.total_cmp(b));
 
         assert_eq!(values, vec![1.0f64, 2.5, 3.75, 4.0]);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_array_agg_dictionary_preserves_type() -> Result<()> {
+        use arrow::array::{DictionaryArray, Int32Array, StringArray};
+
+        // Dictionary(Int32, Utf8) input with duplicates.
+        let keys = Int32Array::from(vec![0, 1, 0, 2, 1]); // "a", "b", "a", "c", "b"
+        let values = StringArray::from(vec!["a", "b", "c"]);
+        let dict: ArrayRef = Arc::new(DictionaryArray::new(keys, Arc::new(values)));
+
+        let datatype =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let mut acc = DistinctArrayAggAccumulator::try_new(&datatype, None, false)?;
+        acc.update_batch(&[dict])?;
+
+        let result = acc.evaluate()?;
+        let ScalarValue::List(arr) = &result else {
+            panic!("expected ScalarValue::List, got {result:?}");
+        };
+
+        // The element type of the returned list must stay Dictionary(Int32, Utf8),
+        // not be silently widened to Utf8.
+        assert_eq!(
+            arr.values().data_type(),
+            &datatype,
+            "element type must be Dictionary(Int32, Utf8), got {}",
+            arr.values().data_type()
+        );
+
+        // There should be exactly 3 distinct values.
+        assert_eq!(arr.value(0).len(), 3);
         Ok(())
     }
 
