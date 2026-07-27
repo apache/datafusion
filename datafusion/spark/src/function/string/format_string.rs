@@ -2376,7 +2376,7 @@ mod tests {
     use super::*;
     use crate::function::utils::test::test_scalar_function;
     use arrow::array::StringArray;
-    use arrow::datatypes::DataType::Utf8;
+    use arrow::datatypes::{DataType::Utf8, i256};
 
     #[test]
     fn test_format_string_nullability() -> Result<()> {
@@ -2905,6 +2905,22 @@ mod tests {
             vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some("%(,.2f".to_string()))),
                 ColumnarValue::Scalar(ScalarValue::Decimal128(Some(-123450), 10, 2)),
+            ],
+            Ok(Some("(1,234.50)")),
+            &str,
+            Utf8,
+            StringArray
+        );
+
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%(,.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal256(
+                    Some(i256::from(-123450)),
+                    10,
+                    2,
+                )),
             ],
             Ok(Some("(1,234.50)")),
             &str,
