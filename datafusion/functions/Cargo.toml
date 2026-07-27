@@ -407,4 +407,4 @@ required-features = ["math_expressions"]
 [[bench]]
 harness = false
 name = "dictionary_encoding"
-required-features = ["string_expressions"]
+required-features = ["string_expressions", "unicode_expressions"]

@@ -487,6 +487,11 @@ SELECT reverse(arrow_cast('abcde', 'Dictionary(Int32, Utf8)'))
 edcba
 
 query T
+SELECT arrow_typeof(reverse(arrow_cast('abcde', 'Dictionary(Int32, Utf8)')))
+----
+Dictionary(Int32, Utf8)
+
+query T
 SELECT reverse('loẅks')
 ----
 sk̈wol
