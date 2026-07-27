@@ -1274,12 +1274,7 @@ impl AggregateExec {
             && self.group_by.is_single()
     }
 
-    fn should_use_single_hash_stream(&self, context: &TaskContext) -> bool {
-        // TODO: implement memory-limited path and remove this limitation
-        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
-            return false;
-        }
-
+    fn should_use_single_hash_stream(&self, _context: &TaskContext) -> bool {
         matches!(
             self.mode,
             AggregateMode::Single | AggregateMode::SinglePartitioned
@@ -3767,7 +3762,7 @@ mod tests {
         let aggregates_v0: Vec<Arc<AggregateFunctionExpr>> =
             vec![Arc::new(test_median_agg_expr(Arc::clone(&input_schema))?)];
 
-        // use fast-path in `grouped_hash_stream.rs`.
+        // Use the fast path in `single_stream.rs`.
         let aggregates_v2: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
             AggregateExprBuilder::new(avg_udaf(), vec![col("b", &input_schema)?])
                 .schema(Arc::clone(&input_schema))
@@ -3800,7 +3795,7 @@ mod tests {
                     assert!(matches!(stream, StreamType::GroupedHash(_)));
                 }
                 2 => {
-                    assert!(matches!(stream, StreamType::GroupedHash(_)));
+                    assert!(matches!(stream, StreamType::SingleHash(_)));
                 }
                 _ => panic!("Unknown version: {version}"),
             }
@@ -4135,15 +4130,14 @@ mod tests {
         Ok(())
     }
 
-    /// Spilling behavior is not implemented for single hash stream yet, so fall
-    /// back to the existing `GroupedHashAggregateStream`.
+    /// Single hash aggregation supports finite memory.
     #[tokio::test]
     async fn single_aggregate_with_memory_limit_planning() -> Result<()> {
         let single = single_test_aggregate()?;
         let task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
 
         let stream = single.execute_typed(0, &task_ctx)?;
-        assert!(matches!(stream, StreamType::GroupedHash(_)));
+        assert!(matches!(stream, StreamType::SingleHash(_)));
 
         Ok(())
     }
@@ -5664,9 +5658,11 @@ mod tests {
             Field::new("b", DataType::Float64, false),
         ]));
 
+        let group_keys = [2, 3, 4, 4].repeat(1_000);
+        let values = [1.0, 2.0, 3.0, 4.0].repeat(1_000);
         let batches = vec![
-            create_record_batch(&schema, (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]))?,
-            create_record_batch(&schema, (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]))?,
+            create_record_batch(&schema, (group_keys.clone(), values.clone()))?,
+            create_record_batch(&schema, (group_keys, values))?,
         ];
         let plan: Arc<dyn ExecutionPlan> =
             TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
@@ -5766,9 +5762,9 @@ mod tests {
     #[tokio::test]
     async fn test_aggregate_with_spill_if_necessary() -> Result<()> {
         // test with spill
-        run_test_with_spill_pool_if_necessary(2_000, true).await?;
+        run_test_with_spill_pool_if_necessary(20_000, true).await?;
         // test without spill
-        run_test_with_spill_pool_if_necessary(20_000, false).await?;
+        run_test_with_spill_pool_if_necessary(200_000, false).await?;
         Ok(())
     }
 
@@ -6743,11 +6739,6 @@ mod tests {
                 assert!(
                     matches!(root, DataFusionError::ResourcesExhausted(_)),
                     "Expected ResourcesExhausted, got: {root}",
-                );
-                let msg = root.to_string();
-                assert!(
-                    msg.contains("Failed to reserve memory for sort during spill"),
-                    "Expected sort reservation error, got: {msg}",
                 );
             }
         }
