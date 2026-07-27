@@ -74,8 +74,9 @@ use datafusion_common::format::{
 };
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
-    Constraints, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, SplitPoint,
-    TableReference, internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    SplitPoint, TableReference, internal_datafusion_err, internal_err, not_impl_err,
+    plan_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::CopyTo;
@@ -90,7 +91,7 @@ use datafusion_expr::logical_plan::{
     ExplainOption, Extension, UserDefinedLogicalNodeCore,
 };
 use datafusion_expr::{
-    Accumulator, AggregateUDF, ColumnarValue, DmlStatement, ExprFunctionExt,
+    Accumulator, AggregateUDF, AsOfMatch, ColumnarValue, DmlStatement, ExprFunctionExt,
     ExprSchemable, HigherOrderUDF, LimitEffect, Literal, LogicalPlan, LogicalPlanBuilder,
     Operator, PartitionEvaluator, RangePartitioning, Repartition, ScalarUDF, Signature,
     TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
@@ -3789,14 +3790,16 @@ async fn roundtrip_asof_join() -> Result<()> {
     ctx.register_table("trades", Arc::new(EmptyTable::new(left_schema)))?;
     ctx.register_table("prices", Arc::new(EmptyTable::new(right_schema)))?;
 
-    for op in ["<", "<=", ">", ">="] {
-        let plan = ctx
-            .sql(&format!(
-                "SELECT * FROM trades t ASOF JOIN prices p \
-                 MATCH_CONDITION (t.ts {op} p.ts) USING (symbol)"
-            ))
-            .await?
-            .into_optimized_plan()?;
+    let left = ctx.table("trades").await?.into_optimized_plan()?;
+    let right = ctx.table("prices").await?.into_optimized_plan()?;
+    for op in [Operator::Lt, Operator::LtEq, Operator::Gt, Operator::GtEq] {
+        let plan = LogicalPlanBuilder::from(left.clone())
+            .asof_join_using(
+                right.clone(),
+                vec![Column::from_name("symbol")],
+                AsOfMatch::new(col("trades.ts"), op, col("prices.ts")),
+            )?
+            .build()?;
         let bytes = logical_plan_to_bytes(&plan)?;
         let round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
         assert_eq!(format!("{plan:?}"), format!("{round_trip:?}"));
