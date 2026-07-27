@@ -1531,6 +1531,19 @@ mod tests {
     }
 
     #[test]
+    fn test_trivial_last_value_merge_all_flags_false() -> Result<()> {
+        let mut acc = TrivialLastValueAccumulator::try_new(&DataType::Int64, false)?;
+        let states: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(vec![None, None])),
+            Arc::new(BooleanArray::from(vec![false, false])),
+        ];
+
+        acc.merge_batch(&states)?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(None));
+        Ok(())
+    }
+
+    #[test]
     fn test_first_group_acc() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, true),
