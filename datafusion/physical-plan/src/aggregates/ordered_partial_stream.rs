@@ -17,9 +17,7 @@
 
 //! Partial aggregate stream for ordered group input.
 
-use std::ops::ControlFlow;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -32,9 +30,9 @@ use super::AggregateExec;
 use super::aggregate_hash_table::{OrderedAggregateTable, PartialMarker};
 use crate::aggregates::AggregateMode;
 use crate::aggregates::order::GroupOrdering;
-use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput, SpillMetrics};
+use crate::metrics::{BaselineMetrics, MetricBuilder, SpillMetrics};
 use crate::stream::{EmptyRecordBatchStream, ObservedStream, RecordBatchStreamAdapter};
-use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metrics};
+use crate::{InputOrderMode, SendableRecordBatchStream, metrics};
 
 /// Partial aggregate stream for `InputOrderMode::Sorted` and
 /// `InputOrderMode::PartiallySorted`.
@@ -121,23 +119,6 @@ pub(crate) struct OrderedPartialAggregateStream {
     table: Option<OrderedAggregateTable<PartialMarker>>,
 }
 
-/// See comments at `poll_next()` for details.
-enum OrderedPartialAggregateState {
-    ReadingInput {
-        table: OrderedAggregateTable<PartialMarker>,
-    },
-    DrainingFinal {
-        table: OrderedAggregateTable<PartialMarker>,
-    },
-    Done,
-}
-
-type OrderedPartialAggregatePoll = Poll<Option<Result<RecordBatch>>>;
-type OrderedPartialAggregateStateTransition = ControlFlow<
-    (OrderedPartialAggregatePoll, OrderedPartialAggregateState),
-    OrderedPartialAggregateState,
->;
-
 impl OrderedPartialAggregateStream {
     pub fn new(
         agg: &AggregateExec,
@@ -178,7 +159,7 @@ impl OrderedPartialAggregateStream {
             reservation,
             baseline_metrics,
             reduction_factor,
-            table: Some(table)
+            table: Some(table),
         })
     }
 
@@ -232,16 +213,13 @@ impl OrderedPartialAggregateStream {
                 .take()
                 .expect("OrderedPartialAggregateStream state should not be None");
 
-            self.handle_reading_input(&mut table, &mut emitter)
-                .await?;
+            self.handle_reading_input(&mut table, &mut emitter).await?;
 
             // Input has exhausted, move to the final draining stage.
             self.close_input();
             table.input_done();
 
-            let last_batch = self
-                .handle_draining_final(&mut table, &mut emitter)
-                .await?;
+            let last_batch = self.handle_draining_final(&mut table, &mut emitter).await?;
 
             // Clear memory before emitting last batch so we don't have to wait for next poll to clear
             {
@@ -267,8 +245,6 @@ impl OrderedPartialAggregateStream {
     /// if the ordering proves any group is ready.
     ///
     /// See comments at `poll_next()` for details.
-    ///
-    /// Returns the next operator state with control flow decision.
     async fn handle_reading_input(
         &mut self,
         table: &mut OrderedAggregateTable<PartialMarker>,
@@ -285,14 +261,11 @@ impl OrderedPartialAggregateStream {
             table.aggregate_batch(&batch)?;
 
             // Check memory reservation. See function comments for details.
-            match self.resize_or_take_state_batch(table)? {
-                Some(batch) => {
-                    self.reduction_factor.add_part(batch.num_rows());
-                    drop(timer);
-                    emitter.emit(batch).await;
-                    continue;
-                }
-                None => {}
+            if let Some(batch) = self.resize_or_take_state_batch(table)? {
+                self.reduction_factor.add_part(batch.num_rows());
+                drop(timer);
+                emitter.emit(batch).await;
+                continue;
             }
 
             let Some(batch) = table.next_output_batch()? else {
@@ -351,9 +324,11 @@ impl OrderedPartialAggregateStream {
     /// `table.input_done()` has already made every remaining group safe to emit,
     /// so this state keeps draining until the table is empty.
     ///
+    /// Returns the last batch to emit so we can free all the state and memory before emitting,
+    /// and we won't need to hold while waiting for the next poll.
+    ///
     /// See comments at `poll_next()` for details.
     ///
-    /// Returns the last batch to emit so we can clear all the state before emitting so we dont need to hold while waiting for next poll to reset the state
     async fn handle_draining_final(
         &mut self,
         table: &mut OrderedAggregateTable<PartialMarker>,
@@ -377,19 +352,5 @@ impl OrderedPartialAggregateStream {
 
         // was empty
         Ok(None)
-    }
-
-    fn resize_reservation_for_state(
-        &mut self,
-        state: &OrderedPartialAggregateState,
-    ) -> Result<()> {
-        let new_size = match state {
-            OrderedPartialAggregateState::ReadingInput { table }
-            | OrderedPartialAggregateState::DrainingFinal { table } => {
-                table.memory_size()
-            }
-            OrderedPartialAggregateState::Done => 0,
-        };
-        self.reservation.try_resize(new_size)
     }
 }
