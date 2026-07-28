@@ -1104,6 +1104,33 @@ ORDER BY tags, timestamp;
 statement ok
 DROP TABLE median_window_test;
 
+# Regression: percentile_cont(DISTINCT ...) used to forward the extra
+# percentile-argument column into the distinct-values buffer (which asserts a
+# single input array), panicking on every distinct query. Plain aggregate:
+statement ok
+CREATE TABLE distinct_pct(id INT, x DOUBLE) AS VALUES
+  (1, 5), (2, 5), (3, 9);
+
+query R
+SELECT percentile_cont(DISTINCT x, 0.5) FROM distinct_pct;
+----
+7
+
+# Regression: distinct sliding-window percentile must count value multiplicity
+# on retract. Row 3's frame is {5, 9}; the row-1 `5` leaves the frame but the
+# row-2 `5` remains, so the distinct set is still {5, 9} (median 7), not {9}.
+query IR
+SELECT id, percentile_cont(DISTINCT x, 0.5)
+  OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM distinct_pct;
+----
+1 5
+2 5
+3 7
+
+statement ok
+DROP TABLE distinct_pct;
+
 query RT
 select approx_median(arrow_cast(col_f32, 'Float16')), arrow_typeof(approx_median(arrow_cast(col_f32, 'Float16'))) from median_table;
 ----
@@ -8046,6 +8073,23 @@ CREATE TABLE t1(v1 int);
 # issue: https://github.com/apache/datafusion/issues/12814
 statement error DataFusion error: Error during planning: Aggregate functions are not allowed in the WHERE clause. Consider using HAVING instead
 SELECT v1 FROM t1 WHERE ((count(v1) % 1) << 1) > 0;
+
+# issue: https://github.com/apache/datafusion/issues/11748
+query R
+SELECT AVG(v1) FROM t1 GROUP BY false HAVING false;
+----
+
+query R
+SELECT AVG(v1) FROM t1 GROUP BY false;
+----
+
+statement ok
+INSERT INTO t1 VALUES (1), (2), (3);
+
+query R
+SELECT AVG(v1) FROM t1 GROUP BY false;
+----
+2
 
 statement ok
 DROP TABLE t1;

@@ -381,7 +381,8 @@ impl AggregateUDFImpl for Max {
 
 #[derive(Debug)]
 pub struct SlidingMaxAccumulator {
-    max: ScalarValue,
+    /// Typed NULL returned when the window contains no non-null values
+    empty_value: ScalarValue,
     moving_max: MovingMax<ScalarValue>,
 }
 
@@ -389,9 +390,16 @@ impl SlidingMaxAccumulator {
     /// new max accumulator
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
-            max: ScalarValue::try_from(datatype)?,
+            empty_value: ScalarValue::try_from(datatype)?,
             moving_max: MovingMax::<ScalarValue>::new(),
         })
+    }
+
+    fn current_max(&self) -> ScalarValue {
+        match self.moving_max.max() {
+            Some(res) => res.clone(),
+            None => self.empty_value.clone(),
+        }
     }
 }
 
@@ -399,20 +407,21 @@ impl Accumulator for SlidingMaxAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         for idx in 0..values[0].len() {
             let val = ScalarValue::try_from_array(&values[0], idx)?;
-            self.moving_max.push(val);
-        }
-        if let Some(res) = self.moving_max.max() {
-            self.max = res.clone();
+            if !val.is_null() {
+                self.moving_max.push(val);
+            }
         }
         Ok(())
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        for _idx in 0..values[0].len() {
-            (self.moving_max).pop();
-        }
-        if let Some(res) = self.moving_max.max() {
-            self.max = res.clone();
+        // We assume that values are retracted in the order they were added, so
+        // the retracted values must be the oldest elements of `moving_max`.
+        // NULLs are never pushed, so be sure to only pop once per non-NULL
+        // value.
+        let valid_count = values[0].len() - values[0].logical_null_count();
+        for _ in 0..valid_count {
+            self.moving_max.pop();
         }
         Ok(())
     }
@@ -422,11 +431,11 @@ impl Accumulator for SlidingMaxAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.max.clone()])
+        Ok(vec![self.current_max()])
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(self.max.clone())
+        Ok(self.current_max())
     }
 
     fn supports_retract_batch(&self) -> bool {
@@ -434,8 +443,8 @@ impl Accumulator for SlidingMaxAccumulator {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) - size_of_val(&self.max)
-            + self.max.size()
+        size_of_val(self) - size_of_val(&self.empty_value)
+            + self.empty_value.size()
             + self.moving_max.heap_size(|sv| sv.size() - size_of_val(sv))
     }
 }
@@ -667,22 +676,30 @@ impl AggregateUDFImpl for Min {
 
 #[derive(Debug)]
 pub struct SlidingMinAccumulator {
-    min: ScalarValue,
+    /// Typed NULL returned when the window contains no non-null values
+    empty_value: ScalarValue,
     moving_min: MovingMin<ScalarValue>,
 }
 
 impl SlidingMinAccumulator {
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
-            min: ScalarValue::try_from(datatype)?,
+            empty_value: ScalarValue::try_from(datatype)?,
             moving_min: MovingMin::<ScalarValue>::new(),
         })
+    }
+
+    fn current_min(&self) -> ScalarValue {
+        match self.moving_min.min() {
+            Some(res) => res.clone(),
+            None => self.empty_value.clone(),
+        }
     }
 }
 
 impl Accumulator for SlidingMinAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.min.clone()])
+        Ok(vec![self.current_min()])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -692,21 +709,17 @@ impl Accumulator for SlidingMinAccumulator {
                 self.moving_min.push(val);
             }
         }
-        if let Some(res) = self.moving_min.min() {
-            self.min = res.clone();
-        }
         Ok(())
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        for idx in 0..values[0].len() {
-            let val = ScalarValue::try_from_array(&values[0], idx)?;
-            if !val.is_null() {
-                (self.moving_min).pop();
-            }
-        }
-        if let Some(res) = self.moving_min.min() {
-            self.min = res.clone();
+        // We assume that values are retracted in the order they were added, so
+        // the retracted values must be the oldest elements of `moving_min`.
+        // NULLs are never pushed, so be sure to only pop once per non-NULL
+        // value.
+        let valid_count = values[0].len() - values[0].logical_null_count();
+        for _ in 0..valid_count {
+            self.moving_min.pop();
         }
         Ok(())
     }
@@ -716,7 +729,7 @@ impl Accumulator for SlidingMinAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(self.min.clone())
+        Ok(self.current_min())
     }
 
     fn supports_retract_batch(&self) -> bool {
@@ -724,8 +737,8 @@ impl Accumulator for SlidingMinAccumulator {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) - size_of_val(&self.min)
-            + self.min.size()
+        size_of_val(self) - size_of_val(&self.empty_value)
+            + self.empty_value.size()
             + self.moving_min.heap_size(|sv| sv.size() - size_of_val(sv))
     }
 }
@@ -1190,6 +1203,58 @@ mod tests {
             res.push(*moving_max.max().unwrap());
         }
         assert_eq!(res, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_min_all_null_window() -> Result<()> {
+        let mut min_acc = SlidingMinAccumulator::try_new(&DataType::Int32)?;
+
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![Some(3), None]));
+        min_acc.update_batch(&[Arc::clone(&values)])?;
+        assert_eq!(min_acc.evaluate()?, ScalarValue::Int32(Some(3)));
+
+        // Retract `3`; the window now contains only the NULL
+        let retracted: ArrayRef = Arc::new(Int32Array::from(vec![Some(3)]));
+        min_acc.retract_batch(&[Arc::clone(&retracted)])?;
+        assert_eq!(min_acc.evaluate()?, ScalarValue::Int32(None));
+
+        // A subsequent non-null value must be picked up again
+        let update: ArrayRef = Arc::new(Int32Array::from(vec![Some(7)]));
+        min_acc.update_batch(&[Arc::clone(&update)])?;
+        assert_eq!(min_acc.evaluate()?, ScalarValue::Int32(Some(7)));
+
+        // Retracting the NULL row must not pop the remaining value
+        let null_row: ArrayRef = Arc::new(Int32Array::from(vec![None::<i32>]));
+        min_acc.retract_batch(&[Arc::clone(&null_row)])?;
+        assert_eq!(min_acc.evaluate()?, ScalarValue::Int32(Some(7)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_max_all_null_window() -> Result<()> {
+        let mut max_acc = SlidingMaxAccumulator::try_new(&DataType::Int32)?;
+
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![Some(3), None]));
+        max_acc.update_batch(&[Arc::clone(&values)])?;
+        assert_eq!(max_acc.evaluate()?, ScalarValue::Int32(Some(3)));
+
+        // Retract `3`; the window now contains only the NULL
+        let retracted: ArrayRef = Arc::new(Int32Array::from(vec![Some(3)]));
+        max_acc.retract_batch(&[Arc::clone(&retracted)])?;
+        assert_eq!(max_acc.evaluate()?, ScalarValue::Int32(None));
+
+        // A subsequent non-null value must be picked up again
+        let update: ArrayRef = Arc::new(Int32Array::from(vec![Some(7)]));
+        max_acc.update_batch(&[Arc::clone(&update)])?;
+        assert_eq!(max_acc.evaluate()?, ScalarValue::Int32(Some(7)));
+
+        // Retracting the NULL row must not disturb the remaining value
+        let null_row: ArrayRef = Arc::new(Int32Array::from(vec![None::<i32>]));
+        max_acc.retract_batch(&[Arc::clone(&null_row)])?;
+        assert_eq!(max_acc.evaluate()?, ScalarValue::Int32(Some(7)));
+
         Ok(())
     }
 
