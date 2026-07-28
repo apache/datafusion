@@ -1819,6 +1819,14 @@ impl PartitionedTopKRank {
 /// `RecordBatch`. `TieEntry` is reused verbatim from [`RankPartitionState`].
 struct DenseRankPartitionState {
     groups: HashMap<Vec<u8>, Vec<TieEntry>>,
+    /// Cached admission boundary: the largest tracked ob value once
+    /// `groups` is full. A `HashMap` is unordered, so finding it otherwise
+    /// costs an O(K) scan of the keys on *every* new distinct ob value —
+    /// O(N·K) overall on mostly-distinct input. Caching makes the common
+    /// "new ob is worse than the boundary → drop" path O(1); the O(K) scan
+    /// is paid only when the cache is stale (`None`) — after a fill or an
+    /// eviction changes the key set.
+    max_key: Option<Vec<u8>>,
 }
 
 impl DenseRankPartitionState {
@@ -1839,7 +1847,7 @@ impl DenseRankPartitionState {
                         .sum::<usize>()
             })
             .sum();
-        table_overhead + contents
+        table_overhead + contents + self.max_key.as_ref().map_or(0, |k| k.capacity())
     }
 }
 
@@ -1869,8 +1877,9 @@ impl DenseRankPartitionState {
 ///   new `TieEntry` (one entry per contributing batch).
 /// - `ob_key` new, `state.groups.len() < k` → insert the run as a new
 ///   group.
-/// - `ob_key` new, `state.groups.len() == k` → find the current max via
-///   an O(K) scan of `state.groups.keys()`:
+/// - `ob_key` new, `state.groups.len() == k` → the largest tracked ob
+///   value is the admission boundary, cached in `max_key` (recomputed via
+///   an O(K) scan of `state.groups.keys()` only when the cache is stale):
 ///   - `ob_key < max` → remove the max key (evict the entire max-key
 ///     group — up to many rows) and insert the run. The evicted group's
 ///     row count is added to the `row_replacements` metric.
@@ -2024,6 +2033,7 @@ impl PartitionedTopKDenseRank {
                     .entry(pk)
                     .or_insert_with(|| DenseRankPartitionState {
                         groups: HashMap::new(),
+                        max_key: None,
                     });
 
             // Bucket by ob key. `ob_runs` is a reused scratch map (taken
@@ -2061,22 +2071,30 @@ impl PartitionedTopKDenseRank {
                             batch_bytes: input_batch_bytes,
                         }],
                     );
+                    // A new distinct key may raise the boundary; drop the
+                    // cached max so it is recomputed on the next Case C.
+                    state.max_key = None;
                     continue;
                 }
 
-                // Case C: new ob, at K distinct keys. Find the current
-                // max (K-th distinct-best) via an O(K) scan — cold path.
-                // Scoped so the immutable borrow ends before mutation.
-                let evict_key: Option<Vec<u8>> = {
-                    let max_key = state
-                        .groups
-                        .keys()
-                        .map(|key| key.as_slice())
-                        .max()
-                        .expect("state.groups has k >= 1 keys");
-                    (ob_key.as_slice() < max_key).then(|| max_key.to_vec())
-                };
-                if let Some(evicted_key) = evict_key {
+                // Case C: new ob, at K distinct keys. The largest tracked
+                // ob value is the admission boundary; it is cached in
+                // `max_key` and recomputed via an O(K) scan only when the
+                // cache is stale, so the common "ob >= max → drop" path is
+                // O(1). Scoped so the immutable borrow ends before mutation.
+                if state.max_key.is_none() {
+                    state.max_key = state.groups.keys().max().cloned();
+                }
+                let is_smaller = state
+                    .max_key
+                    .as_deref()
+                    .map(|max_key| ob_key.as_slice() < max_key)
+                    .expect("state.groups has k >= 1 keys");
+
+                if is_smaller {
+                    // Evict the entire max-key group and drop the cached
+                    // max (recomputed on the next Case C).
+                    let evicted_key = state.max_key.take().expect("max key present");
                     let evicted =
                         state.groups.remove(&evicted_key).expect("max key present");
                     replacements +=
@@ -2139,7 +2157,7 @@ impl PartitionedTopKDenseRank {
         let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), batch_size);
 
         for pk in sorted_pks {
-            let DenseRankPartitionState { groups } =
+            let DenseRankPartitionState { groups, max_key: _ } =
                 states.remove(&pk).expect("key from states.keys()");
             // HashMap is unordered — sort the <= K distinct ob keys so
             // rows emit ascending (byte-comparable encoding == sort order).

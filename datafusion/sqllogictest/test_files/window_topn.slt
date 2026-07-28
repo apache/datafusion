@@ -329,8 +329,114 @@ physical_plan
 04)------SortExec: expr=[pk@1 ASC NULLS LAST, val@2 ASC NULLS LAST], preserve_partitioning=[false]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
+# Sibling safety: an aggregate sibling (SUM) is computed over the pruned
+# input, so the rule must NOT fire even though the filter is on ROW_NUMBER.
+# SUM over the default RANGE frame includes tie-peers that pruning would
+# drop, giving a wrong sum. The plan keeps SortExec + FilterExec — no
+# PartitionedTopKExec.
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *,
+    ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn,
+    SUM(val) OVER (PARTITION BY pk ORDER BY val) as running_sum
+  FROM window_topn_t
+) WHERE rn <= 3;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn, sum(window_topn_t.val) PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as running_sum]
+02)--FilterExec: row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 <= 3
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(window_topn_t.val) PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(window_topn_t.val) PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[pk@1 ASC NULLS LAST, val@2 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Sibling safety: a LEAD sibling reads following (pruned) rows, so the
+# rule must NOT fire — the boundary row's LEAD would resolve to a pruned
+# row. The plan keeps SortExec + FilterExec.
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT *,
+    ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn,
+    LEAD(val) OVER (PARTITION BY pk ORDER BY val) as next_val
+  FROM window_topn_t
+) WHERE rn <= 3;
+----
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, pk@1 as pk, val@2 as val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn, lead(window_topn_t.val) PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as next_val]
+02)--FilterExec: row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 <= 3
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(window_topn_t.val) PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lead(window_topn_t.val) PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int32 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[pk@1 ASC NULLS LAST, val@2 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
 statement ok
 SET datafusion.explain.physical_plan_only = false;
+
+# Sibling safety (correctness): LEAD reads following rows, so if the rule
+# fired, the pruned input would give a wrong LEAD at the retained boundary
+# — each rn=2 row's next_val would become NULL instead of the (pruned)
+# rn=3 row's value. The guard keeps the normal plan, so LEAD sees the full
+# partition and next_val is correct (30 / 25 / 100 for the rn=2 rows).
+query IIIII rowsort
+SELECT id, pk, val, rn, next_val FROM (
+  SELECT *,
+    ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn,
+    LEAD(val)    OVER (PARTITION BY pk ORDER BY val) as next_val
+  FROM window_topn_t
+) WHERE rn <= 2;
+----
+1 1 10 1 20
+10 3 75 2 100
+2 1 20 2 30
+5 2 5 1 15
+6 2 15 2 25
+9 3 50 1 75
+
+# A tie table for sibling-safety correctness: pk=1 has three peers at
+# val=5, one 10, one 20 (row_number 1..5; rank 1,1,1,4,5; dense_rank
+# 1,1,1,2,3).
+statement ok
+CREATE TABLE window_topn_sib_t (id INT, pk INT, val INT) AS VALUES
+  (1, 1, 5),
+  (2, 1, 5),
+  (3, 1, 5),
+  (4, 1, 10),
+  (5, 1, 20);
+
+# SUM sibling (correctness): fetch=2 but there are three peers at val=5,
+# so one peer would be pruned. The guard keeps the normal plan, so the
+# RANGE frame sees all three 5s and running_sum = 15. If the rule fired,
+# the pruned 2-row input would sum to 10. (id excluded — which two of the
+# three tied rows get row_number 1/2 is not deterministic.)
+query III rowsort
+SELECT pk, val, running_sum FROM (
+  SELECT *,
+    ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn,
+    SUM(val)     OVER (PARTITION BY pk ORDER BY val) as running_sum
+  FROM window_topn_sib_t
+) WHERE rn <= 2;
+----
+1 5 15
+1 5 15
+
+# All three ranking siblings (ROW_NUMBER + RANK + DENSE_RANK) over the same
+# window are prune-safe, so the rule DOES fire (filter on rn). Verify the
+# rank/dense_rank values stay correct under the optimized plan — including
+# the val=10 row where row_number=4, rank=4, dense_rank=2 all differ.
+query IIII rowsort
+SELECT pk, val, rnk, dr FROM (
+  SELECT *,
+    ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) as rn,
+    RANK()       OVER (PARTITION BY pk ORDER BY val) as rnk,
+    DENSE_RANK() OVER (PARTITION BY pk ORDER BY val) as dr
+  FROM window_topn_sib_t
+) WHERE rn <= 4;
+----
+1 10 4 2
+1 5 1 1
+1 5 1 1
+1 5 1 1
+
+statement ok
+DROP TABLE window_topn_sib_t;
 
 # Test 15: ROW_NUMBER with DESC ordering — correctness
 query III rowsort
@@ -1291,6 +1397,34 @@ SELECT id, pk, val FROM (
   SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY val) as dr FROM window_topn_dense_rank_t
 ) WHERE dr < 1;
 ----
+
+# Test DR11b: ORDER BY keys fully covered by the PARTITION BY prefix
+# (`PARTITION BY pk ORDER BY pk`). The deduplicated sort ordering is just
+# `[pk]`, so no order key survives past the partition prefix. The rule
+# must NOT fire — a PartitionedTopKExec built with zero order expressions
+# panics on execution. Every row ties at dense_rank 1, so `dr <= 2` keeps
+# the whole table (returned via the ordinary window + filter plan).
+query III rowsort
+SELECT id, pk, val FROM (
+  SELECT *, DENSE_RANK() OVER (PARTITION BY pk ORDER BY pk) as dr FROM window_topn_dense_rank_t
+) WHERE dr <= 2;
+----
+1 1 10
+10 2 25
+11 3 100
+12 3 200
+13 3 200
+14 3 200
+15 3 200
+16 3 300
+2 1 20
+3 1 20
+4 1 20
+5 1 30
+6 1 40
+7 2 5
+8 2 5
+9 2 15
 
 statement ok
 DROP TABLE window_topn_dense_rank_t;
