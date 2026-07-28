@@ -275,6 +275,7 @@ impl GenerateSeriesTable {
                 end: *end,
                 step: *step,
                 current: *start,
+                finished: false,
                 batch_size,
                 include_end: *include_end,
                 name,
@@ -315,6 +316,7 @@ impl GenerateSeriesTable {
                         parsed_tz: Some(parsed_tz),
                         tz_str: tz.clone(),
                     },
+                    finished: false,
                     batch_size,
                     include_end: *include_end,
                     name,
@@ -344,6 +346,7 @@ impl GenerateSeriesTable {
                     parsed_tz: None,
                     tz_str: None,
                 },
+                finished: false,
                 batch_size,
                 include_end: *include_end,
                 name,
@@ -385,6 +388,7 @@ pub struct GenericSeriesState<T: SeriesValue> {
     step: T::StepType,
     batch_size: usize,
     current: T,
+    finished: bool,
     include_end: bool,
     name: &'static str,
 }
@@ -425,6 +429,10 @@ impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
     }
 
     fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        if self.finished {
+            return Ok(None);
+        }
+
         let mut buf = Vec::with_capacity(self.batch_size);
 
         while buf.len() < self.batch_size
@@ -437,11 +445,20 @@ impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
                 .current
                 .should_stop(self.end.clone(), &self.step, false)
             {
-                self.current.advance(&mut self.end, &self.step)?;
+                self.finished = true;
                 break;
             }
 
+            let original_end = self.end.clone();
             self.current.advance(&mut self.end, &self.step)?;
+            if self
+                .current
+                .should_stop(self.end.clone(), &self.step, self.include_end)
+            {
+                self.end = original_end;
+                self.finished = true;
+                break;
+            }
         }
 
         if buf.is_empty() {
@@ -456,6 +473,7 @@ impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
     fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>> {
         let mut new = self.clone();
         new.current = new.start.clone();
+        new.finished = false;
         Arc::new(RwLock::new(new))
     }
 }
@@ -840,11 +858,40 @@ mod generate_series_tests {
             end: 5,
             step: 1,
             current: 1,
+            finished: false,
             batch_size: 8192,
             include_end: true,
             name: "test",
         };
         let batch = state.generate_next_batch()?.expect("missing batch");
+
+        let state_reset = state.reset_state();
+        let reset_batch = state_reset
+            .write()
+            .generate_next_batch()?
+            .expect("missing reset batch");
+
+        assert_eq!(batch, reset_batch);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_generic_series_state_reset_after_overflow() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let mut state = GenericSeriesState::<i64> {
+            schema,
+            start: i64::MAX - 1,
+            end: i64::MAX,
+            step: 2,
+            current: i64::MAX - 1,
+            finished: false,
+            batch_size: 8192,
+            include_end: true,
+            name: "test",
+        };
+        let batch = state.generate_next_batch()?.expect("missing batch");
+        assert!(state.generate_next_batch()?.is_none());
 
         let state_reset = state.reset_state();
         let reset_batch = state_reset

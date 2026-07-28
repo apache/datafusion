@@ -234,6 +234,18 @@ SELECT * FROM generate_series(DATE '0001-01-01', DATE '2000-01-01', INTERVAL '1'
 statement error DataFusion error: Error during planning: Second argument for generate_series is out of range of nanosecond timestamps
 SELECT * FROM generate_series(DATE '2000-01-01', DATE '3000-01-01', INTERVAL '1' DAY)
 
+# Reaching the maximum representable date must not attempt to advance beyond it.
+query P
+SELECT * FROM generate_series(DATE '2262-04-11', DATE '2262-04-11', INTERVAL '1' DAY)
+----
+2262-04-11T00:00:00
+
+# Same for the maximum representable nanosecond timestamp.
+query P
+SELECT * FROM generate_series(TIMESTAMP '2262-04-11T23:47:16.854775807', TIMESTAMP '2262-04-11T23:47:16.854775807', INTERVAL '1' NANOSECOND)
+----
+2262-04-11T23:47:16.854775807
+
 # UDF and UDTF `generate_series` can be used simultaneously
 query ? rowsort
 SELECT generate_series(1, t1.end) FROM generate_series(3, 5) as t1(end)
