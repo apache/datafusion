@@ -68,8 +68,8 @@ use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, create_window_expr};
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, InputOrderMode, Partitioning,
-    PlanProperties, SortOrderPushdownResult, StatisticsArgs, displayable,
+    ChildrenPropertiesHint, DisplayAs, DisplayFormatType, ExecutionPlan, InputOrderMode,
+    Partitioning, PlanProperties, SortOrderPushdownResult, StatisticsArgs, displayable,
 };
 
 /// Create a non sorted parquet exec
@@ -508,15 +508,23 @@ impl ExecutionPlan for RequirementsTestExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert_eq!(children.len(), 1);
         Ok(RequirementsTestExec::new(Arc::clone(&children[0]))
             .with_required_input_ordering(self.required_input_ordering.clone())
             .with_maintains_input_order(self.maintains_input_order)
             .into_arc())
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn execute(
@@ -999,15 +1007,23 @@ impl ExecutionPlan for TestScan {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.is_empty() {
             Ok(self)
         } else {
             internal_err!("TestScan should have no children")
         }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn execute(

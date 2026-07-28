@@ -17,6 +17,7 @@
 
 //! Simple iterator over batches for use in testing
 
+use crate::ChildrenPropertiesHint;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics, common,
@@ -195,11 +196,19 @@ impl ExecutionPlan for MockExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         unimplemented!()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     /// Returns a stream which yields data
@@ -425,11 +434,19 @@ impl ExecutionPlan for BarrierExec {
         unimplemented!()
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         unimplemented!()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     /// Returns a stream which yields data
@@ -561,11 +578,19 @@ impl ExecutionPlan for ErrorExec {
         unimplemented!()
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         unimplemented!()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     /// Returns a stream which yields data
@@ -647,11 +672,19 @@ impl ExecutionPlan for StatisticsExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn execute(
@@ -751,11 +784,19 @@ impl ExecutionPlan for BlockingExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         internal_err!("Children cannot be replaced in {self:?}")
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn execute(
@@ -893,11 +934,19 @@ impl ExecutionPlan for PanicExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         internal_err!("Children cannot be replaced in {:?}", self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn execute(

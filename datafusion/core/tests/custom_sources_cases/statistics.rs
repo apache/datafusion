@@ -36,7 +36,9 @@ use datafusion_catalog::Session;
 use datafusion_common::{project_schema, stats::Precision};
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion_physical_plan::{StatisticsArgs, StatisticsContext};
+use datafusion_physical_plan::{
+    ChildrenPropertiesHint, StatisticsArgs, StatisticsContext,
+};
 
 use async_trait::async_trait;
 
@@ -159,11 +161,19 @@ impl ExecutionPlan for StatisticsValidation {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn execute(

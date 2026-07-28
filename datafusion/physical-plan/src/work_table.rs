@@ -25,7 +25,7 @@ use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::memory::MemoryStream;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    ChildrenPropertiesHint, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
     SendableRecordBatchStream, Statistics,
 };
 
@@ -186,11 +186,19 @@ impl ExecutionPlan for WorkTableExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::clone(&self) as Arc<dyn ExecutionPlan>)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     /// Stream the batches that were written to the work table.

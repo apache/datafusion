@@ -22,7 +22,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::vec;
 
-use crate::ExecutionPlanProperties;
 use crate::execution_plan::{
     EmissionType, boundedness_from_children, has_same_children_properties,
     stub_properties,
@@ -53,6 +52,7 @@ use crate::projection::{
 };
 use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::statistics::{ChildStats, StatisticsArgs};
+use crate::{ChildrenPropertiesHint, ExecutionPlanProperties};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     InputDistributionRequirements, Partitioning, PlanProperties,
@@ -1323,11 +1323,19 @@ impl ExecutionPlan for HashJoinExec {
     /// This method is called during query optimization when the optimizer creates new
     /// plan nodes. Importantly, it creates a fresh bounds_accumulator via `try_new`
     /// rather than cloning the existing one because partitioning may have changed.
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.builder().with_new_children(children)?.build_exec()
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.builder().with_new_children(children)?.build_exec()
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
@@ -2380,6 +2388,7 @@ mod tests {
         Ok((left_schema, right_schema, on))
     }
 
+    use crate::ChildrenPropertiesHint;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::execution_plan::Boundedness;
     use crate::joins::hash_join::stream::lookup_join_hashmap;
@@ -2449,11 +2458,19 @@ mod tests {
             vec![]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ChildrenPropertiesHint,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(self)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(children, ChildrenPropertiesHint::Recompute)
         }
 
         fn execute(

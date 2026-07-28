@@ -20,7 +20,10 @@
 use std::sync::Arc;
 
 use crate::memory::MemoryStream;
-use crate::{DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
+use crate::{
+    ChildrenPropertiesHint, DisplayAs, PlanProperties, SendableRecordBatchStream,
+    Statistics,
+};
 use crate::{
     DisplayFormatType, ExecutionPlan, Partitioning,
     execution_plan::{Boundedness, EmissionType},
@@ -119,11 +122,19 @@ impl ExecutionPlan for EmptyExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn execute(

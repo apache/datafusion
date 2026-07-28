@@ -3615,11 +3615,19 @@ mod tests {
             vec![]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ChildrenPropertiesHint,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             internal_err!("Children cannot be replaced in {self:?}")
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(children, ChildrenPropertiesHint::Recompute)
         }
 
         fn execute(
@@ -4958,8 +4966,8 @@ mod tests {
             Arc::clone(&blocking_exec) as Arc<dyn ExecutionPlan>,
             schema,
         )?);
-        let new_agg =
-            Arc::clone(&aggregate_exec).with_new_children(vec![blocking_exec])?;
+        let new_agg = Arc::clone(&aggregate_exec)
+            .replace_children(vec![blocking_exec], ChildrenPropertiesHint::Recompute)?;
         assert_eq!(new_agg.schema(), aggregate_exec.schema());
         Ok(())
     }

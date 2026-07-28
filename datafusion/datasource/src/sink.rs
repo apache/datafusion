@@ -31,8 +31,8 @@ use datafusion_physical_expr_common::sort_expr::{LexRequirement, OrderingRequire
 use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
-    InputDistributionRequirements, Partitioning, PlanProperties,
+    ChildrenPropertiesHint, DisplayAs, DisplayFormatType, ExecutionPlan,
+    ExecutionPlanProperties, InputDistributionRequirements, Partitioning, PlanProperties,
     SendableRecordBatchStream, execute_input_stream,
 };
 
@@ -220,15 +220,23 @@ impl ExecutionPlan for DataSinkExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self::new(
             Arc::clone(&children[0]),
             Arc::clone(&self.sink),
             self.sort_order.clone(),
         )))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     /// Execute the plan and return a stream of `RecordBatch`es for

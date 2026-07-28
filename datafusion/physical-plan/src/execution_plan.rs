@@ -1802,11 +1802,19 @@ mod tests {
             vec![]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ChildrenPropertiesHint,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(children, ChildrenPropertiesHint::Recompute)
         }
 
         fn execute(
@@ -1865,11 +1873,19 @@ mod tests {
             vec![]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ChildrenPropertiesHint,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(children, ChildrenPropertiesHint::Recompute)
         }
 
         fn execute(
@@ -1915,11 +1931,19 @@ mod tests {
             vec![]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ChildrenPropertiesHint,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(children, ChildrenPropertiesHint::Recompute)
         }
 
         fn downcast_delegate(&self) -> Option<&dyn ExecutionPlan> {
@@ -1974,11 +1998,18 @@ mod tests {
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
         }
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ChildrenPropertiesHint,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(self)
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(children, ChildrenPropertiesHint::Recompute)
         }
         fn execute(
             &self,
@@ -2037,38 +2068,52 @@ mod tests {
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![&self.input]
         }
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             mut children: Vec<Arc<dyn ExecutionPlan>>,
+            hint: ChildrenPropertiesHint,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.recompute_calls
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            // Full recompute: allocate a fresh `PlanProperties` Arc so this
-            // path is observable via `Arc::ptr_eq` on properties.
-            let new_input = children.swap_remove(0);
-            let cache = Arc::new(PlanProperties::new(
-                EquivalenceProperties::new(Arc::new(Schema::empty())),
-                Partitioning::UnknownPartitioning(1),
-                EmissionType::Final,
-                Boundedness::Bounded,
-            ));
-            Ok(Arc::new(Self {
-                input: new_input,
-                cache,
-                recompute_calls: Arc::clone(&self.recompute_calls),
-                fast_path_calls: Arc::clone(&self.fast_path_calls),
-            }))
+            match hint {
+                ChildrenPropertiesHint::SameProperties => {
+                    self.fast_path_calls
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(Arc::new(Self {
+                        input: children.swap_remove(0),
+                        ..Self::clone(&*self)
+                    }))
+                }
+                ChildrenPropertiesHint::Recompute => {
+                    self.recompute_calls
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    // Full recompute: allocate a fresh `PlanProperties` Arc so this
+                    // path is observable via `Arc::ptr_eq` on properties.
+                    let new_input = children.swap_remove(0);
+                    let cache = Arc::new(PlanProperties::new(
+                        EquivalenceProperties::new(Arc::new(Schema::empty())),
+                        Partitioning::UnknownPartitioning(1),
+                        EmissionType::Final,
+                        Boundedness::Bounded,
+                    ));
+                    Ok(Arc::new(Self {
+                        input: new_input,
+                        cache,
+                        recompute_calls: Arc::clone(&self.recompute_calls),
+                        fast_path_calls: Arc::clone(&self.fast_path_calls),
+                    }))
+                }
+            }
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(children, ChildrenPropertiesHint::Recompute)
         }
         fn with_new_children_and_same_properties(
             self: Arc<Self>,
-            mut children: Vec<Arc<dyn ExecutionPlan>>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.fast_path_calls
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(Arc::new(Self {
-                input: children.swap_remove(0),
-                ..Self::clone(&*self)
-            }))
+            self.replace_children(children, ChildrenPropertiesHint::SameProperties)
         }
         fn execute(
             &self,
