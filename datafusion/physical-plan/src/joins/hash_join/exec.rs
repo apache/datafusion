@@ -218,10 +218,8 @@ pub(super) struct JoinLeftData {
     /// Shared atomic flag indicating if any probe partition saw NULL in join keys (for null-aware anti joins)
     pub(super) probe_side_has_null: AtomicBool,
 
-    // For RightAnti joins, where the build side is a smaller subquery, truthy if empty
-    build_is_empty: bool,
-    // For RightAnti joins, where the build side is a smaller subquery, truthy if has null for tjhe single join key
-    build_has_null: bool,
+    // For RightAnti joins, where the build side is a smaller subquery, truthy if has null for the single join key
+    pub(super) build_side_has_null: bool,
 }
 
 impl JoinLeftData {
@@ -434,7 +432,7 @@ impl HashJoinExecBuilder {
                     | (JoinType::RightAnti, PartitionMode::CollectLeft) // `PartitionMode::CollectLeft` is safe because `RigthAnti` is probe-driven
             ) {
                 return plan_err!(
-                    "null_aware can only be true for LeftAnti and RightAnti joins, got {join_type}"
+                    "null_aware can only be true for LeftAnti joins and RightAnti joins with `CollectLeft` `PartitionMode`, got {join_type} with {partition_mode}"
                 );
             }
             let on = exec.on();
@@ -2334,6 +2332,8 @@ async fn collect_left_input(
         bounds = None;
     }
 
+    let build_has_null = left_values[0].null_count() == 0;
+
     let data = JoinLeftData {
         map,
         batch,
@@ -2345,6 +2345,7 @@ async fn collect_left_input(
         membership,
         probe_side_non_empty: AtomicBool::new(false),
         probe_side_has_null: AtomicBool::new(false),
+        build_side_has_null: build_has_null,
     };
 
     Ok(data)
