@@ -131,7 +131,10 @@ fn general_array_empty<O: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef>
     let (values, _) = output_buffer.into_parts();
 
     // Add the nulls
-    let result = BooleanArray::new(values, result.nulls().filter(|n| n.null_count() > 0).cloned());
+    let result = BooleanArray::new(
+        values,
+        result.nulls().filter(|n| n.null_count() > 0).cloned(),
+    );
 
     Ok(Arc::new(result))
 }
