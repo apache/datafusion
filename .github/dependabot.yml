@@ -67,13 +67,13 @@ updates:
     schedule:
       interval: "weekly"
       day: "friday"
-    labels: [auto-dependencies]
+    labels: [auto-dependencies, development-process]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
-    labels: [auto-dependencies]
+    labels: [auto-dependencies, development-process]
     groups:
       codeql-actions:
         patterns:
@@ -82,4 +82,4 @@ updates:
     directory: "/docs"
     schedule:
       interval: "weekly"
-    labels: [auto-dependencies]
+    labels: [auto-dependencies, development-process]
