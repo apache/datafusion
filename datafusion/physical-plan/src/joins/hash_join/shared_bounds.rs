@@ -80,18 +80,34 @@ impl PartitionBounds {
     }
 }
 
+/// A build-side representation that can produce a membership predicate.
+#[derive(Clone, Copy)]
+enum MembershipSource<'a> {
+    InList(&'a InListMembership),
+    Map(&'a Arc<Map>),
+}
+
+impl MembershipSource<'_> {
+    fn distinct_key_count_lower_bound(self) -> Option<usize> {
+        match self {
+            Self::InList(membership) => membership.distinct_key_count_lower_bound,
+            Self::Map(map) => Some(map.num_of_distinct_key()),
+        }
+    }
+}
+
 /// Creates a membership predicate using the representation selected while
 /// collecting the build side.
 ///
 /// Supports both single-column and multi-column joins using struct expressions.
 fn create_membership_predicate(
     on_right: &[PhysicalExprRef],
-    pushdown: &PushdownStrategy,
+    source: MembershipSource<'_>,
     random_state: &SeededRandomState,
     schema: &Schema,
-) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-    match pushdown {
-        PushdownStrategy::InList(membership) => {
+) -> Result<Arc<dyn PhysicalExpr>> {
+    match source {
+        MembershipSource::InList(membership) => {
             // Build the expression to compare against
             let expr = if on_right.len() == 1 {
                 // Single column: col IN (val1, val2, ...)
@@ -119,21 +135,37 @@ fn create_membership_predicate(
             };
 
             // Use InListExpr::try_new_from_array() to build an InList with static_filter optimization (hash-based lookup)
-            Ok(Some(Arc::new(InListExpr::try_new_from_array(
+            Ok(Arc::new(InListExpr::try_new_from_array(
                 expr,
                 Arc::clone(&membership.values),
                 false,
                 schema,
-            )?)))
+            )?))
         }
-        PushdownStrategy::Map(hash_map) => Ok(Some(Arc::new(HashTableLookupExpr::new(
+        MembershipSource::Map(hash_map) => Ok(Arc::new(HashTableLookupExpr::new(
             on_right.to_vec(),
             random_state.clone(),
             Arc::clone(hash_map),
             "hash_lookup".to_string(),
-        )) as Arc<dyn PhysicalExpr>)),
-        PushdownStrategy::Empty => Ok(None),
+        )) as Arc<dyn PhysicalExpr>),
     }
+}
+
+fn create_column_bounds_predicate(
+    right_expr: &PhysicalExprRef,
+    column_bounds: &ColumnBounds,
+) -> Arc<dyn PhysicalExpr> {
+    let min_expr = Arc::new(BinaryExpr::new(
+        Arc::clone(right_expr),
+        Operator::GtEq,
+        lit(column_bounds.min.clone()),
+    )) as Arc<dyn PhysicalExpr>;
+    let max_expr = Arc::new(BinaryExpr::new(
+        Arc::clone(right_expr),
+        Operator::LtEq,
+        lit(column_bounds.max.clone()),
+    )) as Arc<dyn PhysicalExpr>;
+    Arc::new(BinaryExpr::new(min_expr, Operator::And, max_expr)) as Arc<dyn PhysicalExpr>
 }
 
 /// Creates a bounds predicate from partition bounds.
@@ -148,20 +180,8 @@ fn create_bounds_predicate(
 
     for (col_idx, right_expr) in on_right.iter().enumerate() {
         if let Some(column_bounds) = bounds.get_column_bounds(col_idx) {
-            // Create predicate: col >= min AND col <= max
-            let min_expr = Arc::new(BinaryExpr::new(
-                Arc::clone(right_expr),
-                Operator::GtEq,
-                lit(column_bounds.min.clone()),
-            )) as Arc<dyn PhysicalExpr>;
-            let max_expr = Arc::new(BinaryExpr::new(
-                Arc::clone(right_expr),
-                Operator::LtEq,
-                lit(column_bounds.max.clone()),
-            )) as Arc<dyn PhysicalExpr>;
-            let range_expr = Arc::new(BinaryExpr::new(min_expr, Operator::And, max_expr))
-                as Arc<dyn PhysicalExpr>;
-            column_predicates.push(range_expr);
+            column_predicates
+                .push(create_column_bounds_predicate(right_expr, column_bounds));
         }
     }
 
@@ -177,25 +197,6 @@ fn create_bounds_predicate(
                 })
                 .unwrap(),
         )
-    }
-}
-
-/// Combines a membership predicate and a bounds predicate with logical AND.
-///
-/// Returns `None` when neither is available; callers decide the fallback (e.g.
-/// skip updating the filter vs. emit a `lit(true)` branch inside a CASE).
-fn combine_membership_and_bounds(
-    membership_expr: Option<Arc<dyn PhysicalExpr>>,
-    bounds_expr: Option<Arc<dyn PhysicalExpr>>,
-) -> Option<Arc<dyn PhysicalExpr>> {
-    match (membership_expr, bounds_expr) {
-        (Some(membership), Some(bounds)) => {
-            Some(Arc::new(BinaryExpr::new(bounds, Operator::And, membership))
-                as Arc<dyn PhysicalExpr>)
-        }
-        (Some(membership), None) => Some(membership),
-        (None, Some(bounds)) => Some(bounds),
-        (None, None) => None,
     }
 }
 
@@ -216,36 +217,38 @@ fn inclusive_integer_span(bounds: &PartitionBounds) -> Option<u128> {
     Some(u128::from(ArrayMap::calculate_range(min, max)) + 1)
 }
 
-/// Returns true when the membership set is provably identical to its
-/// single-column integer bounds.
+/// Returns the bounds predicate when the membership set is provably identical
+/// to its single-column integer bounds.
 ///
 /// `distinct_key_count_lower_bound` is exact for [`ArrayMap`] and is the number of
 /// distinct hashes for the regular hash map. The latter is a lower bound on
 /// distinct keys. Because the keys are also bounded by the inclusive integer
 /// span, equality with the span proves that every value is present even when
 /// hash collisions are possible.
-fn membership_matches_integer_bounds(
-    pushdown: &PushdownStrategy,
+fn complete_integer_domain_bounds_predicate(
+    source: MembershipSource<'_>,
     bounds: &PartitionBounds,
-    join_key_count: usize,
-) -> bool {
-    if join_key_count != 1 {
-        return false;
-    }
-    let Some(distinct_key_count_lower_bound) = pushdown.distinct_key_count_lower_bound()
-    else {
-        return false;
+    on_right: &[PhysicalExprRef],
+) -> Option<Arc<dyn PhysicalExpr>> {
+    let [right_expr] = on_right else {
+        return None;
     };
-    let Some(inclusive_span) = inclusive_integer_span(bounds) else {
-        return false;
+    let [column_bounds] = bounds.column_bounds.as_slice() else {
+        return None;
     };
-    if let PushdownStrategy::InList(membership) = pushdown
-        && membership.values.data_type() != &bounds.column_bounds[0].min.data_type()
+    let distinct_key_count_lower_bound = source.distinct_key_count_lower_bound()?;
+    let inclusive_span = inclusive_integer_span(bounds)?;
+    if let MembershipSource::InList(membership) = source
+        && membership.values.data_type() != &column_bounds.min.data_type()
     {
-        return false;
+        return None;
     }
 
-    inclusive_span == distinct_key_count_lower_bound as u128
+    if inclusive_span != distinct_key_count_lower_bound as u128 {
+        return None;
+    }
+
+    Some(create_column_bounds_predicate(right_expr, column_bounds))
 }
 
 /// Coordinates build-side information collection across multiple partitions
@@ -372,10 +375,10 @@ pub(crate) enum PushdownStrategy {
 }
 
 impl PushdownStrategy {
-    fn distinct_key_count_lower_bound(&self) -> Option<usize> {
+    fn membership_source(&self) -> Option<MembershipSource<'_>> {
         match self {
-            Self::InList(membership) => membership.distinct_key_count_lower_bound,
-            Self::Map(map) => Some(map.num_of_distinct_key()),
+            Self::InList(membership) => Some(MembershipSource::InList(membership)),
+            Self::Map(map) => Some(MembershipSource::Map(map)),
             Self::Empty => None,
         }
     }
@@ -533,24 +536,46 @@ impl SharedBuildAccumulator {
         &self,
         partition: &PartitionData,
     ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-        let bounds_expr = create_bounds_predicate(&self.on_right, &partition.bounds);
-        let membership_expr = if membership_matches_integer_bounds(
-            &partition.pushdown,
-            &partition.bounds,
-            self.on_right.len(),
-        ) {
-            self.membership_predicates_elided.add(1);
-            None
-        } else {
-            create_membership_predicate(
-                &self.on_right,
-                &partition.pushdown,
-                &HASH_JOIN_SEED,
-                self.probe_schema.as_ref(),
-            )?
+        let Some(source) = partition.pushdown.membership_source() else {
+            return Ok(create_bounds_predicate(&self.on_right, &partition.bounds));
         };
 
-        Ok(combine_membership_and_bounds(membership_expr, bounds_expr))
+        self.create_non_empty_partition_filter(partition, source)
+            .map(Some)
+    }
+
+    /// Builds the predicate for a partition that has membership data.
+    fn create_non_empty_partition_filter(
+        &self,
+        partition: &PartitionData,
+        source: MembershipSource<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        if let Some(bounds_expr) = complete_integer_domain_bounds_predicate(
+            source,
+            &partition.bounds,
+            &self.on_right,
+        ) {
+            self.membership_predicates_elided.add(1);
+            return Ok(bounds_expr);
+        }
+
+        let membership_expr = create_membership_predicate(
+            &self.on_right,
+            source,
+            &HASH_JOIN_SEED,
+            self.probe_schema.as_ref(),
+        )?;
+
+        Ok(
+            if let Some(bounds_expr) =
+                create_bounds_predicate(&self.on_right, &partition.bounds)
+            {
+                Arc::new(BinaryExpr::new(bounds_expr, Operator::And, membership_expr))
+                    as Arc<dyn PhysicalExpr>
+            } else {
+                membership_expr
+            },
+        )
     }
 
     /// Report build-side data from a partition
@@ -751,15 +776,14 @@ impl SharedBuildAccumulator {
 
                 for (partition_id, partition) in partitions.iter().enumerate() {
                     match partition {
-                        PartitionStatus::Reported(partition)
-                            if matches!(partition.pushdown, PushdownStrategy::Empty) =>
-                        {
-                            empty_partition_ids.push(partition_id);
-                        }
                         PartitionStatus::Reported(partition) => {
+                            let Some(source) = partition.pushdown.membership_source()
+                            else {
+                                empty_partition_ids.push(partition_id);
+                                continue;
+                            };
                             let then_expr = self
-                                .create_partition_filter(partition)?
-                                .expect("a reported non-empty partition must produce a filter");
+                                .create_non_empty_partition_filter(partition, source)?;
                             real_branches.push((
                                 lit(ScalarValue::UInt64(Some(partition_id as u64))),
                                 then_expr,
@@ -907,6 +931,22 @@ mod tests {
 
     fn invalid_test_on_right() -> Vec<PhysicalExprRef> {
         vec![Arc::new(Column::new("missing_probe_key", 1))]
+    }
+
+    fn membership_matches_integer_bounds(
+        pushdown: &PushdownStrategy,
+        bounds: &PartitionBounds,
+        join_key_count: usize,
+    ) -> bool {
+        let on_right = (0..join_key_count)
+            .map(|index| Arc::new(Column::new("probe_key", index)) as PhysicalExprRef)
+            .collect::<Vec<_>>();
+        pushdown
+            .membership_source()
+            .and_then(|source| {
+                complete_integer_domain_bounds_predicate(source, bounds, &on_right)
+            })
+            .is_some()
     }
 
     fn test_probe_schema() -> Arc<Schema> {
@@ -1223,6 +1263,16 @@ mod tests {
     #[test]
     fn membership_range_proof_rejects_unsupported_inputs() {
         let membership = in_list(&[-2, -1, 0, 1, 2]);
+        assert!(!membership_matches_integer_bounds(
+            &PushdownStrategy::Empty,
+            &bounds(-2, 2),
+            1,
+        ));
+        assert!(!membership_matches_integer_bounds(
+            &membership,
+            &no_bounds(),
+            1,
+        ));
         assert!(!membership_matches_integer_bounds(
             &membership,
             &bounds(-2, 2),
