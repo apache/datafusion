@@ -1251,7 +1251,7 @@ NULL NULL NULL NULL NULL NULL
 # Test CHARACTER_LENGTH
 # --------------------------------------
 
-query ??
+query II
 SELECT
   CHARACTER_LENGTH(ascii_1),
   CHARACTER_LENGTH(unicode_1)
