@@ -43,7 +43,7 @@ use datafusion_common::hash_utils::RandomState;
 use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, assert_eq_or_internal_err, exec_datafusion_err,
-    internal_datafusion_err,
+    internal_datafusion_err, internal_err,
 };
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
@@ -349,6 +349,15 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
                 i += 1;
             }
         }
+
+        // Retracting values that are not tracked means the accumulator state
+        // has diverged from the window frame; continuing would silently
+        // produce wrong results, so surface it as an error.
+        if !to_remove.is_empty() {
+            return internal_err!(
+                "median retract_batch: retracted value(s) not present in the window"
+            );
+        }
         Ok(())
     }
 
@@ -652,6 +661,23 @@ mod tests {
             data_type: DataType::Float64,
             all_values: vec![],
         }
+    }
+
+    #[test]
+    fn retract_batch_errors_on_untracked_value() {
+        let mut acc = median_accumulator();
+        let values: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0]));
+        acc.update_batch(std::slice::from_ref(&values)).unwrap();
+
+        let retract: ArrayRef = Arc::new(Float64Array::from(vec![3.0]));
+        let err = acc
+            .retract_batch(std::slice::from_ref(&retract))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("not present in the window"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
