@@ -67,7 +67,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "friday"
-    target-branch: main
+    labels: [auto-dependencies]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
