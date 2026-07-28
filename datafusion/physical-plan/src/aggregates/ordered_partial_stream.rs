@@ -244,7 +244,7 @@ impl OrderedPartialAggregateStream {
     /// Consumes one ordered input batch, then immediately emits completed groups
     /// if the ordering proves any group is ready.
     ///
-    /// See comments at `poll_next()` for details.
+    /// See comments at [`Self::create_stream`] for details.
     async fn handle_reading_input(
         &mut self,
         table: &mut OrderedAggregateTable<PartialMarker>,
@@ -327,7 +327,7 @@ impl OrderedPartialAggregateStream {
     /// Returns the last batch to emit so we can free all the state and memory before emitting,
     /// and we won't need to hold while waiting for the next poll.
     ///
-    /// See comments at `poll_next()` for details.
+    /// See comments at [`Self::create_stream`] for details.
     ///
     async fn handle_draining_final(
         &mut self,
