@@ -759,7 +759,7 @@ impl SharedBuildAccumulator {
                         PartitionStatus::Reported(partition) => {
                             let then_expr = self
                                 .create_partition_filter(partition)?
-                                .unwrap_or_else(|| lit(true));
+                                .expect("a reported non-empty partition must produce a filter");
                             real_branches.push((
                                 lit(ScalarValue::UInt64(Some(partition_id as u64))),
                                 then_expr,
@@ -903,6 +903,10 @@ mod tests {
 
     fn test_on_right() -> Vec<PhysicalExprRef> {
         vec![Arc::new(Column::new("probe_key", 0))]
+    }
+
+    fn invalid_test_on_right() -> Vec<PhysicalExprRef> {
+        vec![Arc::new(Column::new("missing_probe_key", 1))]
     }
 
     fn test_probe_schema() -> Arc<Schema> {
@@ -1269,6 +1273,22 @@ mod tests {
         ));
         assert!(!membership_matches_integer_bounds(
             &membership,
+            &PartitionBounds::new(vec![ColumnBounds::new(
+                ScalarValue::Int32(Some(-2)),
+                ScalarValue::Int32(None),
+            )]),
+            1,
+        ));
+        assert!(!membership_matches_integer_bounds(
+            &membership,
+            &PartitionBounds::new(vec![ColumnBounds::new(
+                ScalarValue::Int64(Some(-2)),
+                ScalarValue::Int64(Some(2)),
+            )]),
+            1,
+        ));
+        assert!(!membership_matches_integer_bounds(
+            &membership,
             &bounds(2, -2),
             1,
         ));
@@ -1293,6 +1313,44 @@ mod tests {
         assert_ne!(
             inclusive_integer_span(&full_i64_domain),
             Some(usize::MAX as u128)
+        );
+    }
+
+    #[test]
+    fn membership_expression_errors_propagate_for_both_modes() {
+        let collect_left = make_accumulator_for_test(
+            AccumulatedBuildData::CollectLeft {
+                data: PartitionStatus::Pending,
+                reported_count: 0,
+                expected_reports: 1,
+            },
+            invalid_test_on_right(),
+        );
+        assert!(
+            collect_left
+                .build_filter(FinalizeInput::CollectLeft(reported(
+                    in_list(&[1, 3]),
+                    no_bounds(),
+                )))
+                .is_err(),
+            "CollectLeft must propagate membership-expression construction errors"
+        );
+
+        let partitioned = make_accumulator_for_test(
+            AccumulatedBuildData::Partitioned {
+                partitions: vec![PartitionStatus::Pending],
+                completed_partitions: 0,
+            },
+            invalid_test_on_right(),
+        );
+        assert!(
+            partitioned
+                .build_filter(FinalizeInput::Partitioned(vec![reported(
+                    in_list(&[1, 3]),
+                    no_bounds(),
+                )]))
+                .is_err(),
+            "Partitioned must propagate membership-expression construction errors"
         );
     }
 
