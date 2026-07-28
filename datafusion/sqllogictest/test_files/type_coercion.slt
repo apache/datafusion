@@ -304,7 +304,9 @@ query error does not support zero arguments
 SELECT * FROM (SELECT 1) WHERE TRY_CAST(STARTS_WITH() AS INT) = 1;
 
 ###################################################################
-## SIMILAR TO type coercion (https://github.com/apache/datafusion/issues/22886)
+## SIMILAR TO type coercion
+## https://github.com/apache/datafusion/issues/22886
+## https://github.com/apache/datafusion/issues/23732
 ###################################################################
 
 # NULL pattern is coerced to a typed NULL and evaluates to NULL instead of panicking
@@ -349,8 +351,7 @@ SELECT arrow_cast(t.s, 'Dictionary(Int32, Utf8)') SIMILAR TO p.pat FROM t CROSS 
 ----
 true
 
-# non-scalar Utf8View / LargeUtf8 patterns are accepted by the SQL planner and
-# coerced by the analyzer (https://github.com/apache/datafusion/issues/23732)
+# non-scalar string-like patterns are coerced by the analyzer
 query B
 SELECT t.s SIMILAR TO arrow_cast(p.pat, 'Utf8View') FROM t CROSS JOIN p;
 ----
@@ -366,8 +367,12 @@ SELECT t.s NOT SIMILAR TO arrow_cast(p.pat, 'Utf8View') FROM t CROSS JOIN p;
 ----
 false
 
-# NULL patterns (literal or Null-typed non-scalar) are accepted by the planner
-# and evaluate to NULL
+query B
+SELECT t.s SIMILAR TO arrow_cast(p.pat, 'Dictionary(Int32, Utf8)') FROM t CROSS JOIN p;
+----
+true
+
+# NULL patterns (literal or Null-typed non-scalar) evaluate to NULL
 query B
 SELECT t.s SIMILAR TO NULL FROM t;
 ----
@@ -394,6 +399,6 @@ DROP TABLE p;
 query error There isn't a common type to coerce Int64 and Utf8 in SIMILAR TO expression
 SELECT 1 SIMILAR TO 'a';
 
-# a non-string pattern is rejected even earlier, during SQL planning
-query error Invalid pattern in SIMILAR TO expression
+# a non-string pattern is rejected by the analyzer
+query error There isn't a common type to coerce Utf8 and Int64 in SIMILAR TO expression
 SELECT 'a' SIMILAR TO 1;
