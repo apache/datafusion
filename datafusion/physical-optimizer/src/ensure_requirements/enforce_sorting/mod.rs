@@ -609,11 +609,40 @@ fn adjust_window_sort_removal(
 /// the plan, some of the remaining `RepartitionExec`s might become unnecessary.
 /// Removes such `RepartitionExec`s from the plan as well.
 fn remove_bottleneck_in_subplan(
+    requirements: PlanWithCorrespondingCoalescePartitions,
+) -> Result<PlanWithCorrespondingCoalescePartitions> {
+    // The root is the node `parallelize_sorts` is rewriting (a `SortExec`,
+    // `SortPreservingMergeExec` or `CoalescePartitionsExec`). Its own distribution
+    // requirement does not constrain the removal, because the caller drops the node and
+    // rebuilds the cascade around the result.
+    remove_bottleneck_in_subplan_impl(requirements, true)
+}
+
+fn remove_bottleneck_in_subplan_impl(
     mut requirements: PlanWithCorrespondingCoalescePartitions,
+    is_root: bool,
 ) -> Result<PlanWithCorrespondingCoalescePartitions> {
     let plan = &requirements.plan;
+    // Below the root, a `CoalescePartitionsExec` feeding a child that requires
+    // `Distribution::SinglePartition` is not an avoidable bottleneck: it is what satisfies
+    // that requirement. Removing it leaves the parent with a multi-partition input it cannot
+    // accept, and nothing re-runs distribution enforcement afterwards, so the plan reaches
+    // `SanityCheckPlan` invalid. The traversal reaches such a node because
+    // `update_coalesce_ctx_children` marks a node as connected when *any* child qualifies:
+    // a `CollectLeft` `HashJoinExec` whose probe side is connected is descended into even
+    // though its build side must stay single-partition.
+    let removable = |idx: usize| {
+        is_root
+            || !matches!(
+                plan.input_distribution_requirements()
+                    .child_distribution(idx),
+                Some(Distribution::SinglePartition)
+            )
+    };
+    let remove_from_first_child =
+        is_coalesce_partitions(&requirements.children[0].plan) && removable(0);
     let children = &mut requirements.children;
-    if is_coalesce_partitions(&children[0].plan) {
+    if remove_from_first_child {
         // We can safely use the 0th index since we have a `CoalescePartitionsExec`.
         let mut new_child_node = children[0].children.swap_remove(0);
         while new_child_node.plan.output_partitioning() == plan.output_partitioning()
@@ -627,9 +656,10 @@ fn remove_bottleneck_in_subplan(
         requirements.children = requirements
             .children
             .into_iter()
-            .map(|node| {
-                if node.data {
-                    remove_bottleneck_in_subplan(node)
+            .enumerate()
+            .map(|(idx, node)| {
+                if node.data && removable(idx) {
+                    remove_bottleneck_in_subplan_impl(node, false)
                 } else {
                     Ok(node)
                 }

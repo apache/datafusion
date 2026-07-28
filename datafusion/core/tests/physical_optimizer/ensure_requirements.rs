@@ -21,6 +21,8 @@
 //! so the tests live alongside the rest of the `physical_optimizer/` integration
 //! suite and can use real `ExecutionPlan`s where convenient.
 
+use insta::assert_snapshot;
+
 use datafusion_common::config::ConfigOptions;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
@@ -65,6 +67,19 @@ struct MockMultiPartitionExec {
 
 impl MockMultiPartitionExec {
     fn new(partition_count: usize) -> Self {
+        Self::with_partitioning(Partitioning::UnknownPartitioning(partition_count))
+    }
+
+    /// A source that is already partitioned on `a`, as an aggregate or a partitioned
+    /// join below the node under test would be.
+    fn hash_partitioned_on_a(partition_count: usize) -> Self {
+        Self::with_partitioning(Partitioning::Hash(
+            vec![Arc::new(Column::new("a", 0))],
+            partition_count,
+        ))
+    }
+
+    fn with_partitioning(partitioning: Partitioning) -> Self {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, false),
             Field::new("b", DataType::Int64, false),
@@ -81,7 +96,7 @@ impl MockMultiPartitionExec {
         }
         let properties = PlanProperties::new(
             eq,
-            Partitioning::UnknownPartitioning(partition_count),
+            partitioning,
             EmissionType::Incremental,
             Boundedness::Bounded,
         );
@@ -1251,4 +1266,113 @@ fn test_idempotent_union_projection_sort() {
     let plan: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(21)));
 
     assert_idempotent(plan);
+}
+
+/// A `CollectLeft` `HashJoinExec` requires `Distribution::SinglePartition` on its build
+/// (left) child, so `EnsureRequirements` puts a `CoalescePartitionsExec` on top of a
+/// multi-partition build side. Its sort-parallelization phase must not take that coalesce
+/// back out again.
+///
+/// The phase descends into a node when *any* of its children is linked to a
+/// `CoalescePartitionsExec` below (`update_coalesce_ctx_children`), so a connected probe
+/// side is enough to reach the join, and the removal itself used to look only at
+/// `children[0]` without consulting the join's own distribution requirement. The result was
+/// a build side left multi-partition with nothing to re-enforce distribution afterwards,
+/// which `SanityCheckPlan` then rejected with "does not satisfy distribution requirements:
+/// SinglePartition".
+#[test]
+fn test_collect_left_join_keeps_build_side_coalesce() {
+    let build: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(4));
+    // The probe side carries the `CoalescePartitionsExec` link that makes the traversal
+    // descend into the join in the first place.
+    let probe: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(Arc::new(
+        MockMultiPartitionExec::new(4),
+    )));
+
+    let on = vec![(
+        Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+        Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+    )];
+    let join: Arc<dyn ExecutionPlan> = Arc::new(
+        HashJoinExec::try_new(
+            build,
+            probe,
+            on,
+            None,
+            &JoinType::Left,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )
+        .expect("HashJoinExec creation failed"),
+    );
+
+    // A global sort on top is what triggers the sort-parallelization phase.
+    let plan: Arc<dyn ExecutionPlan> =
+        Arc::new(SortExec::new(sort_expr_on("a", 0, false, false), join));
+
+    let optimized = optimize_and_sanity_check(plan).expect("plan failed SanityCheckPlan");
+
+    assert_snapshot!(plan_string(&optimized), @r"
+    SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+      SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+        HashJoinExec: mode=CollectLeft, join_type=Left, on=[(a@0, a@0)]
+          CoalescePartitionsExec
+            MockMultiPartitionExec
+          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=4
+            MockMultiPartitionExec
+    ");
+
+    assert_idempotent(optimized);
+}
+
+/// The same build-side removal, with a build side that is already hash-partitioned on the
+/// join key rather than `UnknownPartitioning`. This is the shape a `JoinSelection` input
+/// swap leaves behind (a `CollectLeft` join reported as `join_type=Right`) when the build
+/// subtree is the output of an aggregate or a partitioned join.
+#[test]
+fn test_collect_left_join_keeps_hash_partitioned_build_side_coalesce() {
+    let build: Arc<dyn ExecutionPlan> = Arc::new(
+        MockMultiPartitionExec::hash_partitioned_on_a(TEST_TARGET_PARTITIONS),
+    );
+    let probe: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(Arc::new(
+        MockMultiPartitionExec::new(4),
+    )));
+
+    let on = vec![(
+        Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+        Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+    )];
+    let join: Arc<dyn ExecutionPlan> = Arc::new(
+        HashJoinExec::try_new(
+            build,
+            probe,
+            on,
+            None,
+            &JoinType::Right,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )
+        .expect("HashJoinExec creation failed"),
+    );
+
+    let plan: Arc<dyn ExecutionPlan> =
+        Arc::new(SortExec::new(sort_expr_on("a", 0, false, false), join));
+
+    let optimized = optimize_and_sanity_check(plan).expect("plan failed SanityCheckPlan");
+
+    assert_snapshot!(plan_string(&optimized), @r"
+    SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+      SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+        HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@0, a@0)]
+          CoalescePartitionsExec
+            MockMultiPartitionExec
+          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=4
+            MockMultiPartitionExec
+    ");
+
+    assert_idempotent(optimized);
 }
