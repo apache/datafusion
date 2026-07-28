@@ -84,7 +84,14 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{Result, Statistics};
 
 use crate::ExecutionPlan;
+use crate::aggregates::{AggregateExec, AggregateMode};
+use crate::execution_plan::CardinalityEffect;
+use crate::filter::FilterExec;
+use crate::joins::{CrossJoinExec, HashJoinExec, JoinOnRef, SortMergeJoinExec};
+use crate::limit::{GlobalLimitExec, LocalLimitExec};
+use crate::projection::ProjectionExec;
 use crate::statistics::{ChildStats, StatisticsArgs, StatisticsContext};
+use crate::union::UnionExec;
 
 // ============================================================================
 // ExtendedStatistics: Statistics with type-safe extensions
@@ -586,8 +593,6 @@ impl StatisticsProvider for FilterStatisticsProvider {
         plan: &dyn ExecutionPlan,
         child_stats: &[ExtendedStatistics],
     ) -> Result<StatisticsResult> {
-        use crate::filter::FilterExec;
-
         let Some(filter) = plan.downcast_ref::<FilterExec>() else {
             return Ok(StatisticsResult::Delegate);
         };
@@ -642,8 +647,6 @@ impl StatisticsProvider for ProjectionStatisticsProvider {
         plan: &dyn ExecutionPlan,
         child_stats: &[ExtendedStatistics],
     ) -> Result<StatisticsResult> {
-        use crate::projection::ProjectionExec;
-
         let Some(proj) = plan.downcast_ref::<ProjectionExec>() else {
             return Ok(StatisticsResult::Delegate);
         };
@@ -678,8 +681,6 @@ impl StatisticsProvider for PassthroughStatisticsProvider {
         plan: &dyn ExecutionPlan,
         child_stats: &[ExtendedStatistics],
     ) -> Result<StatisticsResult> {
-        use crate::execution_plan::CardinalityEffect;
-
         if child_stats.len() != 1
             || !matches!(plan.cardinality_effect(), CardinalityEffect::Equal)
         {
@@ -726,10 +727,7 @@ impl StatisticsProvider for AggregateStatisticsProvider {
         plan: &dyn ExecutionPlan,
         child_stats: &[ExtendedStatistics],
     ) -> Result<StatisticsResult> {
-        use crate::aggregates::AggregateExec;
         use datafusion_physical_expr::expressions::Column;
-
-        use crate::aggregates::AggregateMode;
 
         let Some(agg) = plan.downcast_ref::<AggregateExec>() else {
             return Ok(StatisticsResult::Delegate);
@@ -818,7 +816,6 @@ impl StatisticsProvider for JoinStatisticsProvider {
         plan: &dyn ExecutionPlan,
         child_stats: &[ExtendedStatistics],
     ) -> Result<StatisticsResult> {
-        use crate::joins::{CrossJoinExec, HashJoinExec, SortMergeJoinExec};
         use datafusion_common::JoinType;
         use datafusion_physical_expr::expressions::Column;
 
@@ -834,8 +831,6 @@ impl StatisticsProvider for JoinStatisticsProvider {
         else {
             return Ok(StatisticsResult::Delegate);
         };
-
-        use crate::joins::JoinOnRef;
 
         /// Estimate equi-join output using NDV of join key columns:
         ///   left_rows * right_rows / product(max(left_ndv_i, right_ndv_i))
@@ -940,8 +935,6 @@ impl StatisticsProvider for LimitStatisticsProvider {
         plan: &dyn ExecutionPlan,
         child_stats: &[ExtendedStatistics],
     ) -> Result<StatisticsResult> {
-        use crate::limit::{GlobalLimitExec, LocalLimitExec};
-
         if child_stats.is_empty() {
             return Ok(StatisticsResult::Delegate);
         }
@@ -988,8 +981,6 @@ impl StatisticsProvider for UnionStatisticsProvider {
         plan: &dyn ExecutionPlan,
         child_stats: &[ExtendedStatistics],
     ) -> Result<StatisticsResult> {
-        use crate::union::UnionExec;
-
         if plan.downcast_ref::<UnionExec>().is_none() {
             return Ok(StatisticsResult::Delegate);
         }
