@@ -1132,6 +1132,25 @@ ORDER BY id;
 statement ok
 DROP TABLE distinct_pct;
 
+# Regression: grouped percentile_cont(DISTINCT ...) forces two-phase
+# (Partial + FinalPartitioned) aggregation, exercising the distinct
+# accumulator's state()/merge_batch() paths. Duplicate values within a
+# group must be de-duplicated across the per-partition merge.
+# Group 1 distinct {1,5,9} -> median 5; group 2 distinct {3,7} -> median 5.
+statement ok
+CREATE TABLE grp_distinct_pct(g INT, x DOUBLE) AS VALUES
+  (1, 5), (1, 5), (1, 9), (1, 1),
+  (2, 7), (2, 7), (2, 3);
+
+query IR
+SELECT g, percentile_cont(DISTINCT x, 0.5) FROM grp_distinct_pct GROUP BY g ORDER BY g;
+----
+1 5
+2 5
+
+statement ok
+DROP TABLE grp_distinct_pct;
+
 query RT
 select approx_median(arrow_cast(col_f32, 'Float16')), arrow_typeof(approx_median(arrow_cast(col_f32, 'Float16'))) from median_table;
 ----
