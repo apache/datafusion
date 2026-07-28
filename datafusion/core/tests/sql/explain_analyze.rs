@@ -827,7 +827,7 @@ async fn test_physical_plan_display_indent_multi_children() {
 }
 
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn csv_explain_analyze() {
     // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
     let ctx = SessionContext::new();
@@ -849,7 +849,7 @@ async fn csv_explain_analyze() {
 }
 
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn csv_explain_analyze_order_by() {
     let ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&ctx).await;
@@ -866,7 +866,7 @@ async fn csv_explain_analyze_order_by() {
 }
 
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn parquet_explain_analyze() {
     let ctx = SessionContext::new();
     register_alltypes_parquet(&ctx).await;
@@ -913,7 +913,7 @@ async fn parquet_explain_analyze() {
 // (e.g. nested/recursive expansion causing full schema to be scanned).
 // Keeping this test ensures we don't regress that behavior.
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn parquet_recursive_projection_pushdown() -> Result<()> {
     use parquet::arrow::arrow_writer::ArrowWriter;
     use parquet::file::properties::WriterProperties;
@@ -1030,7 +1030,7 @@ async fn parquet_recursive_projection_pushdown() -> Result<()> {
 }
 
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn parquet_explain_analyze_verbose() {
     let ctx = SessionContext::new();
     register_alltypes_parquet(&ctx).await;
@@ -1047,7 +1047,7 @@ async fn parquet_explain_analyze_verbose() {
 }
 
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn csv_explain_analyze_verbose() {
     // This test uses the execute function to run an actual plan under EXPLAIN VERBOSE ANALYZE
     let ctx = SessionContext::new();

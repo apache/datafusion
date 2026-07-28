@@ -207,20 +207,22 @@ macro_rules! downcast_arg {
 /// $NAME: the name of the function
 /// $UNARY_FUNC: the unary function to apply to the argument
 /// $OUTPUT_ORDERING: the output ordering calculation method of the function
+/// $STRICT: whether the function returns NULL when any argument is NULL
 /// $GET_DOC: the function to get the documentation of the UDF
 macro_rules! make_math_unary_udf {
-    ($UDF:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr, $EVALUATE_BOUNDS:expr, $GET_DOC:expr) => {
+    ($UDF:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr, $EVALUATE_BOUNDS:expr, $STRICT:expr, $GET_DOC:expr) => {
         make_math_unary_udf!(
             $UDF,
             $NAME,
             $UNARY_FUNC,
             $OUTPUT_ORDERING,
             $EVALUATE_BOUNDS,
+            $STRICT,
             $GET_DOC,
             None::<fn(f64) -> Result<()>>
         );
     };
-    ($UDF:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr, $EVALUATE_BOUNDS:expr, $GET_DOC:expr, $VALIDATOR:expr) => {
+    ($UDF:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr, $EVALUATE_BOUNDS:expr, $STRICT:expr, $GET_DOC:expr, $VALIDATOR:expr) => {
         $crate::make_udf_function!($NAME::$UDF, $NAME);
 
         mod $NAME {
@@ -271,6 +273,10 @@ macro_rules! make_math_unary_udf {
                         DataType::Float32 => Ok(DataType::Float32),
                         _ => Ok(DataType::Float64),
                     }
+                }
+
+                fn is_strict(&self) -> bool {
+                    $STRICT
                 }
 
                 fn output_ordering(
@@ -354,9 +360,10 @@ macro_rules! make_math_unary_udf {
 /// $NAME: the name of the function
 /// $BINARY_FUNC: the binary function to apply to the argument
 /// $OUTPUT_ORDERING: the output ordering calculation method of the function
+/// $STRICT: whether the function returns NULL when any argument is NULL
 /// $GET_DOC: the function to get the documentation of the UDF
 macro_rules! make_math_binary_udf {
-    ($UDF:ident, $NAME:ident, $BINARY_FUNC:ident, $OUTPUT_ORDERING:expr, $GET_DOC:expr) => {
+    ($UDF:ident, $NAME:ident, $BINARY_FUNC:ident, $OUTPUT_ORDERING:expr, $STRICT:expr, $GET_DOC:expr) => {
         $crate::make_udf_function!($NAME::$UDF, $NAME);
 
         mod $NAME {
@@ -412,6 +419,10 @@ macro_rules! make_math_binary_udf {
                         (DataType::Float32, DataType::Float32) => Ok(DataType::Float32),
                         _ => Ok(DataType::Float64),
                     }
+                }
+
+                fn is_strict(&self) -> bool {
+                    $STRICT
                 }
 
                 fn output_ordering(

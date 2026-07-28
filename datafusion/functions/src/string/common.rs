@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use crate::strings::{
     GenericStringArrayBuilder, STRING_VIEW_INIT_BLOCK_SIZE, STRING_VIEW_MAX_BLOCK_SIZE,
-    StringViewArrayBuilder, append_view,
+    StringViewArrayBuilder, StringWriter, append_view,
 };
 use arrow::array::{
     Array, ArrayRef, AsArray, GenericStringArray, NullBufferBuilder, OffsetSizeTrait,
@@ -402,6 +402,29 @@ fn unicode_case(s: &str, lower: bool) -> String {
     }
 }
 
+/// Writes the case-converted form of `s` directly into `w`.
+///
+/// Uppercasing is a context-free character mapping, so each character is
+/// mapped and streamed straight into the output buffer, avoiding the
+/// intermediate `String` that `str::to_uppercase` allocates per row.
+///
+/// Lowercasing is *not* context-free — `str::to_lowercase` applies the
+/// special Greek final-sigma rule (Σ becomes ς at the end of a word but σ
+/// elsewhere), which a per-character mapping cannot reproduce — so it keeps
+/// using `str::to_lowercase`.
+#[inline]
+fn write_unicode_case(w: &mut impl StringWriter, s: &str, lower: bool) {
+    if lower {
+        w.write_str(&s.to_lowercase());
+    } else {
+        for c in s.chars() {
+            for upper in c.to_uppercase() {
+                w.write_char(upper);
+            }
+        }
+    }
+}
+
 fn case_conversion(
     args: &[ColumnarValue],
     lower: bool,
@@ -532,14 +555,14 @@ fn case_conversion_array<O: OffsetSizeTrait>(
             } else {
                 // SAFETY: `n.is_null(i)` was false in the branch above.
                 let s = unsafe { string_array.value_unchecked(i) };
-                builder.try_append_value(&unicode_case(s, lower))?;
+                builder.try_append_with(|w| write_unicode_case(w, s, lower))?;
             }
         }
     } else {
         for i in 0..item_len {
             // SAFETY: no null buffer means every index is valid.
             let s = unsafe { string_array.value_unchecked(i) };
-            builder.try_append_value(&unicode_case(s, lower))?;
+            builder.try_append_with(|w| write_unicode_case(w, s, lower))?;
         }
     }
     Ok(Arc::new(builder.finish(nulls)?))
