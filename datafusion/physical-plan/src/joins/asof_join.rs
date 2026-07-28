@@ -58,16 +58,15 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, RecordBatch, new_null_array};
+use arrow::buffer::NullBuffer;
 use arrow::compute::{SortOptions, interleave};
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::memory::RecordBatchMemoryCounter;
-use datafusion_common::utils::{
-    compare_rows, get_row_at_idx, normalize_float_zero_scalar,
-};
+use datafusion_common::utils::normalize_float_zero_scalar;
 use datafusion_common::{
-    ColumnStatistics, JoinType, Result, ScalarValue, Statistics,
+    ColumnStatistics, JoinType, NullEquality, Result, ScalarValue, Statistics,
     assert_eq_or_internal_err, internal_err, plan_err,
 };
 use datafusion_execution::TaskContext;
@@ -88,7 +87,9 @@ use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
-use crate::joins::utils::{JoinOn, OnceAsync, build_join_schema};
+use crate::joins::utils::{
+    JoinKeyComparator, JoinOn, OnceAsync, build_join_schema, matchable_join_keys,
+};
 use crate::memory::MemoryStream;
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder,
@@ -633,7 +634,8 @@ async fn collect_right_input(
 struct Candidate {
     batch: Arc<RecordBatch>,
     row: usize,
-    group: Vec<ScalarValue>,
+    key_arrays: Arc<[ArrayRef]>,
+    key_batch_id: usize,
 }
 
 struct InputCursor {
@@ -641,8 +643,10 @@ struct InputCursor {
     key_exprs: Vec<PhysicalExprRef>,
     match_expr: PhysicalExprRef,
     batch: Option<Arc<RecordBatch>>,
-    key_arrays: Vec<ArrayRef>,
+    key_arrays: Arc<[ArrayRef]>,
+    key_validity: Option<NullBuffer>,
     match_array: Option<ArrayRef>,
+    key_batch_id: usize,
     row: usize,
     eof: bool,
 }
@@ -658,8 +662,10 @@ impl InputCursor {
             key_exprs,
             match_expr,
             batch: None,
-            key_arrays: vec![],
+            key_arrays: Arc::from([]),
+            key_validity: None,
             match_array: None,
+            key_batch_id: 0,
             row: 0,
             eof: false,
         }
@@ -673,7 +679,8 @@ impl InputCursor {
                 return Ok(true);
             }
             self.batch = None;
-            self.key_arrays.clear();
+            self.key_arrays = Arc::from([]);
+            self.key_validity = None;
             self.match_array = None;
             self.row = 0;
             if self.eof {
@@ -688,23 +695,28 @@ impl InputCursor {
             }
             let batch = Arc::new(batch);
             let _timer = elapsed_compute.timer();
-            self.key_arrays = self
+            let key_arrays = self
                 .key_exprs
                 .iter()
                 .map(|expr| expr.evaluate(&batch)?.into_array(batch.num_rows()))
-                .collect::<Result<_>>()?;
+                .collect::<Result<Vec<_>>>()?;
+            self.key_validity =
+                matchable_join_keys(&key_arrays, NullEquality::NullEqualsNothing);
+            self.key_arrays = key_arrays.into();
             self.match_array = Some(
                 self.match_expr
                     .evaluate(&batch)?
                     .into_array(batch.num_rows())?,
             );
+            self.key_batch_id += 1;
             self.batch = Some(batch);
         }
     }
 
-    fn group(&self) -> Result<Vec<ScalarValue>> {
-        get_row_at_idx(&self.key_arrays, self.row)
-            .map(|row| row.into_iter().map(normalize_float_zero_scalar).collect())
+    fn group_has_null(&self) -> bool {
+        self.key_validity
+            .as_ref()
+            .is_some_and(|validity| validity.is_null(self.row))
     }
 
     fn match_value(&self) -> Result<ScalarValue> {
@@ -850,6 +862,8 @@ struct AsOfJoinStreamState {
     right_output_indices: Vec<usize>,
     candidate: Option<Candidate>,
     group_sort_options: Vec<SortOptions>,
+    input_group_comparator: Option<(usize, usize, JoinKeyComparator)>,
+    candidate_group_comparator: Option<(usize, usize, JoinKeyComparator)>,
     pending_left: PendingRows,
     pending_right: PendingRows,
     batch_size: usize,
@@ -883,9 +897,74 @@ impl AsOfJoinStreamState {
             right_output_indices,
             candidate: None,
             group_sort_options,
+            input_group_comparator: None,
+            candidate_group_comparator: None,
             batch_size: batch_size.max(1),
             metrics,
         }
+    }
+
+    fn compare_input_groups(&mut self) -> Result<Ordering> {
+        if self.group_sort_options.is_empty() {
+            return Ok(Ordering::Equal);
+        }
+        let _timer = self.metrics.baseline.elapsed_compute().timer();
+        let right_batch_id = self.right.key_batch_id;
+        let left_batch_id = self.left.key_batch_id;
+        if self
+            .input_group_comparator
+            .as_ref()
+            .is_none_or(|(right, left, _)| {
+                *right != right_batch_id || *left != left_batch_id
+            })
+        {
+            let comparator = JoinKeyComparator::new(
+                self.right.key_arrays.as_ref(),
+                self.left.key_arrays.as_ref(),
+                &self.group_sort_options,
+                NullEquality::NullEqualsNothing,
+            )?;
+            self.input_group_comparator =
+                Some((right_batch_id, left_batch_id, comparator));
+        }
+        let (_, _, comparator) = self
+            .input_group_comparator
+            .as_ref()
+            .expect("ASOF input group comparator must be initialized");
+        Ok(comparator.compare(self.right.row, self.left.row))
+    }
+
+    fn candidate_is_other_group(&mut self) -> Result<bool> {
+        let Some(candidate) = &self.candidate else {
+            return Ok(false);
+        };
+        if self.group_sort_options.is_empty() {
+            return Ok(false);
+        }
+        let _timer = self.metrics.baseline.elapsed_compute().timer();
+        let candidate_batch_id = candidate.key_batch_id;
+        let left_batch_id = self.left.key_batch_id;
+        if self
+            .candidate_group_comparator
+            .as_ref()
+            .is_none_or(|(candidate, left, _)| {
+                *candidate != candidate_batch_id || *left != left_batch_id
+            })
+        {
+            let comparator = JoinKeyComparator::new(
+                candidate.key_arrays.as_ref(),
+                self.left.key_arrays.as_ref(),
+                &self.group_sort_options,
+                NullEquality::NullEqualsNothing,
+            )?;
+            self.candidate_group_comparator =
+                Some((candidate_batch_id, left_batch_id, comparator));
+        }
+        let (_, _, comparator) = self
+            .candidate_group_comparator
+            .as_ref()
+            .expect("ASOF candidate group comparator must be initialized");
+        Ok(comparator.compare(candidate.row, self.left.row) != Ordering::Equal)
     }
 
     async fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
@@ -905,25 +984,20 @@ impl AsOfJoinStreamState {
                 return Ok(None);
             }
 
-            let (left_group, left_match) = {
+            let left_match = {
                 let _timer = self.metrics.baseline.elapsed_compute().timer();
-                (self.left.group()?, self.left.match_value()?)
+                self.left.match_value()?
             };
-            if left_match.is_null() || left_group.iter().any(ScalarValue::is_null) {
+            if left_match.is_null() || self.left.group_has_null() {
                 self.candidate = None;
+                self.candidate_group_comparator = None;
                 self.push_current_left(None)?;
                 self.left.advance();
                 continue;
             }
-            let candidate_is_other_group = if let Some(candidate) = &self.candidate {
-                let _timer = self.metrics.baseline.elapsed_compute().timer();
-                compare_rows(&candidate.group, &left_group, &self.group_sort_options)?
-                    != Ordering::Equal
-            } else {
-                false
-            };
-            if candidate_is_other_group {
+            if self.candidate_is_other_group()? {
                 self.candidate = None;
+                self.candidate_group_comparator = None;
             }
 
             loop {
@@ -934,34 +1008,27 @@ impl AsOfJoinStreamState {
                 {
                     break;
                 }
-                let action = {
-                    let _timer = self.metrics.baseline.elapsed_compute().timer();
-                    let right_group = self.right.group()?;
-                    if right_group.iter().any(ScalarValue::is_null) {
-                        RightAction::Advance
-                    } else {
-                        match compare_rows(
-                            &right_group,
-                            &left_group,
-                            &self.group_sort_options,
-                        )? {
-                            Ordering::Less => RightAction::Advance,
-                            Ordering::Greater => RightAction::Stop,
-                            Ordering::Equal => {
-                                let right_match = self.right.match_value()?;
-                                if right_match.is_null() {
-                                    RightAction::Advance
-                                } else if is_eligible(self.op, &left_match, &right_match)?
-                                {
-                                    let (batch, row) = self.right.batch_row()?;
-                                    RightAction::Candidate(Candidate {
-                                        batch,
-                                        row,
-                                        group: right_group,
-                                    })
-                                } else {
-                                    RightAction::Stop
-                                }
+                let action = if self.right.group_has_null() {
+                    RightAction::Advance
+                } else {
+                    match self.compare_input_groups()? {
+                        Ordering::Less => RightAction::Advance,
+                        Ordering::Greater => RightAction::Stop,
+                        Ordering::Equal => {
+                            let _timer = self.metrics.baseline.elapsed_compute().timer();
+                            let right_match = self.right.match_value()?;
+                            if right_match.is_null() {
+                                RightAction::Advance
+                            } else if is_eligible(self.op, &left_match, &right_match)? {
+                                let (batch, row) = self.right.batch_row()?;
+                                RightAction::Candidate(Candidate {
+                                    batch,
+                                    row,
+                                    key_arrays: Arc::clone(&self.right.key_arrays),
+                                    key_batch_id: self.right.key_batch_id,
+                                })
+                            } else {
+                                RightAction::Stop
                             }
                         }
                     }
@@ -969,6 +1036,9 @@ impl AsOfJoinStreamState {
                 match action {
                     RightAction::Advance => self.right.advance(),
                     RightAction::Candidate(candidate) => {
+                        // Replacing the candidate selects the nearest eligible row.
+                        // Equal match values have no secondary ordering, so which
+                        // tied row wins is intentionally nondeterministic.
                         self.candidate = Some(candidate);
                         self.right.advance();
                     }
@@ -1057,7 +1127,7 @@ fn is_eligible(op: Operator, left: &ScalarValue, right: &ScalarValue) -> Result<
         Operator::GtEq => ordering != Ordering::Greater,
         Operator::Lt => ordering == Ordering::Greater,
         Operator::LtEq => ordering != Ordering::Less,
-        _ => false,
+        _ => unreachable!("ASOF match operator is validated by try_new"),
     })
 }
 
