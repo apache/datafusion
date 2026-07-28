@@ -40,10 +40,12 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::WindowFunctionDefinition;
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::execution_props::SubqueryIndex;
+use datafusion_physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
+use datafusion_physical_expr::{
+    HigherOrderFunctionExpr, LexOrdering, PhysicalSortExpr, ScalarFunctionExpr,
+};
 use datafusion_physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
     LikeExpr, Literal, NegativeExpr, NotExpr, SqlSimilarToPattern, TryCastExpr,
@@ -335,28 +337,41 @@ pub fn parse_physical_expr_with_converter(
                 .with_nullable(e.nullable),
             )
         }
+        ExprType::HigherOrderUdf(e) => {
+            let func = match &e.fun_definition {
+                Some(buf) => {
+                    ctx.codec().try_decode_higher_order_function(&e.name, buf)?
+                }
+                None => ctx
+                    .task_ctx()
+                    .higher_order_function(e.name.as_str())
+                    .or_else(|_| {
+                        ctx.codec().try_decode_higher_order_function(&e.name, &[])
+                    })?,
+            };
+            let func_def = Arc::clone(&func);
+
+            let args = parse_physical_exprs(&e.args, ctx, input_schema, proto_converter)?;
+
+            let config_options = Arc::clone(ctx.task_ctx().session_config().options());
+
+            Arc::new(HigherOrderFunctionExpr::try_new_with_schema(
+                func_def,
+                args,
+                input_schema,
+                config_options,
+            )?)
+        }
         ExprType::LikeExpr(_) => LikeExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::HashExpr(_) => HashExpr::try_from_proto(proto, &decode_ctx)?,
-        ExprType::ScalarSubquery(sq) => {
-            let data_type: arrow::datatypes::DataType = sq
-                .data_type
-                .as_ref()
-                .ok_or_else(|| {
-                    proto_error("Missing data_type in PhysicalScalarSubqueryExprNode")
-                })?
-                .try_into()?;
+        ExprType::ScalarSubquery(_) => {
             let results = ctx.scalar_subquery_results().ok_or_else(|| {
                 proto_error(
                     "ScalarSubqueryExpr can only be deserialized as part \
                          of a surrounding ScalarSubqueryExec",
                 )
             })?;
-            Arc::new(ScalarSubqueryExpr::new(
-                data_type,
-                sq.nullable,
-                SubqueryIndex::new(sq.index as usize),
-                results.clone(),
-            ))
+            ScalarSubqueryExpr::try_from_proto(proto, &decode_ctx, results)?
         }
         ExprType::DynamicFilter(_) => {
             DynamicFilterPhysicalExpr::try_from_proto(proto, &decode_ctx)?
@@ -370,8 +385,15 @@ pub fn parse_physical_expr_with_converter(
                 .iter()
                 .map(|e| proto_converter.proto_to_physical_expr(e, input_schema, ctx))
                 .collect::<Result<_>>()?;
-            ctx.codec()
-                .try_decode_expr(extension.expr.as_slice(), &inputs)? as _
+            ctx.codec().try_decode_expr(
+                extension.expr.as_slice(),
+                &inputs,
+                &decode_ctx,
+            )? as _
+        }
+        ExprType::Lambda(_) => LambdaExpr::try_from_proto(proto, &decode_ctx)?,
+        ExprType::LambdaVariable(_) => {
+            LambdaVariable::try_from_proto(proto, &decode_ctx)?
         }
     };
 
@@ -590,18 +612,15 @@ pub fn parse_protobuf_file_scan_config(
         file_source
     };
 
-    let mut config_builder = FileScanConfigBuilder::new(object_store_url, file_source)
+    let config = FileScanConfigBuilder::new(object_store_url, file_source)
         .with_file_groups(file_groups)
         .with_constraints(constraints)
         .with_statistics(statistics)
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
         .with_output_ordering(output_ordering)
         .with_output_partitioning(output_partitioning)
-        .with_batch_size(proto.batch_size.map(|s| s as usize));
-    if proto.partitioned_by_file_group.unwrap_or(false) {
-        config_builder = config_builder.with_partitioned_by_file_group(true);
-    }
-    let config = config_builder.build();
+        .with_batch_size(proto.batch_size.map(|s| s as usize))
+        .build();
     Ok(config)
 }
 

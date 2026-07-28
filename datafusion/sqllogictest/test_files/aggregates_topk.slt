@@ -227,8 +227,8 @@ logical_plan
 04)------TableScan: string_topk projection=[category, val]
 physical_plan
 01)SortPreservingMergeExec: [max_val@1 DESC], fetch=2
-02)--SortExec: TopK(fetch=2), expr=[max_val@1 DESC], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[category@0 as category, max(string_topk.val)@1 as max_val]
+02)--ProjectionExec: expr=[category@0 as category, max(string_topk.val)@1 as max_val]
+03)----SortExec: TopK(fetch=2), expr=[max(string_topk.val)@1 DESC], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[category@0 as category], aggr=[max(string_topk.val)], lim=[2]
 05)--------RepartitionExec: partitioning=Hash([category@0], 4), input_partitions=1
 06)----------AggregateExec: mode=Partial, gby=[category@0 as category], aggr=[max(string_topk.val)], lim=[2]
@@ -252,8 +252,8 @@ logical_plan
 06)----------TableScan: string_topk projection=[category, val]
 physical_plan
 01)SortPreservingMergeExec: [max_val@1 DESC], fetch=2
-02)--SortExec: TopK(fetch=2), expr=[max_val@1 DESC], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[category@0 as category, max(string_topk_view.val)@1 as max_val]
+02)--ProjectionExec: expr=[category@0 as category, max(string_topk_view.val)@1 as max_val]
+03)----SortExec: TopK(fetch=2), expr=[max(string_topk_view.val)@1 DESC], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[category@0 as category], aggr=[max(string_topk_view.val)], lim=[2]
 05)--------RepartitionExec: partitioning=Hash([category@0], 4), input_partitions=1
 06)----------AggregateExec: mode=Partial, gby=[category@0 as category], aggr=[max(string_topk_view.val)], lim=[2]
@@ -284,8 +284,8 @@ logical_plan
 04)------TableScan: traces projection=[trace_id]
 physical_plan
 01)SortPreservingMergeExec: [max_trace@1 DESC], fetch=2
-02)--SortExec: TopK(fetch=2), expr=[max_trace@1 DESC], preserve_partitioning=[true]
-03)----ProjectionExec: expr=[trace_id@0 as trace_id, max(traces.trace_id)@1 as max_trace]
+02)--ProjectionExec: expr=[trace_id@0 as trace_id, max(traces.trace_id)@1 as max_trace]
+03)----SortExec: TopK(fetch=2), expr=[max(traces.trace_id)@1 DESC], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces.trace_id)], lim=[2]
 05)--------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
 06)----------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.trace_id)], lim=[2]

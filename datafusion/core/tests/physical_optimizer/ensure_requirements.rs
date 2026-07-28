@@ -293,8 +293,8 @@ fn test_projection_over_multi_partition_sort_limit() {
     assert_ensure_requirements_plan!(limit, @r"
     GlobalLimitExec: skip=0, fetch=21
       SortPreservingMergeExec: [a@0 DESC]
-        SortExec: expr=[a@0 DESC], preserve_partitioning=[true]
-          ProjectionExec: expr=[a@0 as a, b@1 as b]
+        ProjectionExec: expr=[a@0 as a, b@1 as b]
+          SortExec: expr=[a@0 DESC], preserve_partitioning=[true]
             MockMultiPartitionExec
     ");
 }
@@ -580,8 +580,8 @@ fn test_sort_pushdown_through_projection_adds_spm() {
     assert_ensure_requirements_plan!(output_req, @r"
     OutputRequirementExec: order_by=[(a@0, desc)], dist_by=SinglePartition
       SortPreservingMergeExec: [a@0 DESC], fetch=21
-        SortExec: TopK(fetch=21), expr=[a@0 DESC], preserve_partitioning=[true]
-          ProjectionExec: expr=[a@0 as a, b@1 as b]
+        ProjectionExec: expr=[a@0 as a, b@1 as b]
+          SortExec: TopK(fetch=21), expr=[a@0 DESC], preserve_partitioning=[true]
             MockMultiPartitionExec
     ");
 }
@@ -974,8 +974,12 @@ impl ExecutionPlan for MockReqExec {
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
-    fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![self.dist.clone()]
+    fn input_distribution_requirements(
+        &self,
+    ) -> datafusion_physical_plan::InputDistributionRequirements {
+        datafusion_physical_plan::InputDistributionRequirements::new(vec![
+            self.dist.clone(),
+        ])
     }
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         vec![
@@ -1113,7 +1117,7 @@ fn test_idempotent_window_over_multi_partition() {
     ])
     .unwrap();
 
-    let dist = Distribution::HashPartitioned(vec![Arc::new(Column::new("a", 0))]);
+    let dist = Distribution::KeyPartitioned(vec![Arc::new(Column::new("a", 0))]);
     let window_like: Arc<dyn ExecutionPlan> =
         Arc::new(MockReqExec::new(source, dist, Some(ord)));
 

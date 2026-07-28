@@ -21,7 +21,7 @@
 //! for details.
 //!
 //! Note these streams are an incremental migration of the existing
-//! [`crate::aggregates::row_hash::GroupedHashAggregateStream`].
+//! [`crate::aggregates::grouped_hash_stream::GroupedHashAggregateStream`].
 //!
 //! See issue for details: <https://github.com/apache/datafusion/issues/22710>
 
@@ -293,9 +293,7 @@ impl PartialHashAggregateStream {
             Arc::clone(&schema),
             batch_size,
         )?;
-        let can_skip_aggregation =
-            agg.group_by.is_single() && hash_table.can_skip_aggregation();
-        let skip_aggregation_probe = if can_skip_aggregation {
+        let skip_aggregation_probe = if agg.group_by.is_single() {
             let options = &context.session_config().options().execution;
             let probe_ratio_threshold =
                 options.skip_partial_aggregation_probe_ratio_threshold;

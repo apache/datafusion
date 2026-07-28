@@ -298,6 +298,27 @@ SELECT to_date('2020-09-08 12/00/00+00:00', '%c', '%+')
 query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using format '%q': trailing input
 SELECT to_date('2020-09-08 12/00/00+00:00', '%q')
 
+# NULL string scalar inputs and all-NULL scalar formats return NULL
+query DD
+SELECT
+  to_date(NULL::VARCHAR, '%Y-%m-%d'),
+  to_date('2020-09-08', NULL::VARCHAR, NULL::VARCHAR)
+----
+NULL NULL
+
+# NULL array formats are skipped for each row; rows with no usable format return NULL
+query ID
+SELECT id, to_date(value, format1, format2)
+FROM (
+  VALUES
+    (1, '2020-09-08', NULL::VARCHAR, '%Y-%m-%d'),
+    (2, '2020-09-08', NULL::VARCHAR, NULL::VARCHAR)
+) AS t(id, value, format1, format2)
+ORDER BY id
+----
+1 2020-09-08
+2 NULL
+
 statement ok
 create table ts_utf8_data(ts varchar(100), format varchar(100)) as values
   ('2020-09-08 12/00/00+00:00', '%Y-%m-%d %H/%M/%S%#z'),

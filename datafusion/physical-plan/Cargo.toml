@@ -85,7 +85,7 @@ itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
 num-traits = { workspace = true }
 parking_lot = { workspace = true }
-pin-project-lite = "^0.2.7"
+pin-project-lite = { workspace = true }
 serde_json = { workspace = true, features = ["preserve_order"] }
 tokio = { workspace = true }
 
@@ -142,3 +142,4 @@ required-features = ["test_utils"]
 [[bench]]
 harness = false
 name = "multi_group_by"
+required-features = ["test_utils"]

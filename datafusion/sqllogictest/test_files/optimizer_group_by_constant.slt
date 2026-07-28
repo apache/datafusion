@@ -60,10 +60,9 @@ FROM test_table t
 group by 1, 2, 3
 ----
 logical_plan
-01)Projection: Int64(123), Int64(456), Int64(789), count(Int64(1)), avg(t.c12)
-02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), avg(t.c12)]]
-03)----SubqueryAlias: t
-04)------TableScan: test_table projection=[c12]
+01)Aggregate: groupBy=[[Int64(123), Int64(456), Int64(789)]], aggr=[[count(Int64(1)), avg(t.c12)]]
+02)--SubqueryAlias: t
+03)----TableScan: test_table projection=[c12]
 
 query TT
 EXPLAIN 
@@ -72,8 +71,8 @@ FROM test_table t
 GROUP BY 1, 2
 ----
 logical_plan
-01)Projection: Date32("2023-05-04") AS dt, Boolean(true) AS today_filter, count(Int64(1))
-02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+01)Projection: to_date(Utf8("2023-05-04")) AS dt, date_part(Utf8("DAY"),now()) < Int64(1000) AS today_filter, count(Int64(1))
+02)--Aggregate: groupBy=[[Date32("2023-05-04") AS to_date(Utf8("2023-05-04")), Boolean(true) AS date_part(Utf8("DAY"),now()) < Int64(1000)]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: t
 04)------TableScan: test_table projection=[]
 
@@ -90,10 +89,9 @@ FROM test_table t
 GROUP BY 1
 ----
 logical_plan
-01)Projection: Boolean(true) AS NOT date_part(Utf8("MONTH"),now()) BETWEEN Int64(50) AND Int64(60), count(Int64(1))
-02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-03)----SubqueryAlias: t
-04)------TableScan: test_table projection=[]
+01)Aggregate: groupBy=[[Boolean(true) AS NOT date_part(Utf8("MONTH"),now()) BETWEEN Int64(50) AND Int64(60)]], aggr=[[count(Int64(1))]]
+02)--SubqueryAlias: t
+03)----TableScan: test_table projection=[]
 
 query TT
 EXPLAIN 
@@ -119,7 +117,7 @@ logical_plan
 
 # Config reset
 
-# The SLT runner sets `target_partitions` to 4 instead of using the default, so 
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
 statement ok
 set datafusion.execution.target_partitions = 4;

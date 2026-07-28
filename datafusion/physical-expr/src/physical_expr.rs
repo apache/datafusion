@@ -26,6 +26,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{DFSchema, HashMap, ScalarValue, SplitPoint};
 use datafusion_common::{Result, plan_err};
 use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{Expr, Partitioning as LogicalPartitioning, SortExpr};
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 
@@ -60,7 +61,7 @@ pub fn physical_exprs_contains(
 ) -> bool {
     physical_exprs
         .iter()
-        .any(|physical_expr| physical_expr.eq(expr))
+        .any(|physical_expr| physical_expr.as_ref().eq(expr.as_ref()))
 }
 
 /// Checks whether the given physical expression slices are equal.
@@ -68,7 +69,8 @@ pub fn physical_exprs_equal(
     lhs: &[Arc<dyn PhysicalExpr>],
     rhs: &[Arc<dyn PhysicalExpr>],
 ) -> bool {
-    lhs.len() == rhs.len() && izip!(lhs, rhs).all(|(lhs, rhs)| lhs.eq(rhs))
+    lhs.len() == rhs.len()
+        && izip!(lhs, rhs).all(|(lhs, rhs)| lhs.as_ref().eq(rhs.as_ref()))
 }
 
 /// Checks whether the given physical expression slices are equal in the sense
@@ -189,47 +191,68 @@ pub fn create_lex_ordering(
             exprs,
             &df_schema,
             execution_props,
+            &PhysicalPlanningContext::default(),
         )?));
     }
     Ok(all_sort_orders)
 }
 
 /// Create a physical sort expression from a logical expression
+///
+/// See [`create_physical_expr`] for details on the `planning_ctx` argument.
 pub fn create_physical_sort_expr(
     e: &SortExpr,
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
+    planning_ctx: &PhysicalPlanningContext,
 ) -> Result<PhysicalSortExpr> {
-    create_physical_expr(&e.expr, input_dfschema, execution_props).map(|expr| {
-        let options = SortOptions::new(!e.asc, e.nulls_first);
-        PhysicalSortExpr::new(expr, options)
-    })
+    create_physical_expr(&e.expr, input_dfschema, execution_props, planning_ctx).map(
+        |expr| {
+            let options = SortOptions::new(!e.asc, e.nulls_first);
+            PhysicalSortExpr::new(expr, options)
+        },
+    )
 }
 
 /// Create vector of physical sort expression from a vector of logical expression
+///
+/// See [`create_physical_expr`] for details on the `planning_ctx` argument.
 pub fn create_physical_sort_exprs(
     exprs: &[SortExpr],
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
+    planning_ctx: &PhysicalPlanningContext,
 ) -> Result<Vec<PhysicalSortExpr>> {
     exprs
         .iter()
-        .map(|e| create_physical_sort_expr(e, input_dfschema, execution_props))
+        .map(|e| {
+            create_physical_sort_expr(e, input_dfschema, execution_props, planning_ctx)
+        })
         .collect()
 }
 
 /// Create physical partitioning from logical partitioning.
+///
+/// See [`create_physical_expr`] for details on the `planning_ctx` argument.
 pub fn create_physical_partitioning(
     partitioning: &LogicalPartitioning,
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
+    planning_ctx: &PhysicalPlanningContext,
 ) -> Result<Partitioning> {
     match partitioning {
         LogicalPartitioning::RoundRobinBatch(n) => Ok(Partitioning::RoundRobinBatch(*n)),
         LogicalPartitioning::Hash(exprs, partition_count) => {
             let exprs = exprs
                 .iter()
-                .map(|expr| create_physical_expr(expr, input_dfschema, execution_props))
+                .map(|expr| {
+                    create_physical_expr(
+                        expr,
+                        input_dfschema,
+                        execution_props,
+                        planning_ctx,
+                    )
+                })
                 .collect::<Result<Vec<_>>>()?;
             Ok(Partitioning::Hash(exprs, *partition_count))
         }
@@ -238,6 +261,7 @@ pub fn create_physical_partitioning(
                 range.ordering(),
                 input_dfschema,
                 execution_props,
+                planning_ctx,
             )?;
             let Some(ordering) = LexOrdering::new(ordering) else {
                 return plan_err!("Range partitioning requires non-empty ordering");
@@ -328,7 +352,7 @@ pub fn add_offset_to_physical_sort_exprs(
 mod tests {
     use super::*;
 
-    use crate::expressions::{BinaryExpr, Literal};
+    use crate::expressions::{BinaryExpr, Literal, UnKnownColumn};
     use crate::physical_expr::{
         physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
     };
@@ -374,6 +398,12 @@ mod tests {
         // below expressions are not inside physical_exprs
         assert!(!physical_exprs_contains(&physical_exprs, &col_c_expr));
         assert!(!physical_exprs_contains(&physical_exprs, &lit1));
+
+        let unknown = Arc::new(UnKnownColumn::new("unknown")) as Arc<dyn PhysicalExpr>;
+        assert!(!physical_exprs_contains(
+            std::slice::from_ref(&unknown),
+            &unknown
+        ));
     }
 
     #[test]
@@ -404,6 +434,12 @@ mod tests {
         assert!(!physical_exprs_equal(&vec1, &vec3));
         assert!(!physical_exprs_bag_equal(&vec1, &vec2));
         assert!(!physical_exprs_bag_equal(&vec1, &vec3));
+
+        let unknown = Arc::new(UnKnownColumn::new("unknown")) as Arc<dyn PhysicalExpr>;
+        assert!(!physical_exprs_equal(
+            std::slice::from_ref(&unknown),
+            std::slice::from_ref(&unknown)
+        ));
     }
 
     #[test]

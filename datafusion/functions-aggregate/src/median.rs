@@ -535,18 +535,14 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
 
         Ok(vec![Arc::new(converted_list_array)])
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn size(&self) -> usize {
         self.group_values
             .iter()
-            .map(|values| values.capacity() * size_of::<T>())
+            .map(|values| values.capacity() * size_of::<T::Native>())
             .sum::<usize>()
-            // account for size of self.grou_values too
-            + self.group_values.capacity() * size_of::<Vec<T>>()
+            // account for size of self.group_values too
+            + self.group_values.capacity() * size_of::<Vec<T::Native>>()
+            + size_of::<Vec<Vec<T::Native>>>()
     }
 }
 

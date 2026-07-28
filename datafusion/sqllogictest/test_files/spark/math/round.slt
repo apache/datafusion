@@ -305,52 +305,52 @@ SELECT round(arrow_cast(42, 'UInt32'), 2::int);
 # --- Decimal32 ---
 
 # round(decimal32, 0) — round to integer
-query ?
+query R
 SELECT round(arrow_cast(2.5, 'Decimal32(9, 1)'), 0::int);
 ----
-3.0
+3
 
-query ?
+query R
 SELECT round(arrow_cast(-2.5, 'Decimal32(9, 1)'), 0::int);
 ----
--3.0
+-3
 
 # round(decimal32, 2)
-query ?
+query R
 SELECT round(arrow_cast(2.345, 'Decimal32(9, 3)'), 2::int);
 ----
-2.350
+2.35
 
 # round(decimal32) default scale = 0
-query ?
+query R
 SELECT round(arrow_cast(3.5, 'Decimal32(9, 1)'));
 ----
-4.0
+4
 
 # --- Decimal64 ---
 
 # round(decimal64, 0) — round to integer
-query ?
+query R
 SELECT round(arrow_cast(2.5, 'Decimal64(18, 1)'), 0::int);
 ----
-3.0
+3
 
-query ?
+query R
 SELECT round(arrow_cast(-2.5, 'Decimal64(18, 1)'), 0::int);
 ----
--3.0
+-3
 
 # round(decimal64, 2)
-query ?
+query R
 SELECT round(arrow_cast(2.345, 'Decimal64(18, 3)'), 2::int);
 ----
-2.350
+2.35
 
 # round(decimal64) default scale = 0
-query ?
+query R
 SELECT round(arrow_cast(3.5, 'Decimal64(18, 1)'));
 ----
-4.0
+4
 
 # --- Decimal128 ---
 

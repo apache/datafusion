@@ -29,11 +29,11 @@ use std::sync::Arc;
 
 use datafusion_common::{Result, ScalarValue, Statistics, exec_err, internal_err};
 use datafusion_execution::TaskContext;
-use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
+use datafusion_expr::physical_planning_context::{ScalarSubqueryResults, SubqueryIndex};
 
 use crate::execution_plan::{CardinalityEffect, ExecutionPlan, PlanProperties};
 use crate::joins::utils::{OnceAsync, OnceFut};
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayAs, DisplayFormatType, SendableRecordBatchStream};
 
@@ -202,9 +202,9 @@ impl ExecutionPlan for ScalarSubqueryExec {
     ) -> Result<SendableRecordBatchStream> {
         let subqueries = self.subqueries.clone();
         let results = self.results.clone();
-        let subquery_ctx = Arc::clone(&context);
+        let planning_ctx = Arc::clone(&context);
         let mut subquery_future = self.subquery_future.try_once(move || {
-            Ok(async move { execute_subqueries(subqueries, results, subquery_ctx).await })
+            Ok(async move { execute_subqueries(subqueries, results, planning_ctx).await })
         })?;
         let input = Arc::clone(&self.input);
         let schema = self.schema();
@@ -236,8 +236,19 @@ impl ExecutionPlan for ScalarSubqueryExec {
         vec![false; self.subqueries.len() + 1]
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        args.compute_child_statistics(&self.input, args.partition())
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        // Only `self.input` (child 0) is used; the subqueries are skipped.
+        let mut requests = vec![ChildStats::Skip; 1 + self.subqueries.len()];
+        requests[0] = ChildStats::At(partition);
+        requests
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        Ok(Arc::clone(&input_stats[0]))
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
