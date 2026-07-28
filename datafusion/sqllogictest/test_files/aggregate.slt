@@ -1151,6 +1151,27 @@ SELECT g, percentile_cont(DISTINCT x, 0.5) FROM grp_distinct_pct GROUP BY g ORDE
 statement ok
 DROP TABLE grp_distinct_pct;
 
+# Regression: sliding-window percentile_cont(DISTINCT ...) over data with
+# NULLs exercises the null_count() > 0 slow path in BOTH update_batch (a NULL
+# row enters the frame) and retract_batch (a NULL row leaves the frame as the
+# window slides). NULLs are ignored; distinct dedups the non-null values.
+statement ok
+CREATE TABLE distinct_pct_nulls(id INT, x DOUBLE) AS VALUES
+  (1, 5), (2, NULL), (3, 9), (4, 5);
+
+query IR
+SELECT id, percentile_cont(DISTINCT x, 0.5)
+  OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM distinct_pct_nulls ORDER BY id;
+----
+1 5
+2 5
+3 9
+4 7
+
+statement ok
+DROP TABLE distinct_pct_nulls;
+
 query RT
 select approx_median(arrow_cast(col_f32, 'Float16')), arrow_typeof(approx_median(arrow_cast(col_f32, 'Float16'))) from median_table;
 ----
