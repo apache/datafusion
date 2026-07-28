@@ -507,6 +507,20 @@ SELECT initcap(arrow_cast('foo', 'Dictionary(Int32, Utf8)'))
 ----
 Foo
 
+query TTTT
+SELECT initcap(arrow_cast('foo BAR', 'Dictionary(Int32, LargeUtf8)')),
+       arrow_typeof(initcap(arrow_cast('foo BAR', 'Dictionary(Int32, LargeUtf8)'))),
+       initcap(arrow_cast(
+           arrow_cast('foo BAR', 'Dictionary(Int32, Utf8)'),
+           'Dictionary(Int32, Utf8View)'
+       )),
+       arrow_typeof(initcap(arrow_cast(
+           arrow_cast('foo BAR', 'Dictionary(Int32, Utf8)'),
+           'Dictionary(Int32, Utf8View)'
+       )))
+----
+Foo Bar Dictionary(Int32, LargeUtf8) Foo Bar Dictionary(Int32, Utf8View)
+
 query ?T
 SELECT initcap(arrow_cast(
            arrow_cast('foo BAR', 'Dictionary(UInt32, Utf8)'),
@@ -542,6 +556,20 @@ ORDER BY id
 Foo Bar Foo Bar Dictionary(Int32, Utf8) Dictionary(Int32, Dictionary(UInt32, Utf8))
 Éclair Café Éclair Café Dictionary(Int32, Utf8) Dictionary(Int32, Dictionary(UInt32, Utf8))
 NULL NULL Dictionary(Int32, Utf8) Dictionary(Int32, Dictionary(UInt32, Utf8))
+
+query TTTT
+SELECT reverse(arrow_cast('foo BAR', 'Dictionary(Int32, LargeUtf8)')),
+       arrow_typeof(reverse(arrow_cast('foo BAR', 'Dictionary(Int32, LargeUtf8)'))),
+       reverse(arrow_cast(
+           arrow_cast('foo BAR', 'Dictionary(Int32, Utf8)'),
+           'Dictionary(Int32, Utf8View)'
+       )),
+       arrow_typeof(reverse(arrow_cast(
+           arrow_cast('foo BAR', 'Dictionary(Int32, Utf8)'),
+           'Dictionary(Int32, Utf8View)'
+       )))
+----
+RAB oof Dictionary(Int32, LargeUtf8) RAB oof Dictionary(Int32, Utf8View)
 
 query T?TT
 SELECT reverse(dict_col), reverse(nested_dict_col),
@@ -754,6 +782,22 @@ SELECT character_length(arrow_cast(
        )))
 ----
 1 Dictionary(Int32, Dictionary(UInt32, Int32))
+
+query ?T?T
+SELECT character_length(arrow_cast('foo', 'Dictionary(Int32, LargeUtf8)')),
+       arrow_typeof(character_length(
+           arrow_cast('foo', 'Dictionary(Int32, LargeUtf8)')
+       )),
+       character_length(arrow_cast(
+           arrow_cast('foo', 'Dictionary(Int32, Utf8)'),
+           'Dictionary(Int32, Utf8View)'
+       )),
+       arrow_typeof(character_length(arrow_cast(
+           arrow_cast('foo', 'Dictionary(Int32, Utf8)'),
+           'Dictionary(Int32, Utf8View)'
+       )))
+----
+3 Dictionary(Int32, Int64) 3 Dictionary(Int32, Int32)
 
 query I
 SELECT octet_length('foo')
