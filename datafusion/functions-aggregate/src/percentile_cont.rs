@@ -39,7 +39,7 @@ use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 use crate::min_max::{max_udaf, min_udaf};
 use datafusion_common::{
     Result, ScalarValue, exec_datafusion_err, internal_datafusion_err,
-    utils::take_function_args,
+    utils::{SingleRowListArrayBuilder, take_function_args},
 };
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -54,7 +54,7 @@ use datafusion_expr::{
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
-use datafusion_functions_aggregate_common::utils::{GenericDistinctBuffer, Hashable};
+use datafusion_functions_aggregate_common::utils::Hashable;
 use datafusion_macros::user_doc;
 
 use crate::utils::validate_percentile_expr;
@@ -662,16 +662,24 @@ where
     }
 }
 
+/// Sliding-window–capable accumulator for `percentile_cont(DISTINCT ...)`.
+///
+/// Distinct values are tracked with a per-value multiplicity count (how many
+/// rows currently in the window carry that value) rather than a plain set, so
+/// that `retract_batch` only drops a value once *all* of its occurrences have
+/// left the window frame. The percentile is then computed over the set of keys
+/// with a positive count.
 #[derive(Debug)]
 struct DistinctPercentileContAccumulator<T: ArrowNumericType> {
-    distinct_values: GenericDistinctBuffer<T>,
+    /// Distinct value -> number of in-window rows carrying it.
+    counts: HashMap<Hashable<T::Native>, usize>,
     percentile: f64,
 }
 
 impl<T: ArrowNumericType + Debug> DistinctPercentileContAccumulator<T> {
     fn new(percentile: f64) -> Self {
         Self {
-            distinct_values: GenericDistinctBuffer::new(T::DATA_TYPE),
+            counts: HashMap::default(),
             percentile,
         }
     }
@@ -684,26 +692,50 @@ where
     f64: AsPrimitive<T::Native>,
 {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        self.distinct_values.state()
+        // Emit the distinct keys as a single List scalar, matching the state
+        // shape declared in `state_fields` (a List of the input type). Counts
+        // are window-local bookkeeping and are intentionally not serialized:
+        // cross-partition merges only need the distinct key set.
+        let arr = Arc::new(
+            PrimitiveArray::<T>::from_iter_values(self.counts.keys().map(|v| v.0))
+                .with_data_type(T::DATA_TYPE),
+        );
+        Ok(vec![
+            SingleRowListArrayBuilder::new(arr).build_list_scalar(),
+        ])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        self.distinct_values.update_batch(values)
+        // `values` may carry extra argument columns (e.g. the percentile
+        // literal); only the first column holds the aggregated values.
+        let arr = values[0].as_primitive::<T>();
+        for value in arr.iter().flatten() {
+            *self.counts.entry(Hashable(value)).or_default() += 1;
+        }
+        Ok(())
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        self.distinct_values.merge_batch(states)
+        let list = states[0].as_list::<i32>();
+        for values in list.iter().flatten() {
+            let arr = values.as_primitive::<T>();
+            for value in arr.iter().flatten() {
+                *self.counts.entry(Hashable(value)).or_default() += 1;
+            }
+        }
+        Ok(())
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let mut values: Vec<T::Native> =
-            self.distinct_values.values.iter().map(|v| v.0).collect();
+        let mut values: Vec<T::Native> = self.counts.keys().map(|v| v.0).collect();
         let value = calculate_percentile::<T>(&mut values, self.percentile);
         ScalarValue::new_primitive::<T>(value, &T::DATA_TYPE)
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) + self.distinct_values.size()
+        size_of_val(self)
+            + self.counts.capacity()
+                * (size_of::<Hashable<T::Native>>() + size_of::<usize>())
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -713,7 +745,12 @@ where
 
         let arr = values[0].as_primitive::<T>();
         for value in arr.iter().flatten() {
-            self.distinct_values.values.remove(&Hashable(value));
+            if let Some(count) = self.counts.get_mut(&Hashable(value)) {
+                *count -= 1;
+                if *count == 0 {
+                    self.counts.remove(&Hashable(value));
+                }
+            }
         }
         Ok(())
     }
