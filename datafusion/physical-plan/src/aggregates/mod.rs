@@ -4401,6 +4401,124 @@ mod tests {
         Ok(())
     }
 
+    /// Single-mode grouped aggregation over *partially sorted* input
+    /// (`GroupOrdering::Partial` + `OutOfMemoryMode::Spill` in
+    /// `GroupedHashAggregateStream`) must spill and produce the same results
+    /// as an unlimited-memory run.
+    #[tokio::test]
+    async fn partially_sorted_single_aggregate_spills_and_matches() -> Result<()> {
+        // Grouping by (sort_col, group_col) while the input carries an ordering
+        // on `sort_col` alone produces `InputOrderMode::PartiallySorted`, which
+        // drives `GroupOrdering::Partial` inside `GroupedHashAggregateStream`.
+        // A single constant `sort_col` value means no sort boundary ever
+        // completes mid-stream, so groups accumulate until the pool is
+        // exhausted and the stream must spill sorted intermediate state and
+        // merge it back.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("sort_col", DataType::Int32, false),
+            Field::new("group_col", DataType::UInt32, false),
+            Field::new("value_col", DataType::Float64, false),
+        ]));
+
+        let batch = |groups: Vec<u32>, values: Vec<f64>| -> Result<RecordBatch> {
+            Ok(RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![0; groups.len()])),
+                    Arc::new(UInt32Array::from(groups)),
+                    Arc::new(Float64Array::from(values)),
+                ],
+            )?)
+        };
+        // Every group appears in both batches with different values, so the
+        // first batch's states get spilled and the read-back merge must
+        // combine two partial states per group instead of passing spilled
+        // singleton states through.
+        let n_groups: u32 = 400;
+        let groups: Vec<u32> = (0..n_groups).collect();
+        let batches = vec![
+            batch(groups.clone(), (0..n_groups).map(f64::from).collect())?,
+            batch(groups, (0..n_groups).map(|g| f64::from(g + 1000)).collect())?,
+        ];
+
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(
+            Column::new("sort_col", 0),
+        ))])
+        .unwrap();
+
+        let build_exec = || -> Result<Arc<AggregateExec>> {
+            let input = TestMemoryExec::try_new(
+                std::slice::from_ref(&batches),
+                Arc::clone(&schema),
+                None,
+            )?
+            .try_with_sort_information(vec![ordering.clone()])?;
+            let input = Arc::new(TestMemoryExec::update_cache(&Arc::new(input)));
+            // MIN keeps a single intermediate value; AVG keeps two (sum + count),
+            // so both single- and multi-state accumulators are spilled and merged.
+            let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
+                Arc::new(
+                    AggregateExprBuilder::new(
+                        min_udaf(),
+                        vec![col("value_col", &schema)?],
+                    )
+                    .schema(Arc::clone(&schema))
+                    .alias("MIN(value_col)")
+                    .build()?,
+                ),
+                Arc::new(
+                    AggregateExprBuilder::new(
+                        avg_udaf(),
+                        vec![col("value_col", &schema)?],
+                    )
+                    .schema(Arc::clone(&schema))
+                    .alias("AVG(value_col)")
+                    .build()?,
+                ),
+            ];
+            Ok(Arc::new(AggregateExec::try_new(
+                AggregateMode::Single,
+                PhysicalGroupBy::new_single(vec![
+                    (col("sort_col", &schema)?, "sort_col".to_string()),
+                    (col("group_col", &schema)?, "group_col".to_string()),
+                ]),
+                aggregates,
+                vec![None, None],
+                input,
+                Arc::clone(&schema),
+            )?))
+        };
+
+        // Sanity: partial ordering must be detected, otherwise the test would
+        // exercise `GroupOrdering::None` instead of the intended path.
+        assert!(matches!(
+            build_exec()?.input_order_mode(),
+            InputOrderMode::PartiallySorted(_)
+        ));
+
+        // Unlimited-memory reference result (no spill).
+        let reference_agg = build_exec()?;
+        let reference =
+            collect(reference_agg.execute(0, new_spill_ctx(8, 1024 * 1024))?).await?;
+        assert_spill_count_metric(false, reference_agg);
+
+        // A small `FairSpillPool` (disk enabled by default) forces the
+        // partially-ordered aggregate to spill sorted intermediate state and
+        // merge it back. The pool is large enough to still reserve the sort
+        // headroom required while spilling, but too small to hold every group.
+        let spill_agg = build_exec()?;
+        let spilled = collect(spill_agg.execute(0, new_spill_ctx(8, 16_000))?).await?;
+        assert_spill_count_metric(true, spill_agg);
+
+        // Spilled output must match the unlimited-memory reference.
+        assert_eq!(
+            batches_to_sort_string(&reference),
+            batches_to_sort_string(&spilled),
+        );
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn ordered_partial_aggregate_partially_sorted_no_emit_panic() -> Result<()> {
         // Reproducer for #20445: emitting from PartiallySorted input must not
