@@ -129,6 +129,7 @@ use datafusion_functions_aggregate::string_agg::string_agg_udaf;
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
 use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+use datafusion_physical_plan::ChildrenPropertiesHint;
 use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_proto_converter,
     physical_plan_to_bytes_with_proto_converter,
@@ -326,12 +327,21 @@ impl ExecutionPlan for DowncastDelegatingExec {
         self.inner.children()
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let inner = Arc::clone(&self.inner)
+            .replace_children(children, ChildrenPropertiesHint::Recompute)?;
+        Ok(Arc::new(Self::new(inner)))
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let inner = Arc::clone(&self.inner).with_new_children(children)?;
-        Ok(Arc::new(Self::new(inner)))
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn downcast_delegate(&self) -> Option<&dyn ExecutionPlan> {
@@ -4600,11 +4610,19 @@ impl ExecutionPlan for CustomExecWithExprs {
         vec![&self.child]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         unreachable!()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn execute(

@@ -51,9 +51,10 @@ use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use crate::topk::TopK;
 use crate::topk::TopKDynamicFilters;
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
-    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
-    Statistics,
+    ChildrenPropertiesHint, DisplayAs, DisplayFormatType, Distribution,
+    EmptyRecordBatchStream, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    PlanProperties, SendableRecordBatchStream, Statistics,
+    with_new_children_if_necessary,
 };
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
@@ -1278,16 +1279,17 @@ impl ExecutionPlan for SortExec {
         vec![false]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        hint: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut new_sort = self.cloned();
         assert_eq!(children.len(), 1, "SortExec should have exactly one child");
         new_sort.input = Arc::clone(&children[0]);
 
-        if !has_same_children_properties(self.as_ref(), &children)? {
-            // Recompute the properties based on the new input since they may have changed
+        if hint == ChildrenPropertiesHint::Recompute {
+            // Recompute the properties based on the new input since they may have changed.
             let (cache, sort_prefix) = Self::compute_properties(
                 &new_sort.input,
                 new_sort.expr.clone(),
@@ -1303,12 +1305,24 @@ impl ExecutionPlan for SortExec {
         Ok(Arc::new(new_sort))
     }
 
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        match has_same_children_properties(self.as_ref(), &children)? {
+            true => {
+                self.replace_children(children, ChildrenPropertiesHint::SameProperties)
+            }
+            false => self.replace_children(children, ChildrenPropertiesHint::Recompute),
+        }
+    }
+
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         let children = self.children().into_iter().cloned().collect();
-        let new_sort = self.with_new_children(children)?;
+        let new_sort = with_new_children_if_necessary(self, children)?;
         let mut new_sort = new_sort
             .downcast_ref::<SortExec>()
-            .expect("cloned 1 lines above this line, we know the type")
+            .expect("rebuilt SortExec with new children")
             .clone();
         // Our dynamic filter and execution metrics are the state we need to reset.
         new_sort.filter = Some(new_sort.create_filter());
@@ -1753,11 +1767,19 @@ mod tests {
             vec![]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ChildrenPropertiesHint,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(self)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(children, ChildrenPropertiesHint::Recompute)
         }
 
         fn execute(

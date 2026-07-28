@@ -40,8 +40,8 @@ use datafusion_physical_plan::scalar_subquery::ScalarSubqueryExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{
-    ChildStats, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties, SendableRecordBatchStream, StatisticsArgs,
+    ChildStats, ChildrenPropertiesHint, DisplayAs, DisplayFormatType, ExecutionPlan,
+    ExecutionPlanProperties, PlanProperties, SendableRecordBatchStream, StatisticsArgs,
     with_new_children_if_necessary,
 };
 
@@ -232,9 +232,10 @@ impl ExecutionPlan for OutputRequirementExec {
         vec![self.order_requirement.clone()]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self::new(
             children.remove(0), // has a single child
@@ -242,6 +243,13 @@ impl ExecutionPlan for OutputRequirementExec {
             self.dist_requirement.clone(),
             self.fetch,
         )))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn execute(

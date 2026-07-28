@@ -27,7 +27,7 @@ use datafusion_catalog::{Session, TableProvider};
 use datafusion_common::config::Dialect;
 use datafusion_expr::{Expr, TableType, dml::InsertOp};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion_physical_plan::execution_plan::SchedulingType;
+use datafusion_physical_plan::{ChildrenPropertiesHint, execution_plan::SchedulingType};
 use datafusion_physical_plan::{
     DisplayAs, ExecutionPlan, PlanProperties,
     execution_plan::{Boundedness, EmissionType},
@@ -161,12 +161,20 @@ impl ExecutionPlan for TestInsertExec {
         vec![]
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert!(children.is_empty());
+        Ok(self)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        assert!(children.is_empty());
-        Ok(self)
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn execute(

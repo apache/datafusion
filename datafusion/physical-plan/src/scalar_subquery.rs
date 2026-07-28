@@ -35,7 +35,9 @@ use crate::execution_plan::{CardinalityEffect, ExecutionPlan, PlanProperties};
 use crate::joins::utils::{OnceAsync, OnceFut};
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{DisplayAs, DisplayFormatType, SendableRecordBatchStream};
+use crate::{
+    ChildrenPropertiesHint, DisplayAs, DisplayFormatType, SendableRecordBatchStream,
+};
 
 use futures::StreamExt;
 use futures::TryStreamExt;
@@ -162,9 +164,10 @@ impl ExecutionPlan for ScalarSubqueryExec {
         children
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // First child is the main input, the rest are subquery plans.
         let input = children.remove(0);
@@ -182,6 +185,13 @@ impl ExecutionPlan for ScalarSubqueryExec {
             subqueries,
             self.results.clone(),
         )))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
@@ -381,14 +391,22 @@ mod tests {
             vec![&self.inner]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             mut children: Vec<Arc<dyn ExecutionPlan>>,
+            _: ChildrenPropertiesHint,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(Arc::new(Self::new(
                 children.remove(0),
                 Arc::clone(&self.execute_calls),
             )))
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(children, ChildrenPropertiesHint::Recompute)
         }
 
         fn execute(

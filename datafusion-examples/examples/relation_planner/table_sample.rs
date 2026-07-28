@@ -100,7 +100,6 @@ use futures::{
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use tonic::async_trait;
 
-use datafusion::optimizer::simplify_expressions::simplify_literal::parse_literal;
 use datafusion::{
     execution::{
         RecordBatchStream, SendableRecordBatchStream, SessionState, SessionStateBuilder,
@@ -114,6 +113,10 @@ use datafusion::{
     },
     physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
     prelude::*,
+};
+use datafusion::{
+    optimizer::simplify_expressions::simplify_literal::parse_literal,
+    physical_plan::ChildrenPropertiesHint,
 };
 use datafusion_common::{
     DFSchemaRef, DataFusionError, Result, Statistics, internal_err, not_impl_err,
@@ -697,9 +700,10 @@ impl ExecutionPlan for SampleExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self::try_new(
             children.swap_remove(0),
@@ -707,6 +711,13 @@ impl ExecutionPlan for SampleExec {
             self.upper_bound,
             self.seed,
         )?))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn execute(

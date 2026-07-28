@@ -24,8 +24,8 @@ use datafusion_common::{DataFusionError, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr_common::metrics::MetricsSet;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, StatisticsArgs,
-    StatisticsContext,
+    ChildrenPropertiesHint, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    StatisticsArgs, StatisticsContext,
 };
 use stabby::string::String as SString;
 use stabby::vec::Vec as SVec;
@@ -416,9 +416,10 @@ impl ExecutionPlan for ForeignExecutionPlan {
         self.children.iter().collect()
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let children = children
             .into_iter()
@@ -428,6 +429,13 @@ impl ExecutionPlan for ForeignExecutionPlan {
             unsafe { df_result!((self.plan.with_new_children)(&self.plan, children))? };
 
         (&new_plan).try_into()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn execute(
@@ -536,9 +544,10 @@ pub mod tests {
             self.children.iter().collect()
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
+            _: ChildrenPropertiesHint,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(Arc::new(EmptyExec {
                 props: Arc::clone(&self.props),
@@ -546,6 +555,13 @@ pub mod tests {
                 metrics: self.metrics.clone(),
                 statistics: self.statistics.clone(),
             }))
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(children, ChildrenPropertiesHint::Recompute)
         }
 
         fn execute(
