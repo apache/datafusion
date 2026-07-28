@@ -3523,6 +3523,27 @@ select to_time(time_str) from time_strings;
 statement ok
 drop table time_strings;
 
+# Table input with multiple formats
+query D rowsort
+select to_time(
+    time_str,
+    '%Q',
+    '%H:%M:%S',
+    '%H-%M-%S',
+    '%H/%M/%S'
+) from (
+    values
+        ('12:30:45'),
+        ('14-25-30'),
+        ('09/05/01'),
+        (NULL)
+) as formatted_time_strings(time_str);
+----
+09:05:01
+12:30:45
+14:25:30
+NULL
+
 # Error cases
 
 query error Error parsing 'not_a_time' as time
