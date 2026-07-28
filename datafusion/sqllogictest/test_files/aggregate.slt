@@ -1122,7 +1122,8 @@ SELECT percentile_cont(DISTINCT x, 0.5) FROM distinct_pct;
 query IR
 SELECT id, percentile_cont(DISTINCT x, 0.5)
   OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
-FROM distinct_pct;
+FROM distinct_pct
+ORDER BY id;
 ----
 1 5
 2 5

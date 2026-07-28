@@ -32,8 +32,10 @@ use arrow::{
 use num_traits::AsPrimitive;
 
 use arrow::array::ArrowNativeTypeOp;
+use datafusion_common::hash_utils::RandomState;
 use datafusion_common::internal_err;
 use datafusion_common::types::{NativeType, logical_float64};
+use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 
 use crate::min_max::{max_udaf, min_udaf};
@@ -672,7 +674,11 @@ where
 #[derive(Debug)]
 struct DistinctPercentileContAccumulator<T: ArrowNumericType> {
     /// Distinct value -> number of in-window rows carrying it.
-    counts: HashMap<Hashable<T::Native>, usize>,
+    ///
+    /// Uses the same fast (foldhash) `RandomState` as the shared
+    /// `GenericDistinctBuffer` rather than the standard library's default
+    /// SipHash, which is considerably slower for this hot path.
+    counts: HashMap<Hashable<T::Native>, usize, RandomState>,
     percentile: f64,
 }
 
@@ -709,8 +715,15 @@ where
         // `values` may carry extra argument columns (e.g. the percentile
         // literal); only the first column holds the aggregated values.
         let arr = values[0].as_primitive::<T>();
-        for value in arr.iter().flatten() {
-            *self.counts.entry(Hashable(value)).or_default() += 1;
+        if arr.null_count() > 0 {
+            for value in arr.iter().flatten() {
+                *self.counts.entry(Hashable(value)).or_default() += 1;
+            }
+        } else {
+            // Fast path: no nulls, so skip the per-element validity check.
+            for value in arr.values().iter() {
+                *self.counts.entry(Hashable(*value)).or_default() += 1;
+            }
         }
         Ok(())
     }
@@ -733,9 +746,11 @@ where
     }
 
     fn size(&self) -> usize {
-        size_of_val(self)
-            + self.counts.capacity()
-                * (size_of::<Hashable<T::Native>>() + size_of::<usize>())
+        estimate_memory_size::<(Hashable<T::Native>, usize)>(
+            self.counts.capacity(),
+            size_of_val(self),
+        )
+        .unwrap()
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -744,12 +759,22 @@ where
         }
 
         let arr = values[0].as_primitive::<T>();
-        for value in arr.iter().flatten() {
+        let mut decrement = |value: T::Native| {
             if let Some(count) = self.counts.get_mut(&Hashable(value)) {
                 *count -= 1;
                 if *count == 0 {
                     self.counts.remove(&Hashable(value));
                 }
+            }
+        };
+        if arr.null_count() > 0 {
+            for value in arr.iter().flatten() {
+                decrement(value);
+            }
+        } else {
+            // Fast path: no nulls, so skip the per-element validity check.
+            for value in arr.values().iter() {
+                decrement(*value);
             }
         }
         Ok(())
