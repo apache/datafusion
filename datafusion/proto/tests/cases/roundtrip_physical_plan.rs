@@ -2416,7 +2416,7 @@ fn roundtrip_unnest() -> Result<()> {
         Arc::new(Schema::new(vec![fa, fb0, fc1, fc2, fd0, fe1, fe2, fe3]));
     let input = Arc::new(EmptyExec::new(input_schema));
     let options = UnnestOptions {
-        preserve_nulls: false,
+        null_handling: datafusion_common::NullHandling::Drop,
         recursions: vec![datafusion_common::RecursionUnnestOption {
             input_column: datafusion_common::Column::new_unqualified("b"),
             output_column: datafusion_common::Column::new_unqualified("b"),
