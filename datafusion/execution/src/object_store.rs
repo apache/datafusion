@@ -265,13 +265,17 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
 
 /// Get the key of a URL for object store registration.
 ///
-/// Userinfo is preserved for ABFS schemes, where it identifies a namespace,
-/// and removed for all other schemes.
+/// The username portion of userinfo is preserved for ABFS schemes, where it
+/// identifies a namespace. Passwords and userinfo for other schemes are removed.
 fn get_url_key(url: &Url) -> String {
     let key_authority = match url.scheme() {
         // ABFS encodes the container namespace in URL userinfo.
-        "abfs" | "abfss" => &url[url::Position::BeforeUsername..url::Position::AfterPort],
-        _ => &url[url::Position::BeforeHost..url::Position::AfterPort],
+        "abfs" | "abfss" if !url.username().is_empty() => format!(
+            "{}@{}",
+            &url[url::Position::BeforeUsername..url::Position::AfterUsername],
+            &url[url::Position::BeforeHost..url::Position::AfterPort],
+        ),
+        _ => url[url::Position::BeforeHost..url::Position::AfterPort].to_string(),
     };
 
     format!("{}://{key_authority}", url.scheme())
@@ -338,6 +342,16 @@ mod tests {
         for scheme in ["abfs", "abfss"] {
             let url = ObjectStoreUrl::parse(format!(
                 "{scheme}://container@account.dfs.core.windows.net"
+            ))
+            .unwrap();
+            let key = get_url_key(&url.url);
+            assert_eq!(
+                key,
+                format!("{scheme}://container@account.dfs.core.windows.net")
+            );
+
+            let url = ObjectStoreUrl::parse(format!(
+                "{scheme}://container:secret@account.dfs.core.windows.net"
             ))
             .unwrap();
             let key = get_url_key(&url.url);
