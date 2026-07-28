@@ -50,24 +50,23 @@ use datafusion::physical_plan::statistics::StatisticsArgs;
 use datafusion::prelude::*;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
-/// Supplies the catalog-known statistics of the `events` scan that the in-memory
-/// table does not carry: the `amount` range (for filter selectivity) and the
-/// `user_id` distinct count (for post-filter NDV estimation). Only the base
-/// `events` scan (a leaf carrying both columns) is matched; everything else
-/// delegates to the rest of the chain.
+/// Matches the base `events` scan: a leaf carrying both `user_id` and `amount`.
+fn catalog_matches(plan: &dyn ExecutionPlan) -> bool {
+    let schema = plan.schema();
+    plan.children().is_empty()
+        && schema.index_of("user_id").is_ok()
+        && schema.index_of("amount").is_ok()
+}
+
+/// Injects the catalog-known `amount` range (for filter selectivity) and
+/// `user_id` distinct count (for post-filter NDV) the in-memory table lacks.
 fn catalog_stats(
     plan: &dyn ExecutionPlan,
     _child_stats: &[ExtendedStatistics],
 ) -> Result<StatisticsResult> {
     let schema = plan.schema();
-    let (Ok(user_id), Ok(amount)) =
-        (schema.index_of("user_id"), schema.index_of("amount"))
-    else {
-        return Ok(StatisticsResult::Delegate);
-    };
-    if !plan.children().is_empty() {
-        return Ok(StatisticsResult::Delegate);
-    }
+    let user_id = schema.index_of("user_id")?;
+    let amount = schema.index_of("amount")?;
     let mut stats = (*plan.statistics_from_inputs(&[], &StatisticsArgs::new())?).clone();
     stats.column_statistics[amount].min_value =
         Precision::Inexact(ScalarValue::Int32(Some(0)));
@@ -113,7 +112,10 @@ fn build_ctx(with_registry: bool) -> Result<SessionContext> {
         .with_default_features();
     if with_registry {
         let mut registry = StatisticsRegistry::default_with_builtin_providers();
-        registry.register(Arc::new(ClosureStatisticsProvider::new(catalog_stats)));
+        registry.register(Arc::new(ClosureStatisticsProvider::with_matches(
+            catalog_matches,
+            catalog_stats,
+        )));
         builder = builder.with_statistics_registry(registry);
     }
     let ctx = SessionContext::new_with_state(builder.build());

@@ -288,6 +288,9 @@ impl StatisticsContext {
         }
         let partition = args.partition();
         for provider in providers {
+            if !provider.matches(plan) {
+                continue;
+            }
             let requests = provider.child_stats_requests(plan, partition);
             let child_statistics = self.resolve_children(plan, children, &requests)?;
             let child_extended =

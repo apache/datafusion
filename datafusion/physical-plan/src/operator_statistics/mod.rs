@@ -233,18 +233,17 @@ pub enum StatisticsResult {
 /// struct MyStatisticsProvider;
 ///
 /// impl StatisticsProvider for MyStatisticsProvider {
+///     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
+///         plan.downcast_ref::<MyCustomExec>().is_some()
+///     }
+///
 ///     fn compute_statistics(
 ///         &self,
 ///         plan: &dyn ExecutionPlan,
 ///         child_stats: &[ExtendedStatistics],
 ///     ) -> Result<StatisticsResult> {
-///         if let Some(my_exec) = plan.downcast_ref::<MyCustomExec>() {
-///             // Custom logic for MyCustomExec
-///             Ok(StatisticsResult::Computed(/* ... */))
-///         } else {
-///             // Let next provider handle it
-///             Ok(StatisticsResult::Delegate)
-///         }
+///         // matches() guaranteed this node is a MyCustomExec
+///         Ok(StatisticsResult::Computed(/* ... */))
 ///     }
 /// }
 /// ```
@@ -313,6 +312,13 @@ pub trait StatisticsProvider: Debug + Send + Sync {
             .iter()
             .map(|_| ChildStats::At(None))
             .collect()
+    }
+
+    /// Whether this provider handles `plan`. Checked before its
+    /// [`Self::child_stats_requests`] are resolved, so a non-matching provider
+    /// never triggers child statistics computation.
+    fn matches(&self, _plan: &dyn ExecutionPlan) -> bool {
+        true
     }
 }
 
@@ -588,6 +594,10 @@ fn computed_with_row_count(
 pub struct FilterStatisticsProvider;
 
 impl StatisticsProvider for FilterStatisticsProvider {
+    fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
+        plan.downcast_ref::<FilterExec>().is_some()
+    }
+
     fn compute_statistics(
         &self,
         plan: &dyn ExecutionPlan,
@@ -642,6 +652,10 @@ impl StatisticsProvider for FilterStatisticsProvider {
 pub struct ProjectionStatisticsProvider;
 
 impl StatisticsProvider for ProjectionStatisticsProvider {
+    fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
+        plan.downcast_ref::<ProjectionExec>().is_some()
+    }
+
     fn compute_statistics(
         &self,
         plan: &dyn ExecutionPlan,
@@ -676,6 +690,11 @@ impl StatisticsProvider for ProjectionStatisticsProvider {
 pub struct PassthroughStatisticsProvider;
 
 impl StatisticsProvider for PassthroughStatisticsProvider {
+    fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
+        plan.children().len() == 1
+            && matches!(plan.cardinality_effect(), CardinalityEffect::Equal)
+    }
+
     fn compute_statistics(
         &self,
         plan: &dyn ExecutionPlan,
@@ -722,6 +741,10 @@ impl StatisticsProvider for PassthroughStatisticsProvider {
 pub struct AggregateStatisticsProvider;
 
 impl StatisticsProvider for AggregateStatisticsProvider {
+    fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
+        plan.downcast_ref::<AggregateExec>().is_some()
+    }
+
     fn compute_statistics(
         &self,
         plan: &dyn ExecutionPlan,
@@ -811,6 +834,12 @@ impl StatisticsProvider for AggregateStatisticsProvider {
 pub struct JoinStatisticsProvider;
 
 impl StatisticsProvider for JoinStatisticsProvider {
+    fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
+        plan.downcast_ref::<HashJoinExec>().is_some()
+            || plan.downcast_ref::<SortMergeJoinExec>().is_some()
+            || plan.downcast_ref::<CrossJoinExec>().is_some()
+    }
+
     fn compute_statistics(
         &self,
         plan: &dyn ExecutionPlan,
@@ -930,6 +959,11 @@ impl StatisticsProvider for JoinStatisticsProvider {
 pub struct LimitStatisticsProvider;
 
 impl StatisticsProvider for LimitStatisticsProvider {
+    fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
+        plan.downcast_ref::<LocalLimitExec>().is_some()
+            || plan.downcast_ref::<GlobalLimitExec>().is_some()
+    }
+
     fn compute_statistics(
         &self,
         plan: &dyn ExecutionPlan,
@@ -976,6 +1010,10 @@ impl StatisticsProvider for LimitStatisticsProvider {
 pub struct UnionStatisticsProvider;
 
 impl StatisticsProvider for UnionStatisticsProvider {
+    fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
+        plan.downcast_ref::<UnionExec>().is_some()
+    }
+
     fn compute_statistics(
         &self,
         plan: &dyn ExecutionPlan,
@@ -1010,6 +1048,8 @@ type ProviderFn = dyn Fn(&dyn ExecutionPlan, &[ExtendedStatistics]) -> Result<St
     + Send
     + Sync;
 
+type MatchesFn = dyn Fn(&dyn ExecutionPlan) -> bool + Send + Sync;
+
 /// A [`StatisticsProvider`] backed by a user-supplied closure.
 ///
 /// Useful for injecting custom statistics in tests or for cardinality feedback
@@ -1024,18 +1064,18 @@ type ProviderFn = dyn Fn(&dyn ExecutionPlan, &[ExtendedStatistics]) -> Result<St
 /// # Example
 ///
 /// ```rust,ignore (requires crate-internal imports)
-/// let provider = ClosureStatisticsProvider::new(|plan, child_stats| {
-///     if plan.downcast_ref::<FilterExec>().is_some() {
+/// let provider = ClosureStatisticsProvider::with_matches(
+///     |plan| plan.downcast_ref::<FilterExec>().is_some(),
+///     |plan, child_stats| {
 ///         Ok(StatisticsResult::Computed(ExtendedStatistics::from(Statistics {
 ///             num_rows: Precision::Inexact(42),
 ///             ..Statistics::new_unknown(plan.schema().as_ref())
 ///         })))
-///     } else {
-///         Ok(StatisticsResult::Delegate)
-///     }
-/// });
+///     },
+/// );
 /// ```
 pub struct ClosureStatisticsProvider {
+    matches_fn: Box<MatchesFn>,
     f: Box<ProviderFn>,
 }
 
@@ -1047,7 +1087,24 @@ impl ClosureStatisticsProvider {
         + Sync
         + 'static,
     ) -> Self {
-        Self { f: Box::new(f) }
+        Self {
+            matches_fn: Box::new(|_| true),
+            f: Box::new(f),
+        }
+    }
+
+    /// Like [`Self::new`] but applies only where `matches` returns true.
+    pub fn with_matches(
+        matches: impl Fn(&dyn ExecutionPlan) -> bool + Send + Sync + 'static,
+        f: impl Fn(&dyn ExecutionPlan, &[ExtendedStatistics]) -> Result<StatisticsResult>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self {
+            matches_fn: Box::new(matches),
+            f: Box::new(f),
+        }
     }
 }
 
@@ -1058,6 +1115,10 @@ impl Debug for ClosureStatisticsProvider {
 }
 
 impl StatisticsProvider for ClosureStatisticsProvider {
+    fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
+        (self.matches_fn)(plan)
+    }
+
     fn compute_statistics(
         &self,
         plan: &dyn ExecutionPlan,
@@ -1435,6 +1496,10 @@ mod tests {
     struct SkipComputeProvider;
 
     impl StatisticsProvider for SkipComputeProvider {
+        fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
+            plan.downcast_ref::<ProjectionExec>().is_some()
+        }
+
         fn child_stats_requests(
             &self,
             plan: &dyn ExecutionPlan,
@@ -1448,31 +1513,60 @@ mod tests {
             plan: &dyn ExecutionPlan,
             _child_stats: &[ExtendedStatistics],
         ) -> Result<StatisticsResult> {
-            if plan.downcast_ref::<ProjectionExec>().is_some() {
-                let mut stats = Statistics::new_unknown(plan.schema().as_ref());
-                stats.num_rows = Precision::Exact(7);
-                Ok(StatisticsResult::Computed(ExtendedStatistics::from(stats)))
-            } else {
-                Ok(StatisticsResult::Delegate)
+            if plan.downcast_ref::<ProjectionExec>().is_none() {
+                return Ok(StatisticsResult::Delegate);
             }
+            let mut stats = Statistics::new_unknown(plan.schema().as_ref());
+            stats.num_rows = Precision::Exact(7);
+            Ok(StatisticsResult::Computed(ExtendedStatistics::from(stats)))
         }
     }
 
-    #[test]
-    fn test_provider_override_skips_operator_child_walk() -> Result<()> {
-        // ProjectionExec requests At for a child that errors when computed; the
-        // overriding provider requests Skip, so the child is never resolved and
-        // its error never surfaces.
+    /// Never matches, so it must not trigger any child statistics computation.
+    #[derive(Debug)]
+    struct NonMatchingProvider;
+
+    impl StatisticsProvider for NonMatchingProvider {
+        fn matches(&self, _plan: &dyn ExecutionPlan) -> bool {
+            false
+        }
+    }
+
+    /// A `ProjectionExec` (which requests `At`) over a child that errors when its
+    /// statistics are computed.
+    fn projection_over_erroring_child() -> Result<Arc<dyn ExecutionPlan>> {
         let schema = make_schema();
         let child: Arc<dyn ExecutionPlan> = Arc::new(ErroringExec {
             input: make_source(1000),
         });
-        let parent: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+        Ok(Arc::new(ProjectionExec::try_new(
             vec![(col("a", &schema)?, "a".to_string())],
             child,
-        )?);
+        )?))
+    }
+
+    #[test]
+    fn test_provider_override_skips_operator_child_walk() -> Result<()> {
+        // A matching provider requests Skip, so the erroring child is never
+        // resolved and its error never surfaces.
+        let parent = projection_over_erroring_child()?;
         let mut registry = StatisticsRegistry::new();
         registry.register(Arc::new(SkipComputeProvider));
+
+        let stats = compute(&registry, parent.as_ref())?;
+        assert!(matches!(stats.base.num_rows, Precision::Exact(7)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_non_matching_provider_does_not_trigger_child_walk() -> Result<()> {
+        // A non-matching provider precedes the handling one; it must not resolve
+        // the erroring child, so the later provider still succeeds.
+        let parent = projection_over_erroring_child()?;
+        let registry = StatisticsRegistry::with_providers(vec![
+            Arc::new(NonMatchingProvider),
+            Arc::new(SkipComputeProvider),
+        ]);
 
         let stats = compute(&registry, parent.as_ref())?;
         assert!(matches!(stats.base.num_rows, Precision::Exact(7)));
