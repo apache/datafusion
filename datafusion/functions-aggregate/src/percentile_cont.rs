@@ -760,21 +760,30 @@ where
 
         let arr = values[0].as_primitive::<T>();
         let mut decrement = |value: T::Native| {
-            if let Some(count) = self.counts.get_mut(&Hashable(value)) {
-                *count -= 1;
-                if *count == 0 {
-                    self.counts.remove(&Hashable(value));
+            match self.counts.get_mut(&Hashable(value)) {
+                Some(count) => {
+                    *count -= 1;
+                    if *count == 0 {
+                        self.counts.remove(&Hashable(value));
+                    }
+                    Ok(())
                 }
+                // Retracting a value that isn't tracked means the accumulator
+                // state has diverged from the window frame; continuing would
+                // silently produce wrong results, so surface it as an error.
+                None => internal_err!(
+                    "percentile_cont(DISTINCT) retract_batch: retracted a value not present in the window"
+                ),
             }
         };
         if arr.null_count() > 0 {
             for value in arr.iter().flatten() {
-                decrement(value);
+                decrement(value)?;
             }
         } else {
             // Fast path: no nulls, so skip the per-element validity check.
             for value in arr.values().iter() {
-                decrement(*value);
+                decrement(*value)?;
             }
         }
         Ok(())
