@@ -2399,7 +2399,6 @@ mod tests {
         use crate::source::DataSourceExec;
         use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 
-        // Create a schema with 4 columns
         let schema = Arc::new(Schema::new(vec![
             Field::new("col0", DataType::Int32, false),
             Field::new("col1", DataType::Int32, false),
@@ -2496,7 +2495,6 @@ mod tests {
             input_num_rows: Precision<usize>,
             expected_num_rows: Precision<usize>,
         ) {
-            // Create a schema with 4 columns
             let schema = Arc::new(Schema::new(vec![Field::new(
                 "col0",
                 DataType::Int32,
