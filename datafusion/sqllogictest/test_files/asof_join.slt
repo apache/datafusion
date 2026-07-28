@@ -16,28 +16,28 @@
 # under the License.
 
 statement ok
-CREATE TABLE asof_left(id INT, grp TEXT, ts INT) AS VALUES
-  (1, 'A', 1),
-  (2, 'A', 4),
-  (3, 'A', 7),
-  (4, 'B', 2),
-  (5, 'B', 8),
-  (6, NULL, 3),
+CREATE TABLE asof_left(id INT, grp TEXT, ts TIMESTAMP) AS VALUES
+  (1, 'A', TIMESTAMP '2024-01-01 09:00:01'),
+  (2, 'A', TIMESTAMP '2024-01-01 09:00:04'),
+  (3, 'A', TIMESTAMP '2024-01-01 09:00:07'),
+  (4, 'B', TIMESTAMP '2024-01-01 09:00:02'),
+  (5, 'B', TIMESTAMP '2024-01-01 09:00:08'),
+  (6, NULL, TIMESTAMP '2024-01-01 09:00:03'),
   (7, 'A', NULL);
 
 statement ok
-CREATE TABLE asof_right(grp TEXT, ts INT, val TEXT) AS VALUES
-  ('A', 2, 'a2'),
-  ('A', 4, 'a4'),
-  ('A', 6, 'a6'),
-  ('B', 1, 'b1'),
-  ('B', 6, 'b6'),
-  (NULL, 2, 'null-group'),
+CREATE TABLE asof_right(grp TEXT, ts TIMESTAMP, val TEXT) AS VALUES
+  ('A', TIMESTAMP '2024-01-01 09:00:02', 'a2'),
+  ('A', TIMESTAMP '2024-01-01 09:00:04', 'a4'),
+  ('A', TIMESTAMP '2024-01-01 09:00:06', 'a6'),
+  ('B', TIMESTAMP '2024-01-01 09:00:01', 'b1'),
+  ('B', TIMESTAMP '2024-01-01 09:00:06', 'b6'),
+  (NULL, TIMESTAMP '2024-01-01 09:00:02', 'null-group'),
   ('A', NULL, 'null-ts');
 
 # Inclusive predecessor per equality group. This also verifies unmatched left
 # rows and NULL behavior for equality keys and ordered expressions.
-query IIIT
+query IPPT
 SELECT l.id, l.ts, r.ts, r.val
 FROM asof_left l
 ASOF JOIN asof_right r
@@ -45,16 +45,16 @@ MATCH_CONDITION (l.ts >= r.ts)
 ON l.grp = r.grp
 ORDER BY l.id;
 ----
-1 1 NULL NULL
-2 4 4 a4
-3 7 6 a6
-4 2 1 b1
-5 8 6 b6
-6 3 NULL NULL
+1 2024-01-01T09:00:01 NULL NULL
+2 2024-01-01T09:00:04 2024-01-01T09:00:04 a4
+3 2024-01-01T09:00:07 2024-01-01T09:00:06 a6
+4 2024-01-01T09:00:02 2024-01-01T09:00:01 b1
+5 2024-01-01T09:00:08 2024-01-01T09:00:06 b6
+6 2024-01-01T09:00:03 NULL NULL
 7 NULL NULL NULL
 
 # Strict predecessor per equality group.
-query IIIT
+query IPPT
 SELECT l.id, l.ts, r.ts, r.val
 FROM asof_left l
 ASOF JOIN asof_right r
@@ -62,16 +62,16 @@ MATCH_CONDITION (l.ts > r.ts)
 ON l.grp = r.grp
 ORDER BY l.id;
 ----
-1 1 NULL NULL
-2 4 2 a2
-3 7 6 a6
-4 2 1 b1
-5 8 6 b6
-6 3 NULL NULL
+1 2024-01-01T09:00:01 NULL NULL
+2 2024-01-01T09:00:04 2024-01-01T09:00:02 a2
+3 2024-01-01T09:00:07 2024-01-01T09:00:06 a6
+4 2024-01-01T09:00:02 2024-01-01T09:00:01 b1
+5 2024-01-01T09:00:08 2024-01-01T09:00:06 b6
+6 2024-01-01T09:00:03 NULL NULL
 7 NULL NULL NULL
 
 # Inclusive successor per equality group.
-query IIIT
+query IPPT
 SELECT l.id, l.ts, r.ts, r.val
 FROM asof_left l
 ASOF JOIN asof_right r
@@ -79,16 +79,16 @@ MATCH_CONDITION (l.ts <= r.ts)
 ON l.grp = r.grp
 ORDER BY l.id;
 ----
-1 1 2 a2
-2 4 4 a4
-3 7 NULL NULL
-4 2 6 b6
-5 8 NULL NULL
-6 3 NULL NULL
+1 2024-01-01T09:00:01 2024-01-01T09:00:02 a2
+2 2024-01-01T09:00:04 2024-01-01T09:00:04 a4
+3 2024-01-01T09:00:07 NULL NULL
+4 2024-01-01T09:00:02 2024-01-01T09:00:06 b6
+5 2024-01-01T09:00:08 NULL NULL
+6 2024-01-01T09:00:03 NULL NULL
 7 NULL NULL NULL
 
 # Strict successor per equality group.
-query IIIT
+query IPPT
 SELECT l.id, l.ts, r.ts, r.val
 FROM asof_left l
 ASOF JOIN asof_right r
@@ -96,16 +96,16 @@ MATCH_CONDITION (l.ts < r.ts)
 ON l.grp = r.grp
 ORDER BY l.id;
 ----
-1 1 2 a2
-2 4 6 a6
-3 7 NULL NULL
-4 2 6 b6
-5 8 NULL NULL
-6 3 NULL NULL
+1 2024-01-01T09:00:01 2024-01-01T09:00:02 a2
+2 2024-01-01T09:00:04 2024-01-01T09:00:06 a6
+3 2024-01-01T09:00:07 NULL NULL
+4 2024-01-01T09:00:02 2024-01-01T09:00:06 b6
+5 2024-01-01T09:00:08 NULL NULL
+6 2024-01-01T09:00:03 NULL NULL
 7 NULL NULL NULL
 
 # USING exposes one unqualified equality key.
-query TIIT
+query TIPT
 SELECT grp, l.id, r.ts, r.val
 FROM asof_left l
 ASOF JOIN asof_right r
@@ -114,10 +114,10 @@ USING (grp)
 ORDER BY l.id;
 ----
 A 1 NULL NULL
-A 2 4 a4
-A 3 6 a6
-B 4 1 b1
-B 5 6 b6
+A 2 2024-01-01T09:00:04 a4
+A 3 2024-01-01T09:00:06 a6
+B 4 2024-01-01T09:00:01 b1
+B 5 2024-01-01T09:00:06 b6
 NULL 6 NULL NULL
 A 7 NULL NULL
 

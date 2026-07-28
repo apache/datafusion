@@ -17,12 +17,12 @@
 
 use insta::assert_snapshot;
 
-use datafusion::assert_batches_eq;
 use datafusion::catalog::MemTable;
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use datafusion::physical_plan::joins::AsOfJoinExec;
 use datafusion::physical_plan::{Distribution, ExecutionPlanProperties};
 use datafusion::test_util::register_unbounded_file_with_ordering;
+use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
 use datafusion_sql::unparser::plan_to_sql;
 
 use super::*;
@@ -359,7 +359,10 @@ fn register_asof_test_tables(ctx: &SessionContext) -> Result<()> {
     ];
     ctx.register_table(
         "prices",
-        Arc::new(MemTable::try_new(prices_schema, vec![prices])?),
+        Arc::new(MemTable::try_new(
+            prices_schema,
+            prices.into_iter().map(|batch| vec![batch]).collect(),
+        )?),
     )?;
     Ok(())
 }
@@ -483,13 +486,14 @@ async fn asof_join_coerces_equality_and_match_types() -> Result<()> {
 }
 
 #[tokio::test]
-async fn asof_join_without_equality_keys_broadcasts_right_input() -> Result<()> {
+async fn asof_join_broadcasts_multi_partition_right_input() -> Result<()> {
     let config = SessionConfig::new().with_target_partitions(4);
     let ctx = SessionContext::new_with_config(config);
     register_asof_test_tables(&ctx)?;
     let df = ctx
         .sql(
-            "SELECT t.trade_id, p.price FROM trades t ASOF JOIN prices p \
+            "SELECT t.trade_id, p.price FROM trades t ASOF JOIN \
+             (SELECT ts, price FROM prices WHERE symbol = 'A') p \
              MATCH_CONDITION (t.ts >= p.ts)",
         )
         .await?;
@@ -512,6 +516,11 @@ async fn asof_join_without_equality_keys_broadcasts_right_input() -> Result<()> 
         asof.children()[1].output_partitioning().partition_count(),
         1
     );
+    let right_plan = displayable(asof.children()[1].as_ref())
+        .indent(true)
+        .to_string();
+    assert_contains!(right_plan.as_str(), "SortPreservingMergeExec");
+    assert_contains!(right_plan.as_str(), "DataSourceExec: partitions=2");
     assert!(asof.output_ordering().is_some());
     assert!(matches!(
         &asof.input_distribution_requirements().into_per_child()[..],
@@ -521,7 +530,21 @@ async fn asof_join_without_equality_keys_broadcasts_right_input() -> Result<()> 
         ]
     ));
     let batches = collect(plan, ctx.task_ctx()).await?;
-    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 6);
+    assert_batches_sorted_eq!(
+        [
+            "+----------+-------+",
+            "| trade_id | price |",
+            "+----------+-------+",
+            "| 1        |       |",
+            "| 2        | 40    |",
+            "| 3        | 60    |",
+            "| 4        | 20    |",
+            "| 5        | 60    |",
+            "| 6        | 20    |",
+            "+----------+-------+",
+        ],
+        &batches
+    );
     Ok(())
 }
 
