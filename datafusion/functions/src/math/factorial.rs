@@ -119,7 +119,7 @@ impl ScalarUDFImpl for FactorialFunc {
 
     fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {
         // Keep the same ordering as the input
-        Ok(inputs[0].sort_properties.clone())
+        Ok(inputs[0].sort_properties)
     }
 
     fn strictly_order_preserving(&self, _inputs: &[ExprProperties]) -> Result<bool> {

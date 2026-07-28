@@ -37,9 +37,9 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
 };
+use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_macros::user_doc;
 use itertools::Itertools as _;
-use datafusion_expr_common::sort_properties::ExprProperties;
 
 make_udf_expr_and_func!(
     MakeArray,

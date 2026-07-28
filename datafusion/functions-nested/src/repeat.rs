@@ -37,10 +37,10 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
+use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_macros::user_doc;
 use std::mem::size_of;
 use std::sync::Arc;
-use datafusion_expr_common::sort_properties::ExprProperties;
 
 const ARRAY_REPEAT_LENGTH_EXCEEDED: &str =
     "array_repeat: requested length exceeds maximum array size";
