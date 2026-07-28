@@ -73,8 +73,6 @@ pub struct FFI_GroupsAccumulator {
         opt_filter: FFI_Option<WrappedArray>,
     ) -> FFI_Result<SVec<WrappedArray>>,
 
-    pub supports_convert_to_state: bool,
-
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(accumulator: &mut Self),
 
@@ -247,7 +245,6 @@ impl From<Box<dyn GroupsAccumulator>> for FFI_GroupsAccumulator {
             return accumulator.accumulator;
         }
 
-        let supports_convert_to_state = accumulator.supports_convert_to_state();
         let private_data = GroupsAccumulatorPrivateData { accumulator };
 
         Self {
@@ -257,7 +254,6 @@ impl From<Box<dyn GroupsAccumulator>> for FFI_GroupsAccumulator {
             state: state_fn_wrapper,
             merge_batch: merge_batch_fn_wrapper,
             convert_to_state: convert_to_state_fn_wrapper,
-            supports_convert_to_state,
 
             release: release_fn_wrapper,
             private_data: Box::into_raw(Box::new(private_data)) as *mut c_void,
@@ -420,10 +416,6 @@ impl GroupsAccumulator for ForeignGroupsAccumulator {
                 .map(|arr| arr.try_into().map_err(DataFusionError::from))
                 .collect()
         }
-    }
-
-    fn supports_convert_to_state(&self) -> bool {
-        self.accumulator.supports_convert_to_state
     }
 }
 
