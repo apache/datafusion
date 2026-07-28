@@ -20,7 +20,7 @@ use std::time::SystemTime;
 
 use crate::fuzz_cases::join_fuzz::JoinTestType::{HjSmj, NljHj};
 
-use arrow::array::{ArrayRef, BinaryArray, Int32Array};
+use arrow::array::{ArrayRef, BinaryArray, Int32Array, StringArray};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
@@ -30,22 +30,24 @@ use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::{JoinType, Operator};
 use datafusion::physical_expr::expressions::BinaryExpr;
-use datafusion::physical_plan::collect;
 use datafusion::physical_plan::expressions::Column;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
 };
+use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::{NullEquality, ScalarValue};
 use datafusion_execution::TaskContext;
 use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
+use datafusion_execution::memory_pool::FairSpillPool;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::expressions::Literal;
 
 use itertools::Itertools;
-use rand::Rng;
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 use test_utils::stagger_batch_with_seed;
 
 // Determines what Fuzz tests needs to run
@@ -1126,133 +1128,131 @@ impl JoinFuzzTestCase {
     }
 }
 
-/// Fuzz test: compare SMJ (with spilling) against HJ (no spill) for filtered
-/// outer joins under memory pressure. This exercises the deferred filtering +
-/// spill read-back path that unit tests can't easily cover with random data.
+/// Compare a guaranteed-spilling SMJ against an unlimited-memory hash join
+/// for filtered materializing joins.
 #[tokio::test]
 async fn test_filtered_join_spill_fuzz() {
-    let join_types = [JoinType::Left, JoinType::Right, JoinType::Full];
+    let join_types = [
+        JoinType::Inner,
+        JoinType::Left,
+        JoinType::Right,
+        JoinType::Full,
+    ];
+    let input1 = make_spill_join_batches(256, 32, 512, 1);
+    let input2 = make_spill_join_batches(256, 32, 512, 2);
+    let schema1 = input1[0].schema();
+    let schema2 = input2[0].schema();
+    let filter = col_lt_col_filter(Arc::clone(&schema1), Arc::clone(&schema2));
+    let on = vec![
+        (
+            Arc::new(Column::new_with_schema("a", &schema1).unwrap()) as _,
+            Arc::new(Column::new_with_schema("a", &schema2).unwrap()) as _,
+        ),
+        (
+            Arc::new(Column::new_with_schema("b", &schema1).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b", &schema2).unwrap()) as _,
+        ),
+    ];
 
     let runtime_spill = RuntimeEnvBuilder::new()
-        .with_memory_limit(4096, 1.0)
+        .with_memory_pool(Arc::new(FairSpillPool::new(1024)))
         .with_disk_manager_builder(
             DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
         )
         .build_arc()
         .unwrap();
 
-    for join_type in &join_types {
-        for (left_extra, right_extra) in [(true, true), (false, true), (true, false)] {
-            let input1 = make_staggered_batches_i32(1000, left_extra);
-            let input2 = make_staggered_batches_i32(1000, right_extra);
+    for join_type in join_types {
+        for batch_size in [2, 50] {
+            let session_config = SessionConfig::new().with_batch_size(batch_size);
 
-            let schema1 = input1[0].schema();
-            let schema2 = input2[0].schema();
-            let filter = col_lt_col_filter(schema1.clone(), schema2.clone());
-
-            let on = vec![
-                (
-                    Arc::new(Column::new_with_schema("a", &schema1).unwrap()) as _,
-                    Arc::new(Column::new_with_schema("a", &schema2).unwrap()) as _,
-                ),
-                (
-                    Arc::new(Column::new_with_schema("b", &schema1).unwrap()) as _,
-                    Arc::new(Column::new_with_schema("b", &schema2).unwrap()) as _,
-                ),
-            ];
-
-            for batch_size in [2, 49, 100] {
-                let session_config = SessionConfig::new().with_batch_size(batch_size);
-
-                // HJ baseline (no memory limit)
-                let left_hj = MemorySourceConfig::try_new_exec(
-                    std::slice::from_ref(&input1),
-                    schema1.clone(),
+            let left_hj = MemorySourceConfig::try_new_exec(
+                std::slice::from_ref(&input1),
+                Arc::clone(&schema1),
+                None,
+            )
+            .unwrap();
+            let right_hj = MemorySourceConfig::try_new_exec(
+                std::slice::from_ref(&input2),
+                Arc::clone(&schema2),
+                None,
+            )
+            .unwrap();
+            let hj = Arc::new(
+                HashJoinExec::try_new(
+                    left_hj,
+                    right_hj,
+                    on.clone(),
+                    Some(filter.clone()),
+                    &join_type,
                     None,
+                    PartitionMode::Partitioned,
+                    NullEquality::NullEqualsNothing,
+                    false,
                 )
-                .unwrap();
-                let right_hj = MemorySourceConfig::try_new_exec(
-                    std::slice::from_ref(&input2),
-                    schema2.clone(),
-                    None,
-                )
-                .unwrap();
-                let hj = Arc::new(
-                    HashJoinExec::try_new(
-                        left_hj,
-                        right_hj,
-                        on.clone(),
-                        Some(filter.clone()),
-                        join_type,
-                        None,
-                        PartitionMode::Partitioned,
-                        NullEquality::NullEqualsNothing,
-                        false,
-                    )
-                    .unwrap(),
-                );
-                let ctx_hj = SessionContext::new_with_config(session_config.clone());
-                let hj_collected = collect(hj, ctx_hj.task_ctx()).await.unwrap();
+                .unwrap(),
+            );
+            let ctx_hj = SessionContext::new_with_config(session_config.clone());
+            let hj_collected = collect(hj, ctx_hj.task_ctx()).await.unwrap();
 
-                // SMJ with spilling
-                let left_smj = MemorySourceConfig::try_new_exec(
-                    std::slice::from_ref(&input1),
-                    schema1.clone(),
-                    None,
+            let left_smj = MemorySourceConfig::try_new_exec(
+                std::slice::from_ref(&input1),
+                Arc::clone(&schema1),
+                None,
+            )
+            .unwrap();
+            let right_smj = MemorySourceConfig::try_new_exec(
+                std::slice::from_ref(&input2),
+                Arc::clone(&schema2),
+                None,
+            )
+            .unwrap();
+            let smj = Arc::new(
+                SortMergeJoinExec::try_new(
+                    left_smj,
+                    right_smj,
+                    on.clone(),
+                    Some(filter.clone()),
+                    join_type,
+                    vec![SortOptions::default(); on.len()],
+                    NullEquality::NullEqualsNothing,
                 )
-                .unwrap();
-                let right_smj = MemorySourceConfig::try_new_exec(
-                    std::slice::from_ref(&input2),
-                    schema2.clone(),
-                    None,
-                )
-                .unwrap();
-                let smj = Arc::new(
-                    SortMergeJoinExec::try_new(
-                        left_smj,
-                        right_smj,
-                        on.clone(),
-                        Some(filter.clone()),
-                        *join_type,
-                        vec![SortOptions::default(); on.len()],
-                        NullEquality::NullEqualsNothing,
-                    )
-                    .unwrap(),
-                );
-                let task_ctx_spill = Arc::new(
-                    TaskContext::default()
-                        .with_session_config(session_config)
-                        .with_runtime(Arc::clone(&runtime_spill)),
-                );
-                let smj_collected = collect(smj, task_ctx_spill).await.unwrap();
+                .unwrap(),
+            );
+            let task_ctx_spill = Arc::new(
+                TaskContext::default()
+                    .with_session_config(session_config)
+                    .with_runtime(Arc::clone(&runtime_spill)),
+            );
+            let smj_collected =
+                collect(Arc::clone(&smj) as Arc<dyn ExecutionPlan>, task_ctx_spill)
+                    .await
+                    .unwrap();
 
-                let hj_rows: usize = hj_collected.iter().map(|b| b.num_rows()).sum();
-                let smj_rows: usize = smj_collected.iter().map(|b| b.num_rows()).sum();
+            assert!(
+                smj.metrics().unwrap().spill_count().unwrap_or_default() > 0,
+                "expected SMJ to spill for {join_type:?} batch_size={batch_size}",
+            );
 
+            let hj_rows: usize = hj_collected.iter().map(|b| b.num_rows()).sum();
+            let smj_rows: usize = smj_collected.iter().map(|b| b.num_rows()).sum();
+            assert_eq!(
+                hj_rows, smj_rows,
+                "row count mismatch for {join_type:?} batch_size={batch_size}: \
+                 HJ={hj_rows} SMJ={smj_rows}",
+            );
+
+            if hj_rows > 0 {
+                let hj_fmt = pretty_format_batches(&hj_collected).unwrap().to_string();
+                let smj_fmt = pretty_format_batches(&smj_collected).unwrap().to_string();
+                let mut hj_sorted: Vec<&str> = hj_fmt.trim().lines().collect();
+                hj_sorted.sort_unstable();
+                let mut smj_sorted: Vec<&str> = smj_fmt.trim().lines().collect();
+                smj_sorted.sort_unstable();
                 assert_eq!(
-                    hj_rows, smj_rows,
-                    "Row count mismatch for {join_type:?} batch_size={batch_size} \
-                     left_extra={left_extra} right_extra={right_extra}: \
-                     HJ={hj_rows} SMJ={smj_rows}"
+                    hj_sorted, smj_sorted,
+                    "content mismatch for {join_type:?} batch_size={batch_size}",
                 );
-
-                if hj_rows > 0 {
-                    let hj_fmt =
-                        pretty_format_batches(&hj_collected).unwrap().to_string();
-                    let smj_fmt =
-                        pretty_format_batches(&smj_collected).unwrap().to_string();
-
-                    let mut hj_sorted: Vec<&str> = hj_fmt.trim().lines().collect();
-                    hj_sorted.sort_unstable();
-                    let mut smj_sorted: Vec<&str> = smj_fmt.trim().lines().collect();
-                    smj_sorted.sort_unstable();
-
-                    assert_eq!(
-                        hj_sorted, smj_sorted,
-                        "Content mismatch for {join_type:?} batch_size={batch_size} \
-                         left_extra={left_extra} right_extra={right_extra}"
-                    );
-                }
             }
         }
     }
@@ -1346,4 +1346,40 @@ fn make_staggered_batches_binary(
 
     // preserve your existing randomized partitioning
     stagger_batch_with_seed(batch, 42)
+}
+
+/// Sorted, low-cardinality inputs whose wide payloads force SMJ key-group
+/// spilling. `(a, b)` is sorted (`b` is constant) and `x` is nullable to
+/// exercise filter NULL handling.
+fn make_spill_join_batches(
+    len: usize,
+    num_keys: i32,
+    payload_len: usize,
+    seed: u64,
+) -> Vec<RecordBatch> {
+    let mut rng = SmallRng::seed_from_u64(seed);
+
+    let mut keys: Vec<i32> = (0..len).map(|_| rng.random_range(0..num_keys)).collect();
+    keys.sort_unstable();
+    let a = Int32Array::from_iter_values(keys);
+    let b = Int32Array::from_iter_values(std::iter::repeat_n(0, len));
+    let x = Int32Array::from_iter((0..len).map(|_| {
+        if rng.random_range(0..10) == 0 {
+            None
+        } else {
+            Some(rng.random_range(0..1000))
+        }
+    }));
+
+    let payload = "a".repeat(payload_len);
+    let p = StringArray::from_iter_values(std::iter::repeat_n(payload.as_str(), len));
+    let batch = RecordBatch::try_from_iter(vec![
+        ("a", Arc::new(a) as ArrayRef),
+        ("b", Arc::new(b) as ArrayRef),
+        ("x", Arc::new(x) as ArrayRef),
+        ("p", Arc::new(p) as ArrayRef),
+    ])
+    .unwrap();
+
+    stagger_batch_with_seed(batch, 7)
 }
