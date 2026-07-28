@@ -244,6 +244,9 @@ impl<'a> DisplayableExecutionPlan<'a> {
     ///
     /// - An empty vector means plan-only — suppress all metrics.
     /// - `vec!["metric_1"]` means show only the metric named `metric_1`.
+    ///
+    /// Name filtering is intersected with other types of filters, like metric
+    /// category and metric type.
     pub fn set_metric_names(mut self, metric_names: Vec<String>) -> Self {
         self.metric_names = Some(metric_names);
         self
