@@ -84,6 +84,7 @@ pub mod filter_pushdown;
 pub mod joins;
 pub mod limit;
 pub mod memory;
+pub mod memory_guard;
 pub mod metrics;
 pub mod operator_statistics;
 pub mod placeholder_row;
