@@ -1218,6 +1218,10 @@ config_namespace! {
         /// the default parquet writer setting.
         pub compression: Option<String>, transform = str::to_lowercase, default = Some("zstd(3)".into())
 
+        /// (writing) Sets the default compression ratio threshold at or above which a Data Page
+        /// v2's compressed values are discarded in favor of writing the values uncompressed.
+        pub data_page_compression_ratio_threshold: Option<f64>, default = None
+
         /// (writing) Sets if dictionary encoding is enabled. If NULL, uses
         /// default parquet writer setting
         pub dictionary_enabled: Option<bool>, default = Some(true)
@@ -3087,6 +3091,10 @@ config_namespace_with_hashmap! {
         /// These values are not case-sensitive. If NULL, uses
         /// default parquet options
         pub compression: Option<String>, transform = str::to_lowercase, default = None
+
+        /// Sets the default compression ratio threshold at or above which a Data Page
+        /// v2's compressed values are discarded in favor of writing the values uncompressed.
+        pub data_page_compression_ratio_threshold: Option<f64>, default = None
 
         /// Sets if statistics are enabled for the column
         /// Valid values are: "none", "chunk", and "page"
