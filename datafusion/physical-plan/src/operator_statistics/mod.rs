@@ -581,7 +581,7 @@ fn computed_with_row_count(
     Ok(StatisticsResult::Computed(ExtendedStatistics::new(base)))
 }
 
-/// Statistics provider for [`FilterExec`](crate::filter::FilterExec) that uses
+/// Statistics provider for [`FilterExec`] that uses
 /// pre-computed enhanced child statistics from the registry walk.
 ///
 /// Unlike the built-in fallback (which calls `statistics_from_inputs` and gets raw
@@ -642,7 +642,7 @@ impl StatisticsProvider for FilterStatisticsProvider {
     }
 }
 
-/// Statistics provider for [`ProjectionExec`](crate::projection::ProjectionExec)
+/// Statistics provider for [`ProjectionExec`]
 /// that uses pre-computed enhanced child statistics from the registry walk.
 ///
 /// Maps enhanced child column statistics to output columns based on the
@@ -680,7 +680,7 @@ impl StatisticsProvider for ProjectionStatisticsProvider {
 }
 
 /// Statistics provider for single-input operators with
-/// [`CardinalityEffect::Equal`](crate::execution_plan::CardinalityEffect::Equal).
+/// [`CardinalityEffect::Equal`].
 ///
 /// These operators (Sort, Repartition, CoalescePartitions, etc.) don't
 /// transform statistics, so we pass through the enhanced child stats directly.
@@ -719,7 +719,7 @@ impl StatisticsProvider for PassthroughStatisticsProvider {
     }
 }
 
-/// Statistics provider for [`AggregateExec`](crate::aggregates::AggregateExec)
+/// Statistics provider for [`AggregateExec`]
 /// that estimates output cardinality from the NDV of GROUP BY columns.
 ///
 /// For each GROUP BY column, looks up `distinct_count` from the enhanced
@@ -950,8 +950,8 @@ impl StatisticsProvider for JoinStatisticsProvider {
     }
 }
 
-/// Statistics provider for [`LocalLimitExec`](crate::limit::LocalLimitExec) and
-/// [`GlobalLimitExec`](crate::limit::GlobalLimitExec).
+/// Statistics provider for [`LocalLimitExec`] and
+/// [`GlobalLimitExec`].
 ///
 /// Caps output row count at the limit value, accounting for any leading skip offset
 /// in `GlobalLimitExec`.
@@ -1003,7 +1003,7 @@ impl StatisticsProvider for LimitStatisticsProvider {
     }
 }
 
-/// Statistics provider for [`UnionExec`](crate::union::UnionExec).
+/// Statistics provider for [`UnionExec`].
 ///
 /// Sums row counts across all inputs.
 #[derive(Debug, Default)]
