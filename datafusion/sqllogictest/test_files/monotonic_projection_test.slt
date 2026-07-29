@@ -168,3 +168,150 @@ physical_plan
 03)----ProjectionExec: expr=[CAST(a@0 + b@1 AS Int64) as sum_expr, a@0 as a, b@1 as b]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
+
+# concat(a, b) is not lexicographically ordered just because a is ordered:
+# "a" < "a0", but "a1" > "a01". The projected result still needs a sort.
+query I
+COPY (
+  SELECT * FROM (VALUES ('a', '1'), ('a0', '1')) AS t(a, b) ORDER BY a
+) TO 'test_files/scratch/monotonic_projection_test/concat_ordered.parquet';
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE concat_ordered (a VARCHAR, b VARCHAR)
+STORED AS PARQUET
+WITH ORDER (a)
+WITH ORDER (b)
+LOCATION 'test_files/scratch/monotonic_projection_test/concat_ordered.parquet';
+
+query TT
+EXPLAIN
+SELECT concat(a, b) AS c
+FROM concat_ordered
+ORDER BY c;
+----
+logical_plan
+01)Sort: c ASC NULLS LAST
+02)--Projection: concat(concat_ordered.a, concat_ordered.b) AS c
+03)----TableScan: concat_ordered projection=[a, b]
+physical_plan
+01)SortExec: expr=[c@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/monotonic_projection_test/concat_ordered.parquet]]}, projection=[concat(a@0, b@1) as c], file_type=parquet
+
+query T
+SELECT concat(a, b) AS c
+FROM concat_ordered
+ORDER BY c;
+----
+a01
+a1
+
+# An ordering on (c, a, b) does not imply an ordering on (a, b), even when
+# FilterExec establishes c = concat(a, b). EnsureRequirements must retain the
+# sort required by ORDER BY a, b.
+query I
+COPY (
+  SELECT concat(a, b) AS c, a, b
+  FROM (VALUES ('a0', '1'), ('a', '1')) AS t(a, b)
+  ORDER BY c, a, b
+) TO 'test_files/scratch/monotonic_projection_test/concat_equality_ordered.parquet';
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE concat_equality_ordered (c VARCHAR, a VARCHAR, b VARCHAR)
+STORED AS PARQUET
+WITH ORDER (c, a, b)
+LOCATION 'test_files/scratch/monotonic_projection_test/concat_equality_ordered.parquet';
+
+query TT
+EXPLAIN
+SELECT a, b
+FROM concat_equality_ordered
+WHERE c = concat(a, b)
+ORDER BY a, b;
+----
+logical_plan
+01)Sort: concat_equality_ordered.a ASC NULLS LAST, concat_equality_ordered.b ASC NULLS LAST
+02)--Projection: concat_equality_ordered.a, concat_equality_ordered.b
+03)----Filter: concat_equality_ordered.c = concat(concat_equality_ordered.a, concat_equality_ordered.b)
+04)------TableScan: concat_equality_ordered projection=[c, a, b], partial_filters=[concat_equality_ordered.c = concat(concat_equality_ordered.a, concat_equality_ordered.b)]
+physical_plan
+01)SortPreservingMergeExec: [a@0 ASC NULLS LAST, b@1 ASC NULLS LAST]
+02)--SortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[true]
+03)----FilterExec: c@0 = concat(a@1, b@2), projection=[a@1, b@2]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/monotonic_projection_test/concat_equality_ordered.parquet]]}, projection=[c, a, b], output_ordering=[c@0 ASC NULLS LAST, a@1 ASC NULLS LAST, b@2 ASC NULLS LAST], file_type=parquet, predicate=c@0 = concat(a@1, b@2)
+
+query TT
+SELECT a, b
+FROM concat_equality_ordered
+WHERE c = concat(a, b)
+ORDER BY a, b;
+----
+a 1
+a0 1
+
+# Test that precision-losing int-to-float casts do not invalidate suffix sort keys.
+#
+# When CAST(Int32 AS Float32) collapses distinct integer values (e.g., 16777216 and
+# 16777217 both become 16777216.0), the suffix sort key (k) must still be sorted
+# correctly. Before the fix, the optimizer incorrectly reused the pre-existing sort
+# order and dropped the SortExec, producing wrong results.
+#
+# t1 is declared with a sort order, t2 is not — their results should be identical
+# since CAST(v AS FLOAT) is not injective for 32-bit integers.
+statement ok
+CREATE EXTERNAL TABLE t1_int_float (k int, v int)
+STORED AS CSV
+WITH ORDER (v DESC, k DESC)
+LOCATION '../core/tests/data/int_to_float_cast_precision.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE t2_int_float (k int, v int)
+STORED AS CSV
+LOCATION '../core/tests/data/int_to_float_cast_precision.csv'
+OPTIONS ('format.has_header' 'true');
+
+# Both queries must return the same result: k=2 before k=1.
+# (v_=16777216.0 for both rows; when tied on v_, DESC on k means k=2 comes first)
+query IR
+SELECT k, cast(v as float) v_ FROM t1_int_float ORDER BY v_ DESC, k DESC;
+----
+2 16777216
+1 16777216
+
+query IR
+SELECT k, cast(v as float) v_ FROM t2_int_float ORDER BY v_ DESC, k DESC;
+----
+2 16777216
+1 16777216
+
+# Widening cast (Int32 -> Int64) is strictly 1-to-1, so the optimizer CAN
+# legally reuse the pre-existing sort order and omit a SortExec.
+statement ok
+CREATE EXTERNAL TABLE t3_int_bigint (k int, v int)
+STORED AS CSV
+WITH ORDER (v DESC, k DESC)
+LOCATION '../core/tests/data/int_to_float_cast_precision.csv'
+OPTIONS ('format.has_header' 'true');
+
+# CAST(Int32 AS BIGINT) is injective, so suffix key ordering is preserved.
+query II
+SELECT k, cast(v as bigint) v_ FROM t3_int_bigint ORDER BY v_ DESC, k DESC;
+----
+1 16777217
+2 16777216
+
+# Cleanup
+statement ok
+DROP TABLE t1_int_float;
+
+statement ok
+DROP TABLE t2_int_float;
+
+statement ok
+DROP TABLE t3_int_bigint;
+

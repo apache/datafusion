@@ -437,6 +437,98 @@ impl ExecutionPlan for SortPreservingMergeExec {
             .with_fetch(self.fetch()),
         )))
     }
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        let expr = self
+            .expr()
+            .iter()
+            .map(|e| {
+                Ok(protobuf::PhysicalExprNode {
+                    expr_id: None,
+                    expr_type: Some(protobuf::physical_expr_node::ExprType::Sort(
+                        Box::new(protobuf::PhysicalSortExprNode {
+                            expr: Some(Box::new(ctx.encode_expr(&e.expr)?)),
+                            asc: !e.options.descending,
+                            nulls_first: e.options.nulls_first,
+                        }),
+                    )),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::SortPreservingMerge(
+                    Box::new(protobuf::SortPreservingMergeExecNode {
+                        input: Some(Box::new(input)),
+                        expr,
+                        fetch: self.fetch().map(|f| f as i64).unwrap_or(-1),
+                    }),
+                ),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl SortPreservingMergeExec {
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use arrow::compute::SortOptions;
+        use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+        use datafusion_proto_models::protobuf;
+        let spm = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::SortPreservingMerge,
+            "SortPreservingMergeExec",
+        );
+        let input = ctx.decode_required_child(
+            spm.input.as_deref(),
+            "SortPreservingMergeExec",
+            "input",
+        )?;
+        let input_schema = input.schema();
+        let exprs = spm
+            .expr
+            .iter()
+            .map(|e| {
+                let sort = match &e.expr_type {
+                    Some(protobuf::physical_expr_node::ExprType::Sort(s)) => s,
+                    _ => {
+                        return internal_err!(
+                            "SortPreservingMergeExec expression is not a sort expression"
+                        );
+                    }
+                };
+                let expr = ctx.decode_required_expr(
+                    sort.expr.as_deref(),
+                    input_schema.as_ref(),
+                    "SortPreservingMergeExec",
+                    "sort expression",
+                )?;
+                Ok(PhysicalSortExpr {
+                    expr,
+                    options: SortOptions {
+                        descending: !sort.asc,
+                        nulls_first: sort.nulls_first,
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let Some(ordering) = LexOrdering::new(exprs) else {
+            return internal_err!("SortPreservingMergeExec requires an ordering");
+        };
+        let fetch = (spm.fetch >= 0).then_some(spm.fetch as usize);
+        Ok(Arc::new(
+            SortPreservingMergeExec::new(ordering, input).with_fetch(fetch),
+        ))
+    }
 }
 
 #[cfg(test)]

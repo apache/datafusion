@@ -28,6 +28,7 @@ use arrow::{
 use datafusion_common::cast::as_large_binary_array;
 use datafusion_common::cast::as_string_view_array;
 use datafusion_common::types::{NativeType, logical_int64, logical_string};
+use datafusion_common::utils::hex::{HexCase, encode_bytes_into, encode_u64};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
     DataFusionError,
@@ -110,54 +111,6 @@ impl ScalarUDFImpl for SparkHex {
     }
 }
 
-/// Hex encoding lookup tables for fast byte-to-hex conversion.
-///
-/// Each entry maps a full byte to its two-character hex encoding so the
-/// hot loop becomes one load + one two-byte extend per input byte instead
-/// of two nibble lookups and two pushes.
-const HEX_CHARS_UPPER_NIBBLES: &[u8; 16] = b"0123456789ABCDEF";
-const HEX_CHARS_LOWER_NIBBLES: &[u8; 16] = b"0123456789abcdef";
-
-const HEX_LOOKUP_UPPER: [[u8; 2]; 256] = build_hex_lookup(HEX_CHARS_UPPER_NIBBLES);
-const HEX_LOOKUP_LOWER: [[u8; 2]; 256] = build_hex_lookup(HEX_CHARS_LOWER_NIBBLES);
-
-const fn build_hex_lookup(nibbles: &[u8; 16]) -> [[u8; 2]; 256] {
-    let mut table = [[0u8; 2]; 256];
-    let mut i = 0;
-    while i < 256 {
-        table[i][0] = nibbles[(i >> 4) & 0xF];
-        table[i][1] = nibbles[i & 0xF];
-        i += 1;
-    }
-    table
-}
-
-#[inline]
-fn hex_int64(num: i64, buffer: &mut [u8; 16]) -> &[u8] {
-    if num == 0 {
-        return b"0";
-    }
-
-    // Walk the value two nibbles (one full byte) at a time. The buffer is
-    // filled from the right so the high-order nibbles end up first; the
-    // returned slice trims leading zeros automatically.
-    let mut n = num as u64;
-    let mut i = 16;
-    while n >= 0x10 {
-        i -= 2;
-        let pair = HEX_LOOKUP_UPPER[(n & 0xFF) as usize];
-        buffer[i] = pair[0];
-        buffer[i + 1] = pair[1];
-        n >>= 8;
-    }
-    if n > 0 {
-        // Single remaining high nibble (value 0x1..=0xF).
-        i -= 1;
-        buffer[i] = HEX_CHARS_UPPER_NIBBLES[n as usize];
-    }
-    &buffer[i..]
-}
-
 /// Generic hex encoding for byte array types
 fn hex_encode_bytes<'a, I, T>(
     iter: I,
@@ -168,10 +121,10 @@ where
     I: Iterator<Item = Option<T>>,
     T: AsRef<[u8]> + 'a,
 {
-    let lookup = if lowercase {
-        &HEX_LOOKUP_LOWER
+    let case = if lowercase {
+        HexCase::Lower
     } else {
-        &HEX_LOOKUP_UPPER
+        HexCase::Upper
     };
 
     // Write hex digits directly into one growing value buffer, tracking offsets
@@ -195,9 +148,7 @@ where
                     "failed to reserve {additional} bytes for hex output: {e}"
                 )
             })?;
-            for &byte in bytes {
-                values.extend_from_slice(&lookup[byte as usize]);
-            }
+            encode_bytes_into(bytes, case, &mut values);
             nulls.append_non_null();
         } else {
             nulls.append_null();
@@ -233,7 +184,7 @@ fn hex_encode_int64(
     for v in iter {
         if let Some(num) = v {
             let mut temp = [0u8; 16];
-            let slice = hex_int64(num, &mut temp);
+            let slice = encode_u64(num as u64, HexCase::Upper, &mut temp);
             // SAFETY: slice contains only ASCII hex digests, which are valid UTF-8
             unsafe {
                 builder.append_value(from_utf8_unchecked(slice));
@@ -381,11 +332,10 @@ pub fn compute_hex(
 
 #[cfg(test)]
 mod test {
-    use std::str::from_utf8_unchecked;
     use std::sync::Arc;
 
     use arrow::array::{
-        BinaryArray, DictionaryArray, Int32Array, Int64Array, StringArray,
+        Array, BinaryArray, DictionaryArray, Int32Array, Int64Array, StringArray,
     };
     use arrow::{
         array::{
@@ -486,7 +436,7 @@ mod test {
 
     #[test]
     fn test_hex_int64() {
-        let test_cases = vec![
+        let cases = vec![
             (0_i64, "0"),
             (1, "1"),
             (15, "F"),
@@ -499,37 +449,28 @@ mod test {
             (-1, "FFFFFFFFFFFFFFFF"),
         ];
 
-        for (num, expected) in test_cases {
-            let mut cache = [0u8; 16];
-            let slice = super::hex_int64(num, &mut cache);
-
-            unsafe {
-                let result = from_utf8_unchecked(slice);
-                assert_eq!(expected, result, "hex_int64({num}) mismatch");
-            }
+        let arr =
+            super::hex_encode_int64(cases.iter().map(|(n, _)| Some(*n)), cases.len())
+                .unwrap();
+        let arr = as_string_array(&arr);
+        for (i, (num, expected)) in cases.iter().enumerate() {
+            assert_eq!(*expected, arr.value(i), "hex({num})");
         }
     }
 
     #[test]
-    fn test_hex_lookup_table_covers_all_bytes() {
-        // Cross-check the precomputed table against an independent encoder
-        // for every possible byte value and both casings.
-        for byte in 0u8..=255 {
-            let upper = format!("{byte:02X}");
-            let lower = format!("{byte:02x}");
-            let upper_pair = super::HEX_LOOKUP_UPPER[byte as usize];
-            let lower_pair = super::HEX_LOOKUP_LOWER[byte as usize];
-            assert_eq!(
-                upper.as_bytes(),
-                &upper_pair,
-                "upper encoding mismatch for byte 0x{byte:02X}"
-            );
-            assert_eq!(
-                lower.as_bytes(),
-                &lower_pair,
-                "lower encoding mismatch for byte 0x{byte:02X}"
-            );
-        }
+    fn test_hex_encode_bytes_lowercase() {
+        // Every in-repo caller of `hex_encode_bytes` goes through `spark_hex`,
+        // which always passes `lowercase = false`. The `lowercase = true` path
+        // is reachable only via `spark_sha2_hex`, which has no in-workspace
+        // caller, so it otherwise has no coverage. Drive it directly here.
+        let input = StringArray::from(vec![Some("hi"), Some("bye"), None, Some("rust")]);
+        let result = super::hex_encode_bytes(input.iter(), true, input.len()).unwrap();
+        let result = as_string_array(&result);
+
+        let expected =
+            StringArray::from(vec![Some("6869"), Some("627965"), None, Some("72757374")]);
+        assert_eq!(result, &expected);
     }
 
     #[test]
