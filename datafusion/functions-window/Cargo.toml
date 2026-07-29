@@ -58,3 +58,7 @@ criterion = { workspace = true }
 [[bench]]
 name = "nth_value"
 harness = false
+
+[[bench]]
+name = "rank"
+harness = false

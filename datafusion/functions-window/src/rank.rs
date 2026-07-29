@@ -36,7 +36,6 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::iter;
 use std::ops::Range;
 use std::sync::{Arc, LazyLock};
 
@@ -317,43 +316,59 @@ impl PartitionEvaluator for RankEvaluator {
         ranks_in_partition: &[Range<usize>],
     ) -> Result<ArrayRef> {
         let result: ArrayRef = match self.rank_type {
-            RankType::Basic => Arc::new(UInt64Array::from_iter_values(
-                ranks_in_partition
-                    .iter()
-                    .scan(1_u64, |acc, range| {
+            RankType::Basic => {
+                if ranks_in_partition.len() == num_rows {
+                    Arc::new(UInt64Array::from_iter_values(1..=num_rows as u64))
+                } else {
+                    let mut values = Vec::with_capacity(num_rows);
+                    let mut rank = 1_u64;
+                    for range in ranks_in_partition {
                         let len = range.end - range.start;
-                        let result = iter::repeat_n(*acc, len);
-                        *acc += len as u64;
-                        Some(result)
-                    })
-                    .flatten(),
-            )),
+                        values.resize(values.len() + len, rank);
+                        rank += len as u64;
+                    }
 
-            RankType::Dense => Arc::new(UInt64Array::from_iter_values(
-                ranks_in_partition
-                    .iter()
-                    .zip(1u64..)
-                    .flat_map(|(range, rank)| {
+                    Arc::new(UInt64Array::from(values))
+                }
+            }
+
+            RankType::Dense => {
+                if ranks_in_partition.len() == num_rows {
+                    Arc::new(UInt64Array::from_iter_values(1..=num_rows as u64))
+                } else {
+                    let mut values = Vec::with_capacity(num_rows);
+                    for (range, rank) in ranks_in_partition.iter().zip(1_u64..) {
                         let len = range.end - range.start;
-                        iter::repeat_n(rank, len)
-                    }),
-            )),
+                        values.resize(values.len() + len, rank);
+                    }
+
+                    Arc::new(UInt64Array::from(values))
+                }
+            }
 
             RankType::Percent => {
                 let denominator = num_rows as f64;
+                let denominator = (denominator - 1.0).max(1.0);
 
-                Arc::new(Float64Array::from_iter_values(
-                    ranks_in_partition
-                        .iter()
-                        .scan(0_u64, |acc, range| {
-                            let len = range.end - range.start;
-                            let value = (*acc as f64) / (denominator - 1.0).max(1.0);
-                            let result = iter::repeat_n(value, len);
-                            *acc += len as u64;
-                            Some(result)
-                        })
-                        .flatten(),
-                ))
+                if ranks_in_partition.len() == num_rows {
+                    let values: Vec<_> = (0..num_rows)
+                        .map(|rank| rank as f64 / denominator)
+                        .collect();
+                    let result: Float64Array = values.into();
+                    Arc::new(result)
+                } else {
+                    let mut values = Vec::with_capacity(num_rows);
+                    let mut rank = 0_u64;
+
+                    for range in ranks_in_partition {
+                        let len = range.end - range.start;
+                        let value = (rank as f64) / denominator;
+                        values.resize(values.len() + len, value);
+                        rank += len as u64;
+                    }
+
+                    Arc::new(Float64Array::from(values))
+                }
             }
         };
 
@@ -419,6 +434,11 @@ mod tests {
         let r = Rank::basic();
         test_without_rank(&r, vec![1; 8])?;
         test_with_rank(&r, vec![1, 1, 3, 4, 4, 4, 7, 8])?;
+        test_i32_result(
+            &r,
+            (0..8).map(|idx| idx..idx + 1).collect(),
+            vec![1, 2, 3, 4, 5, 6, 7, 8],
+        )?;
         Ok(())
     }
 
@@ -427,6 +447,11 @@ mod tests {
         let r = Rank::dense_rank();
         test_without_rank(&r, vec![1; 8])?;
         test_with_rank(&r, vec![1, 1, 2, 3, 3, 3, 4, 5])?;
+        test_i32_result(
+            &r,
+            (0..8).map(|idx| idx..idx + 1).collect(),
+            vec![1, 2, 3, 4, 5, 6, 7, 8],
+        )?;
         Ok(())
     }
 
@@ -450,6 +475,10 @@ mod tests {
         // non-trivial case
         let expected = vec![0.0, 0.0, 0.0, 0.5, 0.5, 0.5, 0.5];
         test_f64_result(&r, 7, vec![0..3, 3..7], expected)?;
+
+        // singleton rank groups
+        let expected = vec![0.0, 0.25, 0.5, 0.75, 1.0];
+        test_f64_result(&r, 5, (0..5).map(|idx| idx..idx + 1).collect(), expected)?;
 
         Ok(())
     }
