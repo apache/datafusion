@@ -22,7 +22,6 @@ use arrow::buffer::Buffer;
 use arrow::datatypes::DataType;
 
 use crate::strings::{GenericStringArrayBuilder, StringViewArrayBuilder};
-use crate::utils::{transform_leaf_type_preserving_encoding, utf8_to_str_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
 use datafusion_common::{Result, ScalarValue, exec_err};
@@ -84,28 +83,18 @@ impl ScalarUDFImpl for InitcapFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        transform_leaf_type_preserving_encoding(&arg_types[0], &|data_type| {
-            if let DataType::Utf8View = data_type {
-                Ok(DataType::Utf8View)
-            } else {
-                utf8_to_str_type(data_type, "initcap")
-            }
-        })
+        Ok(arg_types[0].clone())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let arg = &args.args[0];
-
-        // Scalar fast path - handle directly without array conversion
-        if let ColumnarValue::Scalar(scalar) = arg {
-            return Ok(ColumnarValue::Scalar(initcap_scalar(scalar)?));
+        match &args.args[0] {
+            ColumnarValue::Scalar(scalar) => {
+                Ok(ColumnarValue::Scalar(initcap_scalar(scalar)?))
+            }
+            ColumnarValue::Array(array) => {
+                Ok(ColumnarValue::Array(initcap_array(array)?))
+            }
         }
-
-        // Array path
-        let ColumnarValue::Array(array) = arg else {
-            unreachable!("scalar handled above")
-        };
-        Ok(ColumnarValue::Array(initcap_array(array)?))
     }
 
     fn documentation(&self) -> Option<&Documentation> {
