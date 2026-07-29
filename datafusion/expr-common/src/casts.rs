@@ -40,8 +40,11 @@ use datafusion_common::{Result, ScalarValue};
 /// Source-domain preimage of `CAST(source_expr AS target_type) OP literal`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CastPredicatePreimage {
-    /// A singleton preimage represented by a literal in the source type. This
-    /// can keep the original comparison operator.
+    /// An exact same-operator source bound or literal.
+    ///
+    /// For equality-like predicates this is a singleton literal. For ordered
+    /// timestamp widening predicates it is a source-unit bound, not a
+    /// singleton equality preimage.
     Exact(ScalarValue),
     /// A half-open source-domain interval `[lower, upper)`. The caller must
     /// map the comparison operator to range predicates.
@@ -94,8 +97,9 @@ pub fn try_cast_literal_to_type(
 /// Computes a source-domain preimage for `CAST(source AS target_type) OP literal`.
 ///
 /// This is the shared semantic core for logical and physical cast-predicate
-/// rewrites. It returns a singleton [`CastPredicatePreimage::Exact`] for casts
-/// where moving the cast to the literal preserves comparison semantics, and a
+/// rewrites. It returns an exact same-operator source bound or literal as
+/// [`CastPredicatePreimage::Exact`] where moving the cast preserves comparison
+/// semantics, and a
 /// [`CastPredicatePreimage::Range`] for many-to-one casts with known preimages
 /// such as timestamp precision narrowing.
 pub fn cast_predicate_preimage(
@@ -118,8 +122,14 @@ pub fn cast_predicate_preimage(
         return Ok(Some(CastPredicatePreimage::Exact(value)));
     }
 
-    Ok(exact_preimage_cast(source_type, target_type, lit_value)
-        .map(CastPredicatePreimage::Exact))
+    if let Some(value) = exact_preimage_cast(source_type, target_type, lit_value) {
+        return Ok(Some(CastPredicatePreimage::Exact(value)));
+    }
+
+    Ok(
+        timestamp_widening_ordered_preimage(source_type, target_type, op, lit_value)
+            .map(CastPredicatePreimage::Exact),
+    )
 }
 
 fn maybe_range_preimage(
@@ -458,6 +468,63 @@ fn timestamp_narrowing_range_preimage(
         timestamp_scalar(source_unit, source_tz.clone(), upper),
     )
     .map(Some)
+}
+
+/// Computes a same-operator source bound for an ordered timestamp precision
+/// widening cast with a non-aligned target literal.
+///
+/// This deliberately follows the accepted timestamp-widening policy for this
+/// PR: at extreme source values where widening overflows, `CAST` can error and
+/// `TRY_CAST` can return `NULL`, while the rewritten source-unit comparison
+/// returns a Boolean. It is therefore not a global full-domain equivalence
+/// claim for those overflow cases; a guarded-preimage redesign is out of scope.
+fn timestamp_widening_ordered_preimage(
+    source_type: &DataType,
+    target_type: &DataType,
+    op: Operator,
+    lit_value: &ScalarValue,
+) -> Option<ScalarValue> {
+    let (
+        DataType::Timestamp(source_unit, source_tz),
+        DataType::Timestamp(target_unit, target_tz),
+    ) = (source_type, target_type)
+    else {
+        return None;
+    };
+
+    if source_tz != target_tz
+        || lit_value.is_null()
+        || lit_value.data_type() != *target_type
+        || !matches!(
+            op,
+            Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
+        )
+    {
+        return None;
+    }
+
+    let source_scale = i128::from(timestamp_unit_scale(source_unit));
+    let target_scale = i128::from(timestamp_unit_scale(target_unit));
+    if target_scale <= source_scale {
+        return None;
+    }
+
+    let target_value = i128::from(timestamp_literal_value(lit_value, target_unit)?);
+    let quotient = target_scale / source_scale;
+    let floor = target_value.div_euclid(quotient);
+    let remainder = target_value.rem_euclid(quotient);
+    if remainder == 0 {
+        return None;
+    }
+    let ceil = floor + 1;
+    let bound = match op {
+        Operator::GtEq | Operator::Lt => ceil,
+        Operator::Gt | Operator::LtEq => floor,
+        _ => return None,
+    };
+
+    let bound = i64::try_from(bound).ok()?;
+    Some(timestamp_scalar(source_unit, source_tz.clone(), bound))
 }
 
 /// Returns the half-open source-domain bucket `[lower, upper)` that truncates
@@ -1704,7 +1771,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_predicate_preimage_timestamp_widening_exact_only() {
+    fn test_cast_predicate_preimage_timestamp_widening_ordered() {
         let ts_ms = DataType::Timestamp(TimeUnit::Millisecond, None);
         let ts_ns = DataType::Timestamp(TimeUnit::Nanosecond, None);
 
@@ -1716,11 +1783,75 @@ mod tests {
             ScalarValue::TimestampMillisecond(Some(123), None),
         );
 
+        for (source_unit, target_unit) in [
+            (TimeUnit::Second, TimeUnit::Millisecond),
+            (TimeUnit::Second, TimeUnit::Microsecond),
+            (TimeUnit::Second, TimeUnit::Nanosecond),
+            (TimeUnit::Millisecond, TimeUnit::Microsecond),
+            (TimeUnit::Millisecond, TimeUnit::Nanosecond),
+            (TimeUnit::Microsecond, TimeUnit::Nanosecond),
+        ] {
+            assert_timestamp_widening_ordered(source_unit, target_unit);
+        }
+
         assert_preimage_none(
             &ts_ms,
             &ts_ns,
             Operator::Eq,
             &ScalarValue::TimestampNanosecond(Some(123_456_789), None),
+        );
+    }
+
+    #[test]
+    fn test_timestamp_widening_ordered_preimage_rejections_and_timezone() {
+        let source_type = DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into()));
+        let target_type = DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()));
+        let literal =
+            ScalarValue::TimestampNanosecond(Some(123_456_789), Some("UTC".into()));
+
+        assert_preimage_exact(
+            &source_type,
+            &target_type,
+            Operator::GtEq,
+            &literal,
+            ScalarValue::TimestampMillisecond(Some(124), Some("UTC".into())),
+        );
+
+        for op in [
+            Operator::Eq,
+            Operator::NotEq,
+            Operator::IsDistinctFrom,
+            Operator::IsNotDistinctFrom,
+        ] {
+            assert_preimage_none(&source_type, &target_type, op, &literal);
+        }
+
+        assert!(
+            timestamp_widening_ordered_preimage(
+                &source_type,
+                &target_type,
+                Operator::GtEq,
+                &ScalarValue::TimestampNanosecond(None, Some("UTC".into())),
+            )
+            .is_none()
+        );
+        assert!(
+            timestamp_widening_ordered_preimage(
+                &source_type,
+                &target_type,
+                Operator::GtEq,
+                &ScalarValue::TimestampMicrosecond(Some(123_456), Some("UTC".into())),
+            )
+            .is_none()
+        );
+        assert!(
+            timestamp_widening_ordered_preimage(
+                &source_type,
+                &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                Operator::GtEq,
+                &ScalarValue::TimestampNanosecond(Some(123_456_789), None),
+            )
+            .is_none()
         );
     }
 
@@ -2440,6 +2571,83 @@ mod tests {
             result, None,
             "expected None preimage for {source_type:?} → {target_type:?} {op:?} {lit_value:?}"
         );
+    }
+
+    fn assert_timestamp_widening_ordered(source_unit: TimeUnit, target_unit: TimeUnit) {
+        let source_type = DataType::Timestamp(source_unit, None);
+        let target_type = DataType::Timestamp(target_unit, None);
+        let quotient = i128::from(timestamp_unit_scale(&target_unit))
+            / i128::from(timestamp_unit_scale(&source_unit));
+
+        for (target_value, floor, ceil) in [
+            (i64::try_from(quotient + 1).unwrap(), 1, 2),
+            (i64::try_from(1 - quotient).unwrap(), -1, 0),
+        ] {
+            for (op, expected) in [
+                (Operator::GtEq, ceil),
+                (Operator::Gt, floor),
+                (Operator::Lt, ceil),
+                (Operator::LtEq, floor),
+            ] {
+                assert_preimage_exact(
+                    &source_type,
+                    &target_type,
+                    op,
+                    &timestamp_scalar(&target_unit, None, target_value),
+                    timestamp_scalar(&source_unit, None, expected),
+                );
+            }
+        }
+
+        // Aligned literals continue through the exact-preimage path.
+        for op in [Operator::GtEq, Operator::Gt, Operator::Lt, Operator::LtEq] {
+            assert_preimage_exact(
+                &source_type,
+                &target_type,
+                op,
+                &timestamp_scalar(
+                    &target_unit,
+                    None,
+                    i64::try_from(123 * quotient).unwrap(),
+                ),
+                timestamp_scalar(&source_unit, None, 123),
+            );
+        }
+
+        // The accepted widening policy applies the Euclidean source bound to
+        // boundary literals as well, despite CAST/TRY_CAST overflow caveats.
+        for target_value in [i64::MIN, i64::MAX] {
+            let target_value = i128::from(target_value);
+            let floor = target_value.div_euclid(quotient);
+            let ceil = floor
+                + if target_value.rem_euclid(quotient) != 0 {
+                    1
+                } else {
+                    0
+                };
+            for (op, expected) in [
+                (Operator::GtEq, ceil),
+                (Operator::Gt, floor),
+                (Operator::Lt, ceil),
+                (Operator::LtEq, floor),
+            ] {
+                assert_preimage_exact(
+                    &source_type,
+                    &target_type,
+                    op,
+                    &timestamp_scalar(
+                        &target_unit,
+                        None,
+                        i64::try_from(target_value).unwrap(),
+                    ),
+                    timestamp_scalar(
+                        &source_unit,
+                        None,
+                        i64::try_from(expected).unwrap(),
+                    ),
+                );
+            }
+        }
     }
 
     fn assert_timestamp_narrowing_range(lit_ms: i64, lower_ns: i64, upper_ns: i64) {
