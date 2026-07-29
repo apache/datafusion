@@ -97,16 +97,31 @@ pub trait Session: Send + Sync {
 
     /// Optimize a logical plan.
     ///
-    /// The default implementation returns the plan unchanged. Sessions that use
-    /// the default query planning implementation should override this method.
+    /// # Warning
+    ///
+    /// The default implementation returns the plan **unchanged**, applying no
+    /// logical optimizations whatsoever. This is almost never what you want:
+    /// without optimization, queries execute in their naive, unoptimized form
+    /// and may be dramatically slower or fail to run at all. The default exists
+    /// only so this crate need not depend on the optimizer; any real session
+    /// should override this method (for example by delegating to
+    /// `SessionState::optimize`).
     fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
         Ok(plan.clone())
     }
 
     /// Return the physical optimizer rules for this session.
     ///
-    /// The default implementation returns no rules. Sessions that use the
-    /// default physical planner should override this method.
+    /// # Warning
+    ///
+    /// The default implementation returns **no rules**. This is almost never
+    /// what you want: DataFusion relies on physical optimizer rules for
+    /// correctness-critical rewrites (such as inserting the repartitioning and
+    /// coalescing needed for parallel and multi-partition execution), so a
+    /// session with no rules will produce plans that are inefficient or that
+    /// fail to execute. The default exists only so this crate need not depend
+    /// on the optimizer; any real session should override this method (for
+    /// example by returning `SessionState::physical_optimizers`).
     fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
         &[]
     }
