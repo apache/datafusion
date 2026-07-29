@@ -1032,15 +1032,17 @@ fn interval_bound_to_precision(
 }
 
 /// Caps a row-bounded column statistic (a null count or distinct count) at the
-/// filtered row estimate, since a column cannot have more nulls or distinct
-/// values than it has rows. Known counts are demoted to inexact because the
-/// filtered row count is itself an estimate.
+/// filtered row count, since a column cannot have more nulls or distinct values
+/// than it has rows. Known counts are demoted to inexact because a
+/// filter-derived row bound is normally an estimate, the exception being an
+/// exact zero, which proves the column is empty.
 fn cap_at_rows(
     value: Precision<usize>,
     filtered_num_rows: Precision<usize>,
 ) -> Precision<usize> {
     match filtered_num_rows {
         Precision::Absent => value.to_inexact(),
+        Precision::Exact(0) => Precision::Exact(0),
         rows => value.to_inexact().min(&rows),
     }
 }
@@ -2904,16 +2906,29 @@ mod tests {
     #[tokio::test]
     async fn test_filter_statistics_preserves_exactly_empty_input() -> Result<()> {
         // A satisfiable predicate over an exactly empty input: the filter cannot
-        // produce rows, so the whole estimate stays exact.
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        // produce rows, so the whole estimate stays exact. Column `b` is not
+        // mentioned by the predicate, so its null and distinct counts go through
+        // the generic row cap.
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
         let input_stats = Statistics {
             num_rows: Precision::Exact(0),
             total_byte_size: Precision::Exact(0),
-            column_statistics: vec![ColumnStatistics {
-                null_count: Precision::Exact(0),
-                byte_size: Precision::Exact(0),
-                ..Default::default()
-            }],
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    byte_size: Precision::Exact(0),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(3),
+                    distinct_count: Precision::Exact(7),
+                    byte_size: Precision::Exact(0),
+                    ..Default::default()
+                },
+            ],
         };
         let predicate = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", 0)),
@@ -2931,6 +2946,14 @@ mod tests {
         assert_eq!(statistics.total_byte_size, Precision::Exact(0));
         assert_eq!(
             statistics.column_statistics[0].byte_size,
+            Precision::Exact(0)
+        );
+        assert_eq!(
+            statistics.column_statistics[1].null_count,
+            Precision::Exact(0)
+        );
+        assert_eq!(
+            statistics.column_statistics[1].distinct_count,
             Precision::Exact(0)
         );
 
