@@ -35,6 +35,7 @@ use datafusion_catalog::{
     MemoryCatalogProviderList, MemorySchemaProvider, SchemaProvider, TableProvider,
 };
 use datafusion_common::{Result, exec_err};
+use datafusion_expr::TableType;
 
 use crate::catalog_provider::FFI_CatalogProvider;
 use crate::catalog_provider_list::FFI_CatalogProviderList;
@@ -96,6 +97,14 @@ impl SchemaProvider for FixedSchemaProvider {
         self.inner.table(name).await
     }
 
+    async fn table_type(&self, name: &str) -> Result<Option<TableType>> {
+        if name == "purchases" {
+            return Ok(Some(TableType::View));
+        }
+
+        self.inner.table_type(name).await
+    }
+
     fn table_exist(&self, name: &str) -> bool {
         self.inner.table_exist(name)
     }
@@ -119,8 +128,8 @@ impl SchemaProvider for FixedSchemaProvider {
     }
 }
 
-/// This catalog provider is intended only for unit tests. It prepopulates with one
-/// schema and only allows for schemas named after four types of fruit.
+/// This catalog provider is intended only for unit tests. It prepopulates with
+/// two schemas and only allows for schemas named after four types of fruit.
 #[derive(Debug)]
 pub struct FixedCatalogProvider {
     inner: MemoryCatalogProvider,
@@ -131,6 +140,11 @@ impl Default for FixedCatalogProvider {
         let inner = MemoryCatalogProvider::new();
 
         let _ = inner.register_schema("apple", Arc::new(FixedSchemaProvider::default()));
+        let fallback_schema = Arc::new(MemorySchemaProvider::new());
+        fallback_schema
+            .register_table("sales".to_string(), fruit_table())
+            .unwrap();
+        let _ = inner.register_schema("banana", fallback_schema);
 
         Self { inner }
     }
