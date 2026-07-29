@@ -477,10 +477,10 @@ EXPLAIN SELECT * FROM cast_preimage_ts
 WHERE CAST(ts_milli AS TIMESTAMP(9)) >= arrow_cast(123456789, 'Timestamp(ns)');
 ----
 logical_plan
-01)Filter: CAST(cast_preimage_ts.ts_milli AS Timestamp(ns)) >= TimestampNanosecond(123456789, None)
+01)Filter: cast_preimage_ts.ts_milli >= TimestampMillisecond(124, None)
 02)--TableScan: cast_preimage_ts projection=[ts_nano, ts_milli]
 physical_plan
-01)FilterExec: CAST(ts_milli@1 AS Timestamp(ns)) >= 123456789
+01)FilterExec: ts_milli@1 >= 124
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
