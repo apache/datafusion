@@ -275,9 +275,8 @@ impl AggregationFuzzTestTask {
     async fn run(&self) -> Result<()> {
         let task_result = match run_sql(&self.sql, &self.ctx_with_params.ctx).await {
             Ok(result) => result,
-            // A bounded pool too tight to even spill fails with
-            // `ResourcesExhausted`. Not a correctness bug, so skip and log it
-            // (no silent drop) instead of failing the run.
+            // A bounded pool too tight to even spill fails with `ResourcesExhausted`. Not a correctness bug, so skip
+            // and log it (no silent drop) instead of failing the run.
             Err(e)
                 if self.ctx_with_params.params.memory_limit().is_some()
                     && matches!(

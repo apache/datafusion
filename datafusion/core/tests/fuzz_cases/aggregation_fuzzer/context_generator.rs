@@ -221,18 +221,16 @@ impl SessionContextGenerator {
         // Decide spilling first; it constrains batch_size and partitions below.
         let spilling = agg_peak > 0 && rng.random_bool(0.5);
 
-        // Cap batch_size when spilling. The spill reserves ~2x the emitted batch
-        // to sort it, so a large batch needs a pool bigger than the aggregate's
-        // peak and never spills. Large batches stay covered by the unbounded rounds.
+        // Cap batch_size when spilling. The spill reserves ~2x the emitted batch to sort it, so a large batch
+        // needs a pool bigger than the aggregate's peak and never spills. Large batches stay covered by the unbounded rounds.
         let batch_size = if spilling {
             rng.random_range(1..=cmp::min(self.max_batch_size, SPILL_BATCH_SIZE_CAP))
         } else {
             rng.random_range(1..=self.max_batch_size)
         };
 
-        // Single partition when spilling. `FairSpillPool` splits across the
-        // per-partition aggregate consumers, so with many partitions each share
-        // is too small and hits `ResourcesExhausted` before it can spill. Multi
+        // Single partition when spilling. `FairSpillPool` splits across the  per-partition aggregate consumers,
+        // so with many partitions each share is too small and hits `ResourcesExhausted` before it can spill. Multi
         // partition stays covered by the unbounded rounds.
         let target_partitions = if spilling {
             1
