@@ -32,7 +32,7 @@ use crate::Session;
 /// A planner that creates a physical plan for a query.
 #[async_trait]
 pub trait QueryPlanner: Any + Debug {
-    /// Create an [`ExecutionPlan`] from a [`LogicalPlan`].
+    /// Given a [`LogicalPlan`], create an [`ExecutionPlan`] suitable for execution
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -62,18 +62,26 @@ impl QueryPlanner for UnsupportedQueryPlanner {
 /// [`ExecutionPlan`] suitable for execution.
 #[async_trait]
 pub trait PhysicalPlanner: Send + Sync {
-    /// Create a physical plan from a logical plan.
+    /// Create a physical plan from a logical plan
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
         session: &dyn Session,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
-    /// Create a physical expression from a logical expression.
+    /// Create a physical expression from a logical expression
+    /// suitable for evaluation
     ///
-    /// `planning_ctx` resolves scalar subqueries for the plan subtree being
-    /// converted. Callers outside plan conversion should pass
-    /// `&PhysicalPlanningContext::default()`.
+    /// `expr`: the expression to convert
+    ///
+    /// `input_dfschema`: the logical plan schema for evaluating `expr`
+    ///
+    /// `planning_ctx`: the [`PhysicalPlanningContext`] used to resolve
+    /// `Expr::ScalarSubquery` nodes. During physical planning the planner
+    /// threads the context of the plan currently being converted to a physical
+    /// plan (for example into [`ExtensionPlanner::plan_extension`], which
+    /// should forward it here). Callers creating physical expressions outside
+    /// of a plan should pass `&PhysicalPlanningContext::default()`.
     fn create_physical_expr(
         &self,
         expr: &Expr,
@@ -83,12 +91,25 @@ pub trait PhysicalPlanner: Send + Sync {
     ) -> Result<Arc<dyn PhysicalExpr>>;
 }
 
-/// Plans user-defined logical nodes and table sources.
+/// This trait exposes the ability to plan an [`ExecutionPlan`] out of a [`LogicalPlan`].
 #[async_trait]
 pub trait ExtensionPlanner {
     /// Create a physical plan for a [`UserDefinedLogicalNode`].
     ///
-    /// Return `Ok(None)` when this planner does not support `node`.
+    /// `input_dfschema`: the logical plan schema for the inputs to this node
+    ///
+    /// Returns an error when the planner knows how to plan the concrete
+    /// implementation of `node` but errors while doing so.
+    ///
+    /// Returns `None` when the planner does not know how to plan the
+    /// `node` and wants to delegate the planning to another
+    /// [`ExtensionPlanner`].
+    ///
+    /// `planning_ctx` is the [`PhysicalPlanningContext`] of the plan subtree
+    /// currently being converted to a physical plan. Forward it to
+    /// [`PhysicalPlanner::create_physical_expr`] when creating this node's
+    /// physical expressions so that scalar subqueries resolve against the same
+    /// subquery state as the rest of the plan.
     async fn plan_extension(
         &self,
         planner: &dyn PhysicalPlanner,
@@ -99,9 +120,72 @@ pub trait ExtensionPlanner {
         planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>>;
 
-    /// Create a physical plan for a [`TableScan`].
+    /// Create a physical plan for a [`LogicalPlan::TableScan`].
     ///
-    /// Return `Ok(None)` when this planner does not support `scan`.
+    /// This is useful for planning valid [`TableSource`]s that are not `TableProvider`s.
+    ///
+    /// Returns:
+    /// * `Ok(Some(plan))` if the planner knows how to plan the `scan`
+    /// * `Ok(None)` if the planner does not know how to plan the `scan` and wants to delegate the planning to another [`ExtensionPlanner`]
+    /// * `Err` if the planner knows how to plan the `scan` but errors while doing so
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use std::sync::Arc;
+    /// use datafusion::physical_plan::ExecutionPlan;
+    /// use datafusion::logical_expr::TableScan;
+    /// use datafusion::catalog::Session;
+    /// use datafusion::error::Result;
+    /// use datafusion_session::{ExtensionPlanner, PhysicalPlanner};
+    /// use async_trait::async_trait;
+    ///
+    /// // Your custom table source type
+    /// struct MyCustomTableSource { /* ... */ }
+    ///
+    /// // Your custom execution plan
+    /// struct MyCustomExec { /* ... */ }
+    ///
+    /// struct MyExtensionPlanner;
+    ///
+    /// #[async_trait]
+    /// impl ExtensionPlanner for MyExtensionPlanner {
+    ///     async fn plan_extension(
+    ///         &self,
+    ///         _planner: &dyn PhysicalPlanner,
+    ///         _node: &dyn UserDefinedLogicalNode,
+    ///         _logical_inputs: &[&LogicalPlan],
+    ///         _physical_inputs: &[Arc<dyn ExecutionPlan>],
+    ///         _session: &dyn Session,
+    ///         _planning_ctx: &PhysicalPlanningContext,
+    ///     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    ///         Ok(None)
+    ///     }
+    ///
+    ///     async fn plan_table_scan(
+    ///         &self,
+    ///         _planner: &dyn PhysicalPlanner,
+    ///         scan: &TableScan,
+    ///         _session: &dyn Session,
+    ///         _planning_ctx: &PhysicalPlanningContext,
+    ///     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    ///         // Check if this is your custom table source
+    ///         if scan.source.is::<MyCustomTableSource>() {
+    ///             // Create a custom execution plan for your table source
+    ///             let exec = MyCustomExec::new(
+    ///                 scan.table_name.clone(),
+    ///                 Arc::clone(scan.projected_schema.inner()),
+    ///             );
+    ///             Ok(Some(Arc::new(exec)))
+    ///         } else {
+    ///             // Return None to let other extension planners handle it
+    ///             Ok(None)
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// [`TableSource`]: datafusion_expr::TableSource
     async fn plan_table_scan(
         &self,
         _planner: &dyn PhysicalPlanner,

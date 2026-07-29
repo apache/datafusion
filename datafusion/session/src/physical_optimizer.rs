@@ -42,20 +42,29 @@ pub trait PhysicalOptimizerContext: Send + Sync {
     }
 }
 
-/// Transforms one [`ExecutionPlan`] into another that computes the same results,
-/// but may do so more efficiently.
+/// `PhysicalOptimizerRule` transforms one [`ExecutionPlan`] into another which
+/// computes the same results, but in a potentially more efficient way.
+///
+/// Use [`SessionState::add_physical_optimizer_rule`] to register additional
+/// `PhysicalOptimizerRule`s.
+///
+/// [`SessionState::add_physical_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.add_physical_optimizer_rule
 pub trait PhysicalOptimizerRule: Debug + std::any::Any {
     /// Rewrite `plan` to an optimized form.
     ///
-    /// Rules that need the statistics registry should override
-    /// [`Self::optimize_with_context`] instead.
+    /// This is the primary optimization method. For rules that need access to
+    /// the statistics registry, override [`optimize_with_context`](Self::optimize_with_context) instead.
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
-    /// Rewrite `plan` with access to extended context.
+    /// Rewrite `plan` with access to extended context (statistics registry, etc.).
+    ///
+    /// Override this method if you need access to the statistics registry for
+    /// enhanced statistics lookup. The default implementation simply calls
+    /// [`optimize`](Self::optimize) with the config options from the context.
     fn optimize_with_context(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -64,10 +73,12 @@ pub trait PhysicalOptimizerRule: Debug + std::any::Any {
         self.optimize(plan, context.config_options())
     }
 
-    /// A human-readable name for this optimizer rule.
+    /// A human readable name for this optimizer rule
     fn name(&self) -> &str;
 
-    /// Whether the physical planner should validate that this rule preserves
-    /// the plan schema.
+    /// A flag to indicate whether the physical planner should validate that the rule will not
+    /// change the schema of the plan after the rewriting.
+    /// Some of the optimization rules might change the nullable properties of the schema
+    /// and should disable the schema check.
     fn schema_check(&self) -> bool;
 }
