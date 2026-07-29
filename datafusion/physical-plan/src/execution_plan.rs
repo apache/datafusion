@@ -312,7 +312,7 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// [`DynamicFilterPhysicalExpr`]: datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         let children = self.children().into_iter().cloned().collect();
-        self.with_new_children(children)
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     /// If supported, attempt to increase the partitioning of this `ExecutionPlan` to

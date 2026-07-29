@@ -77,7 +77,9 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
-use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion_physical_plan::{
+    ExecutionPlan, ExecutionPlanProperties, with_new_children_if_necessary,
+};
 /// This rule inspects [`ExecutionPlan`]'s and pushes down the fetch limit from
 /// the parent to the child if applicable.
 #[derive(Default, Debug)]
@@ -403,7 +405,7 @@ pub(crate) fn pushdown_limits(
         .collect::<Result<_>>()?;
 
     if changed {
-        new_node.data.with_new_children(new_children)
+        with_new_children_if_necessary(new_node.data, new_children)
     } else {
         Ok(new_node.data)
     }

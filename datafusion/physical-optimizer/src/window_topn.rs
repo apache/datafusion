@@ -58,7 +58,6 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion_physical_expr::window::StandardWindowExpr;
-use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -67,6 +66,7 @@ use datafusion_physical_plan::sorts::partitioned_topk::{
 };
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
+use datafusion_physical_plan::{ExecutionPlan, with_new_children_if_necessary};
 
 /// Physical optimizer rule that converts per-partition `ROW_NUMBER` and
 /// `RANK` top-K queries into a more efficient plan using
@@ -192,13 +192,13 @@ impl WindowTopN {
         .ok()?;
 
         // Step 8: Rebuild window with new child
-        let mut result = window_exec
-            .with_new_children(vec![Arc::new(partitioned_topk)])
-            .ok()?;
+        let mut result =
+            with_new_children_if_necessary(window_exec, vec![Arc::new(partitioned_topk)])
+                .ok()?;
 
         // Step 9: Rebuild intermediate nodes (ProjectionExec/RepartitionExec)
         for node in intermediates.into_iter().rev() {
-            result = node.with_new_children(vec![result]).ok()?;
+            result = with_new_children_if_necessary(node, vec![result]).ok()?;
         }
 
         Some(result)

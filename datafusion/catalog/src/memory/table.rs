@@ -574,7 +574,7 @@ impl ExecutionPlan for DmlResultExec {
     fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
-        _: datafusion_physical_plan::ChildrenPropertiesHint,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
     }

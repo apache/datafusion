@@ -760,8 +760,10 @@ fn preserving_order_enables_streaming(
         return Ok(false);
     }
     // Build parent with the ordered child
-    let with_ordered =
-        Arc::clone(parent).with_new_children(vec![Arc::clone(ordered_child)])?;
+    let with_ordered = with_new_children_if_necessary(
+        Arc::clone(parent),
+        vec![Arc::clone(ordered_child)],
+    )?;
     if with_ordered.pipeline_behavior() == EmissionType::Final {
         // Parent is blocking even with ordering — no benefit
         return Ok(false);
@@ -769,7 +771,8 @@ fn preserving_order_enables_streaming(
     // Build parent with an unordered child via CoalescePartitionsExec.
     let unordered_child: Arc<dyn ExecutionPlan> =
         Arc::new(CoalescePartitionsExec::new(Arc::clone(ordered_child)));
-    let without_ordered = Arc::clone(parent).with_new_children(vec![unordered_child])?;
+    let without_ordered =
+        with_new_children_if_necessary(Arc::clone(parent), vec![unordered_child])?;
     Ok(without_ordered.pipeline_behavior() == EmissionType::Final)
 }
 

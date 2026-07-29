@@ -55,7 +55,9 @@ use std::sync::Arc;
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
-use datafusion_physical_plan::{ExecutionPlan, Partitioning};
+use datafusion_physical_plan::{
+    ExecutionPlan, Partitioning, with_new_children_if_necessary,
+};
 
 /// A physical optimizer rule that pushes TopK (Sort with fetch) past
 /// hash repartition when the partition key is a prefix of the sort key.
@@ -151,7 +153,7 @@ impl PhysicalOptimizerRule for TopKRepartition {
 
             // Rebuild the tree above the repartition
             let new_sort_input = if let Some(parent) = repart_parent {
-                parent.with_new_children(vec![new_repartition])?
+                with_new_children_if_necessary(parent, vec![new_repartition])?
             } else {
                 new_repartition
             };

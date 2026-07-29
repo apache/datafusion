@@ -297,6 +297,7 @@ impl AsyncFuncExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::assert_eq_or_internal_err;
         use datafusion_proto_models::protobuf;
         let async_func = crate::expect_plan_variant!(
             node,

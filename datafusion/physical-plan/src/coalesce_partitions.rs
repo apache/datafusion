@@ -33,7 +33,7 @@ use crate::sort_pushdown::SortOrderPushdownResult;
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
     ChildrenPropertiesHint, DisplayFormatType, ExecutionPlan, Partitioning,
-    validate_child_count,
+    validate_child_count, with_new_children_if_necessary,
 };
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
@@ -312,8 +312,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
         self.input
             .with_preserve_order(preserve_order)
             .and_then(|new_input| {
-                Arc::new(self.clone())
-                    .with_new_children(vec![new_input])
+                with_new_children_if_necessary(Arc::new(self.clone()), vec![new_input])
                     .ok()
             })
     }

@@ -4981,10 +4981,16 @@ digraph {
         // ok plan
         let ok_node: Arc<dyn ExecutionPlan> = Arc::new(OkExtensionNode(vec![]));
         let child = Arc::clone(&ok_node);
-        let ok_plan = Arc::clone(&ok_node).with_new_children(vec![
-            Arc::clone(&child).with_new_children(vec![Arc::clone(&child)])?,
-            Arc::clone(&child),
-        ])?;
+        let ok_plan = Arc::clone(&ok_node).replace_children(
+            vec![
+                Arc::clone(&child).replace_children(
+                    vec![Arc::clone(&child)],
+                    ChildrenPropertiesHint::Recompute,
+                )?,
+                Arc::clone(&child),
+            ],
+            ChildrenPropertiesHint::Recompute,
+        )?;
 
         // Test: check should pass with same schema
         let equal_schema = ok_plan.schema();
@@ -5016,10 +5022,16 @@ digraph {
 
         // Test: should fail when descendent extension node fails
         let failing_node: Arc<dyn ExecutionPlan> = Arc::new(InvariantFailsExtensionNode);
-        let invalid_plan = ok_node.with_new_children(vec![
-            Arc::clone(&child).with_new_children(vec![Arc::clone(&failing_node)])?,
-            Arc::clone(&child),
-        ])?;
+        let invalid_plan = ok_node.replace_children(
+            vec![
+                Arc::clone(&child).replace_children(
+                    vec![Arc::clone(&failing_node)],
+                    ChildrenPropertiesHint::Recompute,
+                )?,
+                Arc::clone(&child),
+            ],
+            ChildrenPropertiesHint::Recompute,
+        )?;
         let result = OptimizationInvariantChecker::new(&rule)
             .check(&invalid_plan, &ok_plan.schema());
         if cfg!(debug_assertions) {
@@ -5105,10 +5117,16 @@ digraph {
         let failing_node: Arc<dyn ExecutionPlan> = Arc::new(ExecutableInvariantFails);
         let ok_node: Arc<dyn ExecutionPlan> = Arc::new(OkExtensionNode(vec![]));
         let child = Arc::clone(&ok_node);
-        let plan = ok_node.with_new_children(vec![
-            Arc::clone(&child).with_new_children(vec![Arc::clone(&failing_node)])?,
-            Arc::clone(&child),
-        ])?;
+        let plan = ok_node.replace_children(
+            vec![
+                Arc::clone(&child).replace_children(
+                    vec![Arc::clone(&failing_node)],
+                    ChildrenPropertiesHint::Recompute,
+                )?,
+                Arc::clone(&child),
+            ],
+            ChildrenPropertiesHint::Recompute,
+        )?;
         let expected_err = InvariantChecker(InvariantLevel::Executable)
             .check(&plan)
             .unwrap_err();
