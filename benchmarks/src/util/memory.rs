@@ -15,8 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/// Print Peak RSS, Peak Commit, Page Faults based on mimalloc api
+/// Print Peak RSS, Peak Commit, Page Faults based on mimalloc api, followed by
+/// the peak `MemoryPool` reservation when a memory limit was configured.
 pub fn print_memory_stats() {
+    print_allocator_stats();
+    print_pool_stats();
+}
+
+/// Print the peak `MemoryPool` reservation for the run.
+///
+/// Prints nothing when the benchmark ran without a memory limit, since no pool
+/// was installed to record. Comparing this against the peak RSS above shows how
+/// much of a run's memory the pool actually accounted for — DataFusion only
+/// tracks the "large" allocations that scale with input size, so the two are
+/// expected to differ.
+fn print_pool_stats() {
+    if let Some(peak) = super::max_pool_reserved() {
+        println!(
+            "Peak pool reserved: {}",
+            datafusion_common::human_readable_size(peak)
+        );
+    }
+}
+
+fn print_allocator_stats() {
     #[cfg(all(feature = "mimalloc", feature = "mimalloc_extended"))]
     {
         use datafusion_common::human_readable_size;

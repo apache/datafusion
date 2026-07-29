@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::memory_pool::{peak_pool_reserved, reset_peak_pool_reserved};
 use datafusion::{DATAFUSION_VERSION, error::Result};
 use datafusion_common::utils::get_available_parallelism;
 use serde::{Serialize, Serializer};
@@ -91,6 +92,13 @@ pub struct BenchQuery {
     #[serde(serialize_with = "serialize_start_time")]
     start_time: SystemTime,
     success: bool,
+    /// Peak [`MemoryPool`] reservation observed while running this query, in
+    /// bytes. `None` (and omitted from the JSON) when the benchmark ran without
+    /// a memory limit, since there is no pool to record.
+    ///
+    /// [`MemoryPool`]: datafusion::execution::memory_pool::MemoryPool
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pool_peak_bytes: Option<usize>,
 }
 /// Internal representation of a single benchmark query iteration result.
 pub struct QueryResult {
@@ -121,11 +129,15 @@ impl BenchmarkRun {
     }
     /// begin a new case. iterations added after this will be included in the new case
     pub fn start_new_case(&mut self, id: &str) {
+        // Give this query its own memory pool reading rather than inheriting
+        // the high-water mark of the queries that ran before it.
+        reset_peak_pool_reserved();
         self.queries.push(BenchQuery {
             query: id.to_owned(),
             iterations: vec![],
             start_time: SystemTime::now(),
             success: true,
+            pool_peak_bytes: None,
         });
         if let Some(c) = self.current_case.as_mut() {
             *c += 1;
@@ -138,7 +150,10 @@ impl BenchmarkRun {
         if let Some(idx) = self.current_case {
             self.queries[idx]
                 .iterations
-                .push(QueryIter { elapsed, row_count })
+                .push(QueryIter { elapsed, row_count });
+            // The peak is not reset between iterations, so this ends up holding
+            // the largest reservation seen across all of them.
+            self.queries[idx].pool_peak_bytes = peak_pool_reserved();
         } else {
             panic!("no cases existed yet");
         }
