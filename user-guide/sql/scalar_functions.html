@@ -3396,7 +3396,7 @@ Returns the corresponding date.</p>
 <li><p><strong>expression</strong>: String expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
 <li><p><strong>format_n</strong>: Optional <a class="reference external" href="https://docs.rs/chrono/latest/chrono/format/strftime/index.html">Chrono format</a> strings to use to parse the expression. Formats will be tried in the order
 they appear with the first successful one being returned. If none of the formats successfully parse the expression
-an error will be returned.</p></li>
+an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.</p></li>
 </ul>
 </section>
 <section id="id195">
@@ -3549,7 +3549,8 @@ The time zone can be a value like +00:00, ‘Europe/London’ etc.</p>
 <li><p><strong>format_n</strong>:
 Optional <a class="reference external" href="https://docs.rs/chrono/latest/chrono/format/strftime/index.html">Chrono format</a> strings to use to parse the expression.
 Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-parse the expression an error will be returned. Note: parsing of named timezones (e.g. ‘America/New_York’) using %Z is
+parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+Note: parsing of named timezones (e.g. ‘America/New_York’) using %Z is
 only supported at the end of the string preceded by a space.</p></li>
 </ul>
 </section>
@@ -3592,7 +3593,8 @@ The time zone can be a value like +00:00, ‘Europe/London’ etc.</p>
 <li><p><strong>format_n</strong>:
 Optional <a class="reference external" href="https://docs.rs/chrono/latest/chrono/format/strftime/index.html">Chrono format</a> strings to use to parse the expression.
 Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-parse the expression an error will be returned. Note: parsing of named timezones (e.g. ‘America/New_York’) using %Z is
+parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+Note: parsing of named timezones (e.g. ‘America/New_York’) using %Z is
 only supported at the end of the string preceded by a space.</p></li>
 </ul>
 </section>
@@ -3635,7 +3637,8 @@ The time zone can be a value like +00:00, ‘Europe/London’ etc.</p>
 <li><p><strong>format_n</strong>:
 Optional <a class="reference external" href="https://docs.rs/chrono/latest/chrono/format/strftime/index.html">Chrono format</a> strings to use to parse the expression.
 Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-parse the expression an error will be returned. Note: parsing of named timezones (e.g. ‘America/New_York’) using %Z is
+parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+Note: parsing of named timezones (e.g. ‘America/New_York’) using %Z is
 only supported at the end of the string preceded by a space.</p></li>
 </ul>
 </section>
@@ -3677,7 +3680,8 @@ The time zone can be a value like +00:00, ‘Europe/London’ etc.</p>
 <li><p><strong>format_n</strong>:
 Optional <a class="reference external" href="https://docs.rs/chrono/latest/chrono/format/strftime/index.html">Chrono format</a> strings to use to parse the expression.
 Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-parse the expression an error will be returned. Note: parsing of named timezones (e.g. ‘America/New_York’) using %Z is
+parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+Note: parsing of named timezones (e.g. ‘America/New_York’) using %Z is
 only supported at the end of the string preceded by a space.</p></li>
 </ul>
 </section>
@@ -3720,7 +3724,8 @@ The time zone can be a value like +00:00, ‘Europe/London’ etc.</p>
 <li><p><strong>format_n</strong>:
 Optional <a class="reference external" href="https://docs.rs/chrono/latest/chrono/format/strftime/index.html">Chrono format</a> strings to use to parse the expression.
 Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-parse the expression an error will be returned. Note: parsing of named timezones (e.g. ‘America/New_York’) using %Z is
+parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+Note: parsing of named timezones (e.g. ‘America/New_York’) using %Z is
 only supported at the end of the string preceded by a space.</p></li>
 </ul>
 </section>
@@ -3757,7 +3762,7 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <h4>Arguments<a class="headerlink" href="#id210" title="Link to this heading">#</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.</p></li>
-<li><p><strong>format_n</strong>: Optional <a class="reference external" href="https://docs.rs/chrono/latest/chrono/format/strftime/index.html">Chrono format</a> strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned.</p></li>
+<li><p><strong>format_n</strong>: Optional <a class="reference external" href="https://docs.rs/chrono/latest/chrono/format/strftime/index.html">Chrono format</a> strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.</p></li>
 </ul>
 </section>
 <section id="id211">
