@@ -298,10 +298,6 @@ impl GroupsAccumulator for BytesAnyValueGroupsAccumulator {
         Ok(())
     }
 
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn convert_to_state(
         &self,
         values: &[ArrayRef],
@@ -432,10 +428,6 @@ impl<T: ArrowPrimitiveType + Send> GroupsAccumulator
         Ok(())
     }
 
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn convert_to_state(
         &self,
         values: &[ArrayRef],
@@ -563,10 +555,6 @@ impl GroupsAccumulator for AnyValueGroupsAccumulator {
             }
         }
         Ok(())
-    }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
     }
 
     fn convert_to_state(
