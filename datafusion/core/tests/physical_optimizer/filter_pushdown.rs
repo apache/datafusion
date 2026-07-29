@@ -1818,9 +1818,9 @@ fn col_lit_predicate(
 }
 
 fn assert_parent_filter_remains_above_aggregate(plan: Arc<dyn ExecutionPlan>) {
-    let optimized = FilterPushdown::new()
-        .optimize(plan, &ConfigOptions::default())
-        .unwrap();
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    let optimized = FilterPushdown::new().optimize(plan, &config).unwrap();
     assert!(
         optimized.downcast_ref::<FilterExec>().is_some(),
         "parent filter must remain above aggregate"
