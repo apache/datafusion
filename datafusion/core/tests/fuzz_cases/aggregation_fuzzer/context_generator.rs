@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt::{self, Display};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{cmp, sync::Arc};
 
 use datafusion::{
@@ -26,9 +24,7 @@ use datafusion::{
 use datafusion_catalog::TableProvider;
 use datafusion_common::ScalarValue;
 use datafusion_common::{error::Result, utils::get_available_parallelism};
-use datafusion_execution::memory_pool::{
-    FairSpillPool, MemoryConsumer, MemoryPool, MemoryReservation, UnboundedMemoryPool,
-};
+use datafusion_execution::memory_pool::{FairSpillPool, MemoryPool};
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_expr::col;
 use rand::{Rng, rng};
@@ -44,68 +40,6 @@ const SPILL_POOL_PEAK_FRACTIONS: [(usize, usize); 4] = [(2, 1), (1, 2), (2, 5), 
 /// Batch size cap for spilling contexts, so the spill's sort reservation stays
 /// small enough to fit under the pool.
 const SPILL_BATCH_SIZE_CAP: usize = 256;
-
-/// Unbounded pool that records the peak total reservation.
-///
-/// The baseline runs under it to measure the aggregate's real footprint, which
-/// sizes the spill pools (see `generate`). Unlike `TrackConsumersPool`, the peak
-/// survives consumer deregistration, so it is readable after the query.
-#[derive(Debug, Default)]
-pub(crate) struct PeakRecordingPool {
-    inner: UnboundedMemoryPool,
-    peak: AtomicUsize,
-}
-
-impl PeakRecordingPool {
-    /// Peak total reservation seen so far, in bytes.
-    pub(crate) fn peak(&self) -> usize {
-        self.peak.load(Ordering::Relaxed)
-    }
-
-    fn record_peak(&self) {
-        self.peak
-            .fetch_max(self.inner.reserved(), Ordering::Relaxed);
-    }
-}
-
-impl Display for PeakRecordingPool {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "PeakRecordingPool")
-    }
-}
-
-impl MemoryPool for PeakRecordingPool {
-    fn name(&self) -> &str {
-        "PeakRecordingPool"
-    }
-
-    fn register(&self, consumer: &MemoryConsumer) {
-        self.inner.register(consumer);
-    }
-
-    fn unregister(&self, consumer: &MemoryConsumer) {
-        self.inner.unregister(consumer);
-    }
-
-    fn grow(&self, reservation: &MemoryReservation, additional: usize) {
-        self.inner.grow(reservation, additional);
-        self.record_peak();
-    }
-
-    fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
-        self.inner.shrink(reservation, shrink);
-    }
-
-    fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
-        self.inner.try_grow(reservation, additional)?;
-        self.record_peak();
-        Ok(())
-    }
-
-    fn reserved(&self) -> usize {
-        self.inner.reserved()
-    }
-}
 
 /// SessionContext generator
 ///
@@ -165,11 +99,10 @@ impl SessionContextGenerator {
 impl SessionContextGenerator {
     /// Generate the `SessionContext` for the baseline run.
     ///
-    /// Runs under a `PeakRecordingPool` so the aggregate's peak memory can be
-    /// read after the query (see `generate`, which sizes the spill pools from it).
-    pub fn generate_baseline(
-        &self,
-    ) -> Result<(SessionContextWithParams, Arc<PeakRecordingPool>)> {
+    /// Runs under the default unbounded pool, so it never spills (it is the
+    /// oracle). The caller reads the aggregate's peak from the plan metrics of
+    /// this run (see `run_sql_capturing_peak`) to size the spilling pools.
+    pub fn generate_baseline(&self) -> Result<SessionContextWithParams> {
         let schema = self.dataset.batches[0].schema();
         let batches = self.dataset.batches.clone();
         let provider = MemTable::try_new(schema, vec![batches])?;
@@ -181,23 +114,19 @@ impl SessionContextGenerator {
         let skip_partial_params = SkipPartialParams::ensure_not_trigger();
         let enable_migration_aggregate = false;
 
-        // Records peak usage; unbounded, so the baseline (the oracle) never spills.
-        let tracker = Arc::new(PeakRecordingPool::default());
-
         let builder = GeneratedSessionContextBuilder {
             batch_size,
             target_partitions,
             skip_partial_params,
             enable_migration_aggregate,
             sort_hint: false,
-            memory_pool: Some(Arc::clone(&tracker) as Arc<dyn MemoryPool>),
-            // Baseline: never spill.
+            memory_pool: None,
             memory_limit: None,
             table_name: self.table_name.clone(),
             table_provider: Arc::new(provider),
         };
 
-        Ok((builder.build()?, tracker))
+        builder.build()
     }
 
     /// Randomly generate a session context.
@@ -229,6 +158,9 @@ impl SessionContextGenerator {
             rng.random_range(1..=self.max_batch_size)
         };
 
+        // Single partition when spilling. `FairSpillPool` splits across the  per-partition aggregate consumers,
+        // so with many partitions each share is too small and hits `ResourcesExhausted` before it can spill. Multi
+        // partition stays covered by the unbounded rounds.
         // Single partition when spilling. `FairSpillPool` splits across the  per-partition aggregate consumers,
         // so with many partitions each share is too small and hits `ResourcesExhausted` before it can spill. Multi
         // partition stays covered by the unbounded rounds.
@@ -417,7 +349,9 @@ mod test {
     use arrow::util::pretty::pretty_format_batches;
     use datafusion_common::DataFusionError;
 
-    use crate::fuzz_cases::aggregation_fuzzer::check_equality_of_batches;
+    use crate::fuzz_cases::aggregation_fuzzer::{
+        check_equality_of_batches, run_sql_capturing_peak,
+    };
 
     use super::*;
 
@@ -473,20 +407,14 @@ mod test {
         let ctx_generator = SessionContextGenerator::new(Arc::new(dataset), "fuzz_table");
 
         let query = "select b, count(a) from fuzz_table group by b";
-        let (baseline_wrapped_ctx, tracker) = ctx_generator.generate_baseline().unwrap();
+        let baseline_wrapped_ctx = ctx_generator.generate_baseline().unwrap();
 
-        // Run the baseline first to record the peak, then size the spilling
+        // Run the baseline first to capture the peak, then size the spilling
         // contexts from it.
-        let base_result = baseline_wrapped_ctx
-            .ctx
-            .sql(query)
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
-
-        let agg_peak = tracker.peak();
+        let (base_result, agg_peak) =
+            run_sql_capturing_peak(query, &baseline_wrapped_ctx.ctx)
+                .await
+                .unwrap();
 
         let mut random_wrapped_ctxs = Vec::with_capacity(8);
         for _ in 0..8 {
@@ -536,17 +464,10 @@ mod test {
         let ctx_generator = SessionContextGenerator::new(Arc::new(dataset), "fuzz_table");
         let query = "select k, count(*) from fuzz_table group by k";
 
-        // Run the baseline to record the peak that sizes the spill pools.
-        let (baseline, tracker) = ctx_generator.generate_baseline().unwrap();
-        baseline
-            .ctx
-            .sql(query)
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
-        let agg_peak = tracker.peak();
+        // Run the baseline to capture the peak that sizes the spill pools.
+        let baseline = ctx_generator.generate_baseline().unwrap();
+        let (_baseline_result, agg_peak) =
+            run_sql_capturing_peak(query, &baseline.ctx).await.unwrap();
         assert!(agg_peak > 0, "baseline should have reserved memory");
 
         // Generate contexts until a bounded one actually spills. Spilling is a
