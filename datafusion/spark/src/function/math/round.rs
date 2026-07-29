@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::array::*;
@@ -23,6 +24,8 @@ use arrow::datatypes::{
     Decimal256Type, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type,
     Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
+use bigdecimal::num_traits::ToPrimitive;
+use bigdecimal::{BigDecimal, RoundingMode};
 use datafusion_common::types::{
     NativeType, logical_float32, logical_float64, logical_int32,
 };
@@ -187,20 +190,43 @@ fn get_scale(args: &[ColumnarValue]) -> Result<Option<i32>> {
 /// round_float(125.0, -1) → 130.0
 /// ```
 fn round_float<T: num_traits::Float>(value: T, scale: i32) -> T {
-    if scale >= 0 {
-        let factor = T::from(10.0f64.powi(scale)).unwrap_or_else(T::infinity);
-        if factor.is_infinite() {
-            // Very large positive scale — value is already precise enough, return as-is
-            return value;
-        }
-        (value * factor).round() / factor
-    } else {
-        let factor = T::from(10.0f64.powi(-scale)).unwrap_or_else(T::infinity);
-        if factor.is_infinite() {
-            // Very large negative scale — any finite value rounds to 0
-            return T::zero();
-        }
-        (value / factor).round() * factor
+    // Widen to f64 first. For f32 inputs this matches Spark's `f.toDouble`
+    // step (FloatType: `BigDecimal(f.toDouble).setScale(..).toFloat`), which
+    // exposes the binary-float error before rounding. For f64 it is a no-op.
+    let Some(d) = value.to_f64() else {
+        return value;
+    };
+
+    // Spark returns NaN / ±Inf unchanged; BigDecimal cannot represent them.
+    if !d.is_finite() {
+        return value;
+    }
+
+    // `d.to_string()` produces the shortest round-trip decimal string, matching
+    // Scala's `BigDecimal(d) = java.math.BigDecimal.valueOf(d)` semantics. So
+    // `round(1.255_f64, 2)` parses "1.255" and rounds to 1.26 (not the naive
+    // binary-float 1.25).
+    let Ok(bd) = BigDecimal::from_str(&d.to_string()) else {
+        // Should not happen for a finite f64, but fall back gracefully.
+        return value;
+    };
+
+    // A finite f64 carries at most ~324 fractional decimal digits and saturates
+    // below ~1e309 in magnitude, so any `scale` past those bounds is already a
+    // no-op (large positive) or collapses the value to zero (large negative).
+    // Clamp before `with_scale_round` so adversarial input such as
+    // `round(x, i32::MAX)` cannot drive an unbounded `10^scale` BigInt
+    // allocation. The clamp is exact for every finite f64.
+    let clamped_scale = i64::from(scale).clamp(-340, 340);
+
+    // HALF_UP == ties away from zero, handles negative `scale` directly
+    // (e.g. scale -1 rounds to the nearest ten).
+    let rounded = bd.with_scale_round(clamped_scale, RoundingMode::HalfUp);
+
+    match rounded.to_f64() {
+        // For T = f32 this is the `.toFloat` narrowing; for f64 the `.toDouble`.
+        Some(out) => T::from(out).unwrap_or(value),
+        None => value,
     }
 }
 
@@ -643,5 +669,78 @@ fn spark_round(args: &[ColumnarValue], enable_ansi_mode: bool) -> Result<Columna
 
             dt => not_impl_err!("Unsupported data type for Spark round(): {dt}"),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_round_float_halfup_double() {
+        // The core bug: naive binary-float rounding gives 1.25 here, but Spark's
+        // BigDecimal(valueOf) approach parses the shortest repr "1.255" → 1.26.
+        assert_eq!(round_float(1.255_f64, 2), 1.26_f64);
+        assert_eq!(round_float(1.005_f64, 2), 1.01_f64);
+    }
+
+    #[test]
+    fn test_round_float_double_regression_guards() {
+        // These already worked before the fix; guard against regressions.
+        assert_eq!(round_float(2.675_f64, 2), 2.68_f64);
+        assert_eq!(round_float(8.35_f64, 1), 8.4_f64);
+    }
+
+    #[test]
+    fn test_round_float_negative_scale() {
+        assert_eq!(round_float(125.0_f64, -1), 130.0_f64);
+        assert_eq!(round_float(1234.0_f64, -2), 1200.0_f64);
+    }
+
+    #[test]
+    fn test_round_float_float32_widening() {
+        // Spark FloatType widens f32→f64 first: 1.255f.toDouble == 1.2549999952316284,
+        // whose shortest string rounds to 1.25 (NOT 1.26).
+        assert_eq!(round_float(1.255_f32, 2), 1.25_f32);
+    }
+
+    #[test]
+    fn test_round_float_nan_inf_passthrough() {
+        assert!(round_float(f64::NAN, 2).is_nan());
+        assert!(round_float(f64::INFINITY, 2).is_infinite());
+        assert!(round_float(f64::NEG_INFINITY, 2).is_infinite());
+    }
+
+    #[test]
+    fn test_round_float_ties_away_from_zero() {
+        assert_eq!(round_float(2.5_f64, 0), 3.0_f64);
+        assert_eq!(round_float(-2.5_f64, 0), -3.0_f64);
+    }
+
+    #[test]
+    fn test_round_float_negative_values() {
+        // Negative value with positive scale — symmetric to the positive case.
+        assert_eq!(round_float(-1.255_f64, 2), -1.26_f64);
+        assert_eq!(round_float(-1.005_f64, 2), -1.01_f64);
+        assert_eq!(round_float(-1.255_f32, 2), -1.25_f32);
+    }
+
+    #[test]
+    fn test_round_float_zero_and_default_scale() {
+        assert_eq!(round_float(0.0_f64, 2), 0.0_f64);
+        assert_eq!(round_float(-0.0_f64, 2), 0.0_f64);
+        // Default scale 0 truncating a fraction.
+        assert_eq!(round_float(1.4_f64, 0), 1.0_f64);
+        assert_eq!(round_float(1.5_f64, 0), 2.0_f64);
+    }
+
+    #[test]
+    fn test_round_float_extreme_scales_are_bounded() {
+        // Adversarial scales must not allocate an unbounded 10^scale BigInt.
+        // Large positive scale is a no-op; large negative collapses to zero.
+        assert_eq!(round_float(1.255_f64, i32::MAX), 1.255_f64);
+        assert_eq!(round_float(1.255_f64, i32::MIN), 0.0_f64);
+        assert_eq!(round_float(f64::MAX, i32::MIN), 0.0_f64);
+        assert_eq!(round_float(123.456_f64, 1000), 123.456_f64);
     }
 }
