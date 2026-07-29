@@ -116,6 +116,23 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     values: Vec<T::Native>,
     /// The random state used to generate hashes
     random_state: RandomState,
+    /// The key interned by the previous non-null row (canonicalized).
+    /// Valid only when `last_group != usize::MAX`.
+    ///
+    /// Real-world data frequently arrives with runs of identical keys
+    /// (time-ordered logs, clustered writes), so remembering the previous
+    /// row's `(key, group)` lets `intern` skip both the hash computation
+    /// and the hash-table probe for every row of a run after the first —
+    /// one register compare against state that stays in L1 instead of a
+    /// random access into a table that does not. Same idea as
+    /// ClickHouse's "consecutive keys optimization". A miss costs a
+    /// single well-predicted compare, so the break-even hit rate is
+    /// far below 1%.
+    last_key: T::Native,
+    /// Group index of `last_key`; `usize::MAX` means "no cached key".
+    /// Invalidated on `emit` / `clear_shrink` because both reassign
+    /// group indices.
+    last_group: usize,
 }
 
 impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
@@ -127,6 +144,8 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
             values: Vec::with_capacity(128),
             null_group: None,
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
+            last_key: Default::default(),
+            last_group: usize::MAX,
         }
     }
 }
@@ -151,6 +170,15 @@ where
                     // so the bit-equal `is_eq` matches and the stored value is
                     // the canonical representative.
                     let key = key.canonicalize();
+
+                    // Consecutive-keys fast path: if this row's key equals
+                    // the previous row's, reuse its group index and skip
+                    // both the hash and the table probe entirely.
+                    if self.last_group != usize::MAX && key.is_eq(self.last_key) {
+                        groups.push(self.last_group);
+                        continue;
+                    }
+
                     let state = &self.random_state;
                     let hash = key.hash(state);
                     let insert = self.map.entry(
@@ -161,7 +189,7 @@ where
                         |&(_, h)| h,
                     );
 
-                    match insert {
+                    let g = match insert {
                         hashbrown::hash_table::Entry::Occupied(o) => o.get().0,
                         hashbrown::hash_table::Entry::Vacant(v) => {
                             let g = self.values.len();
@@ -169,7 +197,10 @@ where
                             self.values.push(key);
                             g
                         }
-                    }
+                    };
+                    self.last_key = key;
+                    self.last_group = g;
+                    g
                 }
             };
             groups.push(group_id)
@@ -190,6 +221,11 @@ where
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        // Both emit modes reassign group indices (All clears them,
+        // First(n) shifts them down by n), so the consecutive-keys cache
+        // must be invalidated.
+        self.last_group = usize::MAX;
+
         fn build_primitive<T: ArrowPrimitiveType>(
             values: Vec<T::Native>,
             null_idx: Option<usize>,
@@ -244,6 +280,7 @@ where
         self.values.shrink_to(num_rows);
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
+        self.last_group = usize::MAX;
     }
 }
 
@@ -255,6 +292,43 @@ mod tests {
     use arrow::datatypes::DataType;
     use datafusion_expr::EmitTo;
     use std::sync::Arc;
+
+    /// Consecutive-keys fast path: runs (with interleaved nulls) map to the
+    /// same group ids as scattered occurrences, and `emit(First(n))` must
+    /// invalidate the cache (group indices shift down by `n`, so a stale
+    /// `last_group` would assign wrong ids).
+    #[test]
+    fn consecutive_keys_runs_and_emit_invalidation() -> Result<()> {
+        let mut gv = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
+
+        let arr: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(7),
+            Some(7),
+            None,
+            Some(7),
+            Some(9),
+            Some(9),
+        ]));
+        let mut groups = vec![];
+        gv.intern(&[arr], &mut groups)?;
+        // 7=0, null=1, 9=2; run members and the post-null 7 share ids
+        assert_eq!(groups, vec![0, 0, 1, 0, 2, 2]);
+
+        // Emit the first 2 groups: "7"->gone, "null"->gone, "9" shifts 2->0.
+        gv.emit(EmitTo::First(2))?;
+
+        // Re-intern a run of 9s followed by 7s. A stale cache would claim
+        // "7 is still group 0" — but group 0 is now "9".
+        let arr2: ArrayRef = Arc::new(Int32Array::from(vec![9, 9, 7, 7]));
+        gv.intern(&[arr2], &mut groups)?;
+        assert_eq!(
+            groups,
+            vec![0, 0, 1, 1],
+            "9 is group 0 after shift; 7 is new group 1"
+        );
+
+        Ok(())
+    }
 
     /// Mirror of the `EmitTo::take_needed` regression test, applied to the
     /// concrete `GroupValuesPrimitive` accumulator.

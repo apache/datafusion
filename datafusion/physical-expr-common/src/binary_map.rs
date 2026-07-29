@@ -360,6 +360,19 @@ where
         // Ensure lengths are equivalent
         assert_eq!(values.len(), batch_hashes.len());
 
+        // Consecutive-keys fast path: real-world data frequently arrives
+        // with runs of identical values (time-ordered logs, clustered
+        // writes). Remembering the previous non-null row's value and
+        // payload lets a run reuse the payload with one (adjacent,
+        // cache-hot) byte comparison instead of a hash-table probe into
+        // a table that may not be cache-resident. A miss costs a single
+        // well-predicted compare. Same idea as ClickHouse's "consecutive
+        // keys optimization". Intervening nulls don't invalidate the
+        // cached mapping (the payload for a value never changes within
+        // one `insert_if_new` call or across calls).
+        let mut prev_value: Option<&[u8]> = None;
+        let mut prev_payload = V::default();
+
         for (value, &hash) in values.iter().zip(batch_hashes.iter()) {
             // handle null value
             let Some(value) = value else {
@@ -380,6 +393,17 @@ where
 
             // get the value as bytes
             let value: &[u8] = value.as_ref();
+
+            // Consecutive-keys fast path: the comparison reads bytes that
+            // were just scanned (adjacent rows in the same values buffer),
+            // so it is cache-hot; a hit skips the hash-table probe.
+            if let Some(prev) = prev_value
+                && prev == value
+            {
+                observe_payload_fn(prev_payload);
+                continue;
+            }
+
             let value_len = O::usize_as(value.len());
 
             // value is "small"
@@ -464,6 +488,8 @@ where
                     payload
                 }
             };
+            prev_value = Some(value);
+            prev_payload = payload;
             observe_payload_fn(payload);
         }
         // Check for overflow in offsets (if more data was sent than can be represented)
@@ -644,6 +670,41 @@ mod tests {
         assert_eq!(set.len(), 1);
         assert_eq!(set.non_null_len(), 0);
         assert_set(set, &[None]);
+    }
+
+    /// Runs of identical values (with interleaved nulls) must map to the
+    /// same payload as scattered occurrences — exercises the
+    /// consecutive-keys fast path in `insert_if_new_inner`.
+    #[test]
+    fn string_map_consecutive_keys_runs() {
+        let mut map: ArrowBytesMap<i32, i32> = ArrowBytesMap::new(OutputType::Utf8);
+        // runs: aaa aaa | null | aaa bbb bbb | long(>8B) x2 | aaa
+        let values: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("aaa"),
+            Some("aaa"),
+            None,
+            Some("aaa"),
+            Some("bbb"),
+            Some("bbb"),
+            Some("longer_than_short_value_len"),
+            Some("longer_than_short_value_len"),
+            Some("aaa"),
+        ]));
+        let mut next = 0;
+        let mut seen = vec![];
+        map.insert_if_new(
+            &values,
+            |_| {
+                let id = next;
+                next += 1;
+                id
+            },
+            |id| seen.push(id),
+        );
+        // aaa=0, null=1, bbb=2, long=3; run members share ids, the "aaa"
+        // after the null and at the end still resolve to 0.
+        assert_eq!(seen, vec![0, 0, 1, 0, 2, 2, 3, 3, 0]);
+        assert_eq!(next, 4, "make_payload_fn must run once per distinct");
     }
 
     #[test]
