@@ -644,8 +644,6 @@ impl MaterializingSortMergeJoinStream {
         )))
     }
 
-
-
     /// Main loop
     async fn join(
         &mut self,
@@ -930,36 +928,6 @@ impl MaterializingSortMergeJoinStream {
     ///
     /// Freezes unfrozen pairs, applies deferred filtering, and outputs if ready.
     /// Returns Poll::Ready with a batch if one is available, otherwise Poll::Pending.
-    fn process_filtered_batches(&mut self) -> Poll<Option<Result<RecordBatch>>> {
-        self.freeze_all()?;
-
-        self.joined_record_batches
-          .filter_metadata
-          .debug_assert_metadata_aligned();
-
-        if !self.joined_record_batches.joined_batches.is_empty() {
-            let out_filtered_batch = self.filter_joined_batch()?;
-            self.output
-              .push_batch(out_filtered_batch)
-              .expect("Failed to push output batch");
-
-            if self.output.has_completed_batch() {
-                let record_batch = self
-                  .output
-                  .next_completed_batch()
-                  .expect("Failed to get output batch");
-                (&record_batch).record_output(&self.join_metrics.baseline_metrics());
-                return Poll::Ready(Some(Ok(record_batch)));
-            }
-        }
-
-        Poll::Pending
-    }
-
-    /// Process accumulated batches for filtered joins
-    ///
-    /// Freezes unfrozen pairs, applies deferred filtering, and outputs if ready.
-    /// Returns Poll::Ready with a batch if one is available, otherwise Poll::Pending.
     fn process_filtered_batches2(&mut self) -> Result<Option<RecordBatch>> {
         self.freeze_all()?;
 
@@ -1012,60 +980,6 @@ impl MaterializingSortMergeJoinStream {
 
     /// Asynchronously reads spilled batches back into memory.
     /// Only processes the required indices to avoid OOMs.
-    fn poll_spilled_batches(
-        &mut self,
-        cx: &mut Context<'_>,
-        required_indices: &[usize],
-    ) -> Poll<Result<()>> {
-        for &idx in required_indices {
-            // Guard against indices that might be out of bounds if the queue was cleared
-            if idx >= self.buffered_data.batches.len() {
-                continue;
-            }
-
-            let bb = &mut self.buffered_data.batches[idx];
-
-            if let BufferedBatchState::Spilled(spill_file) = &bb.batch {
-                if self.spill_stream.is_none() {
-                    let stream = self
-                      .spill_manager
-                      .read_spill_as_stream(Arc::clone(spill_file), None)?;
-                    self.spill_stream = Some(stream);
-                }
-
-                match ready!(self.spill_stream.as_mut().unwrap().poll_next_unpin(cx)) {
-                    Some(Ok(batch)) => {
-                        // Transition the batch back to InMemory
-                        bb.batch = BufferedBatchState::InMemory(batch);
-                        self.spilled_batch_count -= 1;
-                        // The batch is back in memory, so we must account for its size.
-                        let newly_allocated =
-                          bb.size_estimation.saturating_sub(bb.reserved_amount);
-                        self.reservation.grow(newly_allocated);
-                        bb.reserved_amount = bb.size_estimation;
-
-                        self.join_metrics
-                          .peak_mem_used()
-                          .set_max(self.reservation.size());
-
-                        self.spill_stream = None;
-                    }
-                    Some(Err(e)) => {
-                        self.spill_stream = None;
-                        return Poll::Ready(Err(e));
-                    }
-                    None => {
-                        self.spill_stream = None;
-                        return Poll::Ready(internal_err!("Spill file was empty"));
-                    }
-                }
-            }
-        }
-        Poll::Ready(Ok(()))
-    }
-
-    /// Asynchronously reads spilled batches back into memory.
-    /// Only processes the required indices to avoid OOMs.
     async fn poll_spilled_batches_async(
         &mut self,
         required_indices: &[usize],
@@ -1112,65 +1026,6 @@ impl MaterializingSortMergeJoinStream {
         }
 
         Ok(())
-    }
-
-    /// Poll next streamed row
-    fn poll_streamed_row(&mut self, cx: &mut Context) -> Poll<Option<Result<()>>> {
-        loop {
-            match &self.streamed_state {
-                StreamedState::Init => {
-                    if self.streamed_batch.idx + 1 < self.streamed_batch.batch.num_rows()
-                    {
-                        self.streamed_batch.idx += 1;
-                        self.streamed_state = StreamedState::Ready;
-                        return Poll::Ready(Some(Ok(())));
-                    } else {
-                        self.streamed_state = StreamedState::Polling;
-                    }
-                }
-                StreamedState::Polling => {
-                    let needed =
-                      self.get_required_batch_indices(self.buffered_data.batches.len());
-                    if let Err(e) = ready!(self.poll_spilled_batches(cx, &needed)) {
-                        return Poll::Ready(Some(Err(e)));
-                    }
-
-                    match self.streamed.poll_next_unpin(cx)? {
-                        Poll::Pending => {
-                            return Poll::Pending;
-                        }
-                        Poll::Ready(None) => {
-                            // Release the streamed input pipeline's resources.
-                            let streamed_schema = self.streamed.schema();
-                            self.streamed =
-                              Box::pin(EmptyRecordBatchStream::new(streamed_schema));
-                            self.streamed_state = StreamedState::Exhausted;
-                        }
-                        Poll::Ready(Some(batch)) => {
-                            if batch.num_rows() > 0 {
-                                self.freeze_streamed()?;
-                                self.join_metrics.input_batches().add(1);
-                                self.join_metrics.input_rows().add(batch.num_rows());
-                                self.streamed_batch =
-                                  StreamedBatch::new(batch, &self.on_streamed);
-                                self.rebuild_streamed_buffered_cmp()?;
-                                // Every incoming streaming batch should have its unique id
-                                // Check `JoinedRecordBatches.self.streamed_batch_counter` documentation
-                                self.streamed_batch_counter
-                                  .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                                self.streamed_state = StreamedState::Ready;
-                            }
-                        }
-                    }
-                }
-                StreamedState::Ready => {
-                    return Poll::Ready(Some(Ok(())));
-                }
-                StreamedState::Exhausted => {
-                    return Poll::Ready(None);
-                }
-            }
-        }
     }
 
     /// Poll next streamed row
@@ -1280,143 +1135,6 @@ impl MaterializingSortMergeJoinStream {
 
         self.buffered_data.batches.push_back(buffered_batch);
         Ok(())
-    }
-
-    /// Poll next buffered batches
-    fn poll_buffered_batches(&mut self, cx: &mut Context) -> Poll<Option<Result<()>>> {
-        loop {
-            match &self.buffered_state {
-                BufferedState::Init => {
-                    // pop previous buffered batches
-                    let mut head_changed = false;
-                    while !self.buffered_data.batches.is_empty() {
-                        let head_batch = self.buffered_data.head_batch();
-                        // If the head batch is fully processed, dequeue it and produce output of it.
-                        if head_batch.range.end == head_batch.num_rows {
-                            // load the spilled head batch before dequeuing
-                            let needed = self.get_required_batch_indices(1);
-                            if let Err(e) = ready!(self.poll_spilled_batches(cx, &needed))
-                            {
-                                return Poll::Ready(Some(Err(e)));
-                            }
-
-                            self.freeze_dequeuing_buffered()?;
-                            if let Some(mut buffered_batch) =
-                              self.buffered_data.batches.pop_front()
-                            {
-                                self.produce_buffered_not_matched(&mut buffered_batch)?;
-                                self.free_reservation(&buffered_batch);
-                                if matches!(
-                                    buffered_batch.batch,
-                                    BufferedBatchState::Spilled(_)
-                                ) {
-                                    self.spilled_batch_count -= 1;
-                                }
-                                head_changed = true;
-                            }
-                        } else {
-                            // If the head batch is not fully processed, break the loop.
-                            // Streamed batch will be joined with the head batch in the next step.
-                            break;
-                        }
-                    }
-                    if head_changed {
-                        self.streamed_buffered_cmp = None;
-                        self.buffered_equality_cmp = None;
-                    }
-                    if self.buffered_data.batches.is_empty() {
-                        self.buffered_state = BufferedState::PollingFirst;
-                    } else {
-                        let tail_batch = self.buffered_data.tail_batch_mut();
-                        tail_batch.range.start = tail_batch.range.end;
-                        tail_batch.range.end += 1;
-                        self.buffered_state = BufferedState::PollingRest;
-                    }
-                }
-                BufferedState::PollingFirst => match self.buffered.poll_next_unpin(cx)? {
-                    Poll::Pending => {
-                        return Poll::Pending;
-                    }
-                    Poll::Ready(None) => {
-                        // Release the buffered input pipeline's resources.
-                        let buffered_schema = self.buffered.schema();
-                        self.buffered =
-                          Box::pin(EmptyRecordBatchStream::new(buffered_schema));
-                        self.buffered_state = BufferedState::Exhausted;
-                        return Poll::Ready(None);
-                    }
-                    Poll::Ready(Some(batch)) => {
-                        self.join_metrics.input_batches().add(1);
-                        self.join_metrics.input_rows().add(batch.num_rows());
-
-                        if batch.num_rows() > 0 {
-                            let buffered_batch =
-                              BufferedBatch::new(batch, 0..1, &self.on_buffered);
-
-                            self.allocate_reservation(buffered_batch)?;
-                            self.streamed_buffered_cmp = None;
-                            self.buffered_state = BufferedState::PollingRest;
-                        }
-                    }
-                },
-                BufferedState::PollingRest => {
-                    if self.buffered_data.tail_batch().range.end
-                      < self.buffered_data.tail_batch().num_rows
-                    {
-                        if self.buffered_equality_cmp.is_none() {
-                            self.rebuild_buffered_equality_cmp()?;
-                        }
-                        while self.buffered_data.tail_batch().range.end
-                          < self.buffered_data.tail_batch().num_rows
-                        {
-                            if self.buffered_equality_cmp.as_ref().unwrap().is_equal(
-                                self.buffered_data.head_batch().range.start,
-                                self.buffered_data.tail_batch().range.end,
-                            ) {
-                                self.buffered_data.tail_batch_mut().range.end += 1;
-                            } else {
-                                self.buffered_state = BufferedState::Ready;
-                                return Poll::Ready(Some(Ok(())));
-                            }
-                        }
-                    } else {
-                        match self.buffered.poll_next_unpin(cx)? {
-                            Poll::Pending => {
-                                return Poll::Pending;
-                            }
-                            Poll::Ready(None) => {
-                                // Release the buffered input pipeline's resources.
-                                let buffered_schema = self.buffered.schema();
-                                self.buffered = Box::pin(EmptyRecordBatchStream::new(
-                                    buffered_schema,
-                                ));
-                                self.buffered_state = BufferedState::Ready;
-                            }
-                            Poll::Ready(Some(batch)) => {
-                                // Polling batches coming concurrently as multiple partitions
-                                self.join_metrics.input_batches().add(1);
-                                self.join_metrics.input_rows().add(batch.num_rows());
-                                if batch.num_rows() > 0 {
-                                    let buffered_batch = BufferedBatch::new(
-                                        batch,
-                                        0..0,
-                                        &self.on_buffered,
-                                    );
-                                    self.allocate_reservation(buffered_batch)?;
-                                    self.buffered_equality_cmp = None;
-                                }
-                            }
-                        }
-                    }
-                }
-                BufferedState::Ready => {
-                    return Poll::Ready(Some(Ok(())));
-                }
-                BufferedState::Exhausted => {
-                    return Poll::Ready(None);
-                }
-            }
-        }
     }
 
     /// Poll next buffered batches
