@@ -26,6 +26,7 @@ use std::hash::Hash;
 use std::mem::size_of_val;
 use std::sync::Arc;
 
+use arrow::array::Array;
 use arrow::array::ArrayRef;
 use arrow::array::BooleanArray;
 use arrow::array::PrimitiveArray;
@@ -86,11 +87,15 @@ where
         }
 
         let arr = as_primitive_array::<T>(&values[0])?;
-        arr.iter().for_each(|value| {
-            if let Some(value) = value {
+        if arr.null_count() == 0 {
+            // Fast path: no nulls, so skip the per-element validity check and
+            // insert directly from the values buffer (mirrors `merge_batch`).
+            self.values.extend(arr.values().iter().copied());
+        } else {
+            arr.iter().flatten().for_each(|value| {
                 self.values.insert(value);
-            }
-        });
+            });
+        }
 
         Ok(())
     }
@@ -615,5 +620,44 @@ impl Accumulator for BooleanDistinctCountAccumulator {
 
     fn size(&self) -> usize {
         size_of_val(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Int64Array;
+    use arrow::datatypes::Int64Type;
+
+    #[test]
+    fn update_batch_null_free_fast_path_agrees_with_general_path() {
+        // The null-free fast path must produce the same distinct set as the
+        // general (validity-checking) path.
+        let dense: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3, 2, 1]));
+        let sparse: ArrayRef = Arc::new(Int64Array::from(vec![
+            Some(1),
+            None,
+            Some(2),
+            None,
+            Some(3),
+            Some(2),
+            Some(1),
+        ]));
+
+        let mut dense_acc =
+            PrimitiveDistinctCountAccumulator::<Int64Type>::new(&DataType::Int64);
+        dense_acc
+            .update_batch(std::slice::from_ref(&dense))
+            .unwrap();
+
+        let mut sparse_acc =
+            PrimitiveDistinctCountAccumulator::<Int64Type>::new(&DataType::Int64);
+        sparse_acc
+            .update_batch(std::slice::from_ref(&sparse))
+            .unwrap();
+
+        // Both should count the 3 distinct non-null values {1, 2, 3}.
+        assert_eq!(dense_acc.evaluate().unwrap(), ScalarValue::Int64(Some(3)));
+        assert_eq!(sparse_acc.evaluate().unwrap(), ScalarValue::Int64(Some(3)));
     }
 }
