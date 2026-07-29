@@ -429,7 +429,7 @@ impl HashJoinExecBuilder {
             if !matches!(
                 (join_type, partition_mode),
                 (JoinType::LeftAnti, _)
-                    | (JoinType::RightAnti, PartitionMode::CollectLeft) // `PartitionMode::CollectLeft` is safe because `RigthAnti` is probe-driven
+                    | (JoinType::RightAnti, PartitionMode::CollectLeft) // `PartitionMode::CollectLeft` is safe because `RightAnti` is probe-driven
             ) {
                 return plan_err!(
                     "null_aware can only be true for LeftAnti joins and RightAnti joins with `CollectLeft` `PartitionMode`, got {join_type} with {partition_mode}"
