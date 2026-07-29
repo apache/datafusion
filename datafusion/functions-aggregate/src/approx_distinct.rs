@@ -38,7 +38,7 @@ use datafusion_common::ScalarValue;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{
     DataFusionError, Result, downcast_value, internal_datafusion_err, internal_err,
-    not_impl_err,
+    not_impl_err, plan_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
@@ -208,7 +208,9 @@ impl Accumulator for HLLAccumulator {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) + self.hashes.capacity() * size_of::<u64>()
+        size_of_val(self)
+            + self.hll.register_heap_size()
+            + self.hashes.capacity() * size_of::<u64>()
     }
 }
 
@@ -278,7 +280,7 @@ where
     }
 
     fn size(&self) -> usize {
-        size_of_val(self)
+        size_of_val(self) + self.hll.register_heap_size()
     }
 }
 
@@ -456,7 +458,11 @@ impl GroupHll {
             GroupHll::Sparse(v) => {
                 v.sort_unstable();
                 v.dedup();
-                if v.len() > SPARSE_LIMIT {
+                let num_registers = 1_usize << p;
+                // Promote to dense if sparse byte length would equal the dense register count,
+                // making the two encodings ambiguous in merge_serialized (occurs when
+                // v.len() == 1 << (p-3), i.e. p <= 11).
+                if v.len() > SPARSE_LIMIT || v.len() * size_of::<u64>() == num_registers {
                     scratch.extend_from_slice(fold_sparse_to_hll(v, p).as_ref());
                 } else {
                     for &h in v.iter() {
@@ -474,9 +480,8 @@ impl GroupHll {
 /// This is dramatically faster than the generic `GroupsAccumulatorAdapter`
 /// fallback for high-cardinality `GROUP BY`s: it processes the whole input in a
 /// single vectorized pass (no per-group `take`/slice and no dynamic dispatch),
-/// and the sparse representation avoids allocating a 16 KiB sketch for every
+/// and the sparse representation avoids allocating a full sketch for every
 /// group when most groups only see a few distinct values.
-///
 ///
 /// # Example
 ///
@@ -708,7 +713,10 @@ pub struct ApproxDistinct {
 
 impl ApproxDistinct {
     pub fn new() -> Self {
-        Self::with_hll_precision(DEFAULT_HLL_P)
+        Self {
+            signature: Signature::any(1, Volatility::Immutable),
+            hll_precision: DEFAULT_HLL_P,
+        }
     }
 
     /// Creates an `ApproxDistinct` that uses HLL sketches with `2^p` registers.
@@ -716,15 +724,16 @@ impl ApproxDistinct {
     /// This only has effect for types that use the HLL accumulator path. Small
     /// integer and boolean types use exact bitmap counting regardless of this
     /// value. Valid range: `HLL_P_MIN..=HLL_P_MAX` (4..=18).
-    pub fn with_hll_precision(p: usize) -> Self {
-        assert!(
-            (HLL_P_MIN..=HLL_P_MAX).contains(&p),
-            "HLL precision must be in {HLL_P_MIN}..={HLL_P_MAX}, got {p}",
-        );
-        Self {
+    pub fn with_hll_precision(p: usize) -> Result<Self> {
+        if !(HLL_P_MIN..=HLL_P_MAX).contains(&p) {
+            return plan_err!(
+                "HLL precision must be in {HLL_P_MIN}..={HLL_P_MAX}, got {p}"
+            );
+        }
+        Ok(Self {
             signature: Signature::any(1, Volatility::Immutable),
             hll_precision: p,
-        }
+        })
     }
 }
 
@@ -1458,6 +1467,40 @@ mod tests {
     }
 
     #[test]
+    fn serialize_avoids_sparse_dense_collision_at_p10() {
+        let p = 10;
+        // 128 == 1 << (p-3): sparse byte length 128*8=1024 == 1<<p, the collision point.
+        let hashes: Vec<u64> = (0..128_u64).map(h).collect();
+        let mut src = GroupHll::new_sparse();
+        for &hash in &hashes {
+            src.add_hash(hash, p);
+        }
+        assert!(matches!(src, GroupHll::Sparse(_)));
+        let bytes = serialize(&mut src, p);
+        assert_eq!(bytes.len(), 1 << p, "must emit dense to avoid collision");
+        let mut dst = GroupHll::new_sparse();
+        dst.merge_serialized(&bytes, p).unwrap();
+        assert_eq!(dst.count(p), src.count(p));
+    }
+
+    #[test]
+    fn serialize_avoids_sparse_dense_collision_at_p4() {
+        let p = 4;
+        // 2 == 1 << (p-3): sparse byte length 2*8=16 == 1<<p, the collision point.
+        let hashes: Vec<u64> = (0..2_u64).map(h).collect();
+        let mut src = GroupHll::new_sparse();
+        for &hash in &hashes {
+            src.add_hash(hash, p);
+        }
+        assert!(matches!(src, GroupHll::Sparse(_)));
+        let bytes = serialize(&mut src, p);
+        assert_eq!(bytes.len(), 1 << p, "must emit dense to avoid collision");
+        let mut dst = GroupHll::new_sparse();
+        dst.merge_serialized(&bytes, p).unwrap();
+        assert_eq!(dst.count(p), src.count(p));
+    }
+
+    #[test]
     fn merge_combines_disjoint_groups() {
         let p = DEFAULT_HLL_P;
         // sparse + sparse, sparse + dense, dense + dense
@@ -1580,7 +1623,7 @@ mod tests {
     fn approx_distinct_with_hll_precision_12_produces_correct_estimate() {
         use arrow::array::Int64Array;
 
-        let func = ApproxDistinct::with_hll_precision(12);
+        let func = ApproxDistinct::with_hll_precision(12).unwrap();
         let values: ArrayRef = Arc::new(Int64Array::from_iter_values(0..1000i64));
         let expr_field: FieldRef =
             Arc::new(Field::new("v", DataType::Int64, false));
@@ -1621,29 +1664,27 @@ mod tests {
         let return_field: FieldRef =
             Arc::new(Field::new("r", DataType::UInt64, false));
         let acc_args = make_acc_args(&schema, &return_field, &expr_field);
-        // Confirm the accumulator can be created and evaluated for Union type.
         let mut acc = func.accumulator(acc_args).unwrap();
         let result = acc.evaluate().unwrap();
         assert_eq!(result, ScalarValue::UInt64(Some(0)));
     }
 
     #[test]
-    #[should_panic(expected = "HLL precision must be in")]
-    fn with_hll_precision_out_of_range_panics() {
-        let _ = ApproxDistinct::with_hll_precision(HLL_P_MAX + 1);
+    fn with_hll_precision_out_of_range_returns_err() {
+        let result = ApproxDistinct::with_hll_precision(HLL_P_MAX + 1);
+        assert!(result.is_err(), "precision above max must be rejected");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("HLL precision must be in"), "got: {msg}");
     }
 
-    // merge_dense Sparse arm: a sparse group absorbs an incoming dense state.
     #[test]
     fn merge_dense_into_sparse_group_produces_dense() {
         let p = DEFAULT_HLL_P;
-        // Build a dense sketch with some hashes.
         let hashes_a: Vec<u64> = (0..100).map(h).collect();
         let mut dense_src = GroupHll::new_sparse();
         for &hash in &hashes_a {
             dense_src.add_hash(hash, p);
         }
-        // Force promotion to dense.
         let extra: Vec<u64> = (100..(SPARSE_LIMIT as u64 * 3)).map(h).collect();
         for &hash in &extra {
             dense_src.add_hash(hash, p);
@@ -1651,7 +1692,6 @@ mod tests {
         assert!(matches!(dense_src, GroupHll::Dense(_)));
         let dense_bytes = serialize(&mut dense_src, p);
 
-        // Target starts sparse with a few hashes.
         let hashes_b: Vec<u64> = (1000..1010).map(h).collect();
         let mut sparse_dst = GroupHll::new_sparse();
         for &hash in &hashes_b {
@@ -1659,15 +1699,10 @@ mod tests {
         }
         assert!(matches!(sparse_dst, GroupHll::Sparse(_)));
 
-        // Merging the dense state into the sparse group should promote it.
         sparse_dst.merge_serialized(&dense_bytes, p).unwrap();
-        assert!(
-            matches!(sparse_dst, GroupHll::Dense(_)),
-            "sparse group must be dense after absorbing a dense state"
-        );
+        assert!(matches!(sparse_dst, GroupHll::Dense(_)));
     }
 
-    // HllGroupsAccumulator at non-default precision: full update → state → merge → evaluate.
     #[cfg(not(feature = "force_hash_collisions"))]
     #[test]
     fn groups_accumulator_with_precision_12_roundtrips() {
@@ -1677,13 +1712,11 @@ mod tests {
         let values: ArrayRef = Arc::new(Int64Array::from_iter_values(0..200i64));
         let group_indices = vec![0usize; 200];
 
-        // Partial accumulator at p=12.
         let mut partial = HllGroupsAccumulator::with_precision(p);
         partial
             .update_batch(&[Arc::clone(&values)], &group_indices, None, 1)
             .unwrap();
 
-        // Emit partial state and merge into a final accumulator at the same precision.
         let state = partial.state(EmitTo::All).unwrap();
         let mut final_acc = HllGroupsAccumulator::with_precision(p);
         final_acc
@@ -1691,16 +1724,11 @@ mod tests {
             .unwrap();
 
         let result = final_acc.evaluate(EmitTo::All).unwrap();
-        let counts = result
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .unwrap();
-        let count = counts.value(0);
-        // 200 distinct values, p=12 → ~1.6% error; allow 10% margin.
+        let count = result.as_any().downcast_ref::<UInt64Array>().unwrap().value(0);
+        // p=12 → ~1.6% error; allow 10% margin
         assert!(count > 180 && count < 220, "count {count} out of range");
     }
 
-    // NumericHLLAccumulator::with_precision propagates precision through evaluate.
     #[cfg(not(feature = "force_hash_collisions"))]
     #[test]
     fn numeric_hll_accumulator_with_precision_12() {
@@ -1715,5 +1743,19 @@ mod tests {
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[test]
+    fn hll_accumulator_size_includes_register_buffer() {
+        let acc = HLLAccumulator::with_precision(10);
+        assert!(acc.size() >= 1 << 10, "register buffer must be counted");
+        assert!(acc.size() > size_of_val(&acc), "heap must be counted");
+    }
+
+    #[test]
+    fn numeric_hll_accumulator_size_includes_register_buffer() {
+        let acc = NumericHLLAccumulator::<Int64Type>::with_precision(10);
+        assert!(acc.size() >= 1 << 10, "register buffer must be counted");
+        assert!(acc.size() > size_of_val(&acc), "heap must be counted");
     }
 }
