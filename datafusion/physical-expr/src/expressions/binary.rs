@@ -802,6 +802,7 @@ impl PhysicalExpr for BinaryExpr {
                     ),
                     range,
                     preserves_lex_ordering: false,
+                    strictly_order_preserving: false,
                 })
             }
             Operator::Minus => {
@@ -815,37 +816,44 @@ impl PhysicalExpr for BinaryExpr {
                     ),
                     range,
                     preserves_lex_ordering: false,
+                    strictly_order_preserving: false,
                 })
             }
             Operator::Gt => Ok(ExprProperties {
                 sort_properties: l_order.gt_or_gteq(&r_order),
                 range: l_range.gt(r_range)?,
                 preserves_lex_ordering: false,
+                strictly_order_preserving: false,
             }),
             Operator::GtEq => Ok(ExprProperties {
                 sort_properties: l_order.gt_or_gteq(&r_order),
                 range: l_range.gt_eq(r_range)?,
                 preserves_lex_ordering: false,
+                strictly_order_preserving: false,
             }),
             Operator::Lt => Ok(ExprProperties {
                 sort_properties: r_order.gt_or_gteq(&l_order),
                 range: l_range.lt(r_range)?,
                 preserves_lex_ordering: false,
+                strictly_order_preserving: false,
             }),
             Operator::LtEq => Ok(ExprProperties {
                 sort_properties: r_order.gt_or_gteq(&l_order),
                 range: l_range.lt_eq(r_range)?,
                 preserves_lex_ordering: false,
+                strictly_order_preserving: false,
             }),
             Operator::And => Ok(ExprProperties {
                 sort_properties: r_order.and_or(&l_order),
                 range: l_range.and(r_range)?,
                 preserves_lex_ordering: false,
+                strictly_order_preserving: false,
             }),
             Operator::Or => Ok(ExprProperties {
                 sort_properties: r_order.and_or(&l_order),
                 range: l_range.or(r_range)?,
                 preserves_lex_ordering: false,
+                strictly_order_preserving: false,
             }),
             _ => Ok(ExprProperties::new_unknown()),
         }
@@ -1354,6 +1362,7 @@ mod tests {
             sort_properties: asc,
             range,
             preserves_lex_ordering: false,
+            strictly_order_preserving: false,
         };
 
         let schema = Schema::new(vec![
