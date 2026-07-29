@@ -990,6 +990,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b25655df2c3cdd83c5e5b293b88acd880332b2ddadd7c30ac43144fdc0033da9"
+
+[[package]]
 name = "base64-simd"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2083,7 +2089,7 @@ dependencies = [
  "arrow-flight",
  "arrow-schema",
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.0",
  "bytes",
  "dashmap",
  "datafusion",
@@ -2221,7 +2227,7 @@ version = "54.1.0"
 dependencies = [
  "arrow",
  "arrow-buffer",
- "base64 0.22.1",
+ "base64 0.23.0",
  "blake2",
  "blake3",
  "chrono",
@@ -2264,6 +2270,7 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "half",
+ "hashbrown 0.17.1",
  "log",
  "num-traits",
  "rand 0.9.4",
@@ -2351,7 +2358,7 @@ version = "54.1.0"
 dependencies = [
  "datafusion-doc",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.2",
 ]
 
 [[package]]

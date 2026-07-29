@@ -1264,6 +1264,12 @@ SELECT DATE_BIN('5 month', '2022-01-01T00:00:00Z');
 ----
 2021-09-01T00:00:00
 
+# test with utf8view
+query P
+SELECT DATE_BIN(arrow_cast('5 month', 'Utf8View'), '2022-01-01T00:00:00Z');
+----
+2021-09-01T00:00:00
+
 # month interval with default start time
 query P
 SELECT DATE_BIN('1 month', '2022-01-01 00:00:00Z');

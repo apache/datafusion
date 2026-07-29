@@ -67,7 +67,7 @@ name = "datafusion_functions"
 [dependencies]
 arrow = { workspace = true }
 arrow-buffer = { workspace = true }
-base64 = { version = "0.22", optional = true }
+base64 = { version = "0.23", optional = true }
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.8", optional = true }
 chrono = { workspace = true }
@@ -328,6 +328,11 @@ required-features = ["unicode_expressions"]
 [[bench]]
 harness = false
 name = "find_in_set"
+required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "find_in_set_literal"
 required-features = ["unicode_expressions"]
 
 [[bench]]
