@@ -42,9 +42,7 @@ use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::logical_plan::from_proto::parse_expr;
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::protobuf::LogicalExprNode;
-use datafusion_session::{
-    CatalogProviderList, QueryPlanner, Session, UnsupportedQueryPlanner,
-};
+use datafusion_session::{CatalogProviderList, Session};
 use prost::Message;
 
 use stabby::str::Str as SStr;
@@ -573,10 +571,6 @@ impl Session for ForeignSession {
 
     fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
         Arc::clone(&self.catalog_list)
-    }
-
-    fn query_planner(&self) -> Arc<dyn QueryPlanner + Send + Sync> {
-        Arc::new(UnsupportedQueryPlanner)
     }
 
     async fn create_physical_plan(

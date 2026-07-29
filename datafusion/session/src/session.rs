@@ -35,7 +35,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
-use crate::{PhysicalOptimizerRule, QueryPlanner};
+use crate::{PhysicalOptimizerRule, QueryPlanner, UnsupportedQueryPlanner};
 
 /// Interface for accessing [`SessionState`] from the catalog and data source.
 ///
@@ -93,7 +93,16 @@ pub trait Session: Send + Sync {
     }
 
     /// Return the query planner for this session.
-    fn query_planner(&self) -> Arc<dyn QueryPlanner + Send + Sync>;
+    ///
+    /// # Warning
+    ///
+    /// The default implementation returns an [`UnsupportedQueryPlanner`], so
+    /// [`Session::create_physical_plan`] will fail. Sessions that support
+    /// physical planning should override this method (for example by returning
+    /// `SessionState::query_planner`).
+    fn query_planner(&self) -> Arc<dyn QueryPlanner + Send + Sync> {
+        Arc::new(UnsupportedQueryPlanner)
+    }
 
     /// Optimize a logical plan.
     ///
