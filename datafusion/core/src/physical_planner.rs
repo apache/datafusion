@@ -55,7 +55,6 @@ use crate::physical_plan::{
     displayable, windows,
 };
 use crate::schema_equivalence::schema_satisfied_by;
-use datafusion_session::{PhysicalOptimizerContext, Session};
 
 use arrow::array::{RecordBatch, builder::StringBuilder};
 use arrow::compute::SortOptions;
@@ -109,7 +108,7 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion_physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
 use datafusion_physical_plan::unnest::ListUnnest;
-use datafusion_session::PhysicalOptimizerRule;
+use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule, Session};
 
 use async_trait::async_trait;
 use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
