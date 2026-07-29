@@ -18,7 +18,7 @@
 use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::from_substrait_literal;
 use crate::logical_plan::consumer::from_substrait_named_struct;
-use crate::logical_plan::consumer::utils::{ensure_schema_compatibility, rename_field};
+use crate::logical_plan::consumer::utils::ensure_schema_compatibility;
 use datafusion::common::{
     DFSchema, DFSchemaRef, TableReference, not_impl_err, plan_err,
     substrait_datafusion_err, substrait_err,
@@ -158,12 +158,10 @@ pub async fn from_read_rel(
 
                     let mut row_exprs = vec![];
                     let mut name_idx = 0;
-                    for (field_idx, expression) in row.fields.iter().enumerate() {
+                    for expression in &row.fields {
                         let expr = match expression.rex_type.as_ref() {
                             Some(substrait::proto::expression::RexType::Literal(lit)) => {
-                                if !named_struct.names.is_empty() {
-                                    name_idx += 1; // top-level names are provided through schema
-                                }
+                                name_idx += 1; // top-level names are provided through schema
                                 Expr::Literal(
                                     from_substrait_literal(
                                         consumer,
@@ -175,12 +173,7 @@ pub async fn from_read_rel(
                                 )
                             }
                             _ => {
-                                rename_field(
-                                    substrait_schema.field(field_idx).as_ref(),
-                                    &named_struct.names,
-                                    field_idx,
-                                    &mut name_idx,
-                                )?;
+                                name_idx += 1; // top-level names are provided through schema
                                 consumer
                                     .consume_expression(expression, &substrait_schema)
                                     .await?
