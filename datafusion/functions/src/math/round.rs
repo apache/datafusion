@@ -241,9 +241,6 @@ impl ScalarUDFImpl for RoundFunc {
 
         // If decimal_places is a scalar literal, we can incorporate it into the output type
         // (scale reduction). Otherwise, keep the input scale as we can't pick a per-row scale.
-        //
-        // `scalar_arguments` uses the coerced argument type, so an integer literal
-        // is Int32 here when the signature coerces it to Int32.
         let decimal_places: Option<i32> = match args.scalar_arguments.get(1) {
             None => Some(0),    // No dp argument means default to 0
             Some(None) => None, // dp is not a literal (e.g. column)

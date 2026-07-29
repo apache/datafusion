@@ -2129,7 +2129,8 @@ async fn test_return_field_args_scalar_argument_types_match_arg_fields() -> Resu
                 "unexpected scalar argument for {}",
                 self.name
             );
-            if let Some(scalar) = args.scalar_arguments[0] {
+            if self.expect_literal {
+                let scalar = args.scalar_arguments[0].unwrap();
                 assert_eq!(args.arg_fields[0].data_type(), &scalar.data_type());
             }
             Ok(
