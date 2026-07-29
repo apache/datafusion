@@ -54,7 +54,6 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, internal_datafusion_err, internal_err,
 };
-use datafusion_expr::JoinType::RightAnti;
 use datafusion_physical_expr::PhysicalExprRef;
 
 use datafusion_common::hash_utils::RandomState;
