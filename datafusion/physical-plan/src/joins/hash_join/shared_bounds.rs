@@ -200,17 +200,14 @@ fn create_bounds_predicate(
     }
 }
 
-fn inclusive_integer_span(bounds: &PartitionBounds) -> Option<u128> {
-    let [column_bounds] = bounds.column_bounds.as_slice() else {
-        return None;
-    };
+fn inclusive_integer_span(column_bounds: &ColumnBounds) -> Option<u128> {
     if column_bounds.min.data_type() != column_bounds.max.data_type()
         || column_bounds.min > column_bounds.max
     {
         return None;
     }
-    let min = ArrayMap::key_to_u64(&column_bounds.min)?;
-    let max = ArrayMap::key_to_u64(&column_bounds.max)?;
+    let (min, max) = ArrayMap::key_to_u64(&column_bounds.min)
+        .zip(ArrayMap::key_to_u64(&column_bounds.max))?;
 
     // ArrayMap uses two's-complement values and wrapping subtraction, which
     // also gives the correct span for signed ranges that cross zero.
@@ -237,7 +234,7 @@ fn complete_integer_domain_bounds_predicate(
         return None;
     };
     let distinct_key_count_lower_bound = source.distinct_key_count_lower_bound()?;
-    let inclusive_span = inclusive_integer_span(bounds)?;
+    let inclusive_span = inclusive_integer_span(column_bounds)?;
     if let MembershipSource::InList(membership) = source
         && membership.values.data_type() != &column_bounds.min.data_type()
     {
@@ -1355,10 +1352,10 @@ mod tests {
             1,
         ));
 
-        let full_i64_domain = PartitionBounds::new(vec![ColumnBounds::new(
+        let full_i64_domain = ColumnBounds::new(
             ScalarValue::Int64(Some(i64::MIN)),
             ScalarValue::Int64(Some(i64::MAX)),
-        )]);
+        );
         assert_eq!(inclusive_integer_span(&full_i64_domain), Some(1_u128 << 64));
         assert_ne!(
             inclusive_integer_span(&full_i64_domain),
