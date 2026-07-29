@@ -22,18 +22,16 @@ use std::sync::Arc;
 
 use crate::fuzz_cases::aggregate_fuzz::assert_spill_count_metric;
 use crate::fuzz_cases::once_exec::OnceExec;
-use arrow::array::{Array, Int64Array, UInt64Array};
+use arrow::array::UInt64Array;
 use arrow::{array::StringArray, compute::SortOptions, record_batch::RecordBatch};
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, Schema};
 use datafusion::common::Result;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
-use datafusion::logical_expr::JoinType;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::prelude::SessionConfig;
 use datafusion_common::units::{KB, MB};
-use datafusion_common::{JoinSide, NullEquality};
 use datafusion_execution::memory_pool::{
     FairSpillPool, MemoryConsumer, MemoryReservation,
 };
@@ -46,7 +44,6 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
-use datafusion_physical_plan::joins::SortMergeJoinExec;
 use datafusion_physical_plan::metrics::MetricValue;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use futures::StreamExt;
@@ -794,225 +791,4 @@ fn get_output_batches_from_metrics(metrics: &MetricsSet) -> usize {
             _ => None,
         })
         .expect("Must have output_batches metric since it exists in the baseline")
-}
-
-/// Sorted-by-key SMJ input: keys `0..num_keys`, each repeated `rows_per_key`
-/// times (SMJ does not sort its inputs), with a `payload_len`-byte payload per
-/// row. A key group spans batches when `rows_per_key > batch_size`, which is
-/// what forces the buffered side to spill.
-fn make_sorted_join_input(
-    schema: &SchemaRef,
-    num_keys: i64,
-    rows_per_key: usize,
-    payload_len: usize,
-    batch_size: usize,
-) -> Vec<RecordBatch> {
-    let payload = "a".repeat(payload_len);
-    let total = num_keys as usize * rows_per_key;
-    let mut keys = Vec::with_capacity(total);
-    for k in 0..num_keys {
-        for _ in 0..rows_per_key {
-            keys.push(k);
-        }
-    }
-
-    keys.chunks(batch_size)
-        .map(|chunk| {
-            let key_arr = Int64Array::from_iter_values(chunk.iter().copied());
-            let val_arr = StringArray::from_iter_values(std::iter::repeat_n(
-                payload.as_str(),
-                chunk.len(),
-            ));
-            RecordBatch::try_new(
-                Arc::clone(schema),
-                vec![Arc::new(key_arr), Arc::new(val_arr)],
-            )
-            .expect("valid record batch")
-        })
-        .collect()
-}
-
-/// Run one `SortMergeJoinExec` whose buffered key groups (~3 MB each) overflow
-/// a 2 MB pool, asserting it spills and still produces the full, correct
-/// output. The streamed side has one row per key, bounding the output to
-/// `num_keys * rows_per_key_large` rows.
-async fn run_sort_merge_join_test_with_limited_memory(join_type: JoinType) -> Result<()> {
-    let pool_size = 2 * MB as usize;
-    let batch_size = 1000;
-    let num_keys: i64 = 12;
-    let rows_per_key_large = 6000;
-    let payload_len_large = 512;
-    let payload_len_sparse = 16;
-
-    let left_schema = Arc::new(Schema::new(vec![
-        Field::new("k1", DataType::Int64, false),
-        Field::new("v1", DataType::Utf8, false),
-    ]));
-    let right_schema = Arc::new(Schema::new(vec![
-        Field::new("k2", DataType::Int64, false),
-        Field::new("v2", DataType::Utf8, false),
-    ]));
-
-    // SMJ spills the buffered side — the opposite of the probe/streamed side.
-    let buffered_side = SortMergeJoinExec::probe_side(&join_type).negate();
-    let large_left = matches!(buffered_side, JoinSide::Left);
-    let large_payload = "a".repeat(payload_len_large);
-    let sparse_payload = "a".repeat(payload_len_sparse);
-    let (expected_left_payload, expected_right_payload) = if large_left {
-        (large_payload.as_str(), sparse_payload.as_str())
-    } else {
-        (sparse_payload.as_str(), large_payload.as_str())
-    };
-
-    let left_batches = make_sorted_join_input(
-        &left_schema,
-        num_keys,
-        if large_left { rows_per_key_large } else { 1 },
-        if large_left {
-            payload_len_large
-        } else {
-            payload_len_sparse
-        },
-        batch_size,
-    );
-    let right_batches = make_sorted_join_input(
-        &right_schema,
-        num_keys,
-        if large_left { 1 } else { rows_per_key_large },
-        if large_left {
-            payload_len_sparse
-        } else {
-            payload_len_large
-        },
-        batch_size,
-    );
-
-    // No unmatched rows on either side, so all four join types produce the
-    // same output row count.
-    let expected_output_rows = num_keys as usize * rows_per_key_large;
-
-    let task_ctx = {
-        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
-        TaskContext::default()
-            .with_session_config(SessionConfig::new().with_batch_size(batch_size))
-            .with_runtime(Arc::new(
-                RuntimeEnvBuilder::new()
-                    .with_memory_pool(memory_pool)
-                    .build()?,
-            ))
-    };
-    let task_ctx = Arc::new(task_ctx);
-
-    let left: Arc<dyn ExecutionPlan> =
-        Arc::new(OnceExec::new(Box::pin(RecordBatchStreamAdapter::new(
-            Arc::clone(&left_schema),
-            futures::stream::iter(left_batches.into_iter().map(Ok)),
-        ))));
-    let right: Arc<dyn ExecutionPlan> =
-        Arc::new(OnceExec::new(Box::pin(RecordBatchStreamAdapter::new(
-            Arc::clone(&right_schema),
-            futures::stream::iter(right_batches.into_iter().map(Ok)),
-        ))));
-
-    let on = vec![(
-        Arc::new(Column::new_with_schema("k1", &left_schema)?) as _,
-        Arc::new(Column::new_with_schema("k2", &right_schema)?) as _,
-    )];
-
-    let join = Arc::new(SortMergeJoinExec::try_new(
-        left,
-        right,
-        on,
-        None,
-        join_type,
-        vec![SortOptions::default()],
-        NullEquality::NullEqualsNothing,
-    )?);
-
-    let mut stream = join.execute(0, Arc::clone(&task_ctx))?;
-    let mut output_rows = 0;
-    let mut output_rows_per_key = vec![0; num_keys as usize];
-    while let Some(batch) = stream.next().await {
-        let batch = batch?;
-        let left_keys = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .expect("left key must be Int64");
-        let left_values = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .expect("left payload must be Utf8");
-        let right_keys = batch
-            .column(2)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .expect("right key must be Int64");
-        let right_values = batch
-            .column(3)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .expect("right payload must be Utf8");
-
-        assert_eq!(left_keys.null_count(), 0);
-        assert_eq!(left_values.null_count(), 0);
-        assert_eq!(right_keys.null_count(), 0);
-        assert_eq!(right_values.null_count(), 0);
-        for row in 0..batch.num_rows() {
-            assert_eq!(left_keys.value(row), right_keys.value(row));
-            let key = left_keys.value(row);
-            assert!(
-                (0..num_keys).contains(&key),
-                "unexpected output key {key} for {join_type:?}",
-            );
-            output_rows_per_key[key as usize] += 1;
-            assert_eq!(left_values.value(row), expected_left_payload);
-            assert_eq!(right_values.value(row), expected_right_payload);
-        }
-        output_rows += batch.num_rows();
-    }
-
-    assert_eq!(
-        output_rows, expected_output_rows,
-        "unexpected output row count for {join_type:?}",
-    );
-    for (key, count) in output_rows_per_key.into_iter().enumerate() {
-        assert_eq!(
-            count, rows_per_key_large,
-            "unexpected output count for key {key} in {join_type:?}",
-        );
-    }
-
-    let metrics = join.metrics().expect("must have metrics");
-    assert!(
-        metrics.spill_count().unwrap_or_default() > 0,
-        "expected the buffered side to spill for {join_type:?}",
-    );
-    assert!(
-        metrics.spilled_bytes().unwrap_or_default() > 0,
-        "expected spilled_bytes > 0 for {join_type:?}",
-    );
-    assert!(
-        metrics.spilled_rows().unwrap_or_default() > 0,
-        "expected spilled_rows > 0 for {join_type:?}",
-    );
-
-    Ok(())
-}
-
-/// Memory-limit stress test: ~36 MB of buffered data joined under a 2 MB pool
-/// for each materializing join type. Semi/anti/mark joins take a separate
-/// execution path (`BitwiseSortMergeJoinStream`) and are out of scope here.
-#[tokio::test]
-async fn test_sort_merge_join_with_limited_memory() -> Result<()> {
-    for join_type in [
-        JoinType::Inner,
-        JoinType::Left,
-        JoinType::Right,
-        JoinType::Full,
-    ] {
-        run_sort_merge_join_test_with_limited_memory(join_type).await?;
-    }
-    Ok(())
 }

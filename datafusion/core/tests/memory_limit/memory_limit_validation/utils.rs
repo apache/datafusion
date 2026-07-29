@@ -101,8 +101,9 @@ where
     (result, peak_rss)
 }
 
-/// Re-run one test from the current integration-test binary in an isolated
-/// process so its RSS can be measured independently.
+/// Helper function that executes a test in a separate process with the required
+/// environment variable set. Re-invokes the current test binary directly,
+/// avoiding cargo overhead and recompilation.
 pub fn spawn_test_process(module: &str, test: &str) {
     let test_path = format!("memory_limit::memory_limit_validation::{module}::{test}");
     let exe = std::env::current_exe().expect("Failed to get test binary path");
@@ -171,8 +172,7 @@ pub async fn validate_query_with_memory_limits(
     query: &str,
     baseline_query: &str,
 ) {
-    // Fixed partition count so results are stable across machines.
-    let session_config = SessionConfig::new().with_target_partitions(4);
+    let session_config = SessionConfig::new().with_target_partitions(4); // Make sure the configuration is the same if test is running on different machines
     validate_query_with_memory_limits_and_config(
         expected_mem_bytes,
         mem_limit_bytes,
@@ -185,10 +185,8 @@ pub async fn validate_query_with_memory_limits(
     .await;
 }
 
-/// Like [`validate_query_with_memory_limits`] but with an explicit
-/// [`SessionConfig`] and optional operator expectations: the plan must contain
-/// `expected_operator_name`, and `expected_operator_spill` requires its spill
-/// count to be positive (`true`) or zero (`false`).
+/// Validate memory usage with a custom session configuration and optional
+/// operator and spill assertions.
 pub async fn validate_query_with_memory_limits_and_config(
     expected_mem_bytes: i64,
     mem_limit_bytes: Option<i64>,
@@ -229,7 +227,7 @@ pub async fn validate_query_with_memory_limits_and_config(
         );
     }
 
-    // Run a query with 10% data to estimate the constant overhead.
+    // Run a query with 10% data to estimate the constant overhead
     let baseline_plan = ctx
         .sql(baseline_query)
         .await
