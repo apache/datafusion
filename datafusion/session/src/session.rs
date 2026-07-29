@@ -27,6 +27,8 @@ use datafusion_expr::{
     AggregateUDF, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF,
 };
 use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
+
+use crate::CatalogProviderList;
 use parking_lot::{Mutex, RwLock};
 use std::any::Any;
 use std::collections::HashMap;
@@ -78,6 +80,9 @@ pub trait Session: Send + Sync {
 
     /// Return the [`SessionConfig`]
     fn config(&self) -> &SessionConfig;
+
+    /// Return the catalogs registered with this session.
+    fn catalog_list(&self) -> Arc<dyn CatalogProviderList>;
 
     /// return the [`ConfigOptions`]
     fn config_options(&self) -> &ConfigOptions {
