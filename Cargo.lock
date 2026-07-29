@@ -1774,6 +1774,7 @@ name = "datafusion-benchmarks"
 version = "54.1.0"
 dependencies = [
  "arrow",
+ "arrow-buffer",
  "async-trait",
  "bytes",
  "clap",
@@ -1781,6 +1782,7 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-common-runtime",
+ "datafusion-execution",
  "datafusion-proto",
  "env_logger",
  "futures",

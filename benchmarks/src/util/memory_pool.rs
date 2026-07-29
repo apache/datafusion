@@ -33,6 +33,12 @@
 //! This is measurement only: nothing here enforces a relationship between the
 //! two numbers.
 //!
+//! What lands in the peak is whatever the pool accounts for, so this follows
+//! the accounting rather than fixing it in place. Arrow-side reservations made
+//! through `ArrowMemoryPool` are included, because that adapter grows a
+//! DataFusion reservation against the pool it wraps; nothing claims buffers
+//! today, but the peak picks it up when something does.
+//!
 //! [`print_memory_stats`]: super::print_memory_stats
 
 use std::{
@@ -286,5 +292,35 @@ mod tests {
         assert_eq!(wrapped.name(), inner.name());
         assert_eq!(wrapped.to_string(), inner.to_string());
         assert!(matches!(wrapped.memory_limit(), MemoryLimit::Finite(4096)));
+    }
+
+    /// Arrow-side reservations reach the recorder too.
+    ///
+    /// [`ArrowMemoryPool`] implements Arrow's `MemoryPool` by growing a
+    /// DataFusion [`MemoryReservation`] against the pool it wraps, so a buffer
+    /// claimed through it lands in `grow` here. Nothing in DataFusion claims
+    /// buffers yet (see apache/datafusion#22898), but when something does, the
+    /// bytes show up in this peak without further changes — as long as the
+    /// adapter is built from the `RuntimeEnv`'s pool, which is the wrapped one.
+    /// This test pins that.
+    #[test]
+    fn records_reservations_arriving_through_the_arrow_adapter() {
+        use arrow_buffer::MemoryPool as ArrowMemoryPoolTrait;
+        use datafusion_execution::memory_pool::arrow::ArrowMemoryPool;
+
+        let (pool, _guard) = pool(4096);
+
+        let arrow_pool =
+            ArrowMemoryPool::new(Arc::clone(&pool), MemoryConsumer::new("arrow"));
+        let reservation = arrow_pool.reserve(1024);
+
+        // The Arrow-side reservation is visible as DataFusion pool usage...
+        assert_eq!(pool.reserved(), 1024);
+        assert_eq!(peak_pool_reserved(), Some(1024));
+
+        // ...and dropping it releases the bytes while the peak is retained.
+        drop(reservation);
+        assert_eq!(pool.reserved(), 0);
+        assert_eq!(peak_pool_reserved(), Some(1024));
     }
 }
