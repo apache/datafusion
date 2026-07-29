@@ -150,10 +150,6 @@ mod tests {
         run_elt_arrays_with(arrs, false)
     }
 
-    fn run_elt_arrays_ansi(arrs: Vec<ArrayRef>) -> Result<StringArray> {
-        run_elt_arrays_with(arrs, true)
-    }
-
     fn run_elt_arrays_with(arrs: Vec<ArrayRef>, ansi: bool) -> Result<StringArray> {
         let arr = elt(&arrs, ansi)?;
         Ok(as_string_array(&arr)?.clone())
