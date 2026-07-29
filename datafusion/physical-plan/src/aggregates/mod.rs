@@ -2050,17 +2050,25 @@ impl ExecutionPlan for AggregateExec {
         }
 
         let child = self.children()[0];
-        if self.group_by.expr().is_empty() {
-            // Preserve the existing global-aggregate behavior: filters that
-            // reference input columns may still be pushed down when their
-            // column names can be remapped to the child schema.
-            allowed_indices.extend(0..child.schema().fields().len());
-        }
-        let mut child_desc = ChildFilterDescription::from_child_with_allowed_indices(
-            &parent_filters,
-            allowed_indices,
-            child,
-        )?;
+        // Global aggregates and grouping sets containing an empty grouping set
+        // emit a row even when their input is empty. Parent filters therefore
+        // cannot be pushed below them, including filters without column
+        // references.
+        let may_emit_on_empty_input = self.group_by.is_true_no_grouping()
+            || self
+                .group_by
+                .groups()
+                .iter()
+                .any(|null_mask| null_mask.iter().all(|is_null| *is_null));
+        let mut child_desc = if may_emit_on_empty_input {
+            ChildFilterDescription::all_unsupported(&parent_filters)
+        } else {
+            ChildFilterDescription::from_child_with_allowed_indices(
+                &parent_filters,
+                allowed_indices,
+                child,
+            )?
+        };
 
         // Include self dynamic filter when it's possible
         if phase == FilterPushdownPhase::Post
