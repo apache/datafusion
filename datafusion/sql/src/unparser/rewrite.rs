@@ -201,7 +201,8 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
         .enumerate()
         .map(|(i, f)| match f {
             Expr::Alias(alias) => {
-                let a = Expr::Column(alias.name.clone().into());
+                let a =
+                    Expr::Column(Column::new(alias.relation.clone(), alias.name.clone()));
                 map.insert(a.clone(), f.clone());
                 a
             }
@@ -220,7 +221,20 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
         })
         .collect::<Vec<_>>();
 
-    let mut collects = p.expr.clone();
+    let mut collects = p
+        .expr
+        .iter()
+        .map(|e| match e {
+            // A pure rename `Column(x) AS out` compares as its underlying
+            // column `x`, so an outer Projection that only renames an inner
+            // column (e.g. the restored merged key of a FULL USING / NATURAL
+            // join) still matches and can be flattened instead of nested.
+            Expr::Alias(alias) if matches!(alias.expr.as_ref(), Expr::Column(_)) => {
+                alias.expr.as_ref().clone()
+            }
+            _ => e.clone(),
+        })
+        .collect::<Vec<_>>();
     for sort in &sort.expr {
         // Strip aliases from sort expressions so the comparison matches
         // the inner Projection's raw expressions. The optimizer may add
@@ -250,7 +264,19 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
         let new_exprs = p
             .expr
             .iter()
-            .map(|e| map.get(e).unwrap_or(e).clone())
+            .map(|e| {
+                // For a pure rename `Column(x) AS out`, inline the inner
+                // definition of `x` and re-apply the outer output name, so the
+                // flattened SELECT keeps `out` as the column name.
+                if let Expr::Alias(alias) = e
+                    && matches!(alias.expr.as_ref(), Expr::Column(_))
+                    && let Some(inner) = map.get(alias.expr.as_ref())
+                {
+                    inner.clone().unalias().alias(alias.name.clone())
+                } else {
+                    map.get(e).unwrap_or(e).clone()
+                }
+            })
             .collect::<Vec<_>>();
 
         // The inner Projection may define aliases that the Sort references

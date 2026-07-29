@@ -31,18 +31,22 @@ use crate::utils::{
 
 use arrow::datatypes::DataType;
 use datafusion_common::error::DataFusionErrorBuilder;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, not_impl_err, plan_err};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
+use datafusion_common::{
+    Column, DFSchema, DFSchemaRef, JoinType, Result, not_impl_err, plan_err,
+};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::ExprSchemable;
 use datafusion_expr::builder::get_struct_unnested_columns;
-use datafusion_expr::expr::{PlannedReplaceSelectItem, WildcardOptions};
+use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, Unnest, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
-    normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
+    merged_using_key_or_column, normalize_col, normalize_sorts,
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{
-    expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
+    expr_as_column_expr, find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::{
     Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
@@ -88,6 +92,81 @@ struct RewrittenUnnestExprGroups {
 
 fn flatten_expr_groups(expr_groups: Vec<Vec<Expr>>) -> Vec<Expr> {
     expr_groups.into_iter().flatten().collect()
+}
+
+/// Normalize unqualified column references in `expr` against `schemas`, then
+/// resolve any USING / NATURAL merged key to its internally qualified merged-key
+/// expression (see [`merged_using_key_or_column`]).
+///
+/// This is a single pass on purpose: only references written *unqualified* are
+/// merged keys, and that distinction is lost once normalization has qualified
+/// them, so the merged-key resolution has to happen as each column is resolved.
+fn normalize_col_resolving_merged_using_key(
+    expr: Expr,
+    schemas: &[&[&DFSchema]],
+    using_columns: &[HashSet<Column>],
+    merged_keys: &[(Column, Column, JoinType)],
+) -> Result<Expr> {
+    // Normalize column inside Unnest
+    if let Expr::Unnest(Unnest { expr }) = expr {
+        let e = normalize_col_resolving_merged_using_key(
+            expr.as_ref().clone(),
+            schemas,
+            using_columns,
+            merged_keys,
+        )?;
+        return Ok(Expr::Unnest(Unnest { expr: Box::new(e) }));
+    }
+
+    expr.transform(|expr| {
+        Ok(if let Expr::Column(c) = expr {
+            let was_unqualified = c.relation.is_none();
+            let col =
+                c.normalize_with_schemas_and_ambiguity_check(schemas, using_columns)?;
+            Transformed::yes(merged_using_key_or_column(
+                col,
+                was_unqualified,
+                merged_keys,
+            )?)
+        } else {
+            Transformed::no(expr)
+        })
+    })
+    .data()
+}
+
+fn unalias_internal_merged_key(expr: Expr, select_exprs: &[Expr]) -> Expr {
+    match expr {
+        Expr::Alias(Alias {
+            expr,
+            relation: Some(relation),
+            ..
+        }) if relation.table() == LogicalPlanBuilder::MERGED_KEY_QUALIFIER => *expr,
+        Expr::Column(column)
+            if column.relation.as_ref().is_some_and(|relation| {
+                relation.table() == LogicalPlanBuilder::MERGED_KEY_QUALIFIER
+            }) =>
+        {
+            select_exprs
+                .iter()
+                .find_map(|select_expr| match select_expr {
+                    Expr::Alias(Alias {
+                        expr,
+                        relation: Some(relation),
+                        name,
+                        ..
+                    }) if relation.table()
+                        == LogicalPlanBuilder::MERGED_KEY_QUALIFIER
+                        && name == &column.name =>
+                    {
+                        Some(*expr.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or(Expr::Column(column))
+        }
+        other => other,
+    }
 }
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
@@ -243,6 +322,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     let group_by_expr =
                         resolve_positions_to_exprs(group_by_expr, &select_exprs)?;
                     let group_by_expr = normalize_col(group_by_expr, &projected_plan)?;
+                    let group_by_expr =
+                        unalias_internal_merged_key(group_by_expr, &select_exprs);
                     self.validate_schema_satisfies_exprs(
                         base_plan.schema(),
                         std::slice::from_ref(&group_by_expr),
@@ -879,22 +960,26 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     );
                 }
 
-                let mut using_columns = HashSet::new();
-                expr_to_columns(&filter_expr, &mut using_columns)?;
+                // Resolve unqualified references against the real USING / NATURAL
+                // join columns so the merged key is recognized rather than
+                // reported as ambiguous.
+                let using_columns = plan.using_columns()?;
+                let merged_keys = plan.using_key_pairs()?;
                 let mut schema_stack: Vec<Vec<&DFSchema>> =
                     vec![vec![plan.schema()], fallback_schemas];
                 for sc in planner_context.outer_schemas_iter() {
                     schema_stack.push(vec![sc.as_ref()]);
                 }
 
-                let filter_expr = normalize_col_with_schemas_and_ambiguity_check(
+                let filter_expr = normalize_col_resolving_merged_using_key(
                     filter_expr,
                     schema_stack
                         .iter()
                         .map(|sc| sc.as_slice())
                         .collect::<Vec<&[&DFSchema]>>()
                         .as_slice(),
-                    &[using_columns],
+                    &using_columns,
+                    &merged_keys,
                 )?;
 
                 Ok(LogicalPlan::Filter(Filter::try_new(
@@ -952,7 +1037,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<Vec<SelectExpr>> {
         let mut prepared_select_exprs = vec![];
         let mut error_builder = DataFusionErrorBuilder::new();
-
         for expr in projection {
             match self.sql_select_to_rex(expr, plan, empty_from, planner_context) {
                 Ok(expr) => prepared_select_exprs.push(expr),
@@ -973,10 +1057,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         match sql {
             SelectItem::UnnamedExpr(expr) => {
                 let expr = self.sql_to_expr(expr, plan.schema(), planner_context)?;
-                let col = normalize_col_with_schemas_and_ambiguity_check(
+                let col = normalize_col_resolving_merged_using_key(
                     expr,
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
+                    &plan.using_key_pairs()?,
                 )?;
 
                 Ok(SelectExpr::Expression(col))
@@ -984,10 +1069,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             SelectItem::ExprWithAlias { expr, alias } => {
                 let select_expr =
                     self.sql_to_expr(expr, plan.schema(), planner_context)?;
-                let col = normalize_col_with_schemas_and_ambiguity_check(
+                let col = normalize_col_resolving_merged_using_key(
                     select_expr,
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
+                    &plan.using_key_pairs()?,
                 )?;
                 let name = self.ident_normalizer.normalize(alias);
                 // avoiding adding an alias if the column name is the same.

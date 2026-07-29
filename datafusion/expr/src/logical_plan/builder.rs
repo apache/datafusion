@@ -130,6 +130,10 @@ pub struct LogicalPlanBuilder {
 }
 
 impl LogicalPlanBuilder {
+    /// Reserved internal qualifier for USING / NATURAL join merged keys.
+    /// A real relation carrying this qualifier would clash.
+    pub const MERGED_KEY_QUALIFIER: &str = "__datafusion_merged_key_qualifier__";
+
     /// Create a builder from an existing plan
     pub fn new(plan: LogicalPlan) -> Self {
         Self {
@@ -855,12 +859,10 @@ impl LogicalPlanBuilder {
         // remove pushed down sort columns
         let new_expr = schema.columns().into_iter().map(Expr::Column).collect();
 
+        let input = Arc::unwrap_or_clone(self.plan);
+
         let is_distinct = false;
-        let plan = Self::add_missing_columns(
-            Arc::unwrap_or_clone(self.plan),
-            &missing_cols,
-            is_distinct,
-        )?;
+        let plan = Self::add_missing_columns(input, &missing_cols, is_distinct)?;
 
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_sorts(sorts, &plan)?,

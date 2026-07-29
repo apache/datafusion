@@ -46,6 +46,7 @@ use datafusion_sql::unparser::dialect::{
 };
 use datafusion_sql::unparser::{Unparser, expr_to_sql, plan_to_sql};
 use insta::assert_snapshot;
+use rstest::rstest;
 use sqlparser::ast::Statement;
 use std::hash::Hash;
 use std::ops::Add;
@@ -256,6 +257,60 @@ fn roundtrip_statement() -> Result<()> {
 
         assert_eq!(plan, plan_roundtrip);
     }
+
+    Ok(())
+}
+
+/// Regression for https://github.com/apache/datafusion/issues/22881.
+///
+/// A `USING` / `NATURAL` merged key is exposed as an unqualified column, while
+/// the original side keys remain addressable through qualified references. The
+/// merged key and qualified side keys may appear together because the user
+/// selected them, or because `ORDER BY` folds a non-projected side key into the
+/// plan. Both shapes must survive an unparser round-trip (`plan -> SQL -> plan`).
+#[rstest]
+#[case::order_by_qualified_side_key_using(
+    "SELECT id FROM (SELECT j1_id AS id FROM j1) ta \
+     FULL JOIN (SELECT j2_id AS id FROM j2) tb USING (id) \
+     ORDER BY ta.id"
+)]
+#[case::order_by_qualified_side_key_natural(
+    "SELECT id FROM (SELECT j1_id AS id FROM j1) ta \
+     NATURAL FULL JOIN (SELECT j2_id AS id FROM j2) tb \
+     ORDER BY ta.id"
+)]
+#[case::select_merged_and_left_side_key(
+    "SELECT id, ta.id FROM (SELECT j1_id AS id FROM j1) ta \
+     LEFT JOIN (SELECT j2_id AS id FROM j2) tb USING (id)"
+)]
+#[case::select_merged_and_right_side_key(
+    "SELECT id, tb.id FROM (SELECT j1_id AS id FROM j1) ta \
+     RIGHT JOIN (SELECT j2_id AS id FROM j2) tb USING (id)"
+)]
+#[case::select_merged_and_both_side_keys(
+    "SELECT id, ta.id, tb.id FROM (SELECT j1_id AS id FROM j1) ta \
+     FULL JOIN (SELECT j2_id AS id FROM j2) tb USING (id)"
+)]
+fn roundtrip_join_using_merged_key_with_qualified_side_keys(
+    #[case] query: &str,
+) -> Result<()> {
+    let dialect = GenericDialect {};
+    let statement = Parser::new(&dialect)
+        .try_with_sql(query)?
+        .parse_statement()?;
+
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
+
+    let roundtrip_statement = plan_to_sql(&plan)?;
+    let plan_roundtrip = sql_to_rel
+        .sql_statement_to_plan(roundtrip_statement)
+        .unwrap();
+
+    assert_eq!(plan, plan_roundtrip);
 
     Ok(())
 }
