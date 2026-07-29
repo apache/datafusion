@@ -40,7 +40,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
@@ -140,6 +140,34 @@ impl ProjectionExec {
         let expr_arc = expr.into_iter().map(Into::into).collect::<Arc<_>>();
         let projection = ProjectionExprs::from_expressions(expr_arc);
         let projector = projection.make_projector(&input_schema)?;
+        Self::try_from_projector(projector, input)
+    }
+
+    /// Create a projection using field and schema metadata from
+    /// `projected_schema`.
+    ///
+    /// Field names, data types, and nullability are still derived from the physical
+    /// projection expressions and the input plan; only field and schema metadata are
+    /// taken from `projected_schema`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the projection cannot be applied to the input plan, or if
+    /// `projected_schema` has a different number of fields than the projection.
+    pub fn try_new_with_schema_metadata<I, E>(
+        expr: I,
+        input: Arc<dyn ExecutionPlan>,
+        projected_schema: &Schema,
+    ) -> Result<Self>
+    where
+        I: IntoIterator<Item = E>,
+        E: Into<ProjectionExpr>,
+    {
+        let input_schema = input.schema();
+        let expr_arc = expr.into_iter().map(Into::into).collect::<Arc<_>>();
+        let projection = ProjectionExprs::from_expressions(expr_arc);
+        let projector = projection
+            .make_projector_with_schema_metadata(&input_schema, projected_schema)?;
         Self::try_from_projector(projector, input)
     }
 
