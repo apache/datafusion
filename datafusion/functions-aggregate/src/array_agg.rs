@@ -855,6 +855,24 @@ pub struct DistinctArrayAggAccumulator {
     ignore_nulls: bool,
 }
 
+/// Returns `true` if `dt` is, or recursively contains, a `Dictionary` type.
+///
+/// `RowConverter` always decodes to the physical (non-dictionary) type, so a
+/// cast back to the declared logical type is required when this is true.
+fn datatype_contains_dictionary(dt: &DataType) -> bool {
+    match dt {
+        DataType::Dictionary(_, _) => true,
+        DataType::List(f)
+        | DataType::LargeList(f)
+        | DataType::FixedSizeList(f, _)
+        | DataType::Map(f, _) => datatype_contains_dictionary(f.data_type()),
+        DataType::Struct(fields) => fields
+            .iter()
+            .any(|f| datatype_contains_dictionary(f.data_type())),
+        _ => false,
+    }
+}
+
 impl DistinctArrayAggAccumulator {
     pub fn try_new(
         datatype: &DataType,
@@ -1025,10 +1043,12 @@ impl Accumulator for DistinctArrayAggAccumulator {
         let arrays = converter.convert_rows(rows)?;
 
         // `convert_rows` always returns the physical (non-dictionary) type.
-        // Cast back to the declared logical type when they differ so that
-        // e.g. Dictionary columns round-trip correctly through the RowConverter.
+        // Cast back to the declared logical type when they differ AND the
+        // declared type contains a Dictionary somewhere (directly or nested
+        // inside a Struct, List, etc.) — that is the only case where
+        // RowConverter strips the logical type.
         let decoded = if arrays[0].data_type() != &self.datatype
-            && matches!(self.datatype, DataType::Dictionary(_, _))
+            && datatype_contains_dictionary(&self.datatype)
         {
             cast(arrays[0].as_ref(), &self.datatype)?
         } else {
