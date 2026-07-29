@@ -28,8 +28,10 @@ use datafusion::{
     prelude::SessionConfig,
 };
 use datafusion_common::{DataFusionError, Result};
+use object_store::chunked::ChunkedStore;
 use object_store::local::LocalFileSystem;
 
+use super::counting_object_store::CountingObjectStore;
 use super::latency_object_store::LatencyObjectStore;
 
 // Common benchmark options (don't use doc comments otherwise this doc
@@ -132,19 +134,29 @@ impl CommonOpt {
         Ok(rt_builder)
     }
 
-    /// Build the runtime environment, optionally wrapping the local filesystem
-    /// with a throttled object store to simulate remote storage latency.
+    /// Build the runtime environment, wrapping the local filesystem with a
+    /// request-counting object store (and, with `--simulate-latency`, a
+    /// throttled one that mimics remote storage latency).
     pub fn build_runtime(&self) -> Result<Arc<RuntimeEnv>> {
         let rt = self.runtime_env_builder()?.build_arc()?;
-        if self.simulate_latency {
-            let store: Arc<dyn object_store::ObjectStore> =
-                Arc::new(LatencyObjectStore::new(LocalFileSystem::new()));
-            let url = ObjectStoreUrl::parse("file:///")?;
-            rt.register_object_store(url.as_ref(), store);
+        // Streamed GET bodies from the local filesystem arrive in 8KiB chunks
+        // by default; re-chunk them at 2MiB to approximate network transfer
+        // granularity (irrelevant for fully-materialized reads)
+        const STREAM_CHUNK_SIZE: usize = 2 * 1024 * 1024;
+        let base = CountingObjectStore::new(ChunkedStore::new(
+            Arc::new(LocalFileSystem::new()),
+            STREAM_CHUNK_SIZE,
+        ));
+        let store: Arc<dyn object_store::ObjectStore> = if self.simulate_latency {
             println!(
                 "Simulating S3-like object store latency (get: 25-200ms, list: 40-400ms)"
             );
-        }
+            Arc::new(LatencyObjectStore::new(base))
+        } else {
+            Arc::new(base)
+        };
+        let url = ObjectStoreUrl::parse("file:///")?;
+        rt.register_object_store(url.as_ref(), store);
         Ok(rt)
     }
 }
