@@ -97,7 +97,7 @@ impl ExecutionPlan for OnceExec {
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
@@ -106,7 +106,7 @@ impl ExecutionPlan for OnceExec {
         &self,
         partition: usize,
         _context: Arc<TaskContext>,
-    ) -> datafusion_common::Result<SendableRecordBatchStream> {
+    ) -> Result<SendableRecordBatchStream> {
         assert_eq!(partition, 0);
 
         let stream = self.stream.lock().unwrap().take();

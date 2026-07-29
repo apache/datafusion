@@ -249,6 +249,7 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
 
     /// Returns a clone of the existing plan with the children replaced, skipping
     /// recomputation of plan properties if possible as indicated by the hint.
+    #[expect(deprecated)]
     fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -264,6 +265,10 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
 
     /// Returns a new `ExecutionPlan` where all existing children were replaced
     /// by the `children`, in order
+    #[deprecated(
+        since = "55.0.0",
+        note = "Use `ExecutionPlan::replace_children` with ChildrenPropertiesHint::Recompute"
+    )]
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -283,6 +288,11 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     ///
     /// Callers should route through [`with_new_children_if_necessary`] and
     /// not invoke this method directly.
+    #[deprecated(
+        since = "55.0.0",
+        note = "Use `ExecutionPlan::replace_children` with ChildrenPropertiesHint::SameProperties"
+    )]
+    #[expect(deprecated)]
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,

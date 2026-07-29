@@ -1578,10 +1578,10 @@ mod tests {
         use insta::assert_snapshot;
 
         use super::super::DisplayableExecutionPlan;
-        use crate::ChildrenPropertiesHint;
         use crate::empty::EmptyExec;
         use crate::filter::FilterExec;
         use crate::projection::ProjectionExec;
+        use crate::{ChildrenPropertiesHint, ExecutionPlan};
         use datafusion_physical_expr::expressions::{binary, col, lit};
         use datafusion_physical_expr::{Partitioning, PhysicalExpr};
 
