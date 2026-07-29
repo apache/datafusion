@@ -28,7 +28,7 @@ use crate::fuzz_cases::aggregation_fuzzer::{
     check_equality_of_batches,
     context_generator::{SessionContextGenerator, SessionContextWithParams},
     data_generator::{Dataset, DatasetGenerator, DatasetGeneratorConfig},
-    run_sql,
+    run_sql, run_sql_capturing_peak,
 };
 
 /// Rounds to call `generate` of [`SessionContextGenerator`]
@@ -213,16 +213,18 @@ impl AggregationFuzzer {
             let ctx_generator =
                 SessionContextGenerator::new(dataset_ref.clone(), &self.table_name);
 
-            // Generate the baseline context, and get the baseline result firstly
-            let (baseline_ctx_with_params, tracker) = ctx_generator
+            // Generate the baseline context, and get the baseline result firstly.
+            // The baseline run also gives the aggregate's peak memory, which sizes
+            // the spill pools for the randomized contexts.
+            let baseline_ctx_with_params = ctx_generator
                 .generate_baseline()
                 .expect("should succeed to generate baseline session context");
-            let baseline_result = run_sql(&sql, &baseline_ctx_with_params.ctx)
-                .await
-                .expect("should succeed to run baseline sql");
+
+            let (baseline_result, agg_peak) =
+                run_sql_capturing_peak(&sql, &baseline_ctx_with_params.ctx)
+                    .await
+                    .expect("should succeed to run baseline sql");
             let baseline_result = Arc::new(baseline_result);
-            // Baseline peak (dominated by the aggregate) sizes the spill pools.
-            let agg_peak = tracker.peak();
             // Generate test tasks
             for _ in 0..CTX_GEN_ROUNDS {
                 let ctx_with_params = ctx_generator
