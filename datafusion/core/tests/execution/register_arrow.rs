@@ -15,10 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Integration tests for register_arrow API
+//! Arrow IPC integration tests
 
 use datafusion::{execution::options::ArrowReadOptions, prelude::*};
 use datafusion_common::Result;
+
+#[tokio::test]
+async fn test_query_arrow_stream_with_arrows_extension() -> Result<()> {
+    let tmp_dir = tempfile::TempDir::new()?;
+    let stream_path = tmp_dir.path().join("example.arrows");
+    std::fs::copy(
+        "../../datafusion/datasource-arrow/tests/data/example_stream.arrow",
+        &stream_path,
+    )?;
+
+    let ctx = SessionContext::new().enable_url_table();
+    let df = ctx
+        .sql(&format!("SELECT * FROM '{}'", stream_path.display()))
+        .await?;
+    assert_eq!(df.count().await?, 4);
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn test_register_arrow_auto_detects_format() -> Result<()> {
