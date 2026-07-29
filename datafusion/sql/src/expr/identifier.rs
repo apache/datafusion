@@ -89,6 +89,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 return Ok(Expr::Column(column));
             }
 
+            // A `RIGHT`/`FULL` `USING`/`NATURAL` join exposes both per-side keys
+            // (`left.k` and `right.k`) in its schema, so a bare `k` is ambiguous and
+            // falls through to here. Per SQL:2016 §7.10 the merged key is
+            // `COALESCE(left.k, right.k)`; resolve the unqualified reference to that
+            // coalesced value (built in `plan_using_join`) rather than to an
+            // unqualified column that would later bind to the NULL-padded left key.
+            if let Some(replacement) = planner_context
+                .using_merged_key_replacement(normalize_ident.as_str(), schema)
+            {
+                return Ok(replacement.clone());
+            }
+
             // Check the outer query schema
             for outer in planner_context.outer_schemas_iter() {
                 if let Ok((qualifier, field)) =

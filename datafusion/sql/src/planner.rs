@@ -27,7 +27,9 @@ use datafusion_common::TableReference;
 use datafusion_common::config::SqlParserOptions;
 use datafusion_common::datatype::{DataTypeExt, FieldExt};
 use datafusion_common::error::add_possible_columns_to_diag;
-use datafusion_common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
+use datafusion_common::{
+    Column, DFSchema, DataFusionError, Result, not_impl_err, plan_err,
+};
 use datafusion_common::{
     DFSchemaRef, Diagnostic, SchemaError, field_not_found, internal_err,
     plan_datafusion_err,
@@ -276,6 +278,33 @@ pub struct PlannerContext {
     set_expr_left_schema: Option<DFSchemaRef>,
     /// The parameters of all lambdas seen so far
     lambda_parameters: HashMap<String, FieldRef>,
+    /// The merged join keys produced by `RIGHT`/`FULL` `USING`/`NATURAL` joins
+    /// planned so far. An unqualified reference to such a key must resolve to the
+    /// coalesced value `COALESCE(left.k, right.k)` rather than to the left key
+    /// alone (which is NULL-padded for unmatched rows). See [`UsingMergedKey`].
+    using_merged_keys: Vec<UsingMergedKey>,
+}
+
+/// A single `USING`/`NATURAL` join key whose unqualified reference must resolve to
+/// a merged (coalesced) value because the left side can be NULL-padded
+/// (`RIGHT`/`FULL` outer joins).
+///
+/// Per SQL:2016 §7.10 a `USING`/`NATURAL` join column is
+/// `COALESCE(left.k, right.k)`. DataFusion keeps both per-side keys (`left.k` and
+/// `right.k`) in the join output schema so they remain individually addressable;
+/// an *unqualified* reference to the key is rewritten to [`Self::replacement`]
+/// during column resolution.
+#[derive(Debug, Clone)]
+pub(crate) struct UsingMergedKey {
+    /// Unqualified key name (e.g. `k`).
+    pub(crate) name: String,
+    /// The left-side key column (`left.k`).
+    pub(crate) left: Column,
+    /// The right-side key column (`right.k`).
+    pub(crate) right: Column,
+    /// The expression a bare reference to `name` resolves to:
+    /// `COALESCE(left, right) AS name` for `FULL`, or `right` for `RIGHT`.
+    pub(crate) replacement: Expr,
 }
 
 impl Default for PlannerContext {
@@ -295,6 +324,7 @@ impl PlannerContext {
             create_table_schema: None,
             set_expr_left_schema: None,
             lambda_parameters: HashMap::new(),
+            using_merged_keys: vec![],
         }
     }
 
@@ -378,6 +408,59 @@ impl PlannerContext {
             None => self.outer_from_schema = Some(Arc::clone(schema)),
         };
         Ok(())
+    }
+
+    /// Register the merged keys of a `RIGHT`/`FULL` `USING`/`NATURAL` join so that
+    /// later unqualified references to those keys resolve to the coalesced value.
+    pub(crate) fn register_using_merged_keys(
+        &mut self,
+        keys: impl IntoIterator<Item = UsingMergedKey>,
+    ) {
+        self.using_merged_keys.extend(keys);
+    }
+
+    /// Snapshot the number of registered merged keys, so a nested scope (e.g. a
+    /// subquery in the FROM clause) can be truncated back via
+    /// [`Self::truncate_using_merged_keys`] once it has been planned.
+    pub(crate) fn using_merged_keys_len(&self) -> usize {
+        self.using_merged_keys.len()
+    }
+
+    /// Drop merged keys registered after `len` (see [`Self::using_merged_keys_len`]).
+    pub(crate) fn truncate_using_merged_keys(&mut self, len: usize) {
+        self.using_merged_keys.truncate(len);
+    }
+
+    /// Find the merged-key replacement expression for an unqualified column `name`,
+    /// if such a key was registered and both of its per-side columns are present in
+    /// `schema` (so we only rewrite where the merged column is actually in scope).
+    pub(crate) fn using_merged_key_replacement(
+        &self,
+        name: &str,
+        schema: &DFSchema,
+    ) -> Option<&Expr> {
+        self.using_merged_keys.iter().rev().find_map(|k| {
+            (k.name == name && schema.has_column(&k.left) && schema.has_column(&k.right))
+                .then_some(&k.replacement)
+        })
+    }
+
+    /// Return the `(name, replacement)` of every distinct merged key in scope for
+    /// `schema` (both per-side columns present). The most recently registered key
+    /// wins for a given name. Used to rewrite unqualified `SELECT *` so the merged
+    /// key is shown once with its coalesced value.
+    pub(crate) fn using_merged_keys_in_scope(
+        &self,
+        schema: &DFSchema,
+    ) -> Vec<(String, Expr)> {
+        let mut seen = std::collections::HashSet::new();
+        self.using_merged_keys
+            .iter()
+            .rev()
+            .filter(|k| schema.has_column(&k.left) && schema.has_column(&k.right))
+            .filter(|k| seen.insert(k.name.clone()))
+            .map(|k| (k.name.clone(), k.replacement.clone()))
+            .collect()
     }
 
     /// Return the types of parameters (`$1`, `$2`, etc) if known

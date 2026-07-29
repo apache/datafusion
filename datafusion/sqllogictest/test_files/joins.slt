@@ -5608,3 +5608,129 @@ set datafusion.execution.target_partitions = 4;
 
 statement ok
 reset datafusion.execution.batch_size;
+
+##########
+# RIGHT / FULL / NATURAL JOIN ... USING(k) must coalesce the merged join key
+# Per SQL:2016 §7.10 a USING/NATURAL join column is COALESCE(left.k, right.k),
+# so a right-only row of a RIGHT/FULL join must expose the RIGHT key value
+# (not the NULL-padded left key). See the GitHub issue this section covers.
+##########
+
+statement ok
+create table using_a(k int, x int) as values (1, 10);
+
+statement ok
+create table using_b(k int, y int) as values (4, 400);
+
+# FULL JOIN USING: the right-only row (k=4) must report k=4, not NULL
+query I
+select k from using_a full join using_b using (k) order by k nulls last;
+----
+1
+4
+
+# The unqualified key is COALESCE(a.k, b.k); the per-side keys remain addressable
+query III
+select k as unqual_k, using_a.k as a_k, using_b.k as b_k
+from using_a full join using_b using (k) order by unqual_k nulls last;
+----
+1 1 NULL
+4 NULL 4
+
+# RIGHT JOIN USING: right-only row exposes the right key
+query I
+select k from using_a right join using_b using (k);
+----
+4
+
+# NATURAL FULL JOIN: same coalescing behavior
+query I
+select k from using_a natural full join using_b order by k nulls last;
+----
+1
+4
+
+# NATURAL RIGHT JOIN
+query I
+select k from using_a natural right join using_b;
+----
+4
+
+# Must match the standard-equivalent explicit COALESCE ... ON form
+query I
+select coalesce(using_a.k, using_b.k) as k
+from using_a full join using_b on using_a.k = using_b.k order by k nulls last;
+----
+1
+4
+
+# Downstream WHERE on the merged key keeps the real right-only row
+query II
+select x, y from using_a full join using_b using (k) where k = 4;
+----
+NULL 400
+
+# Downstream GROUP BY buckets the right-only row under its real key, not NULL
+query II
+select k, count(*) from using_a full join using_b using (k) group by k order by k nulls last;
+----
+1 1
+4 1
+
+# SELECT * exposes a single, coalesced key column (Postgres semantics)
+query III
+select * from using_a full join using_b using (k) order by k nulls last;
+----
+1 10 NULL
+4 NULL 400
+
+# The merged key plan is COALESCE(left, right) for FULL ...
+query TT
+explain select k from using_a full join using_b using (k);
+----
+logical_plan
+01)Projection: CASE WHEN using_a.k IS NOT NULL THEN using_a.k ELSE using_b.k END AS k
+02)--Full Join: Using using_a.k = using_b.k
+03)----TableScan: using_a projection=[k]
+04)----TableScan: using_b projection=[k]
+physical_plan
+01)ProjectionExec: expr=[CASE WHEN k@0 IS NOT NULL THEN k@0 ELSE k@1 END as k]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----HashJoinExec: mode=CollectLeft, join_type=Full, on=[(k@0, k@0)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# ... and the right key for RIGHT (the right side is always present)
+query TT
+explain select k from using_a right join using_b using (k);
+----
+logical_plan
+01)Projection: using_b.k
+02)--Right Join: Using using_a.k = using_b.k
+03)----TableScan: using_a projection=[k]
+04)----TableScan: using_b projection=[k]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Right, on=[(k@0, k@0)], projection=[k@1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# INNER / LEFT are unaffected: the left key is never NULL-padded, so the merged
+# key still resolves to the (unchanged) left column with no COALESCE wrapper.
+query TT
+explain select k from using_a inner join using_b using (k);
+----
+logical_plan
+01)Projection: using_a.k
+02)--Inner Join: using_a.k = using_b.k
+03)----TableScan: using_a projection=[k]
+04)----TableScan: using_b projection=[k]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(k@0, k@0)], projection=[k@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE using_a;
+
+statement ok
+DROP TABLE using_b;
