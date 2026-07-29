@@ -260,6 +260,24 @@ mod tests {
         Arc::new(BinaryExpr::new(cast_expr, op, lit(literal)))
     }
 
+    fn assert_timestamp_widening_rewrite(
+        schema: &Schema,
+        binary_expr: Arc<dyn PhysicalExpr>,
+        expected_op: Operator,
+        expected_value: i64,
+    ) {
+        let result = unwrap_cast_in_comparison(binary_expr, schema).unwrap();
+        assert!(result.transformed);
+        let optimized_binary = result.data.downcast_ref::<BinaryExpr>().unwrap();
+        assert_eq!(*optimized_binary.op(), expected_op);
+        assert!(!is_cast_expr(optimized_binary.left()));
+        let right_literal = optimized_binary.right().downcast_ref::<Literal>().unwrap();
+        assert_eq!(
+            right_literal.value(),
+            &ScalarValue::TimestampMillisecond(Some(expected_value), None)
+        );
+    }
+
     #[test]
     fn test_unwrap_cast_in_binary_comparison() {
         let schema = test_schema();
@@ -714,36 +732,112 @@ mod tests {
     }
 
     #[test]
-    fn test_timestamp_widening_exactness() {
+    fn test_timestamp_widening_ordered() {
         let schema = timestamp_schema(TimeUnit::Millisecond);
-        let binary_expr = timestamp_cast_comparison(
+        assert_timestamp_widening_rewrite(
             &schema,
-            TimeUnit::Nanosecond,
+            timestamp_cast_comparison(
+                &schema,
+                TimeUnit::Nanosecond,
+                Operator::GtEq,
+                ScalarValue::TimestampNanosecond(Some(123_000_000), None),
+            ),
             Operator::GtEq,
-            ScalarValue::TimestampNanosecond(Some(123_000_000), None),
+            123,
         );
 
-        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+        for (literal, floor, ceil) in
+            [(123_456_789, 123, 124), (-123_456_789, -124, -123)]
+        {
+            for (op, bound) in [
+                (Operator::GtEq, ceil),
+                (Operator::Gt, floor),
+                (Operator::Lt, ceil),
+                (Operator::LtEq, floor),
+            ] {
+                assert_timestamp_widening_rewrite(
+                    &schema,
+                    timestamp_cast_comparison(
+                        &schema,
+                        TimeUnit::Nanosecond,
+                        op,
+                        ScalarValue::TimestampNanosecond(Some(literal), None),
+                    ),
+                    op,
+                    bound,
+                );
+            }
+        }
 
-        assert!(result.transformed);
-        let optimized_binary = result.data.downcast_ref::<BinaryExpr>().unwrap();
-        assert_eq!(*optimized_binary.op(), Operator::GtEq);
-        assert!(!is_cast_expr(optimized_binary.left()));
-        let right_literal = optimized_binary.right().downcast_ref::<Literal>().unwrap();
-        assert_eq!(
-            right_literal.value(),
-            &ScalarValue::TimestampMillisecond(Some(123), None)
-        );
-
-        let binary_expr = timestamp_cast_comparison(
+        let try_cast_expr = Arc::new(TryCastExpr::new(
+            col("ts", &schema).unwrap(),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        ));
+        assert_timestamp_widening_rewrite(
             &schema,
-            TimeUnit::Nanosecond,
+            Arc::new(BinaryExpr::new(
+                try_cast_expr,
+                Operator::GtEq,
+                lit(ScalarValue::TimestampNanosecond(Some(123_456_789), None)),
+            )),
             Operator::GtEq,
-            ScalarValue::TimestampNanosecond(Some(123_456_789), None),
+            124,
         );
 
-        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+        let result = unwrap_cast_in_comparison(
+            timestamp_cast_comparison(
+                &schema,
+                TimeUnit::Nanosecond,
+                Operator::Eq,
+                ScalarValue::TimestampNanosecond(Some(123_456_789), None),
+            ),
+            &schema,
+        )
+        .unwrap();
         assert!(!result.transformed);
+    }
+
+    #[test]
+    fn test_timestamp_widening_literal_left_ordered() {
+        let schema = timestamp_schema(TimeUnit::Millisecond);
+        for (op, expected_op, expected_value) in [
+            (Operator::Lt, Operator::Gt, 123),
+            (Operator::LtEq, Operator::GtEq, 124),
+            (Operator::Gt, Operator::Lt, 124),
+            (Operator::GtEq, Operator::LtEq, 123),
+        ] {
+            let cast_expr = Arc::new(CastExpr::new(
+                col("ts", &schema).unwrap(),
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                None,
+            ));
+            let binary_expr = Arc::new(BinaryExpr::new(
+                lit(ScalarValue::TimestampNanosecond(Some(123_456_789), None)),
+                op,
+                cast_expr,
+            ));
+            assert_timestamp_widening_rewrite(
+                &schema,
+                binary_expr,
+                expected_op,
+                expected_value,
+            );
+        }
+
+        let try_cast_expr = Arc::new(TryCastExpr::new(
+            col("ts", &schema).unwrap(),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        ));
+        assert_timestamp_widening_rewrite(
+            &schema,
+            Arc::new(BinaryExpr::new(
+                lit(ScalarValue::TimestampNanosecond(Some(-123_456_789), None)),
+                Operator::GtEq,
+                try_cast_expr,
+            )),
+            Operator::LtEq,
+            -124,
+        );
     }
 
     #[test]
