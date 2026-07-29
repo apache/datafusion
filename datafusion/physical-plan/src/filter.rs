@@ -401,8 +401,11 @@ impl FilterExec {
             }
         };
 
-        let total_byte_size =
-            input_total_byte_size.with_estimated_selectivity(selectivity);
+        let total_byte_size = if is_infeasible {
+            Precision::Exact(0)
+        } else {
+            input_total_byte_size.with_estimated_selectivity(selectivity)
+        };
 
         Ok(Statistics {
             num_rows,
@@ -2936,7 +2939,7 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
         ));
 
-        let input = Arc::new(StatisticsExec::new(input_stats, schema));
+        let input = Arc::new(StatisticsExec::new(input_stats, schema.clone()));
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
         let statistics =
@@ -2956,6 +2959,37 @@ mod tests {
             statistics.column_statistics[1].distinct_count,
             Precision::Exact(0)
         );
+
+        // A contradictory predicate (`a = 1 AND a = 2`) proves the same for an
+        // input of any size, so the byte size is exact too.
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(1000),
+                total_byte_size: Precision::Inexact(8000),
+                column_statistics: vec![ColumnStatistics::new_unknown(); 2],
+            },
+            schema,
+        ));
+        let contradiction = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::Eq,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+            )),
+            Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::Eq,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(2)))),
+            )),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(contradiction, input)?);
+        let statistics =
+            StatisticsContext::new().compute(filter.as_ref(), &StatisticsArgs::new())?;
+
+        assert_eq!(statistics.num_rows, Precision::Exact(0));
+        assert_eq!(statistics.total_byte_size, Precision::Exact(0));
 
         Ok(())
     }
