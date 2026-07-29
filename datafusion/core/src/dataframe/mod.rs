@@ -71,6 +71,7 @@ use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_expr::extension_types::DFArrayFormatterFactory;
 
+#[derive(Clone)]
 /// Contains options that control how data is
 /// written out from a DataFrame
 pub struct DataFrameWriteOptions {
