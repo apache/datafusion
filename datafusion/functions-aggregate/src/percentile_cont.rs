@@ -917,9 +917,8 @@ mod tests {
         // Interpolating between 0 and the max finite f16 value previously overflowed
         // intermediate f16 computations and produced NaN.
         let mut values = vec![f16::from_f32(0.0), f16::from_f32(65504.0)];
-        let result =
-            calculate_percentile::<Float16Type>(&mut values, 0.5)
-                .expect("non-empty input");
+        let result = calculate_percentile::<Float16Type>(&mut values, 0.5)
+            .expect("non-empty input");
         let result_f = result.to_f32();
         assert!(
             !result_f.is_nan(),
