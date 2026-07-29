@@ -134,6 +134,11 @@ where
         self.p
     }
 
+    /// Heap bytes used by the register buffer (not captured by `size_of_val`).
+    pub(crate) fn register_heap_size(&self) -> usize {
+        self.registers.len()
+    }
+
     /// The HLL hash state is shared through `datafusion_common::hash_utils`
     /// so sketches remain compatible across accumulators.
     #[inline]
