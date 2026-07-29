@@ -374,6 +374,12 @@ fn find_inner_join(
                 left_input.schema(),
                 right_input.schema(),
                 &JoinType::Inner,
+                Some(Join::get_uniquely_determined_columns(
+                    &left_input,
+                    &right_input,
+                    &join_keys,
+                    &None,
+                )),
             )?);
 
             return Ok(LogicalPlan::Join(Join {
@@ -397,6 +403,7 @@ fn find_inner_join(
         left_input.schema(),
         right.schema(),
         &JoinType::Inner,
+        None,
     )?);
 
     Ok(LogicalPlan::Join(Join {
@@ -1402,6 +1409,7 @@ mod tests {
             t1.schema(),
             t2.schema(),
             &JoinType::Inner,
+            None,
         )?);
 
         let inner_join = LogicalPlan::Join(Join {

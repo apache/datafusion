@@ -330,11 +330,16 @@ impl FunctionalDependencies {
 
     /// This function joins this set of functional dependencies with the `other`
     /// according to the given `join_type`.
+    ///
+    /// `uniquely_determined_columns` contains a set of columns on each side of the relation (
+    /// self first) which are used in the ON clause of the join in an equality comparison,
+    /// which guarantees they are uniquely determined by the source side of the join.
     pub fn join(
         &self,
         other: &FunctionalDependencies,
         join_type: &JoinType,
         left_cols_len: usize,
+        uniquely_determined_columns: Option<(HashSet<usize>, HashSet<usize>)>,
     ) -> FunctionalDependencies {
         // Get mutable copies of left and right side dependencies:
         let mut right_func_dependencies = other.clone();
@@ -344,6 +349,61 @@ impl FunctionalDependencies {
             JoinType::Inner | JoinType::Left | JoinType::Right => {
                 // Add offset to right schema:
                 right_func_dependencies.add_offset(left_cols_len);
+
+                let (fixed_left, fixed_right) =
+                    uniquely_determined_columns.unwrap_or_default();
+
+                // Computes the list of columns on both side of the relation that can be directly
+                // derived from the join clause, because all the source indices of their dependencies
+                // appear in the join clause.
+                let left_dependent_columns = left_func_dependencies
+                    .deps
+                    .iter()
+                    .filter(|dep| {
+                        dep.source_indices
+                            .iter()
+                            .all(|index| fixed_left.contains(index))
+                    })
+                    .flat_map(|dep| dep.target_indices.clone())
+                    .collect::<Vec<_>>();
+                let right_dependent_columns = right_func_dependencies
+                    .deps
+                    .iter()
+                    .filter(|dep| {
+                        dep.source_indices
+                            .iter()
+                            .all(|index| fixed_right.contains(&(*index - left_cols_len)))
+                    })
+                    .flat_map(|dep| dep.target_indices.clone())
+                    .collect::<Vec<_>>();
+
+                // Update dependencies on each side of the join to add columns from the other side,
+                // if their source appears fully in the condition of the join
+                left_func_dependencies
+                    .deps
+                    .iter_mut()
+                    .filter(|dep| {
+                        dep.source_indices
+                            .iter()
+                            .all(|index| fixed_left.contains(index))
+                    })
+                    .for_each(|dep| {
+                        dep.target_indices
+                            .extend_from_slice(right_dependent_columns.as_slice())
+                    });
+
+                right_func_dependencies
+                    .deps
+                    .iter_mut()
+                    .filter(|dep| {
+                        dep.source_indices
+                            .iter()
+                            .all(|index| fixed_right.contains(&(*index - left_cols_len)))
+                    })
+                    .for_each(|dep| {
+                        dep.target_indices
+                            .extend_from_slice(left_dependent_columns.as_slice())
+                    });
 
                 // Result may have multiple values, update the dependency mode:
                 left_func_dependencies =

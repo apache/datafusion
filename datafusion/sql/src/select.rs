@@ -15,10 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashSet;
-use std::ops::ControlFlow;
-use std::sync::Arc;
-
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::query::to_order_by_exprs_with_select;
 use crate::utils::{
@@ -28,11 +24,17 @@ use crate::utils::{
     rewrite_recursive_unnests_bottom_up, substitute_top_level_alias,
     substitute_top_level_aliases_in_sorts,
 };
+use arrow::datatypes::FieldRef;
+use std::collections::HashSet;
+use std::ops::ControlFlow;
+use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, not_impl_err, plan_err};
+use datafusion_common::{
+    Column, Constraint, DFSchema, DFSchemaRef, HashMap, Result, not_impl_err, plan_err,
+};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::ExprSchemable;
 use datafusion_expr::builder::get_struct_unnested_columns;
