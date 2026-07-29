@@ -546,7 +546,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 context.runtime_env(),
             )
         } else {
-            Ok(Box::pin(MaterializingSortMergeJoinStream::try_new(
+            MaterializingSortMergeJoinStream::try_new(
                 Arc::clone(&self.schema),
                 self.sort_options.clone(),
                 self.null_equality,
@@ -561,7 +561,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 reservation,
                 spill_manager,
                 context.runtime_env(),
-            )?))
+            )
         }
     }
 
