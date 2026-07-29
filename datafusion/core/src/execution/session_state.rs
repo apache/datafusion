@@ -273,6 +273,9 @@ impl Session for SessionState {
     }
 
     fn query_planner(&self) -> Arc<dyn QueryPlanner + Send + Sync> {
+        // Disambiguate: `SessionState` has an inherent `query_planner` (returning
+        // `&Arc<...>`) with the same name as this trait method. The qualified path
+        // calls the inherent one; a bare `self.query_planner()` would recurse.
         Arc::clone(SessionState::query_planner(self))
     }
 
