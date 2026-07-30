@@ -333,7 +333,7 @@ impl OrderedFinalAggregateStream {
         Ok(Box::pin(ObservedStream::new(stream, cloned_metrics, None)))
     }
 
-    /// Entry point for the ordered final aggregate state machine.
+    /// Entry point for the ordered final aggregate stream
     ///
     /// See comments in [`OrderedFinalAggregateStream`] for high-level ideas.
     ///
@@ -391,31 +391,26 @@ impl OrderedFinalAggregateStream {
         mut table: OrderedAggregateTable<FinalMarker>,
     ) -> impl Stream<Item = Result<RecordBatch>> {
         async_try_stream(|mut emitter| async move {
-            let spilled = self.handle_reading_input(&mut table, &mut emitter).await?;
+            let spilled = self.read_input(&mut table, &mut emitter).await?;
 
-            let last_batch = if spilled {
+            if spilled {
                 let mut merging_spills_stream =
-                    self.handle_preparing_merge_input(table)?;
+                    self.prepare_merge_spills(table)?;
 
                 // Forwards output from the fully ordered stream that consumes the merged
                 // spill runs.
                 //
-                // See comments at `poll_next()` for details.
+                // See comments at `create_stream()` for details.
                 while let Some(batch) = merging_spills_stream.next().await.transpose()? {
                     emitter.emit(batch).await;
                 }
 
-                None
+                // Make sure empty
+                self.reservation.try_resize(0)?;
             } else {
                 table.input_done();
-                self.handle_producing_output(table, &mut emitter).await?
+                self.produce_output(table, &mut emitter).await?;
             };
-
-            self.reservation.try_resize(0)?;
-
-            if let Some(last_batch) = last_batch {
-                emitter.emit(last_batch).await;
-            }
 
             Ok(())
         })
@@ -443,10 +438,10 @@ impl OrderedFinalAggregateStream {
     /// Consumes one ordered partial-state input batch, then immediately emits
     /// finalized groups if the ordering proves any group is ready.
     ///
-    /// See comments at `poll_next()` for details.
+    /// See comments at [`Self::create_stream`] for details.
     ///
-    /// Returns the next operator state with control flow decision.
-    async fn handle_reading_input(
+    /// Returns whether there are any spill files
+    async fn read_input(
         &mut self,
         table: &mut OrderedAggregateTable<FinalMarker>,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
@@ -455,17 +450,15 @@ impl OrderedFinalAggregateStream {
             let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
             let timer = elapsed_compute.timer();
             table.aggregate_batch(&batch)?;
-            timer.done();
 
             // Check memory reservation, and potentially spill.
-            let timer = elapsed_compute.timer();
             let resize_result =
                 self.reservation
                     .try_resize(Self::reservation_size_for_table(
                         table,
                         self.spill_context.as_deref(),
                     ));
-            timer.done();
+
             match resize_result {
                 Ok(()) => {}
                 Err(e @ DataFusionError::ResourcesExhausted(_)) => {
@@ -476,15 +469,14 @@ impl OrderedFinalAggregateStream {
                         return Err(e);
                     }
 
+                    timer.done();
                     self.handle_spilling(table, &mut spill_context)?;
 
                     self.spill_context = Some(spill_context);
 
                     continue;
                 }
-                Err(e) => {
-                    return Err(e);
-                }
+                Err(e) => return Err(e)
             }
 
             let result = if self
@@ -496,25 +488,23 @@ impl OrderedFinalAggregateStream {
                 // must participate in replay so no group is finalized twice.
                 None
             } else {
-                let timer = elapsed_compute.timer();
-                let result = table.next_output_batch()?;
-                timer.done();
-                result
+                table.next_output_batch()?
             };
 
             // Some finalized groups can be emitted. Yield them, then
             // continue aggregating input in the current state.
             let Some(batch) = result else {
                 // Can't do early emit, continue aggregating.
-
                 continue;
             };
+
             self.reservation
                 .try_resize(Self::reservation_size_for_table(
                     table,
                     self.spill_context.as_deref(),
                 ))?;
 
+            drop(timer);
             emitter.emit(batch).await;
         }
 
@@ -564,53 +554,54 @@ impl OrderedFinalAggregateStream {
     /// 3. Constructs a replay stream: an ordered aggregate stream over the fully
     ///    ordered input constructed from the spills.
     ///
-    /// See comments at `poll_next()` for details.
+    /// See comments at [`Self::create_stream`] for details.
     ///
-    /// Returns the next operator state with control flow decision.
-    fn handle_preparing_merge_input(
+    /// Returns the merged spill stream
+    fn prepare_merge_spills(
         &mut self,
         mut table: OrderedAggregateTable<FinalMarker>,
     ) -> Result<SendableRecordBatchStream> {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let _timer = elapsed_compute.timer();
+
         let mut spill_context = self
             .spill_context
             .take()
             .expect("must have spill context when merging input");
         spill_context.spill_table(&mut table)?;
-        let replay = {
-            let group_by_metrics = table.group_by_metrics();
-            drop(table);
-            self.reservation.try_resize(0)?;
-            (*spill_context).into_replay_stream(
-                &self.baseline_metrics,
-                group_by_metrics,
-                self.reservation.new_empty(),
-            )?
-        };
-
-        Ok(replay)
+        let group_by_metrics = table.group_by_metrics();
+        drop(table);
+        self.reservation.try_resize(0)?;
+        (*spill_context).into_replay_stream(
+            &self.baseline_metrics,
+            group_by_metrics,
+            self.reservation.new_empty(),
+        )
     }
 
-    /// Emits one batch after input is exhausted.
+    /// Emits all batches after input is exhausted.
     ///
     /// `table.input_done()` has already made every remaining group safe to emit,
     /// so this state keeps draining until the table is empty.
     ///
-    /// See comments at `poll_next()` for details.
-    ///
-    /// Returns the next operator state with control flow decision.
-    async fn handle_producing_output(
+    /// See comments at [`Self::create_stream`] for details.
+    async fn produce_output(
         &mut self,
         mut table: OrderedAggregateTable<FinalMarker>,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
-    ) -> Result<Option<RecordBatch>> {
+    ) -> Result<()> {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let mut timer = elapsed_compute.timer();
 
         while let Some(batch) = table.next_output_batch()? {
             if table.is_empty() {
-                return Ok(Some(batch));
+                drop(table);
+                self.reservation.try_resize(0)?;
+
+                drop(timer);
+                emitter.emit(batch).await;
+
+                return Ok(());
             }
 
             self.reservation.try_resize(table.memory_size())?;
@@ -620,6 +611,6 @@ impl OrderedFinalAggregateStream {
             timer = elapsed_compute.timer();
         }
 
-        Ok(None)
+        Ok(())
     }
 }
