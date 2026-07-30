@@ -398,7 +398,7 @@ impl OrderedFinalAggregateStream {
             // Take the table on init since we want to control when the table is dropped and free memory.
             let mut table = self.table.take().unwrap();
 
-            let spilled = self.read_input(&mut table, &mut emitter).await?;
+            let spilled = self.consume_input(&mut table, &mut emitter).await?;
 
             if spilled {
                 let mut merging_spills_stream = self.prepare_merge_spills(table)?;
@@ -447,7 +447,7 @@ impl OrderedFinalAggregateStream {
     /// See comments at [`Self::aggregate`] for details.
     ///
     /// Returns whether there are any spill files
-    async fn read_input(
+    async fn consume_input(
         &mut self,
         table: &mut OrderedAggregateTable<FinalMarker>,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
