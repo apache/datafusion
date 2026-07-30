@@ -23,7 +23,6 @@ use arrow::array::RecordBatch;
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Field, Schema};
 use arrow::ipc::reader::StreamReader;
-use chrono::{TimeZone, Utc};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, internal_datafusion_err, not_impl_err,
 };
@@ -56,8 +55,6 @@ use datafusion_physical_plan::{
     Partitioning, PhysicalExpr, RangePartitioning, SplitPoint, WindowExpr,
 };
 use datafusion_proto_common::common::proto_error;
-use object_store::ObjectMeta;
-use object_store::path::Path;
 
 use super::{
     DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
@@ -632,64 +629,30 @@ pub fn parse_record_batches(buf: &[u8]) -> Result<Vec<RecordBatch>> {
     Ok(batches)
 }
 
+/// Thin shim over [`PartitionedFile::try_from_proto`], which owns the wire logic.
 impl TryFromProto<&protobuf::PartitionedFile> for PartitionedFile {
     type Error = DataFusionError;
 
     fn try_from_proto(val: &protobuf::PartitionedFile) -> Result<Self, Self::Error> {
-        let mut pf = PartitionedFile::new_from_meta(ObjectMeta {
-            location: Path::parse(val.path.as_str())
-                .map_err(|e| proto_error(format!("Invalid object_store path: {e}")))?,
-            last_modified: Utc.timestamp_nanos(val.last_modified_ns as i64),
-            size: val.size,
-            e_tag: None,
-            version: None,
-        })
-        .with_partition_values(
-            val.partition_values
-                .iter()
-                .map(|v| v.try_into())
-                .collect::<Result<Vec<_>, _>>()?,
-        );
-        if let Some(proto_schema) = val.arrow_schema.as_ref() {
-            pf = pf.with_arrow_schema(Arc::new(
-                proto_schema.try_into().map_err(DataFusionError::from)?,
-            ));
-        }
-        if let Some(range) = val.range.as_ref() {
-            let file_range = FileRange::try_from_proto(range)?;
-            pf = pf.with_range(file_range.start, file_range.end);
-        }
-        if let Some(proto_stats) = val.statistics.as_ref() {
-            // The wire format carries statistics for the full table schema (file + partition
-            // columns), so assign directly — `with_statistics` would append the partition
-            // column stats a second time.
-            pf.statistics = Some(Arc::new(proto_stats.try_into()?));
-        }
-        Ok(pf)
+        PartitionedFile::try_from_proto(val)
     }
 }
 
+/// Thin shim over [`FileRange::try_from_proto`], which owns the wire logic.
 impl TryFromProto<&protobuf::FileRange> for FileRange {
     type Error = DataFusionError;
 
     fn try_from_proto(value: &protobuf::FileRange) -> Result<Self, Self::Error> {
-        Ok(FileRange {
-            start: value.start,
-            end: value.end,
-        })
+        FileRange::try_from_proto(value)
     }
 }
 
+/// Thin shim over [`FileGroup::try_from_proto`], which owns the wire logic.
 impl TryFromProto<&protobuf::FileGroup> for FileGroup {
     type Error = DataFusionError;
 
     fn try_from_proto(val: &protobuf::FileGroup) -> Result<Self, Self::Error> {
-        let files = val
-            .files
-            .iter()
-            .map(PartitionedFile::try_from_proto)
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(FileGroup::new(files))
+        FileGroup::try_from_proto(val)
     }
 }
 
@@ -812,6 +775,9 @@ impl datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprD
 mod tests {
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
+    use chrono::{TimeZone, Utc};
+    use object_store::ObjectMeta;
+    use object_store::path::Path;
 
     #[test]
     fn partitioned_file_path_roundtrip_percent_encoded() {
