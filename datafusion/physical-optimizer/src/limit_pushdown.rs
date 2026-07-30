@@ -86,10 +86,11 @@ pub struct LimitPushdown {}
 
 /// State carried through [`LimitPushdown`] while it pushes limits down the plan.
 ///
-/// While `status` is pending, `skip` and `fetch` are semantic requirements
-/// needing enforcement. Once no enforcement remains pending, a retained `fetch`
-/// is only an early-stop budget for descendant operators; it must not create
-/// another semantic limit.
+/// `pending` keeps the semantic requirement's scope separate from its numeric
+/// payload. `Some(PendingScope::Local)` means a per-output-partition cap is
+/// still owed, and `Some(PendingScope::Global)` means a subtree-wide cap is
+/// still owed. When `pending` is `None`, no semantic enforcement remains
+/// outstanding; a retained `fetch` is a descendant early-stop hint only.
 ///
 /// [`LimitPushdown`]: crate::limit_pushdown::LimitPushdown
 #[derive(Clone, Debug)]
@@ -97,23 +98,17 @@ pub struct GlobalRequirements {
     fetch: Option<usize>,
     skip: usize,
     preserve_order: bool,
-    status: LimitStatus,
+    pending: Option<PendingScope>,
 }
 
-/// Tracks a requirement's scope and enforcement state, which cannot be inferred
-/// from a numeric operator `fetch` or the rewritten plan shape.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum LimitStatus {
-    /// No inherited semantic requirement or fetch budget.
-    #[default]
-    None,
-    /// One pending cap is required per output partition of the current branch.
-    PendingLocal,
-    /// One pending cap is required across all output partitions of the current subtree.
-    PendingGlobal,
-    /// The semantic obligation has been enforced, absorbed, or proven redundant
-    /// at or above this point; retained `fetch` is an early-stop hint only.
-    Enforced,
+/// Scope of a semantic cap that remains pending independently of its numeric
+/// `skip` and `fetch` payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PendingScope {
+    /// A per-output-partition cap is still owed.
+    Local,
+    /// A subtree-wide cap is still owed.
+    Global,
 }
 
 impl LimitPushdown {
@@ -133,7 +128,7 @@ impl PhysicalOptimizerRule for LimitPushdown {
             fetch: None,
             skip: 0,
             preserve_order: false,
-            status: LimitStatus::None,
+            pending: None,
         };
         pushdown_limits(plan, global_state)
     }
@@ -158,13 +153,13 @@ pub fn pushdown_limit_helper(
     mut pushdown_plan: Arc<dyn ExecutionPlan>,
     mut global_state: GlobalRequirements,
 ) -> Result<(Transformed<Arc<dyn ExecutionPlan>>, GlobalRequirements)> {
-    if global_state.status == LimitStatus::PendingLocal
+    if global_state.pending == Some(PendingScope::Local)
         && pushdown_plan.output_partitioning().partition_count() == 1
     {
         // Local and global scope are equivalent with one output partition, but
         // retain the global scope in case recursion later exposes multi-partition
         // children, including through extension combiners.
-        global_state.status = LimitStatus::PendingGlobal;
+        global_state.pending = Some(PendingScope::Global);
     }
 
     if let Some(global_limit) = pushdown_plan.downcast_ref::<GlobalLimitExec>()
@@ -183,7 +178,7 @@ pub fn pushdown_limit_helper(
         ));
     }
 
-    if global_state.status == LimitStatus::PendingGlobal
+    if global_state.pending == Some(PendingScope::Global)
         && pushdown_plan.output_partitioning().partition_count() > 1
     {
         // This must precede generic `plan.fetch()` handling: a fetch on multiple
@@ -208,7 +203,7 @@ pub fn pushdown_limit_helper(
         );
         global_state.fetch = hint;
         global_state.skip = 0;
-        global_state.status = LimitStatus::Enforced;
+        global_state.pending = None;
         return Ok((Transformed::yes(plan), global_state));
     }
 
@@ -220,11 +215,11 @@ pub fn pushdown_limit_helper(
         (global_state.skip, global_state.fetch) =
             combine_limit(global_state.skip, global_state.fetch, skip, fetch);
         global_state.preserve_order |= global_limit.required_ordering().is_some();
-        global_state.status = LimitStatus::PendingGlobal;
+        global_state.pending = Some(PendingScope::Global);
         if let Some(fetch) = global_state.fetch
             && limit_satisfied_by_input(&input, global_state.skip, fetch)?
         {
-            global_state.status = LimitStatus::Enforced;
+            global_state.pending = None;
         }
         return Ok((
             Transformed {
@@ -245,15 +240,15 @@ pub fn pushdown_limit_helper(
             Some(local_limit.fetch()),
         );
         global_state.preserve_order |= local_limit.required_ordering().is_some();
-        global_state.status = if input.output_partitioning().partition_count() == 1 {
-            LimitStatus::PendingGlobal
+        global_state.pending = if input.output_partitioning().partition_count() == 1 {
+            Some(PendingScope::Global)
         } else {
-            LimitStatus::PendingLocal
+            Some(PendingScope::Local)
         };
         if let Some(fetch) = global_state.fetch
             && limit_satisfied_by_input(&input, global_state.skip, fetch)?
         {
-            global_state.status = LimitStatus::Enforced;
+            global_state.pending = None;
         }
         return Ok((
             Transformed {
@@ -268,7 +263,7 @@ pub fn pushdown_limit_helper(
     // Merge a fetch already present on a non-limit operator into global state.
     if pushdown_plan.fetch().is_some() {
         if global_state.skip == 0 {
-            global_state.status = LimitStatus::Enforced;
+            global_state.pending = None;
         }
         (global_state.skip, global_state.fetch) = combine_limit(
             global_state.skip,
@@ -280,10 +275,10 @@ pub fn pushdown_limit_helper(
 
     let Some(global_fetch) = global_state.fetch else {
         // There's no valid fetch information, exit early:
-        return if global_state.skip > 0 && global_state.status != LimitStatus::Enforced {
+        return if global_state.skip > 0 && global_state.pending.is_some() {
             // There might be a case with only offset, if so add a global limit:
             let new_plan = add_global_limit(pushdown_plan, global_state.skip, None);
-            global_state.status = LimitStatus::Enforced;
+            global_state.pending = None;
             Ok((Transformed::yes(new_plan), global_state))
         } else {
             // There's no info on offset or fetch, nothing to do:
@@ -299,9 +294,8 @@ pub fn pushdown_limit_helper(
             // continue:
             Ok((Transformed::no(pushdown_plan), global_state))
         } else if let Some(plan_with_fetch) = pushdown_plan.with_fetch(skip_and_fetch) {
-            // This plan is combining input partitions, so we need to add the
-            // fetch info to plan if possible. If not, we must add a limit node
-            // with the information from the global state.
+            // This operator combines input partitions. Apply the carried fetch when
+            // supported. If it cannot, only a pending requirement needs an explicit limit.
             let mut new_plan = plan_with_fetch;
             // Execution plans can't (yet) handle skip, so if we have one,
             // we still need to add a global limit.
@@ -311,20 +305,19 @@ pub fn pushdown_limit_helper(
             }
             global_state.fetch = skip_and_fetch;
             global_state.skip = 0;
-            global_state.status = LimitStatus::Enforced;
+            global_state.pending = None;
             Ok((Transformed::yes(new_plan), global_state))
-        } else if global_state.status == LimitStatus::Enforced {
-            // If the plan is already satisfied, do not add a limit:
+        } else if global_state.pending.is_none() {
+            // No semantic requirement remains pending, so do not add another limit.
             Ok((Transformed::no(pushdown_plan), global_state))
         } else {
             let new_plan = add_limit(pushdown_plan, global_state.skip, global_fetch);
-            global_state.status = LimitStatus::Enforced;
+            global_state.pending = None;
             Ok((Transformed::yes(new_plan), global_state))
         }
     } else {
-        // The plan does not support push down and it is not a limit. We will need
-        // to add a limit or a fetch. If the plan is already satisfied, we will try
-        // to add the fetch info and return the plan.
+        // This operator blocks pushdown. If no semantic requirement remains pending,
+        // apply only an optional fetch hint; otherwise enforce the requirement here.
 
         // There's no push down, change fetch & skip to default values:
         let global_skip = global_state.skip;
@@ -332,7 +325,7 @@ pub fn pushdown_limit_helper(
         global_state.skip = 0;
 
         let maybe_fetchable = pushdown_plan.with_fetch(skip_and_fetch);
-        if global_state.status == LimitStatus::Enforced {
+        if global_state.pending.is_none() {
             if let Some(plan_with_fetch) = maybe_fetchable {
                 let plan_with_preserve_order = plan_with_fetch
                     .with_preserve_order(global_state.preserve_order)
@@ -359,7 +352,7 @@ pub fn pushdown_limit_helper(
             } else {
                 add_limit(pushdown_plan, global_skip, global_fetch)
             };
-            global_state.status = LimitStatus::Enforced;
+            global_state.pending = None;
             Ok((Transformed::yes(pushdown_plan), global_state))
         }
     }
@@ -438,7 +431,7 @@ pub(crate) fn pushdown_limits(
     // No semantic enforcement remains pending for a child subtree. Descendants
     // may inherit the `fetch` budget for early stopping, but `OFFSET` must not
     // cross this point or combine with nested limits.
-    if global_state.status == LimitStatus::Enforced {
+    if global_state.pending.is_none() {
         global_state.skip = 0;
     }
 
