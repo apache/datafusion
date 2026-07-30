@@ -270,7 +270,8 @@ pub(crate) fn regex_match_dyn_scalar(
             regexp_is_match_flag_scalar!(left, right, LargeStringArray, not_match, flag)
         }
         DataType::Dictionary(_, _) => {
-            let values = left.as_any_dictionary().values();
+            let dictionary = left.as_any_dictionary();
+            let values = dictionary.values();
 
             match values.data_type() {
                 DataType::Utf8 => regexp_is_match_flag_scalar!(values, right, StringArray, not_match, flag),
@@ -280,19 +281,15 @@ pub(crate) fn regex_match_dyn_scalar(
                     "Data type {} not supported as a dictionary value type for operation 'regex_match_dyn_scalar' on string array",
                     other
                 ),
-            }.and_then(
-                // downcast_dictionary_array duplicates code per possible key type, so we aim to do all prep work before
-                |evaluated_values| downcast_dictionary_array! {
-                    left => {
-                        Ok(arrow::compute::take(
-                            evaluated_values.as_ref(),
-                            left.keys(),
-                            None,
-                        )?)
-                    },
-                    _ => unreachable!(),
-                }
-            )
+            }
+            .and_then(|evaluated_values| {
+                // Expand back to rows while preserving nulls from both keys and values.
+                Ok(arrow::compute::take(
+                    evaluated_values.as_ref(),
+                    dictionary.keys(),
+                    None,
+                )?)
+            })
         }
         other => internal_err!(
             "Data type {} not supported for operation 'regex_match_dyn_scalar' on string array",
