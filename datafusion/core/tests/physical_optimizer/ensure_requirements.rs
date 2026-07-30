@@ -30,6 +30,7 @@ use std::sync::Arc;
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::Result;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
     EquivalenceProperties, LexOrdering, PhysicalExpr, PhysicalSortExpr,
@@ -110,6 +111,12 @@ impl ExecutionPlan for MockMultiPartitionExec {
     }
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
+    }
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
     fn with_new_children(
         self: Arc<Self>,
@@ -973,6 +980,26 @@ impl ExecutionPlan for MockReqExec {
     }
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let mut tnr = TreeNodeRecursion::Continue;
+        if let Some(ordering) = &self.ord {
+            for sort_expr in ordering {
+                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+            }
+        }
+        #[expect(deprecated)]
+        if let Distribution::HashPartitioned(exprs)
+        | Distribution::KeyPartitioned(exprs) = &self.dist
+        {
+            for expr in exprs {
+                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
+            }
+        }
+        Ok(tnr)
     }
     fn input_distribution_requirements(
         &self,

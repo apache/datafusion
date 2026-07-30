@@ -1504,8 +1504,11 @@ mod tests {
     use std::fmt::Write;
     use std::sync::Arc;
 
-    use datafusion_common::{Result, Statistics, internal_datafusion_err};
+    use datafusion_common::{
+        Result, Statistics, internal_datafusion_err, tree_node::TreeNodeRecursion,
+    };
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+    use datafusion_physical_expr::PhysicalExpr;
 
     use crate::statistics::StatisticsArgs;
     use crate::{DisplayAs, ExecutionPlan, PlanProperties};
@@ -1547,6 +1550,13 @@ mod tests {
             _: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
 
         fn execute(
@@ -1677,7 +1687,9 @@ mod tests {
             use crate::metrics::{Count, Metric, MetricValue, MetricsSet, Time};
             use crate::{DisplayFormatType, ExecutionPlan, PlanProperties};
             use datafusion_common::Result;
+            use datafusion_common::tree_node::TreeNodeRecursion;
             use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+            use datafusion_physical_expr::PhysicalExpr;
 
             // Wrap `sample_plan()` with an adapter node that exposes a
             // hand-crafted `MetricsSet` so we can assert the PG key mapping
@@ -1705,6 +1717,12 @@ mod tests {
                 }
                 fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
                     vec![&self.inner]
+                }
+                fn apply_expressions(
+                    &self,
+                    _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+                ) -> Result<TreeNodeRecursion> {
+                    Ok(TreeNodeRecursion::Continue)
                 }
                 fn with_new_children(
                     self: Arc<Self>,

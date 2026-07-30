@@ -106,6 +106,7 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::format::ExplainFormat;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     DataFusionError, JoinSide, NullEquality, Result, UnnestOptions, exec_datafusion_err,
     internal_datafusion_err, internal_err, not_impl_err,
@@ -319,6 +320,13 @@ impl ExecutionPlan for DowncastDelegatingExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         self.inner.children()
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        self.inner.apply_expressions(f)
     }
 
     fn with_new_children(
@@ -4593,6 +4601,17 @@ impl ExecutionPlan for CustomExecWithExprs {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.child]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let mut tnr = TreeNodeRecursion::Continue;
+        for expr in &self.exprs {
+            tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
+        }
+        Ok(tnr)
     }
 
     fn with_new_children(

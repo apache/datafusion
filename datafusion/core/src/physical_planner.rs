@@ -4711,6 +4711,20 @@ mod tests {
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!("NoOpExecutionPlan::execute");
         }
+
+        fn apply_expressions(
+            &self,
+            f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            // Visit expressions in the output ordering from equivalence properties
+            let mut tnr = TreeNodeRecursion::Continue;
+            if let Some(ordering) = self.cache.output_ordering() {
+                for sort_expr in ordering {
+                    tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+                }
+            }
+            Ok(tnr)
+        }
     }
 
     struct ExpressionExtensionPlanner;
@@ -4878,6 +4892,12 @@ digraph {
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
         }
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
     }
     impl DisplayAs for OkExtensionNode {
         fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
@@ -4923,6 +4943,12 @@ digraph {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
+        }
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
     }
     impl DisplayAs for InvariantFailsExtensionNode {
@@ -5047,6 +5073,12 @@ digraph {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
+        }
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
     }
     impl DisplayAs for ExecutableInvariantFails {

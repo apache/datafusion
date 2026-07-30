@@ -37,6 +37,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use arrow::row::SortField;
 use datafusion_common::Result;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_execution::TaskContext;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr::PhysicalExpr;
@@ -377,6 +378,17 @@ impl ExecutionPlan for PartitionedTopKExec {
             self.fetch,
             self.fn_kind,
         )?))
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let mut tnr = TreeNodeRecursion::Continue;
+        for sort_expr in &self.expr {
+            tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
+        }
+        Ok(tnr)
     }
 
     fn execute(

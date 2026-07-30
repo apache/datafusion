@@ -53,6 +53,7 @@ use arrow::datatypes::{SchemaRef, UInt32Type};
 use arrow_schema::SortOptions;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, transpose};
 use datafusion_common::{
     ColumnStatistics, DataFusionError, HashMap, ScalarValue, SplitPoint,
@@ -1335,6 +1336,26 @@ impl ExecutionPlan for RepartitionExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let exprs: Vec<_> = match self.partitioning() {
+            Partitioning::Hash(exprs, _) => exprs.iter().collect(),
+            Partitioning::Range(range) => range
+                .ordering()
+                .iter()
+                .map(|sort_expr| &sort_expr.expr)
+                .collect(),
+            _ => return Ok(TreeNodeRecursion::Continue),
+        };
+        let mut tnr = TreeNodeRecursion::Continue;
+        for expr in exprs {
+            tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
+        }
+        Ok(tnr)
     }
 
     fn with_new_children(
@@ -3043,6 +3064,13 @@ mod tests {
 
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
 
         fn with_new_children(

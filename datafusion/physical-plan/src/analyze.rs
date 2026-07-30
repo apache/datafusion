@@ -32,11 +32,13 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::format::ExplainFormat;
 use datafusion_common::instant::Instant;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     DataFusionError, Result, assert_eq_or_internal_err, internal_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::PhysicalExpr;
 
 use futures::StreamExt;
 
@@ -217,6 +219,13 @@ impl ExecutionPlan for AnalyzeExec {
         crate::InputDistributionRequirements::new(vec![
             Distribution::UnspecifiedDistribution,
         ])
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
