@@ -179,7 +179,9 @@ impl OrderedPartialAggregateStream {
     ///
     /// See comments in [`OrderedPartialAggregateStream`] for high-level ideas.
     ///
-    /// State transition graph:
+    /// State transitions are implemented using the generator pattern; see the comments in [`async_try_stream`].
+    ///
+    /// Conceptual state-transition graph:
     ///
     /// ```text
     /// (start)
