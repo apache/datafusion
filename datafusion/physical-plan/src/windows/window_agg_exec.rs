@@ -21,6 +21,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+#[cfg(feature = "proto")]
+use super::proto::{decode_physical_window_expr, encode_physical_window_expr};
 use super::utils::create_schema;
 use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
@@ -241,7 +243,6 @@ impl ExecutionPlan for WindowAggExec {
             InputDistributionRequirements::new(vec![Distribution::KeyPartitioned(
                 self.partition_keys(),
             )])
-            .allow_range_satisfaction_for_key_partitioning()
         }
     }
 
@@ -317,6 +318,106 @@ impl ExecutionPlan for WindowAggExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        let input = ctx.encode_child(self.input())?;
+        let window_expr = self
+            .window_expr()
+            .iter()
+            .map(|expr| encode_physical_window_expr(expr, ctx))
+            .collect::<Result<Vec<_>>>()?;
+        let partition_keys = self
+            .partition_keys()
+            .iter()
+            .map(|expr| ctx.encode_expr(expr))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Window(Box::new(
+                    protobuf::WindowAggExecNode {
+                        input: Some(Box::new(input)),
+                        window_expr,
+                        partition_keys,
+                        // `None` distinguishes a `WindowAggExec` from a
+                        // `BoundedWindowAggExec` on the shared `Window` variant.
+                        input_order_mode: None,
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl WindowAggExec {
+    /// Reconstruct a window plan from its protobuf representation.
+    ///
+    /// This returns a [`WindowAggExec`] when `input_order_mode` is absent and a
+    /// [`BoundedWindowAggExec`] when it is present.
+    ///
+    /// [`BoundedWindowAggExec`]: crate::windows::BoundedWindowAggExec
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use super::BoundedWindowAggExec;
+        use crate::InputOrderMode;
+        use datafusion_proto_models::protobuf;
+        use protobuf::window_agg_exec_node::InputOrderMode as ProtoInputOrderMode;
+
+        let window_agg = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Window,
+            "WindowAggExec",
+        );
+        let input = ctx.decode_required_child(
+            window_agg.input.as_deref(),
+            "WindowAggExec",
+            "input",
+        )?;
+        let input_schema = input.schema();
+        let window_expr = window_agg
+            .window_expr
+            .iter()
+            .map(|expr| decode_physical_window_expr(expr, ctx, input_schema.as_ref()))
+            .collect::<Result<Vec<_>>>()?;
+        let partition_keys = window_agg
+            .partition_keys
+            .iter()
+            .map(|expr| ctx.decode_expr(expr, input_schema.as_ref()))
+            .collect::<Result<Vec<_>>>()?;
+
+        if let Some(input_order_mode) = window_agg.input_order_mode.as_ref() {
+            let input_order_mode = match input_order_mode {
+                ProtoInputOrderMode::Linear(_) => InputOrderMode::Linear,
+                ProtoInputOrderMode::PartiallySorted(
+                    protobuf::PartiallySortedInputOrderMode { columns },
+                ) => InputOrderMode::PartiallySorted(
+                    columns.iter().map(|column| *column as usize).collect(),
+                ),
+                ProtoInputOrderMode::Sorted(_) => InputOrderMode::Sorted,
+            };
+            Ok(Arc::new(BoundedWindowAggExec::try_new(
+                window_expr,
+                input,
+                input_order_mode,
+                !partition_keys.is_empty(),
+            )?))
+        } else {
+            Ok(Arc::new(WindowAggExec::try_new(
+                window_expr,
+                input,
+                !partition_keys.is_empty(),
+            )?))
+        }
     }
 }
 

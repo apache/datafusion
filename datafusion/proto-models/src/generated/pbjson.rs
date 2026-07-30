@@ -3637,6 +3637,9 @@ impl serde::Serialize for CreateExternalTableNode {
         if !self.location.is_empty() {
             len += 1;
         }
+        if !self.locations.is_empty() {
+            len += 1;
+        }
         if !self.file_type.is_empty() {
             len += 1;
         }
@@ -3679,6 +3682,9 @@ impl serde::Serialize for CreateExternalTableNode {
         }
         if !self.location.is_empty() {
             struct_ser.serialize_field("location", &self.location)?;
+        }
+        if !self.locations.is_empty() {
+            struct_ser.serialize_field("locations", &self.locations)?;
         }
         if !self.file_type.is_empty() {
             struct_ser.serialize_field("fileType", &self.file_type)?;
@@ -3728,6 +3734,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
         const FIELDS: &[&str] = &[
             "name",
             "location",
+            "locations",
             "file_type",
             "fileType",
             "schema",
@@ -3752,6 +3759,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
         enum GeneratedField {
             Name,
             Location,
+            Locations,
             FileType,
             Schema,
             TablePartitionCols,
@@ -3787,6 +3795,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                         match value {
                             "name" => Ok(GeneratedField::Name),
                             "location" => Ok(GeneratedField::Location),
+                            "locations" => Ok(GeneratedField::Locations),
                             "fileType" | "file_type" => Ok(GeneratedField::FileType),
                             "schema" => Ok(GeneratedField::Schema),
                             "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
@@ -3820,6 +3829,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
             {
                 let mut name__ = None;
                 let mut location__ = None;
+                let mut locations__ = None;
                 let mut file_type__ = None;
                 let mut schema__ = None;
                 let mut table_partition_cols__ = None;
@@ -3845,6 +3855,12 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                                 return Err(serde::de::Error::duplicate_field("location"));
                             }
                             location__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Locations => {
+                            if locations__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("locations"));
+                            }
+                            locations__ = Some(map_.next_value()?);
                         }
                         GeneratedField::FileType => {
                             if file_type__.is_some() {
@@ -3927,6 +3943,7 @@ impl<'de> serde::Deserialize<'de> for CreateExternalTableNode {
                 Ok(CreateExternalTableNode {
                     name: name__,
                     location: location__.unwrap_or_default(),
+                    locations: locations__.unwrap_or_default(),
                     file_type: file_type__.unwrap_or_default(),
                     schema: schema__,
                     table_partition_cols: table_partition_cols__.unwrap_or_default(),
@@ -6982,9 +6999,6 @@ impl serde::Serialize for FileScanExecConf {
         if self.projection_exprs.is_some() {
             len += 1;
         }
-        if self.partitioned_by_file_group.is_some() {
-            len += 1;
-        }
         if self.output_partitioning.is_some() {
             len += 1;
         }
@@ -7024,9 +7038,6 @@ impl serde::Serialize for FileScanExecConf {
         if let Some(v) = self.projection_exprs.as_ref() {
             struct_ser.serialize_field("projectionExprs", v)?;
         }
-        if let Some(v) = self.partitioned_by_file_group.as_ref() {
-            struct_ser.serialize_field("partitionedByFileGroup", v)?;
-        }
         if let Some(v) = self.output_partitioning.as_ref() {
             struct_ser.serialize_field("outputPartitioning", v)?;
         }
@@ -7057,8 +7068,6 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
             "batchSize",
             "projection_exprs",
             "projectionExprs",
-            "partitioned_by_file_group",
-            "partitionedByFileGroup",
             "output_partitioning",
             "outputPartitioning",
         ];
@@ -7076,7 +7085,6 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
             Constraints,
             BatchSize,
             ProjectionExprs,
-            PartitionedByFileGroup,
             OutputPartitioning,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -7110,7 +7118,6 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                             "constraints" => Ok(GeneratedField::Constraints),
                             "batchSize" | "batch_size" => Ok(GeneratedField::BatchSize),
                             "projectionExprs" | "projection_exprs" => Ok(GeneratedField::ProjectionExprs),
-                            "partitionedByFileGroup" | "partitioned_by_file_group" => Ok(GeneratedField::PartitionedByFileGroup),
                             "outputPartitioning" | "output_partitioning" => Ok(GeneratedField::OutputPartitioning),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -7142,7 +7149,6 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                 let mut constraints__ = None;
                 let mut batch_size__ = None;
                 let mut projection_exprs__ = None;
-                let mut partitioned_by_file_group__ = None;
                 let mut output_partitioning__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -7217,12 +7223,6 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                             }
                             projection_exprs__ = map_.next_value()?;
                         }
-                        GeneratedField::PartitionedByFileGroup => {
-                            if partitioned_by_file_group__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("partitionedByFileGroup"));
-                            }
-                            partitioned_by_file_group__ = map_.next_value()?;
-                        }
                         GeneratedField::OutputPartitioning => {
                             if output_partitioning__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("outputPartitioning"));
@@ -7243,7 +7243,6 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                     constraints: constraints__,
                     batch_size: batch_size__,
                     projection_exprs: projection_exprs__,
-                    partitioned_by_file_group: partitioned_by_file_group__,
                     output_partitioning: output_partitioning__,
                 })
             }

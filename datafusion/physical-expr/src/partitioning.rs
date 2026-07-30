@@ -417,46 +417,69 @@ impl Partitioning {
                 // Here we do not check the partition count for hash partitioning and assumes the partition count
                 // and hash functions in the system are the same. In future if we plan to support storage partition-wise joins,
                 // then we need to have the partition count and hash functions validation.
-                Partitioning::Hash(partition_exprs, _) => {
-                    // Empty hash partitioning is invalid
-                    if partition_exprs.is_empty() || required_exprs.is_empty() {
-                        return PartitioningSatisfaction::NotSatisfied;
-                    }
-
-                    if equivalent_exprs(required_exprs, partition_exprs, eq_properties) {
-                        return PartitioningSatisfaction::Exact;
-                    }
-
-                    let eq_groups = eq_properties.eq_group();
-                    if !eq_groups.is_empty() {
-                        if allow_subset {
-                            let normalized_partition_exprs =
-                                normalize_exprs(partition_exprs, eq_properties);
-                            let normalized_required_exprs =
-                                normalize_exprs(required_exprs, eq_properties);
-                            if Self::is_subset_partitioning(
-                                &normalized_partition_exprs,
-                                &normalized_required_exprs,
-                            ) {
-                                return PartitioningSatisfaction::Subset;
-                            }
-                        }
-                    } else if allow_subset
-                        && Self::is_subset_partitioning(partition_exprs, required_exprs)
-                    {
-                        return PartitioningSatisfaction::Subset;
-                    }
-
-                    PartitioningSatisfaction::NotSatisfied
+                Partitioning::Hash(partition_exprs, _) => Self::key_satisfaction(
+                    partition_exprs,
+                    required_exprs,
+                    eq_properties,
+                    allow_subset,
+                ),
+                Partitioning::Range(range) => {
+                    let partition_exprs = range
+                        .ordering()
+                        .iter()
+                        .map(|sort_expr| Arc::clone(&sort_expr.expr))
+                        .collect::<Vec<_>>();
+                    Self::key_satisfaction(
+                        &partition_exprs,
+                        required_exprs,
+                        eq_properties,
+                        allow_subset,
+                    )
                 }
                 Partitioning::RoundRobinBatch(_)
-                | Partitioning::Range(_)
                 | Partitioning::UnknownPartitioning(_) => {
                     PartitioningSatisfaction::NotSatisfied
                 }
             },
             Distribution::SinglePartition => PartitioningSatisfaction::NotSatisfied,
         }
+    }
+
+    fn key_satisfaction(
+        partition_exprs: &[Arc<dyn PhysicalExpr>],
+        required_exprs: &[Arc<dyn PhysicalExpr>],
+        eq_properties: &EquivalenceProperties,
+        allow_subset: bool,
+    ) -> PartitioningSatisfaction {
+        if partition_exprs.is_empty() || required_exprs.is_empty() {
+            return PartitioningSatisfaction::NotSatisfied;
+        }
+
+        if equivalent_exprs(required_exprs, partition_exprs, eq_properties) {
+            return PartitioningSatisfaction::Exact;
+        }
+
+        let eq_groups = eq_properties.eq_group();
+        if !eq_groups.is_empty() {
+            if allow_subset {
+                let normalized_partition_exprs =
+                    normalize_exprs(partition_exprs, eq_properties);
+                let normalized_required_exprs =
+                    normalize_exprs(required_exprs, eq_properties);
+                if Self::is_subset_partitioning(
+                    &normalized_partition_exprs,
+                    &normalized_required_exprs,
+                ) {
+                    return PartitioningSatisfaction::Subset;
+                }
+            }
+        } else if allow_subset
+            && Self::is_subset_partitioning(partition_exprs, required_exprs)
+        {
+            return PartitioningSatisfaction::Subset;
+        }
+
+        PartitioningSatisfaction::NotSatisfied
     }
 
     /// Calculate the output partitioning after applying the given projection.
@@ -685,6 +708,26 @@ mod tests {
         }
     }
 
+    fn assert_satisfaction(
+        desc: &str,
+        partitioning: &Partitioning,
+        required: &Distribution,
+        eq_properties: &EquivalenceProperties,
+        expected_with_subset: PartitioningSatisfaction,
+        expected_without_subset: PartitioningSatisfaction,
+    ) {
+        assert_eq!(
+            partitioning.satisfaction(required, eq_properties, true),
+            expected_with_subset,
+            "Failed for {desc} with subset enabled"
+        );
+        assert_eq!(
+            partitioning.satisfaction(required, eq_properties, false),
+            expected_without_subset,
+            "Failed for {desc} with subset disabled"
+        );
+    }
+
     #[test]
     #[expect(
         deprecated,
@@ -768,301 +811,105 @@ mod tests {
     }
 
     #[test]
-    fn test_partitioning_satisfy_by_subset() -> Result<()> {
+    fn hash_partitioning_key_distribution_satisfaction() -> Result<()> {
         let fixture = PartitioningTestFixture::int64(&["a", "b", "c"])?;
+        let unknown: Arc<dyn PhysicalExpr> = Arc::new(UnKnownColumn::new("dropped"));
 
         let test_cases = vec![
             (
-                "KeyPartitioned([a, b]) satisfied by Hash([a])",
+                "exact: KeyPartitioned([a, b]) satisfied by Hash([a, b])",
+                fixture.hash_partitioning([0, 1], 4),
+                fixture.key_distribution([0, 1]),
+                PartitioningSatisfaction::Exact,
+                PartitioningSatisfaction::Exact,
+            ),
+            (
+                "subset: KeyPartitioned([a, b]) satisfied by Hash([a])",
                 fixture.hash_partitioning([0], 4),
                 fixture.key_distribution([0, 1]),
                 PartitioningSatisfaction::Subset,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "KeyPartitioned([a, b, c]) satisfied by Hash([a])",
-                fixture.hash_partitioning([0], 4),
-                fixture.key_distribution([0, 1, 2]),
-                PartitioningSatisfaction::Subset,
-                PartitioningSatisfaction::NotSatisfied,
-            ),
-            (
-                "KeyPartitioned([a, b, c]) satisfied by Hash([a, b])",
-                fixture.hash_partitioning([0, 1], 4),
-                fixture.key_distribution([0, 1, 2]),
-                PartitioningSatisfaction::Subset,
-                PartitioningSatisfaction::NotSatisfied,
-            ),
-            (
-                "KeyPartitioned([a, b, c]) satisfied by Hash([b])",
+                "subset: KeyPartitioned([a, b, c]) satisfied by Hash([b])",
                 fixture.hash_partitioning([1], 4),
                 fixture.key_distribution([0, 1, 2]),
                 PartitioningSatisfaction::Subset,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "KeyPartitioned([a, b, c]) satisfied by Hash([b, a])",
+                "subset reordered: KeyPartitioned([a, b, c]) satisfied by Hash([b, a])",
                 fixture.hash_partitioning([1, 0], 4),
                 fixture.key_distribution([0, 1, 2]),
                 PartitioningSatisfaction::Subset,
                 PartitioningSatisfaction::NotSatisfied,
             ),
-        ];
-
-        for (desc, partition, required, expected_with_subset, expected_without_subset) in
-            test_cases
-        {
-            let result = partition.satisfaction(&required, &fixture.eq_properties, true);
-            assert_eq!(
-                result, expected_with_subset,
-                "Failed for {desc} with subset enabled"
-            );
-
-            let result = partition.satisfaction(&required, &fixture.eq_properties, false);
-            assert_eq!(
-                result, expected_without_subset,
-                "Failed for {desc} with subset disabled"
-            );
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_partitioning_current_superset() -> Result<()> {
-        let fixture = PartitioningTestFixture::int64(&["a", "b", "c"])?;
-
-        let test_cases = vec![
             (
-                "KeyPartitioned([a]) satisfied by Hash([a, b])",
+                "superset: KeyPartitioned([a]) not satisfied by Hash([a, b])",
                 fixture.hash_partitioning([0, 1], 4),
                 fixture.key_distribution([0]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "KeyPartitioned([a]) satisfied by Hash([a, b, c])",
-                fixture.hash_partitioning([0, 1, 2], 4),
-                fixture.key_distribution([0]),
-                PartitioningSatisfaction::NotSatisfied,
-                PartitioningSatisfaction::NotSatisfied,
-            ),
-            (
-                "KeyPartitioned([a, b]) satisfied by Hash([a, b, c])",
+                "superset: KeyPartitioned([a, b]) not satisfied by Hash([a, b, c])",
                 fixture.hash_partitioning([0, 1, 2], 4),
                 fixture.key_distribution([0, 1]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
-        ];
-
-        for (desc, partition, required, expected_with_subset, expected_without_subset) in
-            test_cases
-        {
-            let result = partition.satisfaction(&required, &fixture.eq_properties, true);
-            assert_eq!(
-                result, expected_with_subset,
-                "Failed for {desc} with subset enabled"
-            );
-
-            let result = partition.satisfaction(&required, &fixture.eq_properties, false);
-            assert_eq!(
-                result, expected_without_subset,
-                "Failed for {desc} with subset disabled"
-            );
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_partitioning_partial_overlap() -> Result<()> {
-        let fixture = PartitioningTestFixture::int64(&["a", "b", "c"])?;
-
-        let test_cases = vec![(
-            "Partial overlap: KeyPartitioned([a, b]) satisfied by Hash([a, c])",
-            fixture.hash_partitioning([0, 2], 4),
-            fixture.key_distribution([0, 1]),
-            PartitioningSatisfaction::NotSatisfied,
-            PartitioningSatisfaction::NotSatisfied,
-        )];
-
-        for (desc, partition, required, expected_with_subset, expected_without_subset) in
-            test_cases
-        {
-            let result = partition.satisfaction(&required, &fixture.eq_properties, true);
-            assert_eq!(
-                result, expected_with_subset,
-                "Failed for {desc} with subset enabled"
-            );
-
-            let result = partition.satisfaction(&required, &fixture.eq_properties, false);
-            assert_eq!(
-                result, expected_without_subset,
-                "Failed for {desc} with subset disabled"
-            );
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_partitioning_no_overlap() -> Result<()> {
-        let fixture = PartitioningTestFixture::int64(&["a", "b", "c"])?;
-
-        let test_cases = vec![
             (
-                "KeyPartitioned([b, c]) satisfied by Hash([a])",
+                "partial overlap: KeyPartitioned([a, b]) not satisfied by Hash([a, c])",
+                fixture.hash_partitioning([0, 2], 4),
+                fixture.key_distribution([0, 1]),
+                PartitioningSatisfaction::NotSatisfied,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            (
+                "no overlap: KeyPartitioned([b, c]) not satisfied by Hash([a])",
                 fixture.hash_partitioning([0], 4),
                 fixture.key_distribution([1, 2]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "KeyPartitioned([c]) satisfied by Hash([a, b])",
-                fixture.hash_partitioning([0, 1], 4),
-                fixture.key_distribution([2]),
-                PartitioningSatisfaction::NotSatisfied,
-                PartitioningSatisfaction::NotSatisfied,
-            ),
-        ];
-
-        for (desc, partition, required, expected_with_subset, expected_without_subset) in
-            test_cases
-        {
-            let result = partition.satisfaction(&required, &fixture.eq_properties, true);
-            assert_eq!(
-                result, expected_with_subset,
-                "Failed for {desc} with subset enabled"
-            );
-
-            let result = partition.satisfaction(&required, &fixture.eq_properties, false);
-            assert_eq!(
-                result, expected_without_subset,
-                "Failed for {desc} with subset disabled"
-            );
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_partitioning_exact_match() -> Result<()> {
-        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
-
-        let test_cases = vec![
-            (
-                "KeyPartitioned([a, b]) satisfied by Hash([a, b])",
-                fixture.hash_partitioning([0, 1], 4),
-                fixture.key_distribution([0, 1]),
-                PartitioningSatisfaction::Exact,
-                PartitioningSatisfaction::Exact,
-            ),
-            (
-                "KeyPartitioned([a]) satisfied by Hash([a])",
-                fixture.hash_partitioning([0], 4),
-                fixture.key_distribution([0]),
-                PartitioningSatisfaction::Exact,
-                PartitioningSatisfaction::Exact,
-            ),
-        ];
-
-        for (desc, partition, required, expected_with_subset, expected_without_subset) in
-            test_cases
-        {
-            let result = partition.satisfaction(&required, &fixture.eq_properties, true);
-            assert_eq!(
-                result, expected_with_subset,
-                "Failed for {desc} with subset enabled"
-            );
-
-            let result = partition.satisfaction(&required, &fixture.eq_properties, false);
-            assert_eq!(
-                result, expected_without_subset,
-                "Failed for {desc} with subset disabled"
-            );
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_partitioning_unknown() -> Result<()> {
-        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
-        let unknown: Arc<dyn PhysicalExpr> = Arc::new(UnKnownColumn::new("dropped"));
-
-        let test_cases = vec![
-            (
-                "KeyPartitioned([a, b]) satisfied by Hash([unknown])",
+                "unknown partition expr",
                 Partitioning::Hash(vec![Arc::clone(&unknown)], 4),
                 fixture.key_distribution([0, 1]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "KeyPartitioned([unknown]) satisfied by Hash([a, b])",
+                "unknown required expr",
                 fixture.hash_partitioning([0, 1], 4),
                 Distribution::KeyPartitioned(vec![Arc::clone(&unknown)]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "KeyPartitioned([unknown]) satisfied by Hash([unknown])",
+                "same unknown expr",
                 Partitioning::Hash(vec![Arc::clone(&unknown)], 4),
                 Distribution::KeyPartitioned(vec![Arc::clone(&unknown)]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "KeyPartitioned([unknown, a]) satisfied by Hash([unknown])",
+                "unknown partition expr is not a valid subset",
                 Partitioning::Hash(vec![Arc::clone(&unknown)], 4),
                 Distribution::KeyPartitioned(vec![Arc::clone(&unknown), fixture.col(0)]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
-        ];
-
-        for (desc, partition, required, expected_with_subset, expected_without_subset) in
-            test_cases
-        {
-            let result = partition.satisfaction(&required, &fixture.eq_properties, true);
-            assert_eq!(
-                result, expected_with_subset,
-                "Failed for {desc} with subset enabled"
-            );
-
-            let result = partition.satisfaction(&required, &fixture.eq_properties, false);
-            assert_eq!(
-                result, expected_without_subset,
-                "Failed for {desc} with subset disabled"
-            );
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_partitioning_empty_hash() -> Result<()> {
-        let fixture = PartitioningTestFixture::int64(&["a"])?;
-
-        let test_cases = vec![
             (
-                "KeyPartitioned([a]) satisfied by Hash([])",
+                "empty hash partitioning",
                 Partitioning::Hash(vec![], 4),
                 fixture.key_distribution([0]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
             ),
             (
-                "KeyPartitioned([]) satisfied by Hash([a])",
+                "empty key distribution",
                 fixture.hash_partitioning([0], 4),
-                Distribution::KeyPartitioned(vec![]),
-                PartitioningSatisfaction::NotSatisfied,
-                PartitioningSatisfaction::NotSatisfied,
-            ),
-            (
-                "KeyPartitioned([]) satisfied by Hash([])",
-                Partitioning::Hash(vec![], 4),
                 Distribution::KeyPartitioned(vec![]),
                 PartitioningSatisfaction::NotSatisfied,
                 PartitioningSatisfaction::NotSatisfied,
@@ -1072,16 +919,13 @@ mod tests {
         for (desc, partition, required, expected_with_subset, expected_without_subset) in
             test_cases
         {
-            let result = partition.satisfaction(&required, &fixture.eq_properties, true);
-            assert_eq!(
-                result, expected_with_subset,
-                "Failed for {desc} with subset enabled"
-            );
-
-            let result = partition.satisfaction(&required, &fixture.eq_properties, false);
-            assert_eq!(
-                result, expected_without_subset,
-                "Failed for {desc} with subset disabled"
+            assert_satisfaction(
+                desc,
+                &partition,
+                &required,
+                &fixture.eq_properties,
+                expected_with_subset,
+                expected_without_subset,
             );
         }
 
@@ -1230,15 +1074,65 @@ mod tests {
     }
 
     #[test]
-    fn test_multi_partition_range_does_not_satisfy_hash_distribution() -> Result<()> {
-        let fixture = PartitioningTestFixture::int64(&["a", "b"])?;
-        let range_partitioning =
+    fn range_partitioning_key_distribution_satisfaction() -> Result<()> {
+        let fixture = PartitioningTestFixture::int64(&["a", "b", "c"])?;
+        let range_a = fixture.range_partitioning([0], vec![int_split_point([10])]);
+        let range_ab =
             fixture.range_partitioning([0, 1], vec![int_split_point([10, 100])]);
-        let required = fixture.key_distribution([0, 1]);
 
-        assert_eq!(
-            range_partitioning.satisfaction(&required, &fixture.eq_properties, false),
-            PartitioningSatisfaction::NotSatisfied
+        assert_satisfaction(
+            "exact single key",
+            &range_a,
+            &fixture.key_distribution([0]),
+            &fixture.eq_properties,
+            PartitioningSatisfaction::Exact,
+            PartitioningSatisfaction::Exact,
+        );
+        assert_satisfaction(
+            "exact compound key",
+            &range_ab,
+            &fixture.key_distribution([0, 1]),
+            &fixture.eq_properties,
+            PartitioningSatisfaction::Exact,
+            PartitioningSatisfaction::Exact,
+        );
+        assert_satisfaction(
+            "subset key",
+            &range_a,
+            &fixture.key_distribution([0, 1]),
+            &fixture.eq_properties,
+            PartitioningSatisfaction::Subset,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+        assert_satisfaction(
+            "incompatible key",
+            &range_a,
+            &fixture.key_distribution([1]),
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+
+        let mut eq_properties = fixture.eq_properties.clone();
+        eq_properties.add_equal_conditions(fixture.col(0), fixture.col(2))?;
+        assert_satisfaction(
+            "equivalent subset key",
+            &range_a,
+            &fixture.key_distribution([1, 2]),
+            &eq_properties,
+            PartitioningSatisfaction::Subset,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+
+        let mut eq_properties = fixture.eq_properties.clone();
+        eq_properties.add_equal_conditions(fixture.col(0), fixture.col(1))?;
+        assert_satisfaction(
+            "equivalent exact key",
+            &range_a,
+            &fixture.key_distribution([1]),
+            &eq_properties,
+            PartitioningSatisfaction::Exact,
+            PartitioningSatisfaction::Exact,
         );
 
         Ok(())
