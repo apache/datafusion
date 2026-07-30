@@ -26,15 +26,15 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_execution::{TaskContext, async_try_stream};
+use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
 use super::aggregate_hash_table::{AggregateHashTable, SingleMarker};
 use crate::metrics::BaselineMetrics;
-use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
+use crate::stream::{EmptyRecordBatchStream, ObservedStream, RecordBatchStreamAdapter};
 use crate::{InputOrderMode, SendableRecordBatchStream};
 
 /// Hash aggregation can run the full logical aggregation in one operator. This
@@ -66,8 +66,11 @@ pub(crate) struct SingleHashAggregateStream {
     /// Memory reservation for group keys and accumulators.
     reservation: MemoryReservation,
 
-    /// Hash table containing group keys and accumulators.
-    hash_table: AggregateHashTable<SingleMarker>,
+    /// The hash table owns the lower-level state for emitting output batches.
+    ///
+    /// This is optional so `create_stream` can take ownership and control when
+    /// the table's memory is released.
+    hash_table: Option<AggregateHashTable<SingleMarker>>,
 }
 
 impl SingleHashAggregateStream {
@@ -103,7 +106,7 @@ impl SingleHashAggregateStream {
             input,
             baseline_metrics,
             reservation,
-            hash_table,
+            hash_table: Some(hash_table),
         })
     }
 
@@ -120,56 +123,89 @@ impl SingleHashAggregateStream {
     /// comments in [`async_try_stream`].
     ///
     /// Conceptually: ReadingInput -> ProducingOutput -> Done.
-    fn create_stream(self) -> impl Stream<Item = Result<RecordBatch>> {
-        async_try_stream(|mut emitter| async move {
-            let Self {
-                mut input,
-                baseline_metrics,
-                reservation,
-                mut hash_table,
-                ..
-            } = self;
-            let elapsed_compute = baseline_metrics.elapsed_compute().clone();
+    fn create_stream(mut self) -> impl Stream<Item = Result<RecordBatch>> {
+        async_try_stream(|emitter| async move {
+            let mut hash_table = self
+                .hash_table
+                .take()
+                .expect("SingleHashAggregateStream hash table should not be None");
 
-            debug_assert!(hash_table.is_building());
-            while let Some(batch) = input.next().await.transpose()? {
-                {
-                    let _timer = elapsed_compute.timer();
-                    hash_table.aggregate_batch(&batch)?;
-                }
-                reservation.try_resize(hash_table.memory_size())?;
-            }
+            self.handle_reading_input(&mut hash_table).await?;
+            self.handle_producing_output(hash_table, emitter).await?;
 
-            {
-                let _timer = elapsed_compute.timer();
+            Ok(())
+        })
+    }
 
-                // Input is exhausted. Release the upstream pipeline before draining output.
-                drop(input);
-                hash_table.start_output()?;
-            }
+    /// Moves the aggregate hash table's inner state to `Outputting`.
+    ///
+    /// The caller guarantees that input is fully consumed, so this function can
+    /// eagerly release the input stream.
+    fn start_output(
+        &mut self,
+        hash_table: &mut AggregateHashTable<SingleMarker>,
+    ) -> Result<()> {
+        let input_schema = self.input.schema();
+        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
+        hash_table.start_output()
+    }
 
-            debug_assert!(!hash_table.is_building());
-            loop {
-                let next_batch = {
-                    let _timer = elapsed_compute.timer();
-                    hash_table.next_output_batch()?
-                };
-                let Some(batch) = next_batch else {
-                    return Ok(());
-                };
+    /// Handle ReadingInput state - aggregate input batches into the hash table.
+    ///
+    /// See comments at [`Self::create_stream`] for details.
+    async fn handle_reading_input(
+        &mut self,
+        hash_table: &mut AggregateHashTable<SingleMarker>,
+    ) -> Result<()> {
+        debug_assert!(hash_table.is_building());
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
 
-                reservation.try_resize(hash_table.memory_size())?;
-                debug_assert!(batch.num_rows() > 0);
+        while let Some(batch) = self.input.next().await.transpose()? {
+            let timer = elapsed_compute.timer();
+            hash_table.aggregate_batch(&batch)?;
+            timer.done();
 
-                if hash_table.is_done() {
-                    drop(hash_table);
-                    reservation.free();
-                    emitter.emit(batch).await;
-                    return Ok(());
-                }
+            self.reservation.try_resize(hash_table.memory_size())?;
+        }
+
+        let timer = elapsed_compute.timer();
+        let result = self.start_output(hash_table);
+        timer.done();
+        result
+    }
+
+    /// Handle ProducingOutput state - emit final aggregate value batches.
+    ///
+    /// See comments at [`Self::create_stream`] for details.
+    async fn handle_producing_output(
+        &mut self,
+        mut hash_table: AggregateHashTable<SingleMarker>,
+        mut emitter: TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
+        debug_assert!(!hash_table.is_building());
+
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+        let mut timer = elapsed_compute.timer();
+
+        while let Some(batch) = hash_table.next_output_batch()? {
+            self.reservation.try_resize(hash_table.memory_size())?;
+            debug_assert!(batch.num_rows() > 0);
+
+            if hash_table.is_done() {
+                drop(hash_table);
+                timer.done();
 
                 emitter.emit(batch).await;
+
+                return Ok(());
             }
-        })
+
+            timer.done();
+
+            emitter.emit(batch).await;
+            timer = elapsed_compute.timer();
+        }
+
+        Ok(())
     }
 }
