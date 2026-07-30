@@ -2080,6 +2080,7 @@ dependencies = [
  "parquet",
  "tempfile",
  "tokio",
+ "url",
 ]
 
 [[package]]

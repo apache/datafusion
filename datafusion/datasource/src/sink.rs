@@ -131,7 +131,6 @@ pub trait DataSink: Any + DisplayAs + Debug + Send + Sync {
     fn file_metadata(&self) -> Vec<FileWriteMetadata> {
         Vec::new()
     }
-    }
 }
 
 impl dyn DataSink {
@@ -282,7 +281,6 @@ impl DataSinkExec {
     /// operation has completed.
     pub fn file_metadata(&self) -> Vec<FileWriteMetadata> {
         self.sink.file_metadata()
-    }
     }
 
     fn create_schema(
@@ -462,7 +460,7 @@ fn make_count_schema() -> SchemaRef {
 }
 
 #[cfg(test)]
-mod sink_tests {
+mod tests {
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
