@@ -31,9 +31,9 @@ use std::task::{Context, Poll};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
-use datafusion_execution::TaskContext;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
@@ -44,7 +44,7 @@ use super::skip_partial::SkipAggregationProbe;
 use crate::metrics::{
     BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput, SpillMetrics,
 };
-use crate::stream::EmptyRecordBatchStream;
+use crate::stream::{EmptyRecordBatchStream, ObservedStream, RecordBatchStreamAdapter};
 use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metrics};
 
 /// Hash aggregation is implemented in two stages: partial and final. This
@@ -204,67 +204,10 @@ pub(crate) struct FinalHashAggregateStream {
     /// See comments for the same variable in [`PartialHashAggregateStream`].
     group_values_soft_limit: Option<usize>,
 
-    /// Tracks the high-level stream lifecycle. The hash table owns the lower-level
-    /// state for emitting output batches.
-    state: Option<FinalHashAggregateState>,
-}
-
-/// States for final hash aggregation processing.
-// The typestate pattern is used in case the inner logic becomes more complex in
-// the future.
-enum FinalHashAggregateState {
-    ReadingInput {
-        hash_table: AggregateHashTable<FinalMarker>,
-    },
-    ProducingOutput {
-        hash_table: AggregateHashTable<FinalMarker>,
-    },
-    Done,
-}
-
-type FinalHashAggregatePoll = Poll<Option<Result<RecordBatch>>>;
-type FinalHashAggregateStateTransition = ControlFlow<
-    (FinalHashAggregatePoll, FinalHashAggregateState),
-    FinalHashAggregateState,
->;
-
-impl FinalHashAggregateState {
-    fn hash_table(&self) -> &AggregateHashTable<FinalMarker> {
-        match self {
-            Self::ReadingInput { hash_table } | Self::ProducingOutput { hash_table } => {
-                hash_table
-            }
-            Self::Done => unreachable!("Done state does not hold a hash table"),
-        }
-    }
-
-    fn hash_table_mut(&mut self) -> &mut AggregateHashTable<FinalMarker> {
-        match self {
-            Self::ReadingInput { hash_table } | Self::ProducingOutput { hash_table } => {
-                hash_table
-            }
-            Self::Done => unreachable!("Done state does not hold a hash table"),
-        }
-    }
-
-    fn into_hash_table(self) -> AggregateHashTable<FinalMarker> {
-        match self {
-            Self::ReadingInput { hash_table } | Self::ProducingOutput { hash_table } => {
-                hash_table
-            }
-            Self::Done => unreachable!("Done state does not hold a hash table"),
-        }
-    }
-
-    fn into_producing_output(self) -> Self {
-        Self::ProducingOutput {
-            hash_table: self.into_hash_table(),
-        }
-    }
-
-    fn into_done(self) -> Self {
-        Self::Done
-    }
+    /// The hash table owns the lower-level state for emitting output batches.
+    ///
+    /// This is option since it will be taken on [`Self::create_stream`] to control the memory
+    hash_table: Option<AggregateHashTable<FinalMarker>>,
 }
 
 impl PartialHashAggregateStream {
@@ -777,152 +720,21 @@ impl FinalHashAggregateStream {
             baseline_metrics,
             reservation,
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
-            state: Some(FinalHashAggregateState::ReadingInput { hash_table }),
+            hash_table: Some(hash_table),
         })
     }
 
-    /// See comments in [`Self::group_values_soft_limit`] for details.
-    fn hit_soft_group_limit(&self, hash_table: &AggregateHashTable<FinalMarker>) -> bool {
-        self.group_values_soft_limit
-            .is_some_and(|limit| limit <= hash_table.building_group_count())
-    }
+    pub(crate) fn into_stream(self) -> SendableRecordBatchStream {
+        let schema_clone = Arc::clone(&self.schema);
 
-    fn start_output(
-        &mut self,
-        hash_table: &mut AggregateHashTable<FinalMarker>,
-    ) -> Result<()> {
-        let input_schema = self.input.schema();
-        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
-        hash_table.start_output()
-    }
-
-    /// Handle ReadingInput state - aggregate partial state batches into the hash table.
-    ///
-    /// See comments at `poll_next()` for details.
-    ///
-    /// Returns the next operator state with control flow decision.
-    fn handle_reading_input(
-        &mut self,
-        cx: &mut Context<'_>,
-        mut original_state: FinalHashAggregateState,
-    ) -> FinalHashAggregateStateTransition {
-        debug_assert!(matches!(
-            &original_state,
-            FinalHashAggregateState::ReadingInput { .. }
+        let cloned_metrics = self.baseline_metrics.clone();
+        let stream = Box::pin(RecordBatchStreamAdapter::new(
+            schema_clone,
+            self.create_stream(),
         ));
-        debug_assert!(original_state.hash_table().is_building());
 
-        match self.input.poll_next_unpin(cx) {
-            Poll::Pending => ControlFlow::Break((Poll::Pending, original_state)),
-            Poll::Ready(Some(Ok(batch))) => {
-                let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-                let timer = elapsed_compute.timer();
-                let result = original_state.hash_table_mut().aggregate_batch(&batch);
-                timer.done();
-
-                if let Err(e) = result {
-                    return ControlFlow::Break((
-                        Poll::Ready(Some(Err(e))),
-                        original_state,
-                    ));
-                }
-
-                if self.hit_soft_group_limit(original_state.hash_table()) {
-                    let timer = elapsed_compute.timer();
-                    let result = self.start_output(original_state.hash_table_mut());
-                    timer.done();
-
-                    if let Err(e) = result {
-                        return ControlFlow::Break((
-                            Poll::Ready(Some(Err(e))),
-                            original_state,
-                        ));
-                    }
-
-                    return ControlFlow::Continue(original_state.into_producing_output());
-                }
-
-                if let Err(e) = self
-                    .reservation
-                    .try_resize(original_state.hash_table().memory_size())
-                {
-                    return ControlFlow::Break((
-                        Poll::Ready(Some(Err(e))),
-                        original_state,
-                    ));
-                }
-
-                ControlFlow::Continue(original_state)
-            }
-            Poll::Ready(Some(Err(e))) => {
-                ControlFlow::Break((Poll::Ready(Some(Err(e))), original_state))
-            }
-            Poll::Ready(None) => {
-                let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-                let timer = elapsed_compute.timer();
-                let result = self.start_output(original_state.hash_table_mut());
-                timer.done();
-
-                match result {
-                    Ok(()) => {
-                        ControlFlow::Continue(original_state.into_producing_output())
-                    }
-                    Err(e) => {
-                        ControlFlow::Break((Poll::Ready(Some(Err(e))), original_state))
-                    }
-                }
-            }
-        }
+        Box::pin(ObservedStream::new(stream, cloned_metrics, None))
     }
-
-    /// Handle ProducingOutput state - emit final aggregate value batches.
-    ///
-    /// See comments at `poll_next()` for details.
-    ///
-    /// Returns the next operator state with control flow decision.
-    fn handle_producing_output(
-        &mut self,
-        mut original_state: FinalHashAggregateState,
-    ) -> FinalHashAggregateStateTransition {
-        debug_assert!(matches!(
-            &original_state,
-            FinalHashAggregateState::ProducingOutput { .. }
-        ));
-        debug_assert!(!original_state.hash_table().is_building());
-
-        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-        let timer = elapsed_compute.timer();
-        let result = original_state.hash_table_mut().next_output_batch();
-        timer.done();
-
-        match result {
-            Ok(Some(batch)) => {
-                let _ = self
-                    .reservation
-                    .try_resize(original_state.hash_table().memory_size());
-                debug_assert!(batch.num_rows() > 0);
-                let next_state = if original_state.hash_table().is_done() {
-                    original_state.into_done()
-                } else {
-                    original_state
-                };
-
-                ControlFlow::Break((
-                    Poll::Ready(Some(Ok(batch.record_output(&self.baseline_metrics)))),
-                    next_state,
-                ))
-            }
-            Ok(None) => {
-                let _ = self.reservation.try_resize(0);
-                ControlFlow::Continue(original_state.into_done())
-            }
-            Err(e) => ControlFlow::Break((Poll::Ready(Some(Err(e))), original_state)),
-        }
-    }
-}
-
-impl Stream for FinalHashAggregateStream {
-    type Item = Result<RecordBatch>;
 
     /// Entry point for the final hash aggregate state machine.
     ///
@@ -956,47 +768,104 @@ impl Stream for FinalHashAggregateStream {
     /// Done
     ///   -> (end)
     /// ```
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        loop {
-            let cur_state = self
-                .state
+    fn create_stream(mut self) -> impl Stream<Item = Result<RecordBatch>> {
+        async_try_stream(|emitter| async move {
+            let mut hash_table = self
+                .hash_table
                 .take()
-                .expect("FinalHashAggregateStream state should not be None");
+                .expect("hash_table should not be None");
+            self.handle_reading_input(&mut hash_table).await?;
 
-            let next_state = match cur_state {
-                state @ FinalHashAggregateState::ReadingInput { .. } => {
-                    self.handle_reading_input(cx, state)
-                }
-                state @ FinalHashAggregateState::ProducingOutput { .. } => {
-                    self.handle_producing_output(state)
-                }
-                state @ FinalHashAggregateState::Done => {
-                    let _ = self.reservation.try_resize(0);
-                    self.state = Some(state);
-                    return Poll::Ready(None);
-                }
-            };
+            self.produce_output(hash_table, emitter).await?;
 
-            match next_state {
-                ControlFlow::Continue(next_state) => {
-                    self.state = Some(next_state);
-                    continue;
-                }
-                ControlFlow::Break((poll, next_state)) => {
-                    self.state = Some(next_state);
-                    return poll;
-                }
-            }
-        }
+            Ok(())
+        })
     }
-}
 
-impl RecordBatchStream for FinalHashAggregateStream {
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
+    /// See comments in [`Self::group_values_soft_limit`] for details.
+    fn hit_soft_group_limit(&self, hash_table: &AggregateHashTable<FinalMarker>) -> bool {
+        self.group_values_soft_limit
+            .is_some_and(|limit| limit <= hash_table.building_group_count())
+    }
+
+    fn start_output(
+        &mut self,
+        hash_table: &mut AggregateHashTable<FinalMarker>,
+    ) -> Result<()> {
+        let input_schema = self.input.schema();
+        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
+        hash_table.start_output()
+    }
+
+    /// Handle ReadingInput state - aggregate partial state batches into the hash table.
+    ///
+    /// See comments at `poll_next()` for details.
+    ///
+    /// Returns the next operator state with control flow decision.
+    async fn handle_reading_input(
+        &mut self,
+        hash_table: &mut AggregateHashTable<FinalMarker>,
+    ) -> Result<()> {
+        debug_assert!(hash_table.is_building());
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+
+        while let Some(batch) = self.input.next().await.transpose()? {
+            let _timer = elapsed_compute.timer();
+            hash_table.aggregate_batch(&batch)?;
+
+            if self.hit_soft_group_limit(hash_table) {
+                self.start_output(hash_table)?;
+
+                // Into producing output
+                return Ok(());
+            }
+
+            self.reservation.try_resize(hash_table.memory_size())?;
+        }
+
+        let _timer = elapsed_compute.timer();
+        self.start_output(hash_table)?;
+
+        Ok(())
+    }
+
+    /// emit final aggregate value batches.
+    ///
+    /// See comments at [`Self::create_stream`] for details.
+    async fn produce_output(
+        &mut self,
+        mut hash_table: AggregateHashTable<FinalMarker>,
+        mut emitter: TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
+        debug_assert!(!hash_table.is_building());
+
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+        let mut timer = elapsed_compute.timer();
+
+        while let Some(batch) = hash_table.next_output_batch()? {
+            let _ = self.reservation.try_resize(hash_table.memory_size());
+
+            debug_assert!(batch.num_rows() > 0);
+
+            if hash_table.is_done() {
+                drop(hash_table);
+                self.reservation.try_resize(0)?;
+                timer.done();
+
+                emitter.emit(batch).await;
+
+                return Ok(());
+            }
+
+            timer.done();
+            emitter.emit(batch).await;
+            timer = elapsed_compute.timer();
+        }
+
+        drop(hash_table);
+        self.reservation.try_resize(0)?;
+
+        Ok(())
     }
 }
 
