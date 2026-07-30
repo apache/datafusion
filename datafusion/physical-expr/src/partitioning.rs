@@ -25,6 +25,10 @@ pub use datafusion_common::SplitPoint;
 use datafusion_common::{Result, validate_range_split_points};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+#[cfg(feature = "proto")]
+use datafusion_physical_expr_common::sort_expr::{
+    sort_exprs_try_from_proto, sort_exprs_try_to_proto,
+};
 use std::fmt;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -546,11 +550,7 @@ impl Partitioning {
                 )
             }
             Partitioning::Range(range) => {
-                let sort_expr = range
-                    .ordering()
-                    .iter()
-                    .map(|sort_expr| sort_expr.try_to_proto(ctx))
-                    .collect::<Result<Vec<_>>>()?;
+                let sort_expr = sort_exprs_try_to_proto(range.ordering().iter(), ctx)?;
                 let split_point = range
                     .split_points()
                     .iter()
@@ -610,11 +610,7 @@ impl Partitioning {
                 Partitioning::UnknownPartitioning(partition_count(*n)?)
             }
             protobuf::partitioning::PartitionMethod::Range(range) => {
-                let sort_exprs = range
-                    .sort_expr
-                    .iter()
-                    .map(|sort_expr| PhysicalSortExpr::try_from_proto(sort_expr, ctx))
-                    .collect::<Result<Vec<_>>>()?;
+                let sort_exprs = sort_exprs_try_from_proto(&range.sort_expr, ctx)?;
                 let sort_expr_count = sort_exprs.len();
                 let ordering = LexOrdering::new(sort_exprs).ok_or_else(|| {
                     internal_datafusion_err!(
@@ -1276,5 +1272,115 @@ mod tests {
         );
 
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "proto"))]
+mod ordering_proto_tests {
+    use std::sync::Arc;
+
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_physical_expr_common::sort_expr::{
+        LexRequirement, PhysicalSortExpr, PhysicalSortRequirement,
+        sort_exprs_try_from_proto, sort_exprs_try_to_proto,
+    };
+
+    use crate::expressions::Column;
+    use crate::proto_test_util::{StubDecoder, StubEncoder};
+
+    fn schema() -> Schema {
+        Schema::new(vec![Field::new("a", DataType::Int32, false)])
+    }
+
+    fn sort_expr(descending: bool, nulls_first: bool) -> PhysicalSortExpr {
+        PhysicalSortExpr::new(
+            Arc::new(Column::new("a", 0)),
+            SortOptions {
+                descending,
+                nulls_first,
+            },
+        )
+    }
+
+    #[test]
+    fn sort_exprs_round_trip_preserves_options_and_order() {
+        let encoder = StubEncoder::ok();
+        let encode_ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let exprs = vec![sort_expr(true, false), sort_expr(false, true)];
+
+        let nodes = sort_exprs_try_to_proto(&exprs, &encode_ctx).unwrap();
+        // `asc` is the inverse of `descending` on the wire.
+        assert_eq!(
+            nodes
+                .iter()
+                .map(|node| (node.asc, node.nulls_first))
+                .collect::<Vec<_>>(),
+            vec![(false, false), (true, true)]
+        );
+
+        let schema = schema();
+        let decoder = StubDecoder::ok();
+        let decode_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let decoded = sort_exprs_try_from_proto(&nodes, &decode_ctx).unwrap();
+        assert_eq!(
+            decoded.iter().map(|expr| expr.options).collect::<Vec<_>>(),
+            exprs.iter().map(|expr| expr.options).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn sort_exprs_accepts_owned_requirements() {
+        let encoder = StubEncoder::ok();
+        let encode_ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let requirement = LexRequirement::from([PhysicalSortRequirement::new(
+            Arc::new(Column::new("a", 0)),
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+        )]);
+
+        let nodes = sort_exprs_try_to_proto(
+            requirement
+                .iter()
+                .map(|req| PhysicalSortExpr::from(req.clone())),
+            &encode_ctx,
+        )
+        .unwrap();
+
+        assert_eq!(nodes.len(), 1);
+        assert!(!nodes[0].asc);
+        assert!(nodes[0].nulls_first);
+    }
+
+    #[test]
+    fn sort_exprs_propagate_encode_errors() {
+        let encoder = StubEncoder::failing_on(2);
+        let encode_ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let exprs = vec![sort_expr(false, false), sort_expr(true, true)];
+
+        let err = sort_exprs_try_to_proto(&exprs, &encode_ctx).unwrap_err();
+        assert!(err.to_string().contains("stub encode failure on call 2"));
+    }
+
+    #[test]
+    fn sort_exprs_reject_missing_inner_expr() {
+        let encoder = StubEncoder::ok();
+        let encode_ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let mut nodes =
+            sort_exprs_try_to_proto(&[sort_expr(false, false)], &encode_ctx).unwrap();
+        nodes[0].expr = None;
+
+        let schema = schema();
+        let decoder = StubDecoder::ok();
+        let decode_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = sort_exprs_try_from_proto(&nodes, &decode_ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("PhysicalSortExpr is missing required field 'expr'")
+        );
     }
 }

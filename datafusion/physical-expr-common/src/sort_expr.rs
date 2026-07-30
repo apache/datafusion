@@ -226,6 +226,59 @@ impl PhysicalSortExpr {
     }
 }
 
+/// Serialize a sequence of sort expressions into the flat
+/// [`PhysicalSortExprNode`] list the wire format uses for an ordering.
+///
+/// Accepts anything that yields [`PhysicalSortExpr`]s by value or by reference,
+/// so a [`LexOrdering`], a `&[PhysicalSortExpr]`, or a [`LexRequirement`]
+/// mapped through [`PhysicalSortExpr::from`] all work:
+///
+/// ```ignore
+/// let nodes = sort_exprs_try_to_proto(ordering.iter(), ctx)?;
+/// let nodes = sort_exprs_try_to_proto(
+///     requirement.iter().map(|req| PhysicalSortExpr::from(req.clone())),
+///     ctx,
+/// )?;
+/// ```
+///
+/// The `PhysicalSortExprNodeCollection` message some plans use is just this
+/// list in a wrapper, so those callers wrap the result themselves rather than
+/// this function guessing which shape they mean.
+///
+/// [`PhysicalSortExprNode`]: datafusion_proto_models::protobuf::PhysicalSortExprNode
+#[cfg(feature = "proto")]
+pub fn sort_exprs_try_to_proto<E: std::borrow::Borrow<PhysicalSortExpr>>(
+    exprs: impl IntoIterator<Item = E>,
+    ctx: &crate::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+) -> Result<Vec<datafusion_proto_models::protobuf::PhysicalSortExprNode>> {
+    exprs
+        .into_iter()
+        .map(|expr| expr.borrow().try_to_proto(ctx))
+        .collect()
+}
+
+/// Reconstruct a sequence of sort expressions from the flat
+/// [`PhysicalSortExprNode`] list, the counterpart of
+/// [`sort_exprs_try_to_proto`].
+///
+/// Returns the expressions rather than a [`LexOrdering`] or a
+/// [`LexRequirement`], because callers differ in what an empty list means:
+/// `LexOrdering::new` / `LexRequirement::new` return `None` for it, which is
+/// "no ordering declared" for a scan and an error for an operator that requires
+/// one.
+///
+/// [`PhysicalSortExprNode`]: datafusion_proto_models::protobuf::PhysicalSortExprNode
+#[cfg(feature = "proto")]
+pub fn sort_exprs_try_from_proto(
+    nodes: &[datafusion_proto_models::protobuf::PhysicalSortExprNode],
+    ctx: &crate::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+) -> Result<Vec<PhysicalSortExpr>> {
+    nodes
+        .iter()
+        .map(|node| PhysicalSortExpr::try_from_proto(node, ctx))
+        .collect()
+}
+
 impl PartialEq for PhysicalSortExpr {
     fn eq(&self, other: &Self) -> bool {
         self.options == other.options && self.expr.eq(&other.expr)
