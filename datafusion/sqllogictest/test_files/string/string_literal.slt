@@ -344,9 +344,9 @@ true 5
 # lpad with string, length, and fill arrays in every string width
 query BBB
 SELECT
-  lpad(arrow_cast(column1, 'Utf8'), column2, arrow_cast(column3, 'Utf8')) = column4,
-  lpad(arrow_cast(column1, 'LargeUtf8'), column2, arrow_cast(column3, 'LargeUtf8')) = column4,
-  lpad(arrow_cast(column1, 'Utf8View'), column2, arrow_cast(column3, 'Utf8View')) = column4
+  lpad(arrow_cast(column1, 'Utf8'), column2, arrow_cast(column3, 'Utf8')) IS NOT DISTINCT FROM column4,
+  lpad(arrow_cast(column1, 'LargeUtf8'), column2, arrow_cast(column3, 'LargeUtf8')) IS NOT DISTINCT FROM column4,
+  lpad(arrow_cast(column1, 'Utf8View'), column2, arrow_cast(column3, 'Utf8View')) IS NOT DISTINCT FROM column4
 FROM (VALUES
   ('hi', 5, 'xy', 'xyxhi'),
   ('abcdef', 3, 'z', 'abc'),
@@ -361,21 +361,21 @@ true true true
 true true true
 true true true
 true true true
-NULL NULL NULL
-NULL NULL NULL
-NULL NULL NULL
+true true true
+true true true
+true true true
 
 # lpad array path with the default fill
 query BBB
 SELECT
-  lpad(arrow_cast(column1, 'Utf8'), column2) = column3,
-  lpad(arrow_cast(column1, 'LargeUtf8'), column2) = column3,
-  lpad(arrow_cast(column1, 'Utf8View'), column2) = column3
+  lpad(arrow_cast(column1, 'Utf8'), column2) IS NOT DISTINCT FROM column3,
+  lpad(arrow_cast(column1, 'LargeUtf8'), column2) IS NOT DISTINCT FROM column3,
+  lpad(arrow_cast(column1, 'Utf8View'), column2) IS NOT DISTINCT FROM column3
 FROM (VALUES ('hi', 5, '   hi'), ('abcdef', 3, 'abc'), (NULL, 5, NULL)) AS t(column1, column2, column3);
 ----
 true true true
 true true true
-NULL NULL NULL
+true true true
 
 # a large scalar target length skips the scalar fast path
 query I
@@ -384,16 +384,16 @@ SELECT character_length(lpad('x', 16385, 'a'));
 16385
 
 # invalid argument count/type and excessive target length
-query error DataFusion error:
+query error 'lpad' does not support zero arguments
 SELECT lpad();
 
-query error DataFusion error:
+query error No function matches the given name and argument types 'lpad\(Utf8\)'
 SELECT lpad('x');
 
-query error DataFusion error:
+query error No function matches the given name and argument types 'lpad\(Utf8, Int64, Utf8, Utf8\)'
 SELECT lpad('x', 2, 'y', 'z');
 
-query error DataFusion error:
+query error No function matches the given name and argument types 'lpad\(Utf8, Utf8\)'
 SELECT lpad('x', 'bad');
 
 query error lpad requested length 2147483648 too large
