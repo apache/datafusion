@@ -1198,13 +1198,11 @@ fn coerced_from<'a>(
         ) => Some(type_into.clone()),
         (
             Timestamp(TimeUnit::Nanosecond, None),
-            Null | Timestamp(_, None) | Date32 | Utf8 | LargeUtf8,
+            Null | Timestamp(_, None) | Date32 | Date64 | Utf8 | LargeUtf8 | Utf8View,
         ) => Some(type_into.clone()),
-        (Interval(_), Null | Utf8 | LargeUtf8) => Some(type_into.clone()),
-        // We can go into a Utf8View from a Utf8 or LargeUtf8
-        (Utf8View, Utf8 | LargeUtf8 | Null) => Some(type_into.clone()),
+        (Interval(_), Null | Utf8 | LargeUtf8 | Utf8View) => Some(type_into.clone()),
         // Any type can be coerced into strings
-        (Utf8 | LargeUtf8, _) => Some(type_into.clone()),
+        (Utf8 | LargeUtf8 | Utf8View, _) => Some(type_into.clone()),
         // We can go into a BinaryView from a Binary or LargeBinary
         (BinaryView, Binary | LargeBinary | Null) => Some(type_into.clone()),
         (Null, _) if can_cast_types(type_from, type_into) => Some(type_into.clone()),
