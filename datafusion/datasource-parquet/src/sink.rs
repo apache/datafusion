@@ -425,9 +425,7 @@ impl DataSink for ParquetSink {
                 let byte_size: u64 = parquet_meta
                     .row_groups()
                     .iter()
-                    .map(|rg| {
-                        u64::try_from(rg.compressed_size()).unwrap_or(0)
-                    })
+                    .map(|rg| u64::try_from(rg.compressed_size()).unwrap_or(0))
                     .sum();
 
                 FileWriteMetadata {
@@ -437,6 +435,7 @@ impl DataSink for ParquetSink {
                     // Full Parquet metadata is accessible via ParquetSink::written()
                     // for Rust consumers. Thrift serialization for FFI consumers can
                     // be added when a concrete use case (e.g. Python via PyO3) needs it.
+                    // Tracked by https://github.com/apache/datafusion/issues/24010
                     format_metadata: None,
                 }
             })
@@ -924,7 +923,12 @@ mod tests {
             .await
             .unwrap();
 
-        let sum_rows: u64 = fixture.sink.file_metadata().iter().map(|f| f.row_count).sum();
+        let sum_rows: u64 = fixture
+            .sink
+            .file_metadata()
+            .iter()
+            .map(|f| f.row_count)
+            .sum();
         assert_eq!(
             count, sum_rows,
             "write_all count must equal sum of per-file row_counts"

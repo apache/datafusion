@@ -348,7 +348,7 @@ fn make_count_schema() -> SchemaRef {
 }
 
 #[cfg(test)]
-mod sink_tests {
+mod tests {
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
