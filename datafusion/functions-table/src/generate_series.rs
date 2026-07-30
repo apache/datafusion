@@ -79,13 +79,17 @@ pub trait SeriesValue: fmt::Debug + Clone + Send + Sync + 'static {
     /// Check if we've reached the end of the series
     fn should_stop(&self, end: Self, step: &Self::StepType, include_end: bool) -> bool;
 
-    /// Advance to the next value in the series
+    /// Advance to the next value in the series.
+    fn advance(&mut self, step: &Self::StepType) -> Result<()>;
+
+    /// Advance to the next value, adjusting the end of the series if needed.
     ///
-    /// If advancing would overflow the value range, `end` is updated so that
-    /// the series terminates after the current value (matching the behavior
-    /// of PostgreSQL and DuckDB, which return the reachable values instead of
-    /// erroring).
-    fn advance(&mut self, end: &mut Self, step: &Self::StepType) -> Result<()>;
+    /// The default implementation preserves the behavior of [`Self::advance`].
+    /// Implementations can override this method when they need to handle an
+    /// overflow by terminating the series after the current value.
+    fn advance_with_end(&mut self, _end: &mut Self, step: &Self::StepType) -> Result<()> {
+        self.advance(step)
+    }
 
     /// Create an Arrow array from a vector of values
     fn create_array(&self, values: Vec<Self::ValueType>) -> Result<ArrayRef>;
@@ -105,7 +109,12 @@ impl SeriesValue for i64 {
         reach_end_int64(*self, end, *step, include_end)
     }
 
-    fn advance(&mut self, end: &mut Self, step: &Self::StepType) -> Result<()> {
+    fn advance(&mut self, step: &Self::StepType) -> Result<()> {
+        *self += step;
+        Ok(())
+    }
+
+    fn advance_with_end(&mut self, end: &mut Self, step: &Self::StepType) -> Result<()> {
         if let Some(next) = self.checked_add(*step) {
             *self = next;
         } else {
@@ -171,7 +180,7 @@ impl SeriesValue for TimestampValue {
         }
     }
 
-    fn advance(&mut self, _end: &mut Self, step: &Self::StepType) -> Result<()> {
+    fn advance(&mut self, step: &Self::StepType) -> Result<()> {
         let tz = self
             .parsed_tz
             .unwrap_or_else(|| Tz::from_str("+00:00").unwrap());
@@ -450,7 +459,7 @@ impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
             }
 
             let original_end = self.end.clone();
-            self.current.advance(&mut self.end, &self.step)?;
+            self.current.advance_with_end(&mut self.end, &self.step)?;
             if self
                 .current
                 .should_stop(self.end.clone(), &self.step, self.include_end)
