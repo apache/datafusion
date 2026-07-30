@@ -18,6 +18,7 @@
 use arrow_schema::DataType;
 use num_traits::AsPrimitive;
 use std::mem::size_of;
+use std::ops::Range;
 
 use crate::joins::MapOffset;
 use crate::joins::chain::traverse_chain;
@@ -142,7 +143,6 @@ impl ArrayMap {
     }
 
     /// Estimates the maximum memory usage for an `ArrayMap` with the given parameters.
-    ///
     pub fn estimate_memory_size(min_val: u64, max_val: u64, num_rows: usize) -> usize {
         let range = Self::calculate_range(min_val, max_val);
         if range >= usize::MAX as u64 {
@@ -271,6 +271,66 @@ impl ArrayMap {
                 build_indices
             )
         )
+    }
+
+    pub fn get_probe_indices_with_any_match(
+        &self,
+        prob_side_keys: &[ArrayRef],
+        range: Range<usize>,
+        probe_indices: &mut Vec<u32>,
+    ) -> Result<()> {
+        if prob_side_keys.len() != 1 {
+            return internal_err!(
+                "ArrayMap expects 1 join key, but got {}",
+                prob_side_keys.len()
+            );
+        }
+        let array = &prob_side_keys[0];
+
+        downcast_supported_integer!(
+            array.data_type() => (
+                lookup_and_get_probe_indices,
+                self,
+                array,
+                range,
+                probe_indices
+            )
+        )
+    }
+
+    fn lookup_and_get_probe_indices<T: ArrowNumericType>(
+        &self,
+        array: &ArrayRef,
+        range: Range<usize>,
+        probe_indices: &mut Vec<u32>,
+    ) -> Result<()>
+    where
+        T::Native: Copy + AsPrimitive<u64>,
+    {
+        probe_indices.clear();
+
+        let arr = array.as_primitive::<T>();
+        let end = range.end.min(arr.len());
+        if range.start >= end {
+            return Ok(());
+        }
+
+        let have_null = arr.null_count() > 0;
+        for probe_idx in range.start..end {
+            if have_null && arr.is_null(probe_idx) {
+                // Skip NULLs: under NullEqualsNothing, they will never match a
+                // build row, and ArrayMap is not used with NullEqualsNull.
+                continue;
+            }
+
+            // SAFETY: probe_idx is guaranteed to be within bounds by the loop range.
+            let prob_val: u64 = unsafe { arr.value_unchecked(probe_idx) }.as_();
+            if self.get_value(prob_val).is_some() {
+                probe_indices.push(probe_idx as u32);
+            }
+        }
+
+        Ok(())
     }
 
     /// Looks up `key` (a raw probe value cast to `u64`) in the build side,
@@ -517,6 +577,28 @@ mod tests {
     }
 
     #[test]
+    fn test_array_map_probe_indices_with_any_match() -> Result<()> {
+        let build: ArrayRef = Arc::new(Int32Array::from(vec![1, 1, 3, 5, 5]));
+        let map = ArrayMap::try_new(&build, 1, 5)?;
+        let probe = [Arc::new(Int32Array::from(vec![
+            Some(0),
+            Some(1),
+            Some(1),
+            Some(2),
+            Some(3),
+            None,
+            Some(4),
+            Some(5),
+        ])) as ArrayRef];
+
+        let mut probe_indices = vec![99];
+        map.get_probe_indices_with_any_match(&probe, 2..8, &mut probe_indices)?;
+
+        assert_eq!(probe_indices, vec![2, 4, 7]);
+        Ok(())
+    }
+
+    #[test]
     fn test_array_map_rejects_large_out_of_range_probe_key() -> Result<()> {
         let build: ArrayRef =
             Arc::new(UInt64Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]));
@@ -537,6 +619,14 @@ mod tests {
             Some(11),
             None,
         ])) as ArrayRef];
+
+        let mut probe_indices = vec![];
+        map.get_probe_indices_with_any_match(
+            &probe,
+            0..probe[0].len(),
+            &mut probe_indices,
+        )?;
+        assert_eq!(probe_indices, vec![0]);
 
         let mut matched_probe_indices = vec![];
         let mut matched_build_indices = vec![];

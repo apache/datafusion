@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Criterion benchmarks for Hash Join with RightSemi/RightAnti joins with Int32 keys.
+//! Criterion benchmarks for Hash Join with RightSemi/RightAnti joins with
+//! Int32 and Utf8 keys.
 //!
 //! ## Key Benchmark Axes
 //!
@@ -39,18 +40,24 @@
 //!
 //! Semi/anti joins can short-circuit after finding the first match, so these
 //! benchmarks help evaluate optimization strategies for existence checks.
+//!
+//! Each scenario below describes a build/probe data shape and is benchmarked
+//! under both RightSemi and RightAnti.
 
 use std::sync::Arc;
 
 use arrow::array::{Int32Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::measurement::WallTime;
+use criterion::{
+    BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main,
+};
 use datafusion_common::{JoinType, NullEquality};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::col;
-use datafusion_physical_plan::collect;
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, utils::JoinOn};
 use datafusion_physical_plan::test::TestMemoryExec;
+use datafusion_physical_plan::{ExecutionPlan, collect};
 use tokio::runtime::Runtime;
 
 /// Build RecordBatches with Int32 keys.
@@ -65,37 +72,10 @@ fn build_batches(
     key_offset: i32,
     schema: &SchemaRef,
 ) -> Vec<RecordBatch> {
-    let keys: Vec<i32> = (0..num_rows)
-        .map(|i| ((i % key_mod) as i32) + key_offset)
-        .collect();
-    let data: Vec<i32> = (0..num_rows).map(|i| i as i32).collect();
-    let payload: Vec<String> = data.iter().map(|d| format!("val_{d}")).collect();
-
-    let batch = RecordBatch::try_new(
-        Arc::clone(schema),
-        vec![
-            Arc::new(Int32Array::from(keys)),
-            Arc::new(Int32Array::from(data)),
-            Arc::new(StringArray::from(payload)),
-        ],
-    )
-    .unwrap();
-
-    let batch_size = 8192;
-    let mut batches = Vec::new();
-    let mut offset = 0;
-    while offset < batch.num_rows() {
-        let len = (batch.num_rows() - offset).min(batch_size);
-        batches.push(batch.slice(offset, len));
-        offset += len;
-    }
-    batches
+    build_batches_from_key_fn(num_rows, schema, |i| ((i % key_mod) as i32) + key_offset)
 }
 
-fn make_exec(
-    batches: &[RecordBatch],
-    schema: &SchemaRef,
-) -> Arc<dyn datafusion_physical_plan::ExecutionPlan> {
+fn make_exec(batches: &[RecordBatch], schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
     TestMemoryExec::try_new_exec(&[batches.to_vec()], Arc::clone(schema), None).unwrap()
 }
 
@@ -107,34 +87,117 @@ fn schema() -> SchemaRef {
     ]))
 }
 
+fn utf8_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("key", DataType::Utf8, false),
+        Field::new("data", DataType::Int32, false),
+        Field::new("payload", DataType::Utf8, false),
+    ]))
+}
+
 fn do_hash_join(
-    left: Arc<dyn datafusion_physical_plan::ExecutionPlan>,
-    right: Arc<dyn datafusion_physical_plan::ExecutionPlan>,
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
     join_type: JoinType,
     rt: &Runtime,
-) -> usize {
+) -> HashJoinRun {
     let on: JoinOn = vec![(
         col("key", &left.schema()).unwrap(),
         col("key", &right.schema()).unwrap(),
     )];
-    let join = HashJoinExec::try_new(
-        left,
-        right,
-        on,
-        None,
-        &join_type,
-        None,
-        PartitionMode::CollectLeft,
-        NullEquality::NullEqualsNothing,
-        false,
-    )
-    .unwrap();
+    let join = Arc::new(
+        HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &join_type,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    );
 
     let task_ctx = Arc::new(TaskContext::default());
-    rt.block_on(async {
-        let batches = collect(Arc::new(join), task_ctx).await.unwrap();
-        batches.iter().map(|b| b.num_rows()).sum()
-    })
+    let output_rows = rt.block_on(async {
+        let batches = collect(join.clone(), task_ctx).await.unwrap();
+        batches.iter().map(|b| b.num_rows()).sum::<usize>()
+    });
+    let metrics = join.metrics().unwrap();
+    let array_map_created_count = metrics
+        .sum_by_name(HashJoinExec::ARRAY_MAP_CREATED_COUNT_METRIC_NAME)
+        .map(|v| v.as_usize())
+        .unwrap_or(0);
+
+    HashJoinRun {
+        output_rows,
+        array_map_created_count,
+    }
+}
+
+struct HashJoinRun {
+    output_rows: usize,
+    array_map_created_count: usize,
+}
+
+/// A build/probe data shape benchmarked under both RightSemi and RightAnti.
+struct BenchScenario {
+    /// Name suffix shared by the `right_semi_*` / `right_anti_*` variants.
+    suffix: &'static str,
+    probe_rows: usize,
+    left_batches: Vec<RecordBatch>,
+    right_batches: Vec<RecordBatch>,
+    /// Expected RightSemi output row count. The expected RightAnti output is
+    /// the complement (`probe_rows - semi_output_rows`), since every probe
+    /// row is emitted by exactly one of the two join types.
+    semi_output_rows: usize,
+    /// Whether the build side is expected to select the ArrayMap strategy.
+    uses_array_map: bool,
+}
+
+fn bench_scenario(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    schema: &SchemaRef,
+    rt: &Runtime,
+    scenario: &BenchScenario,
+) {
+    for join_type in [JoinType::RightSemi, JoinType::RightAnti] {
+        let (prefix, expected_output_rows) = match join_type {
+            JoinType::RightSemi => ("right_semi", scenario.semi_output_rows),
+            _ => (
+                "right_anti",
+                scenario.probe_rows - scenario.semi_output_rows,
+            ),
+        };
+        let name = format!("{prefix}_{}", scenario.suffix);
+
+        // Validate the output row count and map strategy once before measuring.
+        let run = do_hash_join(
+            make_exec(&scenario.left_batches, schema),
+            make_exec(&scenario.right_batches, schema),
+            join_type,
+            rt,
+        );
+        assert_eq!(
+            run.output_rows, expected_output_rows,
+            "unexpected output row count for {name}"
+        );
+        assert_eq!(
+            run.array_map_created_count > 0,
+            scenario.uses_array_map,
+            "unexpected map strategy for {name}"
+        );
+
+        group.bench_function(BenchmarkId::new(name, scenario.probe_rows), |b| {
+            b.iter(|| {
+                let left = make_exec(&scenario.left_batches, schema);
+                let right = make_exec(&scenario.right_batches, schema);
+                do_hash_join(left, right, join_type, rt).output_rows
+            })
+        });
+    }
 }
 
 /// Build batches with sparse keys (key = row_index % key_mod * multiplier + key_offset).
@@ -146,9 +209,21 @@ fn build_batches_sparse(
     multiplier: i32,
     schema: &SchemaRef,
 ) -> Vec<RecordBatch> {
-    let keys: Vec<i32> = (0..num_rows)
-        .map(|i| ((i % key_mod) as i32) * multiplier + key_offset)
-        .collect();
+    build_batches_from_key_fn(num_rows, schema, |i| {
+        ((i % key_mod) as i32) * multiplier + key_offset
+    })
+}
+
+/// Build batches from an arbitrary deterministic key generator.
+fn build_batches_from_key_fn<F>(
+    num_rows: usize,
+    schema: &SchemaRef,
+    mut key_fn: F,
+) -> Vec<RecordBatch>
+where
+    F: FnMut(usize) -> i32,
+{
+    let keys: Vec<i32> = (0..num_rows).map(&mut key_fn).collect();
     let data: Vec<i32> = (0..num_rows).map(|i| i as i32).collect();
     let payload: Vec<String> = data.iter().map(|d| format!("val_{d}")).collect();
 
@@ -162,6 +237,37 @@ fn build_batches_sparse(
     )
     .unwrap();
 
+    slice_batches(&batch)
+}
+
+/// Build batches with Utf8 keys: `key = "key_<i % key_mod>"`, zero-padded so
+/// every key has the same length.
+fn build_utf8_batches(
+    num_rows: usize,
+    key_mod: usize,
+    schema: &SchemaRef,
+) -> Vec<RecordBatch> {
+    let keys: Vec<String> = (0..num_rows)
+        .map(|i| format!("key_{:08}", i % key_mod))
+        .collect();
+    let data: Vec<i32> = (0..num_rows).map(|i| i as i32).collect();
+    let payload: Vec<String> = data.iter().map(|d| format!("val_{d}")).collect();
+
+    let batch = RecordBatch::try_new(
+        Arc::clone(schema),
+        vec![
+            Arc::new(StringArray::from(keys)),
+            Arc::new(Int32Array::from(data)),
+            Arc::new(StringArray::from(payload)),
+        ],
+    )
+    .unwrap();
+
+    slice_batches(&batch)
+}
+
+/// Split `batch` into 8192-row slices.
+fn slice_batches(batch: &RecordBatch) -> Vec<RecordBatch> {
     let batch_size = 8192;
     let mut batches = Vec::new();
     let mut offset = 0;
@@ -171,6 +277,22 @@ fn build_batches_sparse(
         offset += len;
     }
     batches
+}
+
+/// Skewed 50%-hit key generator for a sparse (HashMap) build side whose keys are
+/// spaced by 10. Matching keys land on multiples of 10; misses are offset by 1.
+fn skewed_h50_hashmap_key(row: usize, build_rows: usize, hot_keys: usize) -> i32 {
+    let logical_row = row / 2;
+    if row.is_multiple_of(2) {
+        let key = if logical_row % 10 < 8 {
+            logical_row % hot_keys
+        } else {
+            hot_keys + logical_row % (build_rows - hot_keys)
+        };
+        (key as i32) * 10
+    } else {
+        ((logical_row % build_rows) as i32) * 10 + 1
+    }
 }
 
 fn bench_hash_join_semi_anti(c: &mut Criterion) {
@@ -184,200 +306,257 @@ fn bench_hash_join_semi_anti(c: &mut Criterion) {
     let build_rows = 100_000;
     let probe_rows = 1_000_000;
 
-    // =========================================================================
-    // RightSemi Join benchmarks
-    // =========================================================================
-
-    // RightSemi - 100% Density, 100% hit rate
+    // 100% Density, 100% hit rate
     // Keys: 0..100K contiguous, all probe rows find a match
-    {
-        let left_batches = build_batches(build_rows, build_rows, 0, &s);
-        let right_batches = build_batches(probe_rows, build_rows, 0, &s);
-        group.bench_function(BenchmarkId::new("right_semi_d100_h100", probe_rows), |b| {
-            b.iter(|| {
-                let left = make_exec(&left_batches, &s);
-                let right = make_exec(&right_batches, &s);
-                do_hash_join(left, right, JoinType::RightSemi, &rt)
-            })
-        });
-    }
+    bench_scenario(
+        &mut group,
+        &s,
+        &rt,
+        &BenchScenario {
+            suffix: "d100_h100",
+            probe_rows,
+            left_batches: build_batches(build_rows, build_rows, 0, &s),
+            right_batches: build_batches(probe_rows, build_rows, 0, &s),
+            semi_output_rows: probe_rows,
+            uses_array_map: true,
+        },
+    );
 
-    // RightSemi - 100% Density, 10% hit rate
+    // 100% Density, 10% hit rate
     // Keys: 0..100K contiguous, only 10% of probe rows find a match
-    {
-        let left_batches = build_batches(build_rows, build_rows, 0, &s);
-        let right_batches = build_batches(probe_rows, build_rows * 10, 0, &s);
-        group.bench_function(BenchmarkId::new("right_semi_d100_h10", probe_rows), |b| {
-            b.iter(|| {
-                let left = make_exec(&left_batches, &s);
-                let right = make_exec(&right_batches, &s);
-                do_hash_join(left, right, JoinType::RightSemi, &rt)
-            })
-        });
-    }
+    bench_scenario(
+        &mut group,
+        &s,
+        &rt,
+        &BenchScenario {
+            suffix: "d100_h10",
+            probe_rows,
+            left_batches: build_batches(build_rows, build_rows, 0, &s),
+            right_batches: build_batches(probe_rows, build_rows * 10, 0, &s),
+            semi_output_rows: build_rows,
+            uses_array_map: true,
+        },
+    );
 
-    // RightSemi - 50% Density, 100% hit rate
+    // 100% Density, 50% hit rate
+    // Keys: 0..100K contiguous, half of probe rows find a match.
+    bench_scenario(
+        &mut group,
+        &s,
+        &rt,
+        &BenchScenario {
+            suffix: "d100_h50",
+            probe_rows,
+            left_batches: build_batches(build_rows, build_rows, 0, &s),
+            right_batches: build_batches(probe_rows, build_rows * 2, 0, &s),
+            semi_output_rows: probe_rows / 2,
+            uses_array_map: true,
+        },
+    );
+
+    // 50% Density, 100% hit rate
     // Keys: 0, 2, 4, ... (sparse, multiplier=2), all probe rows find a match
-    {
-        let left_batches = build_batches_sparse(build_rows, build_rows, 0, 2, &s);
-        let right_batches = build_batches_sparse(probe_rows, build_rows, 0, 2, &s);
-        group.bench_function(BenchmarkId::new("right_semi_d50_h100", probe_rows), |b| {
-            b.iter(|| {
-                let left = make_exec(&left_batches, &s);
-                let right = make_exec(&right_batches, &s);
-                do_hash_join(left, right, JoinType::RightSemi, &rt)
-            })
-        });
-    }
+    bench_scenario(
+        &mut group,
+        &s,
+        &rt,
+        &BenchScenario {
+            suffix: "d50_h100",
+            probe_rows,
+            left_batches: build_batches_sparse(build_rows, build_rows, 0, 2, &s),
+            right_batches: build_batches_sparse(probe_rows, build_rows, 0, 2, &s),
+            semi_output_rows: probe_rows,
+            uses_array_map: true,
+        },
+    );
 
-    // RightSemi - 50% Density, 10% hit rate
+    // 50% Density, 10% hit rate
     // Keys: 0, 2, 4, ... (sparse), only 10% of probe rows find a match
-    {
-        let left_batches = build_batches_sparse(build_rows, build_rows, 0, 2, &s);
-        let right_batches = build_batches_sparse(probe_rows, build_rows * 10, 0, 2, &s);
-        group.bench_function(BenchmarkId::new("right_semi_d50_h10", probe_rows), |b| {
-            b.iter(|| {
-                let left = make_exec(&left_batches, &s);
-                let right = make_exec(&right_batches, &s);
-                do_hash_join(left, right, JoinType::RightSemi, &rt)
-            })
-        });
-    }
+    bench_scenario(
+        &mut group,
+        &s,
+        &rt,
+        &BenchScenario {
+            suffix: "d50_h10",
+            probe_rows,
+            left_batches: build_batches_sparse(build_rows, build_rows, 0, 2, &s),
+            right_batches: build_batches_sparse(probe_rows, build_rows * 10, 0, 2, &s),
+            semi_output_rows: build_rows,
+            uses_array_map: true,
+        },
+    );
 
-    // RightSemi - 10% Density, 100% hit rate
+    // 10% Density, 100% hit rate
     // Keys: 0, 10, 20, ... (very sparse, multiplier=10), all probe rows find a match
-    {
-        let left_batches = build_batches_sparse(build_rows, build_rows, 0, 10, &s);
-        let right_batches = build_batches_sparse(probe_rows, build_rows, 0, 10, &s);
-        group.bench_function(BenchmarkId::new("right_semi_d10_h100", probe_rows), |b| {
-            b.iter(|| {
-                let left = make_exec(&left_batches, &s);
-                let right = make_exec(&right_batches, &s);
-                do_hash_join(left, right, JoinType::RightSemi, &rt)
-            })
-        });
-    }
+    bench_scenario(
+        &mut group,
+        &s,
+        &rt,
+        &BenchScenario {
+            suffix: "d10_h100",
+            probe_rows,
+            left_batches: build_batches_sparse(build_rows, build_rows, 0, 10, &s),
+            right_batches: build_batches_sparse(probe_rows, build_rows, 0, 10, &s),
+            semi_output_rows: probe_rows,
+            uses_array_map: false,
+        },
+    );
 
-    // RightSemi - 10% Density, 10% hit rate
+    // 10% Density, 10% hit rate
     // Keys: 0, 10, 20, ... (very sparse), only 10% of probe rows find a match
-    {
-        let left_batches = build_batches_sparse(build_rows, build_rows, 0, 10, &s);
-        let right_batches = build_batches_sparse(probe_rows, build_rows * 10, 0, 10, &s);
-        group.bench_function(BenchmarkId::new("right_semi_d10_h10", probe_rows), |b| {
-            b.iter(|| {
-                let left = make_exec(&left_batches, &s);
-                let right = make_exec(&right_batches, &s);
-                do_hash_join(left, right, JoinType::RightSemi, &rt)
-            })
-        });
-    }
+    bench_scenario(
+        &mut group,
+        &s,
+        &rt,
+        &BenchScenario {
+            suffix: "d10_h10",
+            probe_rows,
+            left_batches: build_batches_sparse(build_rows, build_rows, 0, 10, &s),
+            right_batches: build_batches_sparse(probe_rows, build_rows * 10, 0, 10, &s),
+            semi_output_rows: build_rows,
+            uses_array_map: false,
+        },
+    );
 
-    // RightSemi - 100% Density, ~1% hit rate, fanout ~100
-    // Build keys are duplicated: 100K rows over 1K distinct keys. Matching
-    // probe rows produce many duplicate probe indices before RightSemi
-    // deduplication.
+    // 10% Density, 50% hit rate
+    // Sparse build keys force the HashMap path while avoiding all-match/no-match extremes.
+    bench_scenario(
+        &mut group,
+        &s,
+        &rt,
+        &BenchScenario {
+            suffix: "d10_h50",
+            probe_rows,
+            left_batches: build_batches_sparse(build_rows, build_rows, 0, 10, &s),
+            right_batches: build_batches_sparse(probe_rows, build_rows * 2, 0, 10, &s),
+            semi_output_rows: probe_rows / 2,
+            uses_array_map: false,
+        },
+    );
+
+    // 100% Density, ~1% hit rate, fanout ~100
+    // Build keys are duplicated: 100K rows over 1K distinct keys, so each
+    // matching key has fanout ~100.
     {
         let fanout_keys = 1_000;
-        let left_batches = build_batches(build_rows, fanout_keys, 0, &s);
-        let right_batches = build_batches(probe_rows, build_rows, 0, &s);
-        group.bench_function(
-            BenchmarkId::new("right_semi_fanout100_h1", probe_rows),
-            |b| {
-                b.iter(|| {
-                    let left = make_exec(&left_batches, &s);
-                    let right = make_exec(&right_batches, &s);
-                    do_hash_join(left, right, JoinType::RightSemi, &rt)
-                })
+        bench_scenario(
+            &mut group,
+            &s,
+            &rt,
+            &BenchScenario {
+                suffix: "fanout100_h1",
+                probe_rows,
+                left_batches: build_batches(build_rows, fanout_keys, 0, &s),
+                right_batches: build_batches(probe_rows, build_rows, 0, &s),
+                semi_output_rows: probe_rows / 100,
+                uses_array_map: true,
             },
         );
     }
 
-    // =========================================================================
-    // RightAnti Join benchmarks
-    // =========================================================================
-
-    // RightAnti - 100% Density, 100% hit rate (no output)
-    // Keys: 0..100K contiguous, all probe rows find a match -> no output
+    // 100% Density, 50% hit rate, fanout ~10
+    // This is a moderate duplicate-heavy case: enough fanout to stress pair
+    // materialization, without relying on a tiny match rate.
     {
-        let left_batches = build_batches(build_rows, build_rows, 0, &s);
-        let right_batches = build_batches(probe_rows, build_rows, 0, &s);
-        group.bench_function(BenchmarkId::new("right_anti_d100_h100", probe_rows), |b| {
-            b.iter(|| {
-                let left = make_exec(&left_batches, &s);
-                let right = make_exec(&right_batches, &s);
-                do_hash_join(left, right, JoinType::RightAnti, &rt)
-            })
-        });
+        let fanout_keys = 10_000;
+        bench_scenario(
+            &mut group,
+            &s,
+            &rt,
+            &BenchScenario {
+                suffix: "fanout10_h50",
+                probe_rows,
+                left_batches: build_batches(build_rows, fanout_keys, 0, &s),
+                right_batches: build_batches(probe_rows, fanout_keys * 2, 0, &s),
+                semi_output_rows: probe_rows / 2,
+                uses_array_map: true,
+            },
+        );
     }
 
-    // RightAnti - 100% Density, 10% hit rate (90% output)
-    // Keys: 0..100K contiguous, only 10% of probe rows find a match -> 90% output
+    // HashMap path, 50% hit rate, fanout ~10
+    // A large sparse key range prevents ArrayMap selection while preserving the
+    // same moderate fanout and hit-rate shape.
     {
-        let left_batches = build_batches(build_rows, build_rows, 0, &s);
-        let right_batches = build_batches(probe_rows, build_rows * 10, 0, &s);
-        group.bench_function(BenchmarkId::new("right_anti_d100_h10", probe_rows), |b| {
-            b.iter(|| {
-                let left = make_exec(&left_batches, &s);
-                let right = make_exec(&right_batches, &s);
-                do_hash_join(left, right, JoinType::RightAnti, &rt)
-            })
-        });
+        let fanout_keys = 10_000;
+        bench_scenario(
+            &mut group,
+            &s,
+            &rt,
+            &BenchScenario {
+                suffix: "fanout10_h50_hashmap",
+                probe_rows,
+                left_batches: build_batches_sparse(build_rows, fanout_keys, 0, 1000, &s),
+                right_batches: build_batches_sparse(
+                    probe_rows,
+                    fanout_keys * 2,
+                    0,
+                    1000,
+                    &s,
+                ),
+                semi_output_rows: probe_rows / 2,
+                uses_array_map: false,
+            },
+        );
     }
 
-    // RightAnti - 50% Density, 100% hit rate (no output)
-    // Keys: 0, 2, 4, ... (sparse), all probe rows find a match -> no output
+    // HashMap path, skewed 50% hit rate
     {
-        let left_batches = build_batches_sparse(build_rows, build_rows, 0, 2, &s);
-        let right_batches = build_batches_sparse(probe_rows, build_rows, 0, 2, &s);
-        group.bench_function(BenchmarkId::new("right_anti_d50_h100", probe_rows), |b| {
-            b.iter(|| {
-                let left = make_exec(&left_batches, &s);
-                let right = make_exec(&right_batches, &s);
-                do_hash_join(left, right, JoinType::RightAnti, &rt)
-            })
-        });
+        let hot_keys = 1_000;
+        bench_scenario(
+            &mut group,
+            &s,
+            &rt,
+            &BenchScenario {
+                suffix: "skewed_h50_hashmap",
+                probe_rows,
+                left_batches: build_batches_sparse(build_rows, build_rows, 0, 10, &s),
+                right_batches: build_batches_from_key_fn(probe_rows, &s, |row| {
+                    skewed_h50_hashmap_key(row, build_rows, hot_keys)
+                }),
+                semi_output_rows: probe_rows / 2,
+                uses_array_map: false,
+            },
+        );
     }
 
-    // RightAnti - 50% Density, 10% hit rate (90% output)
-    // Keys: 0, 2, 4, ... (sparse), only 10% of probe rows find a match -> 90% output
+    // Utf8 keys, unique build keys, 50% hit rate
+    // String keys always take the HashMap path (ArrayMap supports only
+    // integer keys), and key equality is substantially more expensive than
+    // for Int32.
     {
-        let left_batches = build_batches_sparse(build_rows, build_rows, 0, 2, &s);
-        let right_batches = build_batches_sparse(probe_rows, build_rows * 10, 0, 2, &s);
-        group.bench_function(BenchmarkId::new("right_anti_d50_h10", probe_rows), |b| {
-            b.iter(|| {
-                let left = make_exec(&left_batches, &s);
-                let right = make_exec(&right_batches, &s);
-                do_hash_join(left, right, JoinType::RightAnti, &rt)
-            })
-        });
-    }
+        let utf8_s = utf8_schema();
+        bench_scenario(
+            &mut group,
+            &utf8_s,
+            &rt,
+            &BenchScenario {
+                suffix: "utf8_h50",
+                probe_rows,
+                left_batches: build_utf8_batches(build_rows, build_rows, &utf8_s),
+                right_batches: build_utf8_batches(probe_rows, build_rows * 2, &utf8_s),
+                semi_output_rows: probe_rows / 2,
+                uses_array_map: false,
+            },
+        );
 
-    // RightAnti - 10% Density, 100% hit rate (no output)
-    // Keys: 0, 10, 20, ... (very sparse), all probe rows find a match -> no output
-    {
-        let left_batches = build_batches_sparse(build_rows, build_rows, 0, 10, &s);
-        let right_batches = build_batches_sparse(probe_rows, build_rows, 0, 10, &s);
-        group.bench_function(BenchmarkId::new("right_anti_d10_h100", probe_rows), |b| {
-            b.iter(|| {
-                let left = make_exec(&left_batches, &s);
-                let right = make_exec(&right_batches, &s);
-                do_hash_join(left, right, JoinType::RightAnti, &rt)
-            })
-        });
-    }
-
-    // RightAnti - 10% Density, 10% hit rate (90% output)
-    // Keys: 0, 10, 20, ... (very sparse), only 10% of probe rows find a match -> 90% output
-    {
-        let left_batches = build_batches_sparse(build_rows, build_rows, 0, 10, &s);
-        let right_batches = build_batches_sparse(probe_rows, build_rows * 10, 0, 10, &s);
-        group.bench_function(BenchmarkId::new("right_anti_d10_h10", probe_rows), |b| {
-            b.iter(|| {
-                let left = make_exec(&left_batches, &s);
-                let right = make_exec(&right_batches, &s);
-                do_hash_join(left, right, JoinType::RightAnti, &rt)
-            })
-        });
+        // Utf8 keys, fanout ~10, 50% hit rate
+        // Duplicate build keys exercise the hash-chain walk with expensive
+        // key comparisons.
+        let fanout_keys = 10_000;
+        bench_scenario(
+            &mut group,
+            &utf8_s,
+            &rt,
+            &BenchScenario {
+                suffix: "utf8_fanout10_h50",
+                probe_rows,
+                left_batches: build_utf8_batches(build_rows, fanout_keys, &utf8_s),
+                right_batches: build_utf8_batches(probe_rows, fanout_keys * 2, &utf8_s),
+                semi_output_rows: probe_rows / 2,
+                uses_array_map: false,
+            },
+        );
     }
 
     group.finish();
