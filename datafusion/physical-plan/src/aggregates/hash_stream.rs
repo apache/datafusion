@@ -295,7 +295,7 @@ impl PartialHashAggregateStream {
 
             self.start_output(&mut hash_table, partial_table.is_none())?;
 
-            self.handle_producing_output(hash_table, &mut emitter)
+            self.produce_output(hash_table, &mut emitter)
                 .await?;
 
             match partial_table {
@@ -404,10 +404,8 @@ impl PartialHashAggregateStream {
 
     /// Handle ProducingOutput state - emit partial aggregate state batches.
     ///
-    /// See comments at `poll_next()` for details.
-    ///
-    /// Returns the next operator state with control flow decision.
-    async fn handle_producing_output(
+    /// See comments at [`Self::create_stream`] for details.
+    async fn produce_output(
         &mut self,
         mut hash_table: AggregateHashTable<PartialMarker>,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
@@ -556,7 +554,7 @@ impl FinalHashAggregateStream {
                 .hash_table
                 .take()
                 .expect("hash_table should not be None");
-            self.handle_reading_input(&mut hash_table).await?;
+            self.consume_input(&mut hash_table).await?;
 
             self.produce_output(hash_table, emitter).await?;
 
@@ -581,10 +579,8 @@ impl FinalHashAggregateStream {
 
     /// Handle ReadingInput state - aggregate partial state batches into the hash table.
     ///
-    /// See comments at `poll_next()` for details.
-    ///
-    /// Returns the next operator state with control flow decision.
-    async fn handle_reading_input(
+    /// See comments at [`Self::create_stream`] for details.
+    async fn consume_input(
         &mut self,
         hash_table: &mut AggregateHashTable<FinalMarker>,
     ) -> Result<()> {
