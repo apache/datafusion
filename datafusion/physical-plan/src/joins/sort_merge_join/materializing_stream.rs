@@ -613,24 +613,7 @@ impl MaterializingSortMergeJoinStream {
     ///
     /// Both inputs arrive sorted on the join keys. The streamed side is
     /// consumed one row at a time; the buffered side one key *group* (all
-    /// contiguous rows sharing a key) at a time:
-    ///
-    /// ```text
-    /// 1. load the first streamed row and the first buffered key group
-    /// 2. while either input still has rows:
-    ///    3. compare the join keys at both cursors
-    ///       3a. Less    → the streamed row can never match:
-    ///                     null-join it (outer joins), advance streamed
-    ///       3b. Greater → the buffered group can never match again:
-    ///                     null-join it if nothing matched it (FULL join),
-    ///                     advance to the next buffered group
-    ///       3c. Equal   → pair the streamed row with the whole group,
-    ///                     advance streamed (the group stays — the next
-    ///                     streamed row may share its key)
-    ///       (materialize ("freeze") pairs once batch_size accumulate)
-    ///    4. emit completed output batches
-    /// 5. flush everything that remains
-    /// ```
+    /// contiguous rows sharing a key) at a time
     async fn join(
         &mut self,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
