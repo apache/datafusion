@@ -69,8 +69,8 @@ NULL NULL
 query error 'find_in_set' does not support zero arguments
 SELECT find_in_set();
 
-query error No function matches the given name and argument types 'find_in_set\(Utf8\)'
+query error Failed to coerce arguments to satisfy a call to 'find_in_set' function
 SELECT find_in_set('a');
 
-query error No function matches the given name and argument types 'find_in_set\(Utf8, Utf8, Utf8\)'
+query error Failed to coerce arguments to satisfy a call to 'find_in_set' function
 SELECT find_in_set('a', 'a,b', 'extra');
