@@ -1836,6 +1836,7 @@ struct GroupEntry {
 /// BY bytes, capped at `k` distinct keys. Each key's `Vec<GroupEntry>`
 /// holds every row seen at that ob value, one entry per contributing
 /// source `RecordBatch`.
+#[derive(Default)]
 struct DenseRankPartitionState {
     groups: HashMap<Vec<u8>, Vec<GroupEntry>>,
     /// The same keys as `groups`, in a max-heap: the admission boundary
@@ -2061,13 +2062,10 @@ impl PartitionedTopKDenseRank {
         //    (within-call accumulation), then merge each bucket into the
         //    partition state as a single `GroupEntry`.
         for (pk, indices) in groups.drain() {
-            let state =
-                self.states
-                    .entry(pk)
-                    .or_insert_with(|| DenseRankPartitionState {
-                        groups: HashMap::new(),
-                        keys: BinaryHeap::with_capacity(k),
-                    });
+            let state = self
+                .states
+                .entry(pk)
+                .or_insert_with(DenseRankPartitionState::default);
 
             // Bucket by ob key. `ob_runs` is a reused scratch map (taken
             // out and drained below) so its backing table is allocated
@@ -4165,6 +4163,33 @@ mod tests {
         assert_eq!(dense_rank_entry_count(&state), 2);
         assert_eq!(state.store.len(), 1);
         assert_eq!(state.store.batches_size, first_bytes);
+        Ok(())
+    }
+
+    /// `keys` must grow on demand rather than reserve K slots when a
+    /// partition is first seen. `size()` charges `keys.capacity()`, so
+    /// eager sizing reserves O(partitions * K) for slots that never hold
+    /// a key — enough to fail a memory limit on a high-cardinality input
+    /// whose partitions each keep a handful of distinct values.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_heap_grows_on_demand() -> Result<()> {
+        const K: usize = 512;
+        const PARTITIONS: usize = 64;
+        let (schema, mut state) = build_partitioned_topk_dense_rank(K)?;
+
+        // One row per partition: every partition holds exactly one
+        // distinct ob value, K - 1 slots short of capacity.
+        let pks: Vec<i32> = (0..PARTITIONS as i32).collect();
+        let vals = pks.clone();
+        state.insert_batch(&pk_val_batch(&schema, pks, vals)?)?;
+
+        assert_eq!(state.states.len(), PARTITIONS);
+        let heap_slots: usize = state.states.values().map(|s| s.keys.capacity()).sum();
+        // Eager `with_capacity(K)` would reserve PARTITIONS * K = 32768.
+        assert!(
+            heap_slots <= PARTITIONS * 8,
+            "reserved {heap_slots} heap slots to hold {PARTITIONS} keys"
+        );
         Ok(())
     }
 
