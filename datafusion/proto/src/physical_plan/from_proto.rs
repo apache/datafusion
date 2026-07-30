@@ -660,6 +660,9 @@ impl TryFromProto<&protobuf::PartitionedFile> for PartitionedFile {
             pf = pf.with_range(file_range.start, file_range.end);
         }
         if let Some(proto_stats) = val.statistics.as_ref() {
+            // The wire format carries statistics for the full table schema (file + partition
+            // columns), so assign directly — `with_statistics` would append the partition
+            // column stats a second time.
             pf.statistics = Some(Arc::new(proto_stats.try_into()?));
         }
         Ok(pf)
