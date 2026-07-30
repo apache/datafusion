@@ -90,6 +90,9 @@ use datafusion_common::Result;
 /// ```
 pub struct PeakRecordingPool {
     inner: Arc<dyn MemoryPool>,
+    /// Running total of everything granted through this wrapper, kept so the
+    /// peak can be maintained without asking `inner` for its total.
+    reserved: AtomicUsize,
     /// High-water mark since the last [`PeakRecordingPool::reset_peak`].
     peak: AtomicUsize,
     /// High-water mark since this pool was created. Never reset.
@@ -98,9 +101,13 @@ pub struct PeakRecordingPool {
 
 impl PeakRecordingPool {
     /// Wrap `inner`, recording its peak reservation from here on.
+    ///
+    /// `inner` is expected to be empty: the running total starts at zero, so
+    /// anything reserved before wrapping is not counted.
     pub fn new(inner: Arc<dyn MemoryPool>) -> Self {
         Self {
             inner,
+            reserved: AtomicUsize::new(0),
             peak: AtomicUsize::new(0),
             max: AtomicUsize::new(0),
         }
@@ -130,24 +137,33 @@ impl PeakRecordingPool {
         self.max.load(Ordering::Relaxed)
     }
 
-    /// Reset the value returned by [`Self::peak_reserved`], so the next reading
-    /// covers only what follows.
+    /// Reset the value returned by [`Self::peak_reserved`] to what is reserved
+    /// right now, so the next reading covers only what follows.
     ///
     /// [`BenchmarkRun::start_new_case`] calls this, giving each benchmark query
-    /// its own reading.
+    /// its own reading. Anything still held when a query starts — data the
+    /// benchmark loaded up front, say — stays in the reading, since the query
+    /// runs with those bytes reserved.
     ///
     /// [`BenchmarkRun::start_new_case`]: super::BenchmarkRun::start_new_case
     pub fn reset_peak(&self) {
-        self.peak.store(0, Ordering::Relaxed);
+        self.peak
+            .store(self.reserved.load(Ordering::Relaxed), Ordering::Relaxed);
     }
 
-    /// Publish the pool's current reservation to both high-water marks.
+    /// Add `additional` granted bytes to the running total and publish it to
+    /// both high-water marks.
     ///
-    /// Called after any operation that can raise `reserved()`. Reading the
-    /// total rather than accumulating deltas keeps this correct when the
-    /// wrapped pool declines or adjusts a request.
-    fn record(&self) {
-        let reserved = self.inner.reserved();
+    /// Accumulating deltas rather than reading [`MemoryPool::reserved`] keeps
+    /// the wrapped pool's own bookkeeping off this path: `FairSpillPool` takes
+    /// its state lock to answer `reserved()`, which would double the lock
+    /// traffic of every accounted allocation in the benchmark being measured.
+    /// The total stays exact because the trait grants exactly what is asked
+    /// for — `grow` is infallible and `try_grow` either grants `additional` or
+    /// returns an error, leaving the reservation untouched.
+    fn record(&self, additional: usize) {
+        let reserved =
+            self.reserved.fetch_add(additional, Ordering::Relaxed) + additional;
         self.peak.fetch_max(reserved, Ordering::Relaxed);
         self.max.fetch_max(reserved, Ordering::Relaxed);
     }
@@ -186,16 +202,17 @@ impl MemoryPool for PeakRecordingPool {
 
     fn grow(&self, reservation: &MemoryReservation, additional: usize) {
         self.inner.grow(reservation, additional);
-        self.record();
+        self.record(additional);
     }
 
     fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
         self.inner.shrink(reservation, shrink);
+        self.reserved.fetch_sub(shrink, Ordering::Relaxed);
     }
 
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
         self.inner.try_grow(reservation, additional)?;
-        self.record();
+        self.record(additional);
         Ok(())
     }
 
@@ -273,6 +290,22 @@ mod tests {
         reservation.try_grow(100).unwrap();
         assert_eq!(recording.peak_reserved(), 100);
         assert_eq!(recording.max_reserved(), 800);
+    }
+
+    #[test]
+    fn reset_keeps_what_is_still_reserved() {
+        let (recording, pool) = pool(1024);
+
+        // Something a benchmark loaded up front and holds across queries.
+        let held = MemoryConsumer::new("held").register(&pool);
+        held.try_grow(300).unwrap();
+
+        recording.reset_peak();
+        assert_eq!(recording.peak_reserved(), 300);
+
+        let query = MemoryConsumer::new("query").register(&pool);
+        query.try_grow(200).unwrap();
+        assert_eq!(recording.peak_reserved(), 500);
     }
 
     #[test]
