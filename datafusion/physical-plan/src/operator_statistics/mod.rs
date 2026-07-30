@@ -1522,13 +1522,41 @@ mod tests {
         }
     }
 
-    /// Never matches, so it must not trigger any child statistics computation.
+    /// Never matches, but if consulted it resolves the child and returns its row
+    /// count, leaking an observable (non-error) value.
     #[derive(Debug)]
-    struct NonMatchingProvider;
+    struct NonMatchingLeakProvider;
 
-    impl StatisticsProvider for NonMatchingProvider {
+    impl StatisticsProvider for NonMatchingLeakProvider {
         fn matches(&self, _plan: &dyn ExecutionPlan) -> bool {
             false
+        }
+
+        fn compute_statistics(
+            &self,
+            plan: &dyn ExecutionPlan,
+            child_stats: &[ExtendedStatistics],
+        ) -> Result<StatisticsResult> {
+            let mut stats = Statistics::new_unknown(plan.schema().as_ref());
+            if let Some(child) = child_stats.first() {
+                stats.num_rows = child.base.num_rows;
+            }
+            Ok(StatisticsResult::Computed(ExtendedStatistics::from(stats)))
+        }
+    }
+
+    /// Default `matches()` (always true) and `child_stats_requests` (`At(None)`),
+    /// but always delegates.
+    #[derive(Debug)]
+    struct DelegatingProvider;
+
+    impl StatisticsProvider for DelegatingProvider {
+        fn compute_statistics(
+            &self,
+            _plan: &dyn ExecutionPlan,
+            _child_stats: &[ExtendedStatistics],
+        ) -> Result<StatisticsResult> {
+            Ok(StatisticsResult::Delegate)
         }
     }
 
@@ -1559,12 +1587,34 @@ mod tests {
     }
 
     #[test]
-    fn test_non_matching_provider_does_not_trigger_child_walk() -> Result<()> {
-        // A non-matching provider precedes the handling one; it must not resolve
-        // the erroring child, so the later provider still succeeds.
+    fn test_matches_gate_skips_non_matching_provider() -> Result<()> {
+        // A non-matching provider precedes the handling one. The gate must skip it
+        // before it is consulted, otherwise it leaks the child row count (999)
+        // instead of the later provider's 7.
+        let schema = make_schema();
+        let parent: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            vec![(col("a", &schema)?, "a".to_string())],
+            make_source(999),
+        )?);
+        let registry = StatisticsRegistry::with_providers(vec![
+            Arc::new(NonMatchingLeakProvider),
+            Arc::new(SkipComputeProvider),
+        ]);
+
+        let stats = compute(&registry, parent.as_ref())?;
+        assert!(matches!(stats.base.num_rows, Precision::Exact(7)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_delegating_provider_child_error_does_not_block_later_provider() -> Result<()>
+    {
+        // A delegating provider that keeps the default matcher resolves the
+        // erroring child speculatively; that failure must not stop the later
+        // child-skipping provider from succeeding.
         let parent = projection_over_erroring_child()?;
         let registry = StatisticsRegistry::with_providers(vec![
-            Arc::new(NonMatchingProvider),
+            Arc::new(DelegatingProvider),
             Arc::new(SkipComputeProvider),
         ]);
 

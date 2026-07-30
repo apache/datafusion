@@ -21,6 +21,7 @@
 //! [`ExecutionPlan::statistics_from_inputs`].
 
 use crate::ExecutionPlan;
+use crate::displayable;
 use crate::operator_statistics::{
     ExtendedStatistics, StatisticsRegistry, StatisticsResult,
 };
@@ -28,6 +29,7 @@ use datafusion_common::extensions::Extensions;
 use datafusion_common::{
     Result, Statistics, assert_eq_or_internal_err, assert_or_internal_err,
 };
+use log::debug;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -256,11 +258,17 @@ impl StatisticsContext {
         children
             .iter()
             .zip(requests)
-            .map(|(child, directive)| match directive {
-                ChildStats::At(p) => self.compute_base(
-                    child.as_ref(),
-                    &StatisticsArgs::new().with_partition(*p),
-                ),
+            .enumerate()
+            .map(|(i, (child, directive))| match directive {
+                ChildStats::At(p) => self
+                    .compute_base(child.as_ref(), &StatisticsArgs::new().with_partition(*p))
+                    .map_err(|e| {
+                        e.context(format!(
+                            "computing statistics for child {i} ({}) of {} at partition {p:?}",
+                            child.name(),
+                            plan.name()
+                        ))
+                    }),
                 ChildStats::Skip => {
                     Ok(Arc::new(Statistics::new_unknown(child.schema().as_ref())))
                 }
@@ -292,7 +300,22 @@ impl StatisticsContext {
                 continue;
             }
             let requests = provider.child_stats_requests(plan, partition);
-            let child_statistics = self.resolve_children(plan, children, &requests)?;
+            // A provider's child walk is speculative: on failure, skip the provider
+            // so a later one or the operator fallback can handle the node. Not
+            // error-swallowing, whoever genuinely needs the child resolves it again
+            // and the error resurfaces there; a matched provider's own `compute`
+            // error below stays fatal.
+            let child_statistics = match self.resolve_children(plan, children, &requests)
+            {
+                Ok(child_statistics) => child_statistics,
+                Err(e) => {
+                    debug!(
+                        "Statistics provider {provider:?} skipped for {}: child statistics resolution failed: {e}",
+                        displayable(plan).one_line().to_string().trim_end()
+                    );
+                    continue;
+                }
+            };
             let child_extended =
                 self.child_extended_stats(children, &requests, &child_statistics);
             if let StatisticsResult::Computed(computed) =
