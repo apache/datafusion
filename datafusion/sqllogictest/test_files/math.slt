@@ -1064,6 +1064,14 @@ SELECT gcd(arrow_cast(column1, 'Decimal256(40,0)'), arrow_cast(column2, 'Decimal
 
 # gcd array with zero, minimum, and null scalars
 query I
+SELECT gcd(column1, 0) FROM (VALUES (1), (2), (0), (NULL));
+----
+1
+2
+0
+NULL
+
+query I
 SELECT gcd(column1, -9223372036854775808) FROM (VALUES (1), (2), (NULL));
 ----
 1
@@ -1078,13 +1086,13 @@ NULL
 NULL
 
 # invalid argument count and type
-query error DataFusion error:
+query error gcd function requires 2 arguments, got 0
 SELECT gcd();
 
-query error DataFusion error:
+query error gcd function requires 2 arguments, got 3
 SELECT gcd(1, 2, 3);
 
-query error DataFusion error:
+query error Unsupported argument types Utf8 and Utf8 for function gcd
 SELECT gcd('x', 'y');
 
 
