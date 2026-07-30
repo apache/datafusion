@@ -197,6 +197,27 @@ impl SeriesValue for TimestampValue {
         Ok(())
     }
 
+    fn advance_with_end(&mut self, end: &mut Self, step: &Self::StepType) -> Result<()> {
+        let tz = self
+            .parsed_tz
+            .unwrap_or_else(|| Tz::from_str("+00:00").unwrap());
+        if let Some(next_ts) =
+            TimestampNanosecondType::add_month_day_nano(self.value, *step, tz)
+        {
+            self.value = next_ts;
+        } else {
+            // Advancing would exceed the timestamp range. Clamp `end` so the
+            // series terminates after the current (last reachable) value.
+            let step_negative = step.months < 0 || step.days < 0 || step.nanoseconds < 0;
+            end.value = if step_negative {
+                self.value.saturating_add(1)
+            } else {
+                self.value.saturating_sub(1)
+            };
+        }
+        Ok(())
+    }
+
     fn create_array(&self, values: Vec<Self::ValueType>) -> Result<ArrayRef> {
         let array = TimestampNanosecondArray::from(values);
 

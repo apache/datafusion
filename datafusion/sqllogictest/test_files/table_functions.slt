@@ -246,6 +246,19 @@ SELECT * FROM generate_series(TIMESTAMP '2262-04-11T23:47:16.854775807', TIMESTA
 ----
 2262-04-11T23:47:16.854775807
 
+# A timestamp step that exceeds the nanosecond range must terminate after the
+# last reachable value instead of returning an overflow error.
+query P
+SELECT * FROM generate_series(TIMESTAMP '2262-04-11T23:47:16.854775806', TIMESTAMP '2262-04-11T23:47:16.854775807', INTERVAL '2' NANOSECOND)
+----
+2262-04-11T23:47:16.854775806
+
+# Same behavior for date series, which use the timestamp implementation.
+query P
+SELECT * FROM generate_series(DATE '2262-04-10', DATE '2262-04-11', INTERVAL '2' DAY)
+----
+2262-04-10T00:00:00
+
 # UDF and UDTF `generate_series` can be used simultaneously
 query ? rowsort
 SELECT generate_series(1, t1.end) FROM generate_series(3, 5) as t1(end)
