@@ -523,9 +523,10 @@ impl Partitioning {
 ///
 /// Child expressions (hash keys, range orderings) and `ScalarValue` split
 /// points are (de)serialized through the expression-level context, so this is
-/// the single copy of the partitioning wire format: `RepartitionExec`,
-/// `FileScanConfig` and `datafusion-proto`'s central serializer all route
-/// through it.
+/// the single copy of the partitioning wire format: `RepartitionExec` and
+/// `datafusion-proto`'s central serializer route through it, and the remaining
+/// per-plan migrations (`FileScanConfig` and friends) are meant to do the same
+/// rather than grow another copy.
 ///
 /// [`protobuf::Partitioning`]: datafusion_proto_models::protobuf::Partitioning
 #[cfg(feature = "proto")]
@@ -539,13 +540,15 @@ impl Partitioning {
 
         let partition_method = match self {
             Partitioning::RoundRobinBatch(n) => {
-                protobuf::partitioning::PartitionMethod::RoundRobin(*n as u64)
+                protobuf::partitioning::PartitionMethod::RoundRobin(wire_partition_count(
+                    *n,
+                )?)
             }
             Partitioning::Hash(exprs, n) => {
                 protobuf::partitioning::PartitionMethod::Hash(
                     protobuf::PhysicalHashRepartition {
                         hash_expr: ctx.encode_children_expressions(exprs)?,
-                        partition_count: *n as u64,
+                        partition_count: wire_partition_count(*n)?,
                     },
                 )
             }
@@ -571,7 +574,9 @@ impl Partitioning {
                 )
             }
             Partitioning::UnknownPartitioning(n) => {
-                protobuf::partitioning::PartitionMethod::Unknown(*n as u64)
+                protobuf::partitioning::PartitionMethod::Unknown(wire_partition_count(
+                    *n,
+                )?)
             }
         };
         Ok(protobuf::Partitioning {
@@ -647,6 +652,19 @@ fn partition_count(count: u64) -> Result<usize> {
     usize::try_from(count).map_err(|_| {
         datafusion_common::internal_datafusion_err!(
             "Partition count {count} exceeds usize::MAX"
+        )
+    })
+}
+
+/// Widen a partition count to its `u64` wire representation.
+///
+/// The mirror of [`partition_count`]: an out-of-range count is an error on both
+/// sides rather than a silent truncation on the way out.
+#[cfg(feature = "proto")]
+fn wire_partition_count(count: usize) -> Result<u64> {
+    u64::try_from(count).map_err(|_| {
+        datafusion_common::internal_datafusion_err!(
+            "Partition count {count} exceeds u64::MAX"
         )
     })
 }

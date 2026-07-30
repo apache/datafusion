@@ -395,22 +395,16 @@ pub fn parse_protobuf_hash_partitioning(
     input_schema: &Schema,
     proto_converter: &dyn PhysicalProtoConverterExtension,
 ) -> Result<Option<Partitioning>> {
-    match partitioning {
-        Some(hash_part) => {
-            let expr = parse_physical_exprs(
-                &hash_part.hash_expr,
-                ctx,
-                input_schema,
-                proto_converter,
-            )?;
-
-            Ok(Some(Partitioning::Hash(
-                expr,
-                hash_part.partition_count.try_into().unwrap(),
-            )))
-        }
-        None => Ok(None),
-    }
+    // Delegate to the shared decoder rather than keep a second copy of the hash
+    // wire format: a partition count that does not fit in `usize` (a 32-bit
+    // target reading a plan written on a 64-bit one) is then an error here too
+    // instead of a panic.
+    let hash = partitioning.map(|hash_part| protobuf::Partitioning {
+        partition_method: Some(protobuf::partitioning::PartitionMethod::Hash(
+            hash_part.clone(),
+        )),
+    });
+    parse_protobuf_partitioning(hash.as_ref(), ctx, input_schema, proto_converter)
 }
 
 pub fn parse_protobuf_partitioning(

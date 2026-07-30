@@ -229,7 +229,7 @@ impl<'a> ExecutionPlanEncodeCtx<'a> {
     }
 }
 
-/// Lets [`ExecutionPlanEncodeCtx`] back an [`PhysicalExprEncodeCtx`], so
+/// Lets [`ExecutionPlanEncodeCtx`] back a [`PhysicalExprEncodeCtx`], so
 /// expression-level conversions can be reused from plan hooks.
 impl PhysicalExprEncode for ExecutionPlanEncodeCtx<'_> {
     fn encode(&self, expr: &Arc<dyn PhysicalExpr>) -> Result<PhysicalExprNode> {
