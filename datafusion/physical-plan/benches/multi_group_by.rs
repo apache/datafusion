@@ -452,8 +452,10 @@ fn make_duration_schema() -> SchemaRef {
 }
 
 /// Generate `(Duration(Microsecond), Int32)` batches with `num_distinct_groups`
-/// distinct keys. Each distinct duration is `g` microseconds; the `Int32` column
-/// is keyed identically so the combined cardinality equals `num_distinct_groups`.
+/// distinct keys.
+///
+/// Each distinct duration is `g` microseconds. The `Int32` column is keyed
+/// identically so the combined cardinality equals `num_distinct_groups`.
 fn generate_duration_batches(
     num_distinct_groups: usize,
     num_rows: usize,
@@ -485,7 +487,7 @@ fn generate_duration_batches(
         .collect()
 }
 
-/// Experiment 8: Group count sweep for a `(Duration, Int32)` key.
+/// Experiment 9: Group count sweep for a `(Duration, Int32)` key.
 ///
 /// Exercises the primitive `GroupColumn` builder for `Duration` on the
 /// multi-column path (previously such a schema fell back to `GroupValuesRows`).

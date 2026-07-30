@@ -953,8 +953,6 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::Time64(TimeUnit::Microsecond)
             | DataType::Time64(TimeUnit::Nanosecond)
             | DataType::Timestamp(_, _)
-            // All four Duration units are valid Arrow types (unlike Time32 /
-            // Time64), so every unit is handled by the dispatcher below.
             | DataType::Duration(_)
             | DataType::Utf8View
             | DataType::BinaryView
@@ -1377,41 +1375,42 @@ mod tests {
         }
     }
 
-    /// End-to-end coverage for `Duration` group keys: a `Duration` column stays
-    /// on the `GroupValuesColumn` fast path, deduplicates equal durations
-    /// (including nulls), and round-trips with its `Duration` output type
-    /// preserved (not the bare `i64` native). The four units share one builder,
-    /// so a single unit exercises the dispatcher; the fuzz above covers routing
-    /// for every unit.
+    // `Duration` group keys stay on the `GroupValuesColumn` fast path, dedup
+    // (including nulls), and round-trip with the `Duration` type preserved.
     #[test]
     fn test_group_values_column_duration() {
         use arrow::datatypes::TimeUnit;
 
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "d",
-            DataType::Duration(TimeUnit::Microsecond),
-            true,
-        )]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("d", DataType::Duration(TimeUnit::Microsecond), true),
+            Field::new("i", DataType::Int64, true),
+        ]));
         assert!(supported_schema(&schema));
         let mut group_values =
             GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
 
-        // Two distinct durations and a null with repeats: row 3 repeats row 0,
-        // row 4 repeats the null of row 1.
-        let input: ArrayRef = Arc::new(DurationMicrosecondArray::from(vec![
+        // (d, i) rows, where row 3 repeats row 0 and row 4 repeats the null pair.
+        let d: ArrayRef = Arc::new(DurationMicrosecondArray::from(vec![
             Some(10),
             None,
             Some(20),
             Some(10),
             None,
         ]));
+        let i: ArrayRef = Arc::new(Int64Array::from(vec![
+            Some(1),
+            None,
+            Some(2),
+            Some(1),
+            None,
+        ]));
         let mut groups = Vec::new();
-        group_values.intern(&[input], &mut groups).unwrap();
+        group_values.intern(&[d, i], &mut groups).unwrap();
         assert_eq!(groups, vec![0, 1, 2, 0, 1]);
 
         let emitted = group_values.emit(EmitTo::All).unwrap();
-        assert_eq!(emitted.len(), 1);
-        // The emitted key keeps its Duration type, not the bare i64 native.
+        assert_eq!(emitted.len(), 2);
+        // The Duration column round-trips as Duration on emit, not bare i64.
         assert_eq!(
             emitted[0].data_type(),
             &DataType::Duration(TimeUnit::Microsecond)
