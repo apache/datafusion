@@ -1147,16 +1147,28 @@ impl FiltersPreparedParquetOpen {
 impl RowGroupsPrunedParquetOpen {
     /// Load the page index if pruning requires it and metadata did not include it.
     async fn load_page_index(mut self) -> Result<Self> {
-        self.prepared.loaded.reader_metadata = load_page_index(
+        let options = self
+            .prepared
+            .loaded
+            .options
+            .clone()
+            .with_page_index_policy(PageIndexPolicy::Optional);
+        let reader_metadata = load_page_index(
             self.prepared.loaded.reader_metadata.clone(),
             &mut self.prepared.loaded.prepared.async_file_reader,
-            self.prepared
-                .loaded
-                .options
-                .clone()
-                .with_page_index_policy(PageIndexPolicy::Optional),
+            options.clone(),
         )
         .await?;
+        self.prepared
+            .loaded
+            .prepared
+            .parquet_file_reader_factory
+            .cache_metadata(
+                &self.prepared.loaded.prepared.partitioned_file,
+                Arc::clone(reader_metadata.metadata()),
+                &options,
+            );
+        self.prepared.loaded.reader_metadata = reader_metadata;
 
         Ok(self)
     }
@@ -3159,6 +3171,92 @@ mod test {
             page_index_cached,
             Some("false"),
             "cached metadata should not include page index when opener skips it"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_deferred_page_index_is_cached() {
+        use parquet::file::properties::WriterProperties;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let metadata_cache: Arc<FileMetadataCache> =
+            Arc::new(DefaultCache::<Path, CachedFileMetadataEntry>::new(
+                64 * 1024 * 1024,
+            ));
+        let values: Vec<i32> = (1..=100).collect();
+        let batch = record_batch!((
+            "a",
+            Int32,
+            values.iter().map(|v| Some(*v)).collect::<Vec<_>>()
+        ))
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(10)
+            .set_write_batch_size(10)
+            .build();
+        let schema = batch.schema();
+        let data_len = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch],
+            Some(props),
+        )
+        .await;
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_len).unwrap(),
+        );
+        let predicate = logical2physical(&col("a").gt(lit(90i32)), &schema);
+
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(Arc::clone(&predicate))
+            .with_enable_page_index(true)
+            .with_pushdown_filters(false)
+            .with_row_group_stats_pruning(false)
+            .with_parquet_file_reader_factory(Arc::new(
+                CachedParquetFileReaderFactory::new(
+                    Arc::clone(&store),
+                    Arc::clone(&metadata_cache),
+                ),
+            ))
+            .build();
+
+        let (_, rows) =
+            count_batches_and_rows(open_file(&morselizer, file.clone()).await.unwrap())
+                .await;
+        assert_eq!(rows, 10);
+
+        let cached = metadata_cache
+            .get(&Path::from("test.parquet"))
+            .expect("metadata cache should contain the file");
+        let page_index_cached = cached.file_metadata.extra_info();
+        assert_eq!(
+            page_index_cached.get("page_index").map(String::as_str),
+            Some("true"),
+            "deferred page index should be written back to the metadata cache"
+        );
+
+        let second_metrics = ExecutionPlanMetricsSet::new();
+        let second_morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(schema)
+            .with_predicate(predicate)
+            .with_enable_page_index(true)
+            .with_pushdown_filters(false)
+            .with_row_group_stats_pruning(false)
+            .with_metrics(second_metrics.clone())
+            .with_parquet_file_reader_factory(Arc::new(
+                CachedParquetFileReaderFactory::new(store, metadata_cache),
+            ))
+            .build();
+
+        let _stream = open_file(&second_morselizer, file).await.unwrap();
+        assert_eq!(
+            counter_metric_value(&second_metrics, "bytes_scanned"),
+            0,
+            "reopening the file should reuse the cached page index"
         );
     }
 
