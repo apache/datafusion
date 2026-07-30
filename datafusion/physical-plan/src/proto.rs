@@ -33,7 +33,8 @@
 //! * [`ExecutionPlanEncode`] / [`ExecutionPlanDecode`] — internal dispatch
 //!   traits, *defined* here but *implemented* in `datafusion-proto`, that the
 //!   context types delegate to. This is the dependency inversion that keeps the
-//!   proto types flowing in one direction only.
+//!   proto types flowing in one direction only. They are `#[doc(hidden)]`: not
+//!   public API, `pub` only because their implementors live in another crate.
 //!
 //! `datafusion-physical-plan` depends on the pure prost types in
 //! `datafusion-proto-models` (feature `proto`), never on `datafusion-proto`.
@@ -72,6 +73,11 @@ use crate::ExecutionPlan;
 ///
 /// Implemented by `datafusion-proto`. Plan authors never name this trait; they
 /// call methods on [`ExecutionPlanEncodeCtx`] instead.
+///
+/// **Not public API.** `pub` only because the implementors live in another
+/// crate; `#[doc(hidden)]` records that, so encoding primitives can be added
+/// here as the serialization hooks grow without breaking downstream code.
+#[doc(hidden)]
 pub trait ExecutionPlanEncode {
     /// Serialize a child execution plan (recursing through the central
     /// serializer, so the child's own `try_to_proto` hook is honored).
@@ -97,6 +103,11 @@ pub trait ExecutionPlanEncode {
 ///
 /// Implemented by `datafusion-proto`. Plan authors never name this trait; they
 /// call methods on [`ExecutionPlanDecodeCtx`] instead.
+///
+/// **Not public API.** `pub` only because the implementors live in another
+/// crate; `#[doc(hidden)]` records that, so decoding primitives can be added
+/// here as the serialization hooks grow without breaking downstream code.
+#[doc(hidden)]
 pub trait ExecutionPlanDecode {
     /// Deserialize a child execution plan (recursing through the central
     /// deserializer, so the child's own `try_from_proto` is honored).
