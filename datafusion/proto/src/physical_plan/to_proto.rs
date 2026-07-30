@@ -411,7 +411,7 @@ pub fn serialize_file_scan_config(
         codec,
         proto_converter,
     };
-    conf.to_proto_conf(&ExecutionPlanEncodeCtx::new(&encoder))
+    conf.try_to_proto(&ExecutionPlanEncodeCtx::new(&encoder))
 }
 
 pub fn serialize_maybe_filter(

@@ -358,7 +358,7 @@ pub trait FileSource: Any + Send + Sync {
     /// `base` is the shared [`FileScanConfig`] this source is wrapped in; the
     /// format-agnostic parts (file groups, schema, statistics, ordering,
     /// projection, …) are encoded via
-    /// [`FileScanConfig::to_proto_conf`](crate::file_scan_config::FileScanConfig::to_proto_conf),
+    /// [`FileScanConfig::try_to_proto`](crate::file_scan_config::FileScanConfig::try_to_proto),
     /// and the concrete source appends its format-specific fields (e.g. CSV
     /// delimiter/quote) around it.
     ///

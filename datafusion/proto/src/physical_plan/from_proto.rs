@@ -449,7 +449,7 @@ pub fn parse_protobuf_file_scan_config(
         ctx,
         proto_converter,
     };
-    FileScanConfig::from_proto_conf(
+    FileScanConfig::try_from_proto(
         proto,
         &ExecutionPlanDecodeCtx::new(&decoder),
         file_source,

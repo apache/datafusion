@@ -307,7 +307,7 @@ mod file_scan_config_serde {
                 codec: &self.codec,
                 proto_converter: &self.converter,
             };
-            config.to_proto_conf(&ExecutionPlanEncodeCtx::new(&encoder))
+            config.try_to_proto(&ExecutionPlanEncodeCtx::new(&encoder))
         }
 
         fn decode(&self, conf: &protobuf::FileScanExecConf) -> Result<FileScanConfig> {
@@ -325,7 +325,7 @@ mod file_scan_config_serde {
                 ctx: &physical_decode_ctx,
                 proto_converter: &self.converter,
             };
-            FileScanConfig::from_proto_conf(
+            FileScanConfig::try_from_proto(
                 conf,
                 &ExecutionPlanDecodeCtx::new(&decoder),
                 file_source,

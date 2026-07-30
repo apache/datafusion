@@ -21,10 +21,11 @@
 pub(crate) mod sort_pushdown;
 
 /// Shared `FileScanConfig` <-> proto conversion, gated on the `proto` feature.
-/// Attaches inherent `to_proto_conf` / `from_proto_conf` / `parse_table_schema_from_proto`
-/// helpers to [`FileScanConfig`] used by every file source's `try_to_proto` hook.
+/// Attaches inherent `try_to_proto` / `try_from_proto` /
+/// `parse_table_schema_from_proto` helpers to [`FileScanConfig`] used by every
+/// file source's `try_to_proto` hook.
 #[cfg(feature = "proto")]
-pub(crate) mod proto;
+mod proto;
 
 use crate::file_groups::FileGroup;
 use crate::{
