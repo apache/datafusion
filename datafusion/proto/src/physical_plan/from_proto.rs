@@ -660,7 +660,10 @@ impl TryFromProto<&protobuf::PartitionedFile> for PartitionedFile {
             pf = pf.with_range(file_range.start, file_range.end);
         }
         if let Some(proto_stats) = val.statistics.as_ref() {
-            pf = pf.with_statistics(Arc::new(proto_stats.try_into()?));
+            // The wire format carries statistics for the full table schema (file + partition
+            // columns), so assign directly — `with_statistics` would append the partition
+            // column stats a second time.
+            pf.statistics = Some(Arc::new(proto_stats.try_into()?));
         }
         Ok(pf)
     }
@@ -807,8 +810,8 @@ impl datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprD
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
+    use arrow::datatypes::{DataType, Field, Schema};
 
     #[test]
     fn partitioned_file_path_roundtrip_percent_encoded() {
@@ -833,7 +836,6 @@ mod tests {
 
     #[test]
     fn partitioned_file_arrow_schema_roundtrip() {
-        use arrow::datatypes::{DataType, Field, Schema};
         use std::collections::HashMap;
 
         let arrow_schema = Arc::new(Schema::new_with_metadata(
@@ -856,6 +858,28 @@ mod tests {
             decoded.arrow_schema.as_ref().map(|s| s.as_ref()),
             Some(arrow_schema.as_ref())
         );
+    }
+
+    #[test]
+    fn partitioned_file_statistics_roundtrip_with_partition_values() {
+        use datafusion_common::Statistics;
+        let file_schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let pf = PartitionedFile::new("foo/bar.parquet", 1234)
+            .with_partition_values(vec![ScalarValue::from("2024-01-01")])
+            .with_statistics(Arc::new(Statistics::new_unknown(&file_schema)));
+
+        // `statistics` covers the full table schema: file columns followed by one
+        // entry per partition column.
+        let expected_len = file_schema.fields().len() + pf.partition_values.len();
+        assert_eq!(
+            pf.statistics.as_ref().unwrap().column_statistics.len(),
+            expected_len
+        );
+
+        let proto = protobuf::PartitionedFile::try_from_proto(&pf).unwrap();
+        let decoded = PartitionedFile::try_from_proto(&proto).unwrap();
+
+        assert_eq!(decoded.statistics, pf.statistics);
     }
 
     #[test]
