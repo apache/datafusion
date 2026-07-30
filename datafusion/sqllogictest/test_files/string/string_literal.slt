@@ -387,13 +387,13 @@ SELECT character_length(lpad('x', 16385, 'a'));
 query error 'lpad' does not support zero arguments
 SELECT lpad();
 
-query error No function matches the given name and argument types 'lpad\(Utf8\)'
+query error Failed to coerce arguments to satisfy a call to 'lpad' function: coercion from Utf8 to the signature
 SELECT lpad('x');
 
-query error No function matches the given name and argument types 'lpad\(Utf8, Int64, Utf8, Utf8\)'
+query error Failed to coerce arguments to satisfy a call to 'lpad' function: coercion from Utf8, Int64, Utf8, Utf8 to the signature
 SELECT lpad('x', 2, 'y', 'z');
 
-query error No function matches the given name and argument types 'lpad\(Utf8, Utf8\)'
+query error Failed to coerce arguments to satisfy a call to 'lpad' function: coercion from Utf8, Utf8 to the signature
 SELECT lpad('x', 'bad');
 
 query error lpad requested length 2147483648 too large
