@@ -29,4 +29,5 @@ pub use window_expr::PartitionBatches;
 pub use window_expr::PartitionKey;
 pub use window_expr::PartitionWindowAggStates;
 pub use window_expr::WindowExpr;
+pub use window_expr::WindowFn;
 pub use window_expr::WindowState;

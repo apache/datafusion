@@ -23,7 +23,7 @@
 use std::cmp::{Ordering, min};
 use std::collections::VecDeque;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use super::utils::create_schema;
@@ -54,13 +54,14 @@ use datafusion_common::utils::{
     evaluate_partition_ranges, get_at_indices, get_row_at_idx,
 };
 use datafusion_common::{
-    HashMap, Result, arrow_datafusion_err, exec_datafusion_err, exec_err,
+    HashMap, Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err, exec_err,
+    internal_datafusion_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
 use datafusion_physical_expr::window::{
-    PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowState,
+    PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowFn, WindowState,
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
@@ -74,6 +75,14 @@ use futures::{StreamExt, ready};
 use hashbrown::hash_table::HashTable;
 use indexmap::IndexMap;
 use log::debug;
+
+/// One output partition's snapshot of finalized [`Accumulator::state`] values,
+/// keyed by PARTITION BY tuple. The inner `Vec` is indexed by
+/// [`BoundedWindowAggExec::window_expr`]; non-aggregate window functions
+/// (row_number, rank, lead/lag, ...) occupy `None`.
+///
+/// [`Accumulator::state`]: datafusion_expr::Accumulator::state
+pub type FinalizedPartitionState = HashMap<PartitionKey, Vec<Option<Vec<ScalarValue>>>>;
 
 /// Window execution plan
 #[derive(Debug, Clone)]
@@ -99,6 +108,16 @@ pub struct BoundedWindowAggExec {
     cache: Arc<PlanProperties>,
     /// If `can_rerepartition` is false, partition_keys is always empty.
     can_repartition: bool,
+    /// Per-output-partition slots holding the finalized `Accumulator::state()`
+    /// for each aggregate window expression, keyed by PARTITION BY tuple.
+    /// The stream writes into slot `p` at partition-close, immediately before
+    /// internal state would otherwise be pruned. Distributed executors read
+    /// via [`Self::finalized_partition_state`] once a task has drained, to
+    /// ship state via a side-channel for cross-partition prefix scans without
+    /// a two-pass halo scheme. Non-aggregate window functions (row_number,
+    /// rank, lead/lag, ...) have no `Accumulator` and are stored as `None`
+    /// at their index in the per-partition-key `Vec`.
+    finalized_state: Arc<[Mutex<FinalizedPartitionState>]>,
 }
 
 impl BoundedWindowAggExec {
@@ -130,6 +149,11 @@ impl BoundedWindowAggExec {
             }
         };
         let cache = Self::compute_properties(&input, &schema, &window_expr)?;
+        let partition_count = cache.partitioning.partition_count();
+        let finalized_state: Arc<[Mutex<HashMap<_, _>>]> = (0..partition_count)
+            .map(|_| Mutex::new(HashMap::new()))
+            .collect::<Vec<_>>()
+            .into();
         Ok(Self {
             input,
             window_expr,
@@ -139,6 +163,7 @@ impl BoundedWindowAggExec {
             ordered_partition_by_indices,
             cache: Arc::new(cache),
             can_repartition,
+            finalized_state,
         })
     }
 
@@ -233,6 +258,40 @@ impl BoundedWindowAggExec {
                 .min_by_key(|s| s.len())
                 .unwrap_or_else(Vec::new)
         }
+    }
+
+    /// Snapshot of the finalized [`Accumulator::state`] for every partition
+    /// key seen on output partition `partition`, populated as partitions close
+    /// during streaming and complete once the stream has drained.
+    ///
+    /// The outer `HashMap` is keyed by PARTITION BY tuple; the inner `Vec` is
+    /// indexed by [`Self::window_expr`], with `None` at any slot whose window
+    /// function is not an aggregate (row_number, rank, lead/lag, ...) and
+    /// therefore exposes no state.
+    ///
+    /// Returns an empty map when no partitions have closed yet. Errors when
+    /// `partition` is outside the exec's output partitioning or when the slot
+    /// mutex is poisoned.
+    ///
+    /// [`Accumulator::state`]: datafusion_expr::Accumulator::state
+    pub fn finalized_partition_state(
+        &self,
+        partition: usize,
+    ) -> Result<FinalizedPartitionState> {
+        let slot = self.finalized_state.get(partition).ok_or_else(|| {
+            internal_datafusion_err!(
+                "BoundedWindowAggExec: partition {} out of range (have {})",
+                partition,
+                self.finalized_state.len()
+            )
+        })?;
+        let guard = slot.lock().map_err(|e| {
+            internal_datafusion_err!(
+                "BoundedWindowAggExec partition {}: finalized-state mutex poisoned: {e}",
+                partition
+            )
+        })?;
+        Ok(guard.clone())
     }
 
     fn statistics_helper(&self, statistics: Statistics) -> Result<Statistics> {
@@ -371,12 +430,15 @@ impl ExecutionPlan for BoundedWindowAggExec {
     ) -> Result<SendableRecordBatchStream> {
         let input = self.input.execute(partition, context)?;
         let search_mode = self.get_search_algo()?;
+        let finalized_state = Arc::clone(&self.finalized_state);
         let stream = Box::pin(BoundedWindowAggStream::new(
             Arc::clone(&self.schema),
             self.window_expr.clone(),
             input,
             BaselineMetrics::new(&self.metrics, partition),
             search_mode,
+            finalized_state,
+            partition,
         )?);
         Ok(stream)
     }
@@ -1010,6 +1072,12 @@ pub struct BoundedWindowAggStream {
     /// Search mode for partition columns. This determines the algorithm with
     /// which we group each partition.
     search_mode: Box<dyn PartitionSearcher>,
+    /// Shared with [`BoundedWindowAggExec::finalized_state`]. The stream
+    /// writes into slot `partition` at partition-close, immediately before
+    /// the entry is pruned from `window_agg_states`.
+    finalized_state: Arc<[Mutex<FinalizedPartitionState>]>,
+    /// Which slot in [`Self::finalized_state`] this stream writes to.
+    partition: usize,
 }
 
 impl BoundedWindowAggStream {
@@ -1021,6 +1089,11 @@ impl BoundedWindowAggStream {
     // For instance, if `n_out` number of rows are calculated, we can remove
     // first `n_out` rows from `self.input_buffer`.
     fn prune_state(&mut self, n_out: usize) -> Result<()> {
+        // Snapshot `Accumulator::state()` for every partition/window-expr pair
+        // whose entry is about to be dropped, before any of the retain
+        // calls below fire. Pruning happens both mid-stream (as SQL partitions
+        // close) and at EOS; this snapshot covers both.
+        self.publish_finalized_state()?;
         // Prune `self.window_agg_states`:
         self.prune_out_columns();
         // Prune `self.partition_batches`:
@@ -1053,6 +1126,8 @@ impl BoundedWindowAggStream {
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
         search_mode: Box<dyn PartitionSearcher>,
+        finalized_state: Arc<[Mutex<FinalizedPartitionState>]>,
+        partition: usize,
     ) -> Result<Self> {
         let state = window_expr.iter().map(|_| IndexMap::new()).collect();
         let empty_batch = RecordBatch::new_empty(Arc::clone(&schema));
@@ -1066,6 +1141,8 @@ impl BoundedWindowAggStream {
             window_expr,
             baseline_metrics,
             search_mode,
+            finalized_state,
+            partition,
         })
     }
 
@@ -1198,6 +1275,58 @@ impl BoundedWindowAggStream {
                 window_agg_state[partition_row].state.prune_state(*n_prune);
             }
         }
+    }
+
+    /// Snapshot [`Accumulator::state`] for every entry whose `state.is_end` is
+    /// set, i.e. every partition/window-expr pair about to be dropped by the
+    /// retain in [`Self::prune_partition_batches`]. The result is written into
+    /// this stream's slot in the exec's shared `finalized_state`.
+    ///
+    /// [`Accumulator::state`]: datafusion_expr::Accumulator::state
+    fn publish_finalized_state(&mut self) -> Result<()> {
+        let n_exprs = self.window_expr.len();
+        let mut finalizing: HashMap<PartitionKey, Vec<Option<Vec<ScalarValue>>>> =
+            HashMap::new();
+        for (expr_idx, window_agg_state) in self.window_agg_states.iter_mut().enumerate()
+        {
+            for (partition_row, WindowState { state, window_fn }) in
+                window_agg_state.iter_mut()
+            {
+                if !state.is_end {
+                    continue;
+                }
+                let acc_state = match window_fn {
+                    WindowFn::Aggregate(acc) => Some(acc.state()?),
+                    WindowFn::Builtin(_) => None,
+                };
+                let entry = finalizing
+                    .entry(partition_row.clone())
+                    .or_insert_with(|| vec![None; n_exprs]);
+                entry[expr_idx] = acc_state;
+            }
+        }
+        if finalizing.is_empty() {
+            return Ok(());
+        }
+        let slot = self.finalized_state.get(self.partition).ok_or_else(|| {
+            internal_datafusion_err!(
+                "BoundedWindowAggStream: partition {} out of range for \
+                 finalized_state (have {})",
+                self.partition,
+                self.finalized_state.len()
+            )
+        })?;
+        let mut guard = slot.lock().map_err(|e| {
+            internal_datafusion_err!(
+                "BoundedWindowAggStream partition {}: finalized-state mutex \
+                 poisoned: {e}",
+                self.partition
+            )
+        })?;
+        for (key, per_expr) in finalizing {
+            guard.insert(key, per_expr);
+        }
+        Ok(())
     }
 
     /// Prunes the section of the input batch whose aggregate results
@@ -1905,6 +2034,88 @@ mod tests {
         +----+------+-------+
         ");
 
+        Ok(())
+    }
+
+    /// After the stream drains, `finalized_partition_state` returns one
+    /// `Accumulator::state()` per PARTITION BY key seen — the per-partition
+    /// final sum for a cumulative `SUM(v) OVER (PARTITION BY pk)`. Confirms
+    /// state survives both the mid-stream partition-close prune (when the
+    /// sort keys change between rows) and the EOS flush.
+    #[tokio::test]
+    async fn finalized_partition_state_captures_sum_per_partition_key() -> Result<()> {
+        use arrow::array::Int64Array;
+        use datafusion_functions_aggregate::sum::sum_udaf;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("pk", DataType::Int64, false),
+            Field::new("v", DataType::Int64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 1, 1, 2, 2, 2])),
+                Arc::new(Int64Array::from(vec![10, 20, 30, 100, 200, 300])),
+            ],
+        )?;
+
+        let sort_info: LexOrdering = [PhysicalSortExpr {
+            expr: col("pk", &schema)?,
+            options: SortOptions::default(),
+        }]
+        .into();
+        let input: Arc<dyn ExecutionPlan> = Arc::new(
+            TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None)?
+                .try_with_sort_information(vec![sort_info])?,
+        );
+
+        let window_fn = WindowFunctionDefinition::AggregateUDF(sum_udaf());
+        let args = vec![col("v", &schema)?];
+        let partitionby = vec![col("pk", &schema)?];
+        let orderby: Vec<PhysicalSortExpr> = vec![];
+        let window_frame = Arc::new(WindowFrame::new(None));
+        let window_expr = create_window_expr(
+            &window_fn,
+            "sum(v)".to_string(),
+            &args,
+            &partitionby,
+            &orderby,
+            window_frame,
+            Arc::clone(&schema),
+            false,
+            false,
+            None,
+        )?;
+
+        let exec: Arc<BoundedWindowAggExec> = Arc::new(BoundedWindowAggExec::try_new(
+            vec![window_expr],
+            input,
+            InputOrderMode::Sorted,
+            false,
+        )?);
+
+        let ctx = Arc::new(TaskContext::default());
+        let stream = ExecutionPlan::execute(exec.as_ref(), 0, ctx)?;
+        let _batches = collect(stream).await?;
+
+        let state = exec.finalized_partition_state(0)?;
+        assert_eq!(state.len(), 2, "one entry per PARTITION BY key");
+        let sum_of = |key: i64| -> ScalarValue {
+            let states = state
+                .get(&vec![ScalarValue::Int64(Some(key))])
+                .unwrap_or_else(|| panic!("partition key {key} missing from state"));
+            assert_eq!(states.len(), 1, "one window expr");
+            let inner = states[0]
+                .as_ref()
+                .expect("SUM is an aggregate — Accumulator state should be Some");
+            assert_eq!(inner.len(), 1, "SumAccumulator::state() is a single scalar");
+            inner[0].clone()
+        };
+        assert_eq!(sum_of(1), ScalarValue::Int64(Some(60)));
+        assert_eq!(sum_of(2), ScalarValue::Int64(Some(600)));
+
+        // A partition slot the exec doesn't own errors, not panics.
+        assert!(exec.finalized_partition_state(99).is_err());
         Ok(())
     }
 
