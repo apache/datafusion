@@ -276,20 +276,20 @@ pub(crate) fn partitioned_hash_join(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let left = hash_join.left();
     let right = hash_join.right();
+    let partition_mode = if hash_join.null_aware {
+        PartitionMode::CollectLeft
+    } else {
+        PartitionMode::Partitioned
+    };
     if can_swap_hash_join(hash_join)
         && should_swap_join_order(&**left, &**right, config, registry)?
     {
-        hash_join.swap_inputs(PartitionMode::Partitioned)
+        hash_join.swap_inputs(partition_mode)
     } else {
         // Null-aware anti joins must use CollectLeft mode because they track probe-side state
         // (probe_side_non_empty, probe_side_has_null) per-partition, but need global knowledge
         // for correct null handling. With partitioning, a partition might not see probe rows
         // even if the probe side is globally non-empty, leading to incorrect NULL row handling.
-        let partition_mode = if hash_join.null_aware {
-            PartitionMode::CollectLeft
-        } else {
-            PartitionMode::Partitioned
-        };
 
         Ok(Arc::new(
             hash_join
@@ -329,14 +329,16 @@ fn statistical_join_selection_subrule(
             PartitionMode::Partitioned => {
                 let left = hash_join.left();
                 let right = hash_join.right();
-                // Don't swap null-aware anti joins as they have specific side requirements
-                if hash_join.join_type().supports_swap()
-                    && !hash_join.null_aware
+                if can_swap_hash_join(hash_join)
                     && should_swap_join_order(&**left, &**right, config, registry)?
                 {
-                    hash_join
-                        .swap_inputs(PartitionMode::Partitioned)
-                        .map(Some)?
+                    // Null-aware RightAnti only supports CollectLeft
+                    let partition_mode = if hash_join.null_aware {
+                        PartitionMode::CollectLeft
+                    } else {
+                        PartitionMode::Partitioned
+                    };
+                    hash_join.swap_inputs(partition_mode).map(Some)?
                 } else {
                     None
                 }
