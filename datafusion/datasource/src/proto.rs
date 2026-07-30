@@ -123,7 +123,10 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
             pf = pf.with_range(range.start, range.end);
         }
         if let Some(proto_stats) = file.statistics.as_ref() {
-            pf = pf.with_statistics(Arc::new(proto_stats.try_into()?));
+            // The wire format carries statistics for the full table schema (file + partition
+            // columns), so assign directly — `with_statistics` would append the partition
+            // column stats a second time.
+            pf.statistics = Some(Arc::new(proto_stats.try_into()?));
         }
         Ok(pf)
     }
@@ -191,11 +194,13 @@ mod tests {
         assert_eq!(decoded.partition_values, pf.partition_values);
         assert_eq!(decoded.range, pf.range);
         assert_eq!(decoded.arrow_schema.as_deref(), Some(schema.as_ref()));
-        // Statistics on `PartitionedFile` span the full table schema, and
-        // `PartitionedFile::with_statistics` re-derives the partition column
-        // entries, so the decoded statistics are not compared field by field
-        // here; this is pre-existing behavior of the wire format.
-        assert!(decoded.statistics.is_some());
+        // Statistics span the full table schema (file columns followed by one
+        // entry per partition column), and survive the round trip intact.
+        assert_eq!(
+            pf.statistics.as_ref().unwrap().column_statistics.len(),
+            schema.fields().len() + pf.partition_values.len()
+        );
+        assert_eq!(decoded.statistics, pf.statistics);
         Ok(())
     }
 
