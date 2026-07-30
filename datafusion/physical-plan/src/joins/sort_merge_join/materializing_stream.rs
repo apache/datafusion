@@ -307,8 +307,6 @@ pub(super) struct MaterializingSortMergeJoinStream {
     pub streamed: SendableRecordBatchStream,
     /// Current processing record batch of streamed
     pub streamed_batch: StreamedBatch,
-    /// (used in outer join) Is current streamed row joined at least once?
-    pub streamed_joined: bool,
     /// True once the streamed input has no more rows
     pub streamed_exhausted: bool,
     /// Join key columns of streamed
@@ -324,8 +322,9 @@ pub(super) struct MaterializingSortMergeJoinStream {
     pub buffered: SendableRecordBatchStream,
     /// Current buffered data
     pub buffered_data: BufferedData,
-    /// (used in outer join) Is current buffered batches joined at least once?
-    pub buffered_joined: bool,
+    /// Has any streamed row matched the current buffered key group?
+    /// (FULL join: an unmatched group is emitted null-joined when passed.)
+    pub buffered_group_matched: bool,
     /// True once the buffered input has no more rows and no group remains
     pub buffered_exhausted: bool,
     /// Join key columns of buffered
@@ -341,8 +340,6 @@ pub(super) struct MaterializingSortMergeJoinStream {
     /// Output buffer. Currently used by filtering as it requires double buffering
     /// to avoid small/empty batches. Non-filtered join outputs directly from `staging_output_record_batches.batches`
     pub output: BatchCoalescer,
-    /// The comparison result of current streamed row and buffered batches
-    pub current_ordering: Ordering,
     /// Manages the process of spilling and reading back intermediate data
     pub spill_manager: SpillManager,
 
@@ -556,11 +553,9 @@ impl MaterializingSortMergeJoinStream {
             buffered,
             streamed_batch: StreamedBatch::new_empty(streamed_schema),
             buffered_data: BufferedData::default(),
-            streamed_joined: false,
-            buffered_joined: false,
+            buffered_group_matched: false,
             streamed_exhausted: false,
             buffered_exhausted: false,
-            current_ordering: Ordering::Equal,
             on_streamed,
             on_buffered,
             deferred_filtering: needs_deferred_filtering(&filter, join_type),
@@ -599,109 +594,85 @@ impl MaterializingSortMergeJoinStream {
         )))
     }
 
-    /// Main loop: a merge scan over the two sorted inputs.
+    /// Main loop: the textbook sort-merge join.
     ///
-    /// Compares the current streamed row with the current buffered key
-    /// group and advances the smaller side; on equality the scan phase
-    /// pairs the streamed row with every row of the buffered group. Pairs
-    /// are "frozen" (materialized into output columns) once a full batch
-    /// of them has accumulated.
+    /// Both inputs arrive sorted on the join keys. The streamed side is
+    /// consumed one row at a time; the buffered side one key *group* (all
+    /// contiguous rows sharing a key) at a time:
+    ///
+    /// ```text
+    /// load the first streamed row and the first buffered key group
+    /// while either input still has rows:
+    ///     compare the join keys at both cursors
+    ///     Less    → the streamed row can never match:
+    ///               null-join it (outer joins), advance streamed
+    ///     Greater → the buffered group can never match again:
+    ///               null-join it if nothing matched it (FULL join),
+    ///               advance to the next buffered group
+    ///     Equal   → pair the streamed row with the whole group, advance
+    ///               streamed (the group stays — the next streamed row
+    ///               may share its key)
+    ///     materialize ("freeze") pairs once batch_size of them accumulate
+    ///     emit completed output batches
+    /// flush everything that remains
+    /// ```
     async fn join(
         mut self,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
         // TODO - add join time metric
 
-        // Load the first buffered key group before the merge loop; the
-        // streamed side is advanced by the first loop iteration (the
-        // initial `current_ordering` is Equal).
+        self.load_next_streamed_batch().await?;
         self.advance_buffered_group().await?;
 
-        loop {
-            // 1. Based on the previous comparison, advance the consumed
-            // side(s).
-            match self.current_ordering {
-                Ordering::Less | Ordering::Equal if !self.streamed_exhausted => {
-                    // Deferred-filtering gate: run the filter pipeline once at
-                    // least a full batch of rows has accumulated. Without this
-                    // gate, unique keys cause per-row pipeline execution
-                    // (concat + correct_mask + filter_by_type), which
-                    // dominates runtime. See `deferred_rows_accumulated` for
-                    // why the accumulation stays bounded.
-                    if self.deferred_filtering
-                        && self.deferred_rows_accumulated() >= self.batch_size
-                    {
-                        self.emit_deferred_output(emitter).await?;
-                    }
+        while !(self.streamed_exhausted && self.buffered_exhausted) {
+            // Flush the deferred-filtering pipeline once a full batch of
+            // rows accumulated (filtered outer joins output through it).
+            if self.deferred_filtering
+                && self.deferred_rows_accumulated() >= self.batch_size
+            {
+                self.emit_deferred_output(emitter).await?;
+            }
 
-                    self.streamed_joined = false;
-                    // Sync fast path: next row within the current batch.
-                    // The async helper is only entered at batch boundaries.
+            // An exhausted side compares as the larger one, so the other
+            // side keeps draining through its own arm.
+            match self.compare_streamed_buffered()? {
+                // The streamed row can never match: null-join it (outer
+                // joins emit it; inner joins drop it), then advance.
+                Ordering::Less => {
+                    self.null_join_streamed_row();
+                    if self.num_unfrozen_pairs() >= self.batch_size {
+                        self.freeze_full_batch(emitter).await?;
+                    }
                     if !self.try_advance_streamed_row() {
                         self.load_next_streamed_batch().await?;
                     }
                 }
-                Ordering::Greater if !self.buffered_exhausted => {
-                    self.buffered_joined = false;
-                    // Sync fast path: next group within the current buffered
-                    // batch. The async helper is only entered at batch
-                    // boundaries.
+                // The buffered group can never match again: null-join it
+                // if nothing matched it (FULL join), then advance to the
+                // next key group.
+                Ordering::Greater => {
+                    self.null_join_buffered_group();
                     if !self.try_advance_buffered_group()? {
                         self.advance_buffered_group().await?;
                     }
                 }
-                _ => {}
-            }
-
-            if self.streamed_exhausted && self.buffered_exhausted {
-                break;
-            }
-
-            // 2. Compare the join keys at both cursors.
-            self.current_ordering = self.compare_streamed_buffered()?;
-
-            // 3. Scan the buffered group, collecting output pairs for the
-            // current streamed row; freeze (materialize) them whenever a
-            // full batch has accumulated.
-            debug_assert!(self.num_unfrozen_pairs() < self.batch_size);
-            loop {
-                self.join_partial()?;
-
-                if self.num_unfrozen_pairs() < self.batch_size {
-                    // join_partial only stops early when a full batch of
-                    // pairs accumulated, so the scan is complete here.
-                    debug_assert!(self.buffered_data.scanning_finished());
-                    break;
-                }
-
-                // A full batch of pairs is ready — materialize it,
-                // restoring any spilled batches it needs first.
-                self.restore_spilled_batches_for_freeze().await?;
-                self.freeze_all()?;
-
-                self.joined_record_batches
-                    .filter_metadata
-                    .debug_assert_metadata_aligned();
-
-                // For filtered joins, output happens through step 1's
-                // deferred-filtering gate instead.
-                if !self.deferred_filtering
-                    && self
-                        .joined_record_batches
-                        .joined_batches
-                        .has_completed_batch()
-                {
-                    self.emit_completed_joined_batches(emitter).await;
+                // Match: pair the streamed row with the whole group —
+                // materializing ("freezing") mid-scan whenever a full
+                // batch of pairs accumulates — then advance streamed.
+                // The group stays for the next streamed row.
+                Ordering::Equal => {
+                    while !self.pair_streamed_row_with_group() {
+                        self.freeze_full_batch(emitter).await?;
+                    }
+                    if !self.try_advance_streamed_row() {
+                        self.load_next_streamed_batch().await?;
+                    }
                 }
             }
-            self.buffered_data.scanning_reset();
 
-            // 4. Emit any completed output — opportunistic output when the
-            // target batch size is reached (non-filtered joins only;
-            // filtered joins defer output to step 1's gate).
-            self.joined_record_batches
-                .filter_metadata
-                .debug_assert_metadata_aligned();
+            // Emit completed output batches (filtered joins emit through
+            // the deferred-filtering pipeline above instead).
             if !self.deferred_filtering
                 && self
                     .joined_record_batches
@@ -713,6 +684,72 @@ impl MaterializingSortMergeJoinStream {
         }
 
         self.on_children_exhausted(emitter).await
+    }
+
+    /// `Equal`: pair the current streamed row with every row of the
+    /// buffered key group, and mark the group as matched.
+    ///
+    /// Returns false when a full batch of pairs accumulated mid-scan: the
+    /// caller must materialize (`freeze_full_batch`) and call again to
+    /// resume the scan where it paused. Returns true when the group scan
+    /// is complete.
+    fn pair_streamed_row_with_group(&mut self) -> bool {
+        while !self.buffered_data.scanning_finished()
+            && self.num_unfrozen_pairs() < self.batch_size
+        {
+            let scanning_idx = self.buffered_data.scanning_idx();
+            self.streamed_batch.append_output_pair(
+                Some(self.buffered_data.scanning_batch_idx),
+                Some(scanning_idx),
+                self.batch_size,
+            );
+            self.buffered_data.scanning_advance();
+        }
+        if self.num_unfrozen_pairs() >= self.batch_size {
+            return false;
+        }
+
+        self.buffered_group_matched = true;
+        self.buffered_data.scanning_reset();
+        true
+    }
+
+    /// `Less` (outer joins): no buffered row matches the current streamed
+    /// row — emit it joined to NULLs. Inner joins emit nothing.
+    fn null_join_streamed_row(&mut self) {
+        if matches!(
+            self.join_type,
+            JoinType::Left | JoinType::Right | JoinType::Full
+        ) {
+            let scanning_batch_idx = if self.buffered_data.scanning_finished() {
+                None
+            } else {
+                Some(self.buffered_data.scanning_batch_idx)
+            };
+            self.streamed_batch.append_output_pair(
+                scanning_batch_idx,
+                None,
+                self.batch_size,
+            );
+        }
+        self.buffered_data.scanning_reset();
+    }
+
+    /// `Greater` (FULL join): the buffered group can never match a streamed
+    /// row anymore — if nothing matched it, mark all its rows for
+    /// null-joined output (produced when the group's batches are dequeued).
+    fn null_join_buffered_group(&mut self) {
+        if self.join_type == JoinType::Full && !self.buffered_group_matched {
+            while !self.buffered_data.scanning_finished() {
+                let scanning_idx = self.buffered_data.scanning_idx();
+                self.buffered_data
+                    .scanning_batch_mut()
+                    .null_joined
+                    .push(scanning_idx);
+                self.buffered_data.scanning_advance();
+            }
+        }
+        self.buffered_data.scanning_reset();
     }
 
     /// Number of rows currently waiting in the deferred-filtering pipeline.
@@ -730,6 +767,10 @@ impl MaterializingSortMergeJoinStream {
     /// Run the deferred-filtering pipeline over everything accumulated so
     /// far and emit its completed output, if any. Clears the accumulation
     /// it processed.
+    ///
+    /// The caller gates this on `deferred_rows_accumulated() >= batch_size`:
+    /// running the pipeline per row instead (concat + correct_mask +
+    /// filter_by_type) would dominate runtime for unique keys.
     async fn emit_deferred_output(
         &mut self,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
@@ -1099,10 +1140,12 @@ impl MaterializingSortMergeJoinStream {
         let batch = self.buffered_data.tail_batch_mut();
         batch.range.start = group_start;
         batch.range.end = group_end;
+        self.buffered_group_matched = false;
         Ok(true)
     }
 
     async fn advance_buffered_group(&mut self) -> Result<()> {
+        self.buffered_group_matched = false;
         self.dequeue_consumed_buffered_batches().await?;
 
         if self.buffered_data.batches.is_empty() {
@@ -1251,81 +1294,23 @@ impl MaterializingSortMergeJoinStream {
         ))
     }
 
-    /// Produce join and fill output buffer until reaching target batch size
-    /// or the join is finished
-    fn join_partial(&mut self) -> Result<()> {
-        // Whether to join streamed rows
-        let mut join_streamed = false;
-        // Whether to join buffered rows
-        let mut join_buffered = false;
+    /// Materialize ("freeze") the accumulated pairs — restoring any spilled
+    /// batches they reference first — and emit completed output batches
+    /// (filtered joins emit through the deferred-filtering gate instead).
+    async fn freeze_full_batch(
+        &mut self,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
+        self.restore_spilled_batches_for_freeze().await?;
+        self.freeze_all()?;
 
-        // determine whether we need to join streamed/buffered rows
-        match self.current_ordering {
-            Ordering::Less => {
-                if matches!(
-                    self.join_type,
-                    JoinType::Left | JoinType::Right | JoinType::Full
-                ) {
-                    join_streamed = !self.streamed_joined;
-                }
-            }
-            Ordering::Equal => {
-                join_streamed = true;
-                join_buffered = true;
-            }
-            Ordering::Greater => {
-                if self.join_type == JoinType::Full {
-                    join_buffered = !self.buffered_joined;
-                };
-            }
-        }
-        if !join_streamed && !join_buffered {
-            // no joined data
-            self.buffered_data.scanning_finish();
-            return Ok(());
-        }
-
-        if join_buffered {
-            // joining streamed/nulls and buffered
-            while !self.buffered_data.scanning_finished()
-                && self.num_unfrozen_pairs() < self.batch_size
-            {
-                let scanning_idx = self.buffered_data.scanning_idx();
-                if join_streamed {
-                    // Join streamed row and buffered row
-                    self.streamed_batch.append_output_pair(
-                        Some(self.buffered_data.scanning_batch_idx),
-                        Some(scanning_idx),
-                        self.batch_size,
-                    );
-                } else {
-                    // Join nulls and buffered row for FULL join
-                    self.buffered_data
-                        .scanning_batch_mut()
-                        .null_joined
-                        .push(scanning_idx);
-                }
-                self.buffered_data.scanning_advance();
-
-                if self.buffered_data.scanning_finished() {
-                    self.streamed_joined = join_streamed;
-                    self.buffered_joined = true;
-                }
-            }
-        } else {
-            // joining streamed and nulls
-            let scanning_batch_idx = if self.buffered_data.scanning_finished() {
-                None
-            } else {
-                Some(self.buffered_data.scanning_batch_idx)
-            };
-            self.streamed_batch.append_output_pair(
-                scanning_batch_idx,
-                None,
-                self.batch_size,
-            );
-            self.buffered_data.scanning_finish();
-            self.streamed_joined = true;
+        if !self.deferred_filtering
+            && self
+                .joined_record_batches
+                .joined_batches
+                .has_completed_batch()
+        {
+            self.emit_completed_joined_batches(emitter).await;
         }
         Ok(())
     }
@@ -1914,9 +1899,9 @@ fn fetch_right_columns_from_batch_by_idxs(
 pub(super) struct BufferedData {
     /// Buffered batches with the same key
     pub batches: VecDeque<BufferedBatch>,
-    /// current scanning batch index used in join_partial()
+    /// current scanning batch index used by the group-scan phase
     pub scanning_batch_idx: usize,
-    /// current scanning offset used in join_partial()
+    /// current scanning offset used by the group-scan phase
     pub scanning_offset: usize,
 }
 
