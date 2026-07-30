@@ -366,8 +366,8 @@ physical_plan
 statement count 0
 RESET datafusion.execution.parquet.pushdown_filters;
 
-# LEFT ANTI JOIN: both self generated and parent filters can push to the
-# preserved (left/build) side.
+# NULL-AWARE ANTI JOIN: JoinSelection swaps the physical join to RightAnti so
+# the subquery is the build side and the preserved outer input is the probe side.
 query TT
 EXPLAIN SELECT l.*
 FROM left_parquet l
@@ -381,9 +381,9 @@ logical_plan
 05)----SubqueryAlias: r
 06)------TableScan: right_parquet projection=[id]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)], null_aware
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet
-03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(id@0, id@0)], null_aware
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet
 
 # LEFT MARK JOIN: the OR prevents decorrelation to LeftSemi, so the optimizer
 # uses LeftMark. Self-generated dynamic filter pushes to the probe side.
@@ -458,9 +458,8 @@ ORDER BY l.id LIMIT 2;
 3 left3
 
 # ANTI JOIN with TopK parent: TopK generates a dynamic filter on `id` (join
-# key) that pushes through the LeftAnti join to both the preserved and
-# non-preserved sides. The HashJoin pushes the self-generated filter to the
-# right hand side of the LeftAnti join.
+# key) that pushes through the physical RightAnti join to both the build and
+# probe sides.
 query TT
 EXPLAIN SELECT l.*
 FROM left_parquet l
@@ -477,9 +476,9 @@ logical_plan
 07)--------TableScan: right_parquet projection=[id]
 physical_plan
 01)SortExec: TopK(fetch=2), expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)], null_aware
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
-04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+02)--HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(id@0, id@0)], null_aware
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 
 # Correctness check
 query IT
