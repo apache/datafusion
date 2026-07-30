@@ -452,9 +452,11 @@ fn make_decimal256_schema() -> SchemaRef {
 }
 
 /// Generate `(Decimal256(50, 0), Int32)` batches with `num_distinct_groups`
-/// distinct keys. Each distinct value is `i256::from_i128(g)`; precision > 38
-/// keeps it a genuine `Decimal256`. The `Int32` column is keyed identically so
-/// the combined cardinality equals `num_distinct_groups`.
+/// distinct keys.
+///
+/// Each distinct value is `i256::from_i128(g)`, and precision > 38 keeps it a
+/// genuine `Decimal256`. The `Int32` column is keyed identically so the combined
+/// cardinality equals `num_distinct_groups`.
 fn generate_decimal256_batches(
     num_distinct_groups: usize,
     num_rows: usize,
@@ -488,7 +490,7 @@ fn generate_decimal256_batches(
         .collect()
 }
 
-/// Experiment 8: Group count sweep for a `(Decimal256, Int32)` key.
+/// Experiment 11: Group count sweep for a `(Decimal256, Int32)` key.
 ///
 /// Exercises the primitive `GroupColumn` builder for `Decimal256` (32-byte
 /// `i256` native) on the multi-column path (previously such a schema fell back
