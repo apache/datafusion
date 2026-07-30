@@ -45,7 +45,7 @@ use std::{
     fmt::{Debug, Display, Formatter},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -54,70 +54,27 @@ use datafusion::execution::memory_pool::{
 };
 use datafusion_common::Result;
 
-/// High-water mark since the last [`reset_peak_pool_reserved`].
-static PEAK_RESERVED: AtomicUsize = AtomicUsize::new(0);
-
-/// High-water mark since the process started. Never reset.
-static MAX_RESERVED: AtomicUsize = AtomicUsize::new(0);
-
-/// Whether a [`PeakRecordingPool`] has ever been constructed, used to
-/// distinguish "no pool was recording" from "the pool peaked at zero bytes".
-static RECORDING: AtomicBool = AtomicBool::new(false);
-
-/// Peak [`MemoryPool`] reservation, in bytes, since the last call to
-/// [`reset_peak_pool_reserved`].
-///
-/// Returns `None` if no [`PeakRecordingPool`] has been installed, which is the
-/// case whenever a benchmark runs without a memory limit.
-pub fn peak_pool_reserved() -> Option<usize> {
-    RECORDING
-        .load(Ordering::Relaxed)
-        .then(|| PEAK_RESERVED.load(Ordering::Relaxed))
-}
-
-/// Peak [`MemoryPool`] reservation, in bytes, since the process started.
-///
-/// Unlike [`peak_pool_reserved`] this is never reset, so it reports the peak
-/// across every query in a run. Returns `None` if no [`PeakRecordingPool`] has
-/// been installed.
-pub fn max_pool_reserved() -> Option<usize> {
-    RECORDING
-        .load(Ordering::Relaxed)
-        .then(|| MAX_RESERVED.load(Ordering::Relaxed))
-}
-
-/// Reset the value returned by [`peak_pool_reserved`], so the next reading
-/// covers only what follows.
-///
-/// [`BenchmarkRun::start_new_case`] calls this, giving each benchmark query its
-/// own reading.
-///
-/// [`BenchmarkRun::start_new_case`]: super::BenchmarkRun::start_new_case
-pub fn reset_peak_pool_reserved() {
-    PEAK_RESERVED.store(0, Ordering::Relaxed);
-}
-
 /// Wraps a [`MemoryPool`], recording the high-water mark of
 /// [`MemoryPool::reserved`] as reservations come and go.
 ///
 /// Every method delegates to the wrapped pool, so wrapping does not change how
-/// memory is granted, limited, or reported. Peaks are published to the
-/// process-wide counters read by [`peak_pool_reserved`] and
-/// [`max_pool_reserved`] rather than held per instance, so callers can read
-/// them without threading a handle through the benchmark. The benchmarks run
-/// one query at a time, so a process-wide counter attributes cleanly.
+/// memory is granted, limited, or reported. The one thing it does change is
+/// downcasting: `rt.memory_pool.downcast_ref::<FairSpillPool>()` now finds this
+/// wrapper instead of the pool it wraps. Nothing in the benchmarks relies on
+/// that, and [`Self::from_pool`] uses the same mechanism to find the recorder.
+///
+/// Both high-water marks are held per instance, so a benchmark that builds a
+/// fresh runtime per query gets a reading scoped to that query without any
+/// coordination.
 ///
 /// # Example
 ///
 /// ```
 /// # use std::sync::Arc;
 /// # use datafusion::execution::memory_pool::{GreedyMemoryPool, MemoryConsumer, MemoryPool};
-/// # use datafusion_benchmarks::util::{
-/// #     PeakRecordingPool, peak_pool_reserved, reset_peak_pool_reserved,
-/// # };
-/// let pool: Arc<dyn MemoryPool> =
-///     Arc::new(PeakRecordingPool::new(Arc::new(GreedyMemoryPool::new(1024))));
-/// reset_peak_pool_reserved();
+/// # use datafusion_benchmarks::util::PeakRecordingPool;
+/// let recording = Arc::new(PeakRecordingPool::new(Arc::new(GreedyMemoryPool::new(1024))));
+/// let pool: Arc<dyn MemoryPool> = Arc::clone(&recording) as _;
 ///
 /// let reservation = MemoryConsumer::new("example").register(&pool);
 /// reservation.try_grow(512)?;
@@ -125,23 +82,63 @@ pub fn reset_peak_pool_reserved() {
 ///
 /// // The pool is back to empty, but the high-water mark is retained.
 /// assert_eq!(pool.reserved(), 0);
-/// assert_eq!(peak_pool_reserved(), Some(512));
+/// assert_eq!(recording.peak_reserved(), 512);
+///
+/// // The recorder can also be recovered from the pool it was installed as.
+/// assert_eq!(PeakRecordingPool::from_pool(&*pool).unwrap().peak_reserved(), 512);
 /// # Ok::<(), datafusion_common::DataFusionError>(())
 /// ```
 pub struct PeakRecordingPool {
     inner: Arc<dyn MemoryPool>,
+    /// High-water mark since the last [`PeakRecordingPool::reset_peak`].
+    peak: AtomicUsize,
+    /// High-water mark since this pool was created. Never reset.
+    max: AtomicUsize,
 }
 
 impl PeakRecordingPool {
     /// Wrap `inner`, recording its peak reservation from here on.
     pub fn new(inner: Arc<dyn MemoryPool>) -> Self {
-        RECORDING.store(true, Ordering::Relaxed);
-        Self { inner }
+        Self {
+            inner,
+            peak: AtomicUsize::new(0),
+            max: AtomicUsize::new(0),
+        }
     }
 
-    /// The wrapped pool.
-    pub fn inner(&self) -> &Arc<dyn MemoryPool> {
-        &self.inner
+    /// The recorder installed as `pool`, if there is one.
+    ///
+    /// Returns `None` whenever a benchmark runs without a memory limit, since
+    /// [`CommonOpt::runtime_env_builder`] only installs the wrapper alongside a
+    /// pool it has a limit for.
+    ///
+    /// [`CommonOpt::runtime_env_builder`]: super::CommonOpt::runtime_env_builder
+    pub fn from_pool(pool: &dyn MemoryPool) -> Option<&Self> {
+        pool.downcast_ref::<Self>()
+    }
+
+    /// Peak reservation, in bytes, since the last [`Self::reset_peak`].
+    pub fn peak_reserved(&self) -> usize {
+        self.peak.load(Ordering::Relaxed)
+    }
+
+    /// Peak reservation, in bytes, since this pool was created.
+    ///
+    /// Unlike [`Self::peak_reserved`] this is never reset, so it reports the
+    /// peak across every query that shared this pool.
+    pub fn max_reserved(&self) -> usize {
+        self.max.load(Ordering::Relaxed)
+    }
+
+    /// Reset the value returned by [`Self::peak_reserved`], so the next reading
+    /// covers only what follows.
+    ///
+    /// [`BenchmarkRun::start_new_case`] calls this, giving each benchmark query
+    /// its own reading.
+    ///
+    /// [`BenchmarkRun::start_new_case`]: super::BenchmarkRun::start_new_case
+    pub fn reset_peak(&self) {
+        self.peak.store(0, Ordering::Relaxed);
     }
 
     /// Publish the pool's current reservation to both high-water marks.
@@ -151,8 +148,8 @@ impl PeakRecordingPool {
     /// wrapped pool declines or adjusts a request.
     fn record(&self) {
         let reserved = self.inner.reserved();
-        PEAK_RESERVED.fetch_max(reserved, Ordering::Relaxed);
-        MAX_RESERVED.fetch_max(reserved, Ordering::Relaxed);
+        self.peak.fetch_max(reserved, Ordering::Relaxed);
+        self.max.fetch_max(reserved, Ordering::Relaxed);
     }
 }
 
@@ -160,7 +157,8 @@ impl Debug for PeakRecordingPool {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PeakRecordingPool")
             .field("inner", &self.inner)
-            .field("peak", &PEAK_RESERVED.load(Ordering::Relaxed))
+            .field("peak", &self.peak_reserved())
+            .field("max", &self.max_reserved())
             .finish()
     }
 }
@@ -212,30 +210,23 @@ impl MemoryPool for PeakRecordingPool {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, MutexGuard};
-
     use datafusion::execution::memory_pool::GreedyMemoryPool;
 
     use super::*;
 
-    /// The high-water marks are process-wide, so these tests would otherwise
-    /// clobber each other when the test harness runs them in parallel.
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
-
-    /// Take the lock and hand back a freshly reset pool. The guard is returned
-    /// so it stays held for the body of the test.
-    fn pool(limit: usize) -> (Arc<dyn MemoryPool>, MutexGuard<'static, ()>) {
-        let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let pool: Arc<dyn MemoryPool> = Arc::new(PeakRecordingPool::new(Arc::new(
+    /// A recording pool over a `GreedyMemoryPool`, returned both as the
+    /// recorder (to read the marks) and as the pool reservations register with.
+    fn pool(limit: usize) -> (Arc<PeakRecordingPool>, Arc<dyn MemoryPool>) {
+        let recording = Arc::new(PeakRecordingPool::new(Arc::new(
             GreedyMemoryPool::new(limit),
         )));
-        reset_peak_pool_reserved();
-        (pool, guard)
+        let pool = Arc::clone(&recording) as Arc<dyn MemoryPool>;
+        (recording, pool)
     }
 
     #[test]
     fn records_high_water_mark_across_reservations() {
-        let (pool, _guard) = pool(1024);
+        let (recording, pool) = pool(1024);
 
         let a = MemoryConsumer::new("a").register(&pool);
         let b = MemoryConsumer::new("b").register(&pool);
@@ -243,7 +234,7 @@ mod tests {
         a.try_grow(300).unwrap();
         b.try_grow(400).unwrap();
         // Peak of the sum, not the largest single reservation.
-        assert_eq!(peak_pool_reserved(), Some(700));
+        assert_eq!(recording.peak_reserved(), 700);
 
         a.shrink(300);
         b.try_grow(100).unwrap();
@@ -251,12 +242,12 @@ mod tests {
         // Falling back below the peak leaves it untouched, and the later growth
         // does not reach it.
         assert_eq!(pool.reserved(), 500);
-        assert_eq!(peak_pool_reserved(), Some(700));
+        assert_eq!(recording.peak_reserved(), 700);
     }
 
     #[test]
     fn failed_growth_does_not_move_the_peak() {
-        let (pool, _guard) = pool(1024);
+        let (recording, pool) = pool(1024);
 
         let reservation = MemoryConsumer::new("a").register(&pool);
         reservation.try_grow(600).unwrap();
@@ -264,28 +255,59 @@ mod tests {
             .try_grow(600)
             .expect_err("should exceed the 1024 byte pool");
 
-        assert_eq!(peak_pool_reserved(), Some(600));
+        assert_eq!(recording.peak_reserved(), 600);
     }
 
     #[test]
     fn reset_clears_the_window_but_not_the_run_maximum() {
-        let (pool, _guard) = pool(1024);
+        let (recording, pool) = pool(1024);
 
         let reservation = MemoryConsumer::new("a").register(&pool);
         reservation.try_grow(800).unwrap();
         reservation.shrink(800);
 
-        reset_peak_pool_reserved();
-        assert_eq!(peak_pool_reserved(), Some(0));
-        assert!(max_pool_reserved().unwrap() >= 800);
+        recording.reset_peak();
+        assert_eq!(recording.peak_reserved(), 0);
+        assert_eq!(recording.max_reserved(), 800);
 
         reservation.try_grow(100).unwrap();
-        assert_eq!(peak_pool_reserved(), Some(100));
+        assert_eq!(recording.peak_reserved(), 100);
+        assert_eq!(recording.max_reserved(), 800);
+    }
+
+    #[test]
+    fn marks_are_per_instance() {
+        let (one, one_pool) = pool(1024);
+        let (two, _two_pool) = pool(1024);
+
+        MemoryConsumer::new("a")
+            .register(&one_pool)
+            .try_grow(512)
+            .unwrap();
+
+        assert_eq!(one.peak_reserved(), 512);
+        assert_eq!(two.peak_reserved(), 0);
+    }
+
+    #[test]
+    fn is_recoverable_from_the_pool_it_is_installed_as() {
+        let (recording, pool) = pool(1024);
+
+        MemoryConsumer::new("a")
+            .register(&pool)
+            .try_grow(512)
+            .unwrap();
+
+        let found = PeakRecordingPool::from_pool(&*pool).expect("recorder installed");
+        assert_eq!(found.peak_reserved(), recording.peak_reserved());
+
+        // A pool with no recorder in front of it reports nothing.
+        let plain: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1024));
+        assert!(PeakRecordingPool::from_pool(&*plain).is_none());
     }
 
     #[test]
     fn delegates_limit_and_name_to_the_wrapped_pool() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let inner: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(4096));
         let wrapped = PeakRecordingPool::new(Arc::clone(&inner));
 
@@ -308,7 +330,7 @@ mod tests {
         use arrow_buffer::MemoryPool as ArrowMemoryPoolTrait;
         use datafusion_execution::memory_pool::arrow::ArrowMemoryPool;
 
-        let (pool, _guard) = pool(4096);
+        let (recording, pool) = pool(4096);
 
         let arrow_pool =
             ArrowMemoryPool::new(Arc::clone(&pool), MemoryConsumer::new("arrow"));
@@ -316,11 +338,11 @@ mod tests {
 
         // The Arrow-side reservation is visible as DataFusion pool usage...
         assert_eq!(pool.reserved(), 1024);
-        assert_eq!(peak_pool_reserved(), Some(1024));
+        assert_eq!(recording.peak_reserved(), 1024);
 
         // ...and dropping it releases the bytes while the peak is retained.
         drop(reservation);
         assert_eq!(pool.reserved(), 0);
-        assert_eq!(peak_pool_reserved(), Some(1024));
+        assert_eq!(recording.peak_reserved(), 1024);
     }
 }

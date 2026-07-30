@@ -299,6 +299,9 @@ async fn run_simple_benchmark(
 
     let case_name = benchmark_case_name(benchmark);
 
+    // Each case gets its own `SessionContext`, so hand over its pool before the
+    // case starts.
+    run.set_memory_pool(&ctx.runtime_env().memory_pool);
     run.start_new_case(&case_name);
 
     for iteration in 0..config.common.iterations {
@@ -312,7 +315,7 @@ async fn run_simple_benchmark(
         run.write_iter(elapsed, row_count);
     }
 
-    print_memory_stats();
+    print_memory_stats(&*ctx.runtime_env().memory_pool);
 
     Ok(())
 }

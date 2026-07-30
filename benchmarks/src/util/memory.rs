@@ -15,25 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::execution::memory_pool::MemoryPool;
+
+use super::PeakRecordingPool;
+
 /// Print Peak RSS, Peak Commit, Page Faults based on mimalloc api, followed by
-/// the peak `MemoryPool` reservation when a memory limit was configured.
-pub fn print_memory_stats() {
+/// the peak reservation of `memory_pool` when a memory limit was configured.
+pub fn print_memory_stats(memory_pool: &dyn MemoryPool) {
     print_allocator_stats();
-    print_pool_stats();
+    print_pool_stats(memory_pool);
 }
 
-/// Print the peak `MemoryPool` reservation for the run.
+/// Print the peak reservation `memory_pool` has seen.
 ///
-/// Prints nothing when the benchmark ran without a memory limit, since no pool
-/// was installed to record. Comparing this against the peak RSS above shows how
-/// much of a run's memory the pool actually accounted for — DataFusion only
-/// tracks the "large" allocations that scale with input size, so the two are
-/// expected to differ.
-fn print_pool_stats() {
-    if let Some(peak) = super::max_pool_reserved() {
+/// Prints nothing when the benchmark ran without a memory limit, since no
+/// [`PeakRecordingPool`] was installed to record. Comparing this against the
+/// peak RSS above shows how much of a run's memory the pool actually accounted
+/// for — DataFusion only tracks the "large" allocations that scale with input
+/// size, so the two are expected to differ.
+fn print_pool_stats(memory_pool: &dyn MemoryPool) {
+    if let Some(recorder) = PeakRecordingPool::from_pool(memory_pool) {
         println!(
             "Peak pool reserved: {}",
-            datafusion_common::human_readable_size(peak)
+            datafusion_common::human_readable_size(recorder.max_reserved())
         );
     }
 }

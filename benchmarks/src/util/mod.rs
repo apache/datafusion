@@ -23,8 +23,6 @@ mod options;
 mod run;
 
 pub use memory::print_memory_stats;
-pub use memory_pool::{
-    PeakRecordingPool, max_pool_reserved, peak_pool_reserved, reset_peak_pool_reserved,
-};
+pub use memory_pool::PeakRecordingPool;
 pub use options::CommonOpt;
 pub use run::{BenchQuery, BenchmarkRun, QueryResult};

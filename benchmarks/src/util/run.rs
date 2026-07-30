@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::memory_pool::{peak_pool_reserved, reset_peak_pool_reserved};
+use super::memory_pool::PeakRecordingPool;
+use datafusion::execution::memory_pool::MemoryPool;
 use datafusion::{DATAFUSION_VERSION, error::Result};
 use datafusion_common::utils::get_available_parallelism;
 use serde::{Serialize, Serializer};
@@ -23,6 +24,7 @@ use serde_json::Value;
 use std::{
     collections::HashMap,
     path::Path,
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 
@@ -110,6 +112,10 @@ pub struct BenchmarkRun {
     context: RunContext,
     queries: Vec<BenchQuery>,
     current_case: Option<usize>,
+    /// The pool queries run against, when one was handed over with
+    /// [`BenchmarkRun::set_memory_pool`]. Only read through
+    /// [`BenchmarkRun::peak_recorder`].
+    memory_pool: Option<Arc<dyn MemoryPool>>,
 }
 
 impl Default for BenchmarkRun {
@@ -125,13 +131,38 @@ impl BenchmarkRun {
             context: RunContext::new(),
             queries: vec![],
             current_case: None,
+            memory_pool: None,
         }
     }
+
+    /// Report the peak reservation of `memory_pool` alongside each query.
+    ///
+    /// Call this with the pool of the [`RuntimeEnv`] the queries run against.
+    /// Has no effect unless a [`PeakRecordingPool`] is installed, which
+    /// [`CommonOpt::runtime_env_builder`] does whenever a memory limit is
+    /// configured; without one `pool_peak_bytes` is omitted from the results.
+    ///
+    /// Benchmarks that build a runtime per query should call this each time, so
+    /// each query reports against the pool it actually ran on.
+    ///
+    /// [`RuntimeEnv`]: datafusion::execution::runtime_env::RuntimeEnv
+    /// [`CommonOpt::runtime_env_builder`]: super::CommonOpt::runtime_env_builder
+    pub fn set_memory_pool(&mut self, memory_pool: &Arc<dyn MemoryPool>) {
+        self.memory_pool = Some(Arc::clone(memory_pool));
+    }
+
+    /// The recorder in front of the pool set by [`Self::set_memory_pool`].
+    fn peak_recorder(&self) -> Option<&PeakRecordingPool> {
+        PeakRecordingPool::from_pool(self.memory_pool.as_deref()?)
+    }
+
     /// begin a new case. iterations added after this will be included in the new case
     pub fn start_new_case(&mut self, id: &str) {
         // Give this query its own memory pool reading rather than inheriting
         // the high-water mark of the queries that ran before it.
-        reset_peak_pool_reserved();
+        if let Some(recorder) = self.peak_recorder() {
+            recorder.reset_peak();
+        }
         self.queries.push(BenchQuery {
             query: id.to_owned(),
             iterations: vec![],
@@ -147,13 +178,14 @@ impl BenchmarkRun {
     }
     /// Write a new iteration to the current case
     pub fn write_iter(&mut self, elapsed: Duration, row_count: usize) {
+        // The peak is not reset between iterations, so this ends up holding the
+        // largest reservation seen across all of them.
+        let pool_peak_bytes = self.peak_recorder().map(PeakRecordingPool::peak_reserved);
         if let Some(idx) = self.current_case {
             self.queries[idx]
                 .iterations
                 .push(QueryIter { elapsed, row_count });
-            // The peak is not reset between iterations, so this ends up holding
-            // the largest reservation seen across all of them.
-            self.queries[idx].pool_peak_bytes = peak_pool_reserved();
+            self.queries[idx].pool_peak_bytes = pool_peak_bytes;
         } else {
             panic!("no cases existed yet");
         }
@@ -195,5 +227,74 @@ impl BenchmarkRun {
             std::fs::write(path, self.to_json())?;
         };
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::execution::memory_pool::{GreedyMemoryPool, MemoryConsumer};
+
+    use super::*;
+
+    fn recording_pool(limit: usize) -> Arc<dyn MemoryPool> {
+        Arc::new(PeakRecordingPool::new(Arc::new(GreedyMemoryPool::new(
+            limit,
+        ))))
+    }
+
+    #[test]
+    fn each_case_reports_its_own_peak() {
+        let pool = recording_pool(1024);
+        let mut run = BenchmarkRun::new();
+        run.set_memory_pool(&pool);
+
+        run.start_new_case("q1");
+        let reservation = MemoryConsumer::new("q1").register(&pool);
+        reservation.try_grow(600).unwrap();
+        run.write_iter(Duration::from_millis(1), 1);
+        drop(reservation);
+
+        // The second case must not inherit the first case's high-water mark.
+        run.start_new_case("q2");
+        let reservation = MemoryConsumer::new("q2").register(&pool);
+        reservation.try_grow(100).unwrap();
+        run.write_iter(Duration::from_millis(1), 1);
+
+        assert_eq!(run.queries[0].pool_peak_bytes, Some(600));
+        assert_eq!(run.queries[1].pool_peak_bytes, Some(100));
+    }
+
+    #[test]
+    fn a_later_pool_replaces_an_earlier_one() {
+        let first = recording_pool(1024);
+        let mut run = BenchmarkRun::new();
+        run.set_memory_pool(&first);
+        MemoryConsumer::new("q1")
+            .register(&first)
+            .try_grow(600)
+            .unwrap();
+
+        // Benchmarks that build a runtime per query hand over the new pool
+        // before the next case; the reading follows it.
+        let second = recording_pool(1024);
+        run.set_memory_pool(&second);
+        run.start_new_case("q2");
+        MemoryConsumer::new("q2")
+            .register(&second)
+            .try_grow(100)
+            .unwrap();
+        run.write_iter(Duration::from_millis(1), 1);
+
+        assert_eq!(run.queries[0].pool_peak_bytes, Some(100));
+    }
+
+    #[test]
+    fn the_peak_is_omitted_without_a_recording_pool() {
+        let mut run = BenchmarkRun::new();
+        run.start_new_case("q1");
+        run.write_iter(Duration::from_millis(1), 1);
+
+        assert_eq!(run.queries[0].pool_peak_bytes, None);
+        assert!(!run.to_json().contains("pool_peak_bytes"));
     }
 }

@@ -518,6 +518,7 @@ impl RunOpt {
         }
 
         let mut benchmark_run = BenchmarkRun::new();
+        benchmark_run.set_memory_pool(&ctx.runtime_env().memory_pool);
 
         for query_id in query_range {
             let query_index = query_id - 1;
