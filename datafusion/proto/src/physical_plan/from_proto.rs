@@ -863,6 +863,10 @@ mod tests {
     #[test]
     fn partitioned_file_statistics_roundtrip_with_partition_values() {
         use datafusion_common::Statistics;
+        let file_schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let pf = PartitionedFile::new("foo/bar.parquet", 1234)
+            .with_partition_values(vec![ScalarValue::from("2024-01-01")])
+            .with_statistics(Arc::new(Statistics::new_unknown(&file_schema)));
 
         // `statistics` covers the full table schema: file columns followed by one
         // entry per partition column.
