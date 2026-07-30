@@ -2436,6 +2436,15 @@ mod tests {
     }
 
     #[test]
+    fn test_get_file_format_factory() {
+        let state = SessionStateBuilder::new().with_default_features().build();
+
+        assert!(state.get_file_format_factory("arrow").is_some());
+        assert!(state.get_file_format_factory("arrows").is_some());
+        assert!(state.get_file_format_factory("unknown").is_none());
+    }
+
+    #[test]
     #[cfg(feature = "sql")]
     fn test_create_logical_expr_from_sql_expr() {
         let state = SessionStateBuilder::new().with_default_features().build();
