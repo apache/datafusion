@@ -697,7 +697,7 @@ impl From<StreamType> for SendableRecordBatchStream {
             StreamType::PartialReduceHash(stream) => Box::pin(stream),
             StreamType::FinalHash(stream) => Box::pin(stream),
             StreamType::SingleHash(stream) => Box::pin(stream),
-            StreamType::OrderedPartialAggregate(stream) => Box::pin(stream),
+            StreamType::OrderedPartialAggregate(stream) => stream.into_stream(),
             StreamType::OrderedFinalAggregate(stream) => Box::pin(stream),
             StreamType::GroupedHash(stream) => Box::pin(stream),
             StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
@@ -4429,9 +4429,8 @@ mod tests {
                 .with_session_config(session_config),
         );
 
-        let mut stream: SendableRecordBatchStream = Box::pin(
-            OrderedPartialAggregateStream::new(&aggregate, &task_ctx, 0)?,
-        );
+        let mut stream: SendableRecordBatchStream =
+            OrderedPartialAggregateStream::new(&aggregate, &task_ctx, 0)?.into_stream();
 
         while let Some(result) = stream.next().await {
             if let Err(e) = result {
