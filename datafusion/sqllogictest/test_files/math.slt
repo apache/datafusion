@@ -119,6 +119,16 @@ FROM (VALUES ('115', -1), ('0', -1), (NULL, -20)) AS t(column1, column2);
 0 0 0 0 0 0 0 0
 NULL NULL NULL NULL NULL NULL NULL NULL
 
+# Test columns without null
+query I
+SELECT
+  round(column1, column2)
+FROM (VALUES (115, -20), (0, -1), (21, -1)) AS t(column1, column2);
+----
+0
+0
+20
+
 # Round all decimal widths as scalars
 query RRRR
 SELECT
