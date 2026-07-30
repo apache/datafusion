@@ -303,11 +303,11 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// Reset any internal state within this [`ExecutionPlan`].
     ///
     /// This method is called when an [`ExecutionPlan`] needs to be re-executed,
-    /// such as in recursive queries. Unlike [`ExecutionPlan::with_new_children`], this method
+    /// such as in recursive queries. Unlike [`ExecutionPlan::replace_children`], this method
     /// ensures that any stateful components (e.g., [`DynamicFilterPhysicalExpr`])
     /// are reset to their initial state.
     ///
-    /// The default implementation simply calls [`ExecutionPlan::with_new_children`] with the existing children,
+    /// The default implementation simply calls [`ExecutionPlan::replace_children`] with the existing children,
     /// effectively creating a new instance of the [`ExecutionPlan`] with the same children but without
     /// necessarily resetting any internal state. Implementations that require resetting of some
     /// internal state should override this method to provide the necessary logic.
@@ -316,7 +316,7 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// it will be called from within a walk of the execution plan tree so that it will be called on each child later
     /// or was already called on each child.
     ///
-    /// Note to implementers: unlike [`ExecutionPlan::with_new_children`] this method does not accept new children as an argument,
+    /// Note to implementers: unlike [`ExecutionPlan::replace_children`] this method does not accept new children as an argument,
     /// thus it is expected that any cached plan properties will remain valid after the reset.
     ///
     /// [`DynamicFilterPhysicalExpr`]: datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr
@@ -1398,16 +1398,16 @@ pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
 ///
 /// 1. **Same child pointers** — if every `children[i]` is `Arc::ptr_eq` to the
 ///    corresponding existing child, the original `plan` is returned
-///    unchanged (no allocation, no [`ExecutionPlan::with_new_children`]
+///    unchanged (no allocation, no [`ExecutionPlan::replace_children`]
 ///    call).
 /// 2. **Same child properties** — if the children's `PlanProperties` Arcs
 ///    match (via [`has_same_children_properties`]), the plan's own
 ///    `PlanProperties` cache can be reused. This calls
-///    [`ExecutionPlan::with_new_children_and_same_properties`], which
-///    swaps the child pointers without recomputing `PlanProperties`.
+///    [`ExecutionPlan::replace_children`] with [`ChildrenPropertiesHint::SameProperties`],
+///    which swaps the child pointers without recomputing `PlanProperties`.
 /// 3. **Full recompute** — otherwise, delegate to
-///    [`ExecutionPlan::with_new_children`], which recomputes
-///    `PlanProperties` from scratch.
+///    [`ExecutionPlan::replace_children`] with [`ChildrenPropertiesHint::Recompute`],
+///    which recomputes `PlanProperties` from scratch.
 ///
 /// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
 pub fn with_new_children_if_necessary(
@@ -1721,8 +1721,7 @@ macro_rules! check_if_same_properties {
 /// child count.
 ///
 /// This is useful for [`ExecutionPlan::replace_children`] implementations that
-/// no longer call [`check_if_same_properties`] but still need to preserve the
-/// same child-count validation behavior.
+/// need to preserve the same child-count validation behavior.
 #[macro_export]
 macro_rules! validate_child_count {
     ($plan: expr, $children: expr) => {
