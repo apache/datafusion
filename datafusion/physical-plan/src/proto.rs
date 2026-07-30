@@ -62,6 +62,7 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use datafusion_common::{Result, internal_datafusion_err};
 use datafusion_execution::TaskContext;
+use datafusion_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_proto_models::protobuf::{PhysicalExprNode, PhysicalPlanNode};
@@ -101,6 +102,14 @@ pub trait ExecutionPlanDecode {
     /// Deserialize a child execution plan (recursing through the central
     /// deserializer, so the child's own `try_from_proto` is honored).
     fn decode_plan(&self, node: &PhysicalPlanNode) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Deserialize a child plan with `results` active for scalar subquery
+    /// expressions in that plan's subtree.
+    fn decode_plan_with_scalar_subquery_results(
+        &self,
+        node: &PhysicalPlanNode,
+        results: ScalarSubqueryResults,
+    ) -> Result<Arc<dyn ExecutionPlan>>;
 
     /// Deserialize a physical expression against `input_schema`.
     fn decode_expr(
@@ -213,6 +222,17 @@ impl<'a> ExecutionPlanDecodeCtx<'a> {
         node: &PhysicalPlanNode,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.decoder.decode_plan(node)
+    }
+
+    /// Deserialize a child plan with `results` active for scalar subquery
+    /// expressions in that plan's subtree.
+    pub fn decode_child_with_scalar_subquery_results(
+        &self,
+        node: &PhysicalPlanNode,
+        results: ScalarSubqueryResults,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.decoder
+            .decode_plan_with_scalar_subquery_results(node, results)
     }
 
     /// Deserialize a required child plan, producing a uniform "missing required
