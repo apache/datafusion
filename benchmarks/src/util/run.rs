@@ -95,8 +95,11 @@ pub struct BenchQuery {
     start_time: SystemTime,
     success: bool,
     /// Peak [`MemoryPool`] reservation observed while running this query, in
-    /// bytes. `None` (and omitted from the JSON) when the benchmark ran without
-    /// a memory limit, since there is no pool to record.
+    /// bytes. Recorded for failed queries too, since a query that ran out of
+    /// memory is one whose peak is worth seeing.
+    ///
+    /// `None` (and omitted from the JSON) only when the benchmark ran without a
+    /// memory limit, since there is then no pool to record.
     ///
     /// [`MemoryPool`]: datafusion::execution::memory_pool::MemoryPool
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -206,8 +209,12 @@ impl BenchmarkRun {
 
     /// Mark current query
     pub fn mark_failed(&mut self) {
+        // A query that failed under a memory limit wrote no iteration, so this
+        // is the only chance to record what it had reserved when it gave up.
+        let pool_peak_bytes = self.peak_recorder().map(PeakRecordingPool::peak_reserved);
         if let Some(idx) = self.current_case {
             self.queries[idx].success = false;
+            self.queries[idx].pool_peak_bytes = pool_peak_bytes;
         } else {
             unreachable!("Cannot mark failure: no current case");
         }
@@ -286,6 +293,21 @@ mod tests {
         run.write_iter(Duration::from_millis(1), 1);
 
         assert_eq!(run.queries[0].pool_peak_bytes, Some(100));
+    }
+
+    #[test]
+    fn a_failed_query_still_reports_its_peak() {
+        let pool = recording_pool(1024);
+        let mut run = BenchmarkRun::new();
+        run.set_memory_pool(&pool);
+
+        run.start_new_case("q1");
+        let reservation = MemoryConsumer::new("q1").register(&pool);
+        reservation.try_grow(600).unwrap();
+        // No `write_iter`: the query failed before completing an iteration.
+        run.mark_failed();
+
+        assert_eq!(run.queries[0].pool_peak_bytes, Some(600));
     }
 
     #[test]
