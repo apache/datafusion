@@ -424,25 +424,30 @@ fn serialize_range_split_point(
     })
 }
 
-/// Thin shim over [`PartitionedFile::try_to_proto`], which owns the wire logic.
+/// Thin shim over `TryFrom<&PartitionedFile>`, which owns the wire logic.
 impl TryFromProto<&PartitionedFile> for protobuf::PartitionedFile {
     type Error = DataFusionError;
 
     fn try_from_proto(pf: &PartitionedFile) -> Result<Self> {
-        pf.try_to_proto()
+        pf.try_into()
     }
 }
 
-/// Thin shim over [`FileRange::try_to_proto`], which owns the wire logic.
+/// Thin shim over `TryFrom<&FileRange>`, which owns the wire logic.
 impl TryFromProto<&FileRange> for protobuf::FileRange {
     type Error = DataFusionError;
 
     fn try_from_proto(value: &FileRange) -> Result<Self> {
-        value.try_to_proto()
+        value.try_into()
     }
 }
 
-/// Thin shim over [`PartitionedFile::try_to_proto`], which owns the wire logic.
+/// Thin shim over `TryFrom<&PartitionedFile>`, which owns the wire logic.
+///
+/// The slice form cannot be a `TryFrom` impl: the orphan rule only accepts a
+/// type this crate owns, and `&[PartitionedFile]` is not one (`&FileGroup` is,
+/// hence the impl next to the type). Callers inside DataFusion go through
+/// `FileGroup`; this stays for downstream users of the published signature.
 impl TryFromProto<&[PartitionedFile]> for protobuf::FileGroup {
     type Error = DataFusionError;
 
@@ -450,7 +455,7 @@ impl TryFromProto<&[PartitionedFile]> for protobuf::FileGroup {
         Ok(protobuf::FileGroup {
             files: gr
                 .iter()
-                .map(PartitionedFile::try_to_proto)
+                .map(TryInto::try_into)
                 .collect::<Result<Vec<_>>>()?,
         })
     }
@@ -464,7 +469,7 @@ pub fn serialize_file_scan_config(
     let file_groups = conf
         .file_groups
         .iter()
-        .map(|p| protobuf::FileGroup::try_from_proto(p.files()))
+        .map(TryInto::try_into)
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut output_orderings = vec![];

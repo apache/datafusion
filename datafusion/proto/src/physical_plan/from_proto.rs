@@ -629,30 +629,30 @@ pub fn parse_record_batches(buf: &[u8]) -> Result<Vec<RecordBatch>> {
     Ok(batches)
 }
 
-/// Thin shim over [`PartitionedFile::try_from_proto`], which owns the wire logic.
+/// Thin shim over `TryFrom<&protobuf::PartitionedFile>`, which owns the wire logic.
 impl TryFromProto<&protobuf::PartitionedFile> for PartitionedFile {
     type Error = DataFusionError;
 
     fn try_from_proto(val: &protobuf::PartitionedFile) -> Result<Self, Self::Error> {
-        PartitionedFile::try_from_proto(val)
+        PartitionedFile::try_from(val)
     }
 }
 
-/// Thin shim over [`FileRange::try_from_proto`], which owns the wire logic.
+/// Thin shim over `TryFrom<&protobuf::FileRange>`, which owns the wire logic.
 impl TryFromProto<&protobuf::FileRange> for FileRange {
     type Error = DataFusionError;
 
     fn try_from_proto(value: &protobuf::FileRange) -> Result<Self, Self::Error> {
-        FileRange::try_from_proto(value)
+        FileRange::try_from(value)
     }
 }
 
-/// Thin shim over [`FileGroup::try_from_proto`], which owns the wire logic.
+/// Thin shim over `TryFrom<&protobuf::FileGroup>`, which owns the wire logic.
 impl TryFromProto<&protobuf::FileGroup> for FileGroup {
     type Error = DataFusionError;
 
     fn try_from_proto(val: &protobuf::FileGroup) -> Result<Self, Self::Error> {
-        FileGroup::try_from_proto(val)
+        FileGroup::try_from(val)
     }
 }
 
@@ -697,7 +697,7 @@ impl TryFromProto<&protobuf::FileSinkConfig> for FileSinkConfig {
         let file_group = FileGroup::new(
             conf.file_groups
                 .iter()
-                .map(PartitionedFile::try_from_proto)
+                .map(TryInto::try_into)
                 .collect::<Result<Vec<_>>>()?,
         );
         let table_paths = conf

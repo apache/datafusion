@@ -24,7 +24,12 @@
 //! the per-source `try_to_proto` hooks.
 //!
 //! None of these conversions need a codec or an encode/decode context: every
-//! field is plain data or goes through `datafusion-proto-common`.
+//! field is plain data or goes through `datafusion-proto-common`. That is why
+//! they are plain [`TryFrom`] impls rather than the `try_to_proto(ctx)` /
+//! `try_from_proto(node, ctx)` hooks used for plans, expressions and scan
+//! configs: the standard trait can express a conversion that takes nothing but
+//! the value, and the orphan rule allows it here because one side of each
+//! conversion is a type this crate owns.
 
 use std::sync::Arc;
 
@@ -37,17 +42,21 @@ use object_store::path::Path;
 use crate::file_groups::FileGroup;
 use crate::{FileRange, PartitionedFile};
 
-impl FileRange {
-    /// Serialize this range into its protobuf representation.
-    pub fn try_to_proto(&self) -> Result<protobuf::FileRange> {
+impl TryFrom<&FileRange> for protobuf::FileRange {
+    type Error = DataFusionError;
+
+    fn try_from(range: &FileRange) -> Result<Self> {
         Ok(protobuf::FileRange {
-            start: self.start,
-            end: self.end,
+            start: range.start,
+            end: range.end,
         })
     }
+}
 
-    /// Reconstruct a [`FileRange`] from its protobuf representation.
-    pub fn try_from_proto(range: &protobuf::FileRange) -> Result<Self> {
+impl TryFrom<&protobuf::FileRange> for FileRange {
+    type Error = DataFusionError;
+
+    fn try_from(range: &protobuf::FileRange) -> Result<Self> {
         Ok(FileRange {
             start: range.start,
             end: range.end,
@@ -55,40 +64,40 @@ impl FileRange {
     }
 }
 
-impl PartitionedFile {
-    /// Serialize this file into its protobuf representation.
-    pub fn try_to_proto(&self) -> Result<protobuf::PartitionedFile> {
-        let last_modified = self.object_meta.last_modified;
+impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
+    type Error = DataFusionError;
+
+    fn try_from(file: &PartitionedFile) -> Result<Self> {
+        let last_modified = file.object_meta.last_modified;
         let last_modified_ns = last_modified.timestamp_nanos_opt().ok_or_else(|| {
             DataFusionError::Plan(format!(
                 "Invalid timestamp on PartitionedFile::ObjectMeta: {last_modified}"
             ))
         })? as u64;
         Ok(protobuf::PartitionedFile {
-            arrow_schema: self
+            arrow_schema: file
                 .arrow_schema
                 .as_ref()
                 .map(|s| s.as_ref().try_into())
                 .transpose()?,
-            path: self.object_meta.location.as_ref().to_owned(),
-            size: self.object_meta.size,
+            path: file.object_meta.location.as_ref().to_owned(),
+            size: file.object_meta.size,
             last_modified_ns,
-            partition_values: self
+            partition_values: file
                 .partition_values
                 .iter()
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
-            range: self
-                .range
-                .as_ref()
-                .map(FileRange::try_to_proto)
-                .transpose()?,
-            statistics: self.statistics.as_ref().map(|s| s.as_ref().into()),
+            range: file.range.as_ref().map(TryInto::try_into).transpose()?,
+            statistics: file.statistics.as_ref().map(|s| s.as_ref().into()),
         })
     }
+}
 
-    /// Reconstruct a [`PartitionedFile`] from its protobuf representation.
-    pub fn try_from_proto(file: &protobuf::PartitionedFile) -> Result<Self> {
+impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
+    type Error = DataFusionError;
+
+    fn try_from(file: &protobuf::PartitionedFile) -> Result<Self> {
         let mut pf = PartitionedFile::new_from_meta(ObjectMeta {
             location: Path::parse(file.path.as_str()).map_err(|e| {
                 internal_datafusion_err!("Invalid object_store path: {e}")
@@ -110,7 +119,7 @@ impl PartitionedFile {
             ));
         }
         if let Some(range) = file.range.as_ref() {
-            let range = FileRange::try_from_proto(range)?;
+            let range = FileRange::try_from(range)?;
             pf = pf.with_range(range.start, range.end);
         }
         if let Some(proto_stats) = file.statistics.as_ref() {
@@ -120,25 +129,29 @@ impl PartitionedFile {
     }
 }
 
-impl FileGroup {
-    /// Serialize this group into its protobuf representation.
-    pub fn try_to_proto(&self) -> Result<protobuf::FileGroup> {
+impl TryFrom<&FileGroup> for protobuf::FileGroup {
+    type Error = DataFusionError;
+
+    fn try_from(group: &FileGroup) -> Result<Self> {
         Ok(protobuf::FileGroup {
-            files: self
+            files: group
                 .files()
                 .iter()
-                .map(PartitionedFile::try_to_proto)
+                .map(TryInto::try_into)
                 .collect::<Result<Vec<_>>>()?,
         })
     }
+}
 
-    /// Reconstruct a [`FileGroup`] from its protobuf representation.
-    pub fn try_from_proto(group: &protobuf::FileGroup) -> Result<Self> {
+impl TryFrom<&protobuf::FileGroup> for FileGroup {
+    type Error = DataFusionError;
+
+    fn try_from(group: &protobuf::FileGroup) -> Result<Self> {
         Ok(FileGroup::new(
             group
                 .files
                 .iter()
-                .map(PartitionedFile::try_from_proto)
+                .map(TryInto::try_into)
                 .collect::<Result<Vec<_>>>()?,
         ))
     }
@@ -166,7 +179,8 @@ mod tests {
         .with_arrow_schema(Arc::clone(&schema))
         .with_statistics(Arc::new(Statistics::new_unknown(&schema)));
 
-        let decoded = PartitionedFile::try_from_proto(&pf.try_to_proto()?)?;
+        let encoded = protobuf::PartitionedFile::try_from(&pf)?;
+        let decoded = PartitionedFile::try_from(&encoded)?;
 
         assert_eq!(decoded.object_meta.location, pf.object_meta.location);
         assert_eq!(decoded.object_meta.size, pf.object_meta.size);
@@ -192,7 +206,7 @@ mod tests {
             ..Default::default()
         };
 
-        let err = PartitionedFile::try_from_proto(&proto).unwrap_err();
+        let err = PartitionedFile::try_from(&proto).unwrap_err();
         assert!(
             err.to_string().contains("Invalid object_store path"),
             "unexpected error: {err}"
@@ -206,7 +220,8 @@ mod tests {
             PartitionedFile::new("b.parquet", 2),
         ]);
 
-        let decoded = FileGroup::try_from_proto(&group.try_to_proto()?)?;
+        let encoded = protobuf::FileGroup::try_from(&group)?;
+        let decoded = FileGroup::try_from(&encoded)?;
 
         assert_eq!(decoded.len(), 2);
         assert_eq!(
