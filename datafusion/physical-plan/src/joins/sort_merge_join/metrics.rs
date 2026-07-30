@@ -60,9 +60,6 @@ impl SortMergeJoinMetrics {
         }
     }
 
-    // TODO: unused while the generator refactor settles; join_time will be
-    // re-wired once the timing accounting is added back.
-    #[expect(dead_code)]
     pub fn join_time(&self) -> Time {
         self.join_time.clone()
     }

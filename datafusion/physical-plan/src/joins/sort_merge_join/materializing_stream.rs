@@ -17,9 +17,10 @@
 
 //! Sort-Merge Join execution
 //!
-//! This module implements the runtime state machine for the Sort-Merge Join
-//! operator. It drives two sorted input streams (the *streamed* side and the
-//! *buffered* side), compares join keys, and produces joined `RecordBatch`es.
+//! This module implements the Sort-Merge Join operator as an async
+//! generator running a merge scan: it drives two sorted input streams (the
+//! *streamed* side and the *buffered* side), compares join keys, and
+//! produces joined `RecordBatch`es.
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
@@ -27,8 +28,6 @@ use std::fmt::Debug;
 use std::mem::size_of;
 use std::ops::Range;
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering::Relaxed;
 
 use crate::joins::sort_merge_join::filter::{
     FilterMetadata, filter_record_batch_by_join_type, get_corrected_filter_mask,
@@ -36,6 +35,7 @@ use crate::joins::sort_merge_join::filter::{
 };
 use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
 use crate::joins::utils::{JoinFilter, JoinKeyComparator};
+use crate::metrics::Time;
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::{EmptyRecordBatchStream, ObservedStream, RecordBatchStreamAdapter};
 use crate::{PhysicalExpr, SendableRecordBatchStream};
@@ -47,6 +47,7 @@ use arrow::compute::{
 };
 use arrow::datatypes::SchemaRef;
 use datafusion_common::cast::as_uint64_array;
+use datafusion_common::instant::Instant;
 use datafusion_common::{
     DataFusionError, JoinType, NullEquality, Result, exec_err, internal_err,
 };
@@ -338,15 +339,22 @@ pub(super) struct MaterializingSortMergeJoinStream {
     /// Staging output array builders
     pub joined_record_batches: JoinedRecordBatches,
     /// Output buffer. Currently used by filtering as it requires double buffering
-    /// to avoid small/empty batches. Non-filtered join outputs directly from `staging_output_record_batches.batches`
+    /// to avoid small/empty batches. Non-filtered joins output directly from
+    /// `joined_record_batches.joined_batches`
     pub output: BatchCoalescer,
     /// Manages the process of spilling and reading back intermediate data
     pub spill_manager: SpillManager,
 
-    /// Tracks the active stream when loading spilled buffered batches back in memory
-    pub spill_stream: Option<SendableRecordBatchStream>,
     /// Tracks the number of batches currently spilled
     pub spilled_batch_count: usize,
+
+    /// Time spent doing the join's own work (including spill write and
+    /// read-back). The clock is stopped while awaiting the child inputs or
+    /// the consumer taking an emitted batch — see [`Self::stop_join_time`].
+    pub join_time: Time,
+    /// Start of the currently running `join_time` span; `None` while the
+    /// clock is stopped.
+    pub join_time_start: Option<Instant>,
 
     // ========================================================================
     // CACHED COMPARATORS:
@@ -367,8 +375,9 @@ pub(super) struct MaterializingSortMergeJoinStream {
     pub reservation: MemoryReservation,
     /// Runtime env
     pub runtime_env: Arc<RuntimeEnv>,
-    /// A unique number for each batch
-    pub streamed_batch_counter: AtomicUsize,
+    /// A unique id per streamed batch, tagging deferred-filter metadata so
+    /// `get_corrected_filter_mask` can group output rows by input batch.
+    pub streamed_batch_counter: usize,
 }
 
 /// Staging area for joined data before output
@@ -543,6 +552,7 @@ impl MaterializingSortMergeJoinStream {
             "MaterializingSortMergeJoinStream does not handle {join_type:?}; \
              semi/anti/mark joins use BitwiseSortMergeJoinStream"
         );
+        let join_time = join_metrics.join_time();
         let mut this = Self {
             sort_options,
             null_equality,
@@ -573,20 +583,25 @@ impl MaterializingSortMergeJoinStream {
             reservation,
             runtime_env,
             spill_manager,
-            spill_stream: None,
             spilled_batch_count: 0,
+            join_time,
+            join_time_start: None,
             streamed_buffered_cmp: None,
             buffered_equality_cmp: None,
-            streamed_batch_counter: AtomicUsize::new(0),
+            streamed_batch_counter: 0,
         };
 
         let schema = Arc::clone(&this.schema);
         let baseline_metrics = this.join_metrics.baseline_metrics();
 
-        let stream =
-            async_try_stream(|mut emitter| async move { this.join(&mut emitter).await });
+        let stream = async_try_stream(|mut emitter| async move {
+            this.start_join_time();
+            let result = this.join(&mut emitter).await;
+            this.stop_join_time();
+            result
+        });
         // ObservedStream records the baseline metrics (output rows/batches,
-        // end time) exactly as the former hand-written poll_next did.
+        // end time).
         Ok(Box::pin(ObservedStream::new(
             Box::pin(RecordBatchStreamAdapter::new(schema, stream)),
             baseline_metrics,
@@ -617,11 +632,9 @@ impl MaterializingSortMergeJoinStream {
     /// 5. flush everything that remains
     /// ```
     async fn join(
-        mut self,
+        &mut self,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
-        // TODO - add join time metric
-
         // 1. Load the first streamed row and the first buffered key group.
         self.load_next_streamed_batch().await?;
         self.advance_buffered_group().await?;
@@ -645,7 +658,7 @@ impl MaterializingSortMergeJoinStream {
                 Ordering::Less => {
                     self.null_join_streamed_row();
                     if self.num_unfrozen_pairs() >= self.batch_size {
-                        self.freeze_full_batch(emitter).await?;
+                        self.freeze_and_emit(emitter).await?;
                     }
                     if !self.try_advance_streamed_row() {
                         self.load_next_streamed_batch().await?;
@@ -666,7 +679,7 @@ impl MaterializingSortMergeJoinStream {
                 //     The group stays for the next streamed row.
                 Ordering::Equal => {
                     while !self.pair_streamed_row_with_group() {
-                        self.freeze_full_batch(emitter).await?;
+                        self.freeze_and_emit(emitter).await?;
                     }
                     if !self.try_advance_streamed_row() {
                         self.load_next_streamed_batch().await?;
@@ -693,10 +706,11 @@ impl MaterializingSortMergeJoinStream {
     /// `Equal`: pair the current streamed row with every row of the
     /// buffered key group, and mark the group as matched.
     ///
-    /// Returns false when a full batch of pairs accumulated mid-scan: the
-    /// caller must materialize (`freeze_full_batch`) and call again to
-    /// resume the scan where it paused. Returns true when the group scan
-    /// is complete.
+    /// Returns false when a full batch of pairs has accumulated (the scan
+    /// may or may not be complete): the caller must materialize
+    /// (`freeze_and_emit`) and call again, which resumes the scan where it
+    /// paused. Returns true when the group scan is complete and there is
+    /// room for more pairs.
     fn pair_streamed_row_with_group(&mut self) -> bool {
         while !self.buffered_data.scanning_finished()
             && self.num_unfrozen_pairs() < self.batch_size
@@ -756,13 +770,34 @@ impl MaterializingSortMergeJoinStream {
         self.buffered_data.scanning_reset();
     }
 
+    /// Start (resume) the `join_time` clock.
+    fn start_join_time(&mut self) {
+        debug_assert!(self.join_time_start.is_none(), "join_time already running");
+        self.join_time_start = Some(Instant::now());
+    }
+
+    /// Stop (pause) the `join_time` clock, accumulating the elapsed span.
+    ///
+    /// Called around awaits whose duration is not the join's own work: the
+    /// child input streams' `next()` and `emitter.emit()` (where the
+    /// consumer processes the batch). The join's own spill write and
+    /// read-back are NOT excluded — that time is join work.
+    fn stop_join_time(&mut self) {
+        if let Some(start) = self.join_time_start.take() {
+            self.join_time.add_elapsed(start);
+        }
+    }
+
     /// Number of rows currently waiting in the deferred-filtering pipeline.
     ///
-    /// Bounded to ~2*batch_size: one batch_size worth from
+    /// Typically bounded to ~2*batch_size: one batch_size worth from
     /// freeze_dequeuing_buffered() (when an input batch is fully consumed),
-    /// plus up to batch_size pairs accumulating toward the next freeze.
-    /// This does not reintroduce the unbounded buffering fixed by
-    /// PR #20482; `on_children_exhausted` flushes the remainder.
+    /// plus up to batch_size pairs accumulating toward the next freeze. A
+    /// single streamed row matching a very large key group can exceed that
+    /// (its pairs freeze into the pipeline before the gate runs again — same
+    /// as the pre-generator design). This does not reintroduce the unbounded
+    /// buffering fixed by PR #20482; `on_children_exhausted` flushes the
+    /// remainder.
     fn deferred_rows_accumulated(&self) -> usize {
         self.num_unfrozen_pairs()
             + self.joined_record_batches.filter_metadata.filter_mask.len()
@@ -783,7 +818,11 @@ impl MaterializingSortMergeJoinStream {
         // processing, as this path invokes freeze_all().
         self.restore_spilled_batches_for_freeze().await?;
         if let Some(batch) = self.process_filtered_batches()? {
+            // While the emitted batch is in the consumer's hands the join
+            // isn't doing any work.
+            self.stop_join_time();
             emitter.emit(batch).await;
+            self.start_join_time();
         }
         Ok(())
     }
@@ -804,13 +843,17 @@ impl MaterializingSortMergeJoinStream {
             .joined_batches
             .next_completed_batch()
         {
+            // While the emitted batch is in the consumer's hands the join
+            // isn't doing any work.
+            self.stop_join_time();
             emitter.emit(record_batch).await;
+            self.start_join_time();
         }
     }
 
     /// Flush everything that remains once both inputs are exhausted.
     async fn on_children_exhausted(
-        mut self,
+        &mut self,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
         // Freeze the remaining pairs, restoring any spilled batches needed.
@@ -826,7 +869,9 @@ impl MaterializingSortMergeJoinStream {
             // Filtered joins must concat and filter ALL remaining data at once
             if !self.joined_record_batches.joined_batches.is_empty() {
                 let record_batch = self.filter_joined_batch()?;
+                self.stop_join_time();
                 emitter.emit(record_batch).await;
+                self.start_join_time();
             }
         } else if !self.joined_record_batches.joined_batches.is_empty() {
             // For non-filtered joins, finish buffered data first, then emit
@@ -841,7 +886,9 @@ impl MaterializingSortMergeJoinStream {
         if !self.output.is_empty() {
             self.output.finish_buffered_batch()?;
             while let Some(record_batch) = self.output.next_completed_batch() {
+                self.stop_join_time();
                 emitter.emit(record_batch).await;
+                self.start_join_time();
             }
         }
 
@@ -954,21 +1001,11 @@ impl MaterializingSortMergeJoinStream {
             let bb = &mut self.buffered_data.batches[idx];
 
             if let BufferedBatchState::Spilled(spill_file) = &bb.batch {
-                if self.spill_stream.is_none() {
-                    let stream = self
-                        .spill_manager
-                        .read_spill_as_stream(Arc::clone(spill_file), None)?;
-                    self.spill_stream = Some(stream);
-                }
+                let mut spill_stream = self
+                    .spill_manager
+                    .read_spill_as_stream(Arc::clone(spill_file), None)?;
 
-                match self
-                    .spill_stream
-                    .as_mut()
-                    .unwrap()
-                    .next()
-                    .await
-                    .transpose()?
-                {
+                match spill_stream.next().await.transpose()? {
                     Some(batch) => {
                         // Transition the batch back to InMemory
                         bb.batch = BufferedBatchState::InMemory(batch);
@@ -982,11 +1019,8 @@ impl MaterializingSortMergeJoinStream {
                         self.join_metrics
                             .peak_mem_used()
                             .set_max(self.reservation.size());
-
-                        self.spill_stream = None;
                     }
                     None => {
-                        self.spill_stream = None;
                         return internal_err!("Spill file was empty");
                     }
                 }
@@ -1018,7 +1052,11 @@ impl MaterializingSortMergeJoinStream {
             // batches it needs first.
             self.restore_spilled_batches_for_freeze().await?;
 
-            match self.streamed.next().await.transpose()? {
+            // The child's execution time is its own, not join_time.
+            self.stop_join_time();
+            let item = self.streamed.next().await.transpose();
+            self.start_join_time();
+            match item? {
                 None => {
                     // Release the streamed input pipeline's resources.
                     let streamed_schema = self.streamed.schema();
@@ -1035,10 +1073,8 @@ impl MaterializingSortMergeJoinStream {
                         self.streamed_batch =
                             StreamedBatch::new(batch, &self.on_streamed);
                         self.rebuild_streamed_buffered_cmp()?;
-                        // Every incoming streaming batch should have its unique id
-                        // Check `JoinedRecordBatches.self.streamed_batch_counter` documentation
-                        self.streamed_batch_counter
-                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        // Every incoming streamed batch gets a unique id.
+                        self.streamed_batch_counter += 1;
                         return Ok(());
                     }
                 }
@@ -1104,10 +1140,6 @@ impl MaterializingSortMergeJoinStream {
         Ok(())
     }
 
-    /// Advance the buffered side to the next key group: dequeue batches
-    /// fully consumed by the previous group, then collect all contiguous
-    /// rows sharing the next join key (the group may span multiple buffered
-    /// batches). Sets `buffered_exhausted` when no group remains.
     /// Sync fast path of [`Self::advance_buffered_group`]: when the next
     /// group starts in the single remaining buffered batch and provably ends
     /// within it (the common case — a group only reaches a batch boundary
@@ -1148,6 +1180,10 @@ impl MaterializingSortMergeJoinStream {
         Ok(true)
     }
 
+    /// Advance the buffered side to the next key group: dequeue batches
+    /// fully consumed by the previous group, then collect all contiguous
+    /// rows sharing the next join key (the group may span multiple buffered
+    /// batches). Sets `buffered_exhausted` when no group remains.
     async fn advance_buffered_group(&mut self) -> Result<()> {
         self.buffered_group_matched = false;
         self.dequeue_consumed_buffered_batches().await?;
@@ -1205,7 +1241,11 @@ impl MaterializingSortMergeJoinStream {
     /// first row. Returns false when the buffered input is exhausted.
     async fn load_next_buffered_batch(&mut self) -> Result<bool> {
         loop {
-            match self.buffered.next().await.transpose()? {
+            // The child's execution time is its own, not join_time.
+            self.stop_join_time();
+            let item = self.buffered.next().await.transpose();
+            self.start_join_time();
+            match item? {
                 None => {
                     // Release the buffered input pipeline's resources.
                     let buffered_schema = self.buffered.schema();
@@ -1253,7 +1293,11 @@ impl MaterializingSortMergeJoinStream {
                     }
                 }
             } else {
-                match self.buffered.next().await.transpose()? {
+                // The child's execution time is its own, not join_time.
+                self.stop_join_time();
+                let item = self.buffered.next().await.transpose();
+                self.start_join_time();
+                match item? {
                     None => {
                         // Group complete; the input is done but the group is
                         // still valid — `buffered_exhausted` is only set once
@@ -1301,7 +1345,7 @@ impl MaterializingSortMergeJoinStream {
     /// Materialize ("freeze") the accumulated pairs — restoring any spilled
     /// batches they reference first — and emit completed output batches
     /// (filtered joins emit through the deferred-filtering gate instead).
-    async fn freeze_full_batch(
+    async fn freeze_and_emit(
         &mut self,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
@@ -1556,7 +1600,7 @@ impl MaterializingSortMergeJoinStream {
                         output_batch,
                         &combined_left_indices,
                         &mask,
-                        self.streamed_batch_counter.load(Relaxed),
+                        self.streamed_batch_counter,
                         self.join_type,
                     );
                 } else {
@@ -1957,11 +2001,6 @@ impl BufferedData {
 
     pub fn scanning_finished(&self) -> bool {
         self.scanning_batch_idx == self.batches.len()
-    }
-
-    pub fn scanning_finish(&mut self) {
-        self.scanning_batch_idx = self.batches.len();
-        self.scanning_offset = 0;
     }
 }
 
