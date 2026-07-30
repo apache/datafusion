@@ -176,7 +176,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     Constraint, Constraints, Result, ScalarValue, assert_eq_or_internal_err,
     internal_err, not_impl_err,
@@ -762,6 +762,32 @@ struct AggrDynFilter {
     /// min(a), avg(a), max(b)
     /// And this field stores [PerAccumulatorDynFilter(min(a)), PerAccumulatorDynFilter(min(b))]
     supported_accumulators_info: Vec<PerAccumulatorDynFilter>,
+}
+
+fn plan_contains_expression_id(
+    plan: &Arc<dyn ExecutionPlan>,
+    expression_id: u64,
+) -> Result<bool> {
+    let mut found = false;
+    plan.apply(|node| {
+        node.apply_expressions(&mut |root| {
+            root.apply(|expr| {
+                if expr.expression_id() == Some(expression_id) {
+                    found = true;
+                    Ok(TreeNodeRecursion::Stop)
+                } else {
+                    Ok(TreeNodeRecursion::Continue)
+                }
+            })
+        })?;
+
+        Ok(if found {
+            TreeNodeRecursion::Stop
+        } else {
+            TreeNodeRecursion::Continue
+        })
+    })?;
+    Ok(found)
 }
 
 // ---- Aggregate Dynamic Filter Utility Structs ----
@@ -2125,11 +2151,12 @@ impl ExecutionPlan for AggregateExec {
         if phase == FilterPushdownPhase::Post
             && let Some(dyn_filter) = &self.dynamic_filter
         {
-            // HACK: A child reply of `PushedDown::No` can mean it cannot apply the
-            // row-level filter but still retains it for statistics pruning.
-            // Use the reference count to detect whether a child retained it.
-            // Issue: <https://github.com/apache/datafusion/issues/18856>
-            let child_accepts_dyn_filter = Arc::strong_count(dyn_filter) > 1;
+            let child_accepts_dyn_filter = dyn_filter
+                .filter
+                .expression_id()
+                .map(|id| plan_contains_expression_id(&self.input, id))
+                .transpose()?
+                .unwrap_or(false);
 
             if !child_accepts_dyn_filter {
                 // Child can't consume the self dynamic filter, so disable it by setting
@@ -2518,6 +2545,8 @@ impl AggregateExec {
                 })?;
             aggregate.with_dynamic_filter_expr(dynamic_filter)?
         } else {
+            let mut aggregate = aggregate;
+            aggregate.dynamic_filter = None;
             aggregate
         };
 
@@ -3021,6 +3050,7 @@ mod tests {
     use crate::empty::EmptyExec;
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
+    use crate::filter::FilterExecBuilder;
     use crate::metrics::MetricValue;
     use crate::statistics::{StatisticsArgs, StatisticsContext};
     use crate::test::TestMemoryExec;
@@ -3056,7 +3086,7 @@ mod tests {
     use datafusion_physical_expr::Partitioning;
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
-    use datafusion_physical_expr::expressions::Literal;
+    use datafusion_physical_expr::expressions::{Literal, NotExpr};
 
     use crate::projection::ProjectionExec;
     use datafusion_physical_expr::projection::ProjectionExpr;
@@ -7595,6 +7625,38 @@ mod tests {
         // Hard to assert this because the filter is identical. No error means
         // the filter was accepted. That's a good enough assertion for now.
         let _agg = agg.with_dynamic_filter_expr(remapped_df)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_plan_contains_expression_id_recurses_plans_and_expressions() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let empty: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![col("a", &schema)?],
+            lit(true),
+        ));
+        let expression_id = dynamic_filter
+            .expression_id()
+            .expect("dynamic filters always have an expression ID");
+
+        assert!(!plan_contains_expression_id(&empty, expression_id)?);
+
+        let dynamic_filter_expr: Arc<dyn PhysicalExpr> =
+            Arc::<DynamicFilterPhysicalExpr>::clone(&dynamic_filter);
+        let predicate: Arc<dyn PhysicalExpr> =
+            Arc::new(NotExpr::new(dynamic_filter_expr));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExecBuilder::new(predicate, empty).build()?);
+        let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            [ProjectionExpr::new_from_expression(
+                col("a", &schema)?,
+                &schema,
+            )?],
+            filter,
+        )?);
+
+        assert!(plan_contains_expression_id(&projection, expression_id)?);
         Ok(())
     }
 
