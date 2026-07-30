@@ -162,7 +162,7 @@ SELECT round(1.25, NULL);
 ----
 NULL
 
-query error Error during planning: 'round' does not support zero arguments.
+query error DataFusion error: Error during planning: 'round' does not support zero arguments.
 SELECT round();
 
 query error Error during planning: Internal error: Function 'round' failed to match any signature
