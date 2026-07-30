@@ -183,6 +183,49 @@ impl PhysicalSortExpr {
     }
 }
 
+/// Protobuf conversions for [`PhysicalSortExpr`].
+///
+/// This is the flat [`PhysicalSortExprNode`] representation used wherever the
+/// wire format stores an ordering (scan output orderings, range partitioning,
+/// window frames, …). It is *not* the `PhysicalExprNode::Sort` wrapping that
+/// `SortExec` uses for its own `expr` field.
+///
+/// [`PhysicalSortExprNode`]: datafusion_proto_models::protobuf::PhysicalSortExprNode
+#[cfg(feature = "proto")]
+impl PhysicalSortExpr {
+    /// Serialize this sort expression, encoding its child expression through
+    /// `ctx`.
+    pub fn try_to_proto(
+        &self,
+        ctx: &crate::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<datafusion_proto_models::protobuf::PhysicalSortExprNode> {
+        Ok(datafusion_proto_models::protobuf::PhysicalSortExprNode {
+            expr: Some(Box::new(ctx.encode_child(&self.expr)?)),
+            asc: !self.options.descending,
+            nulls_first: self.options.nulls_first,
+        })
+    }
+
+    /// Reconstruct a [`PhysicalSortExpr`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalSortExprNode,
+        ctx: &crate::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Self> {
+        let expr = ctx.decode_required_expression(
+            node.expr.as_deref(),
+            "PhysicalSortExpr",
+            "expr",
+        )?;
+        Ok(PhysicalSortExpr {
+            expr,
+            options: SortOptions {
+                descending: !node.asc,
+                nulls_first: node.nulls_first,
+            },
+        })
+    }
+}
+
 impl PartialEq for PhysicalSortExpr {
     fn eq(&self, other: &Self) -> bool {
         self.options == other.options && self.expr.eq(&other.expr)

@@ -515,6 +515,146 @@ impl Partitioning {
     }
 }
 
+/// Protobuf conversions for [`Partitioning`].
+///
+/// Child expressions (hash keys, range orderings) and `ScalarValue` split
+/// points are (de)serialized through the expression-level context, so this is
+/// the single copy of the partitioning wire format: `RepartitionExec`,
+/// `FileScanConfig` and `datafusion-proto`'s central serializer all route
+/// through it.
+///
+/// [`protobuf::Partitioning`]: datafusion_proto_models::protobuf::Partitioning
+#[cfg(feature = "proto")]
+impl Partitioning {
+    /// Serialize this partitioning into its protobuf representation.
+    pub fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<datafusion_proto_models::protobuf::Partitioning> {
+        use datafusion_proto_models::protobuf;
+
+        let partition_method = match self {
+            Partitioning::RoundRobinBatch(n) => {
+                protobuf::partitioning::PartitionMethod::RoundRobin(*n as u64)
+            }
+            Partitioning::Hash(exprs, n) => {
+                protobuf::partitioning::PartitionMethod::Hash(
+                    protobuf::PhysicalHashRepartition {
+                        hash_expr: ctx.encode_children_expressions(exprs)?,
+                        partition_count: *n as u64,
+                    },
+                )
+            }
+            Partitioning::Range(range) => {
+                let sort_expr = range
+                    .ordering()
+                    .iter()
+                    .map(|sort_expr| sort_expr.try_to_proto(ctx))
+                    .collect::<Result<Vec<_>>>()?;
+                let split_point = range
+                    .split_points()
+                    .iter()
+                    .map(|split_point| {
+                        let value = split_point
+                            .values()
+                            .iter()
+                            .map(|value| value.try_into().map_err(Into::into))
+                            .collect::<Result<Vec<_>>>()?;
+                        Ok(protobuf::PhysicalRangeSplitPoint { value })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                protobuf::partitioning::PartitionMethod::Range(
+                    protobuf::PhysicalRangePartitioning {
+                        sort_expr,
+                        split_point,
+                    },
+                )
+            }
+            Partitioning::UnknownPartitioning(n) => {
+                protobuf::partitioning::PartitionMethod::Unknown(*n as u64)
+            }
+        };
+        Ok(protobuf::Partitioning {
+            partition_method: Some(partition_method),
+        })
+    }
+
+    /// Reconstruct a [`Partitioning`] from its protobuf representation.
+    ///
+    /// Returns `Ok(None)` when the message carries no `partition_method`, which
+    /// the wire format uses to mean "no output partitioning declared"; callers
+    /// for which it is required should turn that into their own error.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::Partitioning,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Option<Self>> {
+        use datafusion_common::{ScalarValue, internal_datafusion_err, internal_err};
+        use datafusion_proto_models::protobuf;
+
+        let Some(partition_method) = node.partition_method.as_ref() else {
+            return Ok(None);
+        };
+        let partitioning = match partition_method {
+            protobuf::partitioning::PartitionMethod::RoundRobin(n) => {
+                Partitioning::RoundRobinBatch(partition_count(*n)?)
+            }
+            protobuf::partitioning::PartitionMethod::Hash(hash) => {
+                let exprs = hash
+                    .hash_expr
+                    .iter()
+                    .map(|expr| ctx.decode(expr))
+                    .collect::<Result<Vec<_>>>()?;
+                Partitioning::Hash(exprs, partition_count(hash.partition_count)?)
+            }
+            protobuf::partitioning::PartitionMethod::Unknown(n) => {
+                Partitioning::UnknownPartitioning(partition_count(*n)?)
+            }
+            protobuf::partitioning::PartitionMethod::Range(range) => {
+                let sort_exprs = range
+                    .sort_expr
+                    .iter()
+                    .map(|sort_expr| PhysicalSortExpr::try_from_proto(sort_expr, ctx))
+                    .collect::<Result<Vec<_>>>()?;
+                let sort_expr_count = sort_exprs.len();
+                let ordering = LexOrdering::new(sort_exprs).ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Range partitioning requires non-empty ordering"
+                    )
+                })?;
+                if ordering.len() != sort_expr_count {
+                    return internal_err!(
+                        "Range partitioning ordering must not contain duplicate expressions"
+                    );
+                }
+                let split_points = range
+                    .split_point
+                    .iter()
+                    .map(|split_point| {
+                        let values = split_point
+                            .value
+                            .iter()
+                            .map(|value| ScalarValue::try_from(value).map_err(Into::into))
+                            .collect::<Result<Vec<_>>>()?;
+                        Ok(SplitPoint::new(values))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Partitioning::Range(RangePartitioning::try_new(ordering, split_points)?)
+            }
+        };
+        Ok(Some(partitioning))
+    }
+}
+
+/// Narrow a wire partition count to `usize`.
+#[cfg(feature = "proto")]
+fn partition_count(count: u64) -> Result<usize> {
+    usize::try_from(count).map_err(|_| {
+        datafusion_common::internal_datafusion_err!(
+            "Partition count {count} exceeds usize::MAX"
+        )
+    })
+}
+
 impl PartialEq for Partitioning {
     fn eq(&self, other: &Partitioning) -> bool {
         match (self, other) {

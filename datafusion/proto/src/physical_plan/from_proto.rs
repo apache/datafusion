@@ -23,9 +23,7 @@ use arrow::array::RecordBatch;
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Field, Schema};
 use arrow::ipc::reader::StreamReader;
-use datafusion_common::{
-    DataFusionError, Result, ScalarValue, internal_datafusion_err, not_impl_err,
-};
+use datafusion_common::{DataFusionError, Result, internal_datafusion_err, not_impl_err};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -51,9 +49,7 @@ use datafusion_physical_plan::expressions::{
 };
 use datafusion_physical_plan::joins::HashExpr;
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
-use datafusion_physical_plan::{
-    Partitioning, PhysicalExpr, RangePartitioning, SplitPoint, WindowExpr,
-};
+use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion_proto_common::common::proto_error;
 
 use super::{
@@ -423,83 +419,20 @@ pub fn parse_protobuf_partitioning(
     input_schema: &Schema,
     proto_converter: &dyn PhysicalProtoConverterExtension,
 ) -> Result<Option<Partitioning>> {
-    match partitioning {
-        Some(protobuf::Partitioning { partition_method }) => match partition_method {
-            Some(protobuf::partitioning::PartitionMethod::RoundRobin(
-                partition_count,
-            )) => Ok(Some(Partitioning::RoundRobinBatch(
-                *partition_count as usize,
-            ))),
-            Some(protobuf::partitioning::PartitionMethod::Hash(hash_repartition)) => {
-                parse_protobuf_hash_partitioning(
-                    Some(hash_repartition),
-                    ctx,
-                    input_schema,
-                    proto_converter,
-                )
-            }
-            Some(protobuf::partitioning::PartitionMethod::Range(range_partitioning)) => {
-                Ok(Some(parse_protobuf_range_partitioning(
-                    range_partitioning,
-                    ctx,
-                    input_schema,
-                    proto_converter,
-                )?))
-            }
-            Some(protobuf::partitioning::PartitionMethod::Unknown(partition_count)) => {
-                Ok(Some(Partitioning::UnknownPartitioning(
-                    *partition_count as usize,
-                )))
-            }
-            None => Ok(None),
-        },
-        None => Ok(None),
-    }
-}
-
-fn parse_protobuf_range_partitioning(
-    range_partitioning: &protobuf::PhysicalRangePartitioning,
-    ctx: &PhysicalPlanDecodeContext<'_>,
-    input_schema: &Schema,
-    proto_converter: &dyn PhysicalProtoConverterExtension,
-) -> Result<Partitioning> {
-    let sort_exprs = parse_physical_sort_exprs(
-        &range_partitioning.sort_expr,
+    let decoder = ConverterDecoder {
         ctx,
-        input_schema,
         proto_converter,
-    )?;
-    let sort_expr_count = sort_exprs.len();
-    let ordering = LexOrdering::new(sort_exprs).ok_or_else(|| {
-        internal_datafusion_err!("Range partitioning requires non-empty ordering")
-    })?;
-    if ordering.len() != sort_expr_count {
-        return Err(internal_datafusion_err!(
-            "Range partitioning ordering must not contain duplicate expressions"
-        ));
-    }
-    let split_points = range_partitioning
-        .split_point
-        .iter()
-        .map(parse_protobuf_range_split_point)
-        .collect::<Result<_>>()?;
-    Ok(Partitioning::Range(RangePartitioning::try_new(
-        ordering,
-        split_points,
-    )?))
+    };
+    let decode_ctx =
+        datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx::new(
+            input_schema,
+            &decoder,
+        );
+    partitioning
+        .map(|partitioning| Partitioning::try_from_proto(partitioning, &decode_ctx))
+        .transpose()
+        .map(Option::flatten)
 }
-
-fn parse_protobuf_range_split_point(
-    split_point: &protobuf::PhysicalRangeSplitPoint,
-) -> Result<SplitPoint> {
-    let values = split_point
-        .value
-        .iter()
-        .map(|value| ScalarValue::try_from(value).map_err(Into::into))
-        .collect::<Result<_>>()?;
-    Ok(SplitPoint::new(values))
-}
-
 pub fn parse_protobuf_file_scan_schema(
     proto: &protobuf::FileScanExecConf,
 ) -> Result<Arc<Schema>> {
@@ -776,6 +709,7 @@ mod tests {
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{TimeZone, Utc};
+    use datafusion_common::ScalarValue;
     use object_store::ObjectMeta;
     use object_store::path::Path;
 
