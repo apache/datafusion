@@ -22,22 +22,20 @@
 //!
 //! See issue for details: <https://github.com/apache/datafusion/issues/22710>
 
-use std::ops::ControlFlow;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
-use datafusion_execution::TaskContext;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
 use super::aggregate_hash_table::{AggregateHashTable, PartialReduceMarker};
-use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
-use crate::stream::EmptyRecordBatchStream;
-use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
+use crate::metrics::{BaselineMetrics, SpillMetrics};
+use crate::stream::{EmptyRecordBatchStream, ObservedStream, RecordBatchStreamAdapter};
+use crate::{InputOrderMode, SendableRecordBatchStream};
 
 /// Hash aggregation can combine multiple partial stages before final
 /// evaluation. This stream implements the partial-reduce stage.
@@ -81,70 +79,10 @@ pub(crate) struct PartialReduceHashAggregateStream {
     /// Memory reservation for group keys and accumulators.
     reservation: MemoryReservation,
 
-    /// Tracks the high-level stream lifecycle. The hash table owns the lower-level
-    /// state for emitting output batches.
-    state: Option<PartialReduceHashAggregateState>,
-}
-
-/// States for partial-reduce hash aggregation processing.
-// The typestate pattern mirrors the final stream and keeps the input/output
-// semantics explicit for this mode.
-enum PartialReduceHashAggregateState {
-    ReadingInput {
-        hash_table: AggregateHashTable<PartialReduceMarker>,
-    },
-    ProducingOutput {
-        hash_table: AggregateHashTable<PartialReduceMarker>,
-    },
-    Done,
-}
-
-type PartialReduceHashAggregatePoll = Poll<Option<Result<RecordBatch>>>;
-type PartialReduceHashAggregateStateTransition = ControlFlow<
-    (
-        PartialReduceHashAggregatePoll,
-        PartialReduceHashAggregateState,
-    ),
-    PartialReduceHashAggregateState,
->;
-
-impl PartialReduceHashAggregateState {
-    fn hash_table(&self) -> &AggregateHashTable<PartialReduceMarker> {
-        match self {
-            Self::ReadingInput { hash_table } | Self::ProducingOutput { hash_table } => {
-                hash_table
-            }
-            Self::Done => unreachable!("Done state does not hold a hash table"),
-        }
-    }
-
-    fn hash_table_mut(&mut self) -> &mut AggregateHashTable<PartialReduceMarker> {
-        match self {
-            Self::ReadingInput { hash_table } | Self::ProducingOutput { hash_table } => {
-                hash_table
-            }
-            Self::Done => unreachable!("Done state does not hold a hash table"),
-        }
-    }
-
-    fn into_hash_table(self) -> AggregateHashTable<PartialReduceMarker> {
-        match self {
-            Self::ReadingInput { hash_table } | Self::ProducingOutput { hash_table } => {
-                hash_table
-            }
-            Self::Done => unreachable!("Done state does not hold a hash table"),
-        }
-    }
-
-    fn into_producing_output(self) -> Self {
-        Self::ProducingOutput {
-            hash_table: self.into_hash_table(),
-        }
-    }
-
-    fn into_done(self) -> Self {
-        Self::Done
-    }
+    /// The hash table owns the lower-level state for emitting output batches.
+    ///
+    /// This is option since it will be taken on [`Self::create_stream`] to control the memory
+    hash_table: Option<AggregateHashTable<PartialReduceMarker>>,
 }
 
 impl PartialReduceHashAggregateStream {
@@ -180,133 +118,21 @@ impl PartialReduceHashAggregateStream {
             input,
             baseline_metrics,
             reservation,
-            state: Some(PartialReduceHashAggregateState::ReadingInput { hash_table }),
+            hash_table: Some(hash_table),
         })
     }
 
-    fn start_output(
-        &mut self,
-        hash_table: &mut AggregateHashTable<PartialReduceMarker>,
-    ) -> Result<()> {
-        let input_schema = self.input.schema();
-        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
-        hash_table.start_output()
-    }
+    pub(crate) fn into_stream(self) -> SendableRecordBatchStream {
+        let schema_clone = Arc::clone(&self.schema);
 
-    /// Handle ReadingInput state - aggregate partial state batches into the hash table.
-    ///
-    /// See comments at `poll_next()` for details.
-    ///
-    /// Returns the next operator state with control flow decision.
-    fn handle_reading_input(
-        &mut self,
-        cx: &mut Context<'_>,
-        mut original_state: PartialReduceHashAggregateState,
-    ) -> PartialReduceHashAggregateStateTransition {
-        debug_assert!(matches!(
-            &original_state,
-            PartialReduceHashAggregateState::ReadingInput { .. }
+        let cloned_metrics = self.baseline_metrics.clone();
+        let stream = Box::pin(RecordBatchStreamAdapter::new(
+            schema_clone,
+            self.create_stream(),
         ));
-        debug_assert!(original_state.hash_table().is_building());
 
-        match self.input.poll_next_unpin(cx) {
-            Poll::Pending => ControlFlow::Break((Poll::Pending, original_state)),
-            // Get a new input batch, aggregate it in the hash table
-            Poll::Ready(Some(Ok(batch))) => {
-                let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-                let timer = elapsed_compute.timer();
-                let result = original_state.hash_table_mut().aggregate_batch(&batch);
-                timer.done();
-
-                if let Err(e) = result {
-                    return ControlFlow::Break((
-                        Poll::Ready(Some(Err(e))),
-                        original_state,
-                    ));
-                }
-
-                if let Err(e) = self
-                    .reservation
-                    .try_resize(original_state.hash_table().memory_size())
-                {
-                    return ControlFlow::Break((
-                        Poll::Ready(Some(Err(e))),
-                        original_state,
-                    ));
-                }
-
-                ControlFlow::Continue(original_state)
-            }
-            Poll::Ready(Some(Err(e))) => {
-                ControlFlow::Break((Poll::Ready(Some(Err(e))), original_state))
-            }
-            // Input ends, move to output state
-            Poll::Ready(None) => {
-                let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-                let timer = elapsed_compute.timer();
-                let result = self.start_output(original_state.hash_table_mut());
-                timer.done();
-
-                match result {
-                    Ok(()) => {
-                        ControlFlow::Continue(original_state.into_producing_output())
-                    }
-                    Err(e) => {
-                        ControlFlow::Break((Poll::Ready(Some(Err(e))), original_state))
-                    }
-                }
-            }
-        }
+        Box::pin(ObservedStream::new(stream, cloned_metrics, None))
     }
-
-    /// Handle ProducingOutput state - emit merged partial aggregate state batches.
-    ///
-    /// See comments at `poll_next()` for details.
-    ///
-    /// Returns the next operator state with control flow decision.
-    fn handle_producing_output(
-        &mut self,
-        mut original_state: PartialReduceHashAggregateState,
-    ) -> PartialReduceHashAggregateStateTransition {
-        debug_assert!(matches!(
-            &original_state,
-            PartialReduceHashAggregateState::ProducingOutput { .. }
-        ));
-        debug_assert!(!original_state.hash_table().is_building());
-
-        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-        let timer = elapsed_compute.timer();
-        let result = original_state.hash_table_mut().next_output_batch();
-        timer.done();
-
-        match result {
-            Ok(Some(batch)) => {
-                let _ = self
-                    .reservation
-                    .try_resize(original_state.hash_table().memory_size());
-                debug_assert!(batch.num_rows() > 0);
-                let next_state = if original_state.hash_table().is_done() {
-                    original_state.into_done()
-                } else {
-                    original_state
-                };
-
-                ControlFlow::Break((
-                    Poll::Ready(Some(Ok(batch.record_output(&self.baseline_metrics)))),
-                    next_state,
-                ))
-            }
-            Ok(None) => {
-                let _ = self.reservation.try_resize(0);
-                ControlFlow::Continue(original_state.into_done())
-            }
-            Err(e) => ControlFlow::Break((Poll::Ready(Some(Err(e))), original_state)),
-        }
-    }
-}
-
-impl Stream for PartialReduceHashAggregateStream {
-    type Item = Result<RecordBatch>;
 
     /// Entry point for the partial-reduce hash aggregate state machine.
     ///
@@ -340,46 +166,85 @@ impl Stream for PartialReduceHashAggregateStream {
     /// Done
     ///   -> (end)
     /// ```
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        loop {
-            let cur_state = self
-                .state
+    fn create_stream(mut self) -> impl Stream<Item = Result<RecordBatch>> {
+        async_try_stream(|emitter| async move {
+            let mut hash_table = self
+                .hash_table
                 .take()
-                .expect("PartialReduceHashAggregateStream state should not be None");
+                .expect("hash table should not be None");
 
-            let next_state = match cur_state {
-                state @ PartialReduceHashAggregateState::ReadingInput { .. } => {
-                    self.handle_reading_input(cx, state)
-                }
-                state @ PartialReduceHashAggregateState::ProducingOutput { .. } => {
-                    self.handle_producing_output(state)
-                }
-                state @ PartialReduceHashAggregateState::Done => {
-                    let _ = self.reservation.try_resize(0);
-                    self.state = Some(state);
-                    return Poll::Ready(None);
-                }
-            };
+            self.consume_input(&mut hash_table).await?;
+            self.produce_output(hash_table, emitter).await?;
 
-            match next_state {
-                ControlFlow::Continue(next_state) => {
-                    self.state = Some(next_state);
-                    continue;
-                }
-                ControlFlow::Break((poll, next_state)) => {
-                    self.state = Some(next_state);
-                    return poll;
-                }
-            }
-        }
+            Ok(())
+        })
     }
-}
 
-impl RecordBatchStream for PartialReduceHashAggregateStream {
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
+    fn start_output(
+        &mut self,
+        hash_table: &mut AggregateHashTable<PartialReduceMarker>,
+    ) -> Result<()> {
+        let input_schema = self.input.schema();
+        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
+        hash_table.start_output()
+    }
+
+    /// Aggregate partial state batches into the hash table.
+    ///
+    /// See comments at [`Self::create_stream`] for details.
+    async fn consume_input(
+        &mut self,
+        hash_table: &mut AggregateHashTable<PartialReduceMarker>,
+    ) -> Result<()> {
+        debug_assert!(hash_table.is_building());
+
+        // Get a new input batch, aggregate it in the hash table
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+
+        while let Some(batch) = self.input.next().await.transpose()? {
+            let _timer = elapsed_compute.timer();
+            hash_table.aggregate_batch(&batch)?;
+
+            self.reservation.try_resize(hash_table.memory_size())?;
+        }
+
+        // Input ends, move to output state
+        let _timer = elapsed_compute.timer();
+        self.start_output(hash_table)?;
+
+        Ok(())
+    }
+
+    /// Emit merged partial aggregate state batches.
+    ///
+    /// See comments at [`Self::create_stream`] for details.
+    async fn produce_output(
+        &mut self,
+        mut hash_table: AggregateHashTable<PartialReduceMarker>,
+        mut emitter: TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
+        debug_assert!(!hash_table.is_building());
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+        let mut timer = elapsed_compute.timer();
+
+        while let Some(batch) = hash_table.next_output_batch()? {
+            let _ = self.reservation.try_resize(hash_table.memory_size());
+            debug_assert!(batch.num_rows() > 0);
+
+            if hash_table.is_done() {
+                drop(hash_table);
+                self.reservation.try_resize(0)?;
+                timer.done();
+                emitter.emit(batch).await;
+
+                return Ok(());
+            }
+
+            timer.done();
+            emitter.emit(batch).await;
+            timer = elapsed_compute.timer();
+        }
+
+        Ok(())
     }
 }
