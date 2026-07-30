@@ -671,7 +671,7 @@ enum StreamType {
     /// Partial stage of aggregation for ordered input.
     OrderedPartialAggregate(OrderedPartialAggregateStream),
     /// Final stage of aggregation for ordered input.
-    OrderedFinalAggregate(SendableRecordBatchStream),
+    OrderedFinalAggregate(OrderedFinalAggregateStream),
     /// Hash aggregation reused for multiple stages
     ///
     /// Note this is being incrementally migrated to dedicated streams like
@@ -698,7 +698,7 @@ impl From<StreamType> for SendableRecordBatchStream {
             StreamType::FinalHash(stream) => Box::pin(stream),
             StreamType::SingleHash(stream) => Box::pin(stream),
             StreamType::OrderedPartialAggregate(stream) => stream.into_stream(),
-            StreamType::OrderedFinalAggregate(stream) => stream,
+            StreamType::OrderedFinalAggregate(stream) => stream.into_stream(),
             StreamType::GroupedHash(stream) => Box::pin(stream),
             StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
         }

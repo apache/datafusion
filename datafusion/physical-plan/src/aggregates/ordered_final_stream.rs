@@ -64,6 +64,9 @@ pub(crate) struct OrderedFinalAggregateStream {
     input: SendableRecordBatchStream,
     reservation: MemoryReservation,
     baseline_metrics: BaselineMetrics,
+
+    /// Will be taken on [`Self::aggregate`], we just keep it in the start until creating the stream itself
+    table: Option<OrderedAggregateTable<FinalMarker>>,
     spill_context: Option<Box<OrderedFinalSpillContext>>,
 }
 
@@ -206,7 +209,7 @@ impl OrderedFinalSpillContext {
             .with_reservation(reservation)
             .build()?;
 
-        OrderedFinalAggregateStream::new_with_input_and_metrics(
+        Ok(OrderedFinalAggregateStream::new_with_input_and_metrics(
             &agg,
             &context,
             partition,
@@ -215,7 +218,8 @@ impl OrderedFinalSpillContext {
             baseline_metrics.clone(),
             group_by_metrics,
             None,
-        )
+        )?
+        .into_stream())
     }
 }
 
@@ -224,7 +228,7 @@ impl OrderedFinalAggregateStream {
         agg: &AggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
-    ) -> Result<SendableRecordBatchStream> {
+    ) -> Result<Self> {
         debug_assert!(matches!(
             agg.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
@@ -241,7 +245,7 @@ impl OrderedFinalAggregateStream {
         partition: usize,
         input: SendableRecordBatchStream,
         input_order_mode: &InputOrderMode,
-    ) -> Result<SendableRecordBatchStream> {
+    ) -> Result<Self> {
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
         let spill_metrics = SpillMetrics::new(&agg.metrics, partition);
@@ -270,7 +274,7 @@ impl OrderedFinalAggregateStream {
         baseline_metrics: BaselineMetrics,
         group_by_metrics: GroupByMetrics,
         spill_metrics: Option<SpillMetrics>,
-    ) -> Result<SendableRecordBatchStream> {
+    ) -> Result<Self> {
         debug_assert!(matches!(
             agg.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
@@ -300,11 +304,6 @@ impl OrderedFinalAggregateStream {
             None
         };
 
-        let reservation =
-            MemoryConsumer::new(format!("OrderedFinalAggregateStream[{partition}]"))
-                .with_can_spill(can_spill)
-                .register(context.memory_pool());
-
         let table = OrderedAggregateTable::<FinalMarker>::new_with_input_order(
             agg,
             &input_schema,
@@ -314,23 +313,31 @@ impl OrderedFinalAggregateStream {
             group_by_metrics,
         )?;
 
-        let this = Self {
+        let reservation =
+            MemoryConsumer::new(format!("OrderedFinalAggregateStream[{partition}]"))
+                .with_can_spill(can_spill)
+                .register(context.memory_pool());
+
+        Ok(Self {
             schema,
             input,
             reservation,
             baseline_metrics,
+            table: Some(table),
             spill_context,
-        };
+        })
+    }
 
-        let schema_clone = Arc::clone(&this.schema);
+    pub(crate) fn into_stream(self) -> SendableRecordBatchStream {
+        let schema_clone = Arc::clone(&self.schema);
 
-        let cloned_metrics = this.baseline_metrics.clone();
+        let cloned_metrics = self.baseline_metrics.clone();
         let stream = Box::pin(RecordBatchStreamAdapter::new(
             schema_clone,
-            this.create_stream(table),
+            self.aggregate(),
         ));
 
-        Ok(Box::pin(ObservedStream::new(stream, cloned_metrics, None)))
+        Box::pin(ObservedStream::new(stream, cloned_metrics, None))
     }
 
     /// Entry point for the ordered final aggregate stream
@@ -386,16 +393,15 @@ impl OrderedFinalAggregateStream {
     /// Done
     ///   -> (end)
     /// ```
-    fn create_stream(
-        mut self,
-        mut table: OrderedAggregateTable<FinalMarker>,
-    ) -> impl Stream<Item = Result<RecordBatch>> {
+    fn aggregate(mut self) -> impl Stream<Item = Result<RecordBatch>> {
         async_try_stream(|mut emitter| async move {
+            // Take the table on init since we want to control when the table is dropped and free memory.
+            let mut table = self.table.take().unwrap();
+
             let spilled = self.read_input(&mut table, &mut emitter).await?;
 
             if spilled {
-                let mut merging_spills_stream =
-                    self.prepare_merge_spills(table)?;
+                let mut merging_spills_stream = self.prepare_merge_spills(table)?;
 
                 // Forwards output from the fully ordered stream that consumes the merged
                 // spill runs.
@@ -438,7 +444,7 @@ impl OrderedFinalAggregateStream {
     /// Consumes one ordered partial-state input batch, then immediately emits
     /// finalized groups if the ordering proves any group is ready.
     ///
-    /// See comments at [`Self::create_stream`] for details.
+    /// See comments at [`Self::aggregate`] for details.
     ///
     /// Returns whether there are any spill files
     async fn read_input(
@@ -476,7 +482,7 @@ impl OrderedFinalAggregateStream {
 
                     continue;
                 }
-                Err(e) => return Err(e)
+                Err(e) => return Err(e),
             }
 
             let result = if self
@@ -554,7 +560,7 @@ impl OrderedFinalAggregateStream {
     /// 3. Constructs a replay stream: an ordered aggregate stream over the fully
     ///    ordered input constructed from the spills.
     ///
-    /// See comments at [`Self::create_stream`] for details.
+    /// See comments at [`Self::aggregate`] for details.
     ///
     /// Returns the merged spill stream
     fn prepare_merge_spills(
@@ -584,7 +590,7 @@ impl OrderedFinalAggregateStream {
     /// `table.input_done()` has already made every remaining group safe to emit,
     /// so this state keeps draining until the table is empty.
     ///
-    /// See comments at [`Self::create_stream`] for details.
+    /// See comments at [`Self::aggregate`] for details.
     async fn produce_output(
         &mut self,
         mut table: OrderedAggregateTable<FinalMarker>,
