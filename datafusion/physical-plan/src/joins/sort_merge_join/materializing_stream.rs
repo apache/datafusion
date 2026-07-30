@@ -601,20 +601,20 @@ impl MaterializingSortMergeJoinStream {
     /// contiguous rows sharing a key) at a time:
     ///
     /// ```text
-    /// load the first streamed row and the first buffered key group
-    /// while either input still has rows:
-    ///     compare the join keys at both cursors
-    ///     Less    → the streamed row can never match:
-    ///               null-join it (outer joins), advance streamed
-    ///     Greater → the buffered group can never match again:
-    ///               null-join it if nothing matched it (FULL join),
-    ///               advance to the next buffered group
-    ///     Equal   → pair the streamed row with the whole group, advance
-    ///               streamed (the group stays — the next streamed row
-    ///               may share its key)
-    ///     materialize ("freeze") pairs once batch_size of them accumulate
-    ///     emit completed output batches
-    /// flush everything that remains
+    /// 1. load the first streamed row and the first buffered key group
+    /// 2. while either input still has rows:
+    ///    3. compare the join keys at both cursors
+    ///       3a. Less    → the streamed row can never match:
+    ///                     null-join it (outer joins), advance streamed
+    ///       3b. Greater → the buffered group can never match again:
+    ///                     null-join it if nothing matched it (FULL join),
+    ///                     advance to the next buffered group
+    ///       3c. Equal   → pair the streamed row with the whole group,
+    ///                     advance streamed (the group stays — the next
+    ///                     streamed row may share its key)
+    ///       (materialize ("freeze") pairs once batch_size accumulate)
+    ///    4. emit completed output batches
+    /// 5. flush everything that remains
     /// ```
     async fn join(
         mut self,
@@ -622,9 +622,11 @@ impl MaterializingSortMergeJoinStream {
     ) -> Result<()> {
         // TODO - add join time metric
 
+        // 1. Load the first streamed row and the first buffered key group.
         self.load_next_streamed_batch().await?;
         self.advance_buffered_group().await?;
 
+        // 2. Merge-scan while either input still has rows.
         while !(self.streamed_exhausted && self.buffered_exhausted) {
             // Flush the deferred-filtering pipeline once a full batch of
             // rows accumulated (filtered outer joins output through it).
@@ -634,11 +636,12 @@ impl MaterializingSortMergeJoinStream {
                 self.emit_deferred_output(emitter).await?;
             }
 
-            // An exhausted side compares as the larger one, so the other
-            // side keeps draining through its own arm.
+            // 3. Compare the join keys at both cursors. An exhausted side
+            //    compares as the larger one, so the other side keeps
+            //    draining through its own arm.
             match self.compare_streamed_buffered()? {
-                // The streamed row can never match: null-join it (outer
-                // joins emit it; inner joins drop it), then advance.
+                // 3a. The streamed row can never match: null-join it (outer
+                //     joins emit it; inner joins drop it), then advance.
                 Ordering::Less => {
                     self.null_join_streamed_row();
                     if self.num_unfrozen_pairs() >= self.batch_size {
@@ -648,19 +651,19 @@ impl MaterializingSortMergeJoinStream {
                         self.load_next_streamed_batch().await?;
                     }
                 }
-                // The buffered group can never match again: null-join it
-                // if nothing matched it (FULL join), then advance to the
-                // next key group.
+                // 3b. The buffered group can never match again: null-join
+                //     it if nothing matched it (FULL join), then advance to
+                //     the next key group.
                 Ordering::Greater => {
                     self.null_join_buffered_group();
                     if !self.try_advance_buffered_group()? {
                         self.advance_buffered_group().await?;
                     }
                 }
-                // Match: pair the streamed row with the whole group —
-                // materializing ("freezing") mid-scan whenever a full
-                // batch of pairs accumulates — then advance streamed.
-                // The group stays for the next streamed row.
+                // 3c. Match: pair the streamed row with the whole group —
+                //     materializing ("freezing") mid-scan whenever a full
+                //     batch of pairs accumulates — then advance streamed.
+                //     The group stays for the next streamed row.
                 Ordering::Equal => {
                     while !self.pair_streamed_row_with_group() {
                         self.freeze_full_batch(emitter).await?;
@@ -671,8 +674,8 @@ impl MaterializingSortMergeJoinStream {
                 }
             }
 
-            // Emit completed output batches (filtered joins emit through
-            // the deferred-filtering pipeline above instead).
+            // 4. Emit completed output batches (filtered joins emit
+            //    through the deferred-filtering pipeline above instead).
             if !self.deferred_filtering
                 && self
                     .joined_record_batches
@@ -683,6 +686,7 @@ impl MaterializingSortMergeJoinStream {
             }
         }
 
+        // 5. Flush everything that remains.
         self.on_children_exhausted(emitter).await
     }
 
