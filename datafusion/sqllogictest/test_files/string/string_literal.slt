@@ -710,13 +710,13 @@ SELECT character_length(rpad('x', 16385, 'a'));
 query error 'rpad' does not support zero arguments
 SELECT rpad();
 
-query error No function matches the given name and argument types 'rpad\(Utf8\)'
+query error Failed to coerce arguments to satisfy a call to 'rpad' function: coercion from Utf8 to the signature
 SELECT rpad('x');
 
-query error No function matches the given name and argument types 'rpad\(Utf8, Int64, Utf8, Utf8\)'
+query error Failed to coerce arguments to satisfy a call to 'rpad' function: coercion from Utf8, Int64, Utf8, Utf8 to the signature
 SELECT rpad('x', 2, 'y', 'z');
 
-query error No function matches the given name and argument types 'rpad\(Utf8, Utf8\)'
+query error Failed to coerce arguments to satisfy a call to 'rpad' function: coercion from Utf8, Utf8 to the signature
 SELECT rpad('x', 'bad');
 
 query error rpad requested length 2147483648 too large
