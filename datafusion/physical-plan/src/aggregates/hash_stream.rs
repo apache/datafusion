@@ -295,8 +295,7 @@ impl PartialHashAggregateStream {
 
             self.start_output(&mut hash_table, partial_table.is_none())?;
 
-            self.produce_output(hash_table, &mut emitter)
-                .await?;
+            self.produce_output(hash_table, &mut emitter).await?;
 
             match partial_table {
                 // partial skip has triggered and the
