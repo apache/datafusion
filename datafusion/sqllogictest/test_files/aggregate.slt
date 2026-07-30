@@ -2297,12 +2297,7 @@ statement ok
 DROP TABLE approx_distinct_interval_test;
 
 
-# GROUP BY over Interval group keys. Interval columns route through the
-# GroupValuesColumn column-wise fast path, so an Interval key no longer forces
-# the row-encoded fallback. Equal intervals collapse and "1 month" / "30 days"
-# stay distinct (no cross-unit folding); a primitive and an Interval key also
-# group together on the multi-column path. Queries project only the INT counts
-# / keys so the expected output does not depend on interval Display formatting.
+# GROUP BY with Interval group keys (single- and multi-column).
 statement ok
 CREATE TABLE interval_group_test AS VALUES
   (1, INTERVAL '1' MONTH),
@@ -2310,7 +2305,7 @@ CREATE TABLE interval_group_test AS VALUES
   (1, INTERVAL '30' DAY),
   (2, INTERVAL '1' MONTH);
 
-# Single Interval group key: {1 month, 30 days}, with 1 month appearing 3 times.
+# Single Interval group key ({1 month, 30 days}) via the GroupValuesPrimitive path.
 query I
 SELECT count(*) FROM interval_group_test GROUP BY column2 ORDER BY count(*);
 ----
@@ -2328,7 +2323,6 @@ FROM interval_group_test GROUP BY column1, column2 ORDER BY column1, count(*);
 
 statement ok
 DROP TABLE interval_group_test;
-
 
 
 ## This test executes the APPROX_PERCENTILE_CONT aggregation against the test

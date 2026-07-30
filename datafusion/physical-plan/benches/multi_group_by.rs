@@ -454,9 +454,10 @@ fn make_interval_schema() -> SchemaRef {
 }
 
 /// Generate `(Interval(MonthDayNano), Int32)` batches with `num_distinct_groups`
-/// distinct keys. Each distinct interval is `MonthDayNano(g, 0, 0)`; the `Int32`
-/// column is keyed identically so the combined cardinality equals
-/// `num_distinct_groups`.
+/// distinct keys.
+///
+/// Each distinct interval is `MonthDayNano(g, 0, 0)`. The `Int32` column is
+/// keyed identically so the combined cardinality equals `num_distinct_groups`.
 fn generate_interval_batches(
     num_distinct_groups: usize,
     num_rows: usize,
@@ -490,7 +491,7 @@ fn generate_interval_batches(
         .collect()
 }
 
-/// Experiment 8: Group count sweep for an `(Interval, Int32)` key.
+/// Experiment 10: Group count sweep for an `(Interval, Int32)` key.
 ///
 /// Exercises the primitive `GroupColumn` builder for `Interval` on the
 /// multi-column path (previously such a schema fell back to `GroupValuesRows`).

@@ -1275,8 +1275,8 @@ mod tests {
     use std::{collections::HashMap, sync::Arc};
 
     use arrow::array::{
-        Array, ArrayRef, Int64Array, IntervalMonthDayNanoArray, RecordBatch, StringArray,
-        StringViewArray,
+        Array, ArrayRef, Int32Array, Int64Array, IntervalMonthDayNanoArray, RecordBatch,
+        StringArray, StringViewArray,
     };
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::{compute::concat_batches, util::pretty::pretty_format_batches};
@@ -1373,40 +1373,41 @@ mod tests {
         }
     }
 
-    /// Interval GROUP BY on the column-wise fast path: dedups (incl. nulls),
-    /// keeps "1 month" and "30 days" distinct (field-wise compare, no cross-unit
-    /// folding), and preserves the Interval output type. One unit exercises the
-    /// shared builder; the fuzz above covers routing for all three.
+    // `(Interval, Int32)` keys: null keys dedup, the Int32 key splits equal
+    // intervals, and emit gives back Interval rather than the raw native.
     #[test]
     fn test_group_values_column_interval() {
         use arrow::datatypes::{IntervalMonthDayNano, IntervalUnit};
 
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "i",
-            DataType::Interval(IntervalUnit::MonthDayNano),
-            true,
-        )]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i", DataType::Interval(IntervalUnit::MonthDayNano), true),
+            Field::new("n", DataType::Int32, true),
+        ]));
         assert!(supported_schema(&schema));
         let mut group_values =
             GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
 
-        // "1 month" and "30 days" are distinct Interval values, not folded
-        // together. Row 3 repeats row 0, row 4 repeats the null of row 1.
         let one_month = IntervalMonthDayNano::new(1, 0, 0);
-        let thirty_days = IntervalMonthDayNano::new(0, 30, 0);
-        let input: ArrayRef = Arc::new(IntervalMonthDayNanoArray::from(vec![
+        let i: ArrayRef = Arc::new(IntervalMonthDayNanoArray::from(vec![
             Some(one_month),
             None,
-            Some(thirty_days),
             Some(one_month),
             None,
+            Some(one_month),
+        ]));
+        let n: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(3),
+            Some(3),
+            Some(3),
+            Some(3),
+            Some(4),
         ]));
         let mut groups = Vec::new();
-        group_values.intern(&[input], &mut groups).unwrap();
-        assert_eq!(groups, vec![0, 1, 2, 0, 1]);
+        group_values.intern(&[i, n], &mut groups).unwrap();
+        assert_eq!(groups, vec![0, 1, 0, 1, 2]);
 
         let emitted = group_values.emit(EmitTo::All).unwrap();
-        assert_eq!(emitted.len(), 1);
+        assert_eq!(emitted.len(), 2);
         // The emitted key keeps its Interval type, not the bare native.
         assert_eq!(
             emitted[0].data_type(),
@@ -1416,11 +1417,16 @@ mod tests {
             .as_any()
             .downcast_ref::<IntervalMonthDayNanoArray>()
             .expect("emitted column should be an IntervalMonthDayNanoArray");
-        // Three groups in first-seen order: 1 month, null, 30 days.
+        // Three groups in first-seen order: 1 month, null, 1 month (n=4).
         assert_eq!(actual.len(), 3);
         assert_eq!(actual.value(0), one_month);
         assert!(actual.is_null(1));
-        assert_eq!(actual.value(2), thirty_days);
+        assert_eq!(actual.value(2), one_month);
+        let ids = emitted[1]
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("emitted column should be an Int32Array");
+        assert_eq!(ids.values().to_vec(), vec![3, 3, 4]);
     }
 
     #[test]
@@ -1537,7 +1543,7 @@ mod tests {
         // `emit(EmitTo::First(4))` calls can `take_n` without panicking.
         // The hashmap entries below reference group indices 0..=11, so the
         // single column builder needs at least 12 rows to back them.
-        let seed: ArrayRef = Arc::new(arrow::array::Int32Array::from(vec![0_i32; 12]));
+        let seed: ArrayRef = Arc::new(Int32Array::from(vec![0_i32; 12]));
         for row in 0..12 {
             group_values.group_values[0]
                 .append_val(&seed, row)
