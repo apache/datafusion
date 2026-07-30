@@ -169,23 +169,16 @@ impl ScalarUDFImpl for DatePartFunc {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let [field, _] = take_function_args(self.name(), args.scalar_arguments)?;
-        let nullable = args.arg_fields[1].is_nullable();
+        let [_, value_field] = take_function_args(self.name(), args.arg_fields)?;
+        let nullable = value_field.is_nullable();
 
         // Always return Float64 to match PostgreSQL's `date_part`, which is
         // defined to return `double precision` regardless of the part.
-        field
-            .and_then(|sv| {
-                sv.try_as_str()
-                    .flatten()
-                    .filter(|s| !s.is_empty())
-                    .map(|_| Field::new(self.name(), DataType::Float64, nullable))
-            })
-            .map(Arc::new)
-            .map_or_else(
-                || exec_err!("{} requires non-empty constant string", self.name()),
-                Ok,
-            )
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Float64,
+            nullable,
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
