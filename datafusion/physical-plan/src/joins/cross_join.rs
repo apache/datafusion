@@ -294,7 +294,7 @@ impl ExecutionPlan for CrossJoinExec {
 
     fn apply_expressions(
         &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // CrossJoin has no join conditions or expressions
         Ok(TreeNodeRecursion::Continue)

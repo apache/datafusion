@@ -359,19 +359,15 @@ pub trait FileSource: Any + Send + Sync {
     /// - Filter predicates (which may contain dynamic filters)
     /// - Projection expressions
     ///
-    /// The function `f` is called once for each expression. The function should
-    /// return `TreeNodeRecursion::Continue` to continue visiting other expressions,
-    /// or `TreeNodeRecursion::Stop` to stop visiting expressions early.
+    /// The function `f` should be called once per expression unless the function returns
+    /// [`TreeNodeRecursion::Stop`] to stop iteration.
     ///
-    /// Implementations must explicitly visit all expressions. There is no default
-    /// implementation to ensure that all FileSource implementations handle this correctly.
-    ///
-    /// See [`ExecutionPlan::apply_expressions`] for more details and examples.
+    /// See [`ExecutionPlan::apply_expressions`] for more details and implementation examples.
     ///
     /// [`ExecutionPlan::apply_expressions`]: datafusion_physical_plan::ExecutionPlan::apply_expressions
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion>;
 }
 

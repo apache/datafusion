@@ -1333,26 +1333,21 @@ impl ExecutionPlan for HashJoinExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Apply to join key expressions from both sides
-        let mut tnr = TreeNodeRecursion::Continue;
-        for (left, right) in &self.on {
-            tnr = tnr.visit_sibling(|| f(left.as_ref()))?;
-            tnr = tnr.visit_sibling(|| f(right.as_ref()))?;
-        }
-
-        // Apply to join filter expression if present
-        if let Some(filter) = &self.filter {
-            tnr = tnr.visit_sibling(|| f(filter.expression().as_ref()))?;
-        }
-
-        // Apply to dynamic filter expression if present
-        if let Some(df) = &self.dynamic_filter {
-            tnr = tnr.visit_sibling(|| f(df.filter.as_ref()))?;
-        }
-
-        Ok(tnr)
+        let join_keys = self
+            .on
+            .iter()
+            .flat_map(|(left, right)| [Arc::clone(left), Arc::clone(right)]);
+        let filter = self
+            .filter
+            .iter()
+            .map(|filter| Arc::clone(filter.expression()));
+        let dynamic_filter = self.dynamic_filter.iter().map(|dynamic_filter| {
+            Arc::<DynamicFilterPhysicalExpr>::clone(&dynamic_filter.filter)
+                as Arc<dyn PhysicalExpr>
+        });
+        crate::apply_expression_roots(join_keys.chain(filter).chain(dynamic_filter), f)
     }
 
     /// Creates a new HashJoinExec with different children while preserving configuration.
@@ -2488,7 +2483,7 @@ mod tests {
 
         fn apply_expressions(
             &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
         ) -> Result<TreeNodeRecursion> {
             Ok(TreeNodeRecursion::Continue)
         }

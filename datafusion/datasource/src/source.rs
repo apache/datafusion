@@ -231,15 +231,15 @@ pub trait DataSource: Any + Send + Sync + Debug {
     /// This includes filter predicates (which may contain dynamic filters) and any
     /// other expressions used during data scanning.
     ///
-    /// Implementations must override this method. If the data source has no expressions,
-    /// return `Ok(TreeNodeRecursion::Continue)` immediately.
+    /// The function `f` should be called once per expression unless the function returns
+    /// [`TreeNodeRecursion::Stop`] to stop iteration.
     ///
     /// See [`ExecutionPlan::apply_expressions`] for more details and implementation examples.
     ///
     /// [`ExecutionPlan::apply_expressions`]: datafusion_physical_plan::ExecutionPlan::apply_expressions
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion>;
 
     /// Injects arbitrary run-time state into this DataSource, returning a new instance
@@ -378,7 +378,7 @@ impl ExecutionPlan for DataSourceExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Delegate to the underlying data source
         self.data_source.apply_expressions(f)

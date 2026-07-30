@@ -1129,16 +1129,16 @@ impl ExecutionPlan for UnboundedExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Visit expressions in the output ordering from equivalence properties
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = self.cache.output_ordering() {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
+        datafusion_physical_plan::apply_expression_roots(
+            self.cache
+                .output_ordering()
+                .into_iter()
+                .flatten()
+                .map(|sort_expr| &sort_expr.expr),
+            f,
+        )
     }
 }
 
@@ -1248,16 +1248,16 @@ impl ExecutionPlan for StatisticsExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Visit expressions in the output ordering from equivalence properties
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = self.cache.output_ordering() {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
+        datafusion_physical_plan::apply_expression_roots(
+            self.cache
+                .output_ordering()
+                .into_iter()
+                .flatten()
+                .map(|sort_expr| &sort_expr.expr),
+            f,
+        )
     }
 }
 

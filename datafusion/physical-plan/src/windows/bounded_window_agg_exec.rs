@@ -314,15 +314,17 @@ impl ExecutionPlan for BoundedWindowAggExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        let mut tnr = TreeNodeRecursion::Continue;
-        for window_expr in &self.window_expr {
-            for expr in window_expr.expressions() {
-                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
+        let expressions = self.window_expr.iter().flat_map(|window_expr| {
+            let expressions = window_expr.all_expressions();
+            expressions
+                .args
+                .into_iter()
+                .chain(expressions.partition_by_exprs)
+                .chain(expressions.order_by_exprs)
+        });
+        crate::apply_expression_roots(expressions, f)
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {

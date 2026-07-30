@@ -22,6 +22,7 @@
 //! suite and can use real `ExecutionPlan`s where convenient.
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 
@@ -30,7 +31,6 @@ use std::sync::Arc;
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::Result;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
     EquivalenceProperties, LexOrdering, PhysicalExpr, PhysicalSortExpr,
@@ -114,7 +114,7 @@ impl ExecutionPlan for MockMultiPartitionExec {
     }
     fn apply_expressions(
         &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         Ok(TreeNodeRecursion::Continue)
     }
@@ -983,23 +983,24 @@ impl ExecutionPlan for MockReqExec {
     }
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = &self.ord {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
         #[expect(deprecated)]
-        if let Distribution::HashPartitioned(exprs)
+        let distribution = if let Distribution::HashPartitioned(exprs)
         | Distribution::KeyPartitioned(exprs) = &self.dist
         {
-            for expr in exprs {
-                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
+            exprs.as_slice()
+        } else {
+            &[]
+        };
+        datafusion_physical_plan::apply_expression_roots(
+            self.ord
+                .iter()
+                .flatten()
+                .map(|sort_expr| &sort_expr.expr)
+                .chain(distribution),
+            f,
+        )
     }
     fn input_distribution_requirements(
         &self,

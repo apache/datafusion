@@ -260,16 +260,15 @@ impl DataSource for MemorySourceConfig {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Visit expressions in sort_information
-        let mut tnr = TreeNodeRecursion::Continue;
-        for ordering in &self.sort_information {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
+        datafusion_physical_plan::apply_expression_roots(
+            self.sort_information
+                .iter()
+                .flatten()
+                .map(|sort_expr| &sort_expr.expr),
+            f,
+        )
     }
 }
 

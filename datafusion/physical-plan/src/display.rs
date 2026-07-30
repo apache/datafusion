@@ -1554,7 +1554,7 @@ mod tests {
 
         fn apply_expressions(
             &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
         ) -> Result<TreeNodeRecursion> {
             Ok(TreeNodeRecursion::Continue)
         }
@@ -1687,9 +1687,7 @@ mod tests {
             use crate::metrics::{Count, Metric, MetricValue, MetricsSet, Time};
             use crate::{DisplayFormatType, ExecutionPlan, PlanProperties};
             use datafusion_common::Result;
-            use datafusion_common::tree_node::TreeNodeRecursion;
             use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-            use datafusion_physical_expr::PhysicalExpr;
 
             // Wrap `sample_plan()` with an adapter node that exposes a
             // hand-crafted `MetricsSet` so we can assert the PG key mapping
@@ -1720,9 +1718,14 @@ mod tests {
                 }
                 fn apply_expressions(
                     &self,
-                    _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
-                ) -> Result<TreeNodeRecursion> {
-                    Ok(TreeNodeRecursion::Continue)
+                    f: &mut dyn FnMut(
+                        &Arc<dyn PhysicalExpr>,
+                    ) -> Result<
+                        datafusion_common::tree_node::TreeNodeRecursion,
+                    >,
+                ) -> Result<datafusion_common::tree_node::TreeNodeRecursion>
+                {
+                    self.inner.apply_expressions(f)
                 }
                 fn with_new_children(
                     self: Arc<Self>,

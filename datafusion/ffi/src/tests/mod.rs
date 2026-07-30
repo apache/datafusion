@@ -28,6 +28,8 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Statistics};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{Expr, TableType};
+use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
 use datafusion_physical_plan::ExecutionPlan;
 use sync_provider::create_sync_table_provider;
 use udf_udaf_udwf::{
@@ -107,6 +109,8 @@ pub struct ForeignLibraryModule {
 
     pub create_empty_exec: extern "C" fn() -> FFI_ExecutionPlan,
 
+    pub create_exec_with_expressions: extern "C" fn() -> FFI_ExecutionPlan,
+
     pub create_exec_with_statistics: extern "C" fn() -> FFI_ExecutionPlan,
 
     pub create_table_with_statistics:
@@ -158,6 +162,14 @@ pub(crate) extern "C" fn create_empty_exec() -> FFI_ExecutionPlan {
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
 
     let plan = Arc::new(EmptyExec::new(schema));
+    FFI_ExecutionPlan::new(plan, None)
+}
+
+pub(crate) extern "C" fn create_exec_with_expressions() -> FFI_ExecutionPlan {
+    let schema = Arc::new(Schema::empty());
+    let expression: Arc<dyn PhysicalExpr> =
+        Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
+    let plan = Arc::new(EmptyExec::new(schema).with_expressions(vec![expression]));
     FFI_ExecutionPlan::new(plan, None)
 }
 
@@ -259,6 +271,7 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_rank_udwf: create_ffi_rank_func,
         create_extension_options: config::create_extension_options,
         create_empty_exec,
+        create_exec_with_expressions,
         create_exec_with_statistics,
         create_table_with_statistics,
         create_physical_optimizer_rule:

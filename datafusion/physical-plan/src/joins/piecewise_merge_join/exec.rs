@@ -485,10 +485,10 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Apply to the two expressions being compared in the range predicate
-        f(self.on.0.as_ref())?.visit_sibling(|| f(self.on.1.as_ref()))
+        crate::apply_expression_roots([&self.on.0, &self.on.1], f)
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {

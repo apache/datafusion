@@ -324,7 +324,7 @@ impl ExecutionPlan for DowncastDelegatingExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         self.inner.apply_expressions(f)
     }
@@ -4605,13 +4605,9 @@ impl ExecutionPlan for CustomExecWithExprs {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        let mut tnr = TreeNodeRecursion::Continue;
-        for expr in &self.exprs {
-            tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
-        }
-        Ok(tnr)
+        datafusion_physical_plan::apply_expression_roots(&self.exprs, f)
     }
 
     fn with_new_children(

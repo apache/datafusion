@@ -1277,21 +1277,19 @@ impl ExecutionPlan for SortExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Apply to sort expressions
-        let mut tnr = TreeNodeRecursion::Continue;
-        for sort_expr in &self.expr {
-            tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-        }
-
-        // Apply to dynamic filter expression if present (when fetch is Some, TopK mode)
-        if let Some(filter) = &self.filter {
-            let filter_guard = filter.read();
-            tnr = tnr.visit_sibling(|| f(filter_guard.expr().as_ref()))?;
-        }
-
-        Ok(tnr)
+        let dynamic_filter = self
+            .filter
+            .as_ref()
+            .map(|filter| filter.read().expr() as Arc<dyn PhysicalExpr>);
+        crate::apply_expression_roots(
+            self.expr
+                .iter()
+                .map(|sort_expr| &sort_expr.expr)
+                .chain(dynamic_filter.iter()),
+            f,
+        )
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -1782,7 +1780,7 @@ mod tests {
 
         fn apply_expressions(
             &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
         ) -> Result<TreeNodeRecursion> {
             Ok(TreeNodeRecursion::Continue)
         }

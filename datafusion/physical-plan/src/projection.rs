@@ -304,13 +304,16 @@ impl ExecutionPlan for ProjectionExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        let mut tnr = TreeNodeRecursion::Continue;
-        for proj_expr in self.projector.projection().as_ref().iter() {
-            tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
-        }
-        Ok(tnr)
+        crate::apply_expression_roots(
+            self.projector
+                .projection()
+                .as_ref()
+                .iter()
+                .map(|proj_expr| &proj_expr.expr),
+            f,
+        )
     }
 
     fn with_new_children(

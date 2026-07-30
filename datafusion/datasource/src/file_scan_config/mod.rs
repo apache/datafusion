@@ -115,7 +115,7 @@ use std::{fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 /// #  fn file_type(&self) -> &str { "parquet" }
 /// #  // Note that this implementation drops the projection on the floor, it is not complete!
 /// #  fn try_pushdown_projection(&self, projection: &ProjectionExprs) -> Result<Option<Arc<dyn FileSource>>> { Ok(Some(Arc::new(self.clone()) as Arc<dyn FileSource>)) }
-/// #  fn apply_expressions(&self, _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>) -> Result<TreeNodeRecursion> { Ok(TreeNodeRecursion::Continue) }
+/// #  fn apply_expressions(&self, _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>) -> Result<TreeNodeRecursion> { Ok(TreeNodeRecursion::Continue) }
 /// #  }
 /// # impl ParquetSource {
 /// #  fn new(table_schema: impl Into<TableSchema>) -> Self { Self {table_schema: table_schema.into()} }
@@ -1161,7 +1161,7 @@ impl DataSource for FileScanConfig {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Delegate to the file source
         self.file_source.apply_expressions(f)
@@ -1648,7 +1648,7 @@ mod tests {
 
         fn apply_expressions(
             &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
         ) -> Result<TreeNodeRecursion> {
             Ok(TreeNodeRecursion::Continue)
         }
@@ -2920,7 +2920,7 @@ mod tests {
 
         fn apply_expressions(
             &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
         ) -> Result<TreeNodeRecursion> {
             Ok(TreeNodeRecursion::Continue)
         }

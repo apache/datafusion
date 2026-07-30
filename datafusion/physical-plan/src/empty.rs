@@ -122,9 +122,9 @@ impl ExecutionPlan for EmptyExec {
 
     fn apply_expressions(
         &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
+        crate::apply_no_expressions(f)
     }
 
     fn with_new_children(

@@ -531,16 +531,15 @@ impl ExecutionPlan for RequirementsTestExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Visit expressions in required_input_ordering if present
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = &self.required_input_ordering {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
+        datafusion_physical_plan::apply_expression_roots(
+            self.required_input_ordering
+                .iter()
+                .flatten()
+                .map(|sort_expr| &sort_expr.expr),
+            f,
+        )
     }
 }
 
@@ -1093,24 +1092,16 @@ impl ExecutionPlan for TestScan {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Visit expressions in output_ordering
-        let mut tnr = TreeNodeRecursion::Continue;
-        for ordering in &self.output_ordering {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-
-        // Visit expressions in requested_ordering if present
-        if let Some(ordering) = &self.requested_ordering {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-
-        Ok(tnr)
+        datafusion_physical_plan::apply_expression_roots(
+            self.output_ordering
+                .iter()
+                .flatten()
+                .chain(self.requested_ordering.iter().flatten())
+                .map(|sort_expr| &sort_expr.expr),
+            f,
+        )
     }
 }
 
@@ -1130,7 +1121,7 @@ struct InexactMemorySource {
 impl DataSource for InexactMemorySource {
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         self.inner.apply_expressions(f)
     }

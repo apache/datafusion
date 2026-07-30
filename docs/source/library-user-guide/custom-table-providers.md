@@ -766,7 +766,7 @@ impl DatePartitionedTable {
 #     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> { vec![] }
 #     fn with_new_children(self: Arc<Self>, _: Vec<Arc<dyn ExecutionPlan>>) -> Result<Arc<dyn ExecutionPlan>> { Ok(self) }
 #     fn execute(&self, _: usize, _: Arc<TaskContext>) -> Result<SendableRecordBatchStream> { todo!() }
-#     fn apply_expressions(&self, _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>) -> Result<TreeNodeRecursion> { Ok(TreeNodeRecursion::Continue) }
+#     fn apply_expressions(&self, _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>) -> Result<TreeNodeRecursion> { Ok(TreeNodeRecursion::Continue) }
 # }
 ```
 
@@ -913,7 +913,7 @@ impl ExecutionPlan for CountingExec {
 
 #     fn apply_expressions(
 #         &self,
-#         _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+#         _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
 #     ) -> Result<TreeNodeRecursion> {
 #         Ok(TreeNodeRecursion::Continue)
 #     }

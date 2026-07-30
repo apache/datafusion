@@ -155,9 +155,15 @@ impl ExecutionPlan for AsyncFuncExec {
 
     fn apply_expressions(
         &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
+        crate::apply_expression_roots(
+            self.async_exprs
+                .iter()
+                .cloned()
+                .map(|expr| expr as Arc<dyn PhysicalExpr>),
+            f,
+        )
     }
 
     fn with_new_children(

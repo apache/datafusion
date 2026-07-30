@@ -538,9 +538,9 @@ impl ExecutionPlan for FilterExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        f(self.predicate.as_ref())
+        crate::apply_expression_roots([&self.predicate], f)
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

@@ -238,21 +238,17 @@ impl FileSource for TestSource {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Visit predicate (filter) expression if present
-        if let Some(predicate) = &self.predicate {
-            f(predicate.as_ref())?;
-        }
-
-        // Visit projection expressions if present
-        if let Some(projection) = &self.projection {
-            for proj_expr in projection {
-                f(proj_expr.expr.as_ref())?;
-            }
-        }
-
-        Ok(TreeNodeRecursion::Continue)
+        datafusion_physical_plan::apply_expression_roots(
+            self.predicate.iter().chain(
+                self.projection
+                    .iter()
+                    .flatten()
+                    .map(|proj_expr| &proj_expr.expr),
+            ),
+            f,
+        )
     }
 }
 
@@ -572,10 +568,8 @@ impl ExecutionPlan for TestNode {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Visit the predicate expression
-        f(self.predicate.as_ref())?;
-        Ok(TreeNodeRecursion::Continue)
+        datafusion_physical_plan::apply_expression_roots([&self.predicate], f)
     }
 }

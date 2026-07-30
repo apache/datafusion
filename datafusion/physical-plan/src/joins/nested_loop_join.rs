@@ -565,13 +565,13 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn crate::PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn crate::PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Apply to join filter expressions if present
-        if let Some(filter) = &self.filter {
-            f(filter.expression().as_ref())?;
-        }
-        Ok(TreeNodeRecursion::Continue)
+        crate::apply_expression_roots(
+            self.filter.iter().map(|filter| filter.expression()),
+            f,
+        )
     }
 
     fn with_new_children(

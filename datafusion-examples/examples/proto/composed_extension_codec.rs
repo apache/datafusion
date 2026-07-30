@@ -129,7 +129,7 @@ impl ExecutionPlan for ParentExec {
     fn apply_expressions(
         &self,
         _f: &mut dyn FnMut(
-            &dyn datafusion::physical_plan::PhysicalExpr,
+            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
         ) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         Ok(TreeNodeRecursion::Continue)
@@ -216,7 +216,7 @@ impl ExecutionPlan for ChildExec {
     fn apply_expressions(
         &self,
         _f: &mut dyn FnMut(
-            &dyn datafusion::physical_plan::PhysicalExpr,
+            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
         ) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         Ok(TreeNodeRecursion::Continue)

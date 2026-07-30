@@ -330,34 +330,28 @@ impl ExecutionPlan for OutputRequirementExec {
     fn apply_expressions(
         &self,
         f: &mut dyn FnMut(
-            &dyn datafusion_physical_expr_common::physical_expr::PhysicalExpr,
+            &Arc<dyn datafusion_physical_expr_common::physical_expr::PhysicalExpr>,
         ) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Visit expressions in order_requirement
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(order_reqs) = &self.order_requirement {
-            let lexes = match order_reqs {
-                OrderingRequirements::Hard(alternatives) => alternatives,
-                OrderingRequirements::Soft(alternatives) => alternatives,
-            };
-            for lex in lexes {
-                for sort_expr in lex {
-                    tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-                }
-            }
-        }
-
-        // Visit expressions in dist_requirement if it's key partitioned
         #[expect(deprecated)]
-        if let Distribution::HashPartitioned(exprs)
-        | Distribution::KeyPartitioned(exprs) = &self.dist_requirement
+        let distribution = if let Distribution::HashPartitioned(exprs)
+        | Distribution::KeyPartitioned(exprs) =
+            &self.dist_requirement
         {
-            for expr in exprs {
-                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
-            }
-        }
-
-        Ok(tnr)
+            exprs.as_slice()
+        } else {
+            &[]
+        };
+        let ordering = self
+            .order_requirement
+            .iter()
+            .flat_map(|requirements| match requirements {
+                OrderingRequirements::Hard(alternatives)
+                | OrderingRequirements::Soft(alternatives) => alternatives,
+            })
+            .flatten()
+            .map(|sort_expr| &sort_expr.expr);
+        datafusion_physical_plan::apply_expression_roots(ordering.chain(distribution), f)
     }
 }
 

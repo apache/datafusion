@@ -275,9 +275,15 @@ impl ExecutionPlan for StreamingTableExec {
 
     fn apply_expressions(
         &self,
-        _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
+        crate::apply_expression_roots(
+            self.projected_output_ordering
+                .iter()
+                .flatten()
+                .map(|sort_expr| &sort_expr.expr),
+            f,
+        )
     }
 
     fn with_new_children(

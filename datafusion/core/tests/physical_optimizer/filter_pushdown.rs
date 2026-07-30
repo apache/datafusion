@@ -34,7 +34,7 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use datafusion_catalog::memory::DataSourceExec;
-use datafusion_common::config::ConfigOptions;
+use datafusion_common::{JoinType, config::ConfigOptions, tree_node::TreeNodeRecursion};
 use datafusion_datasource::{
     PartitionedFile, file_groups::FileGroup, file_scan_config::FileScanConfigBuilder,
 };
@@ -46,7 +46,9 @@ use datafusion_functions_aggregate::{
     min_max::{max_udaf, min_udaf},
 };
 use datafusion_physical_expr::{
-    LexOrdering, PhysicalSortExpr, expressions::col, utils::conjunction,
+    LexOrdering, PhysicalSortExpr,
+    expressions::{DynamicFilterPhysicalExpr, col},
+    utils::conjunction,
 };
 use datafusion_physical_expr::{
     Partitioning, ScalarFunctionExpr, aggregate::AggregateExprBuilder,
@@ -60,6 +62,7 @@ use datafusion_physical_plan::{
     coalesce_partitions::CoalescePartitionsExec,
     collect,
     filter::{FilterExec, FilterExecBuilder},
+    joins::{HashJoinExec, PartitionMode},
     projection::ProjectionExec,
     repartition::RepartitionExec,
     sorts::sort::SortExec,
@@ -3092,11 +3095,6 @@ async fn test_filter_with_projection_pushdown() {
 /// counting nodes. Neither API is observable from SQL.
 #[tokio::test]
 async fn test_discover_dynamic_filters_via_expressions_api() {
-    use datafusion_common::JoinType;
-    use datafusion_common::tree_node::TreeNodeRecursion;
-    use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     fn count_dynamic_filters(plan: &Arc<dyn ExecutionPlan>) -> usize {
         let mut count = 0;
 

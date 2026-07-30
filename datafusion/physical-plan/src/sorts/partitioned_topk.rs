@@ -382,13 +382,12 @@ impl ExecutionPlan for PartitionedTopKExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        let mut tnr = TreeNodeRecursion::Continue;
-        for sort_expr in &self.expr {
-            tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-        }
-        Ok(tnr)
+        crate::apply_expression_roots(
+            self.expr.iter().map(|sort_expr| &sort_expr.expr),
+            f,
+        )
     }
 
     fn execute(

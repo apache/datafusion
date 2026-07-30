@@ -1052,21 +1052,15 @@ impl FileSource for ParquetSource {
     fn apply_expressions(
         &self,
         f: &mut dyn FnMut(
-            &dyn PhysicalExpr,
+            &Arc<dyn PhysicalExpr>,
         ) -> datafusion_common::Result<TreeNodeRecursion>,
     ) -> datafusion_common::Result<TreeNodeRecursion> {
-        // Visit predicate (filter) expression if present
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(predicate) = &self.predicate {
-            tnr = tnr.visit_sibling(|| f(predicate.as_ref()))?;
-        }
-
-        // Visit projection expressions
-        for proj_expr in &self.projection {
-            tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
-        }
-
-        Ok(tnr)
+        datafusion_physical_plan::apply_expression_roots(
+            self.predicate
+                .iter()
+                .chain(self.projection.iter().map(|proj_expr| &proj_expr.expr)),
+            f,
+        )
     }
 }
 

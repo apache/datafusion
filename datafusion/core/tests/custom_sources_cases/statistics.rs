@@ -190,17 +190,17 @@ impl ExecutionPlan for StatisticsValidation {
     fn apply_expressions(
         &self,
         f: &mut dyn FnMut(
-            &dyn datafusion::physical_plan::PhysicalExpr,
+            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
         ) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Visit expressions in the output ordering from equivalence properties
-        let mut tnr = TreeNodeRecursion::Continue;
-        if let Some(ordering) = self.cache.output_ordering() {
-            for sort_expr in ordering {
-                tnr = tnr.visit_sibling(|| f(sort_expr.expr.as_ref()))?;
-            }
-        }
-        Ok(tnr)
+        datafusion::physical_plan::apply_expression_roots(
+            self.cache
+                .output_ordering()
+                .into_iter()
+                .flatten()
+                .map(|sort_expr| &sort_expr.expr),
+            f,
+        )
     }
 }
 

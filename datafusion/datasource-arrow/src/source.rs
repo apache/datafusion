@@ -397,15 +397,16 @@ impl FileSource for ArrowSource {
     fn apply_expressions(
         &self,
         f: &mut dyn FnMut(
-            &dyn datafusion_physical_plan::PhysicalExpr,
+            &Arc<dyn datafusion_physical_plan::PhysicalExpr>,
         ) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Visit projection expressions
-        let mut tnr = TreeNodeRecursion::Continue;
-        for proj_expr in &self.projection.source {
-            tnr = tnr.visit_sibling(|| f(proj_expr.expr.as_ref()))?;
-        }
-        Ok(tnr)
+        datafusion_physical_plan::apply_expression_roots(
+            self.projection
+                .source
+                .iter()
+                .map(|proj_expr| &proj_expr.expr),
+            f,
+        )
     }
 }
 

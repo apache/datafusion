@@ -1340,22 +1340,16 @@ impl ExecutionPlan for RepartitionExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        let exprs: Vec<_> = match self.partitioning() {
-            Partitioning::Hash(exprs, _) => exprs.iter().collect(),
-            Partitioning::Range(range) => range
-                .ordering()
-                .iter()
-                .map(|sort_expr| &sort_expr.expr)
-                .collect(),
-            _ => return Ok(TreeNodeRecursion::Continue),
-        };
-        let mut tnr = TreeNodeRecursion::Continue;
-        for expr in exprs {
-            tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
+        match self.partitioning() {
+            Partitioning::Hash(exprs, _) => crate::apply_expression_roots(exprs, f),
+            Partitioning::Range(range) => crate::apply_expression_roots(
+                range.ordering().iter().map(|sort_expr| &sort_expr.expr),
+                f,
+            ),
+            _ => Ok(TreeNodeRecursion::Continue),
         }
-        Ok(tnr)
     }
 
     fn with_new_children(
@@ -3068,7 +3062,7 @@ mod tests {
 
         fn apply_expressions(
             &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
         ) -> Result<TreeNodeRecursion> {
             Ok(TreeNodeRecursion::Continue)
         }
@@ -4306,6 +4300,13 @@ mod test {
             ],
         )?);
         let exec = RepartitionExec::try_new(source, partitioning)?;
+
+        let mut expressions = vec![];
+        exec.apply_expressions(&mut |expr| {
+            expressions.push(expr.to_string());
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        assert_eq!(expressions, ["c0@0"]);
 
         // Range partition count is fixed by split points, so repartitioned()
         // cannot change it to an arbitrary target.

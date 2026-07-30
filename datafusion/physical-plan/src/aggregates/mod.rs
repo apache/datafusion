@@ -1963,32 +1963,29 @@ impl ExecutionPlan for AggregateExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        // Apply to group by expressions
-        let mut tnr = TreeNodeRecursion::Continue;
-        for expr in self.group_by.input_exprs() {
-            tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
-        }
-
-        // Apply to aggregate expressions
-        for aggr in self.aggr_expr.iter() {
-            for expr in aggr.expressions() {
-                tnr = tnr.visit_sibling(|| f(expr.as_ref()))?;
-            }
-        }
-
-        // Apply to filter expressions (FILTER WHERE clauses)
-        for filter in self.filter_expr.iter().flatten() {
-            tnr = tnr.visit_sibling(|| f(filter.as_ref()))?;
-        }
-
-        // Apply to dynamic filter expression if present
-        if let Some(dyn_filter) = &self.dynamic_filter {
-            tnr = tnr.visit_sibling(|| f(dyn_filter.filter.as_ref()))?;
-        }
-
-        Ok(tnr)
+        let group_by = self.group_by.input_exprs();
+        let aggregates = self.aggr_expr.iter().flat_map(|aggr| {
+            let expressions = aggr.all_expressions();
+            expressions
+                .args
+                .into_iter()
+                .chain(expressions.order_by_exprs)
+        });
+        let filters = self.filter_expr.iter().flatten().cloned();
+        let dynamic_filter = self.dynamic_filter.iter().map(|dynamic_filter| {
+            Arc::<DynamicFilterPhysicalExpr>::clone(&dynamic_filter.filter)
+                as Arc<dyn PhysicalExpr>
+        });
+        crate::apply_expression_roots(
+            group_by
+                .into_iter()
+                .chain(aggregates)
+                .chain(filters)
+                .chain(dynamic_filter),
+            f,
+        )
     }
 
     fn with_new_children(
@@ -2128,25 +2125,9 @@ impl ExecutionPlan for AggregateExec {
         if phase == FilterPushdownPhase::Post
             && let Some(dyn_filter) = &self.dynamic_filter
         {
-            // let child_accepts_dyn_filter = child_pushdown_result
-            //     .self_filters
-            //     .first()
-            //     .map(|filters| {
-            //         assert_eq_or_internal_err!(
-            //             filters.len(),
-            //             1,
-            //             "Aggregate only pushdown one self dynamic filter"
-            //         );
-            //         let filter = filters.get(0).unwrap(); // Asserted above
-            //         Ok(matches!(filter.discriminant, PushedDown::Yes))
-            //     })
-            //     .unwrap_or_else(|| internal_err!("The length of self filters equals to the number of child of this ExecutionPlan, so it must be 1"))?;
-
-            // HACK: The above snippet should be used, however, now the child reply
-            // `PushDown::No` can indicate they're not able to push down row-level
-            // filter, but still keep the filter for statistics pruning.
-            // So here, we try to use ref count to determine if the dynamic filter
-            // has actually be pushed down.
+            // HACK: A child reply of `PushedDown::No` can mean it cannot apply the
+            // row-level filter but still retains it for statistics pruning.
+            // Use the reference count to detect whether a child retained it.
             // Issue: <https://github.com/apache/datafusion/issues/18856>
             let child_accepts_dyn_filter = Arc::strong_count(dyn_filter) > 1;
 
@@ -3597,7 +3578,7 @@ mod tests {
 
         fn apply_expressions(
             &self,
-            _f: &mut dyn FnMut(&dyn PhysicalExpr) -> Result<TreeNodeRecursion>,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
         ) -> Result<TreeNodeRecursion> {
             Ok(TreeNodeRecursion::Continue)
         }
