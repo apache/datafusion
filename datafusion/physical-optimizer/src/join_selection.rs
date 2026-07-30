@@ -186,6 +186,12 @@ impl PhysicalOptimizerRule for JoinSelection {
     }
 }
 
+/// Determines whether it is possible to swap inputs of a hash join - for null-aware joins, we can only swap `LeftAnti`
+fn can_swap_hash_join(hash_join: &HashJoinExec) -> bool {
+    hash_join.join_type().supports_swap()
+        && (!hash_join.null_aware || *hash_join.join_type() == JoinType::LeftAnti)
+}
+
 /// Tries to create a [`HashJoinExec`] in [`PartitionMode::CollectLeft`] when possible.
 ///
 /// This function will first consider the given join type and check whether the
@@ -224,9 +230,8 @@ pub(crate) fn try_collect_left(
 
     match (left_can_collect, right_can_collect) {
         (true, true) => {
-            // Don't swap null-aware anti joins as they have specific side requirements
-            if hash_join.join_type().supports_swap()
-                && !hash_join.null_aware
+            // For null-aware joins, we only swap `LeftAnti` joins where the left side is > right side
+            if can_swap_hash_join(hash_join)
                 && should_swap_join_order(&**left, &**right, config, registry)?
             {
                 Ok(Some(hash_join.swap_inputs(PartitionMode::CollectLeft)?))
@@ -246,11 +251,7 @@ pub(crate) fn try_collect_left(
                 .build()?,
         ))),
         (false, true) => {
-            // Don't swap null-aware anti joins as they have specific side requirements
-            if optimizer_config.join_reordering
-                && hash_join.join_type().supports_swap()
-                && !hash_join.null_aware
-            {
+            if optimizer_config.join_reordering && can_swap_hash_join(hash_join) {
                 hash_join.swap_inputs(PartitionMode::CollectLeft).map(Some)
             } else {
                 Ok(None)
@@ -275,9 +276,7 @@ pub(crate) fn partitioned_hash_join(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let left = hash_join.left();
     let right = hash_join.right();
-    // Don't swap null-aware anti joins as they have specific side requirements
-    if hash_join.join_type().supports_swap()
-        && !hash_join.null_aware
+    if can_swap_hash_join(hash_join)
         && should_swap_join_order(&**left, &**right, config, registry)?
     {
         hash_join.swap_inputs(PartitionMode::Partitioned)
