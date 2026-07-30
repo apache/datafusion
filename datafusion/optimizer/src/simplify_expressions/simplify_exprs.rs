@@ -17,10 +17,13 @@
 
 //! Simplify expressions optimizer rule and implementation
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError, Result};
+use datafusion_common::{
+    Column, DFSchema, DFSchemaRef, DataFusionError, Result, qualified_name,
+};
 use datafusion_expr::Expr;
 use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection};
 use datafusion_expr::simplify::SimplifyContext;
@@ -30,6 +33,7 @@ use datafusion_expr::utils::{
 
 use super::ExprSimplifier;
 use crate::optimizer::ApplyOrder;
+use crate::push_down_filter::replace_cols_by_name;
 use crate::simplify_expressions::linear_aggregates::rewrite_multiple_linear_aggregates;
 use crate::utils::NamePreserver;
 use crate::{OptimizerConfig, OptimizerRule};
@@ -74,6 +78,14 @@ impl OptimizerRule for SimplifyExpressions {
 
 impl SimplifyExpressions {
     fn optimize_internal(
+        plan: LogicalPlan,
+        config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>> {
+        inline_projection_constants(plan)?
+            .transform_data(|plan| Self::simplify_plan(plan, config))
+    }
+
+    fn simplify_plan(
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
@@ -143,6 +155,91 @@ impl SimplifyExpressions {
         })?
         .transform_data(rewrite_aggregate_non_aggregate_aggr_expr)
     }
+}
+
+fn inline_projection_constants(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+    let LogicalPlan::Aggregate(Aggregate {
+        input,
+        group_expr,
+        aggr_expr,
+        schema,
+        ..
+    }) = plan
+    else {
+        return Ok(Transformed::no(plan));
+    };
+    let replacements = projection_constants(input.as_ref())?;
+    if replacements.is_empty() {
+        return Ok(Transformed::no(LogicalPlan::Aggregate(
+            Aggregate::try_new_with_schema(input, group_expr, aggr_expr, schema)?,
+        )));
+    }
+
+    let name_preserver = NamePreserver::new_for_projection();
+    let rewritten_aggr_expr = aggr_expr
+        .iter()
+        .cloned()
+        .map(|expr| {
+            let name = name_preserver.save(&expr);
+            replace_cols_by_name(expr, &replacements).map(|expr| name.restore(expr))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if rewritten_aggr_expr == aggr_expr {
+        return Ok(Transformed::no(LogicalPlan::Aggregate(
+            Aggregate::try_new_with_schema(input, group_expr, aggr_expr, schema)?,
+        )));
+    }
+
+    Ok(Transformed::yes(LogicalPlan::Aggregate(
+        Aggregate::try_new_with_schema(input, group_expr, rewritten_aggr_expr, schema)?,
+    )))
+}
+
+fn projection_constants(plan: &LogicalPlan) -> Result<HashMap<String, Expr>> {
+    match plan {
+        LogicalPlan::Projection(projection) => {
+            let input_constants = projection_constants(projection.input.as_ref())?;
+            projection.schema.iter().zip(&projection.expr).try_fold(
+                HashMap::new(),
+                |mut constants, ((qualifier, field), expr)| {
+                    let expr = replace_cols_by_name(
+                        expr.clone().unalias_nested().data,
+                        &input_constants,
+                    )?;
+                    if !expr.any_column_refs()
+                        && !expr.is_volatile()
+                        && !expr_contains_subquery(&expr)
+                    {
+                        constants.insert(qualified_name(qualifier, field.name()), expr);
+                    }
+                    Ok(constants)
+                },
+            )
+        }
+        LogicalPlan::SubqueryAlias(alias) => {
+            let input_constants = projection_constants(alias.input.as_ref())?;
+            Ok(plan
+                .schema()
+                .iter()
+                .zip(alias.input.schema().iter())
+                .filter_map(|((qualifier, field), (input_qualifier, input_field))| {
+                    input_constants
+                        .get(&qualified_name(input_qualifier, input_field.name()))
+                        .cloned()
+                        .map(|expr| (qualified_name(qualifier, field.name()), expr))
+                })
+                .collect())
+        }
+        _ => Ok(HashMap::new()),
+    }
+}
+
+fn expr_contains_subquery(expr: &Expr) -> bool {
+    expr.exists(|expr| match expr {
+        Expr::ScalarSubquery(_) | Expr::Exists(_) | Expr::InSubquery(_) => Ok(true),
+        _ => Ok(false),
+    })
+    .expect("expression walk is infallible")
 }
 
 impl SimplifyExpressions {

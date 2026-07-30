@@ -155,6 +155,28 @@ from values (1), (2), (3) t(col0);
 ----
 2.5
 
+query R
+SELECT approx_percentile_cont(p) WITHIN GROUP (ORDER BY v)
+FROM (
+  SELECT v, CAST(0.5 AS DOUBLE) AS p
+  FROM (VALUES (1), (2), (3)) t(v)
+) q;
+----
+2
+
+query R
+WITH q AS (
+  SELECT v, CAST(1 AS DOUBLE) / 2 AS p
+  FROM (VALUES (1), (2), (3)) t(v)
+)
+SELECT approx_percentile_cont(p) WITHIN GROUP (ORDER BY v) FROM q;
+----
+2
+
+statement error DataFusion error: Error during planning: Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal
+SELECT approx_percentile_cont(p) WITHIN GROUP (ORDER BY v)
+FROM (VALUES (1, 0.25), (2, 0.75)) t(v, p);
+
 #######
 # Error tests
 #######
