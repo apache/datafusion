@@ -3524,6 +3524,7 @@ statement ok
 drop table time_strings;
 
 # Table input with multiple formats
+# `%Q` is intentionally invalid; subsequent formats should still be tried.
 query D rowsort
 select to_time(
     time_str,
