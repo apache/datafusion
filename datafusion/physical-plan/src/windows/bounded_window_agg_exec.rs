@@ -55,7 +55,7 @@ use datafusion_common::utils::{
 };
 use datafusion_common::{
     HashMap, Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err, exec_err,
-    internal_datafusion_err,
+    internal_datafusion_err, internal_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::ColumnarValue;
@@ -76,13 +76,52 @@ use hashbrown::hash_table::HashTable;
 use indexmap::IndexMap;
 use log::debug;
 
-/// One output partition's snapshot of finalized [`Accumulator::state`] values,
-/// keyed by PARTITION BY tuple. The inner `Vec` is indexed by
-/// [`BoundedWindowAggExec::window_expr`]; non-aggregate window functions
-/// (row_number, rank, lead/lag, ...) occupy `None`.
+/// One output partition's snapshot of finalized [`Accumulator::state`]
+/// values, indexed by [`BoundedWindowAggExec::window_expr`]: outer position
+/// picks the window expression, `None` at a slot marks a non-aggregate window
+/// function (row_number, rank, lead/lag, ...), and the inner `Vec<ScalarValue>`
+/// is whatever [`Accumulator::state`] returned for that aggregate (1 for
+/// SUM/COUNT/MIN/MAX, 2 for AVG's (sum, count), N for sketch-backed / higher-
+/// moment aggregates).
+///
+/// The public API doesn't expose the PARTITION BY tuple BWAG uses to key its
+/// internal state — see [`BoundedWindowAggExec::finalized_partition_state`]
+/// for why (short version: cross-DF-partition prefix scan is the caller, and
+/// it only applies when at most one PARTITION BY group is active per DF
+/// partition; queries with real PARTITION BY get handled by DF's normal
+/// key-based distribution and don't need this getter).
 ///
 /// [`Accumulator::state`]: datafusion_expr::Accumulator::state
-pub type FinalizedPartitionState = HashMap<PartitionKey, Vec<Option<Vec<ScalarValue>>>>;
+pub type FinalizedPartitionState = Vec<Option<Vec<ScalarValue>>>;
+
+/// One slot's write-side view. Holds at most one state — the getter is
+/// intentionally scoped to the at-most-one-group case, so there's no point
+/// carrying N entries around when we'd refuse to combine them anyway. If a
+/// second distinct PARTITION BY group is observed, we transition to `Multi`
+/// and drop the state (the getter will error on read).
+#[derive(Debug, Default)]
+enum FinalStateSlot {
+    /// No PARTITION BY group has closed on this DF partition yet.
+    #[default]
+    Empty,
+    /// Exactly one group has closed; its state is captured here.
+    Single(FinalizedPartitionState),
+    /// More than one group has closed. States discarded — this getter
+    /// doesn't have a well-defined answer to give and the reader will
+    /// error.
+    Multi,
+}
+
+impl FinalStateSlot {
+    /// Absorb one group's finalized state. Transitions:
+    /// `Empty` → `Single(state)`; `Single(_)` → `Multi`; `Multi` → `Multi`.
+    fn observe(&mut self, state: FinalizedPartitionState) {
+        *self = match std::mem::take(self) {
+            Self::Empty => Self::Single(state),
+            Self::Single(_) | Self::Multi => Self::Multi,
+        };
+    }
+}
 
 /// Window execution plan
 #[derive(Debug, Clone)]
@@ -109,15 +148,15 @@ pub struct BoundedWindowAggExec {
     /// If `can_rerepartition` is false, partition_keys is always empty.
     can_repartition: bool,
     /// Per-output-partition slots holding the finalized `Accumulator::state()`
-    /// for each aggregate window expression, keyed by PARTITION BY tuple.
-    /// The stream writes into slot `p` at partition-close, immediately before
-    /// internal state would otherwise be pruned. Distributed executors read
-    /// via [`Self::finalized_partition_state`] once a task has drained, to
-    /// ship state via a side-channel for cross-partition prefix scans without
-    /// a two-pass halo scheme. Non-aggregate window functions (row_number,
-    /// rank, lead/lag, ...) have no `Accumulator` and are stored as `None`
-    /// at their index in the per-partition-key `Vec`.
-    finalized_state: Arc<[Mutex<FinalizedPartitionState>]>,
+    /// for each aggregate window expression, keyed internally by PARTITION BY
+    /// tuple (BWAG's natural write shape). The stream writes into slot `p` at
+    /// partition-close, immediately before internal state would otherwise be
+    /// pruned. Distributed executors read via
+    /// [`Self::finalized_partition_state`] once a task has drained, to ship
+    /// state via a side-channel for cross-partition prefix scans without a
+    /// two-pass halo scheme; that getter projects the internal keyed shape
+    /// down to a `Vec<Option<Vec<ScalarValue>>>` indexed by window expression.
+    finalized_state: Arc<[Mutex<FinalStateSlot>]>,
 }
 
 impl BoundedWindowAggExec {
@@ -150,8 +189,8 @@ impl BoundedWindowAggExec {
         };
         let cache = Self::compute_properties(&input, &schema, &window_expr)?;
         let partition_count = cache.partitioning.partition_count();
-        let finalized_state: Arc<[Mutex<HashMap<_, _>>]> = (0..partition_count)
-            .map(|_| Mutex::new(HashMap::new()))
+        let finalized_state: Arc<[Mutex<FinalStateSlot>]> = (0..partition_count)
+            .map(|_| Mutex::new(FinalStateSlot::default()))
             .collect::<Vec<_>>()
             .into();
         Ok(Self {
@@ -260,18 +299,38 @@ impl BoundedWindowAggExec {
         }
     }
 
-    /// Snapshot of the finalized [`Accumulator::state`] for every partition
-    /// key seen on output partition `partition`, populated as partitions close
-    /// during streaming and complete once the stream has drained.
+    /// Snapshot of the finalized [`Accumulator::state`] for every aggregate
+    /// window expression on output partition `partition`, populated as
+    /// partitions close during streaming and complete once the stream has
+    /// drained.
     ///
-    /// The outer `HashMap` is keyed by PARTITION BY tuple; the inner `Vec` is
-    /// indexed by [`Self::window_expr`], with `None` at any slot whose window
-    /// function is not an aggregate (row_number, rank, lead/lag, ...) and
-    /// therefore exposes no state.
+    /// The returned [`FinalizedPartitionState`] is indexed by
+    /// [`Self::window_expr`]; slots for non-aggregate window functions
+    /// (`row_number`, `rank`, `lead`/`lag`, ...) are `None`. The inner
+    /// `Vec<ScalarValue>` is whatever `Accumulator::state()` returned for
+    /// that aggregate — a variable count of scalars depending on the shape
+    /// of its state.
     ///
-    /// Returns an empty map when no partitions have closed yet. Errors when
-    /// `partition` is outside the exec's output partitioning or when the slot
-    /// mutex is poisoned.
+    /// # Scoping to a single PARTITION BY group
+    ///
+    /// BWAG's internal storage is keyed by PARTITION BY tuple — one entry
+    /// per SQL partition group. This getter is intended for the
+    /// cross-DF-partition prefix-scan use case where at most one such group
+    /// is active per DF output partition (either because the query has no
+    /// PARTITION BY, or because the caller has arranged for a synthetic
+    /// single-key PARTITION BY). Queries with a real multi-group PARTITION
+    /// BY are handled by DataFusion's normal key-partitioned distribution
+    /// and don't need this API.
+    ///
+    /// Behavior:
+    /// - No partitions closed yet → returns `vec![None; window_expr.len()]`
+    ///   (indistinguishable from a plan where every window expression is
+    ///   non-aggregate — that's fine for the intended callers, since both
+    ///   cases correctly mean "no state to merge in").
+    /// - Exactly one PARTITION BY group closed → returns its state.
+    /// - More than one group closed → errors.
+    /// - `partition` outside the exec's output partitioning → errors.
+    /// - Slot mutex poisoned → errors.
     ///
     /// [`Accumulator::state`]: datafusion_expr::Accumulator::state
     pub fn finalized_partition_state(
@@ -291,7 +350,15 @@ impl BoundedWindowAggExec {
                 partition
             )
         })?;
-        Ok(guard.clone())
+        match &*guard {
+            FinalStateSlot::Empty => Ok(vec![None; self.window_expr.len()]),
+            FinalStateSlot::Single(state) => Ok(state.clone()),
+            FinalStateSlot::Multi => internal_err!(
+                "BoundedWindowAggExec partition {partition}: finalized state \
+                 observed more than one PARTITION BY group; this getter is \
+                 scoped to the at-most-one-group case (see docs)"
+            ),
+        }
     }
 
     fn statistics_helper(&self, statistics: Statistics) -> Result<Statistics> {
@@ -1075,7 +1142,7 @@ pub struct BoundedWindowAggStream {
     /// Shared with [`BoundedWindowAggExec::finalized_state`]. The stream
     /// writes into slot `partition` at partition-close, immediately before
     /// the entry is pruned from `window_agg_states`.
-    finalized_state: Arc<[Mutex<FinalizedPartitionState>]>,
+    finalized_state: Arc<[Mutex<FinalStateSlot>]>,
     /// Which slot in [`Self::finalized_state`] this stream writes to.
     partition: usize,
 }
@@ -1126,7 +1193,7 @@ impl BoundedWindowAggStream {
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
         search_mode: Box<dyn PartitionSearcher>,
-        finalized_state: Arc<[Mutex<FinalizedPartitionState>]>,
+        finalized_state: Arc<[Mutex<FinalStateSlot>]>,
         partition: usize,
     ) -> Result<Self> {
         let state = window_expr.iter().map(|_| IndexMap::new()).collect();
@@ -1323,8 +1390,14 @@ impl BoundedWindowAggStream {
                 self.partition
             )
         })?;
-        for (key, per_expr) in finalizing {
-            guard.insert(key, per_expr);
+        // We only key the local `finalizing` map by `PartitionKey` to
+        // collate state across the outer per-window-expr loop; the slot
+        // itself just needs to know "another group closed". Passing every
+        // entry through `observe` lets the slot transition to `Multi` if
+        // more than one distinct key ever appears without holding onto the
+        // rest.
+        for (_key, per_expr) in finalizing {
+            guard.observe(per_expr);
         }
         Ok(())
     }
@@ -2037,13 +2110,11 @@ mod tests {
         Ok(())
     }
 
-    /// After the stream drains, `finalized_partition_state` returns one
-    /// `Accumulator::state()` per PARTITION BY key seen — the per-partition
-    /// final sum for a cumulative `SUM(v) OVER (PARTITION BY pk)`. Confirms
-    /// state survives both the mid-stream partition-close prune (when the
-    /// sort keys change between rows) and the EOS flush.
-    #[tokio::test]
-    async fn finalized_partition_state_captures_sum_per_partition_key() -> Result<()> {
+    /// Helper: builds an exec with a single `SUM(v)` window aggregate,
+    /// partitioned by `pk`, over the provided `(pk, v)` rows. Runs the
+    /// stream to completion and returns the exec so callers can inspect
+    /// `finalized_partition_state`.
+    async fn run_sum_over_pk(rows: &[(i64, i64)]) -> Result<Arc<BoundedWindowAggExec>> {
         use arrow::array::Int64Array;
         use datafusion_functions_aggregate::sum::sum_udaf;
 
@@ -2051,11 +2122,13 @@ mod tests {
             Field::new("pk", DataType::Int64, false),
             Field::new("v", DataType::Int64, false),
         ]));
+        let pks: Vec<i64> = rows.iter().map(|(pk, _)| *pk).collect();
+        let vs: Vec<i64> = rows.iter().map(|(_, v)| *v).collect();
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(Int64Array::from(vec![1, 1, 1, 2, 2, 2])),
-                Arc::new(Int64Array::from(vec![10, 20, 30, 100, 200, 300])),
+                Arc::new(Int64Array::from(pks)),
+                Arc::new(Int64Array::from(vs)),
             ],
         )?;
 
@@ -2097,25 +2170,51 @@ mod tests {
         let ctx = Arc::new(TaskContext::default());
         let stream = ExecutionPlan::execute(exec.as_ref(), 0, ctx)?;
         let _batches = collect(stream).await?;
+        Ok(exec)
+    }
+
+    /// With a single PARTITION BY group active on the DF output partition,
+    /// `finalized_partition_state` returns one `Accumulator::state()` per
+    /// window expression — for `SUM(v)`, a single `Int64` scalar. Confirms
+    /// state survives the EOS flush and the getter unwraps the internal
+    /// keyed storage down to the caller-facing `Vec<Option<Vec<ScalarValue>>>`.
+    #[tokio::test]
+    async fn finalized_partition_state_returns_single_group_state() -> Result<()> {
+        let exec = run_sum_over_pk(&[(1, 10), (1, 20), (1, 30)]).await?;
 
         let state = exec.finalized_partition_state(0)?;
-        assert_eq!(state.len(), 2, "one entry per PARTITION BY key");
-        let sum_of = |key: i64| -> ScalarValue {
-            let states = state
-                .get(&vec![ScalarValue::Int64(Some(key))])
-                .unwrap_or_else(|| panic!("partition key {key} missing from state"));
-            assert_eq!(states.len(), 1, "one window expr");
-            let inner = states[0]
-                .as_ref()
-                .expect("SUM is an aggregate — Accumulator state should be Some");
-            assert_eq!(inner.len(), 1, "SumAccumulator::state() is a single scalar");
-            inner[0].clone()
-        };
-        assert_eq!(sum_of(1), ScalarValue::Int64(Some(60)));
-        assert_eq!(sum_of(2), ScalarValue::Int64(Some(600)));
+        assert_eq!(state.len(), 1, "one entry per window expression");
+        let inner = state[0]
+            .as_ref()
+            .expect("SUM is an aggregate — state should be Some");
+        assert_eq!(inner.len(), 1, "SumAccumulator::state() is a single scalar");
+        assert_eq!(inner[0], ScalarValue::Int64(Some(60)));
 
         // A partition slot the exec doesn't own errors, not panics.
         assert!(exec.finalized_partition_state(99).is_err());
+        Ok(())
+    }
+
+    /// When more than one PARTITION BY group closes on the same DF output
+    /// partition (i.e. the query has a real PARTITION BY and DF's normal
+    /// key-partitioned distribution has co-located multiple groups),
+    /// `finalized_partition_state` errors rather than silently picking one.
+    /// The getter is intentionally scoped to the cross-DF-partition
+    /// prefix-scan use case, which by construction has at most one group.
+    #[tokio::test]
+    async fn finalized_partition_state_errors_on_multi_group() -> Result<()> {
+        let exec =
+            run_sum_over_pk(&[(1, 10), (1, 20), (1, 30), (2, 100), (2, 200), (2, 300)])
+                .await?;
+
+        let err = exec
+            .finalized_partition_state(0)
+            .expect_err("multi-group state must surface as an error");
+        assert!(
+            err.to_string()
+                .contains("more than one PARTITION BY group"),
+            "unexpected error: {err}"
+        );
         Ok(())
     }
 
