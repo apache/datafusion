@@ -20,6 +20,7 @@ use std::sync::Arc;
 use arrow_schema::DataType;
 use datafusion_catalog::TableFunctionImpl;
 use datafusion_common::ScalarValue;
+use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::{
     AggregateUDF, ColumnarValue, ExpressionPlacement, ScalarFunctionArgs, ScalarUDF,
     ScalarUDFImpl, Signature, Volatility, WindowUDF,
@@ -151,6 +152,13 @@ impl ScalarUDFImpl for PlacementUDF {
         } else {
             ExpressionPlacement::KeepInPlace
         }
+    }
+
+    fn preserves_lex_ordering(
+        &self,
+        inputs: &[ExprProperties],
+    ) -> datafusion_common::Result<bool> {
+        Ok(inputs.iter().all(|input| input.preserves_lex_ordering))
     }
 }
 

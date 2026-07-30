@@ -64,10 +64,14 @@ impl OptimizerRule for EliminateGroupByConstant {
                     .group_expr
                     .iter()
                     .partition(|expr| is_redundant_group_expr(expr, &group_by_columns));
-
-                if redundant.is_empty()
-                    || (required.is_empty() && aggregate.aggr_expr.is_empty())
-                {
+                // Return now if no simplification can be done. We also bail out
+                // if applying the optimization would eliminate all of the
+                // grouping expressions (e.g., GROUP BY on only constant
+                // expressions): this would turn a grouped aggregate into an
+                // ungrouped aggregate, which changes query semantics (grouped
+                // aggregates produce an empty result set on an empty input,
+                // whereas ungrouped aggregates return a single row).
+                if redundant.is_empty() || required.is_empty() {
                     return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
                 }
 
@@ -221,16 +225,15 @@ mod tests {
     }
 
     #[test]
-    fn test_eliminate_constant() -> Result<()> {
+    fn test_no_op_only_constant_with_aggregate() -> Result<()> {
         let scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(scan)
             .aggregate(vec![lit("test"), lit(123u32)], vec![count(col("c"))])?
             .build()?;
 
         assert_optimized_plan_equal!(plan, @r#"
-        Projection: Utf8("test"), UInt32(123), count(test.c)
-          Aggregate: groupBy=[[]], aggr=[[count(test.c)]]
-            TableScan: test
+        Aggregate: groupBy=[[Utf8("test"), UInt32(123)]], aggr=[[count(test.c)]]
+          TableScan: test
         "#)
     }
 

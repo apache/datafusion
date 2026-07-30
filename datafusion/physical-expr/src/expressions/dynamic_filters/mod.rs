@@ -461,6 +461,7 @@ impl DynamicFilterPhysicalExpr {
 
     /// Rebuild a `DynamicFilterPhysicalExpr` from its stored parts. Used by
     /// proto deserialization.
+    #[cfg(any(test, feature = "proto"))]
     fn from_parts(
         children: Vec<Arc<dyn PhysicalExpr>>,
         remapped_children: Option<Vec<Arc<dyn PhysicalExpr>>>,

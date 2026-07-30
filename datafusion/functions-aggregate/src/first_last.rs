@@ -1193,7 +1193,7 @@ impl Accumulator for TrivialLastValueAccumulator {
         if let Some(last) = filtered_states.last()
             && !last.is_empty()
         {
-            self.last = ScalarValue::try_from_array(last, 0)?;
+            self.last = ScalarValue::try_from_array(last, last.len() - 1)?;
             self.is_set = true;
         }
         Ok(())
@@ -1525,7 +1525,21 @@ mod tests {
 
         let merged_state = last_accumulator.state()?;
         assert_eq!(merged_state.len(), state1.len());
+        assert_eq!(last_accumulator.evaluate()?, ScalarValue::Int64(Some(10)));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_trivial_last_value_merge_all_flags_false() -> Result<()> {
+        let mut acc = TrivialLastValueAccumulator::try_new(&DataType::Int64, false)?;
+        let states: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(vec![None, None])),
+            Arc::new(BooleanArray::from(vec![false, false])),
+        ];
+
+        acc.merge_batch(&states)?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(None));
         Ok(())
     }
 
