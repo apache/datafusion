@@ -53,10 +53,12 @@ pub struct FileWriteMetadata {
     pub path: String,
     /// Number of rows written to this specific file.
     pub row_count: u64,
-    /// Sum of compressed row group sizes in bytes.
+    /// Best-effort total encoded data size in bytes.
     ///
-    /// Note: this may differ slightly from the actual on-disk file size as it
-    /// excludes the Parquet footer, page indexes, and other metadata overhead.
+    /// How this value is computed depends on the format. For Parquet it is the
+    /// sum of compressed row-group sizes (which excludes the footer and page
+    /// indexes); for other formats it may be the full file size or unavailable
+    /// (zero). Consumers should treat this as an approximation.
     pub byte_size: u64,
     /// Format-specific metadata serialized as bytes.
     ///

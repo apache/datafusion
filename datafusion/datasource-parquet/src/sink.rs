@@ -443,11 +443,17 @@ impl DataSink for ParquetSink {
         written
             .iter()
             .map(|(path, parquet_meta)| {
-                let row_count = parquet_meta.file_metadata().num_rows() as u64;
+                let row_count: u64 = parquet_meta
+                    .file_metadata()
+                    .num_rows()
+                    .try_into()
+                    .unwrap_or(0);
                 let byte_size: u64 = parquet_meta
                     .row_groups()
                     .iter()
-                    .map(|rg| rg.compressed_size() as u64)
+                    .map(|rg| {
+                        u64::try_from(rg.compressed_size()).unwrap_or(0)
+                    })
                     .sum();
 
                 FileWriteMetadata {
@@ -883,7 +889,7 @@ async fn output_single_parquet_file_parallelized(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, StringArray};
+    use arrow::array::record_batch;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::config::TableParquetOptions;
     use datafusion_datasource::PartitionedFile;
@@ -897,38 +903,42 @@ mod tests {
     use datafusion_expr::dml::InsertOp;
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
     use object_store::local::LocalFileSystem;
+    use tempfile::TempDir;
 
-    fn build_test_ctx(store_url: &ObjectStoreUrl) -> Arc<TaskContext> {
-        let tmp_dir = tempfile::TempDir::new().unwrap();
+    /// Test fixture that keeps the TempDir alive for the duration of the test.
+    struct TestFixture {
+        _tmp_dir: TempDir,
+        ctx: Arc<TaskContext>,
+        sink: Arc<ParquetSink>,
+        schema: SchemaRef,
+    }
+
+    fn setup_test_fixture() -> TestFixture {
+        let tmp_dir = TempDir::new().unwrap();
+        let tmp_path = tmp_dir.path().to_owned();
         let local = Arc::new(
-            LocalFileSystem::new_with_prefix(&tmp_dir)
+            LocalFileSystem::new_with_prefix(&tmp_path)
                 .expect("should create object store"),
         );
 
-        let session = SessionConfig::default();
-        let runtime = RuntimeEnv::default();
-        runtime
-            .object_store_registry
-            .register_store(store_url.as_ref(), local);
-
-        Arc::new(
-            TaskContext::default()
-                .with_session_config(session)
-                .with_runtime(Arc::new(runtime)),
+        let object_store_url = ObjectStoreUrl::local_filesystem();
+        let table_url = ListingTableUrl::parse(
+            url::Url::from_directory_path(&tmp_path).unwrap().as_str(),
         )
-    }
+        .unwrap();
 
-    fn create_test_sink() -> (Arc<ParquetSink>, SchemaRef, ObjectStoreUrl) {
         let field_a = Field::new("a", DataType::Utf8, false);
         let field_b = Field::new("b", DataType::Utf8, false);
         let schema = Arc::new(Schema::new(vec![field_a, field_b]));
-        let object_store_url = ObjectStoreUrl::local_filesystem();
 
         let file_sink_config = FileSinkConfig {
             original_url: String::default(),
             object_store_url: object_store_url.clone(),
-            file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
-            table_paths: vec![ListingTableUrl::parse("file:///tmp/test/").unwrap()],
+            file_group: FileGroup::new(vec![PartitionedFile::new(
+                tmp_path.to_string_lossy().to_string(),
+                1,
+            )]),
+            table_paths: vec![table_url],
             output_schema: Arc::clone(&schema),
             table_partition_cols: vec![],
             insert_op: InsertOp::Overwrite,
@@ -937,46 +947,64 @@ mod tests {
             file_output_mode: FileOutputMode::Automatic,
         };
 
-        let parquet_sink = Arc::new(ParquetSink::new(
+        let sink = Arc::new(ParquetSink::new(
             file_sink_config,
             TableParquetOptions::default(),
         ));
 
-        (parquet_sink, schema, object_store_url)
+        let session = SessionConfig::default();
+        let runtime = RuntimeEnv::default();
+        runtime
+            .object_store_registry
+            .register_store(object_store_url.as_ref(), local);
+
+        let ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(session)
+                .with_runtime(Arc::new(runtime)),
+        );
+
+        TestFixture {
+            _tmp_dir: tmp_dir,
+            ctx,
+            sink,
+            schema,
+        }
     }
 
-    fn make_test_batch(schema: &SchemaRef) -> RecordBatch {
-        let col_a: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
-        let col_b: ArrayRef = Arc::new(StringArray::from(vec!["one", "two", "three"]));
-        RecordBatch::try_new(Arc::clone(schema), vec![col_a, col_b]).unwrap()
+    fn make_test_batch(_schema: &SchemaRef) -> RecordBatch {
+        record_batch!(
+            ("a", Utf8, ["foo", "bar", "baz"]),
+            ("b", Utf8, ["one", "two", "three"])
+        )
+        .unwrap()
     }
 
     #[test]
     fn file_metadata_empty_before_write() {
-        let (sink, _schema, _url) = create_test_sink();
+        let fixture = setup_test_fixture();
         assert!(
-            sink.file_metadata().is_empty(),
+            fixture.sink.file_metadata().is_empty(),
             "file_metadata should be empty before any write"
         );
     }
 
     #[tokio::test]
     async fn file_metadata_populated_after_write() {
-        let (sink, schema, object_store_url) = create_test_sink();
-        let ctx = build_test_ctx(&object_store_url);
-        let batch = make_test_batch(&schema);
+        let fixture = setup_test_fixture();
+        let batch = make_test_batch(&fixture.schema);
 
         let data: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
-            Arc::clone(&schema),
+            Arc::clone(&fixture.schema),
             futures::stream::iter(vec![Ok(batch)]),
         ));
 
-        let count = DataSink::write_all(sink.as_ref(), data, &ctx)
+        let count = DataSink::write_all(fixture.sink.as_ref(), data, &fixture.ctx)
             .await
             .unwrap();
         assert_eq!(count, 3, "should have written 3 rows");
 
-        let metadata = sink.file_metadata();
+        let metadata = fixture.sink.file_metadata();
         assert_eq!(metadata.len(), 1, "should have one file metadata entry");
         assert_eq!(metadata[0].row_count, 3);
         assert!(metadata[0].byte_size > 0, "byte_size should be non-zero");
@@ -986,20 +1014,19 @@ mod tests {
 
     #[tokio::test]
     async fn file_metadata_count_equals_write_all_count() {
-        let (sink, schema, object_store_url) = create_test_sink();
-        let ctx = build_test_ctx(&object_store_url);
-        let batch = make_test_batch(&schema);
+        let fixture = setup_test_fixture();
+        let batch = make_test_batch(&fixture.schema);
 
         let data: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
-            Arc::clone(&schema),
+            Arc::clone(&fixture.schema),
             futures::stream::iter(vec![Ok(batch)]),
         ));
 
-        let count = DataSink::write_all(sink.as_ref(), data, &ctx)
+        let count = DataSink::write_all(fixture.sink.as_ref(), data, &fixture.ctx)
             .await
             .unwrap();
 
-        let sum_rows: u64 = sink.file_metadata().iter().map(|f| f.row_count).sum();
+        let sum_rows: u64 = fixture.sink.file_metadata().iter().map(|f| f.row_count).sum();
         assert_eq!(
             count, sum_rows,
             "write_all count must equal sum of per-file row_counts"
@@ -1008,21 +1035,20 @@ mod tests {
 
     #[tokio::test]
     async fn file_metadata_consistent_with_written() {
-        let (sink, schema, object_store_url) = create_test_sink();
-        let ctx = build_test_ctx(&object_store_url);
-        let batch = make_test_batch(&schema);
+        let fixture = setup_test_fixture();
+        let batch = make_test_batch(&fixture.schema);
 
         let data: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
-            Arc::clone(&schema),
+            Arc::clone(&fixture.schema),
             futures::stream::iter(vec![Ok(batch)]),
         ));
 
-        DataSink::write_all(sink.as_ref(), data, &ctx)
+        DataSink::write_all(fixture.sink.as_ref(), data, &fixture.ctx)
             .await
             .unwrap();
 
-        let file_meta = sink.file_metadata();
-        let written = sink.written();
+        let file_meta = fixture.sink.file_metadata();
+        let written = fixture.sink.written();
 
         assert_eq!(
             file_meta.len(),
@@ -1035,12 +1061,17 @@ mod tests {
             let parquet_meta = written
                 .get(&path)
                 .expect("file_metadata path should exist in written()");
-            assert_eq!(fm.row_count, parquet_meta.file_metadata().num_rows() as u64);
+            let expected_rows: u64 = parquet_meta
+                .file_metadata()
+                .num_rows()
+                .try_into()
+                .unwrap_or(0);
+            assert_eq!(fm.row_count, expected_rows);
 
             let expected_bytes: u64 = parquet_meta
                 .row_groups()
                 .iter()
-                .map(|rg| rg.compressed_size() as u64)
+                .map(|rg| u64::try_from(rg.compressed_size()).unwrap_or(0))
                 .sum();
             assert_eq!(fm.byte_size, expected_bytes);
         }
@@ -1048,38 +1079,50 @@ mod tests {
 
     #[tokio::test]
     async fn file_metadata_is_idempotent() {
-        let (sink, schema, object_store_url) = create_test_sink();
-        let ctx = build_test_ctx(&object_store_url);
-        let batch = make_test_batch(&schema);
+        let fixture = setup_test_fixture();
+        let batch = make_test_batch(&fixture.schema);
 
         let data: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
-            Arc::clone(&schema),
+            Arc::clone(&fixture.schema),
             futures::stream::iter(vec![Ok(batch)]),
         ));
 
-        DataSink::write_all(sink.as_ref(), data, &ctx)
+        DataSink::write_all(fixture.sink.as_ref(), data, &fixture.ctx)
             .await
             .unwrap();
 
-        let first = sink.file_metadata();
-        let second = sink.file_metadata();
+        let first = fixture.sink.file_metadata();
+        let second = fixture.sink.file_metadata();
         assert_eq!(first, second);
     }
 
     #[tokio::test]
     async fn partitioned_write_produces_multiple_metadata_entries() {
+        let tmp_dir = TempDir::new().unwrap();
+        let tmp_path = tmp_dir.path().to_owned();
+        let local = Arc::new(
+            LocalFileSystem::new_with_prefix(&tmp_path)
+                .expect("should create object store"),
+        );
+
+        let object_store_url = ObjectStoreUrl::local_filesystem();
+        let table_url = ListingTableUrl::parse(
+            url::Url::from_directory_path(&tmp_path).unwrap().as_str(),
+        )
+        .unwrap();
+
         let field_a = Field::new("a", DataType::Utf8, false);
         let field_b = Field::new("b", DataType::Utf8, false);
         let schema = Arc::new(Schema::new(vec![field_a, field_b]));
-        let object_store_url = ObjectStoreUrl::local_filesystem();
 
         let file_sink_config = FileSinkConfig {
             original_url: String::default(),
             object_store_url: object_store_url.clone(),
-            file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
-            table_paths: vec![
-                ListingTableUrl::parse("file:///tmp/partitioned/").unwrap(),
-            ],
+            file_group: FileGroup::new(vec![PartitionedFile::new(
+                tmp_path.to_string_lossy().to_string(),
+                1,
+            )]),
+            table_paths: vec![table_url],
             output_schema: Arc::clone(&schema),
             table_partition_cols: vec![("a".to_string(), DataType::Utf8)],
             insert_op: InsertOp::Overwrite,
@@ -1093,12 +1136,24 @@ mod tests {
             TableParquetOptions::default(),
         ));
 
-        let col_a: ArrayRef = Arc::new(StringArray::from(vec!["x", "y", "x"]));
-        let col_b: ArrayRef = Arc::new(StringArray::from(vec!["one", "two", "three"]));
-        let batch =
-            RecordBatch::try_new(Arc::clone(&schema), vec![col_a, col_b]).unwrap();
+        let batch = record_batch!(
+            ("a", Utf8, ["x", "y", "x"]),
+            ("b", Utf8, ["one", "two", "three"])
+        )
+        .unwrap();
 
-        let ctx = build_test_ctx(&object_store_url);
+        let session = SessionConfig::default();
+        let runtime = RuntimeEnv::default();
+        runtime
+            .object_store_registry
+            .register_store(object_store_url.as_ref(), local);
+
+        let ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(session)
+                .with_runtime(Arc::new(runtime)),
+        );
+
         let data: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&schema),
             futures::stream::iter(vec![Ok(batch)]),
@@ -1125,17 +1180,16 @@ mod tests {
     /// This tests the `Arc<dyn DataSink>` dispatch path that real consumers use.
     #[tokio::test]
     async fn data_sink_exec_e2e_file_metadata_after_execute() {
-        let (sink, schema, object_store_url) = create_test_sink();
-        let ctx = build_test_ctx(&object_store_url);
-        let batch = make_test_batch(&schema);
+        let fixture = setup_test_fixture();
+        let batch = make_test_batch(&fixture.schema);
 
         let data: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
-            Arc::clone(&schema),
+            Arc::clone(&fixture.schema),
             futures::stream::iter(vec![Ok(batch)]),
         ));
 
         // Write through the DataSink trait (same call DataSinkExec::execute makes)
-        let count = DataSink::write_all(sink.as_ref(), data, &ctx)
+        let count = DataSink::write_all(fixture.sink.as_ref(), data, &fixture.ctx)
             .await
             .unwrap();
         assert_eq!(count, 3);
@@ -1143,9 +1197,9 @@ mod tests {
         // Wrap in DataSinkExec and verify file_metadata is accessible
         // through the exec's convenience accessor (the Arc<dyn DataSink> path)
         let input: Arc<dyn datafusion_physical_plan::ExecutionPlan> = Arc::new(
-            datafusion_physical_plan::empty::EmptyExec::new(Arc::clone(&schema)),
+            datafusion_physical_plan::empty::EmptyExec::new(Arc::clone(&fixture.schema)),
         );
-        let exec = DataSinkExec::new(input, sink, None);
+        let exec = DataSinkExec::new(input, fixture.sink, None);
 
         let metadata = exec.file_metadata();
         assert_eq!(metadata.len(), 1, "should have one file after write");
