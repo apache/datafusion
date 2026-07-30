@@ -229,6 +229,7 @@ impl StatisticsContext {
             Some(statistics) => statistics,
             None => {
                 let requests = plan.child_stats_requests(partition);
+                self.validate_child_requests(plan, &children, &requests)?;
                 let child_statistics =
                     self.resolve_children(plan, &children, &requests)?;
                 plan.statistics_from_inputs(&child_statistics, args)?
@@ -238,15 +239,14 @@ impl StatisticsContext {
         Ok(statistics)
     }
 
-    /// Resolves each child's core statistics per `requests`: computes the child
-    /// at the requested partition (memoized), or supplies a
-    /// [`Statistics::new_unknown`] placeholder for [`ChildStats::Skip`].
-    fn resolve_children(
+    /// Validates child stat `requests` against `plan`'s children: the count must
+    /// match, and each `At(Some(idx))` must be a valid partition of that child.
+    fn validate_child_requests(
         &self,
         plan: &dyn ExecutionPlan,
         children: &[&Arc<dyn ExecutionPlan>],
         requests: &[ChildStats],
-    ) -> Result<Vec<Arc<Statistics>>> {
+    ) -> Result<()> {
         assert_eq_or_internal_err!(
             requests.len(),
             children.len(),
@@ -255,6 +255,30 @@ impl StatisticsContext {
             requests.len(),
             children.len()
         );
+        for (child, directive) in children.iter().zip(requests) {
+            if let ChildStats::At(Some(idx)) = directive {
+                let count = child.properties().partitioning.partition_count();
+                assert_or_internal_err!(
+                    *idx < count,
+                    "{} requested invalid partition {idx} for child {} with {count} partitions",
+                    plan.name(),
+                    child.name()
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolves each child's core statistics per `requests`: computes the child
+    /// at the requested partition (memoized), or supplies a
+    /// [`Statistics::new_unknown`] placeholder for [`ChildStats::Skip`]. Callers
+    /// must validate `requests` via [`Self::validate_child_requests`] first.
+    fn resolve_children(
+        &self,
+        plan: &dyn ExecutionPlan,
+        children: &[&Arc<dyn ExecutionPlan>],
+        requests: &[ChildStats],
+    ) -> Result<Vec<Arc<Statistics>>> {
         children
             .iter()
             .zip(requests)
@@ -300,6 +324,7 @@ impl StatisticsContext {
                 continue;
             }
             let requests = provider.child_stats_requests(plan, partition);
+            self.validate_child_requests(plan, children, &requests)?;
             // A provider's child walk is speculative: on failure, skip the provider
             // so a later one or the operator fallback can handle the node. Not
             // error-swallowing, whoever genuinely needs the child resolves it again

@@ -1573,6 +1573,15 @@ mod tests {
         )?))
     }
 
+    /// A `ProjectionExec` (which requests `At`) over a source with `num_rows` rows.
+    fn projection_over_source(num_rows: usize) -> Result<Arc<dyn ExecutionPlan>> {
+        let schema = make_schema();
+        Ok(Arc::new(ProjectionExec::try_new(
+            vec![(col("a", &schema)?, "a".to_string())],
+            make_source(num_rows),
+        )?))
+    }
+
     #[test]
     fn test_provider_override_skips_operator_child_walk() -> Result<()> {
         // A matching provider requests Skip, so the erroring child is never
@@ -1591,11 +1600,7 @@ mod tests {
         // A non-matching provider precedes the handling one. The gate must skip it
         // before it is consulted, otherwise it leaks the child row count (999)
         // instead of the later provider's 7.
-        let schema = make_schema();
-        let parent: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
-            vec![(col("a", &schema)?, "a".to_string())],
-            make_source(999),
-        )?);
+        let parent = projection_over_source(999)?;
         let registry = StatisticsRegistry::with_providers(vec![
             Arc::new(NonMatchingLeakProvider),
             Arc::new(SkipComputeProvider),
@@ -1620,6 +1625,61 @@ mod tests {
 
         let stats = compute(&registry, parent.as_ref())?;
         assert!(matches!(stats.base.num_rows, Precision::Exact(7)));
+        Ok(())
+    }
+
+    /// Returns the wrong number of child stat requests.
+    #[derive(Debug)]
+    struct MalformedRequestProvider;
+
+    impl StatisticsProvider for MalformedRequestProvider {
+        fn child_stats_requests(
+            &self,
+            _plan: &dyn ExecutionPlan,
+            _partition: Option<usize>,
+        ) -> Vec<ChildStats> {
+            Vec::new()
+        }
+    }
+
+    /// Requests a non-existent partition of its child.
+    #[derive(Debug)]
+    struct InvalidPartitionProvider;
+
+    impl StatisticsProvider for InvalidPartitionProvider {
+        fn child_stats_requests(
+            &self,
+            plan: &dyn ExecutionPlan,
+            _partition: Option<usize>,
+        ) -> Vec<ChildStats> {
+            plan.children()
+                .iter()
+                .map(|_| ChildStats::At(Some(usize::MAX)))
+                .collect()
+        }
+    }
+
+    #[test]
+    fn test_malformed_child_stats_requests_fails_fast() -> Result<()> {
+        // A wrong-length request set is a provider bug: it must error, not be
+        // skipped in favor of the later provider.
+        let parent = projection_over_source(10)?;
+        let registry = StatisticsRegistry::with_providers(vec![
+            Arc::new(MalformedRequestProvider),
+            Arc::new(SkipComputeProvider),
+        ]);
+        assert!(compute(&registry, parent.as_ref()).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_invalid_partition_request_fails_fast() -> Result<()> {
+        let parent = projection_over_source(10)?;
+        let registry = StatisticsRegistry::with_providers(vec![
+            Arc::new(InvalidPartitionProvider),
+            Arc::new(SkipComputeProvider),
+        ]);
+        assert!(compute(&registry, parent.as_ref()).is_err());
         Ok(())
     }
 
