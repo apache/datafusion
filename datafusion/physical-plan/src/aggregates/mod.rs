@@ -696,7 +696,7 @@ impl From<StreamType> for SendableRecordBatchStream {
             StreamType::PartialHash(stream) => Box::pin(stream),
             StreamType::PartialReduceHash(stream) => Box::pin(stream),
             StreamType::FinalHash(stream) => Box::pin(stream),
-            StreamType::SingleHash(stream) => Box::pin(stream),
+            StreamType::SingleHash(stream) => stream.into_stream(),
             StreamType::OrderedPartialAggregate(stream) => stream.into_stream(),
             StreamType::OrderedFinalAggregate(stream) => Box::pin(stream),
             StreamType::GroupedHash(stream) => Box::pin(stream),
@@ -4085,7 +4085,17 @@ mod tests {
         assert!(matches!(stream, StreamType::SingleHash(_)));
         let stream: SendableRecordBatchStream = stream.into();
         let output = collect(stream).await?;
+        assert_eq!(output.len(), 2);
         assert_eq!(output.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
+
+        let metrics = single.metrics().expect("aggregate metrics should exist");
+        assert_eq!(metrics.output_rows(), Some(3));
+        assert_eq!(
+            metrics
+                .sum(|metric| matches!(metric.value(), MetricValue::OutputBatches(_)))
+                .map(|value| value.as_usize()),
+            Some(2)
+        );
         assert_snapshot!(batches_to_sort_string(&output), @r"
 +---+--------+
 | a | SUM(b) |
