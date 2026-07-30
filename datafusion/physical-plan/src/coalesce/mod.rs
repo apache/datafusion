@@ -138,6 +138,11 @@ impl LimitedBatchCoalescer {
         self.finished
     }
 
+    /// Return true if a completed batch is ready to be taken
+    pub fn has_completed_batch(&self) -> bool {
+        self.inner.has_completed_batch()
+    }
+
     /// Return the next completed batch, if any
     pub fn next_completed_batch(&mut self) -> Option<RecordBatch> {
         self.inner.next_completed_batch()
