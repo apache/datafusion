@@ -537,7 +537,7 @@ impl OrderedFinalAggregateStream {
         }
 
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-        let timer = elapsed_compute.timer();
+        let _timer = elapsed_compute.timer();
         let result = spill_context.spill_table(table);
 
         // Spilling shrinks the aggregate table and releases its accumulated
@@ -545,8 +545,6 @@ impl OrderedFinalAggregateStream {
         if let Err(e) = self.reservation.try_resize(table.memory_size()) {
             return Err(e.context("Decreasing allocation after spilling should succeed"));
         }
-
-        timer.done();
 
         result?;
 
