@@ -472,6 +472,52 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         probe_size: "2.3M_long_keys_count",
         isolate_partitioned_join: true,
     },
+    // Q24: single-hot-bucket long string-key inner join.
+    // Build rows all share one long string key, so each matching probe row fans
+    // out to the whole build side. The output is counted to focus on the hash
+    // match/equality path without buffering the joined rows.
+    HashJoinQuery {
+        sql: r###"SELECT count(*)
+        FROM (
+          SELECT 'single_hot_bucket_string_join_key' as k
+          FROM supplier
+          WHERE s_suppkey <= 3000
+        ) s
+        JOIN (
+          SELECT 'single_hot_bucket_string_join_key' as k
+          FROM lineitem
+          WHERE l_orderkey % 3000 = 0
+        ) l ON s.k = l.k"###,
+        density: 1.0,
+        prob_hit: 1.0,
+        build_size: "3K_(single_hot_bucket)",
+        probe_size: "20K_long_keys_count",
+        isolate_partitioned_join: true,
+    },
+    // Q25: skewed high-fanout multi-column string-key inner join.
+    // This tracks the same candidate-pair filtering path for composite join
+    // keys, where the first key is skewed and the second long string key must
+    // also be checked before emitting each match.
+    HashJoinQuery {
+        sql: r###"SELECT count(*)
+        FROM (
+          SELECT CAST((s_suppkey % 256) + 1 AS INT) as k1,
+                 'multi_column_high_fanout_key' as k2
+          FROM supplier
+          WHERE s_suppkey <= 20000
+        ) s
+        JOIN (
+          SELECT CAST(1 AS INT) as k1,
+                 'multi_column_high_fanout_key' as k2
+          FROM lineitem
+          WHERE l_orderkey % 250 = 0
+        ) l ON s.k1 = l.k1 AND s.k2 = l.k2"###,
+        density: 1.0,
+        prob_hit: 1.0,
+        build_size: "20K_(fanout~78_multi_key)",
+        probe_size: "240K_multi_key_count",
+        isolate_partitioned_join: true,
+    },
 ];
 
 impl RunOpt {
