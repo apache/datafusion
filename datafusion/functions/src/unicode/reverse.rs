@@ -24,8 +24,8 @@ use crate::utils::make_scalar_function;
 use DataType::{LargeUtf8, Utf8, Utf8View};
 use arrow::array::{Array, ArrayRef, AsArray, StringArrayType};
 use arrow::datatypes::DataType;
-use datafusion_common::types::{NativeType, logical_binary, logical_string};
-use datafusion_common::{Result, exec_err};
+use datafusion_common::Result;
+use datafusion_common::types::{NativeType, logical_string};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
@@ -64,7 +64,7 @@ impl ReverseFunc {
                 vec![
                     Coercion::new_implicit(
                         TypeSignatureClass::Native(logical_string()),
-                        vec![TypeSignatureClass::Native(logical_binary())],
+                        vec![TypeSignatureClass::Any],
                         NativeType::String,
                     )
                     .with_encoding_preservation(EncodingPreservation::dictionary()),
@@ -89,15 +89,7 @@ impl ScalarUDFImpl for ReverseFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let args = &args.args;
-        match args[0].data_type() {
-            Utf8 | Utf8View | LargeUtf8 | DataType::Dictionary(_, _) => {
-                make_scalar_function(reverse, vec![])(args)
-            }
-            other => {
-                exec_err!("Unsupported data type {other:?} for function reverse")
-            }
-        }
+        make_scalar_function(reverse, vec![])(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {

@@ -24,7 +24,7 @@ use arrow::array::{
 };
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 use datafusion_common::Result;
-use datafusion_common::types::{NativeType, logical_binary, logical_string};
+use datafusion_common::types::{NativeType, logical_string};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
@@ -67,7 +67,7 @@ impl CharacterLengthFunc {
                 vec![
                     Coercion::new_implicit(
                         TypeSignatureClass::Native(logical_string()),
-                        vec![TypeSignatureClass::Native(logical_binary())],
+                        vec![TypeSignatureClass::Any],
                         NativeType::String,
                     )
                     .with_encoding_preservation(EncodingPreservation::dictionary()),
