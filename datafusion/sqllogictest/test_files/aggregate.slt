@@ -2268,12 +2268,7 @@ statement ok
 DROP TABLE approx_distinct_duration_test;
 
 
-# GROUP BY over Float16 group keys. In a multi-column GROUP BY a Float16 key
-# routes through the GroupValuesColumn column-wise fast path (added here); a
-# single-column GROUP BY uses the pre-existing single-column primitive path.
-# Verify both, including that -0.0 / +0.0 fold into one group via the float
-# canonicalization shared with Float32 / Float64. The count-of-groups form
-# avoids depending on Float16's textual display.
+# GROUP BY with Float16 group keys (single- and multi-column).
 statement ok
 CREATE TABLE float16_group_test AS VALUES
   (arrow_cast(1.5, 'Float16'), 1),
@@ -2282,16 +2277,13 @@ CREATE TABLE float16_group_test AS VALUES
   (arrow_cast(-0.0, 'Float16'), 3),
   (arrow_cast(0.0, 'Float16'), 3);
 
-# Single-column GROUP BY (single-column primitive path): five rows collapse to
-# three groups: 1.5, 2.5, and the merged -0.0 / +0.0.
+# Single Float16 group key ({1.5, 2.5, ±0.0}) via the GroupValuesPrimitive path.
 query I
 SELECT count(*) FROM (SELECT column1 FROM float16_group_test GROUP BY column1);
 ----
 3
 
-# Multi-column GROUP BY: a Float16 key alongside a primitive key, exercising the
-# GroupValuesColumn path this PR adds. column2 is aligned 1:1 with the Float16
-# value (the -0.0 / +0.0 rows share id 3), so the result is still three groups.
+# Multi-column GROUP BY: a primitive key and a Float16 key on the same path.
 query I
 SELECT count(*) FROM (SELECT column1, column2 FROM float16_group_test GROUP BY column1, column2);
 ----

@@ -456,8 +456,8 @@ fn make_f16_schema() -> SchemaRef {
 ///
 /// `f16` has only ~63.5k finite values, so `num_distinct_groups` must stay well
 /// under that (see `bench_float16`). Distinct keys are the low finite `f16` bit
-/// patterns (NaN/inf skipped); the `Int32` column is keyed identically so the
-/// combined cardinality equals `num_distinct_groups`.
+/// patterns, skipping NaN and inf. The `Int32` column is keyed identically so
+/// the combined cardinality equals `num_distinct_groups`.
 fn generate_f16_batches(
     num_distinct_groups: usize,
     num_rows: usize,

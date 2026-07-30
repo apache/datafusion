@@ -1264,7 +1264,7 @@ mod tests {
     use std::{collections::HashMap, sync::Arc};
 
     use arrow::array::{
-        Array, ArrayRef, Float16Array, Int64Array, RecordBatch, StringArray,
+        Array, ArrayRef, Float16Array, Int32Array, Int64Array, RecordBatch, StringArray,
         StringViewArray,
     };
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -1290,7 +1290,7 @@ mod tests {
     ///
     /// This test fuzzes a representative cross-section of types and asserts
     /// both directions of the biconditional. When a new specialization is
-    /// added (`FixedSizeList`, `Struct`, `Decimal256`, ...) it should be added
+    /// added (`Float16`, `FixedSizeList`, `Struct`, ...) it should be added
     /// to the supported_cases vector; when a type is intentionally rejected
     /// it should be added to unsupported_cases.
     #[test]
@@ -1359,57 +1359,69 @@ mod tests {
         }
     }
 
-    /// End-to-end coverage for `Float16` group keys. Beyond routing through the
-    /// column-wise `GroupValuesColumn` fast path, this exercises the float
-    /// canonicalization the builder relies on (shared with Float32 / Float64 via
-    /// `HashValue`): `-0.0` and `+0.0` collapse into one group stored as `+0.0`,
-    /// and equal `NaN`s collapse into a single group.
+    // `(Float16, Int32)` keys: ±0.0 collapse (stored as +0.0), NaNs collapse, and
+    // the Int32 key keeps `(0.0, 4)` distinct from `(±0.0, 3)`.
     #[test]
     fn test_group_values_column_float16() {
         use half::f16;
 
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("f", DataType::Float16, true)]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("f", DataType::Float16, true),
+            Field::new("i", DataType::Int32, true),
+        ]));
         assert!(supported_schema(&schema));
         let mut group_values =
             GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
 
-        // Rows: 1.0, -0.0, +0.0, NaN, 1.0, NaN, null, null.
-        // First-seen groups: 1.0 -> 0, -0.0/+0.0 -> 1, NaN -> 2, null -> 3.
-        let input: ArrayRef = Arc::new(Float16Array::from(vec![
+        let f: ArrayRef = Arc::new(Float16Array::from(vec![
             Some(f16::from_f32(1.0)),
             Some(f16::from_f32(-0.0)),
             Some(f16::from_f32(0.0)),
+            Some(f16::from_f32(0.0)),
             Some(f16::NAN),
-            Some(f16::from_f32(1.0)),
             Some(f16::NAN),
             None,
             None,
         ]));
+        let i: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(3),
+            Some(3),
+            Some(3),
+            Some(4),
+            Some(3),
+            Some(3),
+            Some(3),
+            Some(3),
+        ]));
         let mut groups = Vec::new();
-        group_values.intern(&[input], &mut groups).unwrap();
-        assert_eq!(groups, vec![0, 1, 1, 2, 0, 2, 3, 3]);
+        group_values.intern(&[f, i], &mut groups).unwrap();
+        assert_eq!(groups, vec![0, 1, 1, 2, 3, 3, 4, 4]);
 
         let emitted = group_values.emit(EmitTo::All).unwrap();
-        assert_eq!(emitted.len(), 1);
+        assert_eq!(emitted.len(), 2);
         assert_eq!(emitted[0].data_type(), &DataType::Float16);
-        let actual = emitted[0]
+        let keys = emitted[0]
             .as_any()
             .downcast_ref::<Float16Array>()
             .expect("emitted column should be a Float16Array");
-        assert_eq!(actual.len(), 4);
-        assert_eq!(actual.value(0), f16::from_f32(1.0));
+        assert_eq!(keys.len(), 5);
+        assert_eq!(keys.value(0), f16::from_f32(1.0));
         // The ±0.0 group is stored canonically as +0.0 (not -0.0).
-        assert_eq!(actual.value(1).to_bits(), f16::from_f32(0.0).to_bits());
-        assert!(actual.value(2).is_nan());
-        assert!(actual.is_null(3));
+        assert_eq!(keys.value(1).to_bits(), f16::from_f32(0.0).to_bits());
+        assert_eq!(keys.value(2).to_bits(), f16::from_f32(0.0).to_bits());
+        assert!(keys.value(3).is_nan());
+        assert!(keys.is_null(4));
+        let ids = emitted[1]
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("emitted column should be an Int32Array");
+        assert_eq!(ids.values().to_vec(), vec![3, 3, 4, 3, 3]);
     }
 
     #[test]
     fn supported_schema_rejects_mix_of_supported_and_unsupported() {
-        // One permanently-unsupported column flips the whole schema to the
-        // GroupValuesRows fallback. Use an invalid Arrow unit combo
-        // (Time64(Second)) so this stays stable as new primitive builders land.
+        // One unsupported column flips the whole schema to the GroupValuesRows
+        // fallback. Time64(Second) stays invalid as new primitive builders land.
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Utf8, true),
@@ -1527,7 +1539,7 @@ mod tests {
         // `emit(EmitTo::First(4))` calls can `take_n` without panicking.
         // The hashmap entries below reference group indices 0..=11, so the
         // single column builder needs at least 12 rows to back them.
-        let seed: ArrayRef = Arc::new(arrow::array::Int32Array::from(vec![0_i32; 12]));
+        let seed: ArrayRef = Arc::new(Int32Array::from(vec![0_i32; 12]));
         for row in 0..12 {
             group_values.group_values[0]
                 .append_val(&seed, row)
