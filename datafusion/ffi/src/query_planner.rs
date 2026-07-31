@@ -21,7 +21,7 @@
 //! `datafusion-python`) owns the [`Session`] and codec registry. Library B owns
 //! a custom table provider and its extension nodes. Library C (for example,
 //! Ballista or `datafusion-distributed`) owns the query planner. A serializes a
-//! logical plan and invokes C, while [`FFI_SessionRef`] lets C call session
+//! logical plan and invokes C, while `FFI_SessionRef` lets C call session
 //! services in A. C deserializes the logical plan, creates a physical plan,
 //! serializes that result, and returns it for A to deserialize. The logical and
 //! physical extension codecs preserve nodes supplied by B.
@@ -264,7 +264,7 @@ impl FFI_QueryPlanner {
     /// Creates a physical plan through this planner's FFI interface.
     ///
     /// This serializes `logical_plan`, exports `session` as an
-    /// [`FFI_SessionRef`], invokes the planner's owning library, and
+    /// `FFI_SessionRef`, invokes the planner's owning library, and
     /// deserializes its physical-plan response. `session_runtime` is attached
     /// to the exported session for callbacks that need its Tokio runtime.
     pub async fn create_physical_plan_with_session_runtime(
