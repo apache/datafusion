@@ -1294,7 +1294,7 @@ mod tests {
     use std::{collections::HashMap, sync::Arc};
 
     use arrow::array::{
-        Array, ArrayRef, Int32Array, Int64Array, IntervalMonthDayNanoArray, RecordBatch,
+        Array, ArrayRef, Int32Array, Int64Array, PrimitiveArray, RecordBatch,
         StringArray, StringViewArray,
     };
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -1641,60 +1641,69 @@ mod tests {
         }
     }
 
-    // `(Interval, Int32)` keys: null keys dedup, the Int32 key splits equal
-    // intervals, and emit gives back Interval rather than the raw native.
+    // `(Interval, Int32)` keys for each of the three interval units: null keys
+    // dedup, the Int32 key splits equal intervals, and emit gives back Interval.
     #[test]
     fn test_group_values_column_interval() {
-        use arrow::datatypes::{IntervalMonthDayNano, IntervalUnit};
+        use arrow::datatypes::{
+            ArrowPrimitiveType, IntervalDayTime, IntervalDayTimeType,
+            IntervalMonthDayNano, IntervalMonthDayNanoType, IntervalUnit,
+            IntervalYearMonthType,
+        };
 
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("i", DataType::Interval(IntervalUnit::MonthDayNano), true),
-            Field::new("n", DataType::Int32, true),
-        ]));
-        assert!(supported_schema(&schema));
-        let mut group_values =
-            GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+        fn check<T: ArrowPrimitiveType>(unit: IntervalUnit, value: T::Native) {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("i", DataType::Interval(unit), true),
+                Field::new("n", DataType::Int32, true),
+            ]));
+            assert!(supported_schema(&schema), "{unit:?} schema not supported");
+            let mut group_values =
+                GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
 
-        let one_month = IntervalMonthDayNano::new(1, 0, 0);
-        let i: ArrayRef = Arc::new(IntervalMonthDayNanoArray::from(vec![
-            Some(one_month),
-            None,
-            Some(one_month),
-            None,
-            Some(one_month),
-        ]));
-        let n: ArrayRef = Arc::new(Int32Array::from(vec![
-            Some(3),
-            Some(3),
-            Some(3),
-            Some(3),
-            Some(4),
-        ]));
-        let mut groups = Vec::new();
-        group_values.intern(&[i, n], &mut groups).unwrap();
-        assert_eq!(groups, vec![0, 1, 0, 1, 2]);
+            let i: ArrayRef = Arc::new(PrimitiveArray::<T>::from_iter([
+                Some(value),
+                None,
+                Some(value),
+                None,
+                Some(value),
+            ]));
+            let n: ArrayRef = Arc::new(Int32Array::from(vec![
+                Some(3),
+                Some(3),
+                Some(3),
+                Some(3),
+                Some(4),
+            ]));
+            let mut groups = Vec::new();
+            group_values.intern(&[i, n], &mut groups).unwrap();
+            assert_eq!(groups, vec![0, 1, 0, 1, 2], "{unit:?}");
 
-        let emitted = group_values.emit(EmitTo::All).unwrap();
-        assert_eq!(emitted.len(), 2);
-        // The emitted key keeps its Interval type, not the bare native.
-        assert_eq!(
-            emitted[0].data_type(),
-            &DataType::Interval(IntervalUnit::MonthDayNano)
+            let emitted = group_values.emit(EmitTo::All).unwrap();
+            assert_eq!(emitted.len(), 2);
+            // The emitted key keeps its Interval type, not the bare native.
+            assert_eq!(emitted[0].data_type(), &DataType::Interval(unit));
+            let actual = emitted[0]
+                .as_any()
+                .downcast_ref::<PrimitiveArray<T>>()
+                .unwrap_or_else(|| panic!("emitted column should be a {unit:?} array"));
+            // Three groups in first-seen order: value, null, value (n=4).
+            assert_eq!(actual.len(), 3);
+            assert_eq!(actual.value(0), value);
+            assert!(actual.is_null(1));
+            assert_eq!(actual.value(2), value);
+            let ids = emitted[1]
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("emitted column should be an Int32Array");
+            assert_eq!(ids.values().to_vec(), vec![3, 3, 4], "{unit:?}");
+        }
+
+        check::<IntervalYearMonthType>(IntervalUnit::YearMonth, 13);
+        check::<IntervalDayTimeType>(IntervalUnit::DayTime, IntervalDayTime::new(1, 500));
+        check::<IntervalMonthDayNanoType>(
+            IntervalUnit::MonthDayNano,
+            IntervalMonthDayNano::new(1, 0, 0),
         );
-        let actual = emitted[0]
-            .as_any()
-            .downcast_ref::<IntervalMonthDayNanoArray>()
-            .expect("emitted column should be an IntervalMonthDayNanoArray");
-        // Three groups in first-seen order: 1 month, null, 1 month (n=4).
-        assert_eq!(actual.len(), 3);
-        assert_eq!(actual.value(0), one_month);
-        assert!(actual.is_null(1));
-        assert_eq!(actual.value(2), one_month);
-        let ids = emitted[1]
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("emitted column should be an Int32Array");
-        assert_eq!(ids.values().to_vec(), vec![3, 3, 4]);
     }
 
     #[test]
