@@ -159,7 +159,7 @@ use crate::aggregates::{
 use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation, PushedDownPredicate,
+    FilterPushdownPropagation,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::statistics::{ChildStats, StatisticsArgs};
@@ -168,7 +168,6 @@ use crate::{
     InputOrderMode, SendableRecordBatchStream, Statistics, check_if_same_properties,
 };
 use datafusion_common::config::ConfigOptions;
-use datafusion_physical_expr::utils::collect_columns;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 
@@ -698,7 +697,7 @@ impl From<StreamType> for SendableRecordBatchStream {
             StreamType::PartialReduceHash(stream) => Box::pin(stream),
             StreamType::FinalHash(stream) => Box::pin(stream),
             StreamType::SingleHash(stream) => Box::pin(stream),
-            StreamType::OrderedPartialAggregate(stream) => Box::pin(stream),
+            StreamType::OrderedPartialAggregate(stream) => stream.into_stream(),
             StreamType::OrderedFinalAggregate(stream) => Box::pin(stream),
             StreamType::GroupedHash(stream) => Box::pin(stream),
             StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
@@ -2041,70 +2040,35 @@ impl ExecutionPlan for AggregateExec {
         // This optimization is NOT safe for filters on aggregated columns (like filtering on
         // the result of SUM or COUNT), as those require computing all groups first.
 
-        // Build grouping columns using output indices because parent filters reference the
-        // AggregateExec's output schema where grouping columns in the output schema. The
-        // grouping expressions reference input columns which may not match the output schema.
-        //
-        // It is safe to assume that the output_schema contains group by columns in the same order
-        // as the group by expression. See [`create_schema`] and [`AggregateExec`].
-        let output_schema = self.schema();
-        let grouping_columns: HashSet<_> = (0..self.group_by.expr().len())
-            .map(|i| Column::new(output_schema.field(i).name(), i))
-            .collect();
-
-        // Analyze each filter separately to determine if it can be pushed down
-        let mut safe_filters = Vec::new();
-        let mut unsafe_filters = Vec::new();
-
-        for filter in parent_filters {
-            let filter_columns: HashSet<_> =
-                collect_columns(&filter).into_iter().collect();
-
-            // Check if this filter references non-grouping columns
-            let references_non_grouping = !grouping_columns.is_empty()
-                && !filter_columns.is_subset(&grouping_columns);
-
-            if references_non_grouping {
-                unsafe_filters.push(filter);
-                continue;
-            }
-
-            // For GROUPING SETS, verify this filter's columns appear in all grouping sets
-            if self.group_by.groups().len() > 1 {
-                let filter_column_indices: Vec<usize> = filter_columns
-                    .iter()
-                    .filter_map(|filter_col| {
-                        grouping_columns.get(filter_col).map(|col| col.index())
-                    })
-                    .collect();
-
-                // Check if any of this filter's columns are missing from any grouping set
-                let has_missing_column = self.group_by.groups().iter().any(|null_mask| {
-                    filter_column_indices
-                        .iter()
-                        .any(|&idx| null_mask.get(idx) == Some(&true))
-                });
-
-                if has_missing_column {
-                    unsafe_filters.push(filter);
-                    continue;
-                }
-            }
-
-            // This filter is safe to push down
-            safe_filters.push(filter);
+        // Grouping columns are output before aggregate columns, in the same order
+        // as the grouping expressions. A grouping-set null mask marks grouping
+        // columns that are not available in that set.
+        let mut allowed_indices: HashSet<usize> =
+            (0..self.group_by.expr().len()).collect();
+        for null_mask in self.group_by.groups() {
+            allowed_indices.retain(|idx| null_mask.get(*idx) != Some(&true));
         }
 
-        // Build child filter description with both safe and unsafe filters
         let child = self.children()[0];
-        let mut child_desc = ChildFilterDescription::from_child(&safe_filters, child)?;
-
-        // Add unsafe filters as unsupported
-        child_desc.parent_filters.extend(
-            unsafe_filters
-                .into_iter()
-                .map(PushedDownPredicate::unsupported),
-        );
+        // Global aggregates and grouping sets containing an empty grouping set
+        // emit a row even when their input is empty. Parent filters therefore
+        // cannot be pushed below them, including filters without column
+        // references.
+        let may_emit_on_empty_input = self.group_by.is_true_no_grouping()
+            || self
+                .group_by
+                .groups()
+                .iter()
+                .any(|null_mask| null_mask.iter().all(|is_null| *is_null));
+        let mut child_desc = if may_emit_on_empty_input {
+            ChildFilterDescription::all_unsupported(&parent_filters)
+        } else {
+            ChildFilterDescription::from_child_with_allowed_indices(
+                &parent_filters,
+                allowed_indices,
+                child,
+            )?
+        };
 
         // Include self dynamic filter when it's possible
         if phase == FilterPushdownPhase::Post
@@ -2300,17 +2264,11 @@ fn encode_aggregate_expr(
 
     let expressions = aggr_expr.expressions();
     let expr = ctx.encode_expressions(expressions.iter())?;
-    let ordering_req = aggr_expr
-        .order_bys()
-        .iter()
-        .map(|sort_expr| {
-            Ok(protobuf::PhysicalSortExprNode {
-                expr: Some(Box::new(ctx.encode_expr(&sort_expr.expr)?)),
-                asc: !sort_expr.options.descending,
-                nulls_first: sort_expr.options.nulls_first,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let ordering_req =
+        datafusion_physical_expr_common::sort_expr::sort_exprs_try_to_proto(
+            aggr_expr.order_bys(),
+            &ctx.expr_ctx(),
+        )?;
     let name = aggr_expr.fun().name().to_string();
     // The context already applies `(!buf.is_empty()).then_some(buf)`.
     let fun_definition = ctx.encode_udaf(aggr_expr.fun())?;
@@ -2350,7 +2308,6 @@ impl AggregateExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        use datafusion_physical_expr::PhysicalSortExpr;
         use datafusion_physical_expr::aggregate::AggregateExprBuilder;
         use datafusion_proto_models::protobuf;
         use protobuf::physical_aggregate_expr_node::AggregateFunction;
@@ -2457,24 +2414,11 @@ impl AggregateExec {
                     .iter()
                     .map(|expr| ctx.decode_expr(expr, input_schema.as_ref()))
                     .collect::<Result<Vec<_>>>()?;
-                let order_by = aggregate
-                    .ordering_req
-                    .iter()
-                    .map(|sort_expr| {
-                        let expr = sort_expr.expr.as_deref().ok_or_else(|| {
-                            datafusion_common::internal_datafusion_err!(
-                                "AggregateExec ordering expression is missing its inner expr"
-                            )
-                        })?;
-                        Ok(PhysicalSortExpr {
-                            expr: ctx.decode_expr(expr, input_schema.as_ref())?,
-                            options: arrow::compute::SortOptions {
-                                descending: !sort_expr.asc,
-                                nulls_first: sort_expr.nulls_first,
-                            },
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+                let order_by =
+                    datafusion_physical_expr_common::sort_expr::sort_exprs_try_from_proto(
+                        &aggregate.ordering_req,
+                        &ctx.expr_ctx(input_schema.as_ref()),
+                    )?;
                 let Some(AggregateFunction::UserDefinedAggrFunction(udaf_name)) =
                     aggregate.aggregate_function.as_ref()
                 else {
@@ -2484,10 +2428,8 @@ impl AggregateExec {
                 };
                 // The context owns the payload-to-codec and
                 // registry-to-codec fallback order.
-                let udaf = ctx.decode_udaf(
-                    udaf_name,
-                    aggregate.fun_definition.as_deref(),
-                )?;
+                let udaf =
+                    ctx.decode_udaf(udaf_name, aggregate.fun_definition.as_deref())?;
                 let (human_display, human_display_alias) =
                     split_human_display_alias(&aggregate.human_display, name);
                 let builder = AggregateExprBuilder::new(udaf, args)
@@ -4465,9 +4407,8 @@ mod tests {
                 .with_session_config(session_config),
         );
 
-        let mut stream: SendableRecordBatchStream = Box::pin(
-            OrderedPartialAggregateStream::new(&aggregate, &task_ctx, 0)?,
-        );
+        let mut stream: SendableRecordBatchStream =
+            OrderedPartialAggregateStream::new(&aggregate, &task_ctx, 0)?.into_stream();
 
         while let Some(result) = stream.next().await {
             if let Err(e) = result {
