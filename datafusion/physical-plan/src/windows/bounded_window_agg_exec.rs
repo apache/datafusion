@@ -1054,13 +1054,13 @@ impl BoundedWindowAggStream {
         baseline_metrics: BaselineMetrics,
         search_mode: Box<dyn PartitionSearcher>,
     ) -> Result<Self> {
-        let state = window_expr.iter().map(|_| IndexMap::new()).collect();
+        let state = window_expr.iter().map(|_| IndexMap::default()).collect();
         let empty_batch = RecordBatch::new_empty(Arc::clone(&schema));
         Ok(Self {
             schema,
             input,
             input_buffer: empty_batch,
-            partition_buffers: IndexMap::new(),
+            partition_buffers: IndexMap::default(),
             window_agg_states: state,
             finished: false,
             window_expr,

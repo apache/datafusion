@@ -333,6 +333,7 @@ impl RunOpt {
         let rt = self.common.build_runtime()?;
         let ctx = SessionContext::new_with_config_rt(config, rt);
         let mut benchmark_run = BenchmarkRun::new();
+        benchmark_run.set_memory_pool(&ctx.runtime_env().memory_pool);
 
         for query_id in query_range {
             let query = &DICTIONARY_QUERIES[query_id - 1];

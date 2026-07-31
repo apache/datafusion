@@ -424,51 +424,30 @@ fn serialize_range_split_point(
     })
 }
 
+/// Thin shim over `TryFrom<&PartitionedFile>`, which owns the wire logic.
 impl TryFromProto<&PartitionedFile> for protobuf::PartitionedFile {
     type Error = DataFusionError;
 
     fn try_from_proto(pf: &PartitionedFile) -> Result<Self> {
-        let last_modified = pf.object_meta.last_modified;
-        let last_modified_ns = last_modified.timestamp_nanos_opt().ok_or_else(|| {
-            DataFusionError::Plan(format!(
-                "Invalid timestamp on PartitionedFile::ObjectMeta: {last_modified}"
-            ))
-        })? as u64;
-        Ok(protobuf::PartitionedFile {
-            arrow_schema: pf
-                .arrow_schema
-                .as_ref()
-                .map(|s| s.as_ref().try_into())
-                .transpose()?,
-            path: pf.object_meta.location.as_ref().to_owned(),
-            size: pf.object_meta.size,
-            last_modified_ns,
-            partition_values: pf
-                .partition_values
-                .iter()
-                .map(|v| v.try_into())
-                .collect::<Result<Vec<_>, _>>()?,
-            range: pf
-                .range
-                .as_ref()
-                .map(protobuf::FileRange::try_from_proto)
-                .transpose()?,
-            statistics: pf.statistics.as_ref().map(|s| s.as_ref().into()),
-        })
+        pf.try_into()
     }
 }
 
+/// Thin shim over `TryFrom<&FileRange>`, which owns the wire logic.
 impl TryFromProto<&FileRange> for protobuf::FileRange {
     type Error = DataFusionError;
 
     fn try_from_proto(value: &FileRange) -> Result<Self> {
-        Ok(protobuf::FileRange {
-            start: value.start,
-            end: value.end,
-        })
+        value.try_into()
     }
 }
 
+/// Thin shim over `TryFrom<&PartitionedFile>`, which owns the wire logic.
+///
+/// The slice form cannot be a `TryFrom` impl: the orphan rule only accepts a
+/// type this crate owns, and `&[PartitionedFile]` is not one (`&FileGroup` is,
+/// hence the impl next to the type). Callers inside DataFusion go through
+/// `FileGroup`; this stays for downstream users of the published signature.
 impl TryFromProto<&[PartitionedFile]> for protobuf::FileGroup {
     type Error = DataFusionError;
 
@@ -476,8 +455,8 @@ impl TryFromProto<&[PartitionedFile]> for protobuf::FileGroup {
         Ok(protobuf::FileGroup {
             files: gr
                 .iter()
-                .map(protobuf::PartitionedFile::try_from_proto)
-                .collect::<Result<Vec<_>, _>>()?,
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>>>()?,
         })
     }
 }
@@ -490,7 +469,7 @@ pub fn serialize_file_scan_config(
     let file_groups = conf
         .file_groups
         .iter()
-        .map(|p| protobuf::FileGroup::try_from_proto(p.files()))
+        .map(TryInto::try_into)
         .collect::<Result<Vec<_>, _>>()?;
 
     let mut output_orderings = vec![];

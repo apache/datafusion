@@ -483,6 +483,14 @@ Your benchmark should create and use an instance of `BenchmarkRun` defined in `b
 - Call its `start_new_case` method with a string that will appear in the "Query" column of the
   compare output.
 - Use `write_iter` to record elapsed times for the behavior you're benchmarking.
+- Call `set_memory_pool` with the `RuntimeEnv`'s memory pool (`ctx.runtime_env().memory_pool`),
+  and again for each new runtime if your benchmark builds one per query. Each case then reports a
+  `pool_peak_bytes` field: the peak `MemoryPool` reservation reached while running it, which is the
+  largest value across that case's iterations. The field is omitted when the benchmark runs without
+  `--memory-limit`, since no pool is installed to record. Comparing it against the peak RSS printed
+  by `print_memory_stats` shows how much of the run's memory the pool actually accounted for; the
+  pool only tracks the "large" allocations that scale with input size, so the two are expected to
+  differ.
 - When all cases are done, call the `BenchmarkRun`'s `maybe_write_json` method, giving it the value
   of the `--output` structopt field on `RunOpt`.
 

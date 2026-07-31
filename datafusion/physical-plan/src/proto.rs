@@ -33,7 +33,8 @@
 //! * [`ExecutionPlanEncode`] / [`ExecutionPlanDecode`] — internal dispatch
 //!   traits, *defined* here but *implemented* in `datafusion-proto`, that the
 //!   context types delegate to. This is the dependency inversion that keeps the
-//!   proto types flowing in one direction only.
+//!   proto types flowing in one direction only. They are `#[doc(hidden)]`: not
+//!   public API, `pub` only because their implementors live in another crate.
 //!
 //! `datafusion-physical-plan` depends on the pure prost types in
 //! `datafusion-proto-models` (feature `proto`), never on `datafusion-proto`.
@@ -62,6 +63,7 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use datafusion_common::{Result, internal_datafusion_err};
 use datafusion_execution::TaskContext;
+use datafusion_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_proto_models::protobuf::{PhysicalExprNode, PhysicalPlanNode};
@@ -72,6 +74,11 @@ use crate::ExecutionPlan;
 ///
 /// Implemented by `datafusion-proto`. Plan authors never name this trait; they
 /// call methods on [`ExecutionPlanEncodeCtx`] instead.
+///
+/// **Not public API.** `pub` only because the implementors live in another
+/// crate; `#[doc(hidden)]` records that, so encoding primitives can be added
+/// here as the serialization hooks grow without breaking downstream code.
+#[doc(hidden)]
 pub trait ExecutionPlanEncode {
     /// Serialize a child execution plan (recursing through the central
     /// serializer, so the child's own `try_to_proto` hook is honored).
@@ -97,10 +104,23 @@ pub trait ExecutionPlanEncode {
 ///
 /// Implemented by `datafusion-proto`. Plan authors never name this trait; they
 /// call methods on [`ExecutionPlanDecodeCtx`] instead.
+///
+/// **Not public API.** `pub` only because the implementors live in another
+/// crate; `#[doc(hidden)]` records that, so decoding primitives can be added
+/// here as the serialization hooks grow without breaking downstream code.
+#[doc(hidden)]
 pub trait ExecutionPlanDecode {
     /// Deserialize a child execution plan (recursing through the central
     /// deserializer, so the child's own `try_from_proto` is honored).
     fn decode_plan(&self, node: &PhysicalPlanNode) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Deserialize a child plan with `results` active for scalar subquery
+    /// expressions in that plan's subtree.
+    fn decode_plan_with_scalar_subquery_results(
+        &self,
+        node: &PhysicalPlanNode,
+        results: ScalarSubqueryResults,
+    ) -> Result<Arc<dyn ExecutionPlan>>;
 
     /// Deserialize a physical expression against `input_schema`.
     fn decode_expr(
@@ -213,6 +233,17 @@ impl<'a> ExecutionPlanDecodeCtx<'a> {
         node: &PhysicalPlanNode,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.decoder.decode_plan(node)
+    }
+
+    /// Deserialize a child plan with `results` active for scalar subquery
+    /// expressions in that plan's subtree.
+    pub fn decode_child_with_scalar_subquery_results(
+        &self,
+        node: &PhysicalPlanNode,
+        results: ScalarSubqueryResults,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.decoder
+            .decode_plan_with_scalar_subquery_results(node, results)
     }
 
     /// Deserialize a required child plan, producing a uniform "missing required
