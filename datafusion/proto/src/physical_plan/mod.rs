@@ -49,7 +49,7 @@ use datafusion_datasource_parquet::source::ParquetSource;
 #[cfg(feature = "parquet")]
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
-use datafusion_expr::physical_planning_context::{ScalarSubqueryResults, SubqueryIndex};
+use datafusion_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::{
     Empty, GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, TimestampValue,
@@ -85,7 +85,7 @@ use datafusion_physical_plan::proto::{
     ExecutionPlanEncodeCtx,
 };
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
+use datafusion_physical_plan::scalar_subquery::ScalarSubqueryExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::{InterleaveExec, UnionExec};
@@ -811,8 +811,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::Buffer(_) => {
                 BufferExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::ScalarSubquery(sq) => {
-                self.try_into_scalar_subquery_physical_plan(sq, ctx, proto_converter)
+            PhysicalPlanType::ScalarSubquery(_) => {
+                ScalarSubqueryExec::try_from_proto(self.node(), &decode_ctx)
             }
         }
     }
@@ -870,14 +870,6 @@ pub trait PhysicalPlanNodeExt: Sized {
                 protobuf::PhysicalPlanNode::try_from_lazy_memory_exec(exec)?
         {
             return Ok(node);
-        }
-
-        if let Some(exec) = plan.downcast_ref::<ScalarSubqueryExec>() {
-            return protobuf::PhysicalPlanNode::try_from_scalar_subquery_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
         }
 
         let mut buf: Vec<u8> = vec![];
@@ -1950,38 +1942,27 @@ pub trait PhysicalPlanNodeExt: Sized {
         BufferExec::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `ScalarSubqueryExec` deserializes itself via `ScalarSubqueryExec::try_from_proto`"
+    )]
     fn try_into_scalar_subquery_physical_plan(
         &self,
         sq: &protobuf::ScalarSubqueryExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // First, deserialize the main input plan. We set up the subquery results
-        // container first, so that ScalarSubqueryExpr nodes can reference it.
-        let subquery_results = ScalarSubqueryResults::new(sq.subqueries.len());
-        let input_ctx = ctx.with_scalar_subquery_results(subquery_results.clone());
-        let input = into_physical_plan(&sq.input, &input_ctx, proto_converter)?;
-
-        // Now deserialize the subquery children.
-        let subqueries: Vec<ScalarSubqueryLink> = sq
-            .subqueries
-            .iter()
-            .enumerate()
-            .map(|(index, sq_plan)| {
-                let plan =
-                    sq_plan.try_into_physical_plan_with_context(ctx, proto_converter)?;
-                Ok(ScalarSubqueryLink {
-                    plan,
-                    index: SubqueryIndex::new(index),
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(Arc::new(ScalarSubqueryExec::new(
-            input,
-            subqueries,
-            subquery_results,
-        )))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::ScalarSubquery(Box::new(
+                sq.clone(),
+            ))),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        ScalarSubqueryExec::try_from_proto(&node, &decode_ctx)
     }
 
     #[deprecated(
@@ -2866,35 +2847,22 @@ pub trait PhysicalPlanNodeExt: Sized {
             .ok_or_else(|| internal_datafusion_err!("BufferExec is not serializable"))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `ScalarSubqueryExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_scalar_subquery_exec(
         exec: &ScalarSubqueryExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            Arc::clone(exec.input()),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-        let subqueries = exec
-            .subqueries()
-            .iter()
-            .map(|sq| {
-                protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-                    Arc::clone(&sq.plan),
-                    codec,
-                    proto_converter,
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::ScalarSubquery(Box::new(
-                protobuf::ScalarSubqueryExecNode {
-                    input: Some(Box::new(input)),
-                    subqueries,
-                },
-            ))),
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("ScalarSubqueryExec is not serializable")
         })
     }
 }
@@ -3483,6 +3451,16 @@ impl ExecutionPlanDecode for ConverterPlanDecoder<'_, '_> {
         node: &protobuf::PhysicalPlanNode,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.proto_converter.proto_to_execution_plan(node, self.ctx)
+    }
+
+    fn decode_plan_with_scalar_subquery_results(
+        &self,
+        node: &protobuf::PhysicalPlanNode,
+        results: ScalarSubqueryResults,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let scoped_ctx = self.ctx.with_scalar_subquery_results(results);
+        self.proto_converter
+            .proto_to_execution_plan(node, &scoped_ctx)
     }
 
     fn decode_expr(

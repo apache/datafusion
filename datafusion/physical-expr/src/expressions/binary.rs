@@ -764,41 +764,49 @@ impl PhysicalExpr for BinaryExpr {
                 sort_properties: l_order.add(&r_order),
                 range: l_range.add(r_range)?,
                 preserves_lex_ordering: false,
+                strictly_order_preserving: false,
             }),
             Operator::Minus => Ok(ExprProperties {
                 sort_properties: l_order.sub(&r_order),
                 range: l_range.sub(r_range)?,
                 preserves_lex_ordering: false,
+                strictly_order_preserving: false,
             }),
             Operator::Gt => Ok(ExprProperties {
                 sort_properties: l_order.gt_or_gteq(&r_order),
                 range: l_range.gt(r_range)?,
                 preserves_lex_ordering: false,
+                strictly_order_preserving: false,
             }),
             Operator::GtEq => Ok(ExprProperties {
                 sort_properties: l_order.gt_or_gteq(&r_order),
                 range: l_range.gt_eq(r_range)?,
                 preserves_lex_ordering: false,
+                strictly_order_preserving: false,
             }),
             Operator::Lt => Ok(ExprProperties {
                 sort_properties: r_order.gt_or_gteq(&l_order),
                 range: l_range.lt(r_range)?,
                 preserves_lex_ordering: false,
+                strictly_order_preserving: false,
             }),
             Operator::LtEq => Ok(ExprProperties {
                 sort_properties: r_order.gt_or_gteq(&l_order),
                 range: l_range.lt_eq(r_range)?,
                 preserves_lex_ordering: false,
+                strictly_order_preserving: false,
             }),
             Operator::And => Ok(ExprProperties {
                 sort_properties: r_order.and_or(&l_order),
                 range: l_range.and(r_range)?,
                 preserves_lex_ordering: false,
+                strictly_order_preserving: false,
             }),
             Operator::Or => Ok(ExprProperties {
                 sort_properties: r_order.and_or(&l_order),
                 range: l_range.or(r_range)?,
                 preserves_lex_ordering: false,
+                strictly_order_preserving: false,
             }),
             _ => Ok(ExprProperties::new_unknown()),
         }
@@ -3341,6 +3349,78 @@ mod tests {
             Operator::RegexNotIMatch,
             regex_not_expected,
         )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn regex_scalar_with_dictionary_nulls() -> Result<()> {
+        let dictionary_values = Arc::new(StringArray::from(vec![
+            Some("abc"),
+            None,
+            Some("ABC"),
+            Some("def"),
+        ]));
+        let keys = UInt32Array::from(vec![Some(0), None, Some(1), Some(2), Some(3)]);
+        let dictionary =
+            Arc::new(DictionaryArray::try_new(keys, dictionary_values)?) as ArrayRef;
+        let utf8 = cast(&dictionary, &DataType::Utf8)?;
+        let pattern = ScalarValue::Utf8(Some("^abc$".to_string()));
+        let dictionary_schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            dictionary.data_type().clone(),
+            true,
+        )]));
+        let utf8_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
+
+        let evaluate =
+            |schema: &SchemaRef, array: &ArrayRef, op: Operator| -> Result<ArrayRef> {
+                let expr = binary(col("a", schema)?, op, lit(pattern.clone()), schema)?;
+                let batch =
+                    RecordBatch::try_new(Arc::clone(schema), vec![Arc::clone(array)])?;
+                Ok(expr
+                    .evaluate(&batch)?
+                    .into_array(batch.num_rows())
+                    .expect("Failed to convert to array"))
+            };
+
+        for (op, expected) in [
+            (
+                Operator::RegexMatch,
+                BooleanArray::from(vec![
+                    Some(true),
+                    None,
+                    None,
+                    Some(false),
+                    Some(false),
+                ]),
+            ),
+            (
+                Operator::RegexIMatch,
+                BooleanArray::from(vec![Some(true), None, None, Some(true), Some(false)]),
+            ),
+            (
+                Operator::RegexNotMatch,
+                BooleanArray::from(vec![Some(false), None, None, Some(true), Some(true)]),
+            ),
+            (
+                Operator::RegexNotIMatch,
+                BooleanArray::from(vec![
+                    Some(false),
+                    None,
+                    None,
+                    Some(false),
+                    Some(true),
+                ]),
+            ),
+        ] {
+            let dictionary_result = evaluate(&dictionary_schema, &dictionary, op)?;
+            let utf8_result = evaluate(&utf8_schema, &utf8, op)?;
+
+            assert_eq!(dictionary_result.as_ref(), &expected);
+            assert_eq!(&dictionary_result, &utf8_result);
+        }
 
         Ok(())
     }

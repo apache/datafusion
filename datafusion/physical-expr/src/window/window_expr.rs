@@ -30,6 +30,7 @@ use arrow::compute::kernels::sort::SortColumn;
 use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::hash_utils::RandomState;
 use datafusion_common::utils::compare_rows;
 use datafusion_common::{
     Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err, internal_err,
@@ -609,10 +610,10 @@ pub struct WindowState {
     pub state: WindowAggState,
     pub window_fn: WindowFn,
 }
-pub type PartitionWindowAggStates = IndexMap<PartitionKey, WindowState>;
+pub type PartitionWindowAggStates = IndexMap<PartitionKey, WindowState, RandomState>;
 
 /// The IndexMap (i.e. an ordered HashMap) where record batches are separated for each partition.
-pub type PartitionBatches = IndexMap<PartitionKey, PartitionBatchState>;
+pub type PartitionBatches = IndexMap<PartitionKey, PartitionBatchState, RandomState>;
 
 #[cfg(test)]
 mod tests {
