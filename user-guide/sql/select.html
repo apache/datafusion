@@ -654,6 +654,40 @@ table alias and column alias.</p>
 <p><code class="docutils literal notranslate"><span class="pre">UNNEST</span></code> in the <code class="docutils literal notranslate"><span class="pre">FROM</span></code> clause cannot yet reference columns from preceding <code class="docutils literal notranslate"><span class="pre">FROM</span></code>
 items (implicit lateral references such as <code class="docutils literal notranslate"><span class="pre">FROM</span> <span class="pre">orders</span> <span class="pre">AS</span> <span class="pre">t,</span> <span class="pre">UNNEST(t.items)</span></code>
 are not currently supported).</p>
+<section id="unnest-outer">
+<h3><code class="docutils literal notranslate"><span class="pre">unnest_outer</span></code><a class="headerlink" href="#unnest-outer" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">unnest_outer(col)</span></code> is the outer-unnest peer to <code class="docutils literal notranslate"><span class="pre">UNNEST(col)</span></code>. The two differ
+only in how <code class="docutils literal notranslate"><span class="pre">NULL</span></code> and empty input lists are handled:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Form</p></th>
+<th class="head"><p><code class="docutils literal notranslate"><span class="pre">NULL</span></code> input list</p></th>
+<th class="head"><p>Empty input list</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">UNNEST(col)</span></code></p></td>
+<td><p>dropped</p></td>
+<td><p>dropped</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">unnest_outer(col)</span></code></p></td>
+<td><p>one <code class="docutils literal notranslate"><span class="pre">NULL</span></code> row</p></td>
+<td><p>one <code class="docutils literal notranslate"><span class="pre">NULL</span></code> row</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">unnest_outer</span><span class="p">(</span><span class="n">tags</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">tag</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">rows</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>An input row with an empty <code class="docutils literal notranslate"><span class="pre">tags</span></code> array or <code class="docutils literal notranslate"><span class="pre">NULL</span></code> <code class="docutils literal notranslate"><span class="pre">tags</span></code> produces one output
+row whose <code class="docutils literal notranslate"><span class="pre">tag</span></code> is <code class="docutils literal notranslate"><span class="pre">NULL</span></code>, instead of being dropped. This is analogous to the
+outer variant offered by other engines (Spark <code class="docutils literal notranslate"><span class="pre">explode_outer</span></code>, Hive <code class="docutils literal notranslate"><span class="pre">EXPLODE</span> <span class="pre">OUTER</span></code>, Snowflake <code class="docutils literal notranslate"><span class="pre">FLATTEN(OUTER</span> <span class="pre">=&gt;</span> <span class="pre">true)</span></code>).</p>
+<p><code class="docutils literal notranslate"><span class="pre">unnest_outer</span></code> cannot be mixed with <code class="docutils literal notranslate"><span class="pre">unnest</span></code> in the same <code class="docutils literal notranslate"><span class="pre">SELECT</span></code> — the
+unnest plan node carries a single null-handling mode for all its output
+columns, so a mix would be ambiguous. The planner returns an error in that
+case.</p>
+</section>
 </section>
 <section id="where-clause">
 <h2>WHERE clause<a class="headerlink" href="#where-clause" title="Link to this heading">#</a></h2>
@@ -1406,7 +1440,10 @@ order, so the returned rows are not guaranteed to be deterministic.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#select-into">SELECT INTO</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#from-clause">FROM clause</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#from-clause">FROM clause</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#unnest-outer"><code class="docutils literal notranslate"><span class="pre">unnest_outer</span></code></a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#where-clause">WHERE clause</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#join-clause">JOIN clause</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#inner-join">INNER JOIN</a></li>
