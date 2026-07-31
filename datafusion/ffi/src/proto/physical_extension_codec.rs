@@ -92,7 +92,7 @@ pub struct FFI_PhysicalExtensionCodec {
         unsafe extern "C" fn(&Self, node: FFI_WindowUDF) -> FFI_Result<SVec<u8>>,
 
     /// Access the current [`TaskContext`].
-    task_ctx_provider: FFI_TaskContextProvider,
+    pub(crate) task_ctx_provider: FFI_TaskContextProvider,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
