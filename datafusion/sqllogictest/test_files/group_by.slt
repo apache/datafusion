@@ -5694,3 +5694,30 @@ drop table users_with_pk;
 
 statement ok
 drop table user_orders;
+
+# Test multi group by int + Duration
+statement ok
+CREATE TABLE duration_group_test AS VALUES
+  (1, arrow_cast(5, 'Duration(Second)')),
+  (1, arrow_cast(5, 'Duration(Second)')),
+  (1, arrow_cast(7, 'Duration(Second)')),
+  (2, arrow_cast(5, 'Duration(Second)'));
+
+# Single Duration group key ({5s, 7s}, 5s x3) via the GroupValuesPrimitive path.
+query ?I
+SELECT column2, count(*) FROM duration_group_test GROUP BY column2 ORDER BY column2;
+----
+0 days 0 hours 0 mins 5 secs 3
+0 days 0 hours 0 mins 7 secs 1
+
+# Multi-column GROUP BY: a primitive key and a Duration key on the same path.
+query I?I
+SELECT column1, column2, count(*)
+FROM duration_group_test GROUP BY column1, column2 ORDER BY column1, column2;
+----
+1 0 days 0 hours 0 mins 5 secs 2
+1 0 days 0 hours 0 mins 7 secs 1
+2 0 days 0 hours 0 mins 5 secs 1
+
+statement ok
+DROP TABLE duration_group_test;
