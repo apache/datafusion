@@ -197,8 +197,7 @@ mod tests {
         // Library C: a foreign query planner sees B's scan result as opaque,
         // but can downcast its own UnionExec. Its result is serialized rather
         // than returned as FFI_ExecutionPlan.
-        let ffi_planner =
-            (library_c.create_library_c_query_planner)(logical_codec, physical_codec);
+        let ffi_planner = (library_c.create_query_planner)(logical_codec, physical_codec);
         let planner: Arc<dyn QueryPlanner + Send + Sync> = (&ffi_planner).into();
         let planner_any: &dyn std::any::Any = planner.as_ref();
         assert!(planner_any.downcast_ref::<ForeignQueryPlanner>().is_some());

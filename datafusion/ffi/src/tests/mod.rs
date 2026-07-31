@@ -124,11 +124,6 @@ pub struct ForeignLibraryModule {
         physical_codec: FFI_PhysicalExtensionCodec,
     ) -> FFI_QueryPlanner,
 
-    pub create_library_c_query_planner: extern "C" fn(
-        logical_codec: FFI_LogicalExtensionCodec,
-        physical_codec: FFI_PhysicalExtensionCodec,
-    ) -> FFI_QueryPlanner,
-
     pub version: extern "C" fn() -> u64,
 }
 
@@ -279,7 +274,6 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_context_aware_optimizer_rule:
             physical_optimizer::create_context_aware_optimizer_rule,
         create_query_planner: query_planner::create_query_planner,
-        create_library_c_query_planner: query_planner::create_library_c_query_planner,
         version: super::version,
     }
 }

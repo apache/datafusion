@@ -35,15 +35,42 @@ use crate::session::ForeignSession;
 use crate::table_provider::ForeignTableProvider;
 
 #[derive(Debug)]
-struct EmptyQueryPlanner;
+struct TestQueryPlanner;
 
 #[async_trait]
-impl QueryPlanner for EmptyQueryPlanner {
+impl QueryPlanner for TestQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
         session: &dyn Session,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        if let LogicalPlan::TableScan(scan) = logical_plan {
+            if session.as_any().downcast_ref::<ForeignSession>().is_none() {
+                return exec_err!("library A's session was not foreign to library C");
+            }
+
+            let provider = source_as_provider(&scan.source)?;
+            if provider.downcast_ref::<ForeignTableProvider>().is_none() {
+                return exec_err!("library B's provider was not foreign to library C");
+            }
+            let library_b_plan = provider
+                .scan(session, scan.projection.as_ref(), &scan.filters, scan.fetch)
+                .await?;
+
+            if !library_b_plan.is::<ForeignExecutionPlan>() {
+                return exec_err!("library B's plan unexpectedly downcast as C-local");
+            }
+
+            let plan = UnionExec::try_new(vec![
+                Arc::clone(&library_b_plan),
+                Arc::clone(&library_b_plan),
+            ])?;
+            if !plan.is::<UnionExec>() {
+                return exec_err!("library C could not downcast its local UnionExec");
+            }
+            return Ok(plan);
+        }
+
         let query_planner = session.query_planner();
         let planner_any: &dyn std::any::Any = query_planner.as_ref();
         if planner_any.downcast_ref::<ForeignQueryPlanner>().is_none() {
@@ -64,58 +91,7 @@ pub extern "C" fn create_query_planner(
     physical_codec: FFI_PhysicalExtensionCodec,
 ) -> FFI_QueryPlanner {
     FFI_QueryPlanner::new_with_ffi_codecs(
-        Arc::new(EmptyQueryPlanner),
-        logical_codec,
-        physical_codec,
-    )
-}
-
-#[derive(Debug)]
-struct LibraryCQueryPlanner;
-
-#[async_trait]
-impl QueryPlanner for LibraryCQueryPlanner {
-    async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-        session: &dyn Session,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        if session.as_any().downcast_ref::<ForeignSession>().is_none() {
-            return exec_err!("library A's session was not foreign to library C");
-        }
-
-        let LogicalPlan::TableScan(scan) = logical_plan else {
-            return exec_err!("library C expected a table scan");
-        };
-        let provider = source_as_provider(&scan.source)?;
-        if provider.downcast_ref::<ForeignTableProvider>().is_none() {
-            return exec_err!("library B's provider was not foreign to library C");
-        }
-        let library_b_plan = provider
-            .scan(session, scan.projection.as_ref(), &scan.filters, scan.fetch)
-            .await?;
-
-        if !library_b_plan.is::<ForeignExecutionPlan>() {
-            return exec_err!("library B's plan unexpectedly downcast as C-local");
-        }
-
-        let plan = UnionExec::try_new(vec![
-            Arc::clone(&library_b_plan),
-            Arc::clone(&library_b_plan),
-        ])?;
-        if !plan.is::<UnionExec>() {
-            return exec_err!("library C could not downcast its local UnionExec");
-        }
-        Ok(plan)
-    }
-}
-
-pub extern "C" fn create_library_c_query_planner(
-    logical_codec: FFI_LogicalExtensionCodec,
-    physical_codec: FFI_PhysicalExtensionCodec,
-) -> FFI_QueryPlanner {
-    FFI_QueryPlanner::new_with_ffi_codecs(
-        Arc::new(LibraryCQueryPlanner),
+        Arc::new(TestQueryPlanner),
         logical_codec,
         physical_codec,
     )
