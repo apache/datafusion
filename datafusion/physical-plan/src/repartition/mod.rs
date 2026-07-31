@@ -1713,64 +1713,14 @@ impl ExecutionPlan for RepartitionExec {
 
         let input = ctx.encode_child(self.input())?;
 
-        // Keep the existing protobuf wire representation unchanged.
-        let partition_method = match self.partitioning() {
-            Partitioning::RoundRobinBatch(n) => {
-                protobuf::partitioning::PartitionMethod::RoundRobin(*n as u64)
-            }
-            Partitioning::Hash(exprs, n) => {
-                let hash_expr = ctx.encode_expressions(exprs)?;
-                protobuf::partitioning::PartitionMethod::Hash(
-                    protobuf::PhysicalHashRepartition {
-                        hash_expr,
-                        partition_count: *n as u64,
-                    },
-                )
-            }
-            Partitioning::Range(range) => {
-                let sort_expr = range
-                    .ordering()
-                    .iter()
-                    .map(|sort_expr| {
-                        Ok(protobuf::PhysicalSortExprNode {
-                            expr: Some(Box::new(ctx.encode_expr(&sort_expr.expr)?)),
-                            asc: !sort_expr.options.descending,
-                            nulls_first: sort_expr.options.nulls_first,
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let split_point = range
-                    .split_points()
-                    .iter()
-                    .map(|split_point| {
-                        let value = split_point
-                            .values()
-                            .iter()
-                            .map(|value| value.try_into().map_err(Into::into))
-                            .collect::<Result<Vec<_>>>()?;
-                        Ok(protobuf::PhysicalRangeSplitPoint { value })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                protobuf::partitioning::PartitionMethod::Range(
-                    protobuf::PhysicalRangePartitioning {
-                        sort_expr,
-                        split_point,
-                    },
-                )
-            }
-            Partitioning::UnknownPartitioning(n) => {
-                protobuf::partitioning::PartitionMethod::Unknown(*n as u64)
-            }
-        };
+        let partitioning = self.partitioning().try_to_proto(&ctx.expr_ctx())?;
 
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Repartition(Box::new(
                     protobuf::RepartitionExecNode {
                         input: Some(Box::new(input)),
-                        partitioning: Some(protobuf::Partitioning {
-                            partition_method: Some(partition_method),
-                        }),
+                        partitioning: Some(partitioning),
                         preserve_order: self.preserve_order(),
                     },
                 )),
@@ -1800,83 +1750,22 @@ impl RepartitionExec {
         )?;
         let input_schema = input.schema();
 
-        let partition_method = repart
+        let partitioning = repart
             .partitioning
             .as_ref()
-            .and_then(|p| p.partition_method.as_ref())
+            .map(|partitioning| {
+                Partitioning::try_from_proto(
+                    partitioning,
+                    &ctx.expr_ctx(input_schema.as_ref()),
+                )
+            })
+            .transpose()?
+            .flatten()
             .ok_or_else(|| {
                 datafusion_common::internal_datafusion_err!(
                     "RepartitionExec is missing required field 'partitioning'"
                 )
             })?;
-
-        let partitioning = match partition_method {
-            protobuf::partitioning::PartitionMethod::RoundRobin(n) => {
-                Partitioning::RoundRobinBatch(*n as usize)
-            }
-            protobuf::partitioning::PartitionMethod::Hash(hash) => {
-                let exprs = hash
-                    .hash_expr
-                    .iter()
-                    .map(|expr| ctx.decode_expr(expr, input_schema.as_ref()))
-                    .collect::<Result<Vec<_>>>()?;
-                let partition_count =
-                    usize::try_from(hash.partition_count).map_err(|_| {
-                        datafusion_common::internal_datafusion_err!(
-                            "Hash partition count {} exceeds usize::MAX",
-                            hash.partition_count
-                        )
-                    })?;
-                Partitioning::Hash(exprs, partition_count)
-            }
-            protobuf::partitioning::PartitionMethod::Unknown(n) => {
-                Partitioning::UnknownPartitioning(*n as usize)
-            }
-            protobuf::partitioning::PartitionMethod::Range(range) => {
-                let sort_exprs = range
-                    .sort_expr
-                    .iter()
-                    .map(|sort_expr| {
-                        let expr = sort_expr.expr.as_ref().ok_or_else(|| {
-                            datafusion_common::internal_datafusion_err!(
-                                "Unexpected empty physical expression"
-                            )
-                        })?;
-                        Ok(PhysicalSortExpr {
-                            expr: ctx.decode_expr(expr, input_schema.as_ref())?,
-                            options: SortOptions {
-                                descending: !sort_expr.asc,
-                                nulls_first: sort_expr.nulls_first,
-                            },
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let sort_expr_count = sort_exprs.len();
-                let ordering = LexOrdering::new(sort_exprs).ok_or_else(|| {
-                    datafusion_common::internal_datafusion_err!(
-                        "Range partitioning requires non-empty ordering"
-                    )
-                })?;
-                if ordering.len() != sort_expr_count {
-                    return datafusion_common::internal_err!(
-                        "Range partitioning ordering must not contain duplicate expressions"
-                    );
-                }
-                let split_points = range
-                    .split_point
-                    .iter()
-                    .map(|split_point| {
-                        let values = split_point
-                            .value
-                            .iter()
-                            .map(|value| ScalarValue::try_from(value).map_err(Into::into))
-                            .collect::<Result<Vec<_>>>()?;
-                        Ok(SplitPoint::new(values))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                Partitioning::Range(RangePartitioning::try_new(ordering, split_points)?)
-            }
-        };
 
         let mut repart_exec = RepartitionExec::try_new(input, partitioning)?;
         if repart.preserve_order {

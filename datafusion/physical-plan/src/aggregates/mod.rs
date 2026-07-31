@@ -697,7 +697,7 @@ impl From<StreamType> for SendableRecordBatchStream {
             StreamType::PartialReduceHash(stream) => Box::pin(stream),
             StreamType::FinalHash(stream) => Box::pin(stream),
             StreamType::SingleHash(stream) => Box::pin(stream),
-            StreamType::OrderedPartialAggregate(stream) => Box::pin(stream),
+            StreamType::OrderedPartialAggregate(stream) => stream.into_stream(),
             StreamType::OrderedFinalAggregate(stream) => Box::pin(stream),
             StreamType::GroupedHash(stream) => Box::pin(stream),
             StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
@@ -2264,17 +2264,11 @@ fn encode_aggregate_expr(
 
     let expressions = aggr_expr.expressions();
     let expr = ctx.encode_expressions(expressions.iter())?;
-    let ordering_req = aggr_expr
-        .order_bys()
-        .iter()
-        .map(|sort_expr| {
-            Ok(protobuf::PhysicalSortExprNode {
-                expr: Some(Box::new(ctx.encode_expr(&sort_expr.expr)?)),
-                asc: !sort_expr.options.descending,
-                nulls_first: sort_expr.options.nulls_first,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let ordering_req =
+        datafusion_physical_expr_common::sort_expr::sort_exprs_try_to_proto(
+            aggr_expr.order_bys(),
+            &ctx.expr_ctx(),
+        )?;
     let name = aggr_expr.fun().name().to_string();
     // The context already applies `(!buf.is_empty()).then_some(buf)`.
     let fun_definition = ctx.encode_udaf(aggr_expr.fun())?;
@@ -2314,7 +2308,6 @@ impl AggregateExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        use datafusion_physical_expr::PhysicalSortExpr;
         use datafusion_physical_expr::aggregate::AggregateExprBuilder;
         use datafusion_proto_models::protobuf;
         use protobuf::physical_aggregate_expr_node::AggregateFunction;
@@ -2421,24 +2414,11 @@ impl AggregateExec {
                     .iter()
                     .map(|expr| ctx.decode_expr(expr, input_schema.as_ref()))
                     .collect::<Result<Vec<_>>>()?;
-                let order_by = aggregate
-                    .ordering_req
-                    .iter()
-                    .map(|sort_expr| {
-                        let expr = sort_expr.expr.as_deref().ok_or_else(|| {
-                            datafusion_common::internal_datafusion_err!(
-                                "AggregateExec ordering expression is missing its inner expr"
-                            )
-                        })?;
-                        Ok(PhysicalSortExpr {
-                            expr: ctx.decode_expr(expr, input_schema.as_ref())?,
-                            options: arrow::compute::SortOptions {
-                                descending: !sort_expr.asc,
-                                nulls_first: sort_expr.nulls_first,
-                            },
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+                let order_by =
+                    datafusion_physical_expr_common::sort_expr::sort_exprs_try_from_proto(
+                        &aggregate.ordering_req,
+                        &ctx.expr_ctx(input_schema.as_ref()),
+                    )?;
                 let Some(AggregateFunction::UserDefinedAggrFunction(udaf_name)) =
                     aggregate.aggregate_function.as_ref()
                 else {
@@ -2448,10 +2428,8 @@ impl AggregateExec {
                 };
                 // The context owns the payload-to-codec and
                 // registry-to-codec fallback order.
-                let udaf = ctx.decode_udaf(
-                    udaf_name,
-                    aggregate.fun_definition.as_deref(),
-                )?;
+                let udaf =
+                    ctx.decode_udaf(udaf_name, aggregate.fun_definition.as_deref())?;
                 let (human_display, human_display_alias) =
                     split_human_display_alias(&aggregate.human_display, name);
                 let builder = AggregateExprBuilder::new(udaf, args)
@@ -4429,9 +4407,8 @@ mod tests {
                 .with_session_config(session_config),
         );
 
-        let mut stream: SendableRecordBatchStream = Box::pin(
-            OrderedPartialAggregateStream::new(&aggregate, &task_ctx, 0)?,
-        );
+        let mut stream: SendableRecordBatchStream =
+            OrderedPartialAggregateStream::new(&aggregate, &task_ctx, 0)?.into_stream();
 
         while let Some(result) = stream.next().await {
             if let Err(e) = result {

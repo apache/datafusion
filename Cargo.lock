@@ -1780,6 +1780,7 @@ name = "datafusion-benchmarks"
 version = "54.1.0"
 dependencies = [
  "arrow",
+ "arrow-buffer",
  "async-trait",
  "bytes",
  "clap",
@@ -1787,6 +1788,7 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-common-runtime",
+ "datafusion-execution",
  "datafusion-proto",
  "env_logger",
  "futures",
@@ -1942,6 +1944,7 @@ dependencies = [
  "datafusion-physical-expr-adapter",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
+ "datafusion-proto-models",
  "datafusion-session",
  "flate2",
  "futures",
