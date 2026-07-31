@@ -15,6 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! FFI support for [`QueryPlanner`].
+//!
+//! A typical deployment has three libraries. Library A (for example,
+//! `datafusion-python`) owns the [`Session`] and codec registry. Library B owns
+//! a custom table provider and its extension nodes. Library C (for example,
+//! Ballista or `datafusion-distributed`) owns the query planner. A serializes a
+//! logical plan and invokes C, while [`FFI_SessionRef`] lets C call session
+//! services in A. C deserializes the logical plan, creates a physical plan,
+//! serializes that result, and returns it for A to deserialize. The logical and
+//! physical extension codecs preserve nodes supplied by B.
+//!
+//! The physical result is serialized instead of returned as an
+//! [`crate::execution_plan::FFI_ExecutionPlan`]. An FFI execution-plan handle is
+//! a foreign trait-object proxy, so even a built-in plan created in C cannot be
+//! downcast to its concrete
+//! type in A. Serialization reconstructs known plan nodes with A's local Rust
+//! type identities, allowing A's optimizers and other consumers to downcast
+//! them. Extension codecs control how custom nodes are reconstructed.
+//!
+//! A node returned by B while C is planning is still foreign to C unless a
+//! codec boundary reconstructs it in C. The query-planner boundary guarantees
+//! that C-local serializable nodes, and extension nodes understood by the
+//! configured codecs, are reconstructed for A when the completed plan returns.
+
 use std::ffi::c_void;
 use std::sync::Arc;
 
@@ -46,7 +70,11 @@ use crate::session::{FFI_SessionRef, ForeignSession};
 use crate::util::FFI_Result;
 use crate::{df_result, sresult_return};
 
-/// A stable struct for sharing [`QueryPlanner`] across FFI boundaries.
+/// An ABI-stable handle to a [`QueryPlanner`] owned by another library.
+///
+/// The Rust-facing adapters serialize the input [`LogicalPlan`] and resulting
+/// [`ExecutionPlan`]; callers do not invoke the byte-oriented function pointer
+/// directly.
 #[repr(C)]
 #[derive(Debug)]
 pub struct FFI_QueryPlanner {
@@ -56,8 +84,10 @@ pub struct FFI_QueryPlanner {
         session: FFI_SessionRef,
     ) -> FfiFuture<FFI_Result<SVec<u8>>>,
 
+    /// Codec used to encode and decode logical plans and extension nodes.
     pub logical_codec: FFI_LogicalExtensionCodec,
 
+    /// Codec used to encode and decode physical plans and extension nodes.
     pub physical_codec: FFI_PhysicalExtensionCodec,
 
     /// Used to create a clone of the query planner.
@@ -177,7 +207,10 @@ impl Clone for FFI_QueryPlanner {
 }
 
 impl FFI_QueryPlanner {
-    /// Creates a new [`FFI_QueryPlanner`].
+    /// Creates an [`FFI_QueryPlanner`] with native extension codecs.
+    ///
+    /// Missing codecs use DataFusion's defaults. `runtime` and
+    /// `task_ctx_provider` support codec callbacks across the FFI boundary.
     pub fn new(
         planner: Arc<dyn QueryPlanner + Send + Sync>,
         runtime: Option<Handle>,
@@ -200,6 +233,10 @@ impl FFI_QueryPlanner {
         Self::new_with_ffi_codecs(planner, logical_codec, physical_codec)
     }
 
+    /// Creates an [`FFI_QueryPlanner`] using prebuilt FFI extension codecs.
+    ///
+    /// If `planner` is already foreign, this returns its original FFI handle
+    /// rather than adding another wrapper layer.
     pub fn new_with_ffi_codecs(
         planner: Arc<dyn QueryPlanner + Send + Sync>,
         logical_codec: FFI_LogicalExtensionCodec,
@@ -224,8 +261,12 @@ impl FFI_QueryPlanner {
         }
     }
 
-    /// Calls this query planner with a [`Session`] exported over FFI using
-    /// `session_runtime` as that session provider's local Tokio runtime.
+    /// Creates a physical plan through this planner's FFI interface.
+    ///
+    /// This serializes `logical_plan`, exports `session` as an
+    /// [`FFI_SessionRef`], invokes the planner's owning library, and
+    /// deserializes its physical-plan response. `session_runtime` is attached
+    /// to the exported session for callbacks that need its Tokio runtime.
     pub async fn create_physical_plan_with_session_runtime(
         &self,
         logical_plan: &LogicalPlan,
@@ -258,7 +299,10 @@ impl FFI_QueryPlanner {
     }
 }
 
-/// Consumer-side wrapper for a foreign [`QueryPlanner`].
+/// Consumer-side [`QueryPlanner`] adapter for an [`FFI_QueryPlanner`].
+///
+/// Calls serialize the logical plan, invoke the producing library, and
+/// deserialize its physical-plan response.
 #[derive(Debug)]
 pub struct ForeignQueryPlanner(pub FFI_QueryPlanner);
 
