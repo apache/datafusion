@@ -49,6 +49,7 @@ impl OrderedAggregateTable<FinalMarker> {
         batch_size: usize,
         input_order_mode: &InputOrderMode,
         group_by_metrics: GroupByMetrics,
+        partition: usize,
     ) -> Result<Self> {
         Self::new_for_mode(
             agg,
@@ -60,6 +61,7 @@ impl OrderedAggregateTable<FinalMarker> {
             &AggregateMode::Final,
             vec![None; agg.aggr_expr.len()],
             group_by_metrics,
+            partition,
         )
     }
 

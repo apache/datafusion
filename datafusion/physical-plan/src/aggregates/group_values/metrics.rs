@@ -17,7 +17,42 @@
 
 //! Metrics for the various group-by implementations.
 
-use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, Time};
+use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, ScopedTimerGuard, Time};
+
+#[derive(Clone)]
+pub(crate) struct AggregateArgumentMetrics {
+    argument_times: Vec<Time>,
+}
+
+impl AggregateArgumentMetrics {
+    pub(crate) fn new<T>(
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+        aggregate_labels: impl IntoIterator<Item = T>,
+    ) -> Self
+    where
+        T: Into<String>,
+    {
+        let argument_times = aggregate_labels
+            .into_iter()
+            .enumerate()
+            .map(|(idx, label)| {
+                MetricBuilder::new(metrics)
+                    .with_new_label("aggregate", label.into())
+                    .subset_time(format!("agg_expr_{idx}_arguments_time"), partition)
+            })
+            .collect();
+
+        Self { argument_times }
+    }
+
+    pub(crate) fn scoped_argument_timer(
+        &self,
+        index: usize,
+    ) -> Option<ScopedTimerGuard<'_>> {
+        self.argument_times.get(index).map(Time::timer)
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct GroupByMetrics {
@@ -52,7 +87,7 @@ impl GroupByMetrics {
 #[cfg(test)]
 mod tests {
     use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
-    use crate::metrics::MetricsSet;
+    use crate::metrics::{MetricValue, MetricsSet};
     use crate::test::TestMemoryExec;
     use crate::{ExecutionPlan, collect};
     use arrow::array::{Float64Array, UInt32Array};
@@ -80,6 +115,21 @@ mod tests {
         let emitting_time = metrics.sum_by_name("emitting_time");
         assert!(emitting_time.is_some());
         assert!(emitting_time.unwrap().as_usize() > 0);
+    }
+
+    fn aggregate_argument_metric_displays(metrics: &MetricsSet) -> Vec<String> {
+        metrics
+            .iter()
+            .filter(|metric| {
+                matches!(
+                    metric.value(),
+                    MetricValue::Time { name, .. }
+                        if name.ends_with("_arguments_time")
+                            && name.as_ref() != "aggregate_arguments_time"
+                )
+            })
+            .map(|metric| metric.to_string())
+            .collect()
     }
 
     #[tokio::test]
@@ -149,6 +199,91 @@ mod tests {
 
         let metrics = aggregate_exec.metrics().unwrap();
         assert_groupby_metrics(&metrics);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_groupby_aggregate_argument_metrics_distinguish_inputs() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::UInt32, false),
+            Field::new("a", DataType::Float64, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+
+        let batches = (0..5)
+            .map(|i| {
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(UInt32Array::from(vec![1, 2, 1, 2])),
+                        Arc::new(Float64Array::from(vec![
+                            i as f64,
+                            (i + 1) as f64,
+                            (i + 2) as f64,
+                            (i + 3) as f64,
+                        ])),
+                        Arc::new(Float64Array::from(vec![
+                            (i + 4) as f64,
+                            (i + 5) as f64,
+                            (i + 6) as f64,
+                            (i + 7) as f64,
+                        ])),
+                    ],
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        let input = TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".to_string())]);
+        let aggregates = vec![
+            Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("a", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("SUM(a)")
+                    .build()?,
+            ),
+            Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("SUM(b)")
+                    .build()?,
+            ),
+        ];
+
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by,
+            aggregates,
+            vec![None, None],
+            input,
+            schema,
+        )?);
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(10 * 1024 * 1024, 1.0)
+            .build_arc()?;
+        let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+        let _result =
+            collect(Arc::clone(&aggregate_exec) as _, Arc::clone(&task_ctx)).await?;
+
+        let metrics = aggregate_exec.metrics().unwrap();
+        let metric_displays = aggregate_argument_metric_displays(&metrics);
+        assert_eq!(metric_displays.len(), 2, "{metric_displays:#?}");
+        assert!(
+            metric_displays
+                .iter()
+                .any(|display| display.contains("SUM(a)")),
+            "{metric_displays:#?}"
+        );
+        assert!(
+            metric_displays
+                .iter()
+                .any(|display| display.contains("SUM(b)")),
+            "{metric_displays:#?}"
+        );
 
         Ok(())
     }

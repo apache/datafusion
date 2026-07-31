@@ -71,6 +71,7 @@ impl OrderedAggregateTable<PartialMarker> {
             &AggregateMode::Partial,
             agg.filter_expr.iter().cloned().collect(),
             group_by_metrics,
+            partition,
         )
     }
 

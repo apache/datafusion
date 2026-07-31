@@ -338,6 +338,7 @@ impl OrderedFinalAggregateStream {
             batch_size,
             input_order_mode,
             group_by_metrics,
+            partition,
         )?;
         let reservation =
             MemoryConsumer::new(format!("OrderedFinalAggregateStream[{partition}]"))
