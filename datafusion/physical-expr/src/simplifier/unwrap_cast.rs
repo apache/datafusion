@@ -37,7 +37,8 @@ use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{Result, ScalarValue, tree_node::Transformed};
 use datafusion_expr::Operator;
 use datafusion_expr_common::casts::{
-    is_timestamp_precision_narrowing_cast, try_cast_literal_to_type,
+    is_date_narrowing_cast, is_timestamp_precision_narrowing_cast,
+    try_cast_literal_to_type,
 };
 
 use crate::PhysicalExpr;
@@ -129,7 +130,9 @@ fn try_unwrap_cast_comparison(
     // Get the data type of the inner expression
     let inner_type = inner_expr.data_type(schema)?;
 
-    if is_timestamp_precision_narrowing_cast(&inner_type, cast_type) {
+    if is_timestamp_precision_narrowing_cast(&inner_type, cast_type)
+        || is_date_narrowing_cast(&inner_type, cast_type)
+    {
         return Ok(None);
     }
 
@@ -229,6 +232,23 @@ mod tests {
 
         // Check the operator was swapped
         assert_eq!(*optimized_binary.op(), Operator::Gt);
+    }
+
+    #[test]
+    fn test_no_unwrap_date64_to_date32_narrowing() {
+        let schema = Schema::new(vec![Field::new("d64", DataType::Date64, false)]);
+
+        // cast(d64 AS Date32) = Date32(20089) must NOT unwrap: narrowing a Date64
+        // column to Date32 truncates milliseconds to the day (many-to-one), so the
+        // rewritten `d64 = <midnight ms>` would drop sub-day rows.
+        let column_expr = col("d64", &schema).unwrap();
+        let cast_expr = Arc::new(CastExpr::new(column_expr, DataType::Date32, None));
+        let literal_expr = lit(ScalarValue::Date32(Some(20089)));
+        let binary_expr =
+            Arc::new(BinaryExpr::new(cast_expr, Operator::Eq, literal_expr));
+
+        let result = unwrap_cast_in_comparison(binary_expr, &schema).unwrap();
+        assert!(!result.transformed);
     }
 
     #[test]

@@ -74,6 +74,26 @@ impl DiskManagerBuilder {
         self
     }
 
+    /// Configure a custom factory for creating temporary spill files.
+    ///
+    /// This sets the disk manager mode to [`DiskManagerMode::Custom`], so
+    /// operators that spill during query execution create files through the
+    /// provided [`TempFileFactory`] instead of using local temporary files.
+    pub fn set_temp_file_factory(&mut self, temp_file_factory: Arc<dyn TempFileFactory>) {
+        self.mode = DiskManagerMode::Custom(temp_file_factory);
+    }
+
+    /// Configure a custom factory for creating temporary spill files.
+    ///
+    /// See details on [`Self::set_temp_file_factory`].
+    pub fn with_temp_file_factory(
+        mut self,
+        temp_file_factory: Arc<dyn TempFileFactory>,
+    ) -> Self {
+        self.set_temp_file_factory(temp_file_factory);
+        self
+    }
+
     pub fn set_max_temp_directory_size(&mut self, value: u64) {
         self.max_temp_directory_size = value;
     }
