@@ -371,13 +371,13 @@ statement ok
 CREATE TABLE in_list_temporal AS
 SELECT
   label,
-  arrow_cast(arrow_cast(value, 'Int32'), 'Date32')                     AS d32,
-  arrow_cast(arrow_cast(value, 'Int64'), 'Date64')                     AS d64,
-  arrow_cast(arrow_cast(value, 'Int32'), 'Time32(Second)')             AS t32s,
-  arrow_cast(arrow_cast(value, 'Int64'), 'Time64(Nanosecond)')         AS t64ns,
-  arrow_cast(arrow_cast(value, 'Int64'), 'Timestamp(Nanosecond, None)') AS ts_ns,
-  arrow_cast(arrow_cast(value, 'Int64'), 'Timestamp(Second, Some("UTC"))') AS ts_s_utc,
-  arrow_cast(arrow_cast(value, 'Int64'), 'Duration(Second)')           AS dur_s
+  arrow_cast(value, 'Date32')                                AS d32,
+  arrow_cast(value, 'Date64')                                AS d64,
+  arrow_cast(arrow_cast(value, 'Int32'), 'Time32(Second)')   AS t32s,
+  arrow_cast(value, 'Time64(Nanosecond)')                    AS t64ns,
+  arrow_cast(value, 'Timestamp(Nanosecond, None)')           AS ts_ns,
+  arrow_cast(value, 'Timestamp(Second, Some("UTC"))')        AS ts_s_utc,
+  arrow_cast(value, 'Duration(Second)')                      AS dur_s
 FROM (VALUES
   ('match', 11),
   ('no_match', 7),
@@ -388,13 +388,13 @@ FROM (VALUES
 query TBBBBBBB
 SELECT
   label,
-  d32      IN (arrow_cast(arrow_cast(3, 'Int32'), 'Date32'), arrow_cast(arrow_cast(4, 'Int32'), 'Date32'), arrow_cast(arrow_cast(5, 'Int32'), 'Date32'), arrow_cast(arrow_cast(11, 'Int32'), 'Date32')),
-  d64      IN (arrow_cast(arrow_cast(3, 'Int64'), 'Date64'), arrow_cast(arrow_cast(4, 'Int64'), 'Date64'), arrow_cast(arrow_cast(5, 'Int64'), 'Date64'), arrow_cast(arrow_cast(11, 'Int64'), 'Date64')),
+  d32      IN (arrow_cast(3, 'Date32'), arrow_cast(4, 'Date32'), arrow_cast(5, 'Date32'), arrow_cast(11, 'Date32')),
+  d64      IN (arrow_cast(3, 'Date64'), arrow_cast(4, 'Date64'), arrow_cast(5, 'Date64'), arrow_cast(11, 'Date64')),
   t32s     IN (arrow_cast(arrow_cast(3, 'Int32'), 'Time32(Second)'), arrow_cast(arrow_cast(4, 'Int32'), 'Time32(Second)'), arrow_cast(arrow_cast(5, 'Int32'), 'Time32(Second)'), arrow_cast(arrow_cast(11, 'Int32'), 'Time32(Second)')),
-  t64ns    IN (arrow_cast(arrow_cast(3, 'Int64'), 'Time64(Nanosecond)'), arrow_cast(arrow_cast(4, 'Int64'), 'Time64(Nanosecond)'), arrow_cast(arrow_cast(5, 'Int64'), 'Time64(Nanosecond)'), arrow_cast(arrow_cast(11, 'Int64'), 'Time64(Nanosecond)')),
-  ts_ns    IN (arrow_cast(arrow_cast(3, 'Int64'), 'Timestamp(Nanosecond, None)'), arrow_cast(arrow_cast(4, 'Int64'), 'Timestamp(Nanosecond, None)'), arrow_cast(arrow_cast(5, 'Int64'), 'Timestamp(Nanosecond, None)'), arrow_cast(arrow_cast(11, 'Int64'), 'Timestamp(Nanosecond, None)')),
-  ts_s_utc IN (arrow_cast(arrow_cast(3, 'Int64'), 'Timestamp(Second, Some("UTC"))'), arrow_cast(arrow_cast(4, 'Int64'), 'Timestamp(Second, Some("UTC"))'), arrow_cast(arrow_cast(5, 'Int64'), 'Timestamp(Second, Some("UTC"))'), arrow_cast(arrow_cast(11, 'Int64'), 'Timestamp(Second, Some("UTC"))')),
-  dur_s    IN (arrow_cast(arrow_cast(3, 'Int64'), 'Duration(Second)'), arrow_cast(arrow_cast(4, 'Int64'), 'Duration(Second)'), arrow_cast(arrow_cast(5, 'Int64'), 'Duration(Second)'), arrow_cast(arrow_cast(11, 'Int64'), 'Duration(Second)'))
+  t64ns    IN (arrow_cast(3, 'Time64(Nanosecond)'), arrow_cast(4, 'Time64(Nanosecond)'), arrow_cast(5, 'Time64(Nanosecond)'), arrow_cast(11, 'Time64(Nanosecond)')),
+  ts_ns    IN (arrow_cast(3, 'Timestamp(Nanosecond, None)'), arrow_cast(4, 'Timestamp(Nanosecond, None)'), arrow_cast(5, 'Timestamp(Nanosecond, None)'), arrow_cast(11, 'Timestamp(Nanosecond, None)')),
+  ts_s_utc IN (arrow_cast(3, 'Timestamp(Second, Some("UTC"))'), arrow_cast(4, 'Timestamp(Second, Some("UTC"))'), arrow_cast(5, 'Timestamp(Second, Some("UTC"))'), arrow_cast(11, 'Timestamp(Second, Some("UTC"))')),
+  dur_s    IN (arrow_cast(3, 'Duration(Second)'), arrow_cast(4, 'Duration(Second)'), arrow_cast(5, 'Duration(Second)'), arrow_cast(11, 'Duration(Second)'))
 FROM in_list_temporal
 ORDER BY label
 ----
@@ -406,13 +406,13 @@ nulls NULL NULL NULL NULL NULL NULL NULL
 query TBBBBBBB
 SELECT
   label,
-  d32      NOT IN (arrow_cast(arrow_cast(3, 'Int32'), 'Date32'), arrow_cast(arrow_cast(4, 'Int32'), 'Date32'), arrow_cast(arrow_cast(5, 'Int32'), 'Date32'), arrow_cast(arrow_cast(11, 'Int32'), 'Date32')),
-  d64      NOT IN (arrow_cast(arrow_cast(3, 'Int64'), 'Date64'), arrow_cast(arrow_cast(4, 'Int64'), 'Date64'), arrow_cast(arrow_cast(5, 'Int64'), 'Date64'), arrow_cast(arrow_cast(11, 'Int64'), 'Date64')),
+  d32      NOT IN (arrow_cast(3, 'Date32'), arrow_cast(4, 'Date32'), arrow_cast(5, 'Date32'), arrow_cast(11, 'Date32')),
+  d64      NOT IN (arrow_cast(3, 'Date64'), arrow_cast(4, 'Date64'), arrow_cast(5, 'Date64'), arrow_cast(11, 'Date64')),
   t32s     NOT IN (arrow_cast(arrow_cast(3, 'Int32'), 'Time32(Second)'), arrow_cast(arrow_cast(4, 'Int32'), 'Time32(Second)'), arrow_cast(arrow_cast(5, 'Int32'), 'Time32(Second)'), arrow_cast(arrow_cast(11, 'Int32'), 'Time32(Second)')),
-  t64ns    NOT IN (arrow_cast(arrow_cast(3, 'Int64'), 'Time64(Nanosecond)'), arrow_cast(arrow_cast(4, 'Int64'), 'Time64(Nanosecond)'), arrow_cast(arrow_cast(5, 'Int64'), 'Time64(Nanosecond)'), arrow_cast(arrow_cast(11, 'Int64'), 'Time64(Nanosecond)')),
-  ts_ns    NOT IN (arrow_cast(arrow_cast(3, 'Int64'), 'Timestamp(Nanosecond, None)'), arrow_cast(arrow_cast(4, 'Int64'), 'Timestamp(Nanosecond, None)'), arrow_cast(arrow_cast(5, 'Int64'), 'Timestamp(Nanosecond, None)'), arrow_cast(arrow_cast(11, 'Int64'), 'Timestamp(Nanosecond, None)')),
-  ts_s_utc NOT IN (arrow_cast(arrow_cast(3, 'Int64'), 'Timestamp(Second, Some("UTC"))'), arrow_cast(arrow_cast(4, 'Int64'), 'Timestamp(Second, Some("UTC"))'), arrow_cast(arrow_cast(5, 'Int64'), 'Timestamp(Second, Some("UTC"))'), arrow_cast(arrow_cast(11, 'Int64'), 'Timestamp(Second, Some("UTC"))')),
-  dur_s    NOT IN (arrow_cast(arrow_cast(3, 'Int64'), 'Duration(Second)'), arrow_cast(arrow_cast(4, 'Int64'), 'Duration(Second)'), arrow_cast(arrow_cast(5, 'Int64'), 'Duration(Second)'), arrow_cast(arrow_cast(11, 'Int64'), 'Duration(Second)'))
+  t64ns    NOT IN (arrow_cast(3, 'Time64(Nanosecond)'), arrow_cast(4, 'Time64(Nanosecond)'), arrow_cast(5, 'Time64(Nanosecond)'), arrow_cast(11, 'Time64(Nanosecond)')),
+  ts_ns    NOT IN (arrow_cast(3, 'Timestamp(Nanosecond, None)'), arrow_cast(4, 'Timestamp(Nanosecond, None)'), arrow_cast(5, 'Timestamp(Nanosecond, None)'), arrow_cast(11, 'Timestamp(Nanosecond, None)')),
+  ts_s_utc NOT IN (arrow_cast(3, 'Timestamp(Second, Some("UTC"))'), arrow_cast(4, 'Timestamp(Second, Some("UTC"))'), arrow_cast(5, 'Timestamp(Second, Some("UTC"))'), arrow_cast(11, 'Timestamp(Second, Some("UTC"))')),
+  dur_s    NOT IN (arrow_cast(3, 'Duration(Second)'), arrow_cast(4, 'Duration(Second)'), arrow_cast(5, 'Duration(Second)'), arrow_cast(11, 'Duration(Second)'))
 FROM in_list_temporal
 ORDER BY label
 ----
@@ -424,13 +424,13 @@ nulls NULL NULL NULL NULL NULL NULL NULL
 query TBBBBBBB
 SELECT
   label,
-  d32      IN (NULL, arrow_cast(arrow_cast(3, 'Int32'), 'Date32'), arrow_cast(arrow_cast(4, 'Int32'), 'Date32'), arrow_cast(arrow_cast(11, 'Int32'), 'Date32')),
-  d64      IN (NULL, arrow_cast(arrow_cast(3, 'Int64'), 'Date64'), arrow_cast(arrow_cast(4, 'Int64'), 'Date64'), arrow_cast(arrow_cast(11, 'Int64'), 'Date64')),
+  d32      IN (NULL, arrow_cast(3, 'Date32'), arrow_cast(4, 'Date32'), arrow_cast(11, 'Date32')),
+  d64      IN (NULL, arrow_cast(3, 'Date64'), arrow_cast(4, 'Date64'), arrow_cast(11, 'Date64')),
   t32s     IN (NULL, arrow_cast(arrow_cast(3, 'Int32'), 'Time32(Second)'), arrow_cast(arrow_cast(4, 'Int32'), 'Time32(Second)'), arrow_cast(arrow_cast(11, 'Int32'), 'Time32(Second)')),
-  t64ns    IN (NULL, arrow_cast(arrow_cast(3, 'Int64'), 'Time64(Nanosecond)'), arrow_cast(arrow_cast(4, 'Int64'), 'Time64(Nanosecond)'), arrow_cast(arrow_cast(11, 'Int64'), 'Time64(Nanosecond)')),
-  ts_ns    IN (NULL, arrow_cast(arrow_cast(3, 'Int64'), 'Timestamp(Nanosecond, None)'), arrow_cast(arrow_cast(4, 'Int64'), 'Timestamp(Nanosecond, None)'), arrow_cast(arrow_cast(11, 'Int64'), 'Timestamp(Nanosecond, None)')),
-  ts_s_utc IN (NULL, arrow_cast(arrow_cast(3, 'Int64'), 'Timestamp(Second, Some("UTC"))'), arrow_cast(arrow_cast(4, 'Int64'), 'Timestamp(Second, Some("UTC"))'), arrow_cast(arrow_cast(11, 'Int64'), 'Timestamp(Second, Some("UTC"))')),
-  dur_s    IN (NULL, arrow_cast(arrow_cast(3, 'Int64'), 'Duration(Second)'), arrow_cast(arrow_cast(4, 'Int64'), 'Duration(Second)'), arrow_cast(arrow_cast(11, 'Int64'), 'Duration(Second)'))
+  t64ns    IN (NULL, arrow_cast(3, 'Time64(Nanosecond)'), arrow_cast(4, 'Time64(Nanosecond)'), arrow_cast(11, 'Time64(Nanosecond)')),
+  ts_ns    IN (NULL, arrow_cast(3, 'Timestamp(Nanosecond, None)'), arrow_cast(4, 'Timestamp(Nanosecond, None)'), arrow_cast(11, 'Timestamp(Nanosecond, None)')),
+  ts_s_utc IN (NULL, arrow_cast(3, 'Timestamp(Second, Some("UTC"))'), arrow_cast(4, 'Timestamp(Second, Some("UTC"))'), arrow_cast(11, 'Timestamp(Second, Some("UTC"))')),
+  dur_s    IN (NULL, arrow_cast(3, 'Duration(Second)'), arrow_cast(4, 'Duration(Second)'), arrow_cast(11, 'Duration(Second)'))
 FROM in_list_temporal
 ORDER BY label
 ----
@@ -442,13 +442,13 @@ nulls NULL NULL NULL NULL NULL NULL NULL
 query TBBBBBBB
 SELECT
   label,
-  d32      IN (NULL, arrow_cast(arrow_cast(11, 'Int32'), 'Date32')),
-  d64      IN (NULL, arrow_cast(arrow_cast(11, 'Int64'), 'Date64')),
+  d32      IN (NULL, arrow_cast(11, 'Date32')),
+  d64      IN (NULL, arrow_cast(11, 'Date64')),
   t32s     IN (NULL, arrow_cast(arrow_cast(11, 'Int32'), 'Time32(Second)')),
-  t64ns    IN (NULL, arrow_cast(arrow_cast(11, 'Int64'), 'Time64(Nanosecond)')),
-  ts_ns    IN (NULL, arrow_cast(arrow_cast(11, 'Int64'), 'Timestamp(Nanosecond, None)')),
-  ts_s_utc IN (NULL, arrow_cast(arrow_cast(11, 'Int64'), 'Timestamp(Second, Some("UTC"))')),
-  dur_s    IN (NULL, arrow_cast(arrow_cast(11, 'Int64'), 'Duration(Second)'))
+  t64ns    IN (NULL, arrow_cast(11, 'Time64(Nanosecond)')),
+  ts_ns    IN (NULL, arrow_cast(11, 'Timestamp(Nanosecond, None)')),
+  ts_s_utc IN (NULL, arrow_cast(11, 'Timestamp(Second, Some("UTC"))')),
+  dur_s    IN (NULL, arrow_cast(11, 'Duration(Second)'))
 FROM in_list_temporal
 ORDER BY label
 ----
@@ -465,63 +465,117 @@ DROP TABLE in_list_temporal
 ####
 
 statement ok
-CREATE TABLE in_list_wide AS
+CREATE TABLE in_list_decimal AS
 SELECT * FROM (VALUES
-  ('match', arrow_cast(11, 'Decimal128(10, 2)'), INTERVAL '11 months'),
-  ('no_match', arrow_cast(7, 'Decimal128(10, 2)'), INTERVAL '7 months'),
-  ('nulls', NULL, NULL)
-) AS t(label, d128, imdn);
+  ('match', arrow_cast(11, 'Decimal128(10, 2)')),
+  ('no_match', arrow_cast(7, 'Decimal128(10, 2)')),
+  ('nulls', NULL)
+) AS t(label, d128);
 
-query TT
-SELECT arrow_typeof(d128), arrow_typeof(imdn) FROM in_list_wide LIMIT 1
+query T
+SELECT arrow_typeof(d128) FROM in_list_decimal LIMIT 1
 ----
-Decimal128(10, 2) Interval(MonthDayNano)
+Decimal128(10, 2)
 
 # Four non-null values and five non-null values (test different specializations)
-query TBBBB
+query TBB
 SELECT
   label,
   d128 IN (arrow_cast(3, 'Decimal128(10, 2)'), arrow_cast(4, 'Decimal128(10, 2)'), arrow_cast(5, 'Decimal128(10, 2)'), arrow_cast(11, 'Decimal128(10, 2)')),
-  d128 IN (arrow_cast(3, 'Decimal128(10, 2)'), arrow_cast(4, 'Decimal128(10, 2)'), arrow_cast(5, 'Decimal128(10, 2)'), arrow_cast(11, 'Decimal128(10, 2)'), arrow_cast(13, 'Decimal128(10, 2)')),
-  imdn IN (INTERVAL '3 months', INTERVAL '4 months', INTERVAL '5 months', INTERVAL '11 months'),
-  imdn IN (INTERVAL '3 months', INTERVAL '4 months', INTERVAL '5 months', INTERVAL '11 months', INTERVAL '13 months')
-FROM in_list_wide
+  d128 IN (arrow_cast(3, 'Decimal128(10, 2)'), arrow_cast(4, 'Decimal128(10, 2)'), arrow_cast(5, 'Decimal128(10, 2)'), arrow_cast(11, 'Decimal128(10, 2)'), arrow_cast(13, 'Decimal128(10, 2)'))
+FROM in_list_decimal
 ORDER BY label
 ----
-match true true true true
-no_match false false false false
-nulls NULL NULL NULL NULL
+match true true
+no_match false false
+nulls NULL NULL
 
 # The same lists with NOT IN.
-query TBBBB
+query TBB
 SELECT
   label,
   d128 NOT IN (arrow_cast(3, 'Decimal128(10, 2)'), arrow_cast(4, 'Decimal128(10, 2)'), arrow_cast(5, 'Decimal128(10, 2)'), arrow_cast(11, 'Decimal128(10, 2)')),
-  d128 NOT IN (arrow_cast(3, 'Decimal128(10, 2)'), arrow_cast(4, 'Decimal128(10, 2)'), arrow_cast(5, 'Decimal128(10, 2)'), arrow_cast(11, 'Decimal128(10, 2)'), arrow_cast(13, 'Decimal128(10, 2)')),
-  imdn NOT IN (INTERVAL '3 months', INTERVAL '4 months', INTERVAL '5 months', INTERVAL '11 months'),
-  imdn NOT IN (INTERVAL '3 months', INTERVAL '4 months', INTERVAL '5 months', INTERVAL '11 months', INTERVAL '13 months')
-FROM in_list_wide
+  d128 NOT IN (arrow_cast(3, 'Decimal128(10, 2)'), arrow_cast(4, 'Decimal128(10, 2)'), arrow_cast(5, 'Decimal128(10, 2)'), arrow_cast(11, 'Decimal128(10, 2)'), arrow_cast(13, 'Decimal128(10, 2)'))
+FROM in_list_decimal
 ORDER BY label
 ----
-match false false false false
-no_match true true true true
-nulls NULL NULL NULL NULL
+match false false
+no_match true true
+nulls NULL NULL
 
 # Null IN list values, including short lists with a single non-null value.
-query TBBBB
+query TBB
 SELECT
   label,
   d128 IN (NULL, arrow_cast(3, 'Decimal128(10, 2)'), arrow_cast(4, 'Decimal128(10, 2)'), arrow_cast(11, 'Decimal128(10, 2)')),
-  d128 IN (NULL, arrow_cast(11, 'Decimal128(10, 2)')),
-  imdn IN (NULL, INTERVAL '3 months', INTERVAL '4 months', INTERVAL '11 months'),
-  imdn IN (NULL, INTERVAL '11 months')
-FROM in_list_wide
+  d128 IN (NULL, arrow_cast(11, 'Decimal128(10, 2)'))
+FROM in_list_decimal
 ORDER BY label
 ----
-match true true true true
-no_match NULL NULL NULL NULL
-nulls NULL NULL NULL NULL
+match true true
+no_match NULL NULL
+nulls NULL NULL
 
 # Cleanup
 statement ok
-DROP TABLE in_list_wide
+DROP TABLE in_list_decimal
+
+####
+## Interval IN List Specializations
+####
+
+statement ok
+CREATE TABLE in_list_interval AS
+SELECT * FROM (VALUES
+  ('match', INTERVAL '11 months'),
+  ('no_match', INTERVAL '7 months'),
+  ('nulls', NULL)
+) AS t(label, imdn);
+
+query T
+SELECT arrow_typeof(imdn) FROM in_list_interval LIMIT 1
+----
+Interval(MonthDayNano)
+
+# Four non-null values and five non-null values (test different specializations)
+query TBB
+SELECT
+  label,
+  imdn IN (INTERVAL '3 months', INTERVAL '4 months', INTERVAL '5 months', INTERVAL '11 months'),
+  imdn IN (INTERVAL '3 months', INTERVAL '4 months', INTERVAL '5 months', INTERVAL '11 months', INTERVAL '13 months')
+FROM in_list_interval
+ORDER BY label
+----
+match true true
+no_match false false
+nulls NULL NULL
+
+# The same lists with NOT IN.
+query TBB
+SELECT
+  label,
+  imdn NOT IN (INTERVAL '3 months', INTERVAL '4 months', INTERVAL '5 months', INTERVAL '11 months'),
+  imdn NOT IN (INTERVAL '3 months', INTERVAL '4 months', INTERVAL '5 months', INTERVAL '11 months', INTERVAL '13 months')
+FROM in_list_interval
+ORDER BY label
+----
+match false false
+no_match true true
+nulls NULL NULL
+
+# Null IN list values, including short lists with a single non-null value.
+query TBB
+SELECT
+  label,
+  imdn IN (NULL, INTERVAL '3 months', INTERVAL '4 months', INTERVAL '11 months'),
+  imdn IN (NULL, INTERVAL '11 months')
+FROM in_list_interval
+ORDER BY label
+----
+match true true
+no_match NULL NULL
+nulls NULL NULL
+
+# Cleanup
+statement ok
+DROP TABLE in_list_interval
