@@ -54,7 +54,9 @@ use datafusion::prelude::*;
 use datafusion_common::DEFAULT_PARQUET_EXTENSION;
 use datafusion_common::instant::Instant;
 
-use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
+use crate::util::{
+    BenchmarkRun, CommonOpt, QueryResult, print_memory_stats, take_iteration_peak,
+};
 
 /// Default path to query files, relative to the benchmark root
 const SORT_PUSHDOWN_QUERY_DIR: &str = "queries/sort_pushdown";
@@ -141,7 +143,11 @@ impl RunOpt {
             match query_results {
                 Ok(query_results) => {
                     for iter in query_results {
-                        benchmark_run.write_iter(iter.elapsed, iter.row_count);
+                        benchmark_run.write_iter(
+                            iter.elapsed,
+                            iter.row_count,
+                            iter.pool_peak_bytes,
+                        );
                     }
                 }
                 Err(e) => {
@@ -192,7 +198,12 @@ impl RunOpt {
             println!(
                 "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
             );
-            query_results.push(QueryResult { elapsed, row_count });
+            let pool_peak_bytes = take_iteration_peak(&ctx.runtime_env().memory_pool);
+            query_results.push(QueryResult {
+                elapsed,
+                row_count,
+                pool_peak_bytes,
+            });
         }
 
         let avg = millis.iter().sum::<f64>() / millis.len() as f64;

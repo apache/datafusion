@@ -106,7 +106,8 @@ impl RunOpt {
             let elapsed = run_test(self.wait_time, Arc::clone(&store))?;
             let ms = elapsed.as_secs_f64() * 1000.0;
             println!("Iteration {i} cancelled in {ms} ms");
-            rundata.write_iter(elapsed, 0);
+            // No memory limit here, so no pool to read.
+            rundata.write_iter(elapsed, 0, None);
         }
 
         rundata.maybe_write_json(self.output_path.as_ref())?;

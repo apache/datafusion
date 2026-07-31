@@ -40,7 +40,7 @@ use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
 use datafusion_benchmarks::util::{
-    BenchmarkRun, CommonOpt, PeakRecordingPool, QueryResult,
+    BenchmarkRun, CommonOpt, PeakRecordingPool, QueryResult, take_iteration_peak,
 };
 use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
@@ -174,7 +174,11 @@ impl ExternalAggrConfig {
                 .benchmark_query(query_id, mem_limit, mem_pool_type, &mut benchmark_run)
                 .await?;
             for iter in query_results {
-                benchmark_run.write_iter(iter.elapsed, iter.row_count);
+                benchmark_run.write_iter(
+                    iter.elapsed,
+                    iter.row_count,
+                    iter.pool_peak_bytes,
+                );
             }
         }
 
@@ -242,7 +246,12 @@ impl ExternalAggrConfig {
             println!(
                 "{query_name} iteration {i} took {ms:.1} ms and returned {row_count} rows"
             );
-            query_results.push(QueryResult { elapsed, row_count });
+            let pool_peak_bytes = take_iteration_peak(&ctx.runtime_env().memory_pool);
+            query_results.push(QueryResult {
+                elapsed,
+                row_count,
+                pool_peak_bytes,
+            });
         }
 
         let avg = millis.iter().sum::<f64>() / millis.len() as f64;

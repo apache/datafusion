@@ -22,7 +22,9 @@ use super::{
     IMDB_QUERY_END_ID, IMDB_QUERY_START_ID, IMDB_TABLES, get_imdb_table_schema,
     get_query_sql,
 };
-use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
+use crate::util::{
+    BenchmarkRun, CommonOpt, QueryResult, print_memory_stats, take_iteration_peak,
+};
 
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
@@ -297,7 +299,11 @@ impl RunOpt {
             benchmark_run.start_new_case(&format!("Query {query_id}"));
             let query_run = self.benchmark_query(query_id, &mut benchmark_run).await?;
             for iter in query_run {
-                benchmark_run.write_iter(iter.elapsed, iter.row_count);
+                benchmark_run.write_iter(
+                    iter.elapsed,
+                    iter.row_count,
+                    iter.pool_peak_bytes,
+                );
             }
         }
         benchmark_run.maybe_write_json(self.output_path.as_ref())?;
@@ -348,7 +354,12 @@ impl RunOpt {
             println!(
                 "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
             );
-            query_results.push(QueryResult { elapsed, row_count });
+            let pool_peak_bytes = take_iteration_peak(&ctx.runtime_env().memory_pool);
+            query_results.push(QueryResult {
+                elapsed,
+                row_count,
+                pool_peak_bytes,
+            });
         }
 
         let avg = millis.iter().sum::<f64>() / millis.len() as f64;
