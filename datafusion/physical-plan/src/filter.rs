@@ -320,7 +320,8 @@ impl FilterExec {
     /// The estimated output row count is used to keep the per-column statistics
     /// consistent with it:
     /// - null and distinct counts are capped at the estimated row count;
-    /// - byte sizes (per column and total) are scaled by the selectivity;
+    /// - byte sizes (per column and total) are scaled by the selectivity, and
+    ///   are an exact zero when the row count is an exact zero;
     /// - a column constrained to a single value (`col = literal`, or an
     ///   interval that collapses to one point) gets a distinct count of 1;
     /// - a column in a null-rejecting conjunct gets a null count of 0.
@@ -384,8 +385,11 @@ impl FilterExec {
                     input_num_rows.with_estimated_selectivity(selectivity);
                 let mut cs = input_stats.to_inexact().column_statistics;
                 for (idx, col_stat) in cs.iter_mut().enumerate() {
-                    col_stat.byte_size =
-                        col_stat.byte_size.with_estimated_selectivity(selectivity);
+                    col_stat.byte_size = scale_byte_size_at_rows(
+                        col_stat.byte_size,
+                        selectivity,
+                        filtered_num_rows,
+                    );
                     col_stat.null_count = if null_rejecting_columns.contains(&idx) {
                         Precision::Exact(0)
                     } else {
@@ -401,11 +405,8 @@ impl FilterExec {
             }
         };
 
-        let total_byte_size = if is_infeasible {
-            Precision::Exact(0)
-        } else {
-            input_total_byte_size.with_estimated_selectivity(selectivity)
-        };
+        let total_byte_size =
+            scale_byte_size_at_rows(input_total_byte_size, selectivity, num_rows);
 
         Ok(Statistics {
             num_rows,
@@ -1050,6 +1051,20 @@ fn cap_at_rows(
     }
 }
 
+/// Scales a byte size by the filter selectivity. An exact zero row count means
+/// the output is exactly empty, so the byte size is an exact zero too.
+fn scale_byte_size_at_rows(
+    byte_size: Precision<usize>,
+    selectivity: f64,
+    filtered_num_rows: Precision<usize>,
+) -> Precision<usize> {
+    if filtered_num_rows == Precision::Exact(0) {
+        Precision::Exact(0)
+    } else {
+        byte_size.with_estimated_selectivity(selectivity)
+    }
+}
+
 /// Returns the NDV for a column constrained to one non-null value (e.g.
 /// `column = literal` or a singleton interval), derived from the filtered row
 /// estimate: zero rows means zero distinct values, a known positive row count
@@ -1129,9 +1144,11 @@ fn collect_new_statistics(
                 } else {
                     cap_at_rows(input_column_stats[idx].null_count, filtered_num_rows)
                 };
-                let byte_size = input_column_stats[idx]
-                    .byte_size
-                    .with_estimated_selectivity(selectivity);
+                let byte_size = scale_byte_size_at_rows(
+                    input_column_stats[idx].byte_size,
+                    selectivity,
+                    filtered_num_rows,
+                );
                 ColumnStatistics {
                     null_count: capped_null_count,
                     max_value,
@@ -2990,6 +3007,55 @@ mod tests {
 
         assert_eq!(statistics.num_rows, Precision::Exact(0));
         assert_eq!(statistics.total_byte_size, Precision::Exact(0));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_exact_empty_input_zeroes_byte_size() -> Result<()> {
+        let cases = [
+            ("absent", Precision::Absent, Precision::Absent),
+            ("inexact", Precision::Inexact(8000), Precision::Inexact(400)),
+        ];
+
+        for (desc, input_total_byte_size, input_byte_size) in cases {
+            let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+            let input_stats = Statistics {
+                num_rows: Precision::Exact(0),
+                total_byte_size: input_total_byte_size,
+                column_statistics: vec![ColumnStatistics {
+                    byte_size: input_byte_size,
+                    ..Default::default()
+                }],
+            };
+            let predicate = Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::Gt,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+            ));
+
+            let input = Arc::new(StatisticsExec::new(input_stats, schema));
+            let filter: Arc<dyn ExecutionPlan> =
+                Arc::new(FilterExec::try_new(predicate, input)?);
+            let statistics = StatisticsContext::new()
+                .compute(filter.as_ref(), &StatisticsArgs::new())?;
+
+            assert_eq!(
+                statistics.num_rows,
+                Precision::Exact(0),
+                "case '{desc}': num_rows mismatch"
+            );
+            assert_eq!(
+                statistics.total_byte_size,
+                Precision::Exact(0),
+                "case '{desc}': total_byte_size mismatch"
+            );
+            assert_eq!(
+                statistics.column_statistics[0].byte_size,
+                Precision::Exact(0),
+                "case '{desc}': byte_size mismatch"
+            );
+        }
 
         Ok(())
     }
