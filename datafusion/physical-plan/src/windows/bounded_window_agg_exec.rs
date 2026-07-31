@@ -1188,10 +1188,15 @@ impl BoundedWindowAggStream {
         // Retract no longer needed parts during window calculations from partition batch:
         for (partition_row, n_prune) in n_prune_each_partition.iter() {
             let pb_state = &mut self.partition_buffers[partition_row];
+            pb_state.n_out_row = 0;
+
+            // If there is nothing to prune, leave the batch as-is
+            if *n_prune == 0 {
+                continue;
+            }
 
             let batch = &pb_state.record_batch;
             pb_state.record_batch = batch.slice(*n_prune, batch.num_rows() - n_prune);
-            pb_state.n_out_row = 0;
 
             // Update state indices since we have pruned some rows from the beginning:
             for window_agg_state in self.window_agg_states.iter_mut() {
