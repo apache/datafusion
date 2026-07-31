@@ -42,6 +42,28 @@ use crate::aggregates::{
 
 use super::common::{AggregateAccumulator, EvaluatedAggregateBatch};
 
+#[derive(Clone)]
+pub(in crate::aggregates) struct OrderedAggregateTableMetrics {
+    pub(super) group_by: GroupByMetrics,
+    pub(super) aggregate_arguments: AggregateArgumentMetrics,
+}
+
+impl OrderedAggregateTableMetrics {
+    pub(in crate::aggregates) fn new(agg: &AggregateExec, partition: usize) -> Self {
+        let aggregate_arguments = AggregateArgumentMetrics::new(
+            &agg.metrics,
+            partition,
+            agg.aggr_expr
+                .iter()
+                .map(|agg_expr| aggregate_metric_label(agg_expr)),
+        );
+        Self {
+            group_by: GroupByMetrics::new(&agg.metrics, partition),
+            aggregate_arguments,
+        }
+    }
+}
+
 /// Aggregate table shared by the ordered partial and final paths.
 ///
 /// # Ordering optimization
@@ -145,8 +167,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         input_order_mode: &InputOrderMode,
         aggregate_mode: &AggregateMode,
         filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
-        group_by_metrics: GroupByMetrics,
-        partition: usize,
+        metrics: OrderedAggregateTableMetrics,
     ) -> Result<Self> {
         assert_or_internal_err!(
             batch_size > 0,
@@ -177,20 +198,12 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             })
             .collect::<Result<_>>()?;
 
-        let aggregate_argument_metrics = AggregateArgumentMetrics::new(
-            &agg.metrics,
-            partition,
-            agg.aggr_expr
-                .iter()
-                .map(|agg_expr| aggregate_metric_label(agg_expr)),
-        );
-
         Ok(Self {
             output_schema,
             state_schema,
             batch_size,
-            group_by_metrics,
-            aggregate_argument_metrics,
+            group_by_metrics: metrics.group_by,
+            aggregate_argument_metrics: metrics.aggregate_arguments,
             buffer: OrderedAggregateTableBuffer {
                 group_by: Arc::clone(&agg.group_by),
                 group_ordering,
@@ -269,8 +282,11 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             + self.buffer.group_indices.allocated_size()
     }
 
-    pub(in crate::aggregates) fn group_by_metrics(&self) -> GroupByMetrics {
-        self.group_by_metrics.clone()
+    pub(in crate::aggregates) fn metrics(&self) -> OrderedAggregateTableMetrics {
+        OrderedAggregateTableMetrics {
+            group_by: self.group_by_metrics.clone(),
+            aggregate_arguments: self.aggregate_argument_metrics.clone(),
+        }
     }
 
     /// Takes every intermediate aggregate state and resets the table so it can

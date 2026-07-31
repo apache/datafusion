@@ -37,10 +37,9 @@ use datafusion_common::Result;
 
 use crate::aggregates::{
     AggregateExec, AggregateMode, aggregate_hash_table::PartialMarker,
-    group_values::GroupByMetrics,
 };
 
-use super::common_ordered::OrderedAggregateTable;
+use super::common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics};
 
 /// Implementation specific to partial aggregation, where the table stores
 /// partial aggregate states and the input rows are raw rows.
@@ -60,7 +59,7 @@ impl OrderedAggregateTable<PartialMarker> {
     ) -> Result<Self> {
         let input_schema = agg.input().schema();
         let state_schema = Arc::clone(&output_schema);
-        let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
+        let metrics = OrderedAggregateTableMetrics::new(agg, partition);
         Self::new_for_mode(
             agg,
             &input_schema,
@@ -70,8 +69,7 @@ impl OrderedAggregateTable<PartialMarker> {
             &agg.input_order_mode,
             &AggregateMode::Partial,
             agg.filter_expr.iter().cloned().collect(),
-            group_by_metrics,
-            partition,
+            metrics,
         )
     }
 

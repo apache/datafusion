@@ -32,8 +32,9 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
-use super::aggregate_hash_table::{FinalMarker, OrderedAggregateTable};
-use super::group_values::GroupByMetrics;
+use super::aggregate_hash_table::{
+    FinalMarker, OrderedAggregateTable, OrderedAggregateTableMetrics,
+};
 use crate::aggregates::AggregateMode;
 use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
 use crate::sorts::IncrementalSortIterator;
@@ -213,7 +214,7 @@ impl OrderedFinalSpillContext {
     fn into_replay_stream(
         self,
         baseline_metrics: &BaselineMetrics,
-        group_by_metrics: GroupByMetrics,
+        metrics: OrderedAggregateTableMetrics,
         reservation: MemoryReservation,
     ) -> Result<SendableRecordBatchStream> {
         let Self {
@@ -243,7 +244,7 @@ impl OrderedFinalSpillContext {
             merged,
             &InputOrderMode::Sorted,
             baseline_metrics.clone(),
-            group_by_metrics,
+            metrics,
             None,
         )?;
         Ok(Box::pin(replay))
@@ -274,7 +275,7 @@ impl OrderedFinalAggregateStream {
         input_order_mode: &InputOrderMode,
     ) -> Result<Self> {
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
-        let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
+        let metrics = OrderedAggregateTableMetrics::new(agg, partition);
         let spill_metrics = SpillMetrics::new(&agg.metrics, partition);
         Self::new_with_input_and_metrics(
             agg,
@@ -283,7 +284,7 @@ impl OrderedFinalAggregateStream {
             input,
             input_order_mode,
             baseline_metrics,
-            group_by_metrics,
+            metrics,
             Some(spill_metrics),
         )
     }
@@ -299,7 +300,7 @@ impl OrderedFinalAggregateStream {
         input: SendableRecordBatchStream,
         input_order_mode: &InputOrderMode,
         baseline_metrics: BaselineMetrics,
-        group_by_metrics: GroupByMetrics,
+        metrics: OrderedAggregateTableMetrics,
         spill_metrics: Option<SpillMetrics>,
     ) -> Result<Self> {
         debug_assert!(matches!(
@@ -337,8 +338,7 @@ impl OrderedFinalAggregateStream {
             Arc::clone(&schema),
             batch_size,
             input_order_mode,
-            group_by_metrics,
-            partition,
+            metrics,
         )?;
         let reservation =
             MemoryConsumer::new(format!("OrderedFinalAggregateStream[{partition}]"))
@@ -636,12 +636,12 @@ impl OrderedFinalAggregateStream {
         let timer = elapsed_compute.timer();
         let replay = match spill_context.spill_table(&mut table) {
             Ok(()) => {
-                let group_by_metrics = table.group_by_metrics();
+                let metrics = table.metrics();
                 drop(table);
                 match self.reservation.try_resize(0) {
                     Ok(()) => (*spill_context).into_replay_stream(
                         &self.baseline_metrics,
-                        group_by_metrics,
+                        metrics,
                         self.reservation.new_empty(),
                     ),
                     Err(e) => Err(e),
