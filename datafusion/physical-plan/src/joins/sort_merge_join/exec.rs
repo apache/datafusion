@@ -81,8 +81,7 @@ use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequiremen
 /// on the output batch size of the execution plan. There is no spilling support for streamed input.
 /// The comparisons are performed from values of join keys in streamed input with the values of
 /// join keys in buffered input. One row in streamed record batch could be matched with multiple rows in
-/// buffered input batches. The streamed input is managed through the states in `StreamedState`
-/// and streamed input batches are represented by `StreamedBatch`.
+/// buffered input batches. Streamed input batches are represented by `StreamedBatch`.
 ///
 /// Buffered input is buffered for all record batches having the same value of join key.
 /// If the memory limit increases beyond the specified value and spilling is enabled,
@@ -92,8 +91,7 @@ use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequiremen
 /// memory/disk depends on the number of rows of buffered input having the same value
 /// of join key as that of streamed input rows currently present in memory. Due to pre-sorted inputs,
 /// the algorithm understands when it is not needed anymore, and releases the buffered batches
-/// from memory/disk. The buffered input is managed through the states in `BufferedState`
-/// and buffered input batches are represented by `BufferedBatch`.
+/// from memory/disk. Buffered input batches are represented by `BufferedBatch`.
 ///
 /// Depending on the type of join, left or right input may be selected as streamed or buffered
 /// respectively. For example, in a left-outer join, the left execution plan will be selected as
@@ -424,7 +422,6 @@ impl ExecutionPlan for SortMergeJoinExec {
             Distribution::KeyPartitioned(left_expr),
             Distribution::KeyPartitioned(right_expr),
         ])
-        .allow_range_satisfaction_for_key_partitioning()
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
@@ -529,7 +526,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 | JoinType::LeftMark
                 | JoinType::RightMark
         ) {
-            Ok(Box::pin(BitwiseSortMergeJoinStream::try_new(
+            BitwiseSortMergeJoinStream::try_new(
                 Arc::clone(&self.schema),
                 self.sort_options.clone(),
                 self.null_equality,
@@ -545,9 +542,9 @@ impl ExecutionPlan for SortMergeJoinExec {
                 reservation,
                 spill_manager,
                 context.runtime_env(),
-            )?))
+            )
         } else {
-            Ok(Box::pin(MaterializingSortMergeJoinStream::try_new(
+            MaterializingSortMergeJoinStream::try_new(
                 Arc::clone(&self.schema),
                 self.sort_options.clone(),
                 self.null_equality,
@@ -562,7 +559,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 reservation,
                 spill_manager,
                 context.runtime_env(),
-            )?))
+            )
         }
     }
 
@@ -651,5 +648,150 @@ impl ExecutionPlan for SortMergeJoinExec {
             self.sort_options.clone(),
             self.null_equality,
         )?)))
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        let left = ctx.encode_child(self.left())?;
+        let right = ctx.encode_child(self.right())?;
+        let on = self
+            .on()
+            .iter()
+            .map(|(left, right)| {
+                Ok(protobuf::JoinOn {
+                    left: Some(ctx.encode_expr(left)?),
+                    right: Some(ctx.encode_expr(right)?),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let join_type = crate::joins::proto::join_type_to_proto(self.join_type());
+        let null_equality =
+            crate::joins::proto::null_equality_to_proto(self.null_equality());
+        let filter = self
+            .filter()
+            .as_ref()
+            .map(|filter| crate::joins::proto::join_filter_to_proto(filter, ctx))
+            .transpose()?;
+        let sort_options = self
+            .sort_options()
+            .iter()
+            .map(|options| protobuf::SortExprNode {
+                expr: None,
+                asc: !options.descending,
+                nulls_first: options.nulls_first,
+            })
+            .collect();
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::SortMergeJoin(Box::new(
+                    protobuf::SortMergeJoinExecNode {
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
+                        on,
+                        join_type: join_type.into(),
+                        filter,
+                        sort_options,
+                        null_equality: null_equality.into(),
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl SortMergeJoinExec {
+    /// Reconstruct a [`SortMergeJoinExec`] from its protobuf representation.
+    ///
+    /// The exact inverse of [`ExecutionPlan::try_to_proto`].
+    ///
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let sort_join = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::SortMergeJoin,
+            "SortMergeJoinExec",
+        );
+        let left = ctx.decode_required_child(
+            sort_join.left.as_deref(),
+            "SortMergeJoinExec",
+            "left",
+        )?;
+        let right = ctx.decode_required_child(
+            sort_join.right.as_deref(),
+            "SortMergeJoinExec",
+            "right",
+        )?;
+        let left_schema = left.schema();
+        let right_schema = right.schema();
+        let on = sort_join
+            .on
+            .iter()
+            .map(|columns| {
+                let left = ctx.decode_required_expr(
+                    columns.left.as_ref(),
+                    left_schema.as_ref(),
+                    "SortMergeJoinExec",
+                    "on.left",
+                )?;
+                let right = ctx.decode_required_expr(
+                    columns.right.as_ref(),
+                    right_schema.as_ref(),
+                    "SortMergeJoinExec",
+                    "on.right",
+                )?;
+                Ok((left, right))
+            })
+            .collect::<Result<JoinOn>>()?;
+
+        let join_type = crate::joins::proto::join_type_from_proto(
+            sort_join.join_type,
+            "SortMergeJoinExec",
+        )?;
+        let null_equality = crate::joins::proto::null_equality_from_proto(
+            sort_join.null_equality,
+            "SortMergeJoinExec",
+        )?;
+        let filter = sort_join
+            .filter
+            .as_ref()
+            .map(|filter| {
+                crate::joins::proto::join_filter_from_proto(
+                    filter,
+                    ctx,
+                    "SortMergeJoinExec",
+                )
+            })
+            .transpose()?;
+        let sort_options = sort_join
+            .sort_options
+            .iter()
+            .map(|options| SortOptions {
+                descending: !options.asc,
+                nulls_first: options.nulls_first,
+            })
+            .collect();
+
+        Ok(Arc::new(Self::try_new(
+            left,
+            right,
+            on,
+            filter,
+            join_type,
+            sort_options,
+            null_equality,
+        )?))
     }
 }

@@ -253,8 +253,11 @@ pub struct EmptyRelationNode {
 pub struct CreateExternalTableNode {
     #[prost(message, optional, tag = "9")]
     pub name: ::core::option::Option<TableReference>,
+    /// deprecated; use repeated locations
     #[prost(string, tag = "2")]
     pub location: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "16")]
+    pub locations: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, tag = "3")]
     pub file_type: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "4")]
@@ -1872,8 +1875,6 @@ pub struct FileScanExecConf {
     pub batch_size: ::core::option::Option<u64>,
     #[prost(message, optional, tag = "13")]
     pub projection_exprs: ::core::option::Option<ProjectionExprs>,
-    #[prost(bool, optional, tag = "14")]
-    pub partitioned_by_file_group: ::core::option::Option<bool>,
     #[prost(message, optional, tag = "15")]
     pub output_partitioning: ::core::option::Option<Partitioning>,
 }

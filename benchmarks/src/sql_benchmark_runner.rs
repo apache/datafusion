@@ -110,7 +110,7 @@ fn run_criterion_benchmark(
 
     match result {
         Ok(()) => {
-            print_memory_stats();
+            print_memory_stats(&*ctx.runtime_env().memory_pool);
             Ok(())
         }
         Err(payload) => Err(panic_payload_to_error(payload.as_ref())),
