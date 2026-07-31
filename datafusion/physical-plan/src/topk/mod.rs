@@ -2226,14 +2226,31 @@ impl PartitionedTopKDenseRank {
 
     /// Total memory currently held, including all per-partition states.
     fn size(&self) -> usize {
+        // Per partition: the state itself plus the encoded partition key
+        // owned by the map. The key bytes are a heap allocation the table
+        // slot doesn't cover, and with wide or numerous partition keys
+        // they dominate the fixed-size slots.
+        let states_contents: usize = self
+            .states
+            .iter()
+            .map(|(pk, state)| pk.capacity() + state.size())
+            .sum();
+        // `partition_groups` and `ob_runs` are drained, not dropped, so
+        // their backing tables outlive every `insert_batch` call. Both are
+        // empty by the time `size()` runs (drained above), so only the
+        // retained capacity is charged.
+        let scratch_tables = self.partition_groups.capacity()
+            * (size_of::<Vec<u8>>() + size_of::<Vec<u32>>())
+            + self.ob_runs.capacity() * (size_of::<Vec<u8>>() + size_of::<Vec<u32>>());
         size_of::<Self>()
             + self.row_converter.size()
             + self.partition_converter.size()
             + self.scratch_rows.size()
             + self.partition_scratch_rows.size()
-            + self.states.values().map(|s| s.size()).sum::<usize>()
+            + states_contents
             + self.states.capacity()
                 * (size_of::<Vec<u8>>() + size_of::<DenseRankPartitionState>())
+            + scratch_tables
             + self.store.size()
     }
 }
@@ -2241,7 +2258,7 @@ impl PartitionedTopKDenseRank {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{BooleanArray, Float64Array, Int32Array};
+    use arrow::array::{BooleanArray, Float64Array, Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::SortOptions;
     use datafusion_common::assert_batches_eq;
@@ -4190,6 +4207,86 @@ mod tests {
             heap_slots <= PARTITIONS * 8,
             "reserved {heap_slots} heap slots to hold {PARTITIONS} keys"
         );
+        Ok(())
+    }
+
+    /// The encoded partition keys owned by `states`, and the backing
+    /// tables the drained scratch maps keep, are long-lived heap
+    /// allocations `size()` must charge: they persist for the operator's
+    /// life yet belong to no `GroupEntry`, so per-entry accounting can't
+    /// see them. With numerous or wide partition keys the key bytes are
+    /// the larger term.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_size_covers_keys_and_scratch() -> Result<()>
+    {
+        const PARTITIONS: usize = 64;
+        const KEY_WIDTH: usize = 1024;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("pk", DataType::Utf8, false),
+            Field::new("val", DataType::Int32, false),
+        ]));
+        let pk_expr: Arc<dyn PhysicalExpr> = col("pk", schema.as_ref())?;
+        let partition_sort_fields = build_sort_fields(
+            &[PhysicalSortExpr {
+                expr: Arc::clone(&pk_expr),
+                options: SortOptions::default(),
+            }],
+            &schema,
+        )?;
+        let order_expr = LexOrdering::from([PhysicalSortExpr {
+            expr: col("val", schema.as_ref())?,
+            options: SortOptions::default(),
+        }]);
+        let mut state = PartitionedTopKDenseRank::try_new(
+            0,
+            Arc::clone(&schema),
+            vec![pk_expr],
+            partition_sort_fields,
+            order_expr,
+            4,
+            8, // batch_size
+            &Arc::new(RuntimeEnv::default()),
+            &ExecutionPlanMetricsSet::new(),
+        )?;
+
+        // One row per partition, each with a wide key.
+        let pks: Vec<String> = (0..PARTITIONS)
+            .map(|i| format!("{}{i:04}", "p".repeat(KEY_WIDTH - 4)))
+            .collect();
+        let vals: Vec<i32> = (0..PARTITIONS as i32).collect();
+        state.insert_batch(&RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(pks)),
+                Arc::new(Int32Array::from(vals)),
+            ],
+        )?)?;
+        assert_eq!(state.states.len(), PARTITIONS);
+
+        let key_bytes: usize = state.states.keys().map(|pk| pk.capacity()).sum();
+        let scratch_bytes = state.partition_groups.capacity()
+            * (size_of::<Vec<u8>>() + size_of::<Vec<u32>>())
+            + state.ob_runs.capacity() * (size_of::<Vec<u8>>() + size_of::<Vec<u32>>());
+        assert!(key_bytes >= PARTITIONS * KEY_WIDTH, "key bytes {key_bytes}");
+        assert!(scratch_bytes > 0, "scratch tables never allocated");
+
+        // Reconstruct the total from its parts. Both terms above have to
+        // appear for this to balance, so dropping either from `size()`
+        // fails here rather than being absorbed by the slack in some
+        // other term.
+        let expected = size_of::<PartitionedTopKDenseRank>()
+            + state.row_converter.size()
+            + state.partition_converter.size()
+            + state.scratch_rows.size()
+            + state.partition_scratch_rows.size()
+            + key_bytes
+            + state.states.values().map(|s| s.size()).sum::<usize>()
+            + state.states.capacity()
+                * (size_of::<Vec<u8>>() + size_of::<DenseRankPartitionState>())
+            + scratch_bytes
+            + state.store.size();
+        assert_eq!(state.size(), expected);
         Ok(())
     }
 
