@@ -880,9 +880,8 @@ impl GroupedHashAggregateStream {
             .iter()
             .enumerate()
             .map(|(idx, expr)| {
-                let _aggregate_timer =
-                    self.aggregate_argument_metrics.scoped_argument_timer(idx);
-                evaluate_expressions_to_arrays(expr, batch)
+                self.aggregate_argument_metrics
+                    .time(idx, || evaluate_expressions_to_arrays(expr, batch))
             })
             .collect::<Result<Vec<_>>>()?;
         drop(timer);
@@ -1396,9 +1395,8 @@ impl GroupedHashAggregateStream {
             .iter()
             .enumerate()
             .map(|(idx, expr)| {
-                let _aggregate_timer =
-                    self.aggregate_argument_metrics.scoped_argument_timer(idx);
-                evaluate_expressions_to_arrays(expr, batch)
+                self.aggregate_argument_metrics
+                    .time(idx, || evaluate_expressions_to_arrays(expr, batch))
             })
             .collect::<Result<Vec<_>>>()?;
         let filter_values = evaluate_optional(&self.filter_expressions, batch)?;

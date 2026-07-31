@@ -1902,9 +1902,7 @@ fn format_tree_aggregate_expr(agg: &AggregateFunctionExpr) -> Cow<'_, str> {
 }
 
 fn aggregate_metric_label(agg: &AggregateFunctionExpr) -> String {
-    format_human_display(agg.human_display(), agg.human_display_alias())
-        .unwrap_or_else(|| Cow::Borrowed(agg.name()))
-        .into_owned()
+    format_tree_aggregate_expr(agg).into_owned()
 }
 
 fn format_human_display<'a>(

@@ -17,7 +17,7 @@
 
 //! Metrics for the various group-by implementations.
 
-use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, ScopedTimerGuard, Time};
+use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, Time};
 
 #[derive(Clone)]
 pub(crate) struct AggregateArgumentMetrics {
@@ -46,11 +46,9 @@ impl AggregateArgumentMetrics {
         Self { argument_times }
     }
 
-    pub(crate) fn scoped_argument_timer(
-        &self,
-        index: usize,
-    ) -> Option<ScopedTimerGuard<'_>> {
-        self.argument_times.get(index).map(Time::timer)
+    pub(crate) fn time<R>(&self, index: usize, f: impl FnOnce() -> R) -> R {
+        let _timer = self.argument_times.get(index).map(Time::timer);
+        f()
     }
 }
 
@@ -98,7 +96,9 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
-    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_expr::aggregate::{
+        AggregateExprBuilder, AggregateFunctionExpr,
+    };
     use datafusion_physical_expr::expressions::col;
     use std::sync::Arc;
 
@@ -124,12 +124,38 @@ mod tests {
                 matches!(
                     metric.value(),
                     MetricValue::Time { name, .. }
-                        if name.ends_with("_arguments_time")
-                            && name.as_ref() != "aggregate_arguments_time"
+                        if name.starts_with("agg_expr_")
+                            && name.ends_with("_arguments_time")
                 )
             })
             .map(|metric| metric.to_string())
             .collect()
+    }
+
+    fn sum_aggregate(
+        schema: &Arc<Schema>,
+        column: &str,
+        alias: &str,
+    ) -> Result<Arc<AggregateFunctionExpr>> {
+        Ok(Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col(column, schema)?])
+                .schema(Arc::clone(schema))
+                .alias(alias)
+                .build()?,
+        ))
+    }
+
+    fn count_aggregate(
+        schema: &Arc<Schema>,
+        column: &str,
+        alias: &str,
+    ) -> Result<Arc<AggregateFunctionExpr>> {
+        Ok(Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col(column, schema)?])
+                .schema(Arc::clone(schema))
+                .alias(alias)
+                .build()?,
+        ))
     }
 
     #[tokio::test]
@@ -164,18 +190,8 @@ mod tests {
             PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
 
         let aggregates = vec![
-            Arc::new(
-                AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
-                    .schema(Arc::clone(&schema))
-                    .alias("SUM(b)")
-                    .build()?,
-            ),
-            Arc::new(
-                AggregateExprBuilder::new(count_udaf(), vec![col("b", &schema)?])
-                    .schema(Arc::clone(&schema))
-                    .alias("COUNT(b)")
-                    .build()?,
-            ),
+            sum_aggregate(&schema, "b", "SUM(b)")?,
+            count_aggregate(&schema, "b", "COUNT(b)")?,
         ];
 
         let aggregate_exec = Arc::new(AggregateExec::try_new(
@@ -239,18 +255,8 @@ mod tests {
         let group_by =
             PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".to_string())]);
         let aggregates = vec![
-            Arc::new(
-                AggregateExprBuilder::new(sum_udaf(), vec![col("a", &schema)?])
-                    .schema(Arc::clone(&schema))
-                    .alias("SUM(a)")
-                    .build()?,
-            ),
-            Arc::new(
-                AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
-                    .schema(Arc::clone(&schema))
-                    .alias("SUM(b)")
-                    .build()?,
-            ),
+            sum_aggregate(&schema, "a", "SUM(a)")?,
+            sum_aggregate(&schema, "b", "SUM(b)")?,
         ];
 
         let aggregate_exec = Arc::new(AggregateExec::try_new(
@@ -318,12 +324,7 @@ mod tests {
         let group_by =
             PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
 
-        let aggregates = vec![Arc::new(
-            AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias("SUM(b)")
-                .build()?,
-        )];
+        let aggregates = vec![sum_aggregate(&schema, "b", "SUM(b)")?];
 
         // Create partial aggregate
         let partial_aggregate = Arc::new(AggregateExec::try_new(

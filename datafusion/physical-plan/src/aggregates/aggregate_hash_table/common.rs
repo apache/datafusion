@@ -180,9 +180,8 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             .iter()
             .enumerate()
             .map(|(idx, acc)| {
-                let _aggregate_timer =
-                    self.aggregate_argument_metrics.scoped_argument_timer(idx);
-                acc.evaluate_acc_args(batch)
+                self.aggregate_argument_metrics
+                    .time(idx, || acc.evaluate_acc_args(batch))
             })
             .collect::<Result<Vec<_>>>()?;
         drop(timer);
