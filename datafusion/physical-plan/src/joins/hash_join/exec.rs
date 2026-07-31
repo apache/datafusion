@@ -879,6 +879,13 @@ impl HashJoinExec {
         // https://github.com/apache/datafusion/issues/20195
         if config.optimizer.preserve_file_partitions > 0
             && self.mode == PartitionMode::Partitioned
+            && !matches!(
+                (
+                    self.left.output_partitioning(),
+                    self.right.output_partitioning()
+                ),
+                (Partitioning::Range(_), Partitioning::Range(_))
+            )
         {
             return false;
         }
@@ -6809,6 +6816,11 @@ mod tests {
             false,
         )?;
 
+        assert!(join.allow_join_dynamic_filter_pushdown(session_config.options()));
+        session_config
+            .options_mut()
+            .optimizer
+            .preserve_file_partitions = 1;
         assert!(join.allow_join_dynamic_filter_pushdown(session_config.options()));
 
         let mismatched_right_partitioning =
