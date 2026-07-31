@@ -117,18 +117,26 @@ mod tests {
         assert!(emitting_time.unwrap().as_usize() > 0);
     }
 
-    fn aggregate_argument_metric_displays(metrics: &MetricsSet) -> Vec<String> {
+    fn aggregate_argument_metric_names_and_labels(
+        metrics: &MetricsSet,
+    ) -> Vec<(String, String)> {
         metrics
             .iter()
-            .filter(|metric| {
-                matches!(
-                    metric.value(),
-                    MetricValue::Time { name, .. }
-                        if name.starts_with("agg_expr_")
-                            && name.ends_with("_arguments_time")
-                )
+            .filter_map(|metric| match metric.value() {
+                MetricValue::Time { name, .. }
+                    if name.starts_with("agg_expr_")
+                        && name.ends_with("_arguments_time") =>
+                {
+                    let aggregate_label = metric
+                        .labels()
+                        .iter()
+                        .find(|label| label.name() == "aggregate")?
+                        .value()
+                        .to_string();
+                    Some((name.to_string(), aggregate_label))
+                }
+                _ => None,
             })
-            .map(|metric| metric.to_string())
             .collect()
     }
 
@@ -276,19 +284,21 @@ mod tests {
             collect(Arc::clone(&aggregate_exec) as _, Arc::clone(&task_ctx)).await?;
 
         let metrics = aggregate_exec.metrics().unwrap();
-        let metric_displays = aggregate_argument_metric_displays(&metrics);
-        assert_eq!(metric_displays.len(), 2, "{metric_displays:#?}");
-        assert!(
-            metric_displays
-                .iter()
-                .any(|display| display.contains("SUM(a)")),
-            "{metric_displays:#?}"
-        );
-        assert!(
-            metric_displays
-                .iter()
-                .any(|display| display.contains("SUM(b)")),
-            "{metric_displays:#?}"
+        let mut metric_names_and_labels =
+            aggregate_argument_metric_names_and_labels(&metrics);
+        metric_names_and_labels.sort();
+        assert_eq!(
+            metric_names_and_labels,
+            vec![
+                (
+                    "agg_expr_0_arguments_time".to_string(),
+                    "SUM(a)".to_string(),
+                ),
+                (
+                    "agg_expr_1_arguments_time".to_string(),
+                    "SUM(b)".to_string(),
+                ),
+            ]
         );
 
         Ok(())
