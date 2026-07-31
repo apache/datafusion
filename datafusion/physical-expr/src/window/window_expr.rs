@@ -609,6 +609,17 @@ pub struct WindowState {
     pub state: WindowAggState,
     pub window_fn: WindowFn,
 }
+
+impl WindowState {
+    /// `Accumulator::state()` if this is an aggregate window; `None` otherwise.
+    pub fn aggregate_state(&mut self) -> Result<Option<Vec<ScalarValue>>> {
+        match &mut self.window_fn {
+            WindowFn::Aggregate(acc) => acc.state().map(Some),
+            WindowFn::Builtin(_) => Ok(None),
+        }
+    }
+}
+
 pub type PartitionWindowAggStates = IndexMap<PartitionKey, WindowState>;
 
 /// The IndexMap (i.e. an ordered HashMap) where record batches are separated for each partition.
