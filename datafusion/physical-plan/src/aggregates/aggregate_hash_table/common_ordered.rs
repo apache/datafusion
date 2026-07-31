@@ -37,6 +37,10 @@ use crate::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
     evaluate_group_by,
 };
+use crate::aggregates::{
+    narrow_group_key_arrays, narrow_group_key_columns, widen_group_key_arrays,
+    widen_group_key_schema,
+};
 
 use super::common::{AggregateAccumulator, EvaluatedAggregateBatch};
 
@@ -80,6 +84,13 @@ use super::common::{AggregateAccumulator, EvaluatedAggregateBatch};
 pub(in crate::aggregates) struct OrderedAggregateTable<OrderedAggrMode> {
     /// Output schema: group columns followed by aggregate state or final values.
     pub(super) output_schema: SchemaRef,
+
+    /// `output_schema` with string/binary group key columns widened to the
+    /// internal 64-bit offset representation the group values are emitted
+    /// with (see `PhysicalGroupBy::group_schema`). Emitted batches are built
+    /// against this schema and narrowed back to `output_schema`; they are
+    /// clamped to `batch_size` rows, where the narrow representation fits.
+    pub(super) emit_schema: SchemaRef,
 
     /// Intermediate-state schema used when memory pressure requires the table
     /// to pass through or spill its current state.
@@ -149,6 +160,8 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
 
         let group_ordering = GroupOrdering::try_new(input_order_mode)?;
         let group_schema = agg.group_by.group_schema(input_schema)?;
+        let emit_schema =
+            widen_group_key_schema(&output_schema, group_schema.fields().len());
         let group_values = new_group_values(group_schema, &group_ordering)?;
         let aggregate_arguments = aggregate_expressions(
             &agg.aggr_expr,
@@ -173,6 +186,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
 
         Ok(Self {
             output_schema,
+            emit_schema,
             state_schema,
             batch_size,
             group_by_metrics,
@@ -273,6 +287,12 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             output.extend(acc.state(EmitTo::All)?);
         }
 
+        // Group keys are emitted in the widened internal representation (see
+        // `emit_schema`); narrow them back before the batch is passed
+        // downstream or spilled. Unlike ordered emission this batch is not
+        // clamped to `batch_size`, so narrowing fails if a single group key
+        // column exceeds `i32::MAX` bytes.
+        let output = narrow_group_key_arrays(output, &self.state_schema)?;
         let batch = RecordBatch::try_new(Arc::clone(&self.state_schema), output)?;
         debug_assert!(batch.num_rows() > 0);
 
@@ -318,6 +338,10 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         is_final: bool,
     ) -> Result<()> {
         for group_values in &evaluated_batch.grouping_set_args {
+            // Widen string/binary group keys to the internal representation
+            // that `group_values` interns (see `PhysicalGroupBy::group_schema`)
+            let group_values = widen_group_key_arrays(group_values.clone())?;
+            let group_values = &group_values;
             let starting_num_groups = self.buffer.group_values.len();
             self.buffer
                 .group_values
@@ -402,7 +426,11 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         }
         drop(timer);
 
-        let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
+        // Emitted group keys use the widened internal representation; narrow
+        // them back to the output schema. The emission is clamped to
+        // `batch_size` rows above, so the narrow representation always fits.
+        let batch = RecordBatch::try_new(Arc::clone(&self.emit_schema), output)?;
+        let batch = narrow_group_key_columns(batch, &self.output_schema)?;
         debug_assert!(batch.num_rows() > 0);
 
         Ok(Some(batch))

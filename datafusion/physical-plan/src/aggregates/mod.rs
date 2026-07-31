@@ -171,7 +171,10 @@ use datafusion_common::config::ConfigOptions;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 
-use arrow::array::{ArrayRef, UInt8Array, UInt16Array, UInt32Array, UInt64Array};
+use arrow::array::{
+    ArrayRef, MutableArrayData, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
+    make_array,
+};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
@@ -551,8 +554,27 @@ impl PhysicalGroupBy {
         Aggregate::grouping_id_type(self.expr.len(), max_duplicate_ordinal(&self.groups))
     }
 
+    /// Returns the schema of the group values as they are interned and
+    /// emitted by the group values machinery of the aggregation streams.
+    ///
+    /// This differs from the output schema in that string and binary group
+    /// keys are widened to their internal 64-bit offset representation (see
+    /// `internal_group_key_type`). Output batches are narrowed back to the
+    /// declared output types after being sliced to `batch_size` rows.
     pub fn group_schema(&self, schema: &Schema) -> Result<SchemaRef> {
-        Ok(Arc::new(Schema::new(self.group_fields(schema)?)))
+        let fields = self
+            .group_fields(schema)?
+            .into_iter()
+            .map(|field| {
+                let wide = internal_group_key_type(field.data_type());
+                if wide == *field.data_type() {
+                    field
+                } else {
+                    Arc::new(field.as_ref().clone().with_data_type(wide))
+                }
+            })
+            .collect::<Vec<_>>();
+        Ok(Arc::new(Schema::new(fields)))
     }
 
     /// Returns the fields that are used as the grouping keys.
@@ -2511,6 +2533,119 @@ impl AggregateExec {
 
         Ok(Arc::new(aggregate))
     }
+}
+
+/// The type used internally to intern and emit a group-by key of the given
+/// input type.
+///
+/// String and binary group keys are accumulated with 64-bit offsets
+/// (`LargeUtf8` / `LargeBinary`) so that the single array holding all
+/// distinct group keys is not limited to `i32::MAX` total bytes. This is an
+/// implementation detail of the aggregation streams: output batches are
+/// narrowed back to the declared output types after being sliced to
+/// `batch_size` rows, where the narrow representation always fits.
+pub(crate) fn internal_group_key_type(input_type: &DataType) -> DataType {
+    match input_type {
+        DataType::Utf8 => DataType::LargeUtf8,
+        DataType::Binary => DataType::LargeBinary,
+        other => other.clone(),
+    }
+}
+
+/// Returns `schema` with any string/binary fields among the leading
+/// `num_group_columns` group key fields widened to the internal group key
+/// representation (see [`internal_group_key_type`]).
+///
+/// Returns the original schema when nothing needs widening.
+pub(crate) fn widen_group_key_schema(
+    schema: &SchemaRef,
+    num_group_columns: usize,
+) -> SchemaRef {
+    let mut changed = false;
+    let fields = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(idx, field)| {
+            if idx < num_group_columns {
+                let wide = internal_group_key_type(field.data_type());
+                if wide != *field.data_type() {
+                    changed = true;
+                    return Arc::new(field.as_ref().clone().with_data_type(wide));
+                }
+            }
+            Arc::clone(field)
+        })
+        .collect::<Vec<_>>();
+
+    if changed {
+        Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
+    } else {
+        Arc::clone(schema)
+    }
+}
+
+/// Widens string/binary group key arrays to the internal representation
+/// interned by `group_values` (see `PhysicalGroupBy::group_schema`).
+pub(crate) fn widen_group_key_arrays(arrays: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
+    arrays
+        .into_iter()
+        .map(|array| {
+            let wide = internal_group_key_type(array.data_type());
+            if wide == *array.data_type() {
+                Ok(array)
+            } else {
+                Ok(arrow::compute::cast(&array, &wide)?)
+            }
+        })
+        .collect()
+}
+
+/// Narrows internally-widened group key arrays back to the types declared in
+/// `schema`, leaving arrays whose type already matches untouched.
+///
+/// Errors if a narrowed array holds more than `i32::MAX` bytes.
+pub(crate) fn narrow_group_key_arrays(
+    columns: Vec<ArrayRef>,
+    schema: &SchemaRef,
+) -> Result<Vec<ArrayRef>> {
+    columns
+        .into_iter()
+        .zip(schema.fields())
+        .map(|(array, field)| {
+            if array.data_type() == field.data_type() {
+                Ok(array)
+            } else {
+                // The array is typically a slice referencing the buffers of
+                // the full emitted batch; compact it so its offsets are
+                // rebased into a minimal buffer before converting them to the
+                // narrow offset width.
+                let data = array.to_data();
+                let mut mutable = MutableArrayData::new(vec![&data], false, data.len());
+                mutable.try_extend(0, 0, data.len())?;
+                let compacted = make_array(mutable.freeze());
+                Ok(arrow::compute::cast(&compacted, field.data_type())?)
+            }
+        })
+        .collect()
+}
+
+/// Narrows internally-widened group key columns of `batch` back to the types
+/// declared in `schema`.
+///
+/// `batch` is expected to hold at most `batch_size` rows (it is narrowed
+/// after the emitted batch is sliced for output); if a single column slice
+/// still holds more than `i32::MAX` bytes an error is returned.
+pub(crate) fn narrow_group_key_columns(
+    batch: RecordBatch,
+    schema: &SchemaRef,
+) -> Result<RecordBatch> {
+    if batch.schema().fields() == schema.fields() {
+        return Ok(batch);
+    }
+
+    let columns = narrow_group_key_arrays(batch.columns().to_vec(), schema)?;
+    Ok(RecordBatch::try_new(Arc::clone(schema), columns)?)
 }
 
 /// Creates the output schema for an [`AggregateExec`] containing the group by columns followed
