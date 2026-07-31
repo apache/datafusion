@@ -47,6 +47,10 @@ impl AggregateArgumentMetrics {
     }
 
     pub(crate) fn time<R>(&self, index: usize, f: impl FnOnce() -> R) -> R {
+        debug_assert!(
+            index < self.argument_times.len(),
+            "aggregate argument metric index {index} out of range"
+        );
         let _timer = self.argument_times.get(index).map(Time::timer);
         f()
     }
