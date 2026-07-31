@@ -17,8 +17,10 @@
 
 use crate::aggregates::group_values::multi_group_by::GroupColumn;
 use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanBufferBuilder, DictionaryArray, PrimitiveArray,
+    Array, ArrayRef, AsArray, BooleanBufferBuilder, DictionaryArray, Int64Array,
+    PrimitiveArray,
 };
+use arrow::compute::take;
 use arrow::datatypes::{ArrowDictionaryKeyType, ArrowNativeType, DataType, Field};
 use arrow::error::ArrowError;
 use datafusion_common::hash_utils::{RandomState, create_hashes};
@@ -31,7 +33,7 @@ use std::sync::Arc;
 
 use crate::aggregates::AGGREGATION_HASH_SEED;
 
-/// [`GroupColumn`] for dictionary-encoded columns.
+/// [`GroupColumn`] for dictionary-encoded columns with key type `K`.
 ///
 /// `inner` holds one slot per distinct value seen across all batches.
 /// `group_to_inner[group_idx]` maps each group to its slot in `inner`,
@@ -39,7 +41,7 @@ use crate::aggregates::AGGREGATION_HASH_SEED;
 pub struct DictionaryGroupValuesColumn<K: ArrowDictionaryKeyType + Send + Sync> {
     /// Deduplicated store of distinct values.
     inner: Box<dyn GroupColumn>,
-    /// Single-element null array for appending null entries to `inner`.
+    /// Unary null array (length 1) reused for every null appended to `inner`.
     null_array: ArrayRef,
     /// Maps each group index to its slot in `inner`.
     group_to_inner: Vec<usize>,
@@ -93,11 +95,12 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
     // Null groups emit a null key, not a key index into the values array, so the
     // null inner slot does not consume a key index.
     fn check_key_overflow(&self) -> Result<()> {
-        // Keys are raw slot indices; the null slot is excluded only when it is
-        // last (null groups emit None, not an index).
+        // Keys are raw slot indices. The null slot is excluded from key count
+        // only when it occupies the last position — any non-null slot above it
+        // still emits that slot's raw index as a key.
         let inner_len = self.inner.len();
-        let null_is_last = self.null_inner_slot.is_some_and(|s| s + 1 == inner_len);
-        let max_key_count = inner_len - null_is_last as usize;
+        let null_slot_excluded = self.null_inner_slot.is_some_and(|s| s + 1 == inner_len);
+        let max_key_count = inner_len - null_slot_excluded as usize;
         if !Self::key_type_fits(max_key_count) {
             let non_null_slots = inner_len - self.null_inner_slot.is_some() as usize;
             return exec_err!(
@@ -424,32 +427,61 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
-        // `inner` is a trait object — the only way to extract its data is via `take_n`.
-        // Because group->inner slot mappings are non-contiguous, we drain all of `inner`
-        // at once, then re-append only the slots still referenced by the remaining groups.
         let old_inner_len = self.inner.len();
         let all_inner_values = self.inner.take_n(old_inner_len);
 
-        let emitted =
-            Self::into_dict(Arc::clone(&all_inner_values), &self.group_to_inner[..n]);
+        let mut emit_old_to_new = vec![usize::MAX; old_inner_len];
+        let mut emit_new_to_old: Vec<usize> = Vec::new();
+        for &old in &self.group_to_inner[..n] {
+            if emit_old_to_new[old] == usize::MAX {
+                emit_old_to_new[old] = emit_new_to_old.len();
+                emit_new_to_old.push(old);
+            }
+        }
+        let emit_indices =
+            Int64Array::from_iter(emit_new_to_old.iter().map(|&i| i as i64));
+        let compact_emit_values =
+            take(&*all_inner_values, &emit_indices, None).expect("take emit values");
+        let emitted_keys: PrimitiveArray<K> = self.group_to_inner[..n]
+            .iter()
+            .map(|&old| {
+                if all_inner_values.is_null(old) {
+                    None
+                } else {
+                    Some(K::Native::usize_as(emit_old_to_new[old]))
+                }
+            })
+            .collect();
+        let emitted: ArrayRef =
+            Arc::new(DictionaryArray::<K>::new(emitted_keys, compact_emit_values));
 
+        // Null deferred to last so null_inner_slot is always the highest index
+        // and check_key_overflow can subtract it without a false overflow.
         let remaining = self.group_to_inner[n..].to_vec();
-
-        // Map each referenced old slot to a new contiguous index.
         let mut old_to_new = vec![usize::MAX; old_inner_len];
         let mut new_to_old: Vec<usize> = Vec::new();
+        let mut null_old_slot: Option<usize> = None;
         for &old in &remaining {
+            if all_inner_values.is_null(old) {
+                if null_old_slot.is_none() {
+                    null_old_slot = Some(old);
+                }
+                continue;
+            }
             if old_to_new[old] == usize::MAX {
                 old_to_new[old] = new_to_old.len();
                 new_to_old.push(old);
             }
+        }
+        if let Some(old) = null_old_slot {
+            old_to_new[old] = new_to_old.len();
+            new_to_old.push(old);
         }
 
         self.value_dedup = HashTable::new();
         self.value_dedup_size = 0;
         self.null_inner_slot = None;
 
-        // Hash all surviving values in one vectorized pass
         self.hash_values(&all_inner_values);
 
         for (new_slot, &old_slot) in new_to_old.iter().enumerate() {
@@ -760,6 +792,54 @@ mod tests {
             .unwrap();
         col.append_val(&int8_dict(&[None], &[Some("x")]), 0)
             .unwrap();
+    }
+
+    // take_n compacts emitted values to only those referenced by the emitted groups.
+    #[test]
+    fn take_n_emits_compact_values() {
+        let mut col = utf8_col();
+        // Four groups: [a, b, c, a] — three distinct values
+        let arr = dict_arr(
+            &[Some(0), Some(1), Some(2), Some(0)],
+            &[Some("a"), Some("b"), Some("c")],
+        );
+        col.vectorized_append(&arr, &[0, 1, 2, 3]).unwrap();
+
+        // Emit 2 groups (a, b); "c" is only referenced by the remaining group.
+        let emitted = col.take_n(2);
+
+        // Emitted values array must contain only "a" and "b", not "c".
+        assert_eq!(emitted.as_dictionary::<Int32Type>().values().len(), 2);
+        assert_eq!(
+            str_values(&emitted),
+            vec![Some("a".into()), Some("b".into())]
+        );
+        // Remaining group still resolves correctly.
+        let out = Box::new(col).build();
+        assert_eq!(str_values(&out), vec![Some("c".into()), Some("a".into())]);
+    }
+
+    // Regression: take_n must not panic when null appears before a non-null
+    // slot in remaining groups at Int8 key capacity (EmitTo::First boundary).
+    #[test]
+    fn take_n_key_limit_null_first_in_remaining() {
+        let mut col = int8_utf8_col();
+
+        // Fill Int8 capacity: 128 non-null values at slots 0..127.
+        col.vectorized_append(&distinct_strs(0, 128), &(0..128).collect::<Vec<_>>())
+            .unwrap();
+        // Null at slot 128 (last) — still valid for Int8.
+        col.append_val(&int8_dict(&[None], &[Some("x")]), 0)
+            .unwrap();
+        // Re-append v0..v127 (reuses slots 0..127 via dedup).
+        // group_to_inner is now [0..127, 128(null), 0..127].
+        col.vectorized_append(&distinct_strs(0, 128), &(0..128).collect::<Vec<_>>())
+            .unwrap();
+
+        // take_n(1) emits group 0 (v0). In remaining, null (old slot 128) appears
+        // before old slot 0 — without the null-last fix this panics.
+        let emitted = col.take_n(1);
+        assert_eq!(str_values(&emitted), vec![Some("v0".into())]);
     }
 
     // build_lookup_table must use the incoming batch's hashes, not
