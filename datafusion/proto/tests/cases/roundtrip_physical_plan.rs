@@ -2374,6 +2374,89 @@ fn roundtrip_range_partitioning() -> Result<()> {
     roundtrip_test(Arc::new(repartition))
 }
 
+/// `parse_protobuf_hash_partitioning` has no in-tree callers left; it delegates
+/// to the shared `Partitioning::try_from_proto`, so pin that it still decodes
+/// the hash message it is handed.
+#[test]
+fn parse_hash_partitioning_delegates_to_shared_decoder() -> Result<()> {
+    use datafusion_proto::physical_plan::from_proto::parse_protobuf_hash_partitioning;
+
+    let schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
+    let ctx = SessionContext::new();
+    let task_ctx = ctx.task_ctx();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let decode_ctx = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+    let proto_converter = DefaultPhysicalProtoConverter {};
+
+    let hash_expr = serialize_physical_expr_with_converter(
+        &col("a", &schema)?,
+        &codec,
+        &proto_converter,
+    )?;
+    let hash = protobuf::PhysicalHashRepartition {
+        hash_expr: vec![hash_expr],
+        partition_count: 4,
+    };
+
+    let partitioning = parse_protobuf_hash_partitioning(
+        Some(&hash),
+        &decode_ctx,
+        &schema,
+        &proto_converter,
+    )?;
+    let Some(Partitioning::Hash(exprs, count)) = partitioning else {
+        panic!("expected hash partitioning, got {partitioning:?}");
+    };
+    assert_eq!(count, 4);
+    assert_eq!(exprs.len(), 1);
+    assert_eq!(exprs[0].to_string(), col("a", &schema)?.to_string());
+
+    // No message means no partitioning, as before.
+    assert!(
+        parse_protobuf_hash_partitioning(None, &decode_ctx, &schema, &proto_converter)?
+            .is_none()
+    );
+
+    // The count is a `u64` on the wire and a `usize` in memory, so decoding
+    // narrows it. A count that does not fit is the case that motivated routing
+    // this through the shared decoder: it used to `unwrap()` and panic, and now
+    // reports an error. Only a target narrower than 64 bits can reach that arm
+    // -- on a 64-bit target every `u64` fits, and the assertion there is that
+    // the largest possible count survives whole rather than being truncated.
+    let oversized = protobuf::PhysicalHashRepartition {
+        hash_expr: vec![serialize_physical_expr_with_converter(
+            &col("a", &schema)?,
+            &codec,
+            &proto_converter,
+        )?],
+        partition_count: u64::MAX,
+    };
+    let decoded = parse_protobuf_hash_partitioning(
+        Some(&oversized),
+        &decode_ctx,
+        &schema,
+        &proto_converter,
+    );
+
+    #[cfg(target_pointer_width = "64")]
+    {
+        let Some(Partitioning::Hash(_, count)) = decoded? else {
+            panic!("expected hash partitioning");
+        };
+        assert_eq!(count, usize::MAX);
+    }
+
+    #[cfg(not(target_pointer_width = "64"))]
+    assert!(
+        decoded
+            .unwrap_err()
+            .to_string()
+            .contains("Partition count 18446744073709551615 exceeds usize::MAX")
+    );
+
+    Ok(())
+}
+
 #[test]
 fn roundtrip_interleave() -> Result<()> {
     let field_a = Field::new("col", DataType::Int64, false);
