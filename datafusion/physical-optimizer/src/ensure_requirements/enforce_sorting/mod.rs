@@ -631,16 +631,25 @@ fn remove_bottleneck_in_subplan_impl(
     // `update_coalesce_ctx_children` marks a node as connected when *any* child qualifies:
     // a `CollectLeft` `HashJoinExec` whose probe side is connected is descended into even
     // though its build side must stay single-partition.
+    //
+    // Only `SinglePartition` is protected. A `HashPartitioned` child is in principle in the
+    // same position — a single-partition input trivially satisfies a hash requirement, so a
+    // coalesce below one is also load-bearing — but nothing puts a coalesce there:
+    // `ensure_distribution` satisfies a hash requirement with a `RepartitionExec`, never a
+    // `CoalescePartitionsExec`. Widening the check would be dead code today.
+    let dist_reqs = plan.input_distribution_requirements();
     let removable = |idx: usize| {
         is_root
             || !matches!(
-                plan.input_distribution_requirements()
-                    .child_distribution(idx),
+                dist_reqs.child_distribution(idx),
                 Some(Distribution::SinglePartition)
             )
     };
-    let remove_from_first_child =
-        is_coalesce_partitions(&requirements.children[0].plan) && removable(0);
+    let remove_from_first_child = requirements
+        .children
+        .first()
+        .is_some_and(|child| is_coalesce_partitions(&child.plan))
+        && removable(0);
     let children = &mut requirements.children;
     if remove_from_first_child {
         // We can safely use the 0th index since we have a `CoalescePartitionsExec`.
@@ -658,6 +667,10 @@ fn remove_bottleneck_in_subplan_impl(
             .into_iter()
             .enumerate()
             .map(|(idx, node)| {
+                // Deliberately conservative: not descending at all also skips legitimate
+                // cleanups *below* a protected child (a redundant second coalesce under the
+                // load-bearing one, say). This could later be narrowed to "descend, but
+                // protect only the topmost coalesce" if that turns out to matter.
                 if node.data && removable(idx) {
                     remove_bottleneck_in_subplan_impl(node, false)
                 } else {
