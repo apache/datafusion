@@ -3106,6 +3106,7 @@ mod tests {
     use datafusion_physical_expr::expressions::Literal;
 
     use crate::projection::ProjectionExec;
+    use crate::repartition::RepartitionExec;
     use datafusion_physical_expr::projection::ProjectionExpr;
     use futures::{FutureExt, Stream, StreamExt};
     use insta::{allow_duplicates, assert_snapshot};
@@ -5968,6 +5969,157 @@ mod tests {
         assert_eq!(single_stats_zero.num_rows, Precision::Exact(1));
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_statistics_empty_input_with_grouping_sets() -> Result<()> {
+        let schema = empty_grouping_sets_test_schema();
+
+        // `GROUP BY a` produces no groups for an empty input.
+        let grouped = build_test_aggregate(
+            &schema,
+            empty_input_statistics(),
+            simple_group_by(&schema, &["a"]),
+            None,
+        )?;
+        let stats = StatisticsContext::new().compute(&grouped, &StatisticsArgs::new())?;
+        assert_eq!(stats.num_rows, Precision::Exact(0));
+
+        // `GROUPING SETS((a), ())`, as ROLLUP and CUBE produce, still emits the
+        // grand-total row of the empty grouping set on an empty input.
+        let with_empty_set = build_test_aggregate(
+            &schema,
+            empty_input_statistics(),
+            grouping_sets_with_empty(&schema, 1)?,
+            None,
+        )?;
+        let stats =
+            StatisticsContext::new().compute(&with_empty_set, &StatisticsArgs::new())?;
+        assert_eq!(stats.num_rows, Precision::Exact(1));
+
+        // `GROUPING SETS((a), (), ())` emits one grand-total row per empty
+        // grouping set, because execution gives each duplicate its own ordinal.
+        let with_duplicate_empty_sets = build_test_aggregate(
+            &schema,
+            empty_input_statistics(),
+            grouping_sets_with_empty(&schema, 2)?,
+            None,
+        )?;
+        let stats = StatisticsContext::new()
+            .compute(&with_duplicate_empty_sets, &StatisticsArgs::new())?;
+        assert_eq!(stats.num_rows, Precision::Exact(2));
+
+        Ok(())
+    }
+
+    /// Partial aggregation emits the grand-total row from every output
+    /// partition, so the whole-plan estimate scales with the partition count
+    /// while a single-partition request does not.
+    #[tokio::test]
+    async fn test_aggregate_statistics_empty_input_partial_mode_scaling() -> Result<()> {
+        let schema = empty_grouping_sets_test_schema();
+        let input = Arc::new(RepartitionExec::try_new(
+            Arc::new(StatisticsExec::new(
+                empty_input_statistics(),
+                (*schema).clone(),
+            )),
+            Partitioning::RoundRobinBatch(4),
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let agg = AggregateExec::try_new(
+            AggregateMode::Partial,
+            grouping_sets_with_empty(&schema, 1)?,
+            vec![count_a_aggregate(&schema)?],
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?;
+        assert_eq!(agg.properties().output_partitioning().partition_count(), 4);
+
+        let context = StatisticsContext::new();
+        assert_eq!(
+            context.compute(&agg, &StatisticsArgs::new())?.num_rows,
+            Precision::Exact(4)
+        );
+        // Inexact because a repartition only estimates its per-partition row
+        // count.
+        assert_eq!(
+            context
+                .compute(&agg, &StatisticsArgs::new().with_partition(Some(0)))?
+                .num_rows,
+            Precision::Inexact(1)
+        );
+
+        Ok(())
+    }
+
+    /// The input's min, max and distinct values must not reach the output
+    /// column statistics. See `nullify_group_columns_for_empty_input`.
+    #[tokio::test]
+    async fn test_aggregate_statistics_empty_input_nullifies_group_columns() -> Result<()>
+    {
+        let schema = empty_grouping_sets_test_schema();
+        let mut input_statistics = empty_input_statistics();
+        input_statistics.column_statistics[0] = ColumnStatistics {
+            null_count: Precision::Exact(0),
+            max_value: Precision::Exact(ScalarValue::Int32(Some(5))),
+            min_value: Precision::Exact(ScalarValue::Int32(Some(5))),
+            sum_value: Precision::Absent,
+            distinct_count: Precision::Exact(1),
+            byte_size: Precision::Absent,
+        };
+
+        let agg = build_test_aggregate(
+            &schema,
+            input_statistics,
+            grouping_sets_with_empty(&schema, 1)?,
+            None,
+        )?;
+
+        let stats = StatisticsContext::new().compute(&agg, &StatisticsArgs::new())?;
+        assert_eq!(stats.num_rows, Precision::Exact(1));
+        let group_column = &stats.column_statistics[0];
+        let typed_null = Precision::Exact(ScalarValue::Int32(None));
+        assert_eq!(group_column.min_value, typed_null);
+        assert_eq!(group_column.max_value, typed_null);
+        assert_eq!(group_column.distinct_count, Precision::Exact(0));
+        assert_eq!(group_column.null_count, Precision::Exact(1));
+
+        Ok(())
+    }
+
+    fn empty_grouping_sets_test_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Float64, false),
+        ]))
+    }
+
+    fn empty_input_statistics() -> Statistics {
+        Statistics {
+            num_rows: Precision::Exact(0),
+            total_byte_size: Precision::Exact(0),
+            column_statistics: vec![
+                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown(),
+            ],
+        }
+    }
+
+    /// `GROUPING SETS((a), (), ...)` with `empty_sets` empty grouping sets, as
+    /// `ROLLUP(a)` and `CUBE(a)` produce with one.
+    fn grouping_sets_with_empty(
+        schema: &SchemaRef,
+        empty_sets: usize,
+    ) -> Result<PhysicalGroupBy> {
+        let mut groups = vec![vec![false]];
+        groups.resize(1 + empty_sets, vec![true]);
+        Ok(PhysicalGroupBy::new(
+            vec![(col("a", schema)?, "a".to_string())],
+            vec![(lit(ScalarValue::Int32(None)), "a".to_string())],
+            groups,
+            true,
+        ))
     }
 
     fn build_test_aggregate(
