@@ -3309,7 +3309,8 @@ impl ScalarValue {
         let values = if values.is_empty() {
             new_empty_array(data_type)
         } else {
-            Self::iter_to_array(values.iter().cloned()).unwrap()
+            let arr = Self::iter_to_array(values.iter().cloned()).unwrap();
+            cast_with_options(&arr, data_type, &DEFAULT_CAST_OPTIONS).unwrap()
         };
         Arc::new(
             SingleRowListArrayBuilder::new(values)
@@ -3371,7 +3372,8 @@ impl ScalarValue {
         let values = if values.len() == 0 {
             new_empty_array(data_type)
         } else {
-            Self::iter_to_array(values).unwrap()
+            let arr = Self::iter_to_array(values).unwrap();
+            cast_with_options(&arr, data_type, &DEFAULT_CAST_OPTIONS).unwrap()
         };
         Arc::new(
             SingleRowListArrayBuilder::new(values)
@@ -3414,7 +3416,8 @@ impl ScalarValue {
         let values = if values.is_empty() {
             new_empty_array(data_type)
         } else {
-            Self::iter_to_array(values.iter().cloned()).unwrap()
+            let arr = Self::iter_to_array(values.iter().cloned()).unwrap();
+            cast_with_options(&arr, data_type, &DEFAULT_CAST_OPTIONS).unwrap()
         };
         Arc::new(SingleRowListArrayBuilder::new(values).build_large_list_array())
     }
