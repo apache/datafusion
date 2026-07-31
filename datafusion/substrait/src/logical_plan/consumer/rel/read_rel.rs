@@ -159,9 +159,13 @@ pub async fn from_read_rel(
                     let mut row_exprs = vec![];
                     let mut name_idx = 0;
                     for expression in &row.fields {
+                        // Top-level names are provided through schema
+                        // Each expression consumes at least one name, and Literals may consume additional names.
+                        name_idx += 1;
                         let expr = match expression.rex_type.as_ref() {
                             Some(substrait::proto::expression::RexType::Literal(lit)) => {
-                                name_idx += 1; // top-level names are provided through schema
+                                // Values literals need 'named_struct.names' so nested struct fields keep their names from the ReadRel base schema.
+                                // This is important for nested struct fields to retain their names.
                                 Expr::Literal(
                                     from_substrait_literal(
                                         consumer,
@@ -173,7 +177,6 @@ pub async fn from_read_rel(
                                 )
                             }
                             _ => {
-                                name_idx += 1; // top-level names are provided through schema
                                 consumer
                                     .consume_expression(expression, &substrait_schema)
                                     .await?
