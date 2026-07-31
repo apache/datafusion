@@ -2977,8 +2977,8 @@ mod tests {
             Precision::Exact(0)
         );
 
-        // A contradictory predicate (`a = 1 AND a = 2`) proves the same for an
-        // input of any size, so the byte size is exact too.
+        // A contradictory predicate (`a = 1 AND a = 2`) discards all rows, the
+        // output is empty independently of the input.
         let input = Arc::new(StatisticsExec::new(
             Statistics {
                 num_rows: Precision::Inexact(1000),
