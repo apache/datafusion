@@ -55,7 +55,7 @@ use datafusion_common::utils::{
     evaluate_partition_ranges, get_at_indices, get_row_at_idx,
 };
 use datafusion_common::{
-    HashMap, Result, arrow_datafusion_err, exec_datafusion_err, exec_err,
+    HashMap, Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err, exec_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::ColumnarValue;
@@ -77,8 +77,47 @@ use hashbrown::hash_table::HashTable;
 use indexmap::IndexMap;
 use log::debug;
 
+/// Callback receiver for per-partition window state.
+///
+/// `state` is the result of [`Accumulator::state`], which is a `&mut self`
+/// call whose trait doc states "this function should not be called twice."
+/// Several built-in aggregates (`median`, `percentile_cont`, `string_agg`,
+/// `min_max_bytes`/`min_max_struct`) `std::mem::take` their internal
+/// buffers to build that state — so `state` is a destructive read, not a
+/// snapshot. The exec fires this at most once per group; a callee that
+/// needs the value beyond the callback must retain it (e.g. clone into
+/// owned storage).
+///
+/// [`Accumulator::state`]: datafusion_expr::Accumulator::state
+pub trait WindowStateObserver: Send + Sync {
+    /// Invoked once per (output-partition-index, window-expression,
+    /// PARTITION BY tuple) as each PARTITION BY group closes, for every
+    /// aggregate window expression on the exec. Non-aggregate window
+    /// functions (e.g. `row_number`, `rank`, `lead`/`lag`) do not fire this
+    /// callback.
+    ///
+    /// # Arguments
+    ///
+    /// * `partition_idx` - Output partition index of the [`BoundedWindowAggExec`]
+    ///   stream firing this callback.
+    /// * `window_expr` - The window expression whose state just closed.
+    /// * `partition_key` - The PARTITION BY tuple that just closed.
+    /// * `state` - [`Accumulator::state`] for the closed group of
+    ///   `window_expr`. See the trait-level doc for the destructive-read
+    ///   contract.
+    ///
+    /// [`Accumulator::state`]: datafusion_expr::Accumulator::state
+    fn finalize_window_aggregate(
+        &self,
+        partition_idx: usize,
+        window_expr: &Arc<dyn WindowExpr>,
+        partition_key: &PartitionKey,
+        state: Vec<ScalarValue>,
+    ) -> Result<()>;
+}
+
 /// Window execution plan
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BoundedWindowAggExec {
     /// Input plan
     input: Arc<dyn ExecutionPlan>,
@@ -101,6 +140,32 @@ pub struct BoundedWindowAggExec {
     cache: Arc<PlanProperties>,
     /// If `can_rerepartition` is false, partition_keys is always empty.
     can_repartition: bool,
+    /// Invoked at partition-close to publish finalized per-partition window
+    /// state. Storage and multi-group handling are the caller's; the exec is
+    /// a pure event source.
+    state_observer: Option<Arc<dyn WindowStateObserver>>,
+}
+
+impl std::fmt::Debug for BoundedWindowAggExec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BoundedWindowAggExec")
+            .field("input", &self.input)
+            .field("window_expr", &self.window_expr)
+            .field("schema", &self.schema)
+            .field("metrics", &self.metrics)
+            .field("input_order_mode", &self.input_order_mode)
+            .field(
+                "ordered_partition_by_indices",
+                &self.ordered_partition_by_indices,
+            )
+            .field("cache", &self.cache)
+            .field("can_repartition", &self.can_repartition)
+            .field(
+                "state_observer",
+                &self.state_observer.as_ref().map(|_| "..."),
+            )
+            .finish()
+    }
 }
 
 impl BoundedWindowAggExec {
@@ -141,7 +206,18 @@ impl BoundedWindowAggExec {
             ordered_partition_by_indices,
             cache: Arc::new(cache),
             can_repartition,
+            state_observer: None,
         })
+    }
+
+    /// Install (or clear) a [`WindowStateObserver`] that receives each
+    /// PARTITION BY group's finalized window state at partition close.
+    pub fn with_state_observer(
+        mut self,
+        observer: Option<Arc<dyn WindowStateObserver>>,
+    ) -> Self {
+        self.state_observer = observer;
+        self
     }
 
     /// Window expressions
@@ -362,12 +438,14 @@ impl ExecutionPlan for BoundedWindowAggExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         check_if_same_properties!(self, children);
-        Ok(Arc::new(BoundedWindowAggExec::try_new(
+        let new = BoundedWindowAggExec::try_new(
             self.window_expr.clone(),
             Arc::clone(&children[0]),
             self.input_order_mode.clone(),
             self.can_repartition,
-        )?))
+        )?
+        .with_state_observer(self.state_observer.clone());
+        Ok(Arc::new(new))
     }
 
     fn with_new_children_and_same_properties(
@@ -394,6 +472,8 @@ impl ExecutionPlan for BoundedWindowAggExec {
             input,
             BaselineMetrics::new(&self.metrics, partition),
             search_mode,
+            partition,
+            self.state_observer.clone(),
         )?);
         Ok(stream)
     }
@@ -1080,9 +1160,48 @@ pub struct BoundedWindowAggStream {
     /// partitions, so finished partitions are pruned eagerly instead and no
     /// such bound is needed.
     most_recent_row: Option<RecordBatch>,
+    /// Output partition index this stream serves; passed as the first
+    /// argument to [`WindowStateObserver::finalize_window_aggregate`].
+    partition_idx: usize,
+    /// If set, invoked from [`Self::publish_finalized_states`] with the
+    /// finalized per-window-expression state for every partition key that is
+    /// about to be dropped.
+    state_observer: Option<Arc<dyn WindowStateObserver>>,
 }
 
 impl BoundedWindowAggStream {
+    /// Fire `observer` once per (window expression, partition key) for every
+    /// group whose [`WindowAggState::is_end`] is true. Always mutates when
+    /// called: [`datafusion_expr::Accumulator::state`] requires `&mut`, which
+    /// propagates up here. The caller is responsible for deciding whether to
+    /// fire (i.e. checking whether an observer is installed).
+    ///
+    /// Exactly-once per group is enforced by [`WindowState::aggregate_state`],
+    /// which errors on second call; the `published` early-skip below avoids reaching the error.
+    fn publish_finalized_states(
+        &mut self,
+        observer: &dyn WindowStateObserver,
+    ) -> Result<()> {
+        let partition_idx = self.partition_idx;
+        for (expr_idx, per_expr) in self.window_agg_states.iter_mut().enumerate() {
+            let window_expr = &self.window_expr[expr_idx];
+            for (key, ws) in per_expr.iter_mut() {
+                if ws.published || !ws.state.is_end {
+                    continue;
+                }
+                if let Some(state) = ws.aggregate_state()? {
+                    observer.finalize_window_aggregate(
+                        partition_idx,
+                        window_expr,
+                        key,
+                        state,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Prunes sections of the state that are no longer needed when calculating
     /// results (as determined by window frame boundaries and number of results generated).
     // For instance, if first `n` (not necessarily same with `n_out`) elements are no longer needed to
@@ -1123,6 +1242,8 @@ impl BoundedWindowAggStream {
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
         search_mode: Box<dyn PartitionSearcher>,
+        partition_idx: usize,
+        state_observer: Option<Arc<dyn WindowStateObserver>>,
     ) -> Result<Self> {
         let state = window_expr.iter().map(|_| IndexMap::default()).collect();
         let empty_batch = RecordBatch::new_empty(Arc::clone(&schema));
@@ -1137,6 +1258,8 @@ impl BoundedWindowAggStream {
             baseline_metrics,
             search_mode,
             most_recent_row: None,
+            partition_idx,
+            state_observer,
         })
     }
 
@@ -1152,6 +1275,14 @@ impl BoundedWindowAggStream {
                 state,
                 &eval_ctx,
             )?;
+        }
+
+        // Fire before `calculate_out_columns`: on causal frames every row
+        // already streamed out, so at EOS that call returns `None` and the
+        // prune path is skipped — the final partition would otherwise be
+        // dropped unobserved.
+        if let Some(observer) = self.state_observer.clone() {
+            self.publish_finalized_states(observer.as_ref())?;
         }
 
         let schema = Arc::clone(&self.schema);
@@ -1412,10 +1543,11 @@ mod tests {
     use crate::projection::{ProjectionExec, ProjectionExpr};
     use crate::streaming::{PartitionStream, StreamingTableExec};
     use crate::test::TestMemoryExec;
+    use crate::windows::bounded_window_agg_exec::WindowStateObserver;
     use crate::windows::{
         BoundedWindowAggExec, InputOrderMode, create_udwf_window_expr, create_window_expr,
     };
-    use crate::{ExecutionPlan, displayable, execute_stream};
+    use crate::{ExecutionPlan, WindowExpr, displayable, execute_stream};
 
     use arrow::array::{
         RecordBatch,
@@ -1436,7 +1568,7 @@ mod tests {
     use datafusion_functions_window::nth_value::last_value_udwf;
     use datafusion_functions_window::nth_value::nth_value_udwf;
     use datafusion_physical_expr::expressions::{Column, Literal, col};
-    use datafusion_physical_expr::window::StandardWindowExpr;
+    use datafusion_physical_expr::window::{PartitionKey, StandardWindowExpr};
     use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 
     use futures::future::Shared;
@@ -1990,6 +2122,623 @@ mod tests {
         +----+------+-------+
         ");
 
+        Ok(())
+    }
+
+    type Observation = (usize, PartitionKey, Vec<ScalarValue>);
+
+    /// Test [`WindowStateObserver`] that records every callback into a shared
+    /// `Vec` for later assertion.
+    struct RecordingObserver {
+        sink: Arc<std::sync::Mutex<Vec<Observation>>>,
+    }
+
+    impl WindowStateObserver for RecordingObserver {
+        fn finalize_window_aggregate(
+            &self,
+            partition_idx: usize,
+            _window_expr: &Arc<dyn WindowExpr>,
+            partition_key: &PartitionKey,
+            state: Vec<ScalarValue>,
+        ) -> Result<()> {
+            self.sink
+                .lock()
+                .unwrap()
+                .push((partition_idx, partition_key.clone(), state));
+            Ok(())
+        }
+    }
+
+    /// Runs `count(sn) OVER (PARTITION BY hash ORDER BY sn <frame>)` over a
+    /// fixed two-group source (hash=1 × 3, hash=2 × 3, sorted by (hash, sn))
+    /// with a [`RecordingObserver`] installed, and asserts that the
+    /// observer fires once per PARTITION BY group with a non-empty
+    /// `count()` accumulator state.
+    async fn run_partition_close_test(frame: WindowFrame) -> Result<()> {
+        use std::sync::Mutex;
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = test_schema();
+
+        let mut sn_b = UInt64Builder::with_capacity(6);
+        let mut hash_b = Int64Builder::with_capacity(6);
+        for (sn, hash) in [(1u64, 1i64), (2, 1), (3, 1), (4, 2), (5, 2), (6, 2)] {
+            sn_b.append_value(sn);
+            hash_b.append_value(hash);
+        }
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(sn_b.finish()), Arc::new(hash_b.finish())],
+        )?;
+        let ordering: LexOrdering = [
+            PhysicalSortExpr {
+                expr: col("hash", &schema)?,
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: col("sn", &schema)?,
+                options: SortOptions::default(),
+            },
+        ]
+        .into();
+        let source_raw =
+            TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None)?
+                .try_with_sort_information(vec![ordering])?;
+        let source: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(source_raw)));
+
+        let expr = create_window_expr(
+            &WindowFunctionDefinition::AggregateUDF(count_udaf()),
+            "cnt".to_string(),
+            &[col("sn", &schema)?],
+            &[col("hash", &schema)?],
+            &[PhysicalSortExpr {
+                expr: col("sn", &schema)?,
+                options: SortOptions::default(),
+            }],
+            Arc::new(frame),
+            source.schema(),
+            false,
+            false,
+            None,
+        )?;
+
+        let observations: Arc<Mutex<Vec<Observation>>> = Arc::new(Mutex::new(vec![]));
+        let observer: Arc<dyn WindowStateObserver> = Arc::new(RecordingObserver {
+            sink: Arc::clone(&observations),
+        });
+
+        let plan = BoundedWindowAggExec::try_new(
+            vec![expr],
+            source,
+            InputOrderMode::Sorted,
+            false,
+        )?
+        .with_state_observer(Some(observer));
+
+        let _ = collect(Arc::new(plan).execute(0, task_ctx)?).await?;
+
+        let obs = observations.lock().unwrap();
+        assert_eq!(obs.len(), 2, "one observation per PARTITION BY group");
+        let keys: Vec<i64> = obs
+            .iter()
+            .map(|(_, k, _)| match &k[0] {
+                ScalarValue::Int64(Some(v)) => *v,
+                other => panic!("unexpected partition-key element: {other:?}"),
+            })
+            .collect();
+        assert_eq!(keys, vec![1, 2]);
+        for (idx, _, state) in obs.iter() {
+            assert_eq!(*idx, 0, "single output partition");
+            assert!(!state.is_empty(), "count() accumulator state is non-empty");
+        }
+        Ok(())
+    }
+
+    // Two PARTITION BY groups: hash=1 [sn=1,2,3] then hash=2 [sn=4,5,6].
+    // Input is sorted by (hash, sn) so we can run in Sorted mode; in that
+    // mode `mark_partition_end` closes the leading group mid-stream and
+    // EOS closes the tail — both should fire the observer. The two tests
+    // below cover the two frame-causality regimes.
+
+    #[tokio::test]
+    async fn test_finalized_state_observer_fires_at_partition_close() -> Result<()> {
+        // CURRENT ROW → UNBOUNDED FOLLOWING forces each row's output to wait
+        // for partition close (is_causal = false), so hash=2's rows are held
+        // until EOS marks its buffer is_end — the observer path we want to
+        // exercise.
+        run_partition_close_test(WindowFrame::new_bounds(
+            WindowFrameUnits::Rows,
+            WindowFrameBound::CurrentRow,
+            WindowFrameBound::Following(ScalarValue::UInt64(None)),
+        ))
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_finalized_state_observer_fires_on_causal_frame() -> Result<()> {
+        // `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` — the
+        // running-sum shape. Output can stream row-by-row without waiting
+        // for partition close, so this is the frame most likely to bypass
+        // the observer path if `is_end` were tied to buffered-output
+        // flushing. It isn't: `is_end` comes from PARTITION BY transition
+        // detection in `mark_partition_end` (mid-stream) and EOS (tail),
+        // independent of frame causality. This test locks that in.
+        run_partition_close_test(WindowFrame::new_bounds(
+            WindowFrameUnits::Rows,
+            WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+            WindowFrameBound::CurrentRow,
+        ))
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_finalized_state_observer_fires_exactly_once_across_batches()
+    -> Result<()> {
+        // Regression guard for the exactly-once observer contract when
+        // partition close and pruning happen on different `compute_aggregates`
+        // calls.
+        //
+        // The observer fires from `publish_finalized_states`, called at the
+        // top of every `compute_aggregates`. Entries are only cleared by
+        // `prune_state`, which runs only when `calculate_out_columns` returns
+        // `Some`. Nothing in the type system ties the two together, so a
+        // group whose state was published on batch N must not be re-published
+        // on batch N+1 or at EOS.
+        //
+        // Layout: three PARTITION BY groups streamed across two input
+        // batches, so each group closes on a distinct `compute_aggregates`
+        // call:
+        //   batch 1 = [hash=1 × 2]                — no close (single group).
+        //   batch 2 = [hash=2 × 2, hash=3 × 2]    — `mark_partition_end`
+        //                                            closes hash=1 and hash=2.
+        //   EOS                                    — closes hash=3.
+        //
+        // Assertion: each key appears exactly once across all observations.
+        use std::sync::Mutex;
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = test_schema();
+
+        // Two batches, same output partition.
+        let make_batch = |rows: &[(u64, i64)]| -> Result<RecordBatch> {
+            let mut sn_b = UInt64Builder::with_capacity(rows.len());
+            let mut hash_b = Int64Builder::with_capacity(rows.len());
+            for &(sn, hash) in rows {
+                sn_b.append_value(sn);
+                hash_b.append_value(hash);
+            }
+            Ok(RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(sn_b.finish()), Arc::new(hash_b.finish())],
+            )?)
+        };
+        let batch1 = make_batch(&[(1, 1), (2, 1)])?;
+        let batch2 = make_batch(&[(3, 2), (4, 2), (5, 3), (6, 3)])?;
+
+        let ordering: LexOrdering = [
+            PhysicalSortExpr {
+                expr: col("hash", &schema)?,
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: col("sn", &schema)?,
+                options: SortOptions::default(),
+            },
+        ]
+        .into();
+        let source_raw = TestMemoryExec::try_new(
+            &[vec![batch1, batch2]],
+            Arc::clone(&schema),
+            None,
+        )?
+        .try_with_sort_information(vec![ordering])?;
+        let source: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(source_raw)));
+
+        let expr = create_window_expr(
+            &WindowFunctionDefinition::AggregateUDF(count_udaf()),
+            "cnt".to_string(),
+            &[col("sn", &schema)?],
+            &[col("hash", &schema)?],
+            &[PhysicalSortExpr {
+                expr: col("sn", &schema)?,
+                options: SortOptions::default(),
+            }],
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            )),
+            source.schema(),
+            false,
+            false,
+            None,
+        )?;
+
+        let observations: Arc<Mutex<Vec<Observation>>> = Arc::new(Mutex::new(vec![]));
+        let observer: Arc<dyn WindowStateObserver> = Arc::new(RecordingObserver {
+            sink: Arc::clone(&observations),
+        });
+
+        let plan = BoundedWindowAggExec::try_new(
+            vec![expr],
+            source,
+            InputOrderMode::Sorted,
+            false,
+        )?
+        .with_state_observer(Some(observer));
+
+        let _ = collect(Arc::new(plan).execute(0, task_ctx)?).await?;
+
+        let fired: Vec<i64> = observations
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, key, _)| match &key[0] {
+                ScalarValue::Int64(Some(v)) => *v,
+                other => panic!("unexpected partition-key element: {other:?}"),
+            })
+            .collect();
+        // Each group closes on a distinct `compute_aggregates` call — hash=1
+        // and hash=2 on batch 2's `mark_partition_end`, hash=3 at EOS — and
+        // each appears exactly once, in close order.
+        assert_eq!(fired, vec![1, 2, 3]);
+        Ok(())
+    }
+
+    /// Run one task's local BWAG for `SUM(sn) OVER (ORDER BY sn ROWS
+    /// UNBOUNDED PRECEDING TO CURRENT ROW)` with no PARTITION BY, over
+    /// `input` sorted ascending. Returns the per-row output values and the
+    /// observed finalized state total (which the caller uses as a carry-in
+    /// for the next task).
+    async fn run_running_sum_task(
+        input: &[u64],
+        task_ctx: Arc<TaskContext>,
+    ) -> Result<(Vec<u64>, u64)> {
+        use arrow::array::UInt64Array;
+        use datafusion_functions_aggregate::sum::sum_udaf;
+        use std::sync::Mutex;
+
+        /// Observer for `run_running_sum_task`: captures the single running
+        /// SUM total published at EOS. Asserts exactly-one fire and rejects
+        /// non-empty partition keys (this helper is no-PARTITION-BY only).
+        struct RunningSumObserver {
+            sink: Arc<Mutex<Option<u64>>>,
+        }
+
+        impl WindowStateObserver for RunningSumObserver {
+            fn finalize_window_aggregate(
+                &self,
+                _partition_idx: usize,
+                _window_expr: &Arc<dyn WindowExpr>,
+                partition_key: &PartitionKey,
+                state: Vec<ScalarValue>,
+            ) -> Result<()> {
+                assert!(
+                    partition_key.is_empty(),
+                    "empty PartitionKey for no-PARTITION-BY plan"
+                );
+                let total = match &state[0] {
+                    ScalarValue::UInt64(Some(v)) => *v,
+                    ScalarValue::Int64(Some(v)) => *v as u64,
+                    other => panic!("unexpected sum state element: {other:?}"),
+                };
+                let prev = self.sink.lock().unwrap().replace(total);
+                assert!(prev.is_none(), "observer must fire exactly once per task");
+                Ok(())
+            }
+        }
+
+        let schema = test_schema();
+        let mut sn_b = UInt64Builder::with_capacity(input.len());
+        let mut hash_b = Int64Builder::with_capacity(input.len());
+        for &sn in input {
+            sn_b.append_value(sn);
+            hash_b.append_value(0);
+        }
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(sn_b.finish()), Arc::new(hash_b.finish())],
+        )?;
+        let ordering: LexOrdering = [PhysicalSortExpr {
+            expr: col("sn", &schema)?,
+            options: SortOptions::default(),
+        }]
+        .into();
+        let source_raw =
+            TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None)?
+                .try_with_sort_information(vec![ordering])?;
+        let source: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(source_raw)));
+
+        let window_fn = WindowFunctionDefinition::AggregateUDF(sum_udaf());
+        let args = vec![col("sn", &schema)?];
+        let partition_by: Vec<Arc<dyn PhysicalExpr>> = vec![];
+        let order_by = vec![PhysicalSortExpr {
+            expr: col("sn", &schema)?,
+            options: SortOptions::default(),
+        }];
+        let frame = WindowFrame::new_bounds(
+            WindowFrameUnits::Rows,
+            WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+            WindowFrameBound::CurrentRow,
+        );
+        let expr = create_window_expr(
+            &window_fn,
+            "running_sum".to_string(),
+            &args,
+            &partition_by,
+            &order_by,
+            Arc::new(frame),
+            source.schema(),
+            false,
+            false,
+            None,
+        )?;
+
+        let total_sink: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
+        let observer: Arc<dyn WindowStateObserver> = Arc::new(RunningSumObserver {
+            sink: Arc::clone(&total_sink),
+        });
+
+        let plan = BoundedWindowAggExec::try_new(
+            vec![expr],
+            source,
+            InputOrderMode::Sorted,
+            false,
+        )?
+        .with_state_observer(Some(observer));
+        let batches = collect(Arc::new(plan).execute(0, task_ctx)?).await?;
+
+        let mut out = Vec::with_capacity(input.len());
+        for batch in &batches {
+            let col = batch
+                .column_by_name("running_sum")
+                .expect("running_sum column present");
+            let arr = col
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .expect("SUM(UInt64) → UInt64Array");
+            for i in 0..arr.len() {
+                out.push(arr.value(i));
+            }
+        }
+        let total = total_sink
+            .lock()
+            .unwrap()
+            .expect("observer must have fired at EOS");
+        Ok((out, total))
+    }
+
+    /// Run one task's local BWAG for `approx_distinct(sn) OVER (ORDER BY sn
+    /// ROWS UNBOUNDED PRECEDING TO CURRENT ROW)` with no PARTITION BY, and
+    /// return the single EOS-observed [`Accumulator::state`] Vec.
+    async fn run_approx_distinct_task(
+        input: &[u64],
+        task_ctx: Arc<TaskContext>,
+    ) -> Result<Vec<ScalarValue>> {
+        use datafusion_functions_aggregate::approx_distinct::approx_distinct_udaf;
+        use std::sync::Mutex;
+
+        /// Observer for `run_approx_distinct_task`: capture the single EOS
+        /// state. Asserts exactly-one fire and rejects non-empty partition
+        /// keys (helper is no-PARTITION-BY only).
+        struct ApproxDistinctObserver {
+            sink: Arc<Mutex<Option<Vec<ScalarValue>>>>,
+        }
+
+        impl WindowStateObserver for ApproxDistinctObserver {
+            fn finalize_window_aggregate(
+                &self,
+                _partition_idx: usize,
+                _window_expr: &Arc<dyn WindowExpr>,
+                partition_key: &PartitionKey,
+                state: Vec<ScalarValue>,
+            ) -> Result<()> {
+                assert!(
+                    partition_key.is_empty(),
+                    "empty PartitionKey for no-PARTITION-BY plan"
+                );
+                let prev = self.sink.lock().unwrap().replace(state);
+                assert!(prev.is_none(), "observer must fire exactly once per task");
+                Ok(())
+            }
+        }
+
+        let schema = test_schema();
+        let mut sn_b = UInt64Builder::with_capacity(input.len());
+        let mut hash_b = Int64Builder::with_capacity(input.len());
+        for &sn in input {
+            sn_b.append_value(sn);
+            hash_b.append_value(0);
+        }
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(sn_b.finish()), Arc::new(hash_b.finish())],
+        )?;
+        let ordering: LexOrdering = [PhysicalSortExpr {
+            expr: col("sn", &schema)?,
+            options: SortOptions::default(),
+        }]
+        .into();
+        let source_raw =
+            TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None)?
+                .try_with_sort_information(vec![ordering])?;
+        let source: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(source_raw)));
+
+        let expr = create_window_expr(
+            &WindowFunctionDefinition::AggregateUDF(approx_distinct_udaf()),
+            "approx_distinct_sn".to_string(),
+            &[col("sn", &schema)?],
+            &[],
+            &[PhysicalSortExpr {
+                expr: col("sn", &schema)?,
+                options: SortOptions::default(),
+            }],
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            )),
+            source.schema(),
+            false,
+            false,
+            None,
+        )?;
+
+        let state_sink: Arc<Mutex<Option<Vec<ScalarValue>>>> = Arc::new(Mutex::new(None));
+        let observer: Arc<dyn WindowStateObserver> = Arc::new(ApproxDistinctObserver {
+            sink: Arc::clone(&state_sink),
+        });
+
+        let plan = BoundedWindowAggExec::try_new(
+            vec![expr],
+            source,
+            InputOrderMode::Sorted,
+            false,
+        )?
+        .with_state_observer(Some(observer));
+        let _ = collect(Arc::new(plan).execute(0, task_ctx)?).await?;
+
+        state_sink
+            .lock()
+            .unwrap()
+            .take()
+            .ok_or_else(|| exec_datafusion_err!("observer never fired"))
+    }
+
+    #[tokio::test]
+    async fn test_prefix_scan_across_tasks_matches_single_bwag() -> Result<()> {
+        // Demonstrates the parallel-window shape reviewers asked about:
+        // range-shuffle `SUM(sn) OVER (ORDER BY sn UNBOUNDED PRECEDING TO
+        // CURRENT ROW)` across two tasks, then prefix-scan each task's
+        // finalized state (from the observer) to carry-in the next task's
+        // rows. Result must match a single BWAG over the concatenated input.
+        let task_ctx = Arc::new(TaskContext::default());
+
+        // Two tasks under range partition on sn:
+        let (task1_out, task1_total) =
+            run_running_sum_task(&[1, 1, 2, 2, 3, 3, 4, 4], Arc::clone(&task_ctx))
+                .await?;
+        let (task2_out, task2_total) =
+            run_running_sum_task(&[5, 5, 6, 6, 7, 7, 8, 8], Arc::clone(&task_ctx))
+                .await?;
+
+        // Local (uncorrected) outputs and totals — first pass.
+        assert_eq!(task1_out, vec![1, 2, 4, 6, 9, 12, 16, 20]);
+        assert_eq!(task1_total, 20);
+        assert_eq!(task2_out, vec![5, 10, 16, 22, 29, 36, 44, 52]);
+        assert_eq!(task2_total, 52);
+
+        // Prefix scan over per-task totals → carry-in for each task. Task 0's
+        // carry-in is 0; task N's carry-in is the sum of tasks [0, N).
+        let carry_ins = [0u64, task1_total];
+
+        // Second pass: shift each task's local values by its carry-in.
+        let task1_final: Vec<u64> = task1_out.iter().map(|v| v + carry_ins[0]).collect();
+        let task2_final: Vec<u64> = task2_out.iter().map(|v| v + carry_ins[1]).collect();
+        let parallel_result: Vec<u64> = task1_final
+            .iter()
+            .chain(task2_final.iter())
+            .copied()
+            .collect();
+
+        // Oracle: single BWAG over the full concatenated input.
+        let (single_result, single_total) = run_running_sum_task(
+            &[1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8],
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(
+            parallel_result, single_result,
+            "two-task prefix-scan must match single-BWAG oracle"
+        );
+        // And matches the sequence in the design discussion.
+        assert_eq!(
+            single_result,
+            vec![1, 2, 4, 6, 9, 12, 16, 20, 25, 30, 36, 42, 49, 56, 64, 72]
+        );
+        assert_eq!(single_total, 72);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_prefix_merge_across_tasks_approx_distinct() -> Result<()> {
+        // Load-bearing contract for the parallel-window use case: the state
+        // exposed by `WindowStateObserver::finalize_window_aggregate` must be
+        // compatible with `Accumulator::merge_batch` on a fresh accumulator
+        // of the same UDAF. This is what allows non-decomposable aggregates
+        // like `approx_distinct` (HLL sketch state) to be prefix-merged
+        // across shard tasks — the reason we exposed accumulator state at
+        // all. If this ever breaks, downstream parallel-window work has to
+        // wait for a public API change.
+        use arrow::array::{ArrayRef, BinaryArray};
+        use arrow::datatypes::FieldRef;
+        use datafusion_expr::function::AccumulatorArgs;
+        use datafusion_functions_aggregate::approx_distinct::approx_distinct_udaf;
+
+        let task_ctx = Arc::new(TaskContext::default());
+
+        // Two tasks with overlapping inputs; concatenated distinct universe
+        // is {1,2,3,4,5}.
+        let state1 =
+            run_approx_distinct_task(&[1, 1, 2, 3], Arc::clone(&task_ctx)).await?;
+        let state2 = run_approx_distinct_task(&[3, 4, 5], Arc::clone(&task_ctx)).await?;
+        let state_single =
+            run_approx_distinct_task(&[1, 1, 2, 3, 3, 4, 5], Arc::clone(&task_ctx))
+                .await?;
+
+        // approx_distinct state is a single serialized-HLL Binary field.
+        assert_eq!(state1.len(), 1, "single state field");
+        assert_eq!(state2.len(), 1, "single state field");
+        assert_eq!(state_single.len(), 1, "single state field");
+
+        // Seed a fresh accumulator with the given serialized HLL states via
+        // `merge_batch` and return its distinct-count evaluation.
+        fn evaluate_merged(states: &[&ScalarValue]) -> Result<ScalarValue> {
+            let udaf = approx_distinct_udaf();
+            let input_schema =
+                Arc::new(Schema::new(vec![Field::new("sn", DataType::UInt64, true)]));
+            let return_field: FieldRef =
+                Arc::new(Field::new("approx_distinct_sn", DataType::UInt64, true));
+            let expr_field: FieldRef = Arc::new(Field::new("sn", DataType::UInt64, true));
+            let physical_col: Arc<dyn PhysicalExpr> = col("sn", &input_schema)?;
+            let args = AccumulatorArgs {
+                return_field: Arc::clone(&return_field),
+                schema: &input_schema,
+                ignore_nulls: false,
+                order_bys: &[],
+                is_reversed: false,
+                name: "approx_distinct",
+                is_distinct: false,
+                exprs: std::slice::from_ref(&physical_col),
+                expr_fields: std::slice::from_ref(&expr_field),
+            };
+            let mut acc = udaf.accumulator(args)?;
+            let byte_slices: Vec<&[u8]> = states
+                .iter()
+                .map(|s| match s {
+                    ScalarValue::Binary(Some(v)) => v.as_slice(),
+                    other => panic!("expected Binary state, got {other:?}"),
+                })
+                .collect();
+            let bin: ArrayRef = Arc::new(BinaryArray::from_iter_values(byte_slices));
+            acc.merge_batch(std::slice::from_ref(&bin))?;
+            acc.evaluate()
+        }
+
+        let merged = evaluate_merged(&[&state1[0], &state2[0]])?;
+        let oracle = evaluate_merged(&[&state_single[0]])?;
+
+        assert_eq!(
+            merged, oracle,
+            "merged task states must match single-BWAG oracle — parallel prefix-merge contract"
+        );
+        // HLL is approximate but exact for a 5-element universe.
+        assert_eq!(merged, ScalarValue::UInt64(Some(5)));
         Ok(())
     }
 
