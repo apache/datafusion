@@ -2192,6 +2192,22 @@ pub(super) fn equal_rows_arr(
     right_arrays: &[ArrayRef],
     null_equality: NullEquality,
 ) -> Result<(UInt64Array, UInt32Array)> {
+    if indices_left.len() != indices_right.len() {
+        return Err(internal_datafusion_err!(
+            "Cannot compare join indices with different lengths: left={}, right={}",
+            indices_left.len(),
+            indices_right.len()
+        ));
+    }
+
+    if left_arrays.len() != right_arrays.len() {
+        return Err(internal_datafusion_err!(
+            "Cannot compare join keys with different column counts: left={}, right={}",
+            left_arrays.len(),
+            right_arrays.len()
+        ));
+    }
+
     if left_arrays.is_empty() {
         return Ok((Vec::<u64>::new().into(), Vec::<u32>::new().into()));
     }
@@ -2204,7 +2220,9 @@ pub(super) fn equal_rows_arr(
     let mut right_filtered = Vec::with_capacity(indices_right.len());
 
     for (left, right) in indices_left.values().iter().zip(indices_right.values()) {
-        let left_idx = *left as usize;
+        let left_idx = usize::try_from(*left).map_err(|_| {
+            internal_datafusion_err!("Join index {left} can not be represented as usize")
+        })?;
         let right_idx = *right as usize;
 
         if comparator.is_equal(left_idx, right_idx) {
@@ -4570,6 +4588,38 @@ mod tests {
         .unwrap();
         assert_eq!(left_filtered, UInt64Array::from(vec![0, 1, 2, 3]));
         assert_eq!(right_filtered, UInt32Array::from(vec![1, 0, 2, 3]));
+    }
+
+    #[test]
+    fn test_equal_rows_arr_rejects_mismatched_inputs() {
+        let left: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+        let right: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+
+        let err = equal_rows_arr(
+            &UInt64Array::from(vec![0, 1]),
+            &UInt32Array::from(vec![0]),
+            &[Arc::clone(&left)],
+            &[Arc::clone(&right)],
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Cannot compare join indices with different lengths")
+        );
+
+        let err = equal_rows_arr(
+            &UInt64Array::from(vec![0, 1]),
+            &UInt32Array::from(vec![0, 1]),
+            &[left, Arc::new(Int32Array::from(vec![3, 4]))],
+            &[right],
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Cannot compare join keys with different column counts")
+        );
     }
 
     #[test]
