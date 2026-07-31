@@ -1390,6 +1390,7 @@ impl GroupedHashAggregateStream {
     /// Transforms input batch to intermediate aggregate state, without grouping it
     fn transform_to_states(&self, batch: &RecordBatch) -> Result<RecordBatch> {
         let mut group_values = evaluate_group_by(&self.group_by, batch)?;
+        let timer = self.group_by_metrics.aggregate_arguments_time.timer();
         let input_values = self
             .aggregate_arguments
             .iter()
@@ -1399,6 +1400,7 @@ impl GroupedHashAggregateStream {
                     .time(idx, || evaluate_expressions_to_arrays(expr, batch))
             })
             .collect::<Result<Vec<_>>>()?;
+        drop(timer);
         let filter_values = evaluate_optional(&self.filter_expressions, batch)?;
 
         assert_eq_or_internal_err!(
@@ -1428,6 +1430,7 @@ impl GroupedHashAggregateStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ExecutionPlan;
     use crate::InputOrderMode;
     use crate::test::TestMemoryExec;
     use arrow::array::{Int32Array, Int64Array};
@@ -1469,7 +1472,7 @@ mod tests {
             ],
         )?;
 
-        let input_partitions = vec![vec![batch]];
+        let input_partitions = vec![vec![batch.clone(), batch]];
 
         // Create constrained memory to trigger early emission but not completely fail
         let runtime = RuntimeEnvBuilder::default()
@@ -1538,9 +1541,19 @@ mod tests {
         }
 
         assert_eq!(
-            total_output_groups, num_groups,
+            total_output_groups,
+            num_groups * 2,
             "Unexpected number of groups",
         );
+
+        let metrics = aggregate_exec.metrics().unwrap();
+        let agg_arguments_time = metrics.sum_by_name("aggregate_arguments_time");
+        assert!(agg_arguments_time.is_some());
+        assert!(agg_arguments_time.unwrap().as_usize() > 0);
+
+        let per_aggregate_time = metrics.sum_by_name("agg_expr_0_arguments_time");
+        assert!(per_aggregate_time.is_some());
+        assert!(per_aggregate_time.unwrap().as_usize() > 0);
 
         Ok(())
     }
