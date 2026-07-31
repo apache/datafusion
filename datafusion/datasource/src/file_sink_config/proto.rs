@@ -19,35 +19,32 @@
 
 use std::sync::Arc;
 
-use arrow::compute::SortOptions;
-use arrow::datatypes::Schema;
-use datafusion_common::{Result, internal_datafusion_err};
+use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::dml::InsertOp;
-use datafusion_physical_expr::PhysicalSortExpr;
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use datafusion_physical_plan::proto::ExecutionPlanDecodeCtx;
 use datafusion_proto_models::protobuf;
 
 use crate::ListingTableUrl;
 use crate::file_groups::FileGroup;
 use crate::file_sink_config::{FileOutputMode, FileSinkConfig};
 
-impl FileSinkConfig {
+impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
+    type Error = DataFusionError;
+
     /// Serialize this shared file-sink configuration without format-specific
     /// writer options.
-    pub fn to_proto(&self) -> Result<protobuf::FileSinkConfig> {
-        let file_groups = self
+    fn try_from(config: &FileSinkConfig) -> Result<Self> {
+        let file_groups = config
             .file_group
             .iter()
             .map(TryInto::try_into)
             .collect::<Result<Vec<_>>>()?;
-        let table_paths = self
+        let table_paths = config
             .table_paths
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>();
-        let table_partition_cols = self
+        let table_partition_cols = config
             .table_partition_cols
             .iter()
             .map(|(name, data_type)| {
@@ -57,27 +54,36 @@ impl FileSinkConfig {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let file_output_mode = match self.file_output_mode {
+        let insert_op = match config.insert_op {
+            InsertOp::Append => protobuf::InsertOp::Append,
+            InsertOp::Overwrite => protobuf::InsertOp::Overwrite,
+            InsertOp::Replace => protobuf::InsertOp::Replace,
+        };
+        let file_output_mode = match config.file_output_mode {
             FileOutputMode::Automatic => protobuf::FileOutputMode::Automatic,
             FileOutputMode::SingleFile => protobuf::FileOutputMode::SingleFile,
             FileOutputMode::Directory => protobuf::FileOutputMode::Directory,
         };
 
         Ok(protobuf::FileSinkConfig {
-            object_store_url: self.object_store_url.to_string(),
+            object_store_url: config.object_store_url.to_string(),
             file_groups,
             table_paths,
-            output_schema: Some(self.output_schema.as_ref().try_into()?),
+            output_schema: Some(config.output_schema.as_ref().try_into()?),
             table_partition_cols,
-            keep_partition_by_columns: self.keep_partition_by_columns,
-            insert_op: self.insert_op as i32,
-            file_extension: self.file_extension.clone(),
+            keep_partition_by_columns: config.keep_partition_by_columns,
+            insert_op: insert_op.into(),
+            file_extension: config.file_extension.clone(),
             file_output_mode: file_output_mode.into(),
         })
     }
+}
+
+impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
+    type Error = DataFusionError;
 
     /// Reconstruct a shared file-sink configuration from protobuf.
-    pub fn from_proto(conf: &protobuf::FileSinkConfig) -> Result<Self> {
+    fn try_from(conf: &protobuf::FileSinkConfig) -> Result<Self> {
         let file_group = FileGroup::new(
             conf.file_groups
                 .iter()
@@ -148,36 +154,9 @@ impl FileSinkConfig {
     }
 }
 
-/// Decode a sink's optional required output ordering against its input schema.
-pub fn parse_sink_sort_order(
-    collection: Option<&protobuf::PhysicalSortExprNodeCollection>,
-    ctx: &ExecutionPlanDecodeCtx<'_>,
-    schema: &Schema,
-) -> Result<Option<LexRequirement>> {
-    let Some(collection) = collection else {
-        return Ok(None);
-    };
-    let sort_exprs = collection
-        .physical_sort_expr_nodes
-        .iter()
-        .map(|node| {
-            let expr = node.expr.as_ref().ok_or_else(|| {
-                internal_datafusion_err!("Unexpected empty physical expression")
-            })?;
-            Ok(PhysicalSortExpr {
-                expr: ctx.decode_expr(expr, schema)?,
-                options: SortOptions {
-                    descending: !node.asc,
-                    nulls_first: node.nulls_first,
-                },
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(LexRequirement::new(sort_exprs.into_iter().map(Into::into)))
-}
 #[cfg(test)]
 mod tests {
-    use datafusion_common::DataFusionError;
+    use arrow::datatypes::Schema;
 
     use super::*;
 
@@ -203,7 +182,7 @@ mod tests {
         mutate(&mut conf);
 
         let error =
-            FileSinkConfig::from_proto(&conf).expect_err("invalid config should fail");
+            FileSinkConfig::try_from(&conf).expect_err("invalid config should fail");
         match error {
             DataFusionError::Internal(message) => {
                 let message = message

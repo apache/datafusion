@@ -552,6 +552,6 @@ impl TryFromProto<&FileSinkConfig> for protobuf::FileSinkConfig {
     type Error = DataFusionError;
 
     fn try_from_proto(conf: &FileSinkConfig) -> Result<Self, Self::Error> {
-        conf.to_proto()
+        conf.try_into()
     }
 }

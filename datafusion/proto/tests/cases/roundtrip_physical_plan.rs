@@ -82,6 +82,7 @@ use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::metrics::MetricCategory;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion::physical_plan::proto::ExecutionPlanEncodeCtx;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::scalar_subquery::{
     ScalarSubqueryExec, ScalarSubqueryLink,
@@ -134,7 +135,6 @@ use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_proto_converter,
     physical_plan_to_bytes_with_proto_converter,
 };
-use datafusion_proto::convert::TryFromProto;
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DeduplicatingProtoConverter, DefaultPhysicalExtensionCodec,
@@ -2083,10 +2083,11 @@ impl DataSink for ProtoHookSink {
 
     fn try_to_proto(
         &self,
-        input: PhysicalPlanNode,
-        sort_order: Option<protobuf::PhysicalSortExprNodeCollection>,
-        sink_schema: &Schema,
+        exec: &DataSinkExec,
+        ctx: &ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<PhysicalPlanNode>> {
+        let input = ctx.encode_child(exec.input())?;
+        let sort_order = exec.encode_sort_order(ctx)?;
         assert!(matches!(
             input.physical_plan_type,
             Some(protobuf::physical_plan_node::PhysicalPlanType::PlaceholderRow(_))
@@ -2097,13 +2098,13 @@ impl DataSink for ProtoHookSink {
                 .map(|ordering| ordering.physical_sort_expr_nodes.len()),
             Some(1)
         );
-        assert_eq!(sink_schema.fields().len(), 1);
+        assert_eq!(exec.schema().fields().len(), 1);
 
         Ok(Some(PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Empty(
                     protobuf::EmptyExecNode {
-                        schema: Some(sink_schema.try_into()?),
+                        schema: Some(exec.schema().as_ref().try_into()?),
                         partitions: 1,
                     },
                 ),
@@ -2143,7 +2144,7 @@ fn data_sink_exec_delegates_to_sink_proto_hook() -> Result<()> {
 }
 
 #[test]
-fn file_sink_config_conversion_preserves_compatibility_api() -> Result<()> {
+fn file_sink_config_roundtrip_preserves_fields() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new(
         "partition",
         DataType::Utf8,
@@ -2162,14 +2163,40 @@ fn file_sink_config_conversion_preserves_compatibility_api() -> Result<()> {
         file_output_mode: FileOutputMode::Directory,
     };
 
-    let encoded = config.to_proto()?;
-    let compatibility_encoded = protobuf::FileSinkConfig::try_from_proto(&config)?;
-    assert_eq!(encoded, compatibility_encoded);
+    let encoded = protobuf::FileSinkConfig::try_from(&config)?;
+    assert_eq!(encoded.insert_op(), protobuf::InsertOp::Overwrite);
+    assert_eq!(
+        encoded.file_output_mode(),
+        protobuf::FileOutputMode::Directory
+    );
 
-    let decoded = FileSinkConfig::from_proto(&encoded)?;
-    let compatibility_decoded = FileSinkConfig::try_from_proto(&encoded)?;
-    assert_eq!(decoded.to_proto()?, encoded);
-    assert_eq!(compatibility_decoded.to_proto()?, encoded);
+    let decoded = FileSinkConfig::try_from(&encoded)?;
+    assert_eq!(decoded.object_store_url, config.object_store_url);
+    assert_eq!(decoded.table_paths, config.table_paths);
+    assert_eq!(
+        decoded.output_schema.as_ref(),
+        config.output_schema.as_ref()
+    );
+    assert_eq!(decoded.table_partition_cols, config.table_partition_cols);
+    assert_eq!(decoded.insert_op, config.insert_op);
+    assert_eq!(
+        decoded.keep_partition_by_columns,
+        config.keep_partition_by_columns
+    );
+    assert_eq!(decoded.file_extension, config.file_extension);
+    assert_eq!(decoded.file_output_mode, config.file_output_mode);
+
+    let [decoded_file] = decoded.file_group.files() else {
+        panic!("expected one decoded output file");
+    };
+    let [config_file] = config.file_group.files() else {
+        panic!("expected one configured output file");
+    };
+    assert_eq!(
+        decoded_file.object_meta.location,
+        config_file.object_meta.location
+    );
+    assert_eq!(decoded_file.object_meta.size, config_file.object_meta.size);
     Ok(())
 }
 

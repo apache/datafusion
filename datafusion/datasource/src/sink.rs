@@ -74,19 +74,16 @@ pub trait DataSink: Any + DisplayAs + Debug + Send + Sync {
 
     /// Serialize this sink into a full protobuf plan node, if it knows how.
     ///
-    /// [`DataSinkExec::try_to_proto`] encodes the shared child plan and required
-    /// output ordering before delegating to this hook. Implementations only need
-    /// to add their sink-specific fields.
+    /// Implementations can use `ctx` to encode the input plan, sink-specific
+    /// expressions, and [`DataSinkExec::encode_sort_order`].
     ///
-    /// Returning `Ok(None)` preserves the legacy central serialization fallback.
+    /// Returning `Ok(None)` preserves the legacy central serialization fallback
+    /// without eagerly encoding any child plans or expressions.
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
-        _input: datafusion_proto_models::protobuf::PhysicalPlanNode,
-        _sort_order: Option<
-            datafusion_proto_models::protobuf::PhysicalSortExprNodeCollection,
-        >,
-        _sink_schema: &Schema,
+        _exec: &DataSinkExec,
+        _ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         Ok(None)
     }
@@ -162,6 +159,39 @@ impl DataSinkExec {
     /// Optional sort order for output data
     pub fn sort_order(&self) -> &Option<LexRequirement> {
         &self.sort_order
+    }
+
+    /// Encode the optional sink ordering for a protobuf plan node.
+    #[cfg(feature = "proto")]
+    pub fn encode_sort_order(
+        &self,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalSortExprNodeCollection>>
+    {
+        use datafusion_physical_expr::PhysicalSortExpr;
+        use datafusion_proto_models::protobuf;
+
+        self.sort_order
+            .as_ref()
+            .map(|requirements| {
+                requirements
+                    .iter()
+                    .map(|requirement| {
+                        let expr: PhysicalSortExpr = requirement.to_owned().into();
+                        Ok(protobuf::PhysicalSortExprNode {
+                            expr: Some(Box::new(ctx.encode_expr(&expr.expr)?)),
+                            asc: !expr.options.descending,
+                            nulls_first: expr.options.nulls_first,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()
+                    .map(|physical_sort_expr_nodes| {
+                        protobuf::PhysicalSortExprNodeCollection {
+                            physical_sort_expr_nodes,
+                        }
+                    })
+            })
+            .transpose()
     }
 
     fn create_schema(
@@ -288,42 +318,13 @@ impl ExecutionPlan for DataSinkExec {
         self.sink.metrics()
     }
 
-    /// Encodes the shared sink plan fields before delegating the sink-specific
-    /// protobuf representation to [`DataSink::try_to_proto`].
+    /// Delegates protobuf serialization to the underlying sink.
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
         ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
-        use datafusion_physical_expr::PhysicalSortExpr;
-        use datafusion_proto_models::protobuf;
-
-        let input = ctx.encode_child(self.input())?;
-        let sort_order = self
-            .sort_order()
-            .as_ref()
-            .map(|requirements| {
-                requirements
-                    .iter()
-                    .map(|requirement| {
-                        let expr: PhysicalSortExpr = requirement.to_owned().into();
-                        Ok(protobuf::PhysicalSortExprNode {
-                            expr: Some(Box::new(ctx.encode_expr(&expr.expr)?)),
-                            asc: !expr.options.descending,
-                            nulls_first: expr.options.nulls_first,
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()
-                    .map(|physical_sort_expr_nodes| {
-                        protobuf::PhysicalSortExprNodeCollection {
-                            physical_sort_expr_nodes,
-                        }
-                    })
-            })
-            .transpose()?;
-
-        self.sink()
-            .try_to_proto(input, sort_order, self.schema().as_ref())
+        self.sink().try_to_proto(self, ctx)
     }
 }
 
