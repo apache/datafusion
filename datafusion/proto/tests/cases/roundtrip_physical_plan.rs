@@ -2417,6 +2417,43 @@ fn parse_hash_partitioning_delegates_to_shared_decoder() -> Result<()> {
             .is_none()
     );
 
+    // The count is a `u64` on the wire and a `usize` in memory, so decoding
+    // narrows it. A count that does not fit is the case that motivated routing
+    // this through the shared decoder: it used to `unwrap()` and panic, and now
+    // reports an error. Only a target narrower than 64 bits can reach that arm
+    // -- on a 64-bit target every `u64` fits, and the assertion there is that
+    // the largest possible count survives whole rather than being truncated.
+    let oversized = protobuf::PhysicalHashRepartition {
+        hash_expr: vec![serialize_physical_expr_with_converter(
+            &col("a", &schema)?,
+            &codec,
+            &proto_converter,
+        )?],
+        partition_count: u64::MAX,
+    };
+    let decoded = parse_protobuf_hash_partitioning(
+        Some(&oversized),
+        &decode_ctx,
+        &schema,
+        &proto_converter,
+    );
+
+    #[cfg(target_pointer_width = "64")]
+    {
+        let Some(Partitioning::Hash(_, count)) = decoded? else {
+            panic!("expected hash partitioning");
+        };
+        assert_eq!(count, usize::MAX);
+    }
+
+    #[cfg(not(target_pointer_width = "64"))]
+    assert!(
+        decoded
+            .unwrap_err()
+            .to_string()
+            .contains("Partition count 18446744073709551615 exceeds usize::MAX")
+    );
+
     Ok(())
 }
 

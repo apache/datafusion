@@ -1402,3 +1402,129 @@ mod ordering_proto_tests {
         );
     }
 }
+
+/// Partition counts are `usize` in memory and `u64` on the wire, so every
+/// counted [`Partitioning`] variant crosses a width boundary in both
+/// directions. These pin that neither crossing wraps or panics.
+#[cfg(all(test, feature = "proto"))]
+mod partition_count_proto_tests {
+    use std::sync::Arc;
+
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_proto_models::protobuf;
+
+    use super::{Partitioning, partition_count, wire_partition_count};
+    use crate::expressions::Column;
+    use crate::proto_test_util::{StubDecoder, StubEncoder, column_node};
+
+    fn partitioning_node(
+        method: protobuf::partitioning::PartitionMethod,
+    ) -> protobuf::Partitioning {
+        protobuf::Partitioning {
+            partition_method: Some(method),
+        }
+    }
+
+    /// The counted variants, each carrying `count`. `Range` is excluded: it
+    /// derives its partition count from its split points rather than reading
+    /// one off the wire.
+    fn counted_methods(count: u64) -> Vec<protobuf::partitioning::PartitionMethod> {
+        use protobuf::partitioning::PartitionMethod;
+
+        vec![
+            PartitionMethod::RoundRobin(count),
+            PartitionMethod::Unknown(count),
+            PartitionMethod::Hash(protobuf::PhysicalHashRepartition {
+                hash_expr: vec![column_node("a")],
+                partition_count: count,
+            }),
+        ]
+    }
+
+    #[test]
+    fn partition_count_round_trips_at_the_usize_ceiling() {
+        // `usize::MAX` is the largest count that can exist in memory, so it has
+        // to widen onto the wire and narrow back unchanged.
+        let wire = wire_partition_count(usize::MAX).unwrap();
+        assert_eq!(wire, u64::try_from(usize::MAX).unwrap());
+        assert_eq!(partition_count(wire).unwrap(), usize::MAX);
+    }
+
+    #[test]
+    fn out_of_range_partition_count_is_reported_not_wrapped() {
+        // A count wider than the target's `usize` can only be reached by
+        // decoding on a narrower host than the one that encoded. That used to
+        // wrap (`as usize`) or panic (`unwrap`); it is an error now. On a
+        // 64-bit target every `u64` fits, so the same input has to decode
+        // losslessly instead of being rejected.
+        let narrowed = partition_count(u64::MAX);
+
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(narrowed.unwrap(), usize::MAX);
+
+        #[cfg(not(target_pointer_width = "64"))]
+        assert!(
+            narrowed
+                .unwrap_err()
+                .to_string()
+                .contains("Partition count 18446744073709551615 exceeds usize::MAX")
+        );
+    }
+
+    #[test]
+    fn try_from_proto_narrows_every_counted_variant() {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let decoder = StubDecoder::ok();
+        let decode_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        for method in counted_methods(u64::MAX) {
+            let decoded =
+                Partitioning::try_from_proto(&partitioning_node(method), &decode_ctx);
+
+            #[cfg(target_pointer_width = "64")]
+            assert_eq!(decoded.unwrap().unwrap().partition_count(), usize::MAX);
+
+            #[cfg(not(target_pointer_width = "64"))]
+            assert!(
+                decoded
+                    .unwrap_err()
+                    .to_string()
+                    .contains("exceeds usize::MAX")
+            );
+        }
+    }
+
+    #[test]
+    fn try_to_proto_widens_every_counted_variant() {
+        use protobuf::partitioning::PartitionMethod;
+
+        let encoder = StubEncoder::ok();
+        let encode_ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let hash_key: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+
+        let encoded = [
+            Partitioning::RoundRobinBatch(usize::MAX),
+            Partitioning::UnknownPartitioning(usize::MAX),
+            Partitioning::Hash(vec![hash_key], usize::MAX),
+        ]
+        .iter()
+        .map(|partitioning| {
+            match partitioning
+                .try_to_proto(&encode_ctx)
+                .unwrap()
+                .partition_method
+            {
+                Some(PartitionMethod::RoundRobin(n) | PartitionMethod::Unknown(n)) => n,
+                Some(PartitionMethod::Hash(hash)) => hash.partition_count,
+                other => panic!("expected a counted partition method, got {other:?}"),
+            }
+        })
+        .collect::<Vec<_>>();
+
+        // Every variant widens to the same wire value, with no truncation.
+        assert_eq!(encoded, vec![u64::try_from(usize::MAX).unwrap(); 3]);
+    }
+}
