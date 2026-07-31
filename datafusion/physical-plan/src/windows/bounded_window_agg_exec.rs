@@ -54,7 +54,7 @@ use datafusion_common::utils::{
     evaluate_partition_ranges, get_at_indices, get_row_at_idx,
 };
 use datafusion_common::{
-    HashMap, Result, arrow_datafusion_err, exec_datafusion_err, exec_err,
+    HashMap, Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err, exec_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::ColumnarValue;
@@ -76,8 +76,18 @@ use hashbrown::hash_table::HashTable;
 use indexmap::IndexMap;
 use log::debug;
 
+/// Called by [`BoundedWindowAggExec`] when a PARTITION BY group closes,
+/// once per (output-partition-index, PARTITION BY tuple). The third argument
+/// is one entry per window expression on the exec, in the same order as
+/// [`BoundedWindowAggExec::window_expr`]; `None` for built-in functions
+/// (`row_number`, `rank`, `lead`/`lag`, ...), `Some(state)` for aggregates
+/// via [`datafusion_expr::Accumulator::state`].
+pub type FinalizedWindowStateObserver = Arc<
+    dyn Fn(usize, &PartitionKey, &[Option<Vec<ScalarValue>>]) -> Result<()> + Send + Sync,
+>;
+
 /// Window execution plan
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BoundedWindowAggExec {
     /// Input plan
     input: Arc<dyn ExecutionPlan>,
@@ -100,6 +110,32 @@ pub struct BoundedWindowAggExec {
     cache: Arc<PlanProperties>,
     /// If `can_rerepartition` is false, partition_keys is always empty.
     can_repartition: bool,
+    /// Invoked at partition-close to publish finalized per-partition window
+    /// state. Storage and multi-group handling are the caller's; the exec is
+    /// a pure event source.
+    finalized_state_observer: Option<FinalizedWindowStateObserver>,
+}
+
+impl std::fmt::Debug for BoundedWindowAggExec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BoundedWindowAggExec")
+            .field("input", &self.input)
+            .field("window_expr", &self.window_expr)
+            .field("schema", &self.schema)
+            .field("metrics", &self.metrics)
+            .field("input_order_mode", &self.input_order_mode)
+            .field(
+                "ordered_partition_by_indices",
+                &self.ordered_partition_by_indices,
+            )
+            .field("cache", &self.cache)
+            .field("can_repartition", &self.can_repartition)
+            .field(
+                "finalized_state_observer",
+                &self.finalized_state_observer.as_ref().map(|_| "..."),
+            )
+            .finish()
+    }
 }
 
 impl BoundedWindowAggExec {
@@ -140,7 +176,18 @@ impl BoundedWindowAggExec {
             ordered_partition_by_indices,
             cache: Arc::new(cache),
             can_repartition,
+            finalized_state_observer: None,
         })
+    }
+
+    /// Install a callback that receives each PARTITION BY group's finalized
+    /// window state at partition close.
+    pub fn with_finalized_state_observer(
+        mut self,
+        observer: FinalizedWindowStateObserver,
+    ) -> Self {
+        self.finalized_state_observer = Some(observer);
+        self
     }
 
     /// Window expressions
@@ -346,12 +393,16 @@ impl ExecutionPlan for BoundedWindowAggExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         check_if_same_properties!(self, children);
-        Ok(Arc::new(BoundedWindowAggExec::try_new(
+        let mut new = BoundedWindowAggExec::try_new(
             self.window_expr.clone(),
             Arc::clone(&children[0]),
             self.input_order_mode.clone(),
             self.can_repartition,
-        )?))
+        )?;
+        if let Some(observer) = &self.finalized_state_observer {
+            new = new.with_finalized_state_observer(Arc::clone(observer));
+        }
+        Ok(Arc::new(new))
     }
 
     fn with_new_children_and_same_properties(
@@ -378,6 +429,8 @@ impl ExecutionPlan for BoundedWindowAggExec {
             input,
             BaselineMetrics::new(&self.metrics, partition),
             search_mode,
+            partition,
+            self.finalized_state_observer.clone(),
         )?);
         Ok(stream)
     }
@@ -1042,6 +1095,13 @@ pub struct BoundedWindowAggStream {
     /// partitions, so finished partitions are pruned eagerly instead and no
     /// such bound is needed.
     most_recent_row: Option<RecordBatch>,
+    /// Output partition index this stream serves; passed as the first
+    /// argument to `finalized_state_observer`.
+    partition_idx: usize,
+    /// If set, invoked at partition close in [`Self::prune_state`] with the
+    /// finalized per-window-expression state for every partition key that is
+    /// about to be dropped.
+    finalized_state_observer: Option<FinalizedWindowStateObserver>,
 }
 
 impl BoundedWindowAggStream {
@@ -1053,6 +1113,33 @@ impl BoundedWindowAggStream {
     // For instance, if `n_out` number of rows are calculated, we can remove
     // first `n_out` rows from `self.input_buffer`.
     fn prune_state(&mut self, n_out: usize) -> Result<()> {
+        // `WindowAggState::is_end` is copied from `PartitionBatchState::is_end`
+        // during `evaluate_stateful`, so every window_expr's state map agrees
+        // on which partition keys have just closed. Publish those keys before
+        // the retains in `prune_out_columns` / `prune_partition_batches` drop
+        // them.
+        if let Some(observer) = self.finalized_state_observer.clone()
+            && !self.window_agg_states.is_empty()
+        {
+            let closed_keys: Vec<PartitionKey> = self.window_agg_states[0]
+                .iter()
+                .filter(|(_, ws)| ws.state.is_end)
+                .map(|(k, _)| k.clone())
+                .collect();
+            for key in closed_keys {
+                let mut states: Vec<Option<Vec<ScalarValue>>> =
+                    Vec::with_capacity(self.window_agg_states.len());
+                for per_expr in self.window_agg_states.iter_mut() {
+                    let entry = per_expr.get_mut(&key).ok_or_else(|| {
+                        exec_datafusion_err!(
+                            "finalized_state_observer: missing state for closed partition key"
+                        )
+                    })?;
+                    states.push(entry.aggregate_state()?);
+                }
+                observer(self.partition_idx, &key, &states)?;
+            }
+        }
         // Prune `self.window_agg_states`:
         self.prune_out_columns();
         // Prune `self.partition_batches`:
@@ -1085,6 +1172,8 @@ impl BoundedWindowAggStream {
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
         search_mode: Box<dyn PartitionSearcher>,
+        partition_idx: usize,
+        finalized_state_observer: Option<FinalizedWindowStateObserver>,
     ) -> Result<Self> {
         let state = window_expr.iter().map(|_| IndexMap::default()).collect();
         let empty_batch = RecordBatch::new_empty(Arc::clone(&schema));
@@ -1099,6 +1188,8 @@ impl BoundedWindowAggStream {
             baseline_metrics,
             search_mode,
             most_recent_row: None,
+            partition_idx,
+            finalized_state_observer,
         })
     }
 
@@ -1952,6 +2043,113 @@ mod tests {
         +----+------+-------+
         ");
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_finalized_state_observer_fires_at_partition_close() -> Result<()> {
+        use crate::windows::bounded_window_agg_exec::FinalizedWindowStateObserver;
+        use datafusion_physical_expr::window::PartitionKey;
+        use std::sync::Mutex;
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = test_schema();
+
+        // Two PARTITION BY groups: hash=1 [sn=1,2,3] then hash=2 [sn=4,5,6].
+        // Input is sorted by (hash, sn) so we can run in Sorted mode; in that
+        // mode `mark_partition_end` closes the leading group mid-stream and
+        // EOS closes the tail — both should fire the observer.
+        let mut sn_b = UInt64Builder::with_capacity(6);
+        let mut hash_b = Int64Builder::with_capacity(6);
+        for (sn, hash) in [(1u64, 1i64), (2, 1), (3, 1), (4, 2), (5, 2), (6, 2)] {
+            sn_b.append_value(sn);
+            hash_b.append_value(hash);
+        }
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(sn_b.finish()), Arc::new(hash_b.finish())],
+        )?;
+        let ordering: LexOrdering = [
+            PhysicalSortExpr {
+                expr: col("hash", &schema)?,
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: col("sn", &schema)?,
+                options: SortOptions::default(),
+            },
+        ]
+        .into();
+        let source_raw =
+            TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None)?
+                .try_with_sort_information(vec![ordering])?;
+        let source: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(source_raw)));
+
+        let window_fn = WindowFunctionDefinition::AggregateUDF(count_udaf());
+        let args = vec![col("sn", &schema)?];
+        let partition_by = vec![col("hash", &schema)?];
+        let order_by = vec![PhysicalSortExpr {
+            expr: col("sn", &schema)?,
+            options: SortOptions::default(),
+        }];
+        // CURRENT ROW → UNBOUNDED FOLLOWING forces each row's output to wait
+        // for partition close (is_causal = false), so hash=2's rows are held
+        // until EOS marks its buffer is_end — which is the path we want to
+        // exercise for the observer.
+        let frame = WindowFrame::new_bounds(
+            WindowFrameUnits::Rows,
+            WindowFrameBound::CurrentRow,
+            WindowFrameBound::Following(ScalarValue::UInt64(None)),
+        );
+        let expr = create_window_expr(
+            &window_fn,
+            "cnt".to_string(),
+            &args,
+            &partition_by,
+            &order_by,
+            Arc::new(frame),
+            source.schema(),
+            false,
+            false,
+            None,
+        )?;
+
+        type Observation = (usize, PartitionKey, Vec<Option<Vec<ScalarValue>>>);
+        let observations: Arc<Mutex<Vec<Observation>>> = Arc::new(Mutex::new(vec![]));
+        let sink = Arc::clone(&observations);
+        let observer: FinalizedWindowStateObserver = Arc::new(move |idx, key, states| {
+            sink.lock()
+                .unwrap()
+                .push((idx, key.clone(), states.to_vec()));
+            Ok(())
+        });
+
+        let plan = BoundedWindowAggExec::try_new(
+            vec![expr],
+            source,
+            InputOrderMode::Sorted,
+            false,
+        )?
+        .with_finalized_state_observer(observer);
+
+        let _ = collect(Arc::new(plan).execute(0, task_ctx)?).await?;
+
+        let obs = observations.lock().unwrap();
+        assert_eq!(obs.len(), 2, "one observation per PARTITION BY group");
+        let keys: Vec<i64> = obs
+            .iter()
+            .map(|(_, k, _)| match &k[0] {
+                ScalarValue::Int64(Some(v)) => *v,
+                other => panic!("unexpected partition-key element: {other:?}"),
+            })
+            .collect();
+        assert_eq!(keys, vec![1, 2]);
+        for (idx, _, states) in obs.iter() {
+            assert_eq!(*idx, 0, "single output partition");
+            assert_eq!(states.len(), 1, "one window expression");
+            assert!(states[0].is_some(), "count() is an aggregate → Some(state)");
+        }
         Ok(())
     }
 
