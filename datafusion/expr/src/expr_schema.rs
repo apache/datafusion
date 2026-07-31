@@ -99,7 +99,10 @@ fn scalar_arguments_for_fields(
 
 fn scalar_argument_for_field(expr: &Expr, arg_field: &FieldRef) -> Option<ScalarValue> {
     match expr {
-        Expr::Literal(sv, _) => sv.cast_to(arg_field.data_type()).ok(),
+        Expr::Literal(sv, _) => Some(
+            sv.cast_to(arg_field.data_type())
+                .unwrap_or_else(|_| sv.clone()),
+        ),
         _ => None,
     }
 }
@@ -848,11 +851,13 @@ mod tests {
     }
 
     #[test]
-    fn scalar_arguments_exclude_expression_casts_and_invalid_values() {
+    fn scalar_arguments_exclude_expression_casts_and_preserve_invalid_values() {
         let int16_field: FieldRef = Field::new("arg", DataType::Int16, true).into();
+        let int32_field: FieldRef = Field::new("arg", DataType::Int32, true).into();
         let explicit_cast = Expr::Cast(Cast::new(Box::new(lit(1_i64)), DataType::Int16));
         let explicit_try_cast =
             Expr::TryCast(TryCast::new(Box::new(lit(1_i64)), DataType::Int16));
+        let out_of_i32_range = i64::from(i32::MAX) + 1;
 
         assert_eq!(
             scalar_argument_for_field(&explicit_cast, &int16_field),
@@ -864,7 +869,11 @@ mod tests {
         );
         assert_eq!(
             scalar_argument_for_field(&lit("not an integer"), &int16_field),
-            None
+            Some(ScalarValue::Utf8(Some("not an integer".to_string())))
+        );
+        assert_eq!(
+            scalar_argument_for_field(&lit(out_of_i32_range), &int32_field),
+            Some(ScalarValue::Int64(Some(out_of_i32_range)))
         );
     }
 
