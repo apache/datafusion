@@ -994,7 +994,7 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
     let nullable = field.is_nullable();
     let data_type = field.data_type();
     let mut v: Vec<Box<dyn GroupColumn>> = Vec::with_capacity(1);
-    match data_type {
+    match *data_type {
         DataType::Int8 => instantiate_primitive!(v, nullable, Int8Type, data_type),
         DataType::Int16 => instantiate_primitive!(v, nullable, Int16Type, data_type),
         DataType::Int32 => instantiate_primitive!(v, nullable, Int32Type, data_type),
@@ -1114,7 +1114,7 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
                 v.push(Box::new(BooleanGroupValueBuilder::<false>::new()));
             }
         }
-        DataType::Dictionary(key_dt, value_dt) => {
+        DataType::Dictionary(ref key_dt, ref value_dt) => {
             let new_field = Field::new("", *value_dt.clone(), true);
             let inner = make_group_column(&new_field)?;
             macro_rules! dict_col {
