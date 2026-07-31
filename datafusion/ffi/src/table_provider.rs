@@ -492,8 +492,7 @@ impl TableProvider for ForeignTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let session =
-            FFI_SessionRef::new(session, None, self.0.logical_codec.clone(), None);
+        let session = FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
 
         let projections: FFI_Option<SVec<usize>> = projection
             .map(|p| p.iter().map(|v| v.to_owned()).collect())
@@ -563,8 +562,7 @@ impl TableProvider for ForeignTableProvider {
         input: Arc<dyn ExecutionPlan>,
         insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let session =
-            FFI_SessionRef::new(session, None, self.0.logical_codec.clone(), None);
+        let session = FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
 
         let rc = Handle::try_current().ok();
         let input = FFI_ExecutionPlan::new(input, rc);

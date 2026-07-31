@@ -278,7 +278,6 @@ impl TableFunctionImpl for ForeignTableFunction {
             args.session(),
             self.0.runtime(),
             self.0.logical_codec.clone(),
-            None,
         );
         let codec: Arc<dyn LogicalExtensionCodec> = (&self.0.logical_codec).into();
         let expr_list = LogicalExprList {

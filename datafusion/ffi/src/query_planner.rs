@@ -237,11 +237,11 @@ impl FFI_QueryPlanner {
             logical_plan_to_bytes_with_extension_codec(logical_plan, codec.as_ref())?;
         let logical_plan = logical_plan.iter().copied().collect();
         let task_ctx = session.task_ctx();
-        let session = FFI_SessionRef::new(
+        let session = FFI_SessionRef::new_with_ffi_codecs(
             session,
             session_runtime,
             self.logical_codec.clone(),
-            Some(self.physical_codec.clone()),
+            self.physical_codec.clone(),
         );
 
         let physical_plan = unsafe {

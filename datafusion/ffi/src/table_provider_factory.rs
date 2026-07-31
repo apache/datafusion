@@ -293,8 +293,7 @@ impl TableProviderFactory for ForeignTableProviderFactory {
         session: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
-        let session =
-            FFI_SessionRef::new(session, None, self.0.logical_codec.clone(), None);
+        let session = FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
         let cmd = self.serialize_cmd(cmd.clone())?;
 
         let provider = unsafe {

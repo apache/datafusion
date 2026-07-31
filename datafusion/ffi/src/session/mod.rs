@@ -421,19 +421,26 @@ impl FFI_SessionRef {
         session: &(dyn Session + Send + Sync),
         runtime: Option<Handle>,
         logical_codec: FFI_LogicalExtensionCodec,
-        physical_codec: Option<FFI_PhysicalExtensionCodec>,
+    ) -> Self {
+        let physical_codec = FFI_PhysicalExtensionCodec::new(
+            Arc::new(DefaultPhysicalExtensionCodec {}),
+            runtime.clone(),
+            logical_codec.task_ctx_provider.clone(),
+        );
+        Self::new_with_ffi_codecs(session, runtime, logical_codec, physical_codec)
+    }
+
+    /// Creates a new [`FFI_SessionRef`] using existing FFI codecs.
+    pub fn new_with_ffi_codecs(
+        session: &(dyn Session + Send + Sync),
+        runtime: Option<Handle>,
+        logical_codec: FFI_LogicalExtensionCodec,
+        physical_codec: FFI_PhysicalExtensionCodec,
     ) -> Self {
         if let Some(session) = session.as_any().downcast_ref::<ForeignSession>() {
             return session.session.clone();
         }
 
-        let physical_codec = physical_codec.unwrap_or_else(|| {
-            FFI_PhysicalExtensionCodec::new(
-                Arc::new(DefaultPhysicalExtensionCodec {}),
-                runtime.clone(),
-                logical_codec.task_ctx_provider.clone(),
-            )
-        });
         let private_data = Box::new(SessionPrivateData { session, runtime });
 
         Self {
@@ -818,7 +825,7 @@ mod tests {
             task_ctx_provider,
         );
 
-        let local_session = FFI_SessionRef::new(&state, None, logical_codec, None);
+        let local_session = FFI_SessionRef::new(&state, None, logical_codec);
         let foreign_session = ForeignSession::try_from(&local_session)?;
 
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
