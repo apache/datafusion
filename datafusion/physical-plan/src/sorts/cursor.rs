@@ -627,7 +627,7 @@ mod tests {
 
         let memory_pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1_000_000));
         let consumer = MemoryConsumer::new("test");
-        let mut reservation = consumer.register(&memory_pool);
+        let reservation = consumer.register(&memory_pool);
         reservation.grow(rows.size());
 
         Cursor::new(RowValues::new(Arc::new(rows), reservation))
