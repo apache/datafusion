@@ -1930,7 +1930,7 @@ mod test {
         assert_analyzed_plan_eq!(
             plan,
             @r"
-        Projection: TestScalarUDF(CAST(Int32(123) AS Float32))
+        Projection: TestScalarUDF(Float32(123)) AS TestScalarUDF(Int32(123))
           EmptyRelation: rows=0
         "
         )
@@ -1967,7 +1967,7 @@ mod test {
         assert_analyzed_plan_eq!(
             plan,
             @r"
-        Projection: TestScalarUDF(CAST(Int64(10) AS Float32))
+        Projection: TestScalarUDF(Float32(10)) AS TestScalarUDF(Int64(10))
           EmptyRelation: rows=0
         "
         )
@@ -2507,7 +2507,7 @@ mod test {
         assert_analyzed_plan_eq!(
             plan,
             @r#"
-        Projection: TestScalarUDF(a, Utf8("b"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))
+        Projection: TestScalarUDF(a, Utf8("b"), Utf8("true"), Utf8("false"), Utf8("13")) AS TestScalarUDF(a,Utf8("b"),Boolean(true),Boolean(false),Int32(13))
           EmptyRelation: rows=0
         "#
         )
