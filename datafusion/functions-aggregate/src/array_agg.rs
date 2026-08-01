@@ -1059,7 +1059,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
             .map(|i| ScalarValue::try_from_array(decoded.as_ref(), i))
             .collect::<Result<_>>()?;
 
-        let arr = ScalarValue::new_list(&values, &self.datatype, true);
+        let arr = ScalarValue::new_list(&values, decoded.data_type(), true);
         Ok(ScalarValue::List(arr))
     }
 
@@ -1429,14 +1429,15 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         }
 
         let values = self.values.clone();
+        let values_data_type = values[0].data_type();
         let array = if self.reverse {
             ScalarValue::new_list_from_iter(
                 values.into_iter().rev(),
-                &self.datatypes[0],
+                &values_data_type,
                 true,
             )
         } else {
-            ScalarValue::new_list_from_iter(values.into_iter(), &self.datatypes[0], true)
+            ScalarValue::new_list_from_iter(values.into_iter(), &values_data_type, true)
         };
         Ok(ScalarValue::List(array))
     }
