@@ -2119,9 +2119,10 @@ mod tests {
     ///      source batch has been dropped (proves that stored values are
     ///      owned copies, not `Arc` slices into batches that no longer
     ///      exist).
-    ///   2. No `Arc` reference to any past source batch is retained by the
-    ///      accumulator — every batch's `Weak` handle reports
-    ///      `strong_count == 0` once the local `Arc` is dropped.
+    ///   2. No buffer of any past source batch is shared by the emitted
+    ///      output — the raw data-buffer pointer of every source batch is
+    ///      recorded, and the final output's buffers must not alias any of
+    ///      them (proves `compact()` copied the winners into owned memory).
     ///   3. The accumulator's reported `size()` stays bounded by
     ///      `#groups * per-group-cost`, independent of `#batches * #rows`.
     ///
@@ -2154,9 +2155,6 @@ mod tests {
         const BATCHES: usize = 50;
         const ROWS_PER_BATCH: usize = 256;
 
-        // Keep a `Weak` handle to each batch's payload array. After we drop
-        // the local `Arc`s, `strong_count == 0` means nothing in the
-        // accumulator is still holding a reference to that batch.
         // Record the raw pointer of each source batch's Int32 value-data
         // buffer. If `compact()` did its job, the accumulator's final
         // output must not share any of these pointers — every winner
