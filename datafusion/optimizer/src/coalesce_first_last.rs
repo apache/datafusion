@@ -61,6 +61,11 @@ const GET_FIELD: &str = "get_field";
 /// The input is scanned once, not once per expression, and holds one per-group
 /// state slot instead of N.
 ///
+/// Ties are not guaranteed to break the same way with the rule on and off. Each
+/// plan resolves them deterministically on its own, but the two do not guarantee
+/// the same choice as each other, so duplicate `ORDER BY` keys can yield
+/// different (equally valid) winners depending on the flag.
+///
 /// Off by default (`optimizer.enable_coalesce_first_last`); no-ops if
 /// `named_struct` / `get_field` are not registered.
 #[derive(Default, Debug)]
@@ -74,10 +79,9 @@ impl CoalesceFirstLast {
 
 /// `(function name, ORDER BY key, null treatment)` — peers may be coalesced only
 /// when all three match.
-// Peers are bucketed by (function name, ORDER BY, null treatment). Using the
-// function *name* is safe because a session resolves one canonical UDF per
-// name, so same-keyed members share an implementation.
-type BucketKey = (String, Vec<Sort>, Option<NullTreatment>);
+// Using the function *name* is safe because a session resolves one canonical
+// UDF per name, so same-keyed members share an implementation.
+type BucketKey = (String, Vec<Sort>, NullTreatment);
 
 struct Coalesceable {
     key: BucketKey,
@@ -86,9 +90,8 @@ struct Coalesceable {
 }
 
 fn classify(expr: &Expr) -> Option<Coalesceable> {
-    // `Aggregate::aggr_expr` entries are documented to be either an
-    // `AggregateFunction` or an `Alias` wrapping one (e.g. built via the
-    // DataFrame API); unwrap the alias so aliased peers are coalesced too.
+    // `aggr_expr` entries are an `AggregateFunction` or an `Alias` wrapping one
+    // (e.g. built via the DataFrame API), so unwrap to catch aliased peers.
     let inner = match expr {
         Expr::Alias(alias) => alias.expr.as_ref(),
         other => other,
@@ -108,9 +111,8 @@ fn classify(expr: &Expr) -> Option<Coalesceable> {
         null_treatment,
     } = params;
 
-    // DISTINCT / FILTER would break the shared scan, and IGNORE NULLS cannot be
-    // reproduced through a single struct (it would skip rows where the whole
-    // struct is null rather than where the individual value is null).
+    // DISTINCT / FILTER break the shared scan, and IGNORE NULLS can't go through
+    // one struct (it would skip whole-struct nulls, not per-value nulls).
     if *distinct
         || filter.is_some()
         || args.len() != 1
@@ -120,8 +122,14 @@ fn classify(expr: &Expr) -> Option<Coalesceable> {
         return None;
     }
 
+    // `None` and `Some(RespectNulls)` mean the same to the physical planner (and
+    // `IgnoreNulls` bailed above), so normalize or those peers miss each other.
     Some(Coalesceable {
-        key: (name.to_string(), order_by.clone(), *null_treatment),
+        key: (
+            name.to_string(),
+            order_by.clone(),
+            null_treatment.unwrap_or(NullTreatment::RespectNulls),
+        ),
         func: Arc::clone(func),
         value: args[0].clone(),
     })
@@ -149,9 +157,8 @@ impl OptimizerRule for CoalesceFirstLast {
             return Ok(Transformed::no(plan));
         };
 
-        // Grouping sets add an internal grouping-id column and distinct
-        // group-by semantics; this rule declines to coalesce them (consistent
-        // with the other cases it skips).
+        // Grouping sets add an internal grouping-id column and their own
+        // group-by semantics, so decline them like the other skipped cases.
         if matches!(aggregate.group_expr.as_slice(), [Expr::GroupingSet(_)]) {
             return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
         }
@@ -181,10 +188,8 @@ impl OptimizerRule for CoalesceFirstLast {
             return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
         };
 
-        // Use `group_expr_len()` (deduplicated count, matching how
-        // `Aggregate::try_new` builds the schema) rather than `group_expr.len()`,
-        // which over-counts duplicate group exprs (e.g. `GROUP BY p, p`) and would
-        // misalign the group/aggregate split of `orig_columns` below.
+        // Deduplicated count, matching how `Aggregate::try_new` builds the schema.
+        // `group_expr.len()` over-counts `GROUP BY p, p` and misaligns the split.
         let group_len = aggregate.group_expr_len()?;
         let orig_columns = aggregate.schema.columns();
 
@@ -204,14 +209,16 @@ impl OptimizerRule for CoalesceFirstLast {
             }
 
             let first = classified[idxs[0]].as_ref().expect("non-empty bucket");
-            let (_, order_by, null_treatment) = &first.key;
+            let (_, order_by, _) = &first.key;
+            // Only respect-nulls members reach here (`classify` bails on
+            // IgnoreNulls), and that is the default, so leave it unspelled.
             let coalesced = Expr::AggregateFunction(AggregateFunction::new_udf(
                 Arc::clone(&first.func),
                 vec![named_struct.call(struct_args)],
                 /* distinct */ false,
                 /* filter */ None,
                 order_by.clone(),
-                *null_treatment,
+                /* null_treatment */ None,
             ))
             .alias(alias);
             coalesced_aggr_exprs.push(coalesced);
@@ -243,7 +250,10 @@ impl OptimizerRule for CoalesceFirstLast {
             if let Some((alias, pos)) = coalesced_at.get(&i) {
                 let field =
                     get_field.call(vec![col(alias.as_str()), lit(format!("c{pos}"))]);
-                projection_exprs.push(field.alias(column.name().to_string()));
+                // Carry the qualifier over too, or a qualified peer loses it and
+                // the rule trips the optimizer's schema-invariant check.
+                projection_exprs
+                    .push(field.alias_qualified(column.relation.clone(), column.name()));
             } else {
                 projection_exprs.push(Expr::Column(column.clone()));
             }
@@ -274,8 +284,8 @@ mod tests {
     use datafusion_functions_aggregate::expr_fn::count;
     use datafusion_functions_aggregate::first_last::{first_value_udaf, last_value_udaf};
 
-    /// An [`OptimizerConfig`] that enables the rule and exposes a registry with
-    /// `named_struct` / `get_field`, so the rewrite can be exercised in isolation.
+    // An OptimizerConfig that enables the rule and exposes a registry with
+    // named_struct / get_field, so the rewrite can be exercised in isolation.
     #[derive(Debug)]
     struct TestConfig {
         options: Arc<ConfigOptions>,
@@ -334,8 +344,7 @@ mod tests {
         }};
     }
 
-    /// Scan with a partition key `p`, two value columns `a` / `b`, and an
-    /// ordering column `o`.
+    // Scan with a partition key p, two value columns a / b, and an ordering column o.
     fn scan() -> Result<LogicalPlan> {
         let schema = Schema::new(vec![
             Field::new("p", DataType::UInt32, false),
@@ -358,6 +367,21 @@ mod tests {
             None,
             order_by,
             None,
+        ))
+    }
+
+    fn first_value_with_null_treatment(
+        arg: Expr,
+        order_by: Vec<Sort>,
+        null_treatment: Option<NullTreatment>,
+    ) -> Expr {
+        Expr::AggregateFunction(AggregateFunction::new_udf(
+            first_value_udaf(),
+            vec![arg],
+            false,
+            None,
+            order_by,
+            null_treatment,
         ))
     }
 
@@ -531,10 +555,8 @@ mod tests {
 
     #[test]
     fn coalesces_duplicate_group_by() -> Result<()> {
-        // Regression: `GROUP BY p, p` stores two group exprs, but the schema
-        // deduplicates them to one group column. The rule must split group vs
-        // aggregate columns by the deduplicated count (`group_expr_len`), not
-        // `group_expr.len()`, or the projection references a non-existent column.
+        // Regression: `GROUP BY p, p` dedups to one schema column, so splitting
+        // on `group_expr.len()` would point the projection at a missing column.
         let plan = LogicalPlanBuilder::from(scan()?)
             .aggregate(
                 vec![col("p"), col("p")],
@@ -565,6 +587,93 @@ mod tests {
             .build()?;
         assert_coalesced!(TestConfig::new(), plan, @ r#"
         Projection: t.p, get_field(__coalesce_first_last_1, Utf8("c0")) AS fa, get_field(__coalesce_first_last_1, Utf8("c1")) AS fb
+          Aggregate: groupBy=[[t.p]], aggr=[[first_value(named_struct(Utf8("c0"), t.a, Utf8("c1"), t.b)) ORDER BY [t.o DESC NULLS LAST] AS __coalesce_first_last_1]]
+            TableScan: t
+        "#)
+    }
+
+    #[test]
+    fn coalesces_qualified_aliased_peers() -> Result<()> {
+        // Regression: the qualifier must survive the rewrite or the schema
+        // invariant check rejects the plan (the alias prints bare either way).
+        let plan = LogicalPlanBuilder::from(scan()?)
+            .aggregate(
+                vec![col("p")],
+                vec![
+                    first_value(col("a"), order_by_o(), false)
+                        .alias_qualified(Some("t"), "fa"),
+                    first_value(col("b"), order_by_o(), false)
+                        .alias_qualified(Some("t"), "fb"),
+                ],
+            )?
+            .build()?;
+        assert_coalesced!(TestConfig::new(), plan, @ r#"
+        Projection: t.p, get_field(__coalesce_first_last_1, Utf8("c0")) AS fa, get_field(__coalesce_first_last_1, Utf8("c1")) AS fb
+          Aggregate: groupBy=[[t.p]], aggr=[[first_value(named_struct(Utf8("c0"), t.a, Utf8("c1"), t.b)) ORDER BY [t.o DESC NULLS LAST] AS __coalesce_first_last_1]]
+            TableScan: t
+        "#)
+    }
+
+    #[test]
+    fn coalesces_global_aggregate() -> Result<()> {
+        // No GROUP BY, so the group/aggregate split of the output columns is at 0.
+        let plan = LogicalPlanBuilder::from(scan()?)
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![
+                    first_value(col("a"), order_by_o(), false),
+                    first_value(col("b"), order_by_o(), false),
+                ],
+            )?
+            .build()?;
+        assert_coalesced!(TestConfig::new(), plan, @ r#"
+        Projection: get_field(__coalesce_first_last_1, Utf8("c0")) AS first_value(t.a) ORDER BY [t.o DESC NULLS LAST], get_field(__coalesce_first_last_1, Utf8("c1")) AS first_value(t.b) ORDER BY [t.o DESC NULLS LAST]
+          Aggregate: groupBy=[[]], aggr=[[first_value(named_struct(Utf8("c0"), t.a, Utf8("c1"), t.b)) ORDER BY [t.o DESC NULLS LAST] AS __coalesce_first_last_1]]
+            TableScan: t
+        "#)
+    }
+
+    #[test]
+    fn coalesces_two_buckets() -> Result<()> {
+        // Two ORDER BY keys => two buckets => one coalesced aggregate each.
+        let by_b = vec![Sort::new(col("b"), true, true)];
+        let plan = LogicalPlanBuilder::from(scan()?)
+            .aggregate(
+                vec![col("p")],
+                vec![
+                    first_value(col("a"), order_by_o(), false),
+                    first_value(col("b"), order_by_o(), false),
+                    first_value(col("a"), by_b.clone(), false),
+                    first_value(col("o"), by_b, false),
+                ],
+            )?
+            .build()?;
+        assert_coalesced!(TestConfig::new(), plan, @ r#"
+        Projection: t.p, get_field(__coalesce_first_last_1, Utf8("c0")) AS first_value(t.a) ORDER BY [t.o DESC NULLS LAST], get_field(__coalesce_first_last_1, Utf8("c1")) AS first_value(t.b) ORDER BY [t.o DESC NULLS LAST], get_field(__coalesce_first_last_2, Utf8("c0")) AS first_value(t.a) ORDER BY [t.b ASC NULLS FIRST], get_field(__coalesce_first_last_2, Utf8("c1")) AS first_value(t.o) ORDER BY [t.b ASC NULLS FIRST]
+          Aggregate: groupBy=[[t.p]], aggr=[[first_value(named_struct(Utf8("c0"), t.a, Utf8("c1"), t.b)) ORDER BY [t.o DESC NULLS LAST] AS __coalesce_first_last_1, first_value(named_struct(Utf8("c0"), t.a, Utf8("c1"), t.o)) ORDER BY [t.b ASC NULLS FIRST] AS __coalesce_first_last_2]]
+            TableScan: t
+        "#)
+    }
+
+    #[test]
+    fn coalesces_across_null_treatment_spellings() -> Result<()> {
+        // An implicit null treatment and an explicit RESPECT NULLS mean the same
+        // thing, so they must land in one bucket.
+        let plan = LogicalPlanBuilder::from(scan()?)
+            .aggregate(
+                vec![col("p")],
+                vec![
+                    first_value_with_null_treatment(col("a"), order_by_o(), None),
+                    first_value_with_null_treatment(
+                        col("b"),
+                        order_by_o(),
+                        Some(NullTreatment::RespectNulls),
+                    ),
+                ],
+            )?
+            .build()?;
+        assert_coalesced!(TestConfig::new(), plan, @ r#"
+        Projection: t.p, get_field(__coalesce_first_last_1, Utf8("c0")) AS first_value(t.a) ORDER BY [t.o DESC NULLS LAST], get_field(__coalesce_first_last_1, Utf8("c1")) AS first_value(t.b) RESPECT NULLS ORDER BY [t.o DESC NULLS LAST]
           Aggregate: groupBy=[[t.p]], aggr=[[first_value(named_struct(Utf8("c0"), t.a, Utf8("c1"), t.b)) ORDER BY [t.o DESC NULLS LAST] AS __coalesce_first_last_1]]
             TableScan: t
         "#)

@@ -76,9 +76,186 @@ physical_plan
 04)------AggregateExec: mode=Partial, gby=[p@0 as p], aggr=[first_value(named_struct(Utf8("c0"), t.a, Utf8("c1"), t.b)) ORDER BY [t.o ASC NULLS LAST] as __coalesce_first_last_1]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
-# Restore the default so the harness sees no leaked configuration.
+# Tied ORDER BY keys, with the rule still enabled from above. Each tied row is
+# duplicated whole, so the values hold whichever of the tied rows wins.
+statement ok
+CREATE TABLE ties(p int, a int, b int, o int) AS VALUES
+(1, 10, 100, 1),
+(1, 10, 100, 1),
+(1, 30, 300, 2),
+(1, 30, 300, 2);
+
+query IIIII
+SELECT p,
+       first_value(a ORDER BY o ASC) AS fa,
+       first_value(b ORDER BY o ASC) AS fb,
+       last_value(a ORDER BY o ASC) AS la,
+       last_value(b ORDER BY o ASC) AS lb
+FROM ties GROUP BY p ORDER BY p;
+----
+1 10 100 30 300
+
+# Same rows with the rule off, which also restores the default for the harness.
 statement ok
 set datafusion.optimizer.enable_coalesce_first_last = false;
+
+query IIIII
+SELECT p,
+       first_value(a ORDER BY o ASC) AS fa,
+       first_value(b ORDER BY o ASC) AS fb,
+       last_value(a ORDER BY o ASC) AS la,
+       last_value(b ORDER BY o ASC) AS lb
+FROM ties GROUP BY p ORDER BY p;
+----
+1 10 100 30 300
+
+statement ok
+DROP TABLE ties;
+
+# NULL ORDER BY keys, including a group whose keys are all NULL. Group 2 is
+# duplicated whole so its result does not depend on how the all-NULL tie resolves.
+statement ok
+CREATE TABLE t2(p int, a int, b int, o int) AS VALUES
+(1, 10, 100, NULL),
+(1, 20, 200, 1),
+(1, 30, 300, 2),
+(2, 40, 400, NULL),
+(2, 40, 400, NULL);
+
+query III
+SELECT p,
+       first_value(a ORDER BY o DESC NULLS LAST) AS fa,
+       first_value(b ORDER BY o DESC NULLS LAST) AS fb
+FROM t2 GROUP BY p ORDER BY p;
+----
+1 30 300
+2 40 400
+
+query III
+SELECT p,
+       first_value(a ORDER BY o ASC NULLS FIRST) AS fa,
+       first_value(b ORDER BY o ASC NULLS FIRST) AS fb
+FROM t2 GROUP BY p ORDER BY p;
+----
+1 10 100
+2 40 400
+
+query III
+SELECT p,
+       first_value(a ORDER BY o DESC NULLS FIRST) AS fa,
+       first_value(b ORDER BY o DESC NULLS FIRST) AS fb
+FROM t2 GROUP BY p ORDER BY p;
+----
+1 10 100
+2 40 400
+
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = true;
+
+query III
+SELECT p,
+       first_value(a ORDER BY o DESC NULLS LAST) AS fa,
+       first_value(b ORDER BY o DESC NULLS LAST) AS fb
+FROM t2 GROUP BY p ORDER BY p;
+----
+1 30 300
+2 40 400
+
+query III
+SELECT p,
+       first_value(a ORDER BY o ASC NULLS FIRST) AS fa,
+       first_value(b ORDER BY o ASC NULLS FIRST) AS fb
+FROM t2 GROUP BY p ORDER BY p;
+----
+1 10 100
+2 40 400
+
+query III
+SELECT p,
+       first_value(a ORDER BY o DESC NULLS FIRST) AS fa,
+       first_value(b ORDER BY o DESC NULLS FIRST) AS fb
+FROM t2 GROUP BY p ORDER BY p;
+----
+1 10 100
+2 40 400
+
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = false;
+
+statement ok
+DROP TABLE t2;
+
+# Multi-column ORDER BY, where the first key ties and the second key decides.
+statement ok
+CREATE TABLE t4(p int, a int, b int, o1 int, o2 int) AS VALUES
+(1, 10, 100, 1, 1),
+(1, 20, 200, 1, 2),
+(1, 30, 300, 2, 1),
+(2, 40, 400, 5, 1),
+(2, 50, 500, 5, 9);
+
+query III
+SELECT p,
+       first_value(a ORDER BY o1 ASC, o2 DESC) AS fa,
+       first_value(b ORDER BY o1 ASC, o2 DESC) AS fb
+FROM t4 GROUP BY p ORDER BY p;
+----
+1 20 200
+2 50 500
+
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = true;
+
+query III
+SELECT p,
+       first_value(a ORDER BY o1 ASC, o2 DESC) AS fa,
+       first_value(b ORDER BY o1 ASC, o2 DESC) AS fb
+FROM t4 GROUP BY p ORDER BY p;
+----
+1 20 200
+2 50 500
+
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = false;
+
+statement ok
+DROP TABLE t4;
+
+# String and struct payloads. Coalescing a struct-typed value nests it inside the
+# named_struct, so the projection unpacks it with get_field over a struct field.
+statement ok
+CREATE TABLE t3(p int, s varchar, st struct<x int, y varchar>, o int) AS VALUES
+(1, 'a', {x: 1, y: 'one'}, 1),
+(1, 'b', {x: 2, y: 'two'}, 2),
+(2, NULL, NULL, 1),
+(2, 'c', {x: 3, y: 'three'}, 2);
+
+query IT?
+SELECT p,
+       first_value(s ORDER BY o ASC) AS fs,
+       first_value(st ORDER BY o ASC) AS fst
+FROM t3 GROUP BY p ORDER BY p;
+----
+1 a {x: 1, y: one}
+2 NULL NULL
+
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = true;
+
+query IT?
+SELECT p,
+       first_value(s ORDER BY o ASC) AS fs,
+       first_value(st ORDER BY o ASC) AS fst
+FROM t3 GROUP BY p ORDER BY p;
+----
+1 a {x: 1, y: one}
+2 NULL NULL
+
+statement ok
+set datafusion.optimizer.enable_coalesce_first_last = false;
+
+statement ok
+DROP TABLE t3;
 
 statement ok
 DROP TABLE t;
