@@ -3611,7 +3611,7 @@ array_dims(array)
 
 ### `array_distance`
 
-Returns the Euclidean distance between two input arrays of equal length.
+Returns the Euclidean distance between two one-dimensional input arrays of equal length.
 
 ```sql
 array_distance(array1, array2)

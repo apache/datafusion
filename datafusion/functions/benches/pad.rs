@@ -28,8 +28,8 @@ use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::unicode;
-use rand::Rng;
-use rand::distr::{Distribution, Uniform};
+use rand::distr::Uniform;
+use rand::prelude::*;
 use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,7 +51,7 @@ fn create_unicode_string_array<O: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
 ) -> arrow::array::GenericStringArray<O> {
-    let mut rng = rand::rng();
+    let mut rng = StdRng::seed_from_u64(0);
     let mut builder = GenericStringBuilder::<O>::new();
     for i in 0..size {
         if rng.random::<f32>() < null_density {
@@ -67,7 +67,7 @@ fn create_unicode_string_view_array(
     size: usize,
     null_density: f32,
 ) -> arrow::array::StringViewArray {
-    let mut rng = rand::rng();
+    let mut rng = StdRng::seed_from_u64(0);
     let mut builder = StringViewBuilder::with_capacity(size);
     for i in 0..size {
         if rng.random::<f32>() < null_density {
@@ -104,7 +104,7 @@ where
         dist: Uniform::new_inclusive::<i64, i64>(0, len as i64),
     };
 
-    let mut rng = rand::rng();
+    let mut rng = StdRng::seed_from_u64(0);
     (0..size)
         .map(|_| {
             if rng.random::<f32>() < null_density {
