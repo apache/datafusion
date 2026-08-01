@@ -181,3 +181,44 @@ fn to_substrait_bound_offset(value: &ScalarValue) -> datafusion::common::Result<
         _ => not_impl_err!("Unsupported Substrait window frame offset: {value}"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion::common::assert_contains;
+
+    #[test]
+    fn window_frame_offsets() {
+        for value in [
+            ScalarValue::UInt8(Some(1)),
+            ScalarValue::UInt16(Some(1)),
+            ScalarValue::UInt32(Some(1)),
+            ScalarValue::UInt64(Some(1)),
+            ScalarValue::Int8(Some(1)),
+            ScalarValue::Int16(Some(1)),
+            ScalarValue::Int32(Some(1)),
+            ScalarValue::Int64(Some(1)),
+        ] {
+            let frame = WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::CurrentRow,
+                WindowFrameBound::Following(value),
+            );
+            let (_, bound) = to_substrait_bounds(&frame).unwrap();
+            assert_eq!(
+                bound.kind,
+                Some(BoundKind::Following(SubstraitBound::Following {
+                    offset: 1
+                }))
+            );
+        }
+
+        let frame = WindowFrame::new_bounds(
+            WindowFrameUnits::Rows,
+            WindowFrameBound::CurrentRow,
+            WindowFrameBound::Following(ScalarValue::UInt64(Some(u64::MAX))),
+        );
+        let err = to_substrait_bounds(&frame).unwrap_err();
+        assert_contains!(err.to_string(), "Unsupported Substrait window frame offset");
+    }
+}
