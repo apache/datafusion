@@ -6042,13 +6042,16 @@ mod tests {
             Precision::Exact(4)
         );
         // Inexact because a repartition only estimates its per-partition row
-        // count.
-        assert_eq!(
-            context
-                .compute(&agg, &StatisticsArgs::new().with_partition(Some(0)))?
-                .num_rows,
-            Precision::Inexact(1)
-        );
+        // count. The grouping column statistics carry that same precision.
+        let partition_statistics =
+            context.compute(&agg, &StatisticsArgs::new().with_partition(Some(0)))?;
+        assert_eq!(partition_statistics.num_rows, Precision::Inexact(1));
+        let group_column = &partition_statistics.column_statistics[0];
+        let typed_null = Precision::Inexact(ScalarValue::Int32(None));
+        assert_eq!(group_column.min_value, typed_null);
+        assert_eq!(group_column.max_value, typed_null);
+        assert_eq!(group_column.distinct_count, Precision::Inexact(0));
+        assert_eq!(group_column.null_count, Precision::Inexact(1));
 
         Ok(())
     }
