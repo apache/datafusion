@@ -155,6 +155,14 @@ fn create_column_bounds_predicate(
     right_expr: &PhysicalExprRef,
     column_bounds: &ColumnBounds,
 ) -> Arc<dyn PhysicalExpr> {
+    if column_bounds.min == column_bounds.max {
+        return Arc::new(BinaryExpr::new(
+            Arc::clone(right_expr),
+            Operator::Eq,
+            lit(column_bounds.min.clone()),
+        ));
+    }
+
     let min_expr = Arc::new(BinaryExpr::new(
         Arc::clone(right_expr),
         Operator::GtEq,
@@ -1135,6 +1143,15 @@ mod tests {
 
         let expr = current_expr(&acc);
         assert_top_binary_op(&expr, Operator::And);
+    }
+
+    #[test]
+    fn singleton_bounds_use_equality_predicate() {
+        let on_right = test_on_right();
+        let expr = create_bounds_predicate(&on_right, &bounds(7, 7))
+            .expect("singleton bounds should create a predicate");
+
+        assert_top_binary_op(&expr, Operator::Eq);
     }
 
     #[test]
