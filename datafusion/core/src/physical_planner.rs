@@ -3128,15 +3128,14 @@ impl<'a> OptimizationInvariantChecker<'a> {
         previous_schema: &Arc<Schema>,
     ) -> Result<()> {
         // if the rule is not permitted to change the schema, confirm that it did not change.
-        if self.rule.schema_check()
-            && !is_allowed_schema_change(previous_schema.as_ref(), plan.schema().as_ref())
-        {
-            internal_err!(
-                "PhysicalOptimizer rule '{}' failed. Schema mismatch. Expected original schema: {}, got new schema: {}",
-                self.rule.name(),
-                previous_schema,
-                plan.schema()
-            )?
+        if self.rule.schema_check() {
+            is_allowed_schema_change(previous_schema.as_ref(), plan.schema().as_ref())
+                .map_err(|e| {
+                    e.context(format!(
+                        "PhysicalOptimizer rule '{}' failed. Schema mismatch.",
+                        self.rule.name(),
+                    ))
+                })?
         }
 
         // check invariants per each ExecutionPlan node
@@ -3155,28 +3154,45 @@ impl<'a> OptimizationInvariantChecker<'a> {
 /// This change is allowed because for any field the non-nullable domain `F` is a strict subset
 /// of the nullable domain `F ∪ { NULL }`. A physical schema that guarantees a stricter subset
 /// of values will not violate any assumptions made based on the less strict schema.
-fn is_allowed_schema_change(old: &Schema, new: &Schema) -> bool {
+fn is_allowed_schema_change(old: &Schema, new: &Schema) -> Result<()> {
     if new.metadata != old.metadata {
-        return false;
+        return internal_err!(
+            "Schema metadata mismatch: Expected original metadata: {:?}, got metadata: {:?}",
+            old.metadata,
+            new.metadata
+        );
     }
 
     if new.fields.len() != old.fields.len() {
-        return false;
+        return internal_err!(
+            "Schema field mismatch: Expected original field count: {}, got field count: {}",
+            old.fields.len(),
+            new.fields.len()
+        );
     }
 
     let new_fields = new.fields.iter().map(|f| f.as_ref());
     let old_fields = old.fields.iter().map(|f| f.as_ref());
     old_fields
         .zip(new_fields)
-        .all(|(old, new)| is_allowed_field_change(old, new))
+        .try_for_each(|(old, new)| is_allowed_field_change(old, new))
 }
 
-fn is_allowed_field_change(old_field: &Field, new_field: &Field) -> bool {
-    new_field.name() == old_field.name()
+fn is_allowed_field_change(old_field: &Field, new_field: &Field) -> Result<()> {
+    if new_field.name() == old_field.name()
         && new_field.data_type() == old_field.data_type()
         && new_field.metadata() == old_field.metadata()
         && (new_field.is_nullable() == old_field.is_nullable()
             || !new_field.is_nullable())
+    {
+        Ok(())
+    } else {
+        internal_err!(
+            "Schema field unallowed change: old field: {:?}, new field: {:?}",
+            old_field,
+            new_field
+        )
+    }
 }
 
 impl<'n> TreeNodeVisitor<'n> for OptimizationInvariantChecker<'_> {
@@ -5038,7 +5054,7 @@ digraph {
         let expected_err = OptimizationInvariantChecker::new(&rule)
             .check(&ok_plan, &different_schema)
             .unwrap_err();
-        assert!(expected_err.to_string().contains("PhysicalOptimizer rule 'OptimizerRuleWithSchemaCheck' failed. Schema mismatch. Expected original schema"));
+        assert!(expected_err.to_string().contains("PhysicalOptimizer rule 'OptimizerRuleWithSchemaCheck' failed. Schema mismatch."));
 
         // The recursive `check_invariants` walk only runs under `debug_assertions`
         // (see `OptimizationInvariantChecker::check`). In release builds the walk is

@@ -36,11 +36,12 @@ use arrow::compute::cast;
 use arrow::datatypes::{
     BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type,
     DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, Field, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, Schema, SchemaRef, StringViewType, Time32MillisecondType,
-    Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimeUnit,
-    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    DurationSecondType, Field, Float16Type, Float32Type, Float64Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, Schema, SchemaRef, StringViewType,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
+    UInt64Type,
 };
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
@@ -945,6 +946,7 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::UInt16
             | DataType::UInt32
             | DataType::UInt64
+            | DataType::Float16
             | DataType::Float32
             | DataType::Float64
             | DataType::Decimal128(_, _)
@@ -999,6 +1001,9 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
         DataType::UInt16 => instantiate_primitive!(v, nullable, UInt16Type, data_type),
         DataType::UInt32 => instantiate_primitive!(v, nullable, UInt32Type, data_type),
         DataType::UInt64 => instantiate_primitive!(v, nullable, UInt64Type, data_type),
+        DataType::Float16 => {
+            instantiate_primitive!(v, nullable, Float16Type, data_type)
+        }
         DataType::Float32 => {
             instantiate_primitive!(v, nullable, Float32Type, data_type)
         }
@@ -1295,8 +1300,8 @@ mod tests {
     use std::{collections::HashMap, sync::Arc};
 
     use arrow::array::{
-        Array, ArrayRef, DurationMicrosecondArray, Int64Array, RecordBatch, StringArray,
-        StringViewArray,
+        Array, ArrayRef, DurationMicrosecondArray, Float16Array, Int32Array, Int64Array,
+        RecordBatch, StringArray, StringViewArray,
     };
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::{compute::concat_batches, util::pretty::pretty_format_batches};
@@ -1581,6 +1586,7 @@ mod tests {
             DataType::UInt64,
             DataType::Float32,
             DataType::Float64,
+            DataType::Float16,
             DataType::Decimal128(38, 10),
             DataType::Utf8,
             DataType::LargeUtf8,
@@ -1616,7 +1622,6 @@ mod tests {
         }
 
         let unsupported_cases: Vec<DataType> = vec![
-            DataType::Float16,
             DataType::Decimal256(76, 10),
             // Invalid Time-unit combinations: Time32 is defined only for
             // Second / Millisecond and Time64 only for Microsecond /
@@ -1694,14 +1699,77 @@ mod tests {
         assert_eq!(actual.value(2), 20);
     }
 
+    // `(Float16, Int32)` keys: ±0.0 collapse (stored as +0.0), NaNs collapse, and
+    // the Int32 key keeps `(0.0, 4)` distinct from `(±0.0, 3)`.
+    #[test]
+    fn test_group_values_column_float16() {
+        use half::f16;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("f", DataType::Float16, true),
+            Field::new("i", DataType::Int32, true),
+        ]));
+        assert!(supported_schema(&schema));
+        let mut group_values =
+            GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+
+        let f: ArrayRef = Arc::new(Float16Array::from(vec![
+            Some(f16::from_f32(1.0)),
+            Some(f16::from_f32(-0.0)),
+            Some(f16::from_f32(0.0)),
+            Some(f16::from_f32(0.0)),
+            Some(f16::NAN),
+            Some(f16::NAN),
+            None,
+            None,
+        ]));
+        let i: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(3),
+            Some(3),
+            Some(3),
+            Some(4),
+            Some(3),
+            Some(3),
+            Some(3),
+            Some(3),
+        ]));
+        let mut groups = Vec::new();
+        group_values.intern(&[f, i], &mut groups).unwrap();
+        assert_eq!(groups, vec![0, 1, 1, 2, 3, 3, 4, 4]);
+
+        let emitted = group_values.emit(EmitTo::All).unwrap();
+        assert_eq!(emitted.len(), 2);
+        assert_eq!(emitted[0].data_type(), &DataType::Float16);
+        let keys = emitted[0]
+            .as_any()
+            .downcast_ref::<Float16Array>()
+            .expect("emitted column should be a Float16Array");
+        assert_eq!(keys.len(), 5);
+        assert_eq!(keys.value(0), f16::from_f32(1.0));
+        // The ±0.0 group is stored canonically as +0.0 (not -0.0).
+        assert_eq!(keys.value(1).to_bits(), f16::from_f32(0.0).to_bits());
+        assert_eq!(keys.value(2).to_bits(), f16::from_f32(0.0).to_bits());
+        assert!(keys.value(3).is_nan());
+        assert!(keys.is_null(4));
+        let ids = emitted[1]
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("emitted column should be an Int32Array");
+        assert_eq!(ids.values().to_vec(), vec![3, 3, 4, 3, 3]);
+    }
+
     #[test]
     fn supported_schema_rejects_mix_of_supported_and_unsupported() {
-        // One Float16 column among supported columns flips the whole
-        // schema to GroupValuesRows fallback.
+        // One unsupported column flips the whole schema to the GroupValuesRows
+        // fallback. Time64(Second) stays invalid as new primitive builders land.
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Utf8, true),
-            Field::new("c", DataType::Float16, true),
+            Field::new(
+                "c",
+                DataType::Time64(arrow::datatypes::TimeUnit::Second),
+                true,
+            ),
         ]);
         assert!(!supported_schema(&schema));
 
@@ -1720,8 +1788,11 @@ mod tests {
         // rejected at construction time rather than at first `intern`.
         // `GroupValuesColumn` doesn't implement `Debug`, so explicit match
         // instead of `unwrap_err`.
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("x", DataType::Float16, true)]));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Time64(arrow::datatypes::TimeUnit::Second),
+            true,
+        )]));
         match GroupValuesColumn::<false>::try_new(schema) {
             Ok(_) => panic!("expected NotImpl error, but try_new succeeded"),
             Err(e) => {
@@ -1808,7 +1879,7 @@ mod tests {
         // `emit(EmitTo::First(4))` calls can `take_n` without panicking.
         // The hashmap entries below reference group indices 0..=11, so the
         // single column builder needs at least 12 rows to back them.
-        let seed: ArrayRef = Arc::new(arrow::array::Int32Array::from(vec![0_i32; 12]));
+        let seed: ArrayRef = Arc::new(Int32Array::from(vec![0_i32; 12]));
         for row in 0..12 {
             group_values.group_values[0]
                 .append_val(&seed, row)
