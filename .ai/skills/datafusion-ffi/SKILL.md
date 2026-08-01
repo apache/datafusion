@@ -209,9 +209,11 @@ cargo test -p datafusion-ffi --features integration-tests
 
 To add coverage for a new wrapper:
 
-1. **Reuse an existing fixture and constructor** when it can express the new behaviour with a small trait-method override. Do not add a dedicated test type or `ForeignLibraryModule` field for each method.
-2. **Add a constructor only when necessary** in `src/tests/<area>.rs` (or a new file there). Return a populated `FFI_X` from a known-good native type, then wire it into `ForeignLibraryModule` in `src/tests/mod.rs`.
-3. **Add the test** in `tests/ffi_<area>.rs` under `#[cfg(feature = "integration-tests")] mod tests { … }`. Call `datafusion_ffi::tests::utils::get_module()` to load the cdylib, invoke the constructor through the returned `ForeignLibraryModule`, convert into `Arc<dyn X>`, and exercise every method.
+1. **Add a constructor** in `src/tests/<area>.rs` (or a new file there). Return a populated `FFI_X` from a known-good native type.
+2. **Wire it into `ForeignLibraryModule`** in `src/tests/mod.rs`: add a field of type `extern "C" fn(...) -> FFI_X` and populate it in `datafusion_ffi_get_module`. This struct is the cross-library contract. Adding a field is itself an ABI change for the test module; integration tests will rebuild the cdylib automatically.
+3. **Add the test** in `tests/ffi_<area>.rs` under `#[cfg(feature = "integration-tests")] mod tests { … }`. Call `datafusion_ffi::tests::utils::get_module()` to load the cdylib, invoke your constructor through the returned `ForeignLibraryModule`, convert into `Arc<dyn X>`, and exercise every method.
+
+When adding a method to an existing wrapper, reuse an existing fixture and constructor when a small trait-method override can cover it. This applies both to omitted default methods and methods newly added to the trait. Add a dedicated test type or `ForeignLibraryModule` field only when the existing fixtures cannot cover the method.
 
 What integration tests catch that unit tests cannot:
 
@@ -235,7 +237,7 @@ What integration tests catch that unit tests cannot:
 - Primitives (`u8`/`u64`/`bool`/`usize`, etc.) and `#[repr(u8)]` FFI enums (`FFI_TableType`, `Volatility`, `InsertOp`, `TableProviderFilterPushDown`).
 - A `stabby::string::String` (`SString`) returned by value, with no other args or returns.
 
-Concrete skippable example: `fn name(&self) -> SString` reading a field already validated by another method. Concrete *non*-skippable examples: anything returning `SVec<T>`, `FFI_Option<T>`, `FFI_Result<T>`, `WrappedSchema`, `WrappedArray`, an `FfiFuture`, an `FFI_*` sub-struct, or any `*mut`/`*const` pointer — those exercise alignment / padding / niche-opt across the ABI boundary and need the two-build coverage. When unsure, write the integration test and extend an existing fixture first.
+Concrete skippable example: `fn name(&self) -> SString` reading a field already validated by another method. Concrete *non*-skippable examples: anything returning `SVec<T>`, `FFI_Option<T>`, `FFI_Result<T>`, `WrappedSchema`, `WrappedArray`, an `FfiFuture`, an `FFI_*` sub-struct, or any `*mut`/`*const` pointer. These exercise alignment / padding / niche-opt across the ABI boundary and need the two-build coverage. When unsure, write the integration test; the cost is one constructor + ~20 lines.
 
 If you skip the integration test for a layout change, you have effectively shipped untested ABI.
 
