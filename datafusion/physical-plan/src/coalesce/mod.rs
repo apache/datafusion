@@ -18,7 +18,9 @@
 use arrow::array::RecordBatch;
 use arrow::compute::BatchCoalescer;
 use arrow::datatypes::SchemaRef;
+use arrow_schema::Schema;
 use datafusion_common::{Result, assert_or_internal_err};
+use std::sync::Arc;
 
 /// Concatenate multiple [`RecordBatch`]es and apply a limit
 ///
@@ -138,9 +140,23 @@ impl LimitedBatchCoalescer {
         self.finished
     }
 
+    fn limit_reached(&self) -> bool {
+        self.fetch.is_some_and(|fetch| self.total_rows >= fetch)
+    }
+
     /// Return the next completed batch, if any
     pub fn next_completed_batch(&mut self) -> Option<RecordBatch> {
-        self.inner.next_completed_batch()
+        let next = self.inner.next_completed_batch();
+
+        if self.inner.is_empty() && (self.finished || self.limit_reached()) {
+            self.release_memory();
+        }
+
+        next
+    }
+
+    fn release_memory(&mut self) {
+        self.inner = BatchCoalescer::new(Arc::new(Schema::empty()), 1);
     }
 }
 
