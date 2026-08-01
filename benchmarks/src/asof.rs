@@ -25,13 +25,13 @@ use futures::StreamExt;
 
 /// Run end-to-end ASOF join benchmarks.
 ///
-/// The cases cover broadcast build reuse, left-side parallelism,
-/// optimizer-inserted ordering, wide payload materialization, and descending
-/// successor matching.
+/// The cases cover broadcast-side size asymmetry, equality-key cardinality and
+/// skew, left-side parallelism, optimizer-inserted ordering, wide payload
+/// materialization, and descending successor matching.
 #[derive(Debug, Args, Clone)]
 #[command(verbatim_doc_comment)]
 pub struct RunOpt {
-    /// Query number (between 1 and 4). If not specified, runs all queries
+    /// Query number (between 1 and 6). If not specified, runs all queries
     #[arg(short, long)]
     query: Option<usize>,
 
@@ -45,13 +45,13 @@ pub struct RunOpt {
 }
 
 const ASOF_QUERIES: &[&str] = &[
-    // Q1: predecessor without equality keys broadcasts right across left partitions
+    // Q1: small broadcast input and a large, equality-free probe input
     r#"
         WITH left_input AS (
             SELECT value AS ts, value AS payload FROM range(1000000)
         ),
         right_input AS (
-            SELECT value AS ts, value AS payload FROM range(1000000)
+            SELECT value AS ts, value AS payload FROM range(10000)
         )
         SELECT l.ts, l.payload, r.payload AS right_payload
         FROM left_input l
@@ -106,6 +106,37 @@ const ASOF_QUERIES: &[&str] = &[
         SELECT l.ts, l.payload, r.payload AS right_payload
         FROM left_input l
         ASOF JOIN right_input r MATCH_CONDITION (l.ts <= r.ts)
+    "#,
+    // Q5: a large broadcast input exposes the opposite size asymmetry
+    r#"
+        WITH left_input AS (
+            SELECT value AS ts, value AS payload FROM range(100000)
+        ),
+        right_input AS (
+            SELECT value AS ts, value AS payload FROM range(1000000)
+        )
+        SELECT l.ts, l.payload, r.payload AS right_payload
+        FROM left_input l
+        ASOF JOIN right_input r MATCH_CONDITION (l.ts >= r.ts)
+    "#,
+    // Q6: low-cardinality, heavily skewed equality keys
+    r#"
+        WITH left_input AS (
+            SELECT CASE WHEN value % 100 < 95 THEN 0 ELSE value % 16 + 1 END AS key,
+                   value / 100 + 1 AS ts,
+                   value AS payload
+            FROM range(1000000)
+        ),
+        right_input AS (
+            SELECT CASE WHEN value % 100 < 95 THEN 0 ELSE value % 16 + 1 END AS key,
+                   value / 100 AS ts,
+                   value AS payload
+            FROM range(1000000)
+        )
+        SELECT l.key, l.ts, l.payload, r.payload AS right_payload
+        FROM left_input l
+        ASOF JOIN right_input r MATCH_CONDITION (l.ts >= r.ts)
+        ON l.key = r.key
     "#,
 ];
 
