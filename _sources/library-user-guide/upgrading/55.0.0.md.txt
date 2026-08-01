@@ -948,3 +948,20 @@ See [PR #23827](https://github.com/apache/datafusion/pull/23827) for details.
 The Minimum Supported Rust Version (MSRV) has been updated to [`1.94.0`].
 
 [`1.94.0`]: https://releases.rs/docs/1.94.0/
+
+### `array_distance` scalar function now rejects multidimensional arrays
+
+`array_distance` only supports one-dimensional arrays. Previously, when given
+multidimensional arrays, it computed the distance using only the first
+subarray and ignored the remaining subarrays. For example:
+
+```sql
+SELECT array_distance(
+    [[1, 2], [100, 100]],
+    [[1, 4], [0, 0]]
+);
+```
+
+Previously, this query returned `2.0`, the distance between `[1, 2]` and
+`[1, 4]`. It now returns a planning error stating that `array_distance` only
+supports one-dimensional arrays.

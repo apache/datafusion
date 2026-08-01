@@ -1263,6 +1263,21 @@ on a non-future value does not compile:</p>
 <h3><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.94.0<a class="headerlink" href="#msrv-updated-to-1-94-0" title="Link to this heading">#</a></h3>
 <p>The Minimum Supported Rust Version (MSRV) has been updated to <a class="reference external" href="https://releases.rs/docs/1.94.0/"><code class="docutils literal notranslate"><span class="pre">1.94.0</span></code></a>.</p>
 </section>
+<section id="array-distance-scalar-function-now-rejects-multidimensional-arrays">
+<h3><code class="docutils literal notranslate"><span class="pre">array_distance</span></code> scalar function now rejects multidimensional arrays<a class="headerlink" href="#array-distance-scalar-function-now-rejects-multidimensional-arrays" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">array_distance</span></code> only supports one-dimensional arrays. Previously, when given
+multidimensional arrays, it computed the distance using only the first
+subarray and ignored the remaining subarrays. For example:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">array_distance</span><span class="p">(</span>
+<span class="w">    </span><span class="p">[[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">100</span><span class="p">,</span><span class="w"> </span><span class="mi">100</span><span class="p">]],</span>
+<span class="w">    </span><span class="p">[[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">]]</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p>Previously, this query returned <code class="docutils literal notranslate"><span class="pre">2.0</span></code>, the distance between <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">2]</span></code> and
+<code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">4]</span></code>. It now returns a planning error stating that <code class="docutils literal notranslate"><span class="pre">array_distance</span></code> only
+supports one-dimensional arrays.</p>
+</section>
 </section>
 </section>
 
@@ -1340,6 +1355,7 @@ on a non-future value does not compile:</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#unused-async-removed-from-several-public-functions">Unused <code class="docutils literal notranslate"><span class="pre">async</span></code> removed from several public functions</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#movingmin-and-movingmax-changed-to-pub-crate"><code class="docutils literal notranslate"><span class="pre">MovingMin</span></code> and <code class="docutils literal notranslate"><span class="pre">MovingMax</span></code> changed to <code class="docutils literal notranslate"><span class="pre">pub(crate)</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#msrv-updated-to-1-94-0"><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.94.0</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#array-distance-scalar-function-now-rejects-multidimensional-arrays"><code class="docutils literal notranslate"><span class="pre">array_distance</span></code> scalar function now rejects multidimensional arrays</a></li>
 </ul>
 </li>
 </ul>
