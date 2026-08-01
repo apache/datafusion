@@ -1738,13 +1738,7 @@ mod tests {
                 None,
                 Some(value),
             ]));
-            let n: ArrayRef = Arc::new(Int32Array::from(vec![
-                Some(3),
-                Some(3),
-                Some(3),
-                Some(3),
-                Some(4),
-            ]));
+            let n: ArrayRef = Arc::new(Int32Array::from(vec![3, 3, 3, 3, 4]));
             let mut groups = Vec::new();
             group_values.intern(&[i, n], &mut groups).unwrap();
             assert_eq!(groups, vec![0, 1, 0, 1, 2], "{unit:?}");
@@ -1758,10 +1752,10 @@ mod tests {
                 .downcast_ref::<PrimitiveArray<T>>()
                 .unwrap_or_else(|| panic!("emitted column should be a {unit:?} array"));
             // Three groups in first-seen order: value, null, value (n=4).
-            assert_eq!(actual.len(), 3);
-            assert_eq!(actual.value(0), value);
-            assert!(actual.is_null(1));
-            assert_eq!(actual.value(2), value);
+            assert_eq!(actual.len(), 3, "{unit:?}");
+            assert_eq!(actual.value(0), value, "{unit:?}");
+            assert!(actual.is_null(1), "{unit:?}");
+            assert_eq!(actual.value(2), value, "{unit:?}");
             let ids = emitted[1]
                 .as_any()
                 .downcast_ref::<Int32Array>()
