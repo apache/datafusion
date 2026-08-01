@@ -150,6 +150,50 @@ ORDER BY l.id;
 2 r4
 3 NULL
 
+# Multiple equality keys form one candidate group.
+query IT
+SELECT l.id, r.val
+FROM (VALUES
+  (1, 'X', 'A', TIMESTAMP '2024-01-01 09:00:04'),
+  (2, 'Y', 'A', TIMESTAMP '2024-01-01 09:00:04')
+) AS l(id, venue, grp, ts)
+ASOF JOIN (VALUES
+  ('X', 'A', TIMESTAMP '2024-01-01 09:00:02', 'x-a2'),
+  ('Y', 'A', TIMESTAMP '2024-01-01 09:00:03', 'y-a3'),
+  ('X', 'B', TIMESTAMP '2024-01-01 09:00:04', 'x-b4')
+) AS r(venue, grp, ts, val)
+MATCH_CONDITION (l.ts >= r.ts)
+ON l.venue = r.venue AND l.grp = r.grp
+ORDER BY l.id;
+----
+1 x-a2
+2 y-a3
+
+# Candidate selection sees the right input after subquery filtering.
+query IT
+SELECT l.id, r.val
+FROM asof_left l
+ASOF JOIN (SELECT * FROM asof_right WHERE val <> 'a6') r
+MATCH_CONDITION (l.ts >= r.ts)
+ON l.grp = r.grp
+WHERE l.id IN (3, 5)
+ORDER BY l.id;
+----
+3 a4
+5 b6
+
+# Equality and match operands use the planner's common coercion types.
+query II
+SELECT l.id, r.payload
+FROM (VALUES (1, CAST(5 AS SMALLINT), CAST(10 AS INT))) AS l(id, grp, ts)
+ASOF JOIN (
+  VALUES (CAST(5 AS BIGINT), CAST(9 AS BIGINT), 90)
+) AS r(grp, ts, payload)
+MATCH_CONDITION (l.ts >= r.ts)
+ON l.grp = r.grp;
+----
+1 90
+
 query TT
 EXPLAIN SELECT l.id, r.val
 FROM asof_left l
