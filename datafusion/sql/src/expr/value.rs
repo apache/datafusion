@@ -36,7 +36,6 @@ use sqlparser::ast::{
     BinaryOperator, Expr as SQLExpr, Interval, UnaryOperator, Value, ValueWithSpan,
 };
 use sqlparser::parser::ParserError::ParserError;
-use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::ops::Neg;
 use std::str::FromStr;
