@@ -1504,6 +1504,85 @@ fn select_aggregate_with_group_by_with_having_using_count_star_not_in_select() {
     );
 }
 
+/// An expression containing a placeholder, written in both the SELECT list and
+/// the GROUP BY, has to be recognised as one expression the way its literal
+/// equivalent is. Otherwise the columns inside it read as ungrouped, because the
+/// SELECT list has its placeholder types inferred and the grouping key does not.
+#[test]
+fn select_aggregate_with_group_by_placeholder_expression() {
+    let sql = "SELECT CASE WHEN age < $1 THEN 'young' ELSE 'old' END, count(*)
+                   FROM person
+                   GROUP BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END, count(*)
+      Aggregate: groupBy=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], aggr=[[count(*)]]
+        TableScan: person
+    "#
+    );
+}
+
+/// The same, for a grouping expression repeated in HAVING.
+#[test]
+fn select_aggregate_with_having_placeholder_expression() {
+    let sql = "SELECT CASE WHEN age < $1 THEN 'young' ELSE 'old' END, count(*)
+                   FROM person
+                   GROUP BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END
+                   HAVING CASE WHEN age < $1 THEN 'young' ELSE 'old' END = 'young'";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END, count(*)
+      Filter: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END = Utf8("young")
+        Aggregate: groupBy=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], aggr=[[count(*)]]
+          TableScan: person
+    "#
+    );
+}
+
+/// The same, for a grouping expression repeated in ORDER BY.
+#[test]
+fn select_aggregate_with_order_by_placeholder_expression() {
+    let sql = "SELECT CASE WHEN age < $1 THEN 'young' ELSE 'old' END, count(*)
+                   FROM person
+                   GROUP BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END
+                   ORDER BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Sort: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END ASC NULLS LAST
+      Projection: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END, count(*)
+        Aggregate: groupBy=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], aggr=[[count(*)]]
+          TableScan: person
+    "#
+    );
+}
+
+/// The same, for a window expression repeated in QUALIFY. Here the two spellings
+/// of the window expression collide by name instead, since they print alike but
+/// do not compare equal.
+#[test]
+fn select_window_with_qualify_placeholder_expression() {
+    let sql = "SELECT first_name,
+                          row_number() OVER (PARTITION BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END)
+                   FROM person
+                   QUALIFY row_number() OVER (PARTITION BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END) = 1";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: person.first_name, row_number() PARTITION BY [CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+      Filter: row_number() PARTITION BY [CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING = Int64(1)
+        WindowAggr: windowExpr=[[row_number() PARTITION BY [CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+          TableScan: person
+    "#
+    );
+}
+
 #[test]
 fn select_binary_expr() {
     let sql = "SELECT age + salary from person";

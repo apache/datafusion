@@ -219,7 +219,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 //   SELECT c1, MAX(c2) AS m FROM t GROUP BY c1 HAVING MAX(c2) > 10;
                 //
                 let having_expr = resolve_aliases_to_exprs(having_expr, &alias_map)?;
-                normalize_col(having_expr, &projected_plan)
+                let having_expr = normalize_col(having_expr, &projected_plan)?;
+                let (having_expr, _) =
+                    having_expr.infer_placeholder_types(&combined_schema)?;
+                Ok(having_expr)
             })
             .transpose()?;
 
@@ -248,6 +251,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         base_plan.schema(),
                         std::slice::from_ref(&group_by_expr),
                     )?;
+                    let (group_by_expr, _) =
+                        group_by_expr.infer_placeholder_types(&combined_schema)?;
                     Ok(group_by_expr)
                 })
                 .collect::<Result<Vec<Expr>>>()?
@@ -286,7 +291,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 //   select row_number() over (PARTITION BY id) as rk from users qualify row_number() over (PARTITION BY id) > 1;
                 //
                 let qualify_expr = resolve_aliases_to_exprs(qualify_expr, &alias_map)?;
-                normalize_col(qualify_expr, &projected_plan)
+                let qualify_expr = normalize_col(qualify_expr, &projected_plan)?;
+                let (qualify_expr, _) =
+                    qualify_expr.infer_placeholder_types(&combined_schema)?;
+                Ok(qualify_expr)
             })
             .transpose()?;
 
