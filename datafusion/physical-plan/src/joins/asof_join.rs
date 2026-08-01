@@ -19,7 +19,7 @@
 //!
 //! An ASOF join emits exactly one output row for every left row. Within an
 //! optional equality-key group, it selects the closest right row that satisfies
-//! one ordered comparison:
+//! one ordered comparison. This follows Snowflake's [ASOF JOIN] semantics:
 //!
 //! ```text
 //! left.ts >= right.ts  => greatest eligible right.ts
@@ -28,32 +28,44 @@
 //!
 //! The right input is collected and shared by all output partitions. The left
 //! input remains partitioned, and each partition performs an independent
-//! monotonic scan over the ordered right input:
+//! monotonic scan over the ordered right input.
 //!
-//! ```text
-//! AsOfJoinExec
-//!   SortExec(left equality keys, left match key)
-//!     RepartitionExec(RoundRobinBatch)
-//!       left
-//!   SortExec(right equality keys, right match key)
-//!     CoalescePartitionsExec
-//!       right
-//! ```
+//! [`AsOfJoinExec::input_distribution_requirements`] requires a single right
+//! partition but leaves the left distribution unrestricted.
+//! [`AsOfJoinExec::required_input_ordering`] requires both inputs to be ordered.
+//! The physical optimizer satisfies these contracts by inserting operators such
+//! as `RepartitionExec`, `SortExec`, `CoalescePartitionsExec`, or
+//! `SortPreservingMergeExec`, depending on the input properties. The inserted
+//! plan shape is therefore not fixed by this operator.
 //!
 //! Both inputs must be ordered by their equality keys followed by the match
 //! key. For `<` and `<=`, the match ordering is reversed so all directions use
-//! the same forward-only state machine. Each left partition owns its cursors,
-//! equality-group state, and current candidate, while the collected right
-//! batches are immutable and shared.
+//! the same forward-only state machine. For example:
+//!
+//! ```text
+//! ON left.symbol = right.symbol MATCH_CONDITION(left.ts >= right.ts)
+//!   left:  [left.symbol ASC NULLS FIRST, left.ts ASC NULLS FIRST]
+//!   right: [right.symbol ASC NULLS FIRST, right.ts ASC NULLS FIRST]
+//!
+//! ON left.symbol = right.symbol MATCH_CONDITION(left.ts <= right.ts)
+//!   left:  [left.symbol ASC NULLS FIRST, left.ts DESC NULLS FIRST]
+//!   right: [right.symbol ASC NULLS FIRST, right.ts DESC NULLS FIRST]
+//! ```
+//!
+//! Each left partition owns its cursors, equality-group state, and current
+//! candidate, while the collected right batches are immutable and shared.
 //!
 //! This mode preserves probe-side parallelism when there are no equality keys
 //! or when equality keys have low cardinality or skew. It retains the complete
-//! right input in the memory pool and may scan it once per left partition, so a
-//! repartitioned streaming mode remains a useful future alternative for large
-//! right inputs.
+//! right input in the memory pool and may scan it once per left partition.
+//! Alternative strategies, including broadcasting the other side or
+//! repartitioning both inputs, remain future work for other input-size and
+//! key-distribution profiles.
+//!
+//! [ASOF JOIN]: https://docs.snowflake.com/en/sql-reference/constructs/asof-join
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -61,7 +73,6 @@ use arrow::array::{Array, ArrayRef, RecordBatch, new_null_array};
 use arrow::buffer::NullBuffer;
 use arrow::compute::{SortOptions, interleave};
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::memory::RecordBatchMemoryCounter;
 use datafusion_common::utils::normalize_float_zero_scalar;
@@ -83,10 +94,6 @@ use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequiremen
 use futures::{StreamExt, TryStreamExt, future::poll_fn, stream};
 
 use crate::execution_plan::{Boundedness, EmissionType};
-use crate::filter_pushdown::{
-    ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation,
-};
 use crate::joins::utils::{
     JoinKeyComparator, JoinOn, OnceAsync, build_join_schema, matchable_join_keys,
 };
@@ -128,17 +135,26 @@ pub struct AsOfJoinExec {
     right: Arc<dyn ExecutionPlan>,
     on: JoinOn,
     match_condition: AsOfMatchExpr,
+    /// Sorted, unique indices of right columns appended after all left columns.
     right_output_indices: Vec<usize>,
     schema: SchemaRef,
     metrics: ExecutionPlanMetricsSet,
+    /// Required ordering for each left partition.
     left_ordering: LexOrdering,
+    /// Required global ordering for the single right partition.
     right_ordering: LexOrdering,
+    /// Shared collection future that materializes the right input only once.
     right_fut: OnceAsync<BroadcastRightInput>,
     cache: Arc<PlanProperties>,
 }
 
 impl AsOfJoinExec {
     /// Creates a bounded ASOF join over sorted inputs.
+    ///
+    /// The match operator must be `<`, `<=`, `>`, or `>=`. Equality and match
+    /// expressions must be deterministic, reference only their corresponding
+    /// input, and have matching input types. Equality types must support hashing.
+    /// Right output indices must be in bounds, sorted, and unique.
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -146,73 +162,15 @@ impl AsOfJoinExec {
         match_condition: AsOfMatchExpr,
         right_output_indices: Vec<usize>,
     ) -> Result<Self> {
-        if !matches!(
-            match_condition.op,
-            Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
-        ) {
-            return plan_err!(
-                "AsOfJoinExec requires <, <=, >, or >=, found {}",
-                match_condition.op
-            );
-        }
-        if left.boundedness().is_unbounded() || right.boundedness().is_unbounded() {
-            return plan_err!("AsOfJoinExec requires bounded inputs");
-        }
-        if is_volatile(&match_condition.left) || is_volatile(&match_condition.right) {
-            return plan_err!("AsOfJoinExec match expression must be deterministic");
-        }
-        if on
-            .iter()
-            .any(|(left, right)| is_volatile(left) || is_volatile(right))
-        {
-            return plan_err!("AsOfJoinExec equality expressions must be deterministic");
-        }
-
+        validate_asof_join(
+            left.as_ref(),
+            right.as_ref(),
+            &on,
+            &match_condition,
+            &right_output_indices,
+        )?;
         let left_schema = left.schema();
         let right_schema = right.schema();
-        validate_expr_side(&match_condition.left, &left_schema, "left match")?;
-        validate_expr_side(&match_condition.right, &right_schema, "right match")?;
-        for (left_expr, right_expr) in &on {
-            validate_expr_side(left_expr, &left_schema, "left equality")?;
-            validate_expr_side(right_expr, &right_schema, "right equality")?;
-            let left_type = left_expr.data_type(&left_schema)?;
-            let right_type = right_expr.data_type(&right_schema)?;
-            if left_type != right_type {
-                return plan_err!(
-                    "AsOfJoinExec equality expression types differ: {left_type} and {right_type}"
-                );
-            }
-            if !datafusion_expr::utils::can_hash(&left_type) {
-                return plan_err!(
-                    "AsOfJoinExec equality expressions have unsupported hash type {left_type}"
-                );
-            }
-        }
-        let left_match_type = match_condition.left.data_type(&left_schema)?;
-        let right_match_type = match_condition.right.data_type(&right_schema)?;
-        if left_match_type != right_match_type {
-            return plan_err!(
-                "AsOfJoinExec match expression types differ: {left_match_type} and {right_match_type}"
-            );
-        }
-        if let Some(index) = right_output_indices
-            .iter()
-            .find(|index| **index >= right_schema.fields().len())
-        {
-            return plan_err!(
-                "AsOfJoinExec right output index {index} is outside schema with {} fields",
-                right_schema.fields().len()
-            );
-        }
-        if !right_output_indices
-            .windows(2)
-            .all(|pair| pair[0] < pair[1])
-        {
-            return plan_err!(
-                "AsOfJoinExec right output indices must be strictly increasing"
-            );
-        }
-
         let schema =
             build_output_schema(&left_schema, &right_schema, &right_output_indices);
         let descending = matches!(match_condition.op, Operator::Lt | Operator::LtEq);
@@ -304,31 +262,6 @@ impl AsOfJoinExec {
             Boundedness::Bounded,
         ))
     }
-
-    /// Equality expressions.
-    pub fn on(&self) -> &JoinOn {
-        &self.on
-    }
-
-    /// Ordered match expression.
-    pub fn match_condition(&self) -> &AsOfMatchExpr {
-        &self.match_condition
-    }
-
-    /// Indices of right input columns emitted after the left columns.
-    pub fn right_output_indices(&self) -> &[usize] {
-        &self.right_output_indices
-    }
-
-    /// Left input.
-    pub fn left(&self) -> &Arc<dyn ExecutionPlan> {
-        &self.left
-    }
-
-    /// Right input.
-    pub fn right(&self) -> &Arc<dyn ExecutionPlan> {
-        &self.right
-    }
 }
 
 fn build_output_schema(
@@ -401,6 +334,8 @@ impl ExecutionPlan for AsOfJoinExec {
     }
 
     fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        // Every left partition scans the complete broadcast right input, so
+        // equality keys do not require the inputs to be co-partitioned.
         InputDistributionRequirements::new(vec![
             Distribution::UnspecifiedDistribution,
             Distribution::SinglePartition,
@@ -415,7 +350,7 @@ impl ExecutionPlan for AsOfJoinExec {
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        vec![true, false]
+        vec![false, false]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -543,6 +478,8 @@ impl ExecutionPlan for AsOfJoinExec {
         input_stats: &[Arc<Statistics>],
         _args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
+        // The default is fully unknown, but ASOF emits exactly one output row
+        // per left row and preserves statistics for unmodified left columns.
         let left = &input_stats[0];
         let mut column_statistics = left.column_statistics.clone();
         column_statistics.truncate(self.left.schema().fields().len());
@@ -561,32 +498,6 @@ impl ExecutionPlan for AsOfJoinExec {
             column_statistics,
         }))
     }
-
-    fn gather_filters_for_pushdown(
-        &self,
-        _phase: FilterPushdownPhase,
-        parent_filters: Vec<PhysicalExprRef>,
-        _config: &ConfigOptions,
-    ) -> Result<FilterDescription> {
-        let left_indices = (0..self.left.schema().fields().len()).collect::<HashSet<_>>();
-        let left = ChildFilterDescription::from_child_with_allowed_indices(
-            &parent_filters,
-            left_indices,
-            &self.left,
-        )?;
-        let right = ChildFilterDescription::all_unsupported(&parent_filters);
-        Ok(FilterDescription::new().with_child(left).with_child(right))
-    }
-
-    fn handle_child_pushdown_result(
-        &self,
-        _phase: FilterPushdownPhase,
-        child_pushdown_result: ChildPushdownResult,
-        _config: &ConfigOptions,
-    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        Ok(FilterPushdownPropagation::if_any(child_pushdown_result))
-    }
-
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
@@ -731,9 +642,13 @@ impl AsOfJoinExec {
     }
 }
 
+/// Materialized right input shared by every left output partition.
 struct BroadcastRightInput {
+    /// Schema retained even when the input has no batches.
     schema: SchemaRef,
+    /// Ordered right batches; their buffers are shared without copying.
     batches: Vec<RecordBatch>,
+    /// Holds the memory-pool reservation for as long as the batches are shared.
     _reservation: MemoryReservation,
 }
 
@@ -775,22 +690,40 @@ async fn collect_right_input(
 
 #[derive(Clone)]
 struct Candidate {
+    /// Right batch containing the nearest eligible row.
     batch: Arc<RecordBatch>,
+    /// Row index within `batch`.
     row: usize,
+    /// Evaluated equality keys retained when the right cursor changes batches.
     key_arrays: Arc<[ArrayRef]>,
+    /// Identity used to invalidate the cached candidate/left comparator.
     key_batch_id: usize,
 }
 
+/// Cursor over one ordered input stream.
+///
+/// Expressions are evaluated once per non-empty batch. `key_batch_id` changes
+/// whenever a new batch is loaded so comparators cannot retain stale arrays.
 struct InputCursor {
+    /// Remaining input batches.
     stream: SendableRecordBatchStream,
+    /// Equality expressions evaluated for each batch.
     key_exprs: Vec<PhysicalExprRef>,
+    /// Ordered match expression evaluated for each batch.
     match_expr: PhysicalExprRef,
+    /// Current non-empty batch.
     batch: Option<Arc<RecordBatch>>,
+    /// Evaluated equality-key arrays for `batch`.
     key_arrays: Arc<[ArrayRef]>,
+    /// Rows whose equality keys are all non-NULL.
     key_validity: Option<NullBuffer>,
+    /// Evaluated match values for `batch`.
     match_array: Option<ArrayRef>,
+    /// Monotonic identity of the current key arrays.
     key_batch_id: usize,
+    /// Current row within `batch`.
     row: usize,
+    /// Whether the input stream has returned EOF.
     eof: bool,
 }
 
@@ -913,10 +846,18 @@ impl AsOfJoinMetrics {
     }
 }
 
+/// Row references accumulated for the next output batch.
+///
+/// For right output, `None` represents NULL padding for an unmatched left row.
+/// For example, indices `[Some((0, 2)), None, Some((1, 0))]` select row 2 from
+/// the first source batch, a NULL, and row 0 from the second source batch.
 #[derive(Default)]
 struct PendingRows {
+    /// Distinct source batches referenced by `indices`.
     sources: Vec<Arc<RecordBatch>>,
+    /// Maps an `Arc<RecordBatch>` pointer to its index in `sources`.
     source_by_ptr: HashMap<usize, usize>,
+    /// Per-output-row `(source, row)` references or NULL padding.
     indices: Vec<Option<(usize, usize)>>,
 }
 
@@ -997,18 +938,36 @@ impl PendingRows {
     }
 }
 
+/// Per-left-partition state for the monotonic ASOF scan.
+///
+/// For left rows `(A, 4), (A, 7)` and right rows `(A, 2), (A, 6)`, the
+/// candidate advances from `(A, 2)` to `(A, 6)` without rewinding the right
+/// cursor. Cursors and the candidate survive input batch changes and output
+/// flushes; a change of equality group clears the candidate before reuse.
 struct AsOfJoinStreamState {
+    /// Output schema used when pending row references are materialized.
     schema: SchemaRef,
+    /// Cursor over the current left partition.
     left: InputCursor,
+    /// Independent cursor over the shared, ordered right input.
     right: InputCursor,
+    /// Validated ordered match operator.
     op: Operator,
+    /// Right columns appended to each output row.
     right_output_indices: Vec<usize>,
+    /// Nearest eligible right row for the current equality group.
     candidate: Option<Candidate>,
+    /// Equality-key ordering shared by the comparator caches.
     group_sort_options: Vec<SortOptions>,
+    /// Cached comparator for the current right and left input batches.
     input_group_comparator: Option<(usize, usize, JoinKeyComparator)>,
+    /// Cached comparator for the candidate and current left batches.
     candidate_group_comparator: Option<(usize, usize, JoinKeyComparator)>,
+    /// Left row references accumulated for the next output batch.
     pending_left: PendingRows,
+    /// Matched right row references, aligned with `pending_left`.
     pending_right: PendingRows,
+    /// Maximum number of pending rows before an output flush.
     batch_size: usize,
     metrics: AsOfJoinMetrics,
 }
@@ -1110,6 +1069,15 @@ impl AsOfJoinStreamState {
         Ok(comparator.compare(candidate.row, self.left.row) != Ordering::Equal)
     }
 
+    /// Produces the next output batch without resetting the merge state.
+    ///
+    /// Each left row first validates its equality group, then advances the right
+    /// cursor while right groups sort before it or right match values remain
+    /// eligible. The last eligible right row becomes the candidate. Empty input
+    /// batches are skipped. Right EOF preserves that candidate for later left
+    /// rows in the same group; left EOF flushes the final pending rows. NULL keys
+    /// and group changes clear the candidate, while output flushes only clear
+    /// pending row references.
     async fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
         loop {
             if self.pending_left.len() >= self.batch_size {
@@ -1215,6 +1183,8 @@ impl AsOfJoinStreamState {
         Ok(())
     }
 
+    /// Materializes pending row references while preserving both cursors and the
+    /// current equality-group candidate for the next output batch.
     fn flush(&mut self) -> Result<RecordBatch> {
         let _timer = self.metrics.baseline.elapsed_compute().timer();
         let left_len = self.schema.fields().len() - self.right_output_indices.len();
@@ -1237,6 +1207,83 @@ impl AsOfJoinStreamState {
         (&batch).record_output(&self.metrics.baseline);
         Ok(batch)
     }
+}
+
+/// Validates all invariants required by the forward-only ASOF state machine.
+fn validate_asof_join(
+    left: &dyn ExecutionPlan,
+    right: &dyn ExecutionPlan,
+    on: &JoinOn,
+    match_condition: &AsOfMatchExpr,
+    right_output_indices: &[usize],
+) -> Result<()> {
+    if !matches!(
+        match_condition.op,
+        Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
+    ) {
+        return plan_err!(
+            "AsOfJoinExec requires <, <=, >, or >=, found {}",
+            match_condition.op
+        );
+    }
+    if left.boundedness().is_unbounded() || right.boundedness().is_unbounded() {
+        return plan_err!("AsOfJoinExec requires bounded inputs");
+    }
+    if is_volatile(&match_condition.left) || is_volatile(&match_condition.right) {
+        return plan_err!("AsOfJoinExec match expression must be deterministic");
+    }
+    if on
+        .iter()
+        .any(|(left, right)| is_volatile(left) || is_volatile(right))
+    {
+        return plan_err!("AsOfJoinExec equality expressions must be deterministic");
+    }
+
+    let left_schema = left.schema();
+    let right_schema = right.schema();
+    validate_expr_side(&match_condition.left, &left_schema, "left match")?;
+    validate_expr_side(&match_condition.right, &right_schema, "right match")?;
+    for (left_expr, right_expr) in on {
+        validate_expr_side(left_expr, &left_schema, "left equality")?;
+        validate_expr_side(right_expr, &right_schema, "right equality")?;
+        let left_type = left_expr.data_type(&left_schema)?;
+        let right_type = right_expr.data_type(&right_schema)?;
+        if left_type != right_type {
+            return plan_err!(
+                "AsOfJoinExec equality expression types differ: {left_type} and {right_type}"
+            );
+        }
+        if !datafusion_expr::utils::can_hash(&left_type) {
+            return plan_err!(
+                "AsOfJoinExec equality expressions have unsupported hash type {left_type}"
+            );
+        }
+    }
+    let left_match_type = match_condition.left.data_type(&left_schema)?;
+    let right_match_type = match_condition.right.data_type(&right_schema)?;
+    if left_match_type != right_match_type {
+        return plan_err!(
+            "AsOfJoinExec match expression types differ: {left_match_type} and {right_match_type}"
+        );
+    }
+    if let Some(index) = right_output_indices
+        .iter()
+        .find(|index| **index >= right_schema.fields().len())
+    {
+        return plan_err!(
+            "AsOfJoinExec right output index {index} is outside schema with {} fields",
+            right_schema.fields().len()
+        );
+    }
+    if !right_output_indices
+        .windows(2)
+        .all(|pair| pair[0] < pair[1])
+    {
+        return plan_err!(
+            "AsOfJoinExec right output indices must be strictly increasing"
+        );
+    }
+    Ok(())
 }
 
 fn validate_expr_side(expr: &PhysicalExprRef, schema: &Schema, name: &str) -> Result<()> {
@@ -1276,6 +1323,11 @@ fn is_eligible(op: Operator, left: &ScalarValue, right: &ScalarValue) -> Result<
 
 #[cfg(test)]
 mod tests {
+    // These tests cover physical-only contracts that SQL logic tests cannot
+    // observe, including batch-boundary state, shared build memory, Arrow type
+    // preservation, and execution properties. End-to-end SQL semantics live in
+    // the dependent SQL layer.
+
     use super::*;
     use crate::test::TestMemoryExec;
     use crate::{collect, collect_partitioned};
@@ -1798,9 +1850,9 @@ mod tests {
         let exec = test_exec()?;
         let volatile = Arc::new(VolatileExpr) as PhysicalExprRef;
         let match_error = AsOfJoinExec::try_new(
-            Arc::clone(exec.left()),
-            Arc::clone(exec.right()),
-            exec.on().clone(),
+            Arc::clone(&exec.left),
+            Arc::clone(&exec.right),
+            exec.on.clone(),
             AsOfMatchExpr::new(
                 Arc::clone(&volatile),
                 Operator::GtEq,
@@ -1812,10 +1864,10 @@ mod tests {
         assert!(match_error.to_string().contains("must be deterministic"));
 
         let equality_error = AsOfJoinExec::try_new(
-            Arc::clone(exec.left()),
-            Arc::clone(exec.right()),
+            Arc::clone(&exec.left),
+            Arc::clone(&exec.right),
             vec![(volatile, Arc::new(PhysicalColumn::new("key", 0)))],
-            exec.match_condition().clone(),
+            exec.match_condition.clone(),
             vec![2],
         )
         .expect_err("volatile equality expression must be rejected");
@@ -1827,7 +1879,7 @@ mod tests {
     fn properties_and_statistics_follow_left_preserving_contract() -> Result<()> {
         let exec = test_exec()?;
         let exec_plan: Arc<dyn ExecutionPlan> = Arc::clone(&exec) as _;
-        assert_eq!(exec.maintains_input_order(), vec![true, false]);
+        assert_eq!(exec.maintains_input_order(), vec![false, false]);
         assert_eq!(exec_plan.pipeline_behavior(), EmissionType::Incremental);
         assert_eq!(exec_plan.boundedness(), Boundedness::Bounded);
         assert!(matches!(
@@ -1857,8 +1909,8 @@ mod tests {
         }
 
         let no_keys: Arc<dyn ExecutionPlan> = Arc::new(AsOfJoinExec::try_new(
-            Arc::clone(exec.left()),
-            Arc::clone(exec.right()),
+            Arc::clone(&exec.left),
+            Arc::clone(&exec.right),
             vec![],
             AsOfMatchExpr::new(
                 Arc::new(PhysicalColumn::new("ts", 1)),
@@ -1869,7 +1921,7 @@ mod tests {
         )?);
         assert_eq!(
             no_keys.output_partitioning().partition_count(),
-            exec.left().output_partitioning().partition_count()
+            exec.left.output_partitioning().partition_count()
         );
         assert!(matches!(
             &no_keys.input_distribution_requirements().into_per_child()[..],
@@ -1905,7 +1957,7 @@ mod tests {
             total_byte_size: Precision::Exact(128),
             column_statistics: left_column_statistics.clone(),
         });
-        let right_stats = Arc::new(Statistics::new_unknown(&exec.right().schema()));
+        let right_stats = Arc::new(Statistics::new_unknown(&exec.right.schema()));
         let stats = exec
             .statistics_from_inputs(&[left_stats, right_stats], &StatisticsArgs::new())?;
         assert_eq!(stats.num_rows, Precision::Exact(7));
