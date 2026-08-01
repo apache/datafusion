@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::cell::OnceCell;
 use std::sync::Arc;
 
 use arrow::array::builder::StringBuilder;
@@ -27,7 +28,9 @@ use arrow::datatypes::DataType::{
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
-use datafusion_common::{Result, ScalarValue, exec_err, utils::take_function_args};
+use datafusion_common::{
+    HashMap, Result, ScalarValue, exec_err, hash_map::Entry, utils::take_function_args,
+};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -236,6 +239,28 @@ fn to_char_scalar(expression: &ColumnarValue, format: &str) -> Result<ColumnarVa
     }
 }
 
+/// Returns the [`ArrayFormatter`] for `format` from `cache`, building and
+/// caching it on first use.
+///
+/// Building a formatter parses the format string and is much more expensive
+/// than formatting a single value with it, so a query that uses only a handful
+/// of distinct format strings pays that cost once per format instead of once
+/// per row.
+fn cached_formatter<'a, 'c>(
+    cache: &'c mut HashMap<&'a str, ArrayFormatter<'a>>,
+    array: &'a dyn Array,
+    data_type: &DataType,
+    format: &'a str,
+) -> Result<&'c ArrayFormatter<'a>> {
+    match cache.entry(format) {
+        Entry::Occupied(entry) => Ok(entry.into_mut()),
+        Entry::Vacant(entry) => {
+            let format_options = build_format_options(data_type, format)?;
+            Ok(entry.insert(ArrayFormatter::try_new(array, &format_options)?))
+        }
+    }
+}
+
 fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let arrays = ColumnarValue::values_to_arrays(args)?;
     let data_array = &arrays[0];
@@ -248,10 +273,15 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         StringBuilder::with_capacity(data_array.len(), data_array.len() * fmt_len);
     let mut buffer = String::with_capacity(fmt_len);
 
-    // Lazily computed Date64 cast of the entire array, used when a Date32
-    // format string contains time specifiers that the Date32 formatter
-    // cannot handle. Cast once and reuse for all subsequent rows
-    let mut date64_array: Option<ArrayRef> = None;
+    // Date64 cast of the whole array, used when formatting a Date32 value fails
+    // (see the retry arm below). Cast at most once, on first need. It must
+    // outlive `retry_formatters`, which borrows from it, and is held in a
+    // `OnceCell` rather than an `Option` so that it can still be populated while
+    // those formatters borrow it.
+    let date64_array: OnceCell<ArrayRef> = OnceCell::new();
+
+    let mut formatters: HashMap<&str, ArrayFormatter> = HashMap::new();
+    let mut retry_formatters: HashMap<&str, ArrayFormatter> = HashMap::new();
 
     for idx in 0..data_array.len() {
         if format_array.is_null(idx) || data_array.is_null(idx) {
@@ -260,8 +290,8 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         }
 
         let format = format_array.value(idx);
-        let format_options = build_format_options(data_type, format)?;
-        let formatter = ArrayFormatter::try_new(data_array.as_ref(), &format_options)?;
+        let formatter =
+            cached_formatter(&mut formatters, data_array.as_ref(), data_type, format)?;
 
         buffer.clear();
 
@@ -271,17 +301,24 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         // buffer and `append_value` on success.
         match formatter.value(idx).write(&mut buffer) {
             Ok(()) => builder.append_value(&buffer),
+            // Arrow's Date32 formatter only handles date specifiers, so retry
+            // against a Date64 cast, whose datetime formatter also handles time
+            // specifiers (with zero for the time components).
             Err(_) if data_type == &Date32 => {
                 buffer.clear();
-                let date64_ref = match &date64_array {
-                    Some(arr) => arr.as_ref(),
+                let date64_ref = match date64_array.get() {
+                    Some(array) => array,
                     None => {
-                        date64_array = Some(cast(data_array.as_ref(), &Date64)?);
-                        date64_array.as_ref().unwrap().as_ref()
+                        let casted = cast(data_array.as_ref(), &Date64)?;
+                        date64_array.get_or_init(|| casted)
                     }
                 };
-                let retry_options = build_format_options(&Date64, format)?;
-                let retry_fmt = ArrayFormatter::try_new(date64_ref, &retry_options)?;
+                let retry_fmt = cached_formatter(
+                    &mut retry_formatters,
+                    date64_ref.as_ref(),
+                    &Date64,
+                    format,
+                )?;
                 retry_fmt.value(idx).write(&mut buffer)?;
                 builder.append_value(&buffer);
             }
