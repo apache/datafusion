@@ -594,10 +594,10 @@ impl ExecutionPlan for AsOfJoinExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
 
-        let left = ctx.encode_child(self.left())?;
-        let right = ctx.encode_child(self.right())?;
+        let left = ctx.encode_child(&self.left)?;
+        let right = ctx.encode_child(&self.right)?;
         let on = self
-            .on()
+            .on
             .iter()
             .map(|(left, right)| {
                 Ok(protobuf::JoinOn {
@@ -606,7 +606,7 @@ impl ExecutionPlan for AsOfJoinExec {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let match_operator = match self.match_condition().op {
+        let match_operator = match self.match_condition.op {
             Operator::Lt => protobuf::AsOfMatchOperator::Lt,
             Operator::LtEq => protobuf::AsOfMatchOperator::LtEq,
             Operator::Gt => protobuf::AsOfMatchOperator::Gt,
@@ -626,14 +626,14 @@ impl ExecutionPlan for AsOfJoinExec {
                         right: Some(Box::new(right)),
                         on,
                         left_match_expr: Some(
-                            ctx.encode_expr(&self.match_condition().left)?,
+                            ctx.encode_expr(&self.match_condition.left)?,
                         ),
                         right_match_expr: Some(
-                            ctx.encode_expr(&self.match_condition().right)?,
+                            ctx.encode_expr(&self.match_condition.right)?,
                         ),
                         match_operator: match_operator.into(),
                         right_output_indices: self
-                            .right_output_indices()
+                            .right_output_indices
                             .iter()
                             .map(|index| *index as u32)
                             .collect(),
