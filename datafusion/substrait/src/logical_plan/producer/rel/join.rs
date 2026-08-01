@@ -117,7 +117,7 @@ mod tests {
     use std::sync::Arc;
     use substrait::proto::expression::{RexType, ScalarFunction};
     use substrait::proto::rel::RelType;
-    use substrait::proto::{Expression, JoinRel, Rel, join_rel};
+    use substrait::proto::{CrossRel, Expression, JoinRel, Rel, join_rel};
 
     #[test]
     fn test_from_join() -> datafusion::common::Result<()> {
@@ -183,5 +183,46 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn conditionless_inner_join_is_cross_rel() {
+        let state = SessionStateBuilder::default().build();
+        let mut producer = DefaultSubstraitProducer::new(&state);
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let left = Arc::new(
+            table_scan(Some("t1"), &schema, None)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+        let right = Arc::new(
+            table_scan(Some("t2"), &schema, None)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+
+        let inner = Join::try_new(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            vec![],
+            None,
+            JoinType::Inner,
+            JoinConstraint::On,
+            NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap();
+        let expected = Rel {
+            rel_type: Some(RelType::Cross(Box::new(CrossRel {
+                common: None,
+                left: Some(producer.handle_plan(&left).unwrap()),
+                right: Some(producer.handle_plan(&right).unwrap()),
+                advanced_extension: None,
+            }))),
+        };
+
+        assert_eq!(producer.handle_join(&inner).unwrap(), Box::new(expected));
     }
 }
