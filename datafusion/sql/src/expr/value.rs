@@ -74,10 +74,22 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         unsigned_number: &str,
         negative: bool,
     ) -> Result<Expr> {
-        let signed_number: Cow<str> = if negative {
-            Cow::Owned(format!("-{unsigned_number}"))
+        let mut signed_number =
+            String::with_capacity(unsigned_number.len() + usize::from(negative));
+        if negative {
+            signed_number.push('-');
+        }
+        // remove underscores, since the Rust parser used here does not support them
+        unsigned_number.bytes().for_each(|b| {
+            if b != b'_' {
+                signed_number.push(b as char);
+            }
+        });
+
+        let unsigned_number = if negative {
+            &signed_number[1..]
         } else {
-            Cow::Borrowed(unsigned_number)
+            signed_number.as_str()
         };
 
         // Try to parse as i64 first, then u64 if negative is false, then decimal or f64
