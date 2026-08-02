@@ -200,7 +200,7 @@ SELECT pk, largest_v2 FROM (
 -- Window Top-N (DENSE_RANK top-2 per partition, ~100 partitions)
 -- The DENSE_RANK queries below mirror the RANK cardinality sweep above.
 -- DENSE_RANK semantics keep every row whose ORDER BY value is among the
--- K distinct-smallest values in the partition, so total kept per partition
+-- K distinct-greatest values in the partition, so total kept per partition
 -- is unbounded in rows-per-distinct-value — exercises PartitionedTopKDenseRank's
 -- HashMap-of-groups path.
 SELECT pk, largest_v2 FROM (
