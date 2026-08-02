@@ -24,7 +24,8 @@ use arrow::datatypes::{
     DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType, Decimal32Type,
     Decimal64Type, Decimal128Type, Decimal256Type, DurationMicrosecondType,
     DurationMillisecondType, DurationNanosecondType, DurationSecondType, FieldRef,
-    Float64Type, Int64Type, TimeUnit, UInt64Type,
+    Float64Type, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+    IntervalYearMonthType, TimeUnit, UInt64Type,
 };
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::internal_err;
@@ -117,6 +118,21 @@ macro_rules! downcast_sum {
                     $args.return_field.data_type().clone()
                 )
             }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                $helper!(
+                    IntervalYearMonthType,
+                    $args.return_field.data_type().clone()
+                )
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                $helper!(IntervalDayTimeType, $args.return_field.data_type().clone())
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                $helper!(
+                    IntervalMonthDayNanoType,
+                    $args.return_field.data_type().clone()
+                )
+            }
             _ => {
                 not_impl_err!(
                     "Sum not supported for {}: {}",
@@ -186,6 +202,9 @@ impl Sum {
                     TypeSignature::Coercible(vec![Coercion::new_exact(
                         TypeSignatureClass::Duration,
                     )]),
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Interval,
+                    )]),
                 ],
                 Volatility::Immutable,
             ),
@@ -232,6 +251,7 @@ impl AggregateUDFImpl for Sum {
                 Ok(DataType::Decimal256(new_precision, *scale))
             }
             DataType::Duration(time_unit) => Ok(DataType::Duration(*time_unit)),
+            DataType::Interval(interval_unit) => Ok(DataType::Interval(*interval_unit)),
             other => {
                 exec_err!("[return_type] SUM not supported for {}", other)
             }
@@ -303,13 +323,18 @@ impl AggregateUDFImpl for Sum {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
         if args.is_distinct {
-            // distinct path: use our sliding‐window distinct‐sum
-            macro_rules! helper_distinct {
-                ($t:ty, $dt:expr) => {
-                    Ok(Box::new(SlidingDistinctSumAccumulator::try_new(&$dt)?))
-                };
+            // distinct path: [`SlidingDistinctSumAccumulator`] only implements
+            // Int64, so gate the supported type here rather than dispatching
+            // through `downcast_sum!`, which accepts every SUM type
+            match args.return_field.data_type() {
+                DataType::Int64 => Ok(Box::new(SlidingDistinctSumAccumulator::try_new(
+                    &DataType::Int64,
+                )?)),
+                _ => not_impl_err!(
+                    "SUM(DISTINCT) over sliding window frames is only supported for Int64, got {}",
+                    args.expr_fields[0].data_type()
+                ),
             }
-            downcast_sum!(args, helper_distinct)
         } else {
             // non‐distinct path: existing sliding sum
             macro_rules! helper {
@@ -525,7 +550,9 @@ impl SlidingDistinctSumAccumulator {
     pub fn try_new(data_type: &DataType) -> Result<Self> {
         // TODO support other numeric types
         if *data_type != DataType::Int64 {
-            return exec_err!("SlidingDistinctSumAccumulator only supports Int64");
+            return exec_err!(
+                "SlidingDistinctSumAccumulator only supports Int64, got {data_type}"
+            );
         }
         Ok(Self {
             counts: HashMap::default(),

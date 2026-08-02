@@ -19,7 +19,7 @@
 
 use arrow::array::{
     Array, ArrayRef, AsArray, Capacities, GenericListArray, MutableArrayData,
-    NullBufferBuilder, OffsetBufferBuilder, OffsetSizeTrait, Scalar, new_null_array,
+    NullBufferBuilder, OffsetSizeTrait, Scalar, new_null_array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
@@ -391,7 +391,8 @@ fn general_replace<O: OffsetSizeTrait>(
     arr_n: &[Option<i64>],
 ) -> Result<ArrayRef> {
     // Build up the offsets for the final output array
-    let mut offsets: Vec<O> = vec![O::usize_as(0)];
+    let mut offsets: Vec<O> = Vec::with_capacity(list_array.len() + 1);
+    offsets.push(O::usize_as(0));
     let values = list_array.values();
     let original_data = values.to_data();
     let to_data = to_array.to_data();
@@ -440,11 +441,11 @@ fn general_replace<O: OffsetSizeTrait>(
 
         // All elements are false, no need to replace, just copy original data
         if n <= 0 || !eq_array.has_true() {
-            mutable.extend(
+            mutable.try_extend(
                 original_idx.to_usize().unwrap(),
                 start.to_usize().unwrap(),
                 end.to_usize().unwrap(),
-            );
+            )?;
             offsets.push(offsets[row_index] + (end - start));
             valid.append_non_null();
             continue;
@@ -456,21 +457,25 @@ fn general_replace<O: OffsetSizeTrait>(
             if to_replace == Some(true) && counter < n {
                 // Flush any pending retain run before emitting the replacement.
                 if let Some(rs) = pending_retain.take() {
-                    mutable.extend(
+                    mutable.try_extend(
                         original_idx.to_usize().unwrap(),
                         (start + rs).to_usize().unwrap(),
                         (start + i).to_usize().unwrap(),
-                    );
+                    )?;
                 }
-                mutable.extend(replace_idx.to_usize().unwrap(), row_index, row_index + 1);
+                mutable.try_extend(
+                    replace_idx.to_usize().unwrap(),
+                    row_index,
+                    row_index + 1,
+                )?;
                 counter += 1;
                 if counter == n {
                     // copy original data for any matches past n
-                    mutable.extend(
+                    mutable.try_extend(
                         original_idx.to_usize().unwrap(),
                         (start + i).to_usize().unwrap() + 1,
                         end.to_usize().unwrap(),
-                    );
+                    )?;
                     break;
                 }
             } else if pending_retain.is_none() {
@@ -483,11 +488,11 @@ fn general_replace<O: OffsetSizeTrait>(
         if counter < n
             && let Some(rs) = pending_retain
         {
-            mutable.extend(
+            mutable.try_extend(
                 original_idx.to_usize().unwrap(),
                 (start + rs).to_usize().unwrap(),
                 end.to_usize().unwrap(),
-            );
+            )?;
         }
 
         offsets.push(offsets[row_index] + (end - start));
@@ -538,7 +543,8 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
         capacity,
     );
 
-    let mut offsets = OffsetBufferBuilder::<O>::new(list_array.len());
+    let mut offsets = Vec::<O>::with_capacity(list_array.len() + 1);
+    offsets.push(O::zero());
 
     // Single bulk comparison over the visible values only.
     let match_bitmap = arrow_ord::cmp::not_distinct(&visible_values, needle)?;
@@ -551,7 +557,7 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
         let row_len = end - start;
 
         if list_array.is_null(row_index) {
-            offsets.push_length(0);
+            offsets.push(offsets[row_index]);
             continue;
         }
 
@@ -562,8 +568,8 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
             .take(max_replacements as usize)
             .peekable();
         if match_positions.peek().is_none() {
-            mutable.extend(0, start, end);
-            offsets.push_length(row_len);
+            mutable.try_extend(0, start, end)?;
+            offsets.push(offsets[row_index] + O::usize_as(row_len));
             continue;
         }
 
@@ -574,26 +580,26 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
         for match_pos in match_positions {
             // Retain elements before this match.
             if match_pos > prev_end {
-                mutable.extend(0, start + prev_end, start + match_pos);
+                mutable.try_extend(0, start + prev_end, start + match_pos)?;
             }
             // Emit the replacement element.
-            mutable.extend(1, 0, 1);
+            mutable.try_extend(1, 0, 1)?;
             prev_end = match_pos + 1;
         }
 
         // Copy remaining elements after the last replacement.
         if prev_end < row_len {
-            mutable.extend(0, start + prev_end, end);
+            mutable.try_extend(0, start + prev_end, end)?;
         }
 
-        offsets.push_length(row_len);
+        offsets.push(offsets[row_index] + O::usize_as(row_len));
     }
 
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new_list_field(list_array.value_type(), true)),
-        offsets.finish(),
+        OffsetBuffer::new(offsets.into()),
         arrow::array::make_array(data),
         list_array.nulls().cloned(),
     )?))

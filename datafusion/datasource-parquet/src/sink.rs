@@ -171,7 +171,7 @@ impl ParquetSink {
 
     /// Creates an AsyncArrowWriter which serializes a parquet file to an ObjectStore
     /// AsyncArrowWriters are used when individual parquet file serialization is not parallelized
-    async fn create_async_arrow_writer(
+    fn create_async_arrow_writer(
         &self,
         location: &Path,
         object_store: Arc<dyn ObjectStore>,
@@ -296,14 +296,12 @@ impl FileSink for ParquetSink {
             if !parquet_opts.global.allow_single_file_parallelism
                 || parquet_opts.global.content_defined_chunking.enabled
             {
-                let mut writer = self
-                    .create_async_arrow_writer(
-                        &path,
-                        Arc::clone(&object_store),
-                        context,
-                        parquet_props.clone(),
-                    )
-                    .await?;
+                let mut writer = self.create_async_arrow_writer(
+                    &path,
+                    Arc::clone(&object_store),
+                    context,
+                    parquet_props.clone(),
+                )?;
                 let reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
                     .register(context.memory_pool());
                 file_write_tasks.spawn(

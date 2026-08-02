@@ -33,9 +33,10 @@ use arrow::datatypes::DataType;
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, not_impl_err, plan_err};
-use datafusion_common::{RecursionUnnestOption, UnnestOptions};
+use datafusion_common::{NullHandling, RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::ExprSchemable;
 use datafusion_expr::builder::get_struct_unnested_columns;
+use datafusion_expr::expr::Unnest as UnnestExpr;
 use datafusion_expr::expr::{PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
@@ -198,6 +199,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let having_expr_opt = select
             .having
             .map::<Result<Expr>, _>(|having_expr| {
+                self.warn_on_null_equality_predicate(&having_expr);
                 let having_expr = self.sql_expr_to_logical_expr(
                     having_expr,
                     &combined_schema,
@@ -664,8 +666,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 });
             }
 
-            // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
-            let mut unnest_options = UnnestOptions::new().with_preserve_nulls(false);
+            // The default SQL `UNNEST` matches DuckDB/PostgreSQL: drop both
+            // NULL and empty input lists. Outer-unnest (modelled as
+            // `Unnest { outer: true }`) overrides that and selects
+            // `NullHandling::PreserveAndExpandEmpty`. Mixing the two in a
+            // single SELECT is a planning error because `UnnestOptions` is
+            // per-`UnnestExec`, not per-column.
+            let null_handling = collect_unnest_null_handling(&intermediate_expr_groups)?;
+            let mut unnest_options =
+                UnnestOptions::new().with_null_handling(null_handling);
             let mut unnest_col_vec = vec![];
 
             for (col, maybe_list_unnest) in unnest_columns.into_iter() {
@@ -865,6 +874,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Some(predicate_expr) => {
                 let fallback_schemas = plan.fallback_normalize_schemas();
 
+                self.warn_on_null_equality_predicate(&predicate_expr);
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, plan.schema(), planner_context)?;
 
@@ -1448,4 +1458,46 @@ fn has_unnest_expr_recursively(expr: &Expr) -> bool {
         }
     });
     has_unnest
+}
+
+/// Walk `select_exprs`, observe every [`Expr::Unnest`] inside them, and
+/// derive the [`NullHandling`] mode for the resulting [`UnnestOptions`].
+///
+/// * No unnest with `outer = true`  → [`NullHandling::Drop`] (default SQL
+///   `UNNEST(...)` semantics, matching DuckDB/PostgreSQL).
+/// * Every unnest with `outer = true` → [`NullHandling::PreserveAndExpandEmpty`]
+///   (outer-unnest semantics: `NULL` and empty input lists each produce a
+///   single `NULL` output row).
+/// * A mix of `outer = true` and `outer = false` in one SELECT → planning
+///   error, because `UnnestOptions` applies per `Unnest` plan node, not
+///   per output column.
+fn collect_unnest_null_handling(expr_groups: &[Vec<Expr>]) -> Result<NullHandling> {
+    let mut saw_outer = false;
+    let mut saw_inner = false;
+    for group in expr_groups {
+        for expr in group {
+            expr.apply(|e| {
+                if let Expr::Unnest(UnnestExpr { outer, .. }) = e {
+                    if *outer {
+                        saw_outer = true;
+                    } else {
+                        saw_inner = true;
+                    }
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+        }
+    }
+    if saw_outer && saw_inner {
+        return plan_err!(
+            "Cannot mix `unnest(...)` with `unnest_outer(...)` in the same \
+             SELECT — the unnest operator carries a single null-handling \
+             mode. Split the query so each unnest projection uses one mode."
+        );
+    }
+    Ok(if saw_outer {
+        NullHandling::PreserveAndExpandEmpty
+    } else {
+        NullHandling::Drop
+    })
 }

@@ -226,6 +226,7 @@ impl RunOpt {
             self.hash_join_buffering_capacity;
         let rt = self.common.build_runtime()?;
         let ctx = SessionContext::new_with_config_rt(config, rt);
+        benchmark_run.set_memory_pool(&ctx.runtime_env().memory_pool);
         // register tables
         self.register_tables(&ctx).await?;
 
@@ -290,7 +291,7 @@ impl RunOpt {
         println!("Query {query_id} avg time: {avg:.2} ms");
 
         // Print memory stats using mimalloc (only when compiled with --features mimalloc_extended)
-        print_memory_stats();
+        print_memory_stats(&*ctx.runtime_env().memory_pool);
 
         Ok(query_results)
     }
@@ -364,7 +365,6 @@ impl RunOpt {
         table: &str,
     ) -> Result<Arc<dyn TableProvider>> {
         let path = self.path.to_str().unwrap();
-        let target_partitions = self.partitions();
 
         // Obtain a snapshot of the SessionState
         let state = ctx.state();
@@ -380,9 +380,7 @@ impl RunOpt {
 
         let table_path = ListingTableUrl::parse(path)?;
         let options = ListingOptions::new(Arc::new(format))
-            .with_file_extension(DEFAULT_PARQUET_EXTENSION)
-            .with_target_partitions(target_partitions)
-            .with_collect_stat(state.config().collect_statistics());
+            .with_file_extension(DEFAULT_PARQUET_EXTENSION);
 
         let schema = options.infer_schema(&state, &table_path).await?;
         let constraints = table_constraints(table, schema.as_ref());

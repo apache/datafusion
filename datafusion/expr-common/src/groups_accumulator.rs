@@ -18,7 +18,7 @@
 //! Vectorized [`GroupsAccumulator`]
 
 use arrow::array::{ArrayRef, BooleanArray};
-use datafusion_common::{Result, not_impl_err, utils::split_vec_min_alloc};
+use datafusion_common::{Result, utils::split_vec_min_alloc};
 
 /// Describes how many rows should be emitted during grouping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,12 +183,14 @@ pub trait GroupsAccumulator: Send + std::any::Any {
     ///
     /// * `values`: arrays produced from previously calling `state` on other accumulators.
     ///
-    /// Other arguments are the same as for [`Self::update_batch`].
+    /// Other arguments are the same as for [`Self::update_batch`], except that
+    /// there is no `opt_filter` — aggregate filters are applied during the
+    /// partial (update) phase, so by the time intermediate states are merged
+    /// no per-row filtering is needed.
     fn merge_batch(
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()>;
 
@@ -229,23 +231,17 @@ pub trait GroupsAccumulator: Send + std::any::Any {
     /// [`Accumulator::state`]: crate::accumulator::Accumulator::state
     fn convert_to_state(
         &self,
-        _values: &[ArrayRef],
-        _opt_filter: Option<&BooleanArray>,
-    ) -> Result<Vec<ArrayRef>> {
-        not_impl_err!("Input batch conversion to state not implemented")
-    }
-
-    /// Returns `true` if [`Self::convert_to_state`] is implemented to support
-    /// intermediate aggregate state conversion.
-    fn supports_convert_to_state(&self) -> bool {
-        false
-    }
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>>;
 
     /// Amount of memory used to store the state of this accumulator,
     /// in bytes.
     ///
     /// This function is called once per batch, so it should be `O(n)` to
     /// compute, not `O(num_groups)`
+    ///
+    /// May be expensive; check the implementation before calling on hot paths.
     fn size(&self) -> usize;
 }
 

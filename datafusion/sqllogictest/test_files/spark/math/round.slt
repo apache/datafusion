@@ -222,6 +222,18 @@ SELECT round(25::bigint, -1::int);
 ----
 30
 
+# round(bigint) should preserve exact values above Float64's exact integer range
+query IT
+SELECT round(arrow_cast(9007199254740993, 'Int64')), arrow_typeof(round(arrow_cast(9007199254740993, 'Int64')));
+----
+9007199254740993 Int64
+
+# round(bigint, positive scale) should also preserve exact values above Float64's exact integer range
+query IT
+SELECT round(arrow_cast(9007199254740993, 'Int64'), 2::int), arrow_typeof(round(arrow_cast(9007199254740993, 'Int64'), 2::int));
+----
+9007199254740993 Int64
+
 # round(smallint, -1)
 query I
 SELECT round(25::smallint, -1::int);
@@ -268,6 +280,18 @@ SELECT round(arrow_cast(25, 'UInt64'), -1::int);
 ----
 30
 
+# round(uint64) should preserve exact values above Float64's exact integer range
+query IT
+SELECT round(arrow_cast(18446744073709551615, 'UInt64')), arrow_typeof(round(arrow_cast(18446744073709551615, 'UInt64')));
+----
+18446744073709551615 UInt64
+
+# round(uint64, positive scale) should also preserve exact values above Float64's exact integer range
+query IT
+SELECT round(arrow_cast(18446744073709551615, 'UInt64'), 2::int), arrow_typeof(round(arrow_cast(18446744073709551615, 'UInt64'), 2::int));
+----
+18446744073709551615 UInt64
+
 # round(uint32, positive scale) — no-op for integers
 query I
 SELECT round(arrow_cast(42, 'UInt32'), 2::int);
@@ -281,52 +305,52 @@ SELECT round(arrow_cast(42, 'UInt32'), 2::int);
 # --- Decimal32 ---
 
 # round(decimal32, 0) — round to integer
-query ?
+query R
 SELECT round(arrow_cast(2.5, 'Decimal32(9, 1)'), 0::int);
 ----
-3.0
+3
 
-query ?
+query R
 SELECT round(arrow_cast(-2.5, 'Decimal32(9, 1)'), 0::int);
 ----
--3.0
+-3
 
 # round(decimal32, 2)
-query ?
+query R
 SELECT round(arrow_cast(2.345, 'Decimal32(9, 3)'), 2::int);
 ----
-2.350
+2.35
 
 # round(decimal32) default scale = 0
-query ?
+query R
 SELECT round(arrow_cast(3.5, 'Decimal32(9, 1)'));
 ----
-4.0
+4
 
 # --- Decimal64 ---
 
 # round(decimal64, 0) — round to integer
-query ?
+query R
 SELECT round(arrow_cast(2.5, 'Decimal64(18, 1)'), 0::int);
 ----
-3.0
+3
 
-query ?
+query R
 SELECT round(arrow_cast(-2.5, 'Decimal64(18, 1)'), 0::int);
 ----
--3.0
+-3
 
 # round(decimal64, 2)
-query ?
+query R
 SELECT round(arrow_cast(2.345, 'Decimal64(18, 3)'), 2::int);
 ----
-2.350
+2.35
 
 # round(decimal64) default scale = 0
-query ?
+query R
 SELECT round(arrow_cast(3.5, 'Decimal64(18, 1)'));
 ----
-4.0
+4
 
 # --- Decimal128 ---
 

@@ -141,6 +141,7 @@ make_stub_package!(unicode, "unicode_expressions");
 #[cfg(any(feature = "datetime_expressions", feature = "unicode_expressions"))]
 pub mod planner;
 
+pub mod binaries;
 pub mod strings;
 
 pub mod utils;

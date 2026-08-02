@@ -64,8 +64,8 @@ pub struct RunOpt {
     #[arg(short = 'm', long = "mem-table")]
     mem_table: bool,
 
-    /// Mark the first column of each table as sorted in ascending order.
-    /// The tables should have been created with the `--sort` option for this to have any effect.
+    /// Declare that the first column of the input table is already sorted in ascending order.
+    /// This flag only attaches ordering metadata; it does not sort the input files.
     #[arg(short = 't', long = "sorted")]
     sorted: bool,
 
@@ -187,7 +187,7 @@ impl RunOpt {
         for query_id in query_range {
             benchmark_run.start_new_case(&format!("{query_id}"));
 
-            let query_results = self.benchmark_query(query_id).await;
+            let query_results = self.benchmark_query(query_id, &mut benchmark_run).await;
             match query_results {
                 Ok(query_results) => {
                     for iter in query_results {
@@ -207,7 +207,14 @@ impl RunOpt {
     }
 
     /// Benchmark query `query_id` in `SORT_QUERIES`
-    async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
+    ///
+    /// `benchmark_run` is handed this query's runtime, which is built here so
+    /// each query gets a pool of its own.
+    async fn benchmark_query(
+        &self,
+        query_id: usize,
+        benchmark_run: &mut BenchmarkRun,
+    ) -> Result<Vec<QueryResult>> {
         let config = self.common.config()?;
         let rt = self.common.build_runtime()?;
         let state = SessionStateBuilder::new()
@@ -216,6 +223,7 @@ impl RunOpt {
             .with_default_features()
             .build();
         let ctx = SessionContext::from(state);
+        benchmark_run.set_memory_pool(&ctx.runtime_env().memory_pool);
 
         // register tables
         self.register_tables(&ctx).await?;
@@ -250,7 +258,7 @@ impl RunOpt {
         println!("Query {query_id} avg time: {avg:.2} ms");
 
         // Print memory usage stats using mimalloc (only when compiled with --features mimalloc_extended)
-        print_memory_stats();
+        print_memory_stats(&*ctx.runtime_env().memory_pool);
 
         Ok(query_results)
     }
@@ -333,9 +341,7 @@ impl RunOpt {
         );
         let extension = DEFAULT_PARQUET_EXTENSION;
 
-        let options = ListingOptions::new(format)
-            .with_file_extension(extension)
-            .with_collect_stat(state.config().collect_statistics());
+        let options = ListingOptions::new(format).with_file_extension(extension);
 
         let table_path = ListingTableUrl::parse(path)?;
         let schema = options.infer_schema(&state, &table_path).await?;

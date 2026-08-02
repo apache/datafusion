@@ -42,6 +42,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
 
 use async_trait::async_trait;
+use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use parquet::basic::ConvertedType;
 use parquet::data_type::{ByteArray, FixedLenByteArray};
 use parquet::file::reader::FileReader;
@@ -546,15 +547,17 @@ impl TableFunctionImpl for MetadataCacheFunc {
         for (path, entry) in cached_entries {
             path_arr.push(path.to_string());
             file_modified_arr
-                .push(Some(entry.object_meta.last_modified.timestamp_millis()));
-            file_size_bytes_arr.push(entry.object_meta.size);
-            e_tag_arr.push(entry.object_meta.e_tag);
-            version_arr.push(entry.object_meta.version);
+                .push(Some(entry.value.meta.last_modified.timestamp_millis()));
+            file_size_bytes_arr.push(entry.value.meta.size);
+            e_tag_arr.push(entry.value.meta.e_tag);
+            version_arr.push(entry.value.meta.version);
             metadata_size_bytes.push(entry.size_bytes as u64);
             hits_arr.push(entry.hits as u64);
 
             let mut extra = entry
-                .extra
+                .value
+                .file_metadata
+                .extra_info()
                 .iter()
                 .map(|(k, v)| format!("{k}={v}"))
                 .collect::<Vec<_>>();
@@ -646,6 +649,7 @@ impl TableFunctionImpl for StatisticsCacheFunc {
             Field::new("num_columns", DataType::UInt64, false),
             Field::new("table_size_bytes", DataType::Utf8, false),
             Field::new("statistics_size_bytes", DataType::UInt64, false),
+            Field::new("hits", DataType::UInt64, false),
         ]));
 
         // construct record batch from metadata
@@ -659,6 +663,7 @@ impl TableFunctionImpl for StatisticsCacheFunc {
         let mut num_columns_arr = vec![];
         let mut table_size_bytes_arr = vec![];
         let mut statistics_size_bytes_arr = vec![];
+        let mut hits_arr = vec![];
 
         if let Some(file_statistics_cache) = self.cache_manager.get_file_statistic_cache()
         {
@@ -667,14 +672,23 @@ impl TableFunctionImpl for StatisticsCacheFunc {
                 table_arr
                     .push(path.table.map_or_else(|| "".to_string(), |t| t.to_string()));
                 file_modified_arr
-                    .push(Some(entry.object_meta.last_modified.timestamp_millis()));
-                file_size_bytes_arr.push(entry.object_meta.size);
-                e_tag_arr.push(entry.object_meta.e_tag);
-                version_arr.push(entry.object_meta.version);
-                num_rows_arr.push(entry.num_rows.to_string());
-                num_columns_arr.push(entry.num_columns as u64);
-                table_size_bytes_arr.push(entry.table_size_bytes.to_string());
-                statistics_size_bytes_arr.push(entry.statistics_size_bytes as u64);
+                    .push(Some(entry.value.meta.last_modified.timestamp_millis()));
+                file_size_bytes_arr.push(entry.value.meta.size);
+                e_tag_arr.push(entry.value.meta.e_tag);
+                version_arr.push(entry.value.meta.version);
+                num_rows_arr.push(entry.value.statistics.num_rows.to_string());
+                num_columns_arr
+                    .push(entry.value.statistics.column_statistics.len() as u64);
+                table_size_bytes_arr
+                    .push(entry.value.statistics.total_byte_size.to_string());
+                statistics_size_bytes_arr.push(
+                    entry
+                        .value
+                        .statistics
+                        .heap_size(&mut DFHeapSizeCtx::default())
+                        as u64,
+                );
+                hits_arr.push(entry.hits as u64);
             }
         }
 
@@ -691,6 +705,7 @@ impl TableFunctionImpl for StatisticsCacheFunc {
                 Arc::new(UInt64Array::from(num_columns_arr)),
                 Arc::new(StringArray::from(table_size_bytes_arr)),
                 Arc::new(UInt64Array::from(statistics_size_bytes_arr)),
+                Arc::new(UInt64Array::from(hits_arr)),
             ],
         )?;
 
@@ -798,6 +813,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
                 DataType::List(Arc::new(metadata_field.clone())),
                 true,
             ),
+            Field::new("hits", DataType::UInt64, false),
         ]));
 
         let mut table_arr = vec![];
@@ -811,6 +827,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
         let mut etag_arr = vec![];
         let mut version_arr = vec![];
         let mut offsets: Vec<i32> = vec![0];
+        let mut hits_arr = vec![];
 
         if let Some(list_files_cache) = self.cache_manager.get_list_files_cache() {
             let now = Instant::now();
@@ -827,15 +844,16 @@ impl TableFunctionImpl for ListFilesCacheFunc {
                         .map(|t| t.duration_since(now).as_millis() as i64),
                 );
 
-                for meta in entry.metas.files.iter() {
+                for meta in entry.value.files.iter() {
                     file_path_arr.push(meta.location.to_string());
                     file_modified_arr.push(meta.last_modified.timestamp_millis());
                     file_size_bytes_arr.push(meta.size);
                     etag_arr.push(meta.e_tag.clone());
                     version_arr.push(meta.version.clone());
                 }
-                current_offset += entry.metas.files.len() as i32;
+                current_offset += entry.value.files.len() as i32;
                 offsets.push(current_offset);
+                hits_arr.push(entry.hits as u64);
             }
         }
 
@@ -867,6 +885,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
                     Arc::new(struct_arr),
                     None,
                 )),
+                Arc::new(UInt64Array::from(hits_arr)),
             ],
         )?;
 

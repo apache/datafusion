@@ -40,6 +40,7 @@ use datafusion_common::project_schema;
 use datafusion_common::stats::Precision;
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::PlanProperties;
+use datafusion_physical_plan::StatisticsArgs;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 
@@ -178,8 +179,12 @@ impl ExecutionPlan for CustomExecutionPlan {
         Ok(Box::pin(TestCustomRecordBatchStream { nb_batch: 1 }))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        if partition.is_some() {
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        if args.partition().is_some() {
             return Ok(Arc::new(Statistics::new_unknown(&self.schema())));
         }
         let batch = TEST_CUSTOM_RECORD_BATCH!().unwrap();

@@ -17,10 +17,10 @@
 
 use std::sync::Arc;
 
-use arrow::array::builder::PrimitiveBuilder;
 use arrow::array::cast::AsArray;
 use arrow::array::types::{Date32Type, Int32Type};
 use arrow::array::{Array, PrimitiveArray};
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Date32;
 use chrono::prelude::*;
@@ -139,24 +139,27 @@ impl ScalarUDFImpl for MakeDateFunc {
                 let months = months.as_primitive::<Int32Type>();
                 let days = days.as_primitive::<Int32Type>();
 
-                let mut builder: PrimitiveBuilder<Date32Type> =
-                    PrimitiveArray::builder(len);
+                let nulls =
+                    NullBuffer::union_many([years.nulls(), months.nulls(), days.nulls()]);
 
+                let mut values = Vec::with_capacity(len);
                 for i in 0..len {
                     // match postgresql behaviour which returns null for any null input
-                    if years.is_null(i) || months.is_null(i) || days.is_null(i) {
-                        builder.append_null();
+                    if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
+                        values.push(0);
                     } else {
                         make_date_inner(
                             years.value(i),
                             months.value(i),
                             days.value(i),
-                            |days: i32| builder.append_value(days),
+                            |days: i32| values.push(days),
                         )?;
                     }
                 }
 
-                Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+                Ok(ColumnarValue::Array(Arc::new(
+                    PrimitiveArray::<Date32Type>::new(values.into(), nulls),
+                )))
             }
         }
     }
@@ -195,5 +198,90 @@ fn make_date_inner<F: FnMut(i32)>(
         Ok(())
     } else {
         exec_err!("Unable to parse date from {year}, {month}, {day}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Int32Array;
+    use arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
+
+    fn invoke(args: Vec<ColumnarValue>, number_rows: usize) -> Result<ColumnarValue> {
+        let arg_fields = args
+            .iter()
+            .map(|a| Field::new("a", a.data_type(), true).into())
+            .collect::<Vec<_>>();
+        MakeDateFunc::new().invoke_with_args(ScalarFunctionArgs {
+            args,
+            arg_fields,
+            number_rows,
+            return_field: Field::new("f", Date32, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        })
+    }
+
+    #[test]
+    fn test_make_date_array() {
+        let years = ColumnarValue::Array(Arc::new(Int32Array::from(vec![
+            Some(1970),
+            Some(1970),
+        ])));
+        let months =
+            ColumnarValue::Array(Arc::new(Int32Array::from(vec![Some(1), Some(1)])));
+        let days =
+            ColumnarValue::Array(Arc::new(Int32Array::from(vec![Some(1), Some(2)])));
+
+        let ColumnarValue::Array(arr) = invoke(vec![years, months, days], 2).unwrap()
+        else {
+            panic!("expected array result");
+        };
+        let arr = arr.as_primitive::<Date32Type>();
+        // Days since the unix epoch.
+        assert_eq!(arr.value(0), 0);
+        assert_eq!(arr.value(1), 1);
+    }
+
+    #[test]
+    fn test_make_date_null_propagation() {
+        // A NULL in any component column yields a NULL row.
+        let years =
+            ColumnarValue::Array(Arc::new(Int32Array::from(vec![Some(2000), None])));
+        let months =
+            ColumnarValue::Array(Arc::new(Int32Array::from(vec![Some(6), Some(6)])));
+        let days = ColumnarValue::Array(Arc::new(Int32Array::from(vec![None, Some(15)])));
+
+        let ColumnarValue::Array(arr) = invoke(vec![years, months, days], 2).unwrap()
+        else {
+            panic!("expected array result");
+        };
+        let arr = arr.as_primitive::<Date32Type>();
+        assert!(arr.is_null(0));
+        assert!(arr.is_null(1));
+    }
+
+    #[test]
+    fn test_make_date_scalar_array_mix() {
+        let year = ColumnarValue::Scalar(ScalarValue::Int32(Some(1970)));
+        let month = ColumnarValue::Scalar(ScalarValue::Int32(Some(1)));
+        let days =
+            ColumnarValue::Array(Arc::new(Int32Array::from(vec![Some(1), Some(3)])));
+
+        let ColumnarValue::Array(arr) = invoke(vec![year, month, days], 2).unwrap()
+        else {
+            panic!("expected array result");
+        };
+        let arr = arr.as_primitive::<Date32Type>();
+        assert_eq!(arr.value(0), 0);
+        assert_eq!(arr.value(1), 2);
+    }
+
+    #[test]
+    fn test_make_date_out_of_range_errors() {
+        let years = ColumnarValue::Array(Arc::new(Int32Array::from(vec![Some(2000)])));
+        let months = ColumnarValue::Array(Arc::new(Int32Array::from(vec![Some(13)])));
+        let days = ColumnarValue::Array(Arc::new(Int32Array::from(vec![Some(1)])));
+        assert!(invoke(vec![years, months, days], 1).is_err());
     }
 }

@@ -2851,7 +2851,7 @@ to_date('2017-05-31', '%Y-%m-%d')
 - **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order
   they appear with the first successful one being returned. If none of the formats successfully parse the expression
-  an error will be returned.
+  an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
 
 #### Example
 
@@ -3006,7 +3006,8 @@ to_timestamp(expression[, ..., format_n])
 - **format_n**:
   Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
   Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-  parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+  parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+  Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
   only supported at the end of the string preceded by a space.
 
 #### Example
@@ -3050,7 +3051,8 @@ to_timestamp_micros(expression[, ..., format_n])
 - **format_n**:
   Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
   Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-  parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+  parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+  Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
   only supported at the end of the string preceded by a space.
 
 #### Example
@@ -3094,7 +3096,8 @@ to_timestamp_millis(expression[, ..., format_n])
 - **format_n**:
   Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
   Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-  parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+  parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+  Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
   only supported at the end of the string preceded by a space.
 
 #### Example
@@ -3137,7 +3140,8 @@ to_timestamp_nanos(expression[, ..., format_n])
 - **format_n**:
   Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
   Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-  parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+  parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+  Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
   only supported at the end of the string preceded by a space.
 
 #### Example
@@ -3181,7 +3185,8 @@ to_timestamp_seconds(expression[, ..., format_n])
 - **format_n**:
   Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
   Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-  parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+  parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+  Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
   only supported at the end of the string preceded by a space.
 
 #### Example
@@ -3218,7 +3223,7 @@ to_unixtime(expression[, ..., format_n])
 #### Arguments
 
 - **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
-- **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned.
+- **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
 
 #### Example
 
@@ -3248,6 +3253,7 @@ _Alias of [current_date](#current_date)._
 - [array_any_match](#array_any_match)
 - [array_any_value](#array_any_value)
 - [array_append](#array_append)
+- [array_avg](#array_avg)
 - [array_cat](#array_cat)
 - [array_compact](#array_compact)
 - [array_concat](#array_concat)
@@ -3260,6 +3266,7 @@ _Alias of [current_date](#current_date)._
 - [array_except](#array_except)
 - [array_extract](#array_extract)
 - [array_filter](#array_filter)
+- [array_first](#array_first)
 - [array_has](#array_has)
 - [array_has_all](#array_has_all)
 - [array_has_any](#array_has_any)
@@ -3309,6 +3316,7 @@ _Alias of [current_date](#current_date)._
 - [list_any_match](#list_any_match)
 - [list_any_value](#list_any_value)
 - [list_append](#list_append)
+- [list_avg](#list_avg)
 - [list_cat](#list_cat)
 - [list_compact](#list_compact)
 - [list_concat](#list_concat)
@@ -3321,6 +3329,7 @@ _Alias of [current_date](#current_date)._
 - [list_except](#list_except)
 - [list_extract](#list_extract)
 - [list_filter](#list_filter)
+- [list_first](#list_first)
 - [list_has](#list_has)
 - [list_has_all](#list_has_all)
 - [list_has_any](#list_has_any)
@@ -3426,7 +3435,7 @@ any_match(array, predicate)
 
 ### `array_any_value`
 
-Returns the first non-null element in the array.
+Returns the first non-null element in the array. Returns NULL if the array is empty or NULL.
 
 ```sql
 array_any_value(array)
@@ -3480,6 +3489,33 @@ array_append(array, element)
 - list_append
 - array_push_back
 - list_push_back
+
+### `array_avg`
+
+Returns the arithmetic mean (sum divided by count) of the elements of the input array. NULL elements are skipped (per SQL aggregate convention) and excluded from the count. Returns NULL if the input row is NULL, every element is NULL, or the array is empty.
+
+```sql
+array_avg(array)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+
+#### Example
+
+```sql
+> select array_avg([1.0, 2.0, 3.0]);
++----------------------------+
+| array_avg(List([1.0,2.0,3.0])) |
++----------------------------+
+| 2.0                        |
++----------------------------+
+```
+
+#### Aliases
+
+- list_avg
 
 ### `array_cat`
 
@@ -3575,7 +3611,7 @@ array_dims(array)
 
 ### `array_distance`
 
-Returns the Euclidean distance between two input arrays of equal length.
+Returns the Euclidean distance between two one-dimensional input arrays of equal length.
 
 ```sql
 array_distance(array1, array2)
@@ -3727,6 +3763,34 @@ array_filter(array, x -> x > 2)
 #### Aliases
 
 - list_filter
+
+### `array_first`
+
+Returns the first element of an array that satisfies the given predicate. Returns null if the array is empty or no element matches. A predicate that returns null for an element is treated as not matching.
+
+```sql
+array_first(array, predicate)
+```
+
+#### Arguments
+
+- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **predicate**: Lambda predicate that returns a boolean. The first element for which it returns true is returned.
+
+#### Example
+
+```sql
+> select array_first([1, 2, 3, 4], x -> x > 2);
++----------------------------------------+
+| array_first([1,2,3,4],x -> x > 2)      |
++----------------------------------------+
+| 3                                      |
++----------------------------------------+
+```
+
+#### Aliases
+
+- list_first
 
 ### `array_has`
 
@@ -4909,6 +4973,10 @@ _Alias of [array_any_value](#array_any_value)._
 
 _Alias of [array_append](#array_append)._
 
+### `list_avg`
+
+_Alias of [array_avg](#array_avg)._
+
 ### `list_cat`
 
 _Alias of [array_concat](#array_concat)._
@@ -4956,6 +5024,10 @@ _Alias of [array_element](#array_element)._
 ### `list_filter`
 
 _Alias of [array_filter](#array_filter)._
+
+### `list_first`
+
+_Alias of [array_first](#array_first)._
 
 ### `list_has`
 
@@ -5702,7 +5774,9 @@ union_tag(union_expression)
 - [arrow_try_cast](#arrow_try_cast)
 - [arrow_typeof](#arrow_typeof)
 - [cast_to_type](#cast_to_type)
+- [file_row_index](#file_row_index)
 - [get_field](#get_field)
+- [input_file_name](#input_file_name)
 - [try_cast_to_type](#try_cast_to_type)
 - [version](#version)
 - [with_metadata](#with_metadata)
@@ -5885,6 +5959,27 @@ cast_to_type(expression, reference)
 +-----+
 ```
 
+### `file_row_index`
+
+Returns the zero-based row offset within the source file
+that produced the current row.
+
+The value is scoped to one file, so rows from different files in the same scan
+can have the same row index. This function is intended to be rewritten at
+file-scan time. If the input file is not known (for example, if this function
+is evaluated outside a file scan, or was not pushed down into one), direct
+evaluation returns an error.
+
+```sql
+file_row_index()
+```
+
+#### Example
+
+```sql
+SELECT file_row_index() FROM t;
+```
+
 ### `get_field`
 
 Returns a field within a map or a struct with the given key.
@@ -5935,6 +6030,26 @@ get_field(expression, field_name[, field_name2, ...])
 +--------+
 | 42     |
 +--------+
+```
+
+### `input_file_name`
+
+Returns the path of the input file that produced the current row.
+
+Note: file paths/URIs may be sensitive metadata depending on your environment.
+
+This function is intended to be rewritten at file-scan time (when the file is
+known). If the input file is not known (for example, if this function is
+evaluated outside a file scan, or was not pushed down into one), direct evaluation returns an error.
+
+```sql
+input_file_name()
+```
+
+#### Example
+
+```sql
+SELECT input_file_name() FROM t;
 ```
 
 ### `try_cast_to_type`

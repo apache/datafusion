@@ -289,7 +289,6 @@ where
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        _opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 2, "two arguments to merge_batch");
@@ -368,11 +367,6 @@ where
             Arc::new(counts) as ArrayRef,
         ])
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn size(&self) -> usize {
         self.counts.capacity() * size_of::<i64>() + self.sums.capacity() * size_of::<T>()
     }
@@ -388,12 +382,6 @@ mod tests {
             Ok(sum / count as f64)
         })
     }
-
-    #[test]
-    fn supports_convert_to_state() {
-        assert!(make_acc().supports_convert_to_state());
-    }
-
     #[test]
     fn convert_to_state_basic() {
         let acc = make_acc();
@@ -464,7 +452,6 @@ mod tests {
         acc.merge_batch(
             &state,
             &[0, 0, 0],
-            None,
             1, // single group
         )
         .unwrap();
@@ -486,7 +473,7 @@ mod tests {
             Some(3.0),
         ]))];
         let state = acc.convert_to_state(&input, None).unwrap();
-        acc.merge_batch(&state, &[0, 0, 0], None, 1).unwrap();
+        acc.merge_batch(&state, &[0, 0, 0], 1).unwrap();
 
         let result = acc.evaluate(EmitTo::All).unwrap();
         let result = result.as_primitive::<Float64Type>();

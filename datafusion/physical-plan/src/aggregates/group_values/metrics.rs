@@ -19,6 +19,7 @@
 
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, Time};
 
+#[derive(Clone)]
 pub(crate) struct GroupByMetrics {
     /// Time spent calculating the group IDs from the evaluated grouping columns.
     pub(crate) time_calculating_group_ids: Time,

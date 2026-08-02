@@ -33,7 +33,7 @@ use arrow::compute::{SortOptions};
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::config::{ConfigOptions, CsvOptions};
 use datafusion_common::tree_node::{TreeNode, TransformedResult};
-use datafusion_common::{create_array, Result, TableReference};
+use datafusion_common::{create_array, DataFusionError, NullEquality, Result, TableReference};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr_common::operator::Operator;
@@ -42,28 +42,33 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, PhysicalSortExpr, PhysicalSortRequirement, OrderingRequirements
 };
-use datafusion_physical_expr::{Distribution, Partitioning};
+use datafusion_physical_expr::{Distribution, Partitioning, PhysicalExpr};
 use datafusion_physical_expr::expressions::{col, BinaryExpr, Column, NotExpr};
+use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
-use datafusion_physical_plan::{displayable, get_plan_string, ExecutionPlan};
+use datafusion_physical_plan::{displayable, get_plan_string, ExecutionPlan, ExecutionPlanProperties};
 use datafusion::datasource::physical_plan::CsvSource;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion_physical_optimizer::enforce_sorting::{PlanWithCorrespondingCoalescePartitions, PlanWithCorrespondingSort, parallelize_sorts, ensure_sorting};
+use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
 use datafusion_physical_optimizer::enforce_sorting::sort_pushdown::{SortPushDown, assign_initial_requirements, pushdown_sorts};
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion::prelude::*;
-use arrow::array::{record_batch, ArrayRef, Int32Array, RecordBatch};
+use arrow::array::{record_batch, Array, ArrayRef, Int32Array, RecordBatch};
 use arrow::datatypes::{Field};
 use arrow_schema::Schema;
 use datafusion_execution::TaskContext;
 use datafusion_catalog::streaming::StreamingTable;
 
+use datafusion_expr_common::columnar_value::ColumnarValue;
+use datafusion_physical_expr::projection::ProjectionExpr;
+use datafusion_physical_plan::projection::ProjectionExec;
 use futures::StreamExt;
 use insta::{Settings, assert_snapshot};
 
@@ -237,6 +242,48 @@ async fn test_remove_unnecessary_sort5() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_hash_join_interleaved_projection_preserves_parent_sort() -> Result<()> {
+    let left_schema = create_test_schema()?;
+    let right_schema = create_test_schema2()?;
+    let left = parquet_exec(left_schema.clone());
+    let right = parquet_exec(right_schema.clone());
+    let on = vec![(
+        Arc::new(Column::new_with_schema("nullable_col", &left_schema)?) as _,
+        Arc::new(Column::new_with_schema("col_a", &right_schema)?) as _,
+    )];
+    let join = Arc::new(HashJoinExec::try_new(
+        left,
+        right,
+        on,
+        None,
+        &JoinType::Right,
+        // Interleave a right-side column before a left-side column.
+        Some(vec![2, 0]),
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+        false,
+    )?);
+    let ordering = [sort_expr("nullable_col", &join.schema())].into();
+    let physical_plan = sort_exec(ordering, join);
+
+    let mut config = ConfigOptions::new();
+    config.execution.target_partitions = 10;
+    let optimized_plan =
+        EnsureRequirements::new().optimize(Arc::clone(&physical_plan), &config)?;
+    let optimized_plan = SanityCheckPlan::new().optimize(optimized_plan, &config)?;
+
+    assert_snapshot!(displayable(optimized_plan.as_ref()).indent(true), @r"
+    SortPreservingMergeExec: [nullable_col@1 ASC]
+      SortExec: expr=[nullable_col@1 ASC], preserve_partitioning=[true]
+        HashJoinExec: mode=CollectLeft, join_type=Right, on=[(nullable_col@0, col_a@0)], projection=[col_a@2, nullable_col@0]
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
+          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
+    ");
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_do_not_remove_sort_with_limit() -> Result<()> {
     let schema = create_test_schema()?;
     let source1 = parquet_exec(schema.clone());
@@ -381,12 +428,12 @@ async fn test_union_inputs_different_sorted2() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[test]
 // Test with `repartition_sorts` enabled to preserve pre-sorted partitions and avoid resorting
-async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true()
+fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true()
 -> Result<()> {
     assert_snapshot!(
-        union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true).await?,
+        union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true)?,
         @r"
     Input Plan:
     OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
@@ -407,12 +454,12 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
     Ok(())
 }
 
-#[tokio::test]
+#[test]
 // Test with `repartition_sorts` disabled, causing a full resort of the data
-async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_false()
+fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_false()
 -> Result<()> {
     assert_snapshot!(
-        union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false).await?,
+        union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false)?,
         @r"
     Input Plan:
     OutputRequirementExec: order_by=[(nullable_col@0, asc)], dist_by=SinglePartition
@@ -433,7 +480,7 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
     Ok(())
 }
 
-async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(
+fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(
     repartition_sorts: bool,
 ) -> Result<String> {
     let schema = create_test_schema()?;
@@ -2842,6 +2889,520 @@ async fn test_sort_with_streaming_table() -> Result<()> {
     assert_eq!(results[0].num_columns(), 1);
     let expected = create_array!(Int32, vec![1, 2, 3]) as ArrayRef;
     assert_eq!(results[0].column(0), &expected);
+
+    Ok(())
+}
+
+/// Regression: `parallelize_sorts` must not relocate a per-partition `SortExec`
+/// below an order-preserving `ProjectionExec` that *reorders* columns without
+/// remapping the sort-key column indices.
+///
+/// Builds the minimal physical plan that reproduces the bug (as it looks after
+/// distribution enforcement, before sorting enforcement):
+///
+/// ```text
+/// SortExec(fetch=4) [score@1 DESC, a@0 ASC]      (global, single-partition)
+///   CoalescePartitionsExec
+///     ProjectionExec [a@0, score@2 as score, b@1 as value]   <- reorder: score 2 -> 1
+///       ProjectionExec [a@0, b@1, c+d as score]              <- computes score at index 2
+///         SortExec(fetch=1000) [c+d DESC] preserve_partitioning=[true]   <- inner ordering
+///           RepartitionExec(RoundRobinBatch)                 <- multi-partition
+///             DataSourceExec
+/// ```
+///
+/// `parallelize_sorts` turns the `CoalescePartitionsExec` + global `SortExec`
+/// into a `SortPreservingMergeExec` + per-partition `SortExec`, sinking the
+/// per-partition sort *below* the reordering projection. The sort key
+/// `score@1` is valid in the projection's output schema, but in the child
+/// schema `[a, b, score]` index 1 is `b` and `score` is at index 2. If the
+/// index is not remapped, the relocated `SortExec` references the wrong column
+/// and `SanityCheckPlan` rejects the plan with
+/// "does not satisfy order requirements ... Child-0 order: []".
+fn reorder_projection_physical_plan() -> Result<Arc<dyn ExecutionPlan>> {
+    let schema = create_test_schema3()?; // [a, b, c, d, e]
+    let source = parquet_exec(schema.clone());
+    let repartitioned = repartition_exec(source); // RoundRobinBatch -> multi-partition
+
+    // The score-source expression `c + d`. The inner sort below orders by this
+    // expression, and the lower projection aliases the *same* expression to
+    // `score`, so the projection output is already ordered by `score`. This
+    // existing ordering is what drives sort enforcement to relocate the outer
+    // sort below the reorder projection.
+    let score_expr = Arc::new(BinaryExpr::new(
+        col("c", &schema)?,
+        Operator::Plus,
+        col("d", &schema)?,
+    )) as Arc<dyn PhysicalExpr>;
+
+    // Inner per-partition, fetch-bearing sort on `c + d`.
+    let inner_ordering: LexOrdering = [PhysicalSortExpr::new(
+        Arc::clone(&score_expr),
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )]
+    .into();
+    let inner_sort = Arc::new(
+        SortExec::new(inner_ordering, repartitioned)
+            .with_fetch(Some(1000))
+            .with_preserve_partitioning(true),
+    );
+
+    // Lower projection: compute `score` (= c + d) as the last column. Output
+    // schema: [a, b, score]; output is ordered by `score`.
+    let lower = projection_exec(
+        vec![
+            (col("a", &schema)?, "a".to_string()),
+            (col("b", &schema)?, "b".to_string()),
+            (Arc::clone(&score_expr), "score".to_string()),
+        ],
+        inner_sort,
+    )?;
+
+    // Upper projection: reorder so `score` moves from input index 2 to output
+    // index 1, and rename `b` to `value`. Output schema: [a, score, value].
+    let lower_schema = lower.schema();
+    let upper = projection_exec(
+        vec![
+            (col("a", &lower_schema)?, "a".to_string()),
+            (col("score", &lower_schema)?, "score".to_string()),
+            (col("b", &lower_schema)?, "value".to_string()),
+        ],
+        lower,
+    )?;
+
+    // Global, fetch-bearing sort on the renamed column + a tiebreaker, expressed
+    // in the upper projection's output schema (score@1 DESC NULLS LAST, a@0 ASC).
+    let upper_schema = upper.schema();
+    let ordering: LexOrdering = [
+        sort_expr_options(
+            "score",
+            &upper_schema,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        ),
+        sort_expr("a", &upper_schema),
+    ]
+    .into();
+    let coalesced = coalesce_partitions_exec(upper);
+    Ok(sort_exec_with_fetch(ordering, Some(4), coalesced))
+}
+
+#[tokio::test]
+async fn test_parallelize_sorts_remaps_index_through_reordering_projection() -> Result<()>
+{
+    let physical_plan = reorder_projection_physical_plan()?;
+
+    // `EnsureRequirements` (with sort repartitioning enabled) runs the sort
+    // enforcement pass, including `parallelize_sorts`.
+    let mut config = ConfigOptions::new();
+    config.optimizer.repartition_sorts = true;
+    let optimized = EnsureRequirements::new().optimize(physical_plan, &config)?;
+
+    // The optimized plan must be physically valid. Before the fix this fails:
+    // the per-partition `SortExec` was relocated below the reordering projection
+    // but kept the key `score@1` (valid only in the projection output), while its
+    // child schema `[a, b, score]` has `score` at index 2 — so `SanityCheckPlan`
+    // reports `does not satisfy order requirements: [...]. Child-0 order: []`.
+    SanityCheckPlan::new()
+        .optimize(Arc::clone(&optimized), &ConfigOptions::default())
+        .unwrap_or_else(|e| {
+            panic!(
+                "Sort enforcement produced a plan that fails SanityCheckPlan \
+                 (stale sort-key index after relocating the SortExec below a \
+                 reordering ProjectionExec): {e}\n\nPlan:\n{}",
+                displayable(optimized.as_ref()).indent(true)
+            )
+        });
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_push_sort_through_reordered_projection_to_union() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let ordering: LexOrdering = [sort_expr("a", &schema)].into();
+
+    let sorted_source = parquet_exec_with_sort(schema.clone(), vec![ordering.clone()]);
+    let unsorted_source = sort_exec(ordering.clone(), parquet_exec(schema.clone()));
+    let union = union_exec(vec![sorted_source, unsorted_source]);
+
+    let projection = projection_exec(
+        vec![
+            (col("c", &schema)?, "c".to_string()),
+            (col("b", &schema)?, "b".to_string()),
+            (col("a", &schema)?, "a".to_string()),
+        ],
+        union,
+    )?;
+
+    let physical_plan =
+        sort_exec([sort_expr("a", &projection.schema())].into(), projection);
+
+    let test = EnforceSortingTest::new(physical_plan).with_repartition_sorts(true);
+    assert_snapshot!(test.run(), @r"
+    Input Plan:
+    SortExec: expr=[a@2 ASC], preserve_partitioning=[false]
+      ProjectionExec: expr=[c@2 as c, b@1 as b, a@0 as a]
+        UnionExec
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+          SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+
+    Optimized Plan:
+    SortPreservingMergeExec: [a@2 ASC]
+      ProjectionExec: expr=[c@2 as c, b@1 as b, a@0 as a]
+        UnionExec
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+          SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    ");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_push_sort_through_alias_reordered_projection() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let source = parquet_exec(schema.clone());
+    let projection = projection_exec(
+        vec![
+            (col("c", &schema)?, "c_alias".to_string()),
+            (col("b", &schema)?, "b_alias".to_string()),
+            (col("a", &schema)?, "a_alias".to_string()),
+        ],
+        source,
+    )?;
+
+    let physical_plan = sort_exec(
+        [sort_expr("a_alias", &projection.schema())].into(),
+        projection,
+    );
+
+    let test = EnforceSortingTest::new(physical_plan);
+    assert_snapshot!(test.run(), @r"
+    Input Plan:
+    SortExec: expr=[a_alias@2 ASC], preserve_partitioning=[false]
+      ProjectionExec: expr=[c@2 as c_alias, b@1 as b_alias, a@0 as a_alias]
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+
+    Optimized Plan:
+    ProjectionExec: expr=[c@2 as c_alias, b@1 as b_alias, a@0 as a_alias]
+      SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    ");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_does_not_push_sort_through_computed_projection() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let source = parquet_exec(schema.clone());
+    let computed_expr = Arc::new(BinaryExpr::new(
+        col("a", &schema)?,
+        Operator::Plus,
+        col("b", &schema)?,
+    )) as Arc<dyn PhysicalExpr>;
+    let projection = projection_exec(
+        vec![
+            (computed_expr, "sort_key".to_string()),
+            (col("c", &schema)?, "c".to_string()),
+        ],
+        source,
+    )?;
+
+    let physical_plan = sort_exec(
+        [sort_expr("sort_key", &projection.schema())].into(),
+        projection,
+    );
+
+    let test = EnforceSortingTest::new(physical_plan);
+    assert_snapshot!(test.run(), @"
+    Input Plan:
+    SortExec: expr=[sort_key@0 ASC], preserve_partitioning=[false]
+      ProjectionExec: expr=[a@0 + b@1 as sort_key, c@2 as c]
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+
+    Optimized Plan:
+    SortExec: expr=[sort_key@0 ASC], preserve_partitioning=[false]
+      CoalescePartitionsExec
+        ProjectionExec: expr=[a@0 + b@1 as sort_key, c@2 as c]
+          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    ");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_push_fetch_sort_through_alias_reordered_projection() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let source = parquet_exec(schema.clone());
+    let projection = projection_exec(
+        vec![
+            (col("c", &schema)?, "c_alias".to_string()),
+            (col("b", &schema)?, "b_alias".to_string()),
+            (col("a", &schema)?, "a_alias".to_string()),
+        ],
+        source,
+    )?;
+
+    let physical_plan = sort_exec_with_fetch(
+        [sort_expr("a_alias", &projection.schema())].into(),
+        Some(3),
+        projection,
+    );
+
+    let test = EnforceSortingTest::new(physical_plan);
+    assert_snapshot!(test.run(), @r"
+    Input Plan:
+    SortExec: TopK(fetch=3), expr=[a_alias@2 ASC], preserve_partitioning=[false]
+      ProjectionExec: expr=[c@2 as c_alias, b@1 as b_alias, a@0 as a_alias]
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+
+    Optimized Plan:
+    ProjectionExec: expr=[c@2 as c_alias, b@1 as b_alias, a@0 as a_alias]
+      SortExec: TopK(fetch=3), expr=[a@0 ASC], preserve_partitioning=[false]
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    ");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_push_sort_through_reordered_projection_remaps_multiple_keys_and_options()
+-> Result<()> {
+    let schema = create_test_schema3()?;
+    let source = parquet_exec(schema.clone());
+
+    let projection = projection_exec(
+        vec![
+            (col("c", &schema)?, "c_alias".to_string()),
+            (col("b", &schema)?, "b_alias".to_string()),
+            (col("a", &schema)?, "a_alias".to_string()),
+        ],
+        source,
+    )?;
+
+    let projection_schema = projection.schema();
+    let ordering: LexOrdering = [
+        sort_expr_options(
+            "c_alias",
+            &projection_schema,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        ),
+        sort_expr("a_alias", &projection_schema),
+    ]
+    .into();
+
+    let physical_plan = sort_exec(ordering, projection);
+
+    let test = EnforceSortingTest::new(physical_plan);
+    assert_snapshot!(test.run(), @r"
+    Input Plan:
+    SortExec: expr=[c_alias@0 DESC NULLS LAST, a_alias@2 ASC], preserve_partitioning=[false]
+      ProjectionExec: expr=[c@2 as c_alias, b@1 as b_alias, a@0 as a_alias]
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+
+    Optimized Plan:
+    ProjectionExec: expr=[c@2 as c_alias, b@1 as b_alias, a@0 as a_alias]
+      SortExec: expr=[c@2 DESC NULLS LAST, a@0 ASC], preserve_partitioning=[false]
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    ");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_does_not_push_fetch_sort_through_projection_over_union() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let union = union_exec(vec![
+        parquet_exec(schema.clone()),
+        parquet_exec(schema.clone()),
+    ]);
+
+    let projection = projection_exec(
+        vec![
+            (col("c", &schema)?, "c".to_string()),
+            (col("b", &schema)?, "b".to_string()),
+            (col("a", &schema)?, "a".to_string()),
+        ],
+        union,
+    )?;
+
+    let physical_plan = sort_exec_with_fetch(
+        [sort_expr("a", &projection.schema())].into(),
+        Some(4),
+        projection,
+    );
+
+    let test = EnforceSortingTest::new(physical_plan);
+    assert_snapshot!(test.run(), @r"
+    Input Plan:
+    SortExec: TopK(fetch=4), expr=[a@2 ASC], preserve_partitioning=[false]
+      ProjectionExec: expr=[c@2 as c, b@1 as b, a@0 as a]
+        UnionExec
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+
+    Optimized Plan:
+    SortExec: TopK(fetch=4), expr=[a@2 ASC], preserve_partitioning=[false]
+      CoalescePartitionsExec
+        ProjectionExec: expr=[c@2 as c, b@1 as b, a@0 as a]
+          UnionExec
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+    ");
+
+    Ok(())
+}
+
+/// A pass-through wrapper around a column: just assert that column does not contain any nulls
+#[derive(Debug, Eq)]
+struct AssertNotNull {
+    inner: Arc<dyn PhysicalExpr>,
+}
+
+impl AssertNotNull {
+    fn new(inner: Arc<dyn PhysicalExpr>) -> Arc<Self> {
+        Arc::new(Self { inner })
+    }
+}
+
+impl PartialEq for AssertNotNull {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner.eq(&other.inner)
+    }
+}
+
+impl std::hash::Hash for AssertNotNull {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.inner.hash(state);
+    }
+}
+
+impl std::fmt::Display for AssertNotNull {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "assert_not_null({})", self.inner)
+    }
+}
+
+impl PhysicalExpr for AssertNotNull {
+    fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+        self.inner.data_type(input_schema)
+    }
+
+    fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        let child = self.inner.evaluate(batch)?;
+        match child {
+            ColumnarValue::Array(a) if a.logical_null_count() > 0 => Err(
+                DataFusionError::Internal("AssertNotNull evaluated to null".to_string()),
+            ),
+            ColumnarValue::Scalar(s) if s.is_null() => Err(DataFusionError::Internal(
+                "AssertNotNull evaluated to null".to_string(),
+            )),
+            child => Ok(child),
+        }
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        vec![&self.inner]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(AssertNotNull {
+            inner: Arc::clone(&children[0]),
+        }))
+    }
+
+    fn get_properties(
+        &self,
+        children: &[datafusion_expr::sort_properties::ExprProperties],
+    ) -> Result<datafusion_expr::sort_properties::ExprProperties> {
+        Ok(children[0].clone())
+    }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "assert_not_null({})", self.inner)
+    }
+}
+
+#[tokio::test]
+async fn test_passthrough_wrapper_projection_keeps_ordering() -> Result<()> {
+    fn sort_expr(name: &str, schema: &Schema) -> PhysicalSortExpr {
+        PhysicalSortExpr {
+            expr: col(name, schema).unwrap(),
+            options: Default::default(),
+        }
+    }
+
+    pub fn projection_exec(
+        expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
+        input: Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let proj_exprs: Vec<ProjectionExpr> = expr
+            .into_iter()
+            .map(|(expr, alias)| ProjectionExpr { expr, alias })
+            .collect();
+        Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input)?))
+    }
+
+    let batch = record_batch!(
+        ("a", Utf8, ["x", "y"]),
+        ("b", Utf8, ["1", "2"]),
+        ("c", Utf8, ["1", "2"])
+    )?;
+    let schema = batch.schema();
+    let source = Arc::new(DataSourceExec::new(Arc::new(
+        datafusion::datasource::memory::MemorySourceConfig::try_new(
+            &[vec![batch]],
+            schema.clone(),
+            None,
+        )?
+        .try_with_sort_information(vec![
+            LexOrdering::new([
+                sort_expr("a", &schema),
+                sort_expr("b", &schema),
+                sort_expr("c", &schema),
+            ])
+            .unwrap(),
+        ])?,
+    ))) as Arc<dyn ExecutionPlan>;
+
+    let projection = projection_exec(
+        vec![
+            (AssertNotNull::new(col("a", &schema)?), "a".to_string()),
+            (AssertNotNull::new(col("b", &schema)?), "b".to_string()),
+            (AssertNotNull::new(col("c", &schema)?), "c".to_string()),
+        ],
+        source,
+    )?;
+
+    let ordering = LexOrdering::new([
+        sort_expr("a", &projection.schema()),
+        sort_expr("b", &projection.schema()),
+        sort_expr("c", &projection.schema()),
+    ])
+    .unwrap();
+
+    let sort_satisfied = projection
+        .equivalence_properties()
+        .ordering_satisfy(ordering.clone())?;
+
+    let plan_str = displayable(projection.as_ref()).indent(true).to_string();
+    assert!(
+        sort_satisfied,
+        "sort should be satisfied, ordering: {ordering}\nplan:\n{plan_str}"
+    );
 
     Ok(())
 }

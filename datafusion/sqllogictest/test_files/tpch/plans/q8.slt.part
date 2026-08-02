@@ -61,7 +61,7 @@ logical_plan
 03)----Aggregate: groupBy=[[all_nations.o_year]], aggr=[[sum(CASE WHEN all_nations.nation = Utf8View("BRAZIL") THEN all_nations.volume ELSE Decimal128(0.0000,38,4) END) AS sum(CASE WHEN all_nations.nation = Utf8("BRAZIL") THEN all_nations.volume ELSE Int64(0) END), sum(all_nations.volume)]]
 04)------SubqueryAlias: all_nations
 05)--------Projection: date_part(Utf8("YEAR"), orders.o_orderdate) AS o_year, lineitem.l_extendedprice * (Decimal128(1,20,0) - lineitem.l_discount) AS volume, n2.n_name AS nation
-06)----------Inner Join: n1.n_regionkey = region.r_regionkey
+06)----------LeftSemi Join: n1.n_regionkey = region.r_regionkey
 07)------------Projection: lineitem.l_extendedprice, lineitem.l_discount, orders.o_orderdate, n1.n_regionkey, n2.n_name
 08)--------------Inner Join: supplier.s_nationkey = n2.n_nationkey
 09)----------------Projection: lineitem.l_extendedprice, lineitem.l_discount, supplier.s_nationkey, orders.o_orderdate, n1.n_regionkey
@@ -73,7 +73,7 @@ logical_plan
 15)----------------------------Projection: lineitem.l_orderkey, lineitem.l_extendedprice, lineitem.l_discount, supplier.s_nationkey
 16)------------------------------Inner Join: lineitem.l_suppkey = supplier.s_suppkey
 17)--------------------------------Projection: lineitem.l_orderkey, lineitem.l_suppkey, lineitem.l_extendedprice, lineitem.l_discount
-18)----------------------------------Inner Join: part.p_partkey = lineitem.l_partkey
+18)----------------------------------RightSemi Join: part.p_partkey = lineitem.l_partkey
 19)------------------------------------Projection: part.p_partkey
 20)--------------------------------------Filter: part.p_type = Utf8View("ECONOMY ANODIZED STEEL")
 21)----------------------------------------TableScan: part projection=[p_partkey, p_type], partial_filters=[part.p_type = Utf8View("ECONOMY ANODIZED STEEL")]
@@ -97,7 +97,7 @@ physical_plan
 05)--------RepartitionExec: partitioning=Hash([o_year@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[o_year@0 as o_year], aggr=[sum(CASE WHEN all_nations.nation = BRAZIL THEN all_nations.volume ELSE 0.0000 END) as sum(CASE WHEN all_nations.nation = Utf8("BRAZIL") THEN all_nations.volume ELSE Int64(0) END), sum(all_nations.volume)]
 07)------------ProjectionExec: expr=[date_part(YEAR, o_orderdate@0) as o_year, l_extendedprice@1 * (1 - l_discount@2) as volume, n_name@3 as nation]
-08)--------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(n_regionkey@3, r_regionkey@0)], projection=[o_orderdate@2, l_extendedprice@0, l_discount@1, n_name@4]
+08)--------------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(n_regionkey@3, r_regionkey@0)], projection=[o_orderdate@2, l_extendedprice@0, l_discount@1, n_name@4]
 09)----------------RepartitionExec: partitioning=Hash([n_regionkey@3], 4), input_partitions=4
 10)------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@2, n_nationkey@0)], projection=[l_extendedprice@0, l_discount@1, o_orderdate@3, n_regionkey@4, n_name@6]
 11)--------------------RepartitionExec: partitioning=Hash([s_nationkey@2], 4), input_partitions=4
@@ -109,7 +109,7 @@ physical_plan
 17)--------------------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
 18)----------------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(l_suppkey@1, s_suppkey@0)], projection=[l_orderkey@0, l_extendedprice@2, l_discount@3, s_nationkey@5]
 19)------------------------------------RepartitionExec: partitioning=Hash([l_suppkey@1], 4), input_partitions=4
-20)--------------------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(p_partkey@0, l_partkey@1)], projection=[l_orderkey@1, l_suppkey@3, l_extendedprice@4, l_discount@5]
+20)--------------------------------------HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(p_partkey@0, l_partkey@1)], projection=[l_orderkey@0, l_suppkey@2, l_extendedprice@3, l_discount@4]
 21)----------------------------------------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
 22)------------------------------------------FilterExec: p_type@1 = ECONOMY ANODIZED STEEL, projection=[p_partkey@0]
 23)--------------------------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl:0..597773], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl:597773..1195546], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl:1195546..1793319], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl:1793319..2391090]]}, projection=[p_partkey, p_type], constraints=[PrimaryKey([0])], file_type=csv, has_header=false

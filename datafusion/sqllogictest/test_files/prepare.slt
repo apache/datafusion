@@ -139,6 +139,54 @@ EXECUTE my_plan(20);
 statement ok
 DEALLOCATE my_plan
 
+# Allow prepare $1 = ANY (subquery)
+statement ok
+PREPARE my_plan AS SELECT id FROM person WHERE $1 = ANY (SELECT age FROM person);
+
+query I rowsort
+EXECUTE my_plan(20);
+----
+1
+
+query I rowsort
+EXECUTE my_plan(99);
+----
+
+statement ok
+DEALLOCATE my_plan
+
+# Allow prepare $1 <> ALL (subquery)
+statement ok
+PREPARE my_plan AS SELECT id FROM person WHERE $1 <> ALL (SELECT age FROM person);
+
+query I rowsort
+EXECUTE my_plan(99);
+----
+1
+
+query I rowsort
+EXECUTE my_plan(20);
+----
+
+statement ok
+DEALLOCATE my_plan
+
+# Allow prepare $1 < ALL (subquery)
+statement ok
+PREPARE my_plan AS SELECT id FROM person WHERE $1 < ALL (SELECT age FROM person);
+
+query I rowsort
+EXECUTE my_plan(10);
+----
+1
+
+query I rowsort
+EXECUTE my_plan(50);
+----
+
+statement ok
+DEALLOCATE my_plan
+
 # Check for missing parameters
 statement ok
 PREPARE my_plan AS SELECT * FROM person WHERE id < $1;

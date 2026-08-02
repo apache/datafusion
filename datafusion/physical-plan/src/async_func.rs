@@ -23,7 +23,7 @@ use crate::{
     check_if_same_properties,
 };
 use arrow::array::RecordBatch;
-use arrow_schema::{Fields, Schema, SchemaRef};
+use arrow_schema::{FieldRef, Fields, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
@@ -61,8 +61,8 @@ impl AsyncFuncExec {
     ) -> Result<Self> {
         let async_fields = async_exprs
             .iter()
-            .map(|async_expr| async_expr.field(input.schema().as_ref()))
-            .collect::<Result<Vec<_>>>()?;
+            .map(|async_expr| async_expr.return_field(input.schema().as_ref()))
+            .collect::<Result<Vec<FieldRef>>>()?;
 
         // compute the output schema: input schema then async expressions
         let fields: Fields = input
@@ -70,7 +70,7 @@ impl AsyncFuncExec {
             .fields()
             .iter()
             .cloned()
-            .chain(async_fields.into_iter().map(Arc::new))
+            .chain(async_fields)
             .collect();
 
         let schema = Arc::new(Schema::new(fields));
@@ -112,17 +112,6 @@ impl AsyncFuncExec {
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
-    }
-
-    fn with_new_children_and_same_properties(
-        &self,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Self {
-        Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(self)
-        }
     }
 }
 
@@ -180,6 +169,17 @@ impl ExecutionPlan for AsyncFuncExec {
         )?))
     }
 
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(&*self)
+        }))
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -208,7 +208,7 @@ impl ExecutionPlan for AsyncFuncExec {
             input_stream,
             batch_coalescer: LimitedBatchCoalescer::new(
                 Arc::clone(&self.input.schema()),
-                config_options_ref.execution.batch_size,
+                config_options_ref.execution.batch_size.get(),
                 None,
             ),
         };
@@ -245,6 +245,83 @@ impl ExecutionPlan for AsyncFuncExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        let async_exprs =
+            ctx.encode_expressions(self.async_exprs.iter().map(|e| &e.func))?;
+        let async_expr_names = self
+            .async_exprs
+            .iter()
+            .map(|e| e.name().to_string())
+            .collect();
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::AsyncFunc(Box::new(
+                    protobuf::AsyncFuncExecNode {
+                        input: Some(Box::new(input)),
+                        async_exprs,
+                        async_expr_names,
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl AsyncFuncExec {
+    /// Reconstruct an [`AsyncFuncExec`] from its protobuf representation.
+    ///
+    /// The exact inverse of [`ExecutionPlan::try_to_proto`]: it takes the whole
+    /// [`PhysicalPlanNode`] so every plan's `try_from_proto` shares one
+    /// signature. Child plans and expressions are decoded recursively via the
+    /// [`ExecutionPlanDecodeCtx`].
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    /// [`ExecutionPlanDecodeCtx`]: crate::proto::ExecutionPlanDecodeCtx
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let async_func = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::AsyncFunc,
+            "AsyncFuncExec",
+        );
+        let input = ctx.decode_required_child(
+            async_func.input.as_deref(),
+            "AsyncFuncExec",
+            "input",
+        )?;
+        let input_schema = input.schema();
+        assert_eq_or_internal_err!(
+            async_func.async_exprs.len(),
+            async_func.async_expr_names.len(),
+            "AsyncFuncExecNode async_exprs length does not match async_expr_names"
+        );
+        let async_exprs = async_func
+            .async_exprs
+            .iter()
+            .zip(async_func.async_expr_names.iter())
+            .map(|(expr, name)| {
+                let physical_expr = ctx.decode_expr(expr, input_schema.as_ref())?;
+                Ok(Arc::new(AsyncFuncExpr::try_new(
+                    name.clone(),
+                    physical_expr,
+                    input_schema.as_ref(),
+                )?))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Arc::new(AsyncFuncExec::try_new(async_exprs, input)?))
     }
 }
 

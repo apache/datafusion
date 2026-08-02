@@ -103,6 +103,35 @@ SELECT list_any_match([1, 2, 3], x -> x > 2);
 ----
 true
 
+# null arg
+query B
+SELECT array_any_match(NULL, x -> x > 2);
+----
+NULL
+
+# predicate can reference an outer column
+query B
+SELECT array_any_match(list, x -> x > number) FROM t;
+----
+true
+true
+false
+
+# large list works
+query B
+SELECT array_any_match(arrow_cast([1, 2, 3], 'LargeList(Int32)'), x -> x > 2);
+----
+true
+
+# other list representations are coerced during planning
+query BBB
+SELECT
+  array_any_match(arrow_cast([1, 2, 3], 'FixedSizeList(3, Int32)'), x -> x > 2),
+  array_any_match(arrow_cast([1, 2, 3], 'ListView(Int32)'), x -> x > 2),
+  array_any_match(arrow_cast([1, 2, 3], 'LargeListView(Int32)'), x -> x > 2);
+----
+true true true
+
 statement ok
 drop table t;
 

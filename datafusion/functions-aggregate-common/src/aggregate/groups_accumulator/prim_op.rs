@@ -131,11 +131,10 @@ where
         &mut self,
         values: &[ArrayRef],
         group_indices: &[usize],
-        opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
         // update / merge are the same
-        self.update_batch(values, group_indices, opt_filter, total_num_groups)
+        self.update_batch(values, group_indices, None, total_num_groups)
     }
 
     /// Converts an input batch directly to a state batch
@@ -190,11 +189,6 @@ where
 
         Ok(vec![Arc::new(state_values)])
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn size(&self) -> usize {
         self.values.capacity() * size_of::<T::Native>() + self.null_state.size()
     }

@@ -99,7 +99,9 @@ pub trait GroupValues: Send {
     /// assigned.
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
 
-    /// Returns the number of bytes of memory used by this [`GroupValues`]
+    /// Returns the number of bytes of memory used by this [`GroupValues`].
+    ///
+    /// May be expensive; check the implementation before calling on hot paths.
     fn size(&self) -> usize;
 
     /// Returns true if this [`GroupValues`] is empty

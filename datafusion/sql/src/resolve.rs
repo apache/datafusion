@@ -20,9 +20,9 @@ use std::ops::ControlFlow;
 
 use datafusion_common::{DataFusionError, Result};
 
-use crate::TableReference;
 use crate::parser::{CopyToSource, CopyToStatement, Statement as DFStatement};
 use crate::planner::object_name_to_table_reference;
+use datafusion_common::TableReference;
 use sqlparser::ast::*;
 
 // following constants are used in `resolve_table_references`

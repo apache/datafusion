@@ -31,8 +31,54 @@ use itertools::Itertools;
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hash, Hasher};
 
-/// The hash random state used throughout DataFusion for hashing.
+/// [`RandomState`] is optimized for speed and suitable for hash tables and
+/// bloom filters. [`QualityRandomState`] is optimized for statistical quality
+/// and suitable for algorithms such as HyperLogLog. The tradeoff is that the
+/// fast variant gives up some statistical quality, while the quality variant
+/// is slightly slower.
+///
+/// See: <https://docs.rs/foldhash/0.2.0/src/foldhash/lib.rs.html#17-21>
 pub type RandomState = FixedState;
+pub type QualityRandomState = foldhash::quality::FixedState;
+
+/// Fixed quality hash state used by HyperLogLog sketches.
+///
+/// The seed is part of the HLL wire/storage semantics: serialized sketches only
+/// remain mergeable if every producer uses the same hash state.
+pub const HLL_RANDOM_STATE: QualityRandomState = QualityRandomState::with_seed(0);
+
+/// Hash state used by [`create_hashes`].
+///
+/// Multi-column hashing folds the previous column hash into a fresh hasher
+/// before hashing the next column. This trait keeps that seeded hasher in the
+/// same foldhash tier as the top-level hash state.
+pub trait HashState: BuildHasher {
+    type SeededState: BuildHasher;
+
+    fn seeded_state(&self, seed: u64) -> Self::SeededState;
+}
+
+impl HashState for FixedState {
+    type SeededState = foldhash::fast::SeedableRandomState;
+
+    fn seeded_state(&self, seed: u64) -> Self::SeededState {
+        foldhash::fast::SeedableRandomState::with_seed(
+            seed,
+            foldhash::SharedSeed::global_fixed(),
+        )
+    }
+}
+
+impl HashState for foldhash::quality::FixedState {
+    type SeededState = foldhash::quality::SeedableRandomState;
+
+    fn seeded_state(&self, seed: u64) -> Self::SeededState {
+        foldhash::quality::SeedableRandomState::with_seed(
+            seed,
+            foldhash::SharedSeed::global_fixed(),
+        )
+    }
+}
 
 #[cfg(not(feature = "force_hash_collisions"))]
 use crate::cast::{
@@ -44,6 +90,8 @@ use crate::cast::{
 use crate::error::Result;
 use crate::error::{_internal_datafusion_err, _internal_err};
 use std::cell::RefCell;
+
+mod build_hasher;
 
 // Combines two hashes into one hash
 #[inline]
@@ -99,7 +147,7 @@ thread_local! {
 /// ```
 pub fn with_hashes<I, T, F, R>(
     arrays: I,
-    random_state: &RandomState,
+    random_state: &impl HashState,
     callback: F,
 ) -> Result<R>
 where
@@ -140,9 +188,32 @@ where
     }).map_err(|_| _internal_datafusion_err!("with_hashes cannot access thread-local storage during or after thread destruction"))?
 }
 
+/// Creates hashes for the given arrays using a thread-local buffer and a custom
+/// hash builder, then calls the provided callback with the computed hashes.
+///
+/// Hash compatibility with [`with_hashes`] follows the rules documented on
+/// [`create_hashes_with_hasher`].
+pub fn with_hashes_with_hasher<I, T, F, R, S>(
+    arrays: I,
+    hash_builder: &S,
+    callback: F,
+) -> Result<R>
+where
+    I: IntoIterator<Item = T>,
+    T: AsDynArray,
+    F: FnOnce(&[u64]) -> Result<R>,
+    S: BuildHasher,
+{
+    build_hasher::with_hashes_with_hasher(arrays, hash_builder, callback)
+}
+
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_null(random_state: &RandomState, hashes_buffer: &'_ mut [u64], mul_col: bool) {
-    if mul_col {
+fn hash_null<S: HashState>(
+    random_state: &S,
+    hashes_buffer: &'_ mut [u64],
+    multi_col: bool,
+) {
+    if multi_col {
         hashes_buffer.iter_mut().for_each(|hash| {
             // stable hash for null value
             *hash = combine_hashes(random_state.hash_one(1), *hash);
@@ -155,13 +226,13 @@ fn hash_null(random_state: &RandomState, hashes_buffer: &'_ mut [u64], mul_col: 
 }
 
 pub trait HashValue {
-    fn hash_one(&self, state: &RandomState) -> u64;
+    fn hash_one<S: BuildHasher>(&self, state: &S) -> u64;
     /// Write this value into an existing hasher (same data as `hash_one`).
     fn hash_write(&self, hasher: &mut impl Hasher);
 }
 
 impl<T: HashValue + ?Sized> HashValue for &T {
-    fn hash_one(&self, state: &RandomState) -> u64 {
+    fn hash_one<S: BuildHasher>(&self, state: &S) -> u64 {
         T::hash_one(self, state)
     }
     fn hash_write(&self, hasher: &mut impl Hasher) {
@@ -172,7 +243,7 @@ impl<T: HashValue + ?Sized> HashValue for &T {
 macro_rules! hash_value {
     ($($t:ty),+) => {
         $(impl HashValue for $t {
-            fn hash_one(&self, state: &RandomState) -> u64 {
+            fn hash_one<S: BuildHasher>(&self, state: &S) -> u64 {
                 state.hash_one(self)
             }
             fn hash_write(&self, hasher: &mut impl Hasher) {
@@ -187,7 +258,7 @@ hash_value!(bool, str, [u8], IntervalDayTime, IntervalMonthDayNano);
 macro_rules! hash_float_value {
     ($(($t:ty, $i:ty)),+) => {
         $(impl HashValue for $t {
-            fn hash_one(&self, state: &RandomState) -> u64 {
+            fn hash_one<S: BuildHasher>(&self, state: &S) -> u64 {
                 // +0.0 and -0.0 differ only in the sign bit but compare equal
                 // under IEEE 754; normalize -0.0 → +0.0 so Hash agrees with Eq.
                 let bits = <$i>::from_ne_bytes(self.to_ne_bytes());
@@ -204,16 +275,28 @@ macro_rules! hash_float_value {
 }
 hash_float_value!((half::f16, u16), (f32, u32), (f64, u64));
 
-/// Create a `SeedableRandomState` whose per-hasher seed incorporates `seed`.
-/// This folds the previous hash into the hasher's initial state so only the
-/// new value needs to pass through the hash function — same cost as `hash_one`.
 #[cfg(not(feature = "force_hash_collisions"))]
-#[inline]
-fn seeded_state(seed: u64) -> foldhash::fast::SeedableRandomState {
-    foldhash::fast::SeedableRandomState::with_seed(
-        seed,
-        foldhash::SharedSeed::global_fixed(),
-    )
+trait ChildHashing {
+    fn create_hashes<I, T>(&self, arrays: I, hashes_buffer: &mut [u64]) -> Result<()>
+    where
+        I: IntoIterator<Item = T>,
+        T: AsDynArray;
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+struct HashStateChildHashing<'a, S> {
+    hash_state: &'a S,
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+impl<S: HashState> ChildHashing for HashStateChildHashing<'_, S> {
+    fn create_hashes<I, T>(&self, arrays: I, hashes_buffer: &mut [u64]) -> Result<()>
+    where
+        I: IntoIterator<Item = T>,
+        T: AsDynArray,
+    {
+        create_hashes(arrays, self.hash_state, hashes_buffer).map(|_| ())
+    }
 }
 
 /// Builds hash values of PrimitiveArray and writes them into `hashes_buffer`
@@ -222,7 +305,7 @@ fn seeded_state(seed: u64) -> foldhash::fast::SeedableRandomState {
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_array_primitive<T>(
     array: &PrimitiveArray<T>,
-    random_state: &RandomState,
+    random_state: &impl HashState,
     hashes_buffer: &mut [u64],
     rehash: bool,
 ) where
@@ -237,7 +320,7 @@ fn hash_array_primitive<T>(
     if array.null_count() == 0 {
         if rehash {
             for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
-                let mut hasher = seeded_state(*hash).build_hasher();
+                let mut hasher = random_state.seeded_state(*hash).build_hasher();
                 value.hash_write(&mut hasher);
                 *hash = hasher.finish();
             }
@@ -249,7 +332,7 @@ fn hash_array_primitive<T>(
     } else if rehash {
         for i in array.nulls().unwrap().valid_indices() {
             let value = unsafe { array.value_unchecked(i) };
-            let mut hasher = seeded_state(hashes_buffer[i]).build_hasher();
+            let mut hasher = random_state.seeded_state(hashes_buffer[i]).build_hasher();
             value.hash_write(&mut hasher);
             hashes_buffer[i] = hasher.finish();
         }
@@ -267,7 +350,7 @@ fn hash_array_primitive<T>(
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_array<T>(
     array: &T,
-    random_state: &RandomState,
+    random_state: &impl HashState,
     hashes_buffer: &mut [u64],
     rehash: bool,
 ) where
@@ -322,7 +405,7 @@ fn hash_string_view_array_inner<
     const REHASH: bool,
 >(
     array: &GenericByteViewArray<T>,
-    random_state: &RandomState,
+    random_state: &impl HashState,
     hashes_buffer: &mut [u64],
 ) {
     assert_eq!(
@@ -351,7 +434,7 @@ fn hash_string_view_array_inner<
         // all views are inlined, no need to access external buffers
         if !HAS_BUFFERS || view_len <= 12 {
             if REHASH {
-                let mut hasher = seeded_state(*hash).build_hasher();
+                let mut hasher = random_state.seeded_state(*hash).build_hasher();
                 v.hash_write(&mut hasher);
                 *hash = hasher.finish();
             } else {
@@ -362,7 +445,7 @@ fn hash_string_view_array_inner<
         // view is not inlined, so we need to hash the bytes as well
         let value = view_bytes(view_len, v);
         if REHASH {
-            let mut hasher = seeded_state(*hash).build_hasher();
+            let mut hasher = random_state.seeded_state(*hash).build_hasher();
             value.hash_write(&mut hasher);
             *hash = hasher.finish();
         } else {
@@ -377,7 +460,7 @@ fn hash_string_view_array_inner<
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_generic_byte_view_array<T: ByteViewType>(
     array: &GenericByteViewArray<T>,
-    random_state: &RandomState,
+    random_state: &impl HashState,
     hashes_buffer: &mut [u64],
     rehash: bool,
 ) {
@@ -396,7 +479,7 @@ fn hash_generic_byte_view_array<T: ByteViewType>(
         }
         (false, false, true) => {
             for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
-                let mut hasher = seeded_state(*hash).build_hasher();
+                let mut hasher = random_state.seeded_state(*hash).build_hasher();
                 view.hash_write(&mut hasher);
                 *hash = hasher.finish();
             }
@@ -434,31 +517,25 @@ fn hash_generic_byte_view_array<T: ByteViewType>(
     }
 }
 
-/// Hash dictionary array with compile-time specialization for null handling.
+/// Scatter precomputed dictionary value hashes to key positions.
 ///
-/// Uses const generics to eliminate runtim branching in the hot loop:
+/// Uses const generics to eliminate runtime branching in the hot loop:
 /// - `HAS_NULL_KEYS`: Whether to check for null dictionary keys
 /// - `HAS_NULL_VALUES`: Whether to check for null dictionary values
 /// - `MULTI_COL`: Whether to combine with existing hash (true) or initialize (false)
 #[cfg(not(feature = "force_hash_collisions"))]
 #[inline(never)]
-fn hash_dictionary_inner<
+fn hash_dictionary_scatter<
     K: ArrowDictionaryKeyType,
     const HAS_NULL_KEYS: bool,
     const HAS_NULL_VALUES: bool,
     const MULTI_COL: bool,
 >(
     array: &DictionaryArray<K>,
-    random_state: &RandomState,
+    dict_hashes: &[u64],
     hashes_buffer: &mut [u64],
-) -> Result<()> {
-    // Hash each dictionary value once, and then use that computed
-    // hash for each key value to avoid a potentially expensive
-    // redundant hashing for large dictionary elements (e.g. strings)
+) {
     let dict_values = array.values();
-    let mut dict_hashes = vec![0; dict_values.len()];
-    create_hashes([dict_values], random_state, &mut dict_hashes)?;
-
     if HAS_NULL_KEYS {
         for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
             if let Some(key) = key {
@@ -484,70 +561,98 @@ fn hash_dictionary_inner<
             }
         }
     }
-    Ok(())
 }
 
-/// Hash the values in a dictionary array
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_dictionary<K: ArrowDictionaryKeyType>(
+fn dispatch_dictionary_scatter<K: ArrowDictionaryKeyType>(
     array: &DictionaryArray<K>,
-    random_state: &RandomState,
+    dict_hashes: &[u64],
     hashes_buffer: &mut [u64],
     multi_col: bool,
-) -> Result<()> {
+) {
     let has_null_keys = array.keys().null_count() != 0;
     let has_null_values = array.values().null_count() != 0;
 
-    // Dispatcher based on null presence and multi-column mode
-    // Should reduce branching within hot loops
     match (has_null_keys, has_null_values, multi_col) {
-        (false, false, false) => hash_dictionary_inner::<K, false, false, false>(
+        (false, false, false) => hash_dictionary_scatter::<K, false, false, false>(
             array,
-            random_state,
+            dict_hashes,
             hashes_buffer,
         ),
-        (false, false, true) => hash_dictionary_inner::<K, false, false, true>(
+        (false, false, true) => hash_dictionary_scatter::<K, false, false, true>(
             array,
-            random_state,
+            dict_hashes,
             hashes_buffer,
         ),
-        (false, true, false) => hash_dictionary_inner::<K, false, true, false>(
+        (false, true, false) => hash_dictionary_scatter::<K, false, true, false>(
             array,
-            random_state,
+            dict_hashes,
             hashes_buffer,
         ),
-        (false, true, true) => hash_dictionary_inner::<K, false, true, true>(
+        (false, true, true) => hash_dictionary_scatter::<K, false, true, true>(
             array,
-            random_state,
+            dict_hashes,
             hashes_buffer,
         ),
-        (true, false, false) => hash_dictionary_inner::<K, true, false, false>(
+        (true, false, false) => hash_dictionary_scatter::<K, true, false, false>(
             array,
-            random_state,
+            dict_hashes,
             hashes_buffer,
         ),
-        (true, false, true) => hash_dictionary_inner::<K, true, false, true>(
+        (true, false, true) => hash_dictionary_scatter::<K, true, false, true>(
             array,
-            random_state,
+            dict_hashes,
             hashes_buffer,
         ),
-        (true, true, false) => hash_dictionary_inner::<K, true, true, false>(
+        (true, true, false) => hash_dictionary_scatter::<K, true, true, false>(
             array,
-            random_state,
+            dict_hashes,
             hashes_buffer,
         ),
-        (true, true, true) => hash_dictionary_inner::<K, true, true, true>(
+        (true, true, true) => hash_dictionary_scatter::<K, true, true, true>(
             array,
-            random_state,
+            dict_hashes,
             hashes_buffer,
         ),
     }
 }
 
+/// Hash the values in a dictionary array.
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_dictionary<K: ArrowDictionaryKeyType>(
+    array: &DictionaryArray<K>,
+    random_state: &impl HashState,
+    hashes_buffer: &mut [u64],
+    multi_col: bool,
+) -> Result<()> {
+    // Hash each dictionary value once, and then use that computed
+    // hash for each key value to avoid a potentially expensive
+    // redundant hashing for large dictionary elements (e.g. strings)
+    let dict_values = array.values();
+    let mut dict_hashes = vec![0; dict_values.len()];
+    create_hashes([dict_values], random_state, &mut dict_hashes)?;
+    dispatch_dictionary_scatter(array, &dict_hashes, hashes_buffer, multi_col);
+    Ok(())
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_dictionary_with_child_hashing<K: ArrowDictionaryKeyType>(
+    array: &DictionaryArray<K>,
+    child_hashing: &impl ChildHashing,
+    hashes_buffer: &mut [u64],
+    multi_col: bool,
+) -> Result<()> {
+    let dict_values = array.values();
+    let mut dict_hashes = vec![0; dict_values.len()];
+    child_hashing.create_hashes([dict_values], &mut dict_hashes)?;
+    dispatch_dictionary_scatter(array, &dict_hashes, hashes_buffer, multi_col);
+    Ok(())
+}
+
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_struct_array(
     array: &StructArray,
-    random_state: &RandomState,
+    child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
     let nulls = array.nulls();
@@ -555,7 +660,7 @@ fn hash_struct_array(
 
     // Create hashes for each row that combines the hashes over all the column at that row.
     let mut values_hashes = vec![0u64; row_len];
-    create_hashes(array.columns(), random_state, &mut values_hashes)?;
+    child_hashing.create_hashes(array.columns(), &mut values_hashes)?;
 
     // Separate paths to avoid allocating Vec when there are no nulls
     if let Some(nulls) = nulls {
@@ -577,7 +682,7 @@ fn hash_struct_array(
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_map_array(
     array: &MapArray,
-    random_state: &RandomState,
+    child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
     let nulls = array.nulls();
@@ -596,7 +701,7 @@ fn hash_map_array(
         .iter()
         .map(|col| col.slice(first_offset, entries_len))
         .collect();
-    create_hashes(&sliced_columns, random_state, &mut values_hashes)?;
+    child_hashing.create_hashes(&sliced_columns, &mut values_hashes)?;
 
     // Combine the hashes for entries on each row with each other and previous hash for that row
     // Adjust indices by first_offset since values_hashes is sliced starting from first_offset
@@ -628,7 +733,7 @@ fn hash_map_array(
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_list_array<OffsetSize>(
     array: &GenericListArray<OffsetSize>,
-    random_state: &RandomState,
+    child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
 ) -> Result<()>
 where
@@ -639,11 +744,10 @@ where
     let last_offset = array.value_offsets().last().cloned().unwrap_or_default();
     let value_bytes_len = (last_offset - first_offset).as_usize();
     let mut values_hashes = vec![0u64; value_bytes_len];
-    create_hashes(
+    child_hashing.create_hashes(
         [array
             .values()
             .slice(first_offset.as_usize(), value_bytes_len)],
-        random_state,
         &mut values_hashes,
     )?;
 
@@ -679,7 +783,7 @@ where
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_list_view_array<OffsetSize>(
     array: &GenericListViewArray<OffsetSize>,
-    random_state: &RandomState,
+    child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
 ) -> Result<()>
 where
@@ -690,7 +794,7 @@ where
     let sizes = array.value_sizes();
     let nulls = array.nulls();
     let mut values_hashes = vec![0u64; values.len()];
-    create_hashes([values], random_state, &mut values_hashes)?;
+    child_hashing.create_hashes([values], &mut values_hashes)?;
     if let Some(nulls) = nulls {
         for (i, (offset, size)) in offsets.iter().zip(sizes.iter()).enumerate() {
             if nulls.is_valid(i) {
@@ -718,7 +822,7 @@ where
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_union_array(
     array: &UnionArray,
-    random_state: &RandomState,
+    child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
     let DataType::Union(union_fields, _mode) = array.data_type() else {
@@ -728,12 +832,12 @@ fn hash_union_array(
     if array.is_dense() {
         // Dense union: children only contain values of their type, so they're already compact.
         // Use the default hashing approach which is efficient for dense unions.
-        hash_union_array_default(array, union_fields, random_state, hashes_buffer)
+        hash_union_array_default(array, union_fields, child_hashing, hashes_buffer)
     } else {
         // Sparse union: each child has the same length as the union array.
         // Optimization: only hash the elements that are actually referenced by type_ids,
         // instead of hashing all K*N elements (where K = num types, N = array length).
-        hash_sparse_union_array(array, union_fields, random_state, hashes_buffer)
+        hash_sparse_union_array(array, union_fields, child_hashing, hashes_buffer)
     }
 }
 
@@ -750,7 +854,7 @@ fn hash_union_array(
 fn hash_union_array_default(
     array: &UnionArray,
     union_fields: &UnionFields,
-    random_state: &RandomState,
+    child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
     let mut child_hashes: HashMap<i8, Vec<u64>> =
@@ -760,7 +864,7 @@ fn hash_union_array_default(
     for (type_id, _field) in union_fields.iter() {
         let child = array.child(type_id);
         let mut child_hash_buffer = vec![0; child.len()];
-        create_hashes([child], random_state, &mut child_hash_buffer)?;
+        child_hashing.create_hashes([child], &mut child_hash_buffer)?;
 
         child_hashes.insert(type_id, child_hash_buffer);
     }
@@ -791,7 +895,7 @@ fn hash_union_array_default(
 fn hash_sparse_union_array(
     array: &UnionArray,
     union_fields: &UnionFields,
-    random_state: &RandomState,
+    child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
     use std::collections::HashMap;
@@ -802,7 +906,7 @@ fn hash_sparse_union_array(
         return hash_union_array_default(
             array,
             union_fields,
-            random_state,
+            child_hashing,
             hashes_buffer,
         );
     }
@@ -830,7 +934,7 @@ fn hash_sparse_union_array(
 
             // Hash the filtered array
             let mut filtered_hashes = vec![0u64; filtered.len()];
-            create_hashes([&filtered], random_state, &mut filtered_hashes)?;
+            child_hashing.create_hashes([&filtered], &mut filtered_hashes)?;
 
             // Scatter hashes back to correct positions
             for (hash, &idx) in filtered_hashes.iter().zip(indices.iter()) {
@@ -846,14 +950,14 @@ fn hash_sparse_union_array(
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_fixed_list_array(
     array: &FixedSizeListArray,
-    random_state: &RandomState,
+    child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
     let values = array.values();
     let value_length = array.value_length() as usize;
     let nulls = array.nulls();
     let mut values_hashes = vec![0u64; values.len()];
-    create_hashes([values], random_state, &mut values_hashes)?;
+    child_hashing.create_hashes([values], &mut values_hashes)?;
     if let Some(nulls) = nulls {
         for i in 0..array.len() {
             if nulls.is_valid(i) {
@@ -881,11 +985,12 @@ fn hash_fixed_list_array(
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_run_array_inner<
     R: RunEndIndexType,
+    C: ChildHashing + ?Sized,
     const HAS_NULL_VALUES: bool,
     const REHASH: bool,
 >(
     array: &RunArray<R>,
-    random_state: &RandomState,
+    child_hashing: &C,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
     // We find the relevant runs that cover potentially sliced arrays, so we can only hash those
@@ -912,11 +1017,8 @@ fn hash_run_array_inner<
         end_physical_index - start_physical_index,
     );
     let mut values_hashes = vec![0u64; sliced_values.len()];
-    create_hashes(
-        std::slice::from_ref(&sliced_values),
-        random_state,
-        &mut values_hashes,
-    )?;
+    child_hashing
+        .create_hashes(std::slice::from_ref(&sliced_values), &mut values_hashes)?;
 
     let mut start_in_slice = 0;
     for (adjusted_physical_index, &absolute_run_end) in run_ends_values
@@ -952,24 +1054,26 @@ fn hash_run_array_inner<
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_run_array<R: RunEndIndexType>(
     array: &RunArray<R>,
-    random_state: &RandomState,
+    child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
     rehash: bool,
 ) -> Result<()> {
     let has_null_values = array.values().null_count() != 0;
 
     match (has_null_values, rehash) {
-        (false, false) => {
-            hash_run_array_inner::<R, false, false>(array, random_state, hashes_buffer)
-        }
+        (false, false) => hash_run_array_inner::<R, _, false, false>(
+            array,
+            child_hashing,
+            hashes_buffer,
+        ),
         (false, true) => {
-            hash_run_array_inner::<R, false, true>(array, random_state, hashes_buffer)
+            hash_run_array_inner::<R, _, false, true>(array, child_hashing, hashes_buffer)
         }
         (true, false) => {
-            hash_run_array_inner::<R, true, false>(array, random_state, hashes_buffer)
+            hash_run_array_inner::<R, _, true, false>(array, child_hashing, hashes_buffer)
         }
         (true, true) => {
-            hash_run_array_inner::<R, true, true>(array, random_state, hashes_buffer)
+            hash_run_array_inner::<R, _, true, true>(array, child_hashing, hashes_buffer)
         }
     }
 }
@@ -979,7 +1083,7 @@ fn hash_run_array<R: RunEndIndexType>(
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_single_array(
     array: &dyn Array,
-    random_state: &RandomState,
+    random_state: &impl HashState,
     hashes_buffer: &mut [u64],
     rehash: bool,
 ) -> Result<()> {
@@ -1003,38 +1107,67 @@ fn hash_single_array(
         }
         DataType::Struct(_) => {
             let array = as_struct_array(array)?;
-            hash_struct_array(array, random_state, hashes_buffer)?;
+            let child_hashing = HashStateChildHashing {
+                hash_state: random_state,
+            };
+            hash_struct_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::List(_) => {
             let array = as_list_array(array)?;
-            hash_list_array(array, random_state, hashes_buffer)?;
+            let child_hashing = HashStateChildHashing {
+                hash_state: random_state,
+            };
+            hash_list_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::LargeList(_) => {
             let array = as_large_list_array(array)?;
-            hash_list_array(array, random_state, hashes_buffer)?;
+            let child_hashing = HashStateChildHashing {
+                hash_state: random_state,
+            };
+            hash_list_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::ListView(_) => {
             let array = as_list_view_array(array)?;
-            hash_list_view_array(array, random_state, hashes_buffer)?;
+            let child_hashing = HashStateChildHashing {
+                hash_state: random_state,
+            };
+            hash_list_view_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::LargeListView(_) => {
             let array = as_large_list_view_array(array)?;
-            hash_list_view_array(array, random_state, hashes_buffer)?;
+            let child_hashing = HashStateChildHashing {
+                hash_state: random_state,
+            };
+            hash_list_view_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::Map(_, _) => {
             let array = as_map_array(array)?;
-            hash_map_array(array, random_state, hashes_buffer)?;
+            let child_hashing = HashStateChildHashing {
+                hash_state: random_state,
+            };
+            hash_map_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::FixedSizeList(_,_) => {
             let array = as_fixed_size_list_array(array)?;
-            hash_fixed_list_array(array, random_state, hashes_buffer)?;
+            let child_hashing = HashStateChildHashing {
+                hash_state: random_state,
+            };
+            hash_fixed_list_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::Union(_, _) => {
             let array = as_union_array(array)?;
-            hash_union_array(array, random_state, hashes_buffer)?;
+            let child_hashing = HashStateChildHashing {
+                hash_state: random_state,
+            };
+            hash_union_array(array, &child_hashing, hashes_buffer)?;
         }
         DataType::RunEndEncoded(_, _) => downcast_run_array! {
-            array => hash_run_array(array, random_state, hashes_buffer, rehash)?,
+            array => {
+                let child_hashing = HashStateChildHashing {
+                    hash_state: random_state,
+                };
+                hash_run_array(array, &child_hashing, hashes_buffer, rehash)?
+            },
             _ => unreachable!()
         }
         _ => {
@@ -1052,7 +1185,7 @@ fn hash_single_array(
 #[cfg(feature = "force_hash_collisions")]
 fn hash_single_array(
     _array: &dyn Array,
-    _random_state: &RandomState,
+    _random_state: &impl HashState,
     hashes_buffer: &mut [u64],
     _rehash: bool,
 ) -> Result<()> {
@@ -1105,7 +1238,7 @@ impl AsDynArray for &ArrayRef {
 /// `hashes_buffer` should be pre-sized appropriately.
 pub fn create_hashes<'a, I, T>(
     arrays: I,
-    random_state: &RandomState,
+    random_state: &impl HashState,
     hashes_buffer: &'a mut [u64],
 ) -> Result<&'a mut [u64]>
 where
@@ -1120,8 +1253,36 @@ where
     Ok(hashes_buffer)
 }
 
+/// Creates hash values for every row using a caller-provided hash builder.
+///
+/// The number of rows to hash is determined by `hashes_buffer.len()`.
+/// `hashes_buffer` should be pre-sized appropriately.
+///
+/// # Hash compatibility
+///
+/// Hash values are not guaranteed to be bit-for-bit identical to those from
+/// [`create_hashes`], even when `hash_builder` also implements [`HashState`].
+/// The optimized [`HashState`] path seeds the hasher from the previous hash
+/// when rehashing some primitive and byte-view values, whereas this function
+/// combines independently computed hashes. Use one API consistently if hashes
+/// are persisted or exchanged.
+pub fn create_hashes_with_hasher<'a, I, T, S>(
+    arrays: I,
+    hash_builder: &S,
+    hashes_buffer: &'a mut [u64],
+) -> Result<&'a mut [u64]>
+where
+    I: IntoIterator<Item = T>,
+    T: AsDynArray,
+    S: BuildHasher,
+{
+    build_hasher::create_hashes_with_hasher(arrays, hash_builder, hashes_buffer)
+}
+
 #[cfg(test)]
 mod tests {
+    #[cfg(not(feature = "force_hash_collisions"))]
+    use std::hash::{BuildHasherDefault, Hasher};
     use std::sync::Arc;
 
     use arrow::array::*;
@@ -1129,6 +1290,23 @@ mod tests {
     use arrow::datatypes::*;
 
     use super::*;
+
+    #[cfg(not(feature = "force_hash_collisions"))]
+    #[derive(Default)]
+    struct TestHasher(u64);
+
+    #[cfg(not(feature = "force_hash_collisions"))]
+    impl Hasher for TestHasher {
+        fn finish(&self) -> u64 {
+            self.0
+        }
+
+        fn write(&mut self, bytes: &[u8]) {
+            for byte in bytes {
+                self.0 = self.0.wrapping_mul(37).wrapping_add(u64::from(*byte));
+            }
+        }
+    }
 
     #[test]
     fn create_hashes_for_decimal_array() -> Result<()> {
@@ -1364,6 +1542,206 @@ mod tests {
         assert_eq!(diff_2_vs_3_one_col, diff_2_vs_3_two_col);
 
         Ok(())
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn test_create_hashes_with_custom_hasher() {
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 1, 4]));
+        let hash_builder = BuildHasherDefault::<TestHasher>::default();
+
+        let mut custom_hashes = vec![0; array.len()];
+        create_hashes_with_hasher([&array], &hash_builder, &mut custom_hashes).unwrap();
+
+        let random_state = RandomState::with_seed(0);
+        let mut default_hashes = vec![0; array.len()];
+        create_hashes([&array], &random_state, &mut default_hashes).unwrap();
+
+        assert_eq!(custom_hashes[0], custom_hashes[2]);
+        assert_ne!(custom_hashes[0], custom_hashes[1]);
+        assert_ne!(custom_hashes, default_hashes);
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn test_create_hashes_with_custom_hasher_normalizes_negative_zero() {
+        let array: ArrayRef = Arc::new(Float64Array::from(vec![0.0, -0.0]));
+        let hash_builder = BuildHasherDefault::<TestHasher>::default();
+        let mut hashes = vec![0; array.len()];
+
+        create_hashes_with_hasher([&array], &hash_builder, &mut hashes).unwrap();
+
+        assert_eq!(hashes[0], hashes[1]);
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn test_create_hashes_dictionary_with_custom_hasher() {
+        let strings = [Some("foo"), None, Some("bar"), Some("foo"), None];
+        let string_array: ArrayRef =
+            Arc::new(strings.iter().cloned().collect::<StringArray>());
+        let dict_array: ArrayRef = Arc::new(
+            strings
+                .iter()
+                .cloned()
+                .collect::<DictionaryArray<Int8Type>>(),
+        );
+        let hash_builder = BuildHasherDefault::<TestHasher>::default();
+
+        let mut string_hashes = vec![0; strings.len()];
+        create_hashes_with_hasher([&string_array], &hash_builder, &mut string_hashes)
+            .unwrap();
+
+        let mut dict_hashes = vec![0; strings.len()];
+        create_hashes_with_hasher([&dict_array], &hash_builder, &mut dict_hashes)
+            .unwrap();
+
+        assert_eq!(string_hashes, dict_hashes);
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn test_create_hashes_struct_with_custom_hasher() {
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("int", DataType::Int32, false)),
+                Arc::new(Int32Array::from(vec![1, 2, 1, 3])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("string", DataType::Utf8, false)),
+                Arc::new(StringArray::from(vec!["alpha", "beta", "alpha", "alpha"]))
+                    as ArrayRef,
+            ),
+        ]);
+        let hash_builder = BuildHasherDefault::<TestHasher>::default();
+
+        let mut child_hashes = vec![0; struct_array.len()];
+        create_hashes_with_hasher(
+            struct_array.columns(),
+            &hash_builder,
+            &mut child_hashes,
+        )
+        .unwrap();
+        let expected_hashes = child_hashes
+            .into_iter()
+            .map(|hash| combine_hashes(0, hash))
+            .collect::<Vec<_>>();
+
+        let array: ArrayRef = Arc::new(struct_array);
+        let mut actual_hashes = vec![0; array.len()];
+        create_hashes_with_hasher([&array], &hash_builder, &mut actual_hashes).unwrap();
+
+        assert_eq!(actual_hashes, expected_hashes);
+        assert_eq!(actual_hashes[0], actual_hashes[2]);
+        assert_ne!(actual_hashes[0], actual_hashes[3]);
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn test_create_hashes_long_utf8_view_with_custom_hasher() {
+        let values = vec![
+            Some("this string is longer than twelve bytes"),
+            None,
+            Some("another string longer than twelve bytes"),
+            Some("this string is longer than twelve bytes"),
+        ];
+        let view_array = StringViewArray::from(values.clone());
+        assert!(!view_array.data_buffers().is_empty());
+        let view_array: ArrayRef = Arc::new(view_array);
+        let hash_builder = BuildHasherDefault::<TestHasher>::default();
+
+        let mut view_hashes = vec![0; view_array.len()];
+        create_hashes_with_hasher([&view_array], &hash_builder, &mut view_hashes)
+            .unwrap();
+        let expected_hashes = values
+            .iter()
+            .map(|value| {
+                value
+                    .map(|value| hash_builder.hash_one(value.as_bytes()))
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(view_hashes, expected_hashes);
+
+        let prefix_array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 1]));
+        let mut expected_hashes = vec![0; prefix_array.len()];
+        create_hashes_with_hasher([&prefix_array], &hash_builder, &mut expected_hashes)
+            .unwrap();
+        for (hash, value) in expected_hashes.iter_mut().zip(&values) {
+            if let Some(value) = value {
+                *hash = combine_hashes(hash_builder.hash_one(value.as_bytes()), *hash);
+            }
+        }
+
+        let mut view_hashes = vec![0; view_array.len()];
+        create_hashes_with_hasher(
+            [&prefix_array, &view_array],
+            &hash_builder,
+            &mut view_hashes,
+        )
+        .unwrap();
+        assert_eq!(view_hashes, expected_hashes);
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn test_single_column_leaf_hashes_match_with_same_hasher() {
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(vec![Some(1), None, Some(-1)])),
+            Arc::new(Float64Array::from(vec![Some(0.0), Some(-0.0), None])),
+            Arc::new(StringArray::from(vec![Some("foo"), None, Some("bar")])),
+            Arc::new(BinaryArray::from(vec![
+                Some(&b"short"[..]),
+                None,
+                Some(&b"longer than twelve bytes"[..]),
+            ])),
+            Arc::new(StringViewArray::from(vec![
+                Some("short"),
+                None,
+                Some("longer than twelve bytes"),
+            ])),
+        ];
+        let random_state = RandomState::with_seed(0);
+
+        for array in arrays {
+            let mut default_hashes = vec![0; array.len()];
+            create_hashes([&array], &random_state, &mut default_hashes).unwrap();
+
+            let mut custom_hashes = vec![0; array.len()];
+            create_hashes_with_hasher([&array], &random_state, &mut custom_hashes)
+                .unwrap();
+
+            assert_eq!(
+                custom_hashes,
+                default_hashes,
+                "single-column parity failed for {}",
+                array.data_type()
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn test_with_hashes_with_custom_hasher() {
+        let int_array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let str_array: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+        let hash_builder = BuildHasherDefault::<TestHasher>::default();
+
+        let mut expected_hashes = vec![0; int_array.len()];
+        create_hashes_with_hasher(
+            [&int_array, &str_array],
+            &hash_builder,
+            &mut expected_hashes,
+        )
+        .unwrap();
+
+        let actual_hashes =
+            with_hashes_with_hasher([&int_array, &str_array], &hash_builder, |hashes| {
+                Ok(hashes.to_vec())
+            })
+            .unwrap();
+
+        assert_eq!(actual_hashes, expected_hashes);
     }
 
     #[test]
@@ -1812,6 +2190,31 @@ mod tests {
         create_hashes([array], &random_state, &mut hashes2).unwrap();
 
         assert_eq!(hashes1, hashes2);
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn test_create_hashes_with_quality_hash_state() {
+        let int_array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
+        let str_array: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c", "d"]));
+        let quality_state = foldhash::quality::FixedState::with_seed(0);
+
+        let mut one_col_hashes = vec![0; int_array.len()];
+        create_hashes([&int_array], &quality_state, &mut one_col_hashes).unwrap();
+        let expected_hashes: Vec<_> = [1i32, 2, 3, 4]
+            .iter()
+            .map(|value| quality_state.hash_one(value))
+            .collect();
+        assert_eq!(one_col_hashes, expected_hashes);
+
+        let mut two_col_hashes = vec![0; int_array.len()];
+        create_hashes(
+            [&int_array, &str_array],
+            &quality_state,
+            &mut two_col_hashes,
+        )
+        .unwrap();
+        assert_ne!(two_col_hashes, one_col_hashes);
     }
 
     #[test]

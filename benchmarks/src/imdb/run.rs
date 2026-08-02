@@ -295,7 +295,7 @@ impl RunOpt {
         let mut benchmark_run = BenchmarkRun::new();
         for query_id in query_range {
             benchmark_run.start_new_case(&format!("Query {query_id}"));
-            let query_run = self.benchmark_query(query_id).await?;
+            let query_run = self.benchmark_query(query_id, &mut benchmark_run).await?;
             for iter in query_run {
                 benchmark_run.write_iter(iter.elapsed, iter.row_count);
             }
@@ -304,7 +304,13 @@ impl RunOpt {
         Ok(())
     }
 
-    async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
+    /// `benchmark_run` is handed this query's runtime, which is built here so
+    /// each query gets a pool of its own.
+    async fn benchmark_query(
+        &self,
+        query_id: usize,
+        benchmark_run: &mut BenchmarkRun,
+    ) -> Result<Vec<QueryResult>> {
         let mut config = self
             .common
             .config()?
@@ -314,6 +320,7 @@ impl RunOpt {
             self.hash_join_buffering_capacity;
         let rt = self.common.build_runtime()?;
         let ctx = SessionContext::new_with_config_rt(config, rt);
+        benchmark_run.set_memory_pool(&ctx.runtime_env().memory_pool);
 
         // register tables
         self.register_tables(&ctx).await?;
@@ -348,14 +355,14 @@ impl RunOpt {
         println!("Query {query_id} avg time: {avg:.2} ms");
 
         // Print memory usage stats using mimalloc (only when compiled with --features mimalloc_extended)
-        print_memory_stats();
+        print_memory_stats(&*ctx.runtime_env().memory_pool);
 
         Ok(query_results)
     }
 
     async fn register_tables(&self, ctx: &SessionContext) -> Result<()> {
         for table in IMDB_TABLES {
-            let table_provider = { self.get_table(ctx, table).await? };
+            let table_provider = { self.get_table(ctx, table)? };
 
             if self.mem_table {
                 println!("Loading table '{table}' into memory");
@@ -416,7 +423,7 @@ impl RunOpt {
         Ok(result)
     }
 
-    async fn get_table(
+    fn get_table(
         &self,
         ctx: &SessionContext,
         table: &str,
@@ -425,7 +432,6 @@ impl RunOpt {
         let table_format = self.file_format.as_str();
 
         // Obtain a snapshot of the SessionState
-        let state = ctx.state();
         let (format, path, extension): (Arc<dyn FileFormat>, String, &'static str) =
             match table_format {
                 // dbgen creates .tbl ('|' delimited) files without header
@@ -458,9 +464,7 @@ impl RunOpt {
                 }
             };
 
-        let options = ListingOptions::new(format)
-            .with_file_extension(extension)
-            .with_collect_stat(state.config().collect_statistics());
+        let options = ListingOptions::new(format).with_file_extension(extension);
 
         let table_path = ListingTableUrl::parse(path)?;
         let config = ListingTableConfig::new(table_path).with_listing_options(options);

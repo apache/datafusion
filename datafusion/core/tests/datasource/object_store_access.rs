@@ -231,23 +231,13 @@ async fn query_multi_csv_file() {
     );
 }
 
-/// Test that a CSV file split into byte ranges via repartitioning exercises
-/// range-based object store access.
+/// Test that a CSV file split into byte ranges via repartitioning produces
+/// exactly one GET request per byte range — no extra requests for boundary seeking.
 ///
 /// With a single file and `target_partitions=3`, the repartitioner produces
-/// exactly 3 ranges.  For each range, `calculate_range` calls
-/// `find_first_newline` via a GET for every non-file boundary it touches
-/// (the start boundary if `start > 0`, the end boundary if `end < file_size`),
-/// plus one GET for the actual data — so 2 GETs for the first range (end scan
-/// + data), 3 for the middle range (start scan + end scan + data), and 2 for
-/// the last range (start scan + data) = 7 data GETs total.  Additionally,
-/// adjacent ranges share a boundary position, so each shared boundary is scanned
-/// twice — once as the left range's end and again as the right range's start —
-/// producing the duplicate GETs visible in the snapshot.  Add the 1 HEAD for
-/// file-size metadata = **8 total**.
-///
-/// This differs from the JSON reader which uses [`AlignedBoundaryStream`] and
-/// needs only 1 GET per range.
+/// exactly 3 ranges.  Each range is served by a single [`AlignedBoundaryStream`]
+/// which issues exactly one bounded `get_opts` call, so there are 3 data GETs
+/// plus 1 HEAD (to determine file size) = **4 total**.
 ///
 /// This test documents the current request pattern to catch regressions.
 #[tokio::test]
@@ -275,15 +265,11 @@ async fn query_csv_file_with_byte_range_partitions() {
     +---------+-------+-------+
     ------- Object Store Request Summary -------
     RequestCountingObjectStore()
-    Total Requests: 8
+    Total Requests: 4
     - GET  (opts) path=csv_range_table.csv head=true
-    - GET  (opts) path=csv_range_table.csv range=42-129
-    - GET  (opts) path=csv_range_table.csv range=0-49
+    - GET  (opts) path=csv_range_table.csv range=0-129
     - GET  (opts) path=csv_range_table.csv range=42-129
     - GET  (opts) path=csv_range_table.csv range=85-129
-    - GET  (opts) path=csv_range_table.csv range=49-89
-    - GET  (opts) path=csv_range_table.csv range=85-129
-    - GET  (opts) path=csv_range_table.csv range=89-129
     "
     );
 }

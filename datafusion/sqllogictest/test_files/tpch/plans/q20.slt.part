@@ -60,14 +60,14 @@ logical_plan
 02)--Projection: supplier.s_name, supplier.s_address
 03)----LeftSemi Join: supplier.s_suppkey = __correlated_sq_2.ps_suppkey
 04)------Projection: supplier.s_suppkey, supplier.s_name, supplier.s_address
-05)--------Inner Join: supplier.s_nationkey = nation.n_nationkey
+05)--------LeftSemi Join: supplier.s_nationkey = nation.n_nationkey
 06)----------TableScan: supplier projection=[s_suppkey, s_name, s_address, s_nationkey]
 07)----------Projection: nation.n_nationkey
 08)------------Filter: nation.n_name = Utf8View("CANADA")
 09)--------------TableScan: nation projection=[n_nationkey, n_name], partial_filters=[nation.n_name = Utf8View("CANADA")]
 10)------SubqueryAlias: __correlated_sq_2
 11)--------Projection: partsupp.ps_suppkey
-12)----------Inner Join: partsupp.ps_partkey = __scalar_sq_3.l_partkey, partsupp.ps_suppkey = __scalar_sq_3.l_suppkey Filter: CAST(partsupp.ps_availqty AS Float64) > __scalar_sq_3.Float64(0.5) * sum(lineitem.l_quantity)
+12)----------LeftSemi Join: partsupp.ps_partkey = __scalar_sq_3.l_partkey, partsupp.ps_suppkey = __scalar_sq_3.l_suppkey Filter: CAST(partsupp.ps_availqty AS Float64) > __scalar_sq_3.Float64(0.5) * sum(lineitem.l_quantity)
 13)------------LeftSemi Join: partsupp.ps_partkey = __correlated_sq_1.p_partkey
 14)--------------TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_availqty]
 15)--------------SubqueryAlias: __correlated_sq_1
@@ -85,7 +85,7 @@ physical_plan
 02)--SortExec: expr=[s_name@0 ASC NULLS LAST], preserve_partitioning=[true]
 03)----HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(s_suppkey@0, ps_suppkey@0)], projection=[s_name@1, s_address@2]
 04)------RepartitionExec: partitioning=Hash([s_suppkey@0], 4), input_partitions=4
-05)--------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@3, n_nationkey@0)], projection=[s_suppkey@0, s_name@1, s_address@2]
+05)--------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(s_nationkey@3, n_nationkey@0)], projection=[s_suppkey@0, s_name@1, s_address@2]
 06)----------RepartitionExec: partitioning=Hash([s_nationkey@3], 4), input_partitions=1
 07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/supplier.tbl]]}, projection=[s_suppkey, s_name, s_address, s_nationkey], constraints=[PrimaryKey([0])], file_type=csv, has_header=false
 08)----------RepartitionExec: partitioning=Hash([n_nationkey@0], 4), input_partitions=4
@@ -93,7 +93,7 @@ physical_plan
 10)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 11)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_name], constraints=[PrimaryKey([0])], file_type=csv, has_header=false
 12)------RepartitionExec: partitioning=Hash([ps_suppkey@0], 4), input_partitions=4
-13)--------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(ps_partkey@0, l_partkey@1), (ps_suppkey@1, l_suppkey@2)], filter=CAST(ps_availqty@0 AS Float64) > Float64(0.5) * sum(lineitem.l_quantity)@1, projection=[ps_suppkey@1]
+13)--------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(ps_partkey@0, l_partkey@1), (ps_suppkey@1, l_suppkey@2)], filter=CAST(ps_availqty@0 AS Float64) > Float64(0.5) * sum(lineitem.l_quantity)@1, projection=[ps_suppkey@1]
 14)----------RepartitionExec: partitioning=Hash([ps_partkey@0, ps_suppkey@1], 4), input_partitions=4
 15)------------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(ps_partkey@0, p_partkey@0)]
 16)--------------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=4
