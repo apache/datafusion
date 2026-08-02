@@ -19,9 +19,9 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayRef, Float64Array, GenericListArray, NullBufferBuilder,
-    OffsetBufferBuilder, OffsetSizeTrait,
+    Array, ArrayRef, Float64Array, GenericListArray, NullBufferBuilder, OffsetSizeTrait,
 };
+use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{
     DataType,
     DataType::{FixedSizeList, LargeList, List, Null},
@@ -144,13 +144,14 @@ fn general_array_normalize<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Ar
     let offsets = list_array.value_offsets();
 
     let mut new_values: Vec<f64> = Vec::with_capacity(values.len());
-    let mut new_offsets = OffsetBufferBuilder::<O>::new(list_array.len());
+    let mut new_offsets = Vec::<O>::with_capacity(list_array.len() + 1);
+    new_offsets.push(O::zero());
     let mut nulls = NullBufferBuilder::new(list_array.len());
 
     for row in 0..list_array.len() {
         if list_array.is_null(row) {
             nulls.append_null();
-            new_offsets.push_length(0);
+            new_offsets.push(new_offsets[row]);
             continue;
         }
 
@@ -161,7 +162,7 @@ fn general_array_normalize<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Ar
         let slice = values.slice(start, len);
         if slice.null_count() != 0 {
             nulls.append_null();
-            new_offsets.push_length(0);
+            new_offsets.push(new_offsets[row]);
             continue;
         }
 
@@ -170,7 +171,7 @@ fn general_array_normalize<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Ar
         // Empty array: return empty array (no normalization needed, no division by zero risk)
         if len == 0 {
             nulls.append_non_null();
-            new_offsets.push_length(0);
+            new_offsets.push(new_offsets[row]);
             continue;
         }
 
@@ -183,7 +184,7 @@ fn general_array_normalize<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Ar
         // Zero magnitude: undefined normalization. Emit NULL row.
         if sq_sum == 0.0 {
             nulls.append_null();
-            new_offsets.push_length(0);
+            new_offsets.push(new_offsets[row]);
             continue;
         }
 
@@ -192,7 +193,7 @@ fn general_array_normalize<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Ar
             new_values.push(vals[i] / mag);
         }
         nulls.append_non_null();
-        new_offsets.push_length(len);
+        new_offsets.push(new_offsets[row] + O::usize_as(len));
     }
 
     let values_array = Arc::new(Float64Array::from(new_values));
@@ -200,7 +201,7 @@ fn general_array_normalize<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Ar
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
         field,
-        new_offsets.finish(),
+        OffsetBuffer::new(new_offsets.into()),
         values_array,
         nulls.finish(),
     )?))

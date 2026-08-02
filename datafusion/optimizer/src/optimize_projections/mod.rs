@@ -386,10 +386,20 @@ fn optimize_projections(
             let right_len = join.right.schema().fields().len();
             let (left_req_indices, right_req_indices) =
                 split_join_requirements(left_len, right_len, indices, &join.join_type);
-            let left_indices =
+            let mut left_indices =
                 left_req_indices.with_plan_exprs(&plan, join.left.schema())?;
-            let right_indices =
+            let mut right_indices =
                 right_req_indices.with_plan_exprs(&plan, join.right.schema())?;
+            // Ensure an empty mark join still has a column to qualify mark
+            match join.join_type {
+                JoinType::LeftMark if right_indices.indices().is_empty() => {
+                    right_indices = right_indices.append(&[0]);
+                }
+                JoinType::RightMark if left_indices.indices().is_empty() => {
+                    left_indices = left_indices.append(&[0]);
+                }
+                _ => {}
+            }
             // Joins benefit from "small" input tables (lower memory usage).
             // Therefore, each child benefits from projection:
             vec![
@@ -2384,6 +2394,62 @@ mod tests {
               TableScan: a projection=[a, b, c]
               TableScan: b projection=[a]
           TableScan: c projection=[a, b, c]
+        "
+        )
+    }
+
+    // Stacked filter-less LeftMark joins (from `= ANY` / `<> ALL`) must keep
+    // each `mark` qualified so they don't collide.
+    #[test]
+    fn optimize_projections_stacked_mark_joins_keep_qualified_mark() -> Result<()> {
+        let person = test_table_scan_with_name("person")?;
+
+        let aliased_scan = |table: &str, alias: &str| -> Result<LogicalPlan> {
+            LogicalPlanBuilder::from(test_table_scan_with_name(table)?)
+                .project(vec![col(format!("{table}.a"))])?
+                .alias(alias)?
+                .build()
+        };
+
+        let plan = LogicalPlanBuilder::from(person)
+            .join_on(
+                aliased_scan("s1", "__correlated_sq_1")?,
+                JoinType::LeftMark,
+                vec![lit(true)],
+            )?
+            .join_on(
+                aliased_scan("s2", "__correlated_sq_2")?,
+                JoinType::LeftMark,
+                vec![lit(true)],
+            )?
+            .join_on(
+                aliased_scan("s3", "__correlated_sq_3")?,
+                JoinType::LeftMark,
+                vec![lit(true)],
+            )?
+            .filter(
+                col("__correlated_sq_1.mark")
+                    .or(col("__correlated_sq_2.mark"))
+                    .and(not(col("__correlated_sq_3.mark"))),
+            )?
+            .project(vec![col("person.a")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: person.a
+          Filter: (__correlated_sq_1.mark OR __correlated_sq_2.mark) AND NOT __correlated_sq_3.mark
+            LeftMark Join:  Filter: Boolean(true)
+              LeftMark Join:  Filter: Boolean(true)
+                LeftMark Join:  Filter: Boolean(true)
+                  TableScan: person projection=[a]
+                  SubqueryAlias: __correlated_sq_1
+                    TableScan: s1 projection=[a]
+                SubqueryAlias: __correlated_sq_2
+                  TableScan: s2 projection=[a]
+              SubqueryAlias: __correlated_sq_3
+                TableScan: s3 projection=[a]
         "
         )
     }

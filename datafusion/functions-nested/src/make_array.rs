@@ -224,9 +224,9 @@ pub fn array_array<O: OffsetSizeTrait>(
                 && !arg.is_null(row_idx)
                 && arg.is_valid(row_idx)
             {
-                mutable.extend(arr_idx, row_idx, row_idx + 1);
+                mutable.try_extend(arr_idx, row_idx, row_idx + 1)?;
             } else {
-                mutable.extend_nulls(1);
+                mutable.try_extend_nulls(1)?;
             }
         }
         offsets.push(O::usize_as(mutable.len()));

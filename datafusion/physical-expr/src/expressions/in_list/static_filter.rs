@@ -35,3 +35,20 @@ pub(super) trait StaticFilter {
     /// implementation unwraps the dictionary and operates on its values.
     fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray>;
 }
+
+/// Evaluate dictionary-encoded needles by applying a filter to dictionary
+/// values and remapping the result through the keys.
+macro_rules! handle_dictionary {
+    ($self:ident, $v:ident, $negated:ident) => {
+        arrow::array::downcast_dictionary_array! {
+            $v => {
+                let values_contains = $self.contains($v.values().as_ref(), $negated)?;
+                let result = arrow::compute::take(&values_contains, $v.keys(), None)?;
+                return Ok(arrow::array::downcast_array(result.as_ref()))
+            }
+            _ => {}
+        }
+    };
+}
+
+pub(super) use handle_dictionary;

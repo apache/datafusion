@@ -591,7 +591,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 idents.len()
             )
         } else {
-            let columns = plan.schema().columns().clone();
+            let columns = plan.schema().columns();
             LogicalPlanBuilder::from(plan)
                 .project(columns.into_iter().zip(idents).map(|(col, ident)| {
                     Expr::Column(col).alias(self.ident_normalizer.normalize(ident))
@@ -641,13 +641,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             Diagnostic::new_error(
                                 format!(
                                     "column '{}' not found in '{}'",
-                                    &col.name, relation
+                                    col.name, relation
                                 ),
                                 col.spans().first(),
                             )
                         } else {
                             Diagnostic::new_error(
-                                format!("column '{}' not found", &col.name),
+                                format!("column '{}' not found", col.name),
                                 col.spans().first(),
                             )
                         };

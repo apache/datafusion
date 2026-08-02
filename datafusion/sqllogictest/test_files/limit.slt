@@ -748,7 +748,7 @@ explain select * from testSubQueryLimit as t1 join (select * from testSubQueryLi
 ----
 logical_plan
 01)Limit: skip=0, fetch=10
-02)--Cross Join: 
+02)--Cross Join:
 03)----SubqueryAlias: t1
 04)------Limit: skip=0, fetch=10
 05)--------TableScan: testsubquerylimit projection=[a, b], fetch=10
@@ -773,7 +773,7 @@ explain select * from testSubQueryLimit as t1 join (select * from testSubQueryLi
 ----
 logical_plan
 01)Limit: skip=0, fetch=2
-02)--Cross Join: 
+02)--Cross Join:
 03)----SubqueryAlias: t1
 04)------Limit: skip=0, fetch=2
 05)--------TableScan: testsubquerylimit projection=[a, b], fetch=2
@@ -1035,8 +1035,8 @@ physical_plan
 01)GlobalLimitExec: skip=1, fetch=None
 02)--SortExec: expr=[sy@2 DESC], preserve_partitioning=[false]
 03)----SortPreservingMergeExec: [sx@1 DESC], fetch=4
-04)------SortExec: TopK(fetch=4), expr=[sx@1 DESC], preserve_partitioning=[true]
-05)--------ProjectionExec: expr=[g@0 as g, sum(t22489.x)@1 as sx, sum(t22489.y)@2 as sy]
+04)------ProjectionExec: expr=[g@0 as g, sum(t22489.x)@1 as sx, sum(t22489.y)@2 as sy]
+05)--------SortExec: TopK(fetch=4), expr=[sum(t22489.x)@1 DESC], preserve_partitioning=[true]
 06)----------AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[sum(t22489.x), sum(t22489.y)]
 07)------------RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=1
 08)--------------AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[sum(t22489.x), sum(t22489.y)]

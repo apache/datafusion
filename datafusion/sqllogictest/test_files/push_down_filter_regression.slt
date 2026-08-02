@@ -222,7 +222,7 @@ set datafusion.execution.collect_statistics = true;
 # execution (the order in which Partial aggregates publish dynamic filter
 # updates races against when the scan reads each partition). The original
 # Rust test only asserted matched < 4; the important invariant here is
-# that the DynamicFilter text is correct.
+# that dynamic filtering is applied and metrics are suppressed.
 statement ok
 set datafusion.explain.analyze_level = summary;
 
@@ -236,7 +236,7 @@ Plan with Metrics
 01)AggregateExec: mode=Final, gby=[], aggr=[max(agg_dyn_e2e.column1)], metrics=[]
 02)--CoalescePartitionsExec, metrics=[]
 03)----AggregateExec: mode=Partial, gby=[], aggr=[max(agg_dyn_e2e.column1)], metrics=[]
-04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_2.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_dyn/file_3.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 > 1 AND DynamicFilter [ column1@0 > 4 ], dynamic_rg_pruning=eligible, pruning_predicate=column1_null_count@1 != row_count@2 AND column1_max@0 > 1 AND column1_null_count@1 != row_count@2 AND column1_max@0 > 4, required_guarantees=[], metrics=[]
+04)------DataSourceExec: file_groups=<slt:ignore> projection=[column1], file_type=parquet, predicate=column1@0 > 1 AND DynamicFilter [ column1@0 > <slt:ignore> ], dynamic_rg_pruning=eligible, pruning_predicate=column1_null_count@1 != row_count@2 AND column1_max@0 > 1 AND column1_null_count@1 != row_count@2 AND column1_max@0 > <slt:ignore>, required_guarantees=[], metrics=[]
 
 statement ok
 reset datafusion.explain.analyze_categories;
@@ -514,6 +514,44 @@ physical_plan
 04)------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
 05)--------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(agg_filter_pushdown.b)]
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_filter_pushdown.parquet]]}, projection=[a, b], file_type=parquet
+
+# Mixed filters on an aggregate output and a grouping column must preserve their
+# parent filter result order. The grouping-column filter can push below the
+# aggregate, but the aggregate-output filter must remain above it.
+# Disable logical optimizer passes for this regression so the logical filter
+# pushdown rule does not split the mixed predicate before the physical
+# `AggregateExec::gather_filters_for_pushdown` path sees it.
+statement ok
+set datafusion.optimizer.max_passes = 0;
+
+query TT
+EXPLAIN SELECT a, b, cnt FROM (
+  SELECT a, b, count(b) AS cnt
+  FROM agg_filter_pushdown
+  GROUP BY a, b
+) q WHERE cnt = 2 AND b = 'foo';
+----
+physical_plan
+01)FilterExec: cnt@2 = 2
+02)--ProjectionExec: expr=[a@0 as a, b@1 as b, count(agg_filter_pushdown.b)@2 as cnt]
+03)----AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b], aggr=[count(agg_filter_pushdown.b)]
+04)------RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=4
+05)--------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b], aggr=[count(agg_filter_pushdown.b)]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_filter_pushdown.parquet]]}, projection=[a, b], file_type=parquet, predicate=b@1 = CAST(foo AS Utf8View), pruning_predicate=b_null_count@2 != row_count@3 AND b_min@0 <= foo AND foo <= b_max@1, required_guarantees=[]
+
+# If the aggregate-output filter is incorrectly removed, this query returns 1.
+query I
+SELECT count(*) FROM (
+  SELECT a, b, count(b) AS cnt
+  FROM agg_filter_pushdown
+  GROUP BY a, b
+) q WHERE cnt = 2 AND b = 'foo';
+----
+0
+
+statement ok
+reset datafusion.optimizer.max_passes;
 
 statement ok
 drop table agg_filter_pushdown;

@@ -32,6 +32,7 @@ pub mod metadata;
 mod metrics;
 mod opener;
 mod page_filter;
+mod projection_read_plan;
 mod push_decoder;
 mod reader;
 mod row_filter;
@@ -47,6 +48,7 @@ mod virtual_column;
 mod writer;
 
 pub use access_plan::{ParquetAccessPlan, ParquetRowSelection, RowGroupAccess};
+pub use bloom_filter::BloomFilterStatistics;
 pub use file_format::*;
 pub use metrics::ParquetFileMetrics;
 pub use page_filter::PagePruningAccessPlanFilter;

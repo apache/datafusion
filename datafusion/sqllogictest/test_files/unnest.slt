@@ -278,8 +278,8 @@ NULL NULL 17
 NULL NULL 18
 
 query IIII
-select 
-    unnest(column1), unnest(column2) + 2, 
+select
+    unnest(column1), unnest(column2) + 2,
     column3 * 10, unnest(array_remove(column1, 4))
 from unnest_table;
 ----
@@ -903,7 +903,7 @@ query TT
 explain select * from unnest_table u, unnest(u.column1);
 ----
 logical_plan
-01)Cross Join: 
+01)Cross Join:
 02)--SubqueryAlias: u
 03)----TableScan: unnest_table projection=[column1, column2, column3, column4, column5]
 04)--Subquery:
@@ -1060,8 +1060,8 @@ logical_plan
 04)------Projection: t.column1 AS __unnest_placeholder(t.column1), t.column2
 05)--------TableScan: t projection=[column1, column2]
 physical_plan
-01)SortExec: expr=[unnested@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[__unnest_placeholder(t.column1,depth=1)@0 as unnested, column2@1 as column2]
+01)ProjectionExec: expr=[__unnest_placeholder(t.column1,depth=1)@0 as unnested, column2@1 as column2]
+02)--SortExec: expr=[__unnest_placeholder(t.column1,depth=1)@0 ASC NULLS LAST], preserve_partitioning=[false]
 03)----UnnestExec
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_array.parquet]]}, projection=[column1@0 as __unnest_placeholder(t.column1), column2], output_ordering=[column2@1 ASC NULLS LAST], file_type=parquet
 
@@ -1107,8 +1107,8 @@ logical_plan
 05)--------Projection: struct(t.column1, t.column2, t.column3) AS __unnest_placeholder(struct(t.column1,t.column2,t.column3))
 06)----------TableScan: t projection=[column1, column2, column3]
 physical_plan
-01)SortExec: expr=[struct(t.column1,t.column2,t.column3).c0@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[__unnest_placeholder(struct(t.column1,t.column2,t.column3)).c0@0 as struct(t.column1,t.column2,t.column3).c0, __unnest_placeholder(struct(t.column1,t.column2,t.column3)).c1@1 as struct(t.column1,t.column2,t.column3).c1, __unnest_placeholder(struct(t.column1,t.column2,t.column3)).c2@2 as struct(t.column1,t.column2,t.column3).c2]
+01)ProjectionExec: expr=[__unnest_placeholder(struct(t.column1,t.column2,t.column3)).c0@0 as struct(t.column1,t.column2,t.column3).c0, __unnest_placeholder(struct(t.column1,t.column2,t.column3)).c1@1 as struct(t.column1,t.column2,t.column3).c1, __unnest_placeholder(struct(t.column1,t.column2,t.column3)).c2@2 as struct(t.column1,t.column2,t.column3).c2]
+02)--SortExec: expr=[__unnest_placeholder(struct(t.column1,t.column2,t.column3)).c0@0 ASC NULLS LAST], preserve_partitioning=[false]
 03)----UnnestExec
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/unnest/ordered_tuples.parquet]]}, projection=[struct(column1@0, column2@1, column3@2) as __unnest_placeholder(struct(t.column1,t.column2,t.column3))], file_type=parquet
 
@@ -1423,7 +1423,7 @@ DROP TABLE unused_unnest_pruning;
 ## Regression: pushing a leaf-extracted projection (containing get_field,
 ## which has MoveTowardsLeafNodes placement) through an `Unnest` used to
 ## trip `Assertion failed: expr.is_empty(): Unnest` inside
-## `PushDownLeafProjections`. The optimizer must not try to pushdown these 
+## `PushDownLeafProjections`. The optimizer must not try to pushdown these
 ## projections through an `Unnest` and should produce a valid plan.
 
 statement ok
@@ -1463,3 +1463,186 @@ FROM list_struct_table;
 
 statement ok
 DROP TABLE list_struct_table;
+
+####################################
+# `unnest_outer` Tests
+#
+# `unnest_outer(col)` is the outer-unnest peer to `unnest(col)`. Rows whose
+# input list is `NULL` or empty produce a single output row containing
+# `NULL`; rows with values are exploded element-by-element the same way as
+# plain `unnest`.
+#
+# Column types on the tables below are inferred from the `VALUES` rows.
+# DataFusion's SQL parser does not accept PostgreSQL `TYPE[]` array-column
+# syntax inside `CREATE TABLE ... AS VALUES`, so tables are declared as
+# CTAS over a `VALUES` subquery with aliased column names.
+####################################
+
+## unnest vs unnest_outer on an integer list
+
+statement ok
+CREATE TABLE int_lists AS
+SELECT column1 AS id, column2 AS xs FROM (VALUES
+    (1, [10, 20, 30]),
+    (4, [40]),
+    (5, [NULL, 50]),
+    (2, arrow_cast(make_array(), 'List(Int64)')),
+    (3, NULL)
+);
+
+## Plain `unnest`: drops both NULL and empty input rows.
+## Inner NULL elements survive.
+query II
+SELECT id, unnest(xs) AS x FROM int_lists ORDER BY id, x;
+----
+1 10
+1 20
+1 30
+4 40
+5 50
+5 NULL
+
+## `unnest_outer`: NULL and empty input lists each produce one NULL row.
+query II
+SELECT id, unnest_outer(xs) AS x FROM int_lists ORDER BY id, x;
+----
+1 10
+1 20
+1 30
+2 NULL
+3 NULL
+4 40
+5 50
+5 NULL
+
+## String list with inner NULLs: inner NULL elements must survive (they are
+## not the same as "empty"), while NULL and empty input lists become a
+## single NULL output row.
+
+statement ok
+CREATE TABLE str_lists AS
+SELECT column1 AS id, column2 AS tags FROM (VALUES
+    ('A', ['x', 'y']),
+    ('B', ['p', NULL, 'q']),
+    ('C', arrow_cast(make_array(), 'List(Utf8)')),
+    ('D', NULL)
+);
+
+query TT
+SELECT id, unnest_outer(tags) AS tag FROM str_lists ORDER BY id, tag;
+----
+A x
+A y
+B p
+B q
+B NULL
+C NULL
+D NULL
+
+## Mixed list lengths — verify row-wise expansion.
+
+statement ok
+CREATE TABLE varied_lists AS
+SELECT column1 AS id, column2 AS xs FROM (VALUES
+    (1, [1, 2, 3, 4]),
+    (2, [5]),
+    (3, arrow_cast(make_array(), 'List(Int64)')),
+    (4, NULL)
+);
+
+query II
+SELECT id, unnest_outer(xs) AS x FROM varied_lists ORDER BY id, x;
+----
+1 1
+1 2
+1 3
+1 4
+2 5
+3 NULL
+4 NULL
+
+## Aliased output column.
+query II
+SELECT id, unnest_outer(xs) AS unwrapped FROM int_lists WHERE id = 2;
+----
+2 NULL
+
+## Mixing `unnest` and `unnest_outer` in one SELECT is a planning error.
+## `UnnestOptions` is per-`UnnestExec`, so we refuse to silently pick one mode.
+
+statement error DataFusion error: Error during planning: Cannot mix `unnest\(\.\.\.\)` with `unnest_outer\(\.\.\.\)` in the same SELECT
+SELECT unnest(xs), unnest_outer(xs) FROM int_lists;
+
+## Chained `unnest` → `unnest_outer` via subquery.
+## `unnest(xs)` (inner) drops NULL and empty outer rows, then
+## `unnest_outer(ys)` (outer) preserves NULL and empty sub-lists from the
+## inner unnest.
+
+statement ok
+CREATE TABLE nested_lists AS
+SELECT column1 AS id, column2 AS xs FROM (VALUES
+    (100, [[1, 2, 3], NULL, [4, 5]]),
+    (200, [[7], arrow_cast(make_array(), 'List(Int64)')]),
+    (300, NULL)
+);
+
+query II
+SELECT id, unnest_outer(ys) AS y
+FROM (SELECT id, unnest(xs) AS ys FROM nested_lists)
+ORDER BY id, y;
+----
+100 1
+100 2
+100 3
+100 4
+100 5
+100 NULL
+200 7
+200 NULL
+
+statement ok
+DROP TABLE nested_lists;
+
+## `unnest_outer` agrees with `unnest` when no NULL or empty rows exist.
+
+statement ok
+CREATE TABLE dense_lists AS
+SELECT column1 AS id, column2 AS xs FROM (VALUES
+    (1, [10, 20]),
+    (2, [30]),
+    (3, [40, 50, 60])
+);
+
+query II
+SELECT id, unnest(xs) AS x FROM dense_lists ORDER BY id, x;
+----
+1 10
+1 20
+2 30
+3 40
+3 50
+3 60
+
+query II
+SELECT id, unnest_outer(xs) AS x FROM dense_lists ORDER BY id, x;
+----
+1 10
+1 20
+2 30
+3 40
+3 50
+3 60
+
+## Cleanup
+
+statement ok
+DROP TABLE int_lists;
+
+statement ok
+DROP TABLE str_lists;
+
+statement ok
+DROP TABLE varied_lists;
+
+statement ok
+DROP TABLE dense_lists;

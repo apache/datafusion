@@ -599,30 +599,6 @@ impl DFSchema {
             .all(|(dffield, arrowfield)| dffield.name() == arrowfield.name())
     }
 
-    /// Check to see if fields in 2 Arrow schemas are compatible
-    #[deprecated(since = "47.0.0", note = "This method is no longer used")]
-    pub fn check_arrow_schema_type_compatible(
-        &self,
-        arrow_schema: &Schema,
-    ) -> Result<()> {
-        let self_arrow_schema = self.as_arrow();
-        self_arrow_schema
-            .fields()
-            .iter()
-            .zip(arrow_schema.fields().iter())
-            .try_for_each(|(l_field, r_field)| {
-                if !can_cast_types(r_field.data_type(), l_field.data_type()) {
-                    _plan_err!("Column {} (type: {}) is not compatible with column {} (type: {})",
-                                r_field.name(),
-                                r_field.data_type(),
-                                l_field.name(),
-                                l_field.data_type())
-                } else {
-                    Ok(())
-                }
-            })
-    }
-
     /// Returns true if the two schemas have the same qualified named
     /// fields with logically equivalent data types. Returns false otherwise.
     ///
@@ -639,11 +615,6 @@ impl DFSchema {
                 && f1.name() == f2.name()
                 && Self::datatype_is_logically_equal(f1.data_type(), f2.data_type())
         })
-    }
-
-    #[deprecated(since = "47.0.0", note = "Use has_equivalent_names_and_types` instead")]
-    pub fn equivalent_names_and_types(&self, other: &Self) -> bool {
-        self.has_equivalent_names_and_types(other).is_ok()
     }
 
     /// Returns Ok if the two schemas have the same qualified named
@@ -1281,13 +1252,13 @@ pub trait SchemaExt {
     /// This is a specialized version of Eq that ignores differences
     /// in nullability and metadata.
     ///
-    /// It works the same as [`DFSchema::equivalent_names_and_types`].
+    /// It works the same as [`DFSchema::has_equivalent_names_and_types`].
     fn equivalent_names_and_types(&self, other: &Self) -> bool;
 
     /// Returns nothing if the two schemas have the same qualified named
     /// fields with logically equivalent data types. Returns internal error otherwise.
     ///
-    /// Use [DFSchema]::equivalent_names_and_types for stricter semantic type
+    /// Use [DFSchema]::has_equivalent_names_and_types for stricter semantic type
     /// equivalence checking.
     ///
     /// It is only used by insert into cases.
