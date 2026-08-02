@@ -552,13 +552,28 @@ async fn dynamic_rg_pruning_fires_for_multi_column_sort_leading_tied() {
         .await;
 
     assert_eq!(output.result_rows, 5, "query must return LIMIT rows");
+    // The leading key `a = 1` is tied everywhere, so correctness rests
+    // entirely on the secondary key: the five smallest `b` values must come
+    // back, in ascending secondary order. Assert the exact result rows
+    // (full two-column text, in order) rather than just probing for each
+    // `b` — a bare `| {b} ` match would be satisfied by the leading `a = 1`
+    // column even if that `b` were missing or misordered.
     let formatted = output.pretty_results();
-    for b in [0i64, 1, 2, 3, 4] {
-        assert!(
-            formatted.contains(&format!("| {b} ")),
-            "output must contain b={b}; got:\n{formatted}",
-        );
-    }
+    let data_rows: Vec<&str> = formatted
+        .lines()
+        .filter(|line| line.starts_with("| 1 |"))
+        .collect();
+    assert_eq!(
+        data_rows,
+        vec![
+            "| 1 | 0 |",
+            "| 1 | 1 |",
+            "| 1 | 2 |",
+            "| 1 | 3 |",
+            "| 1 | 4 |",
+        ],
+        "output must be exactly (a=1, b=0..=4) in ascending secondary order; got:\n{formatted}",
+    );
 
     let pruned = output
         .row_groups_pruned_dynamic_filter()
