@@ -1758,6 +1758,7 @@ fn append_probe_indices_in_order(
 /// Metrics for build & probe joins
 #[derive(Clone, Debug)]
 pub(crate) struct BuildProbeJoinMetrics {
+    // Keep these metric descriptions in sync with docs/source/user-guide/metrics.md.
     pub(crate) baseline: BaselineMetrics,
     /// Total time for collecting build-side of join
     pub(crate) build_time: metrics::Time,
@@ -1773,7 +1774,7 @@ pub(crate) struct BuildProbeJoinMetrics {
     pub(crate) input_batches: metrics::Count,
     /// Number of rows consumed by probe-side this operator
     pub(crate) input_rows: metrics::Count,
-    /// Fraction of probe rows that found more than one match
+    /// Fraction of probe rows that found at least one match
     pub(crate) probe_hit_rate: metrics::RatioMetrics,
     /// Average number of build matches per matched probe row
     pub(crate) avg_fanout: metrics::RatioMetrics,
