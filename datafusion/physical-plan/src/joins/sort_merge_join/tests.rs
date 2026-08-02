@@ -4890,15 +4890,15 @@ async fn filtered_boundary_pending_outer_rows() -> Result<()> {
 
 // ── Bitwise stream spill tests ─────────────────────────────────────────────
 
-/// Exercises inner key group spilling under memory pressure.
-///
-/// Uses a tiny memory limit (100 bytes) with disk spilling enabled. Since our
-/// operator only buffers inner rows when a filter is present, this test includes
-/// a filter (c1 < c2, always true). Verifies:
-/// 1. Spill metrics are recorded (spill_count, spilled_bytes, spilled_rows > 0)
-/// 2. Results match a non-spilled run
-#[tokio::test]
-async fn bitwise_spill_with_filter() -> Result<()> {
+struct FilteredBitwiseSpillFixture {
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
+    on: JoinOn,
+    sort_options: Vec<SortOptions>,
+    filter: JoinFilter,
+}
+
+fn filtered_bitwise_spill_fixture() -> Result<FilteredBitwiseSpillFixture> {
     let left = build_table(
         ("a1", &vec![1, 2, 3, 4, 5, 6]),
         ("b1", &vec![1, 2, 3, 4, 5, 6]),
@@ -4914,29 +4914,33 @@ async fn bitwise_spill_with_filter() -> Result<()> {
         Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
     )];
     let sort_options = vec![SortOptions::default(); on.len()];
+    let filter = build_c1_lt_c2_filter(left.schema().as_ref(), right.schema().as_ref());
 
-    // c1 < c2 is always true for matching keys
-    let filter = JoinFilter::new(
-        Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("c1", 0)),
-            Operator::Lt,
-            Arc::new(Column::new("c2", 1)),
-        )),
-        vec![
-            ColumnIndex {
-                index: 2,
-                side: JoinSide::Left,
-            },
-            ColumnIndex {
-                index: 2,
-                side: JoinSide::Right,
-            },
-        ],
-        Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Int32, false),
-            Field::new("c2", DataType::Int32, false),
-        ])),
-    );
+    Ok(FilteredBitwiseSpillFixture {
+        left,
+        right,
+        on,
+        sort_options,
+        filter,
+    })
+}
+
+/// Exercises inner key group spilling under memory pressure.
+///
+/// Uses a tiny memory limit (100 bytes) with disk spilling enabled. Since our
+/// operator only buffers inner rows when a filter is present, this test includes
+/// a filter (c1 < c2, always true). Verifies:
+/// 1. Spill metrics are recorded (spill_count, spilled_bytes, spilled_rows > 0)
+/// 2. Results match a non-spilled run
+#[tokio::test]
+async fn bitwise_spill_with_filter() -> Result<()> {
+    let FilteredBitwiseSpillFixture {
+        left,
+        right,
+        on,
+        sort_options,
+        filter,
+    } = filtered_bitwise_spill_fixture()?;
 
     let runtime = RuntimeEnvBuilder::new()
         .with_memory_limit(100, 1.0)
@@ -5028,6 +5032,81 @@ async fn bitwise_spill_with_filter() -> Result<()> {
                 "spilled vs non-spilled results differ for {join_type:?}, batch_size={batch_size}"
             );
         }
+    }
+
+    Ok(())
+}
+
+/// Semi/anti/mark joins use `BitwiseSortMergeJoinStream`, which buffers the
+/// inner key group for filter evaluation. When that buffer exhausts the memory
+/// pool and the `DiskManager` has spilling disabled, the stream must surface a
+/// clear "Disk spilling disabled" error instead of spilling or panicking.
+///
+/// The `overallocation_*_no_spill` tests cover this contract for the
+/// Inner/Left/Right/Full `MaterializingSortMergeJoinStream`; this is the
+/// mirror for the bitwise stream, whose disk-disabled error path was otherwise
+/// untested (only the successful `bitwise_spill_with_filter` spill path was).
+#[tokio::test]
+async fn bitwise_filtered_no_spill() -> Result<()> {
+    let FilteredBitwiseSpillFixture {
+        left,
+        right,
+        on,
+        sort_options,
+        filter,
+    } = filtered_bitwise_spill_fixture()?;
+
+    // Tiny memory pool with the DiskManager disabled: spilling is impossible.
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(100, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+        )
+        .build_arc()?;
+    let session_config = SessionConfig::default().with_batch_size(1);
+
+    for join_type in [
+        LeftSemi, LeftAnti, RightSemi, RightAnti, LeftMark, RightMark,
+    ] {
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config.clone())
+                .with_runtime(Arc::clone(&runtime)),
+        );
+
+        let join = SortMergeJoinExec::try_new(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            Some(filter.clone()),
+            join_type,
+            sort_options.clone(),
+            NullEquality::NullEqualsNothing,
+        )?;
+        let stream = join.execute(0, task_ctx)?;
+        let err = common::collect(stream).await.unwrap_err();
+
+        assert_contains!(err.to_string(), "Failed to allocate additional");
+        assert_contains!(err.to_string(), "SMJStream[0]");
+        assert_contains!(err.to_string(), "Disk spilling disabled");
+        let metrics = join
+            .metrics()
+            .unwrap_or_else(|| panic!("metrics missing for {join_type:?}"));
+        assert_eq!(
+            metrics.spill_count(),
+            Some(0),
+            "unexpected spill for {join_type:?} with disk disabled",
+        );
+        assert_eq!(
+            metrics.spilled_bytes(),
+            Some(0),
+            "unexpected spilled bytes for {join_type:?} with disk disabled",
+        );
+        assert_eq!(
+            metrics.spilled_rows(),
+            Some(0),
+            "unexpected spilled rows for {join_type:?} with disk disabled",
+        );
     }
 
     Ok(())
