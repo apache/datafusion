@@ -302,20 +302,12 @@ where
             continue;
         }
         let regex = regex_array.value(i);
-        if regex.is_empty() {
-            result.append_value(0);
-            continue;
-        }
 
         if values.is_null(i) {
             result.append_null();
             continue;
         }
         let value = values.value(i);
-        if value.is_empty() {
-            result.append_value(0);
-            continue;
-        }
 
         let flags = match flags_array {
             Some(flags) if !flags.is_null(i) => Some(flags.value(i)),
@@ -376,7 +368,7 @@ impl<'a> RegexCache<'a> {
 /// Returns the 1-based character position of the `n`-th match of `pattern` in
 /// `value`, or 0 if there is no such match. The search begins at the 1-based
 /// character position `start`. A positive `subexpr` selects that capture group
-/// of the first match instead of the `n`-th match. `value` is non-empty.
+/// of the first match instead of the `n`-th match.
 fn get_index(
     value: &str,
     pattern: &Regex,
@@ -396,9 +388,16 @@ fn get_index(
         ));
     }
 
-    // Byte offset of the `start`-th character. A `start` past the end of the
-    // string leaves nothing to search, so no match is possible.
-    let Some((byte_start_offset, _)) = value.char_indices().nth((start - 1) as usize)
+    let Ok(start_index) = usize::try_from(start - 1) else {
+        return Ok(0);
+    };
+    // Include the terminal byte boundary so an empty pattern can match after
+    // the last character, including in an empty string.
+    let Some(byte_start_offset) = value
+        .char_indices()
+        .map(|(offset, _)| offset)
+        .chain(std::iter::once(value.len()))
+        .nth(start_index)
     else {
         return Ok(0);
     };
@@ -451,6 +450,10 @@ mod tests {
         test_case_sensitive_regexp_instr_array_nth::<GenericStringArray<i32>>();
         test_case_sensitive_regexp_instr_array_nth::<GenericStringArray<i64>>();
         test_case_sensitive_regexp_instr_array_nth::<StringViewArray>();
+
+        test_case_sensitive_regexp_instr_empty_pattern::<GenericStringArray<i32>>();
+        test_case_sensitive_regexp_instr_empty_pattern::<GenericStringArray<i64>>();
+        test_case_sensitive_regexp_instr_empty_pattern::<StringViewArray>();
     }
 
     fn regexp_instr_with_scalar_values(args: &[ScalarValue]) -> Result<ColumnarValue> {
@@ -479,7 +482,7 @@ mod tests {
     fn test_case_sensitive_regexp_instr_nulls() {
         let v = "";
         let r = "";
-        let expected = 0;
+        let expected = 1;
         let regex_sv = ScalarValue::Utf8(Some(r.to_string()));
         let re = regexp_instr_with_scalar_values(&[v.to_string().into(), regex_sv]);
         // let res_exp = re.unwrap();
@@ -790,6 +793,26 @@ mod tests {
         let start = Int64Array::from(vec![1, 1, 1, 1]);
         let nth = Int64Array::from(vec![1, 2, 3, 4]);
         let expected = Int64Array::from(vec![1, 4, 7, 0]);
+
+        let re = regexp_instr_func(&[
+            Arc::new(values),
+            Arc::new(regex),
+            Arc::new(start),
+            Arc::new(nth),
+        ])
+        .unwrap();
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    fn test_case_sensitive_regexp_instr_empty_pattern<A>()
+    where
+        A: From<Vec<&'static str>> + Array + 'static,
+    {
+        let values = A::from(vec!["abc", "", "abc", "abc", "😀"]);
+        let regex = A::from(vec!["", "", "", "", ""]);
+        let start = Int64Array::from(vec![1, 1, 4, 5, 1]);
+        let nth = Int64Array::from(vec![1, 1, 1, 1, 2]);
+        let expected = Int64Array::from(vec![1, 1, 4, 0, 2]);
 
         let re = regexp_instr_func(&[
             Arc::new(values),
