@@ -586,7 +586,7 @@ impl SingleHashAggregateStream {
         let timer = elapsed_compute.timer();
         let replay = match spill_context.spill_table(&mut hash_table) {
             Ok(()) => {
-                let group_by_metrics = hash_table.group_by_metrics();
+                let group_by_metrics = hash_table.group_by_metrics().clone();
                 drop(hash_table);
                 match self.reservation.try_resize(0) {
                     Ok(()) => (*spill_context).into_replay_stream(

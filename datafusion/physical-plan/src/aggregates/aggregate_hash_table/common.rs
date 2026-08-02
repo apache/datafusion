@@ -288,8 +288,8 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         }
     }
 
-    pub(in crate::aggregates) fn group_by_metrics(&self) -> GroupByMetrics {
-        self.group_by_metrics.clone()
+    pub(in crate::aggregates) fn group_by_metrics(&self) -> &GroupByMetrics {
+        &self.group_by_metrics
     }
 
     /// Returns the number of distinct groups accumulated so far.
