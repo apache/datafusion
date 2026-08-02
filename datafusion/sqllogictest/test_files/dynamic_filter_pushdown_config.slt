@@ -490,6 +490,40 @@ ORDER BY l.id LIMIT 2;
 2 left2
 4 left4
 
+# A parent filter must remain when only an anti join's non-output side accepts
+# pushdown; otherwise filtering that side creates incorrect anti-join rows.
+statement ok
+SET datafusion.optimizer.max_passes = 0;
+
+statement ok
+SET datafusion.optimizer.join_reordering = false;
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+query I
+SELECT count(*)
+FROM join_left l LEFT ANTI JOIN right_parquet r USING (id)
+WHERE false;
+----
+0
+
+query I
+SELECT count(*)
+FROM right_parquet r RIGHT ANTI JOIN join_left l USING (id)
+WHERE false;
+----
+0
+
+statement ok
+RESET datafusion.optimizer.max_passes;
+
+statement ok
+RESET datafusion.optimizer.join_reordering;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;
+
 # Test 3: Test independent control
 
 # Disable TopK, keep Join enabled
