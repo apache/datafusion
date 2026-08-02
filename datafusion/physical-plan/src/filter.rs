@@ -1457,7 +1457,8 @@ mod tests {
         let predicate = binary(ceil_x, Operator::Gt, lit(12.0f64), &schema)?;
 
         let filter = Arc::new(FilterExec::try_new(predicate, input)?);
-        let statistics = filter.statistics_with_args(&StatisticsArgs::new())?;
+        let statistics =
+            StatisticsContext::new().compute(filter.as_ref(), &StatisticsArgs::new())?;
 
         let input_num_rows = 100.0_f64;
         let num_rows = statistics.num_rows.get_value().copied().unwrap_or(100);
