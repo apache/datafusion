@@ -15,21 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Regression tests for `UNION ALL` between inputs where the same column is
-//! nullable on one side and `NOT NULL` on the other.
-//!
-//! DataFusion's analyzer computes the union's output schema by OR-ing the
-//! nullability of each input's field (`coerce_union_schema`), so the
-//! *declared* output field is nullable whenever any leg is. But before this
-//! fix, `UnionExec::execute` handed out each child's `RecordBatch`es
-//! completely unchanged, so a leg whose column was already `NOT NULL` (and
-//! therefore needed no `CAST`) kept producing batches with a `NOT NULL`
-//! field, contradicting the union's own declared (nullable) schema. Any
-//! consumer that checks schema equality across batches from the same
-//! stream -- e.g. `pyarrow.Table.from_batches` via the Arrow C Stream FFI
-//! used by the `datafusion` Python bindings -- then rejects the stream with
-//! `ArrowInvalid: Schema at index N was different`, even though every
-//! individual `SELECT` runs fine on its own. See
+//! Regression tests asserting that every batch yielded by a `UNION ALL`
+//! reports the union's own declared schema, even when the same column is
+//! `NOT NULL` on one leg and nullable on another. See
 //! <https://github.com/apache/datafusion/issues/15394>.
 
 use std::sync::Arc;

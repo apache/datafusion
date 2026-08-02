@@ -121,6 +121,21 @@ impl Stream for SchemaConformingStream {
     }
 }
 
+/// Wraps `stream` in a [`SchemaConformingStream`] if its schema disagrees
+/// with `schema`, otherwise returns it unchanged. See
+/// [`SchemaConformingStream`] and
+/// <https://github.com/apache/datafusion/issues/15394>.
+fn conform_stream_schema(
+    schema: SchemaRef,
+    stream: SendableRecordBatchStream,
+) -> SendableRecordBatchStream {
+    if stream.schema() == schema {
+        stream
+    } else {
+        Box::pin(SchemaConformingStream::new(schema, stream))
+    }
+}
+
 /// `UnionExec`: `UNION ALL` execution plan.
 ///
 /// `UnionExec` combines multiple inputs with the same schema by
@@ -352,21 +367,7 @@ impl ExecutionPlan for UnionExec {
             if partition < input.output_partitioning().partition_count() {
                 let stream = input.execute(partition, context)?;
                 debug!("Found a Union partition to execute");
-                // An input's schema can disagree with `UnionExec`'s own
-                // (declared) schema -- most commonly a field that is
-                // nullable in the union's schema (because another input's
-                // field is nullable) but not on this particular input's
-                // batches. Re-stamp each batch with the union's schema so
-                // every partition -- regardless of which input it came from
-                // -- reports the same schema, which downstream consumers
-                // that check schema equality across batches (e.g. Arrow's
-                // C Stream FFI / pyarrow) require. See
-                // <https://github.com/apache/datafusion/issues/15394>.
-                let stream = if stream.schema() == self.schema() {
-                    stream
-                } else {
-                    Box::pin(SchemaConformingStream::new(self.schema(), stream))
-                };
+                let stream = conform_stream_schema(self.schema(), stream);
                 return Ok(Box::pin(ObservedStream::new(
                     stream,
                     baseline_metrics,
@@ -741,7 +742,8 @@ impl ExecutionPlan for InterleaveExec {
         let mut input_stream_vec = vec![];
         for input in self.inputs.iter() {
             if partition < input.output_partitioning().partition_count() {
-                input_stream_vec.push(input.execute(partition, Arc::clone(&context))?);
+                let stream = input.execute(partition, Arc::clone(&context))?;
+                input_stream_vec.push(conform_stream_schema(self.schema(), stream));
             } else {
                 // Do not find a partition to execute
                 break;
@@ -1051,6 +1053,50 @@ mod tests {
 
         let result: Vec<RecordBatch> = collect(union_exec, task_ctx).await?;
         assert_eq!(result.len(), 9);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_interleave_conforms_batch_schema() -> Result<()> {
+        // Two inputs agree on the column's type but disagree on nullability;
+        // InterleaveExec's declared schema ORs nullability across inputs, so
+        // every yielded batch must be re-stamped with that schema. See
+        // <https://github.com/apache/datafusion/issues/15394>.
+        let task_ctx = Arc::new(TaskContext::default());
+
+        let schema_not_null =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch_not_null = RecordBatch::try_new(
+            Arc::clone(&schema_not_null),
+            vec![Arc::new(arrow::array::Int32Array::from(vec![1, 2]))],
+        )?;
+
+        let schema_nullable =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let batch_nullable = RecordBatch::try_new(
+            Arc::clone(&schema_nullable),
+            vec![Arc::new(arrow::array::Int32Array::from(vec![3, 4]))],
+        )?;
+
+        let hash_expr = vec![col("a", schema_not_null.as_ref())?];
+        let left: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+            TestMemoryExec::try_new_exec(&[vec![batch_not_null]], schema_not_null, None)?,
+            Partitioning::Hash(hash_expr.clone(), 1),
+        )?);
+        let right: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+            TestMemoryExec::try_new_exec(&[vec![batch_nullable]], schema_nullable, None)?,
+            Partitioning::Hash(hash_expr, 1),
+        )?);
+
+        let interleave: Arc<dyn ExecutionPlan> =
+            Arc::new(InterleaveExec::try_new(vec![left, right])?);
+        let interleave_schema = interleave.schema();
+        assert!(interleave_schema.field(0).is_nullable());
+
+        for batch in collect(interleave, task_ctx).await? {
+            assert_eq!(batch.schema(), interleave_schema);
+        }
 
         Ok(())
     }
