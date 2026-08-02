@@ -158,6 +158,7 @@ To get started, see
    :caption: Contributor Guide
 
    contributor-guide/index
+   contributor-guide/pr_review
    contributor-guide/communication
    contributor-guide/development_environment
    contributor-guide/architecture
