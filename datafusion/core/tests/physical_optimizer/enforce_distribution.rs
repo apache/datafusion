@@ -756,53 +756,6 @@ enum RangeKeyMatch {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum ThresholdState {
-    Met,
-    NotMet,
-}
-
-impl ThresholdState {
-    fn value(self, input_partitions: usize) -> usize {
-        match self {
-            Self::Met => input_partitions,
-            Self::NotMet => input_partitions + 1,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum PreserveFileState {
-    Disabled,
-    Met,
-    NotMet,
-}
-
-impl PreserveFileState {
-    fn value(self, input_partitions: usize) -> usize {
-        match self {
-            Self::Disabled => 0,
-            Self::Met => input_partitions,
-            Self::NotMet => input_partitions + 1,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum TargetPartitions {
-    Equal,
-    Greater,
-}
-
-impl TargetPartitions {
-    fn value(self, input_partitions: usize) -> usize {
-        match self {
-            Self::Equal => input_partitions,
-            Self::Greater => input_partitions + 1,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
 enum ExpectedPlan {
     Reuse,
     Hash,
@@ -810,52 +763,92 @@ enum ExpectedPlan {
 
 #[derive(Debug, Clone, Copy)]
 struct RangeSatisfactionConfigCase {
-    subset_threshold: ThresholdState,
-    preserve_file_partitions: PreserveFileState,
-    target_partitions: TargetPartitions,
+    subset_met: bool,
+    preserve_met: Option<bool>,
+    increase_partitions: bool,
     // Expected plans for Exact, Subset, and Incompatible keys, respectively.
     expected_plans: [ExpectedPlan; 3],
-}
-
-impl RangeSatisfactionConfigCase {
-    fn new(
-        subset_threshold: ThresholdState,
-        preserve_file_partitions: PreserveFileState,
-        target_partitions: TargetPartitions,
-        expected_plans: [ExpectedPlan; 3],
-    ) -> Self {
-        Self {
-            subset_threshold,
-            preserve_file_partitions,
-            target_partitions,
-            expected_plans,
-        }
-    }
 }
 
 #[test]
 fn range_satisfaction_config_matrix() -> Result<()> {
     const INPUT_PARTITIONS: usize = 4;
     use ExpectedPlan::{Hash, Reuse};
-    use PreserveFileState::{Disabled, Met as FileMet, NotMet as FileNotMet};
     use RangeKeyMatch::{Exact, Incompatible, Subset};
-    use TargetPartitions::{Equal, Greater};
-    use ThresholdState::{Met, NotMet};
 
     let config_cases = [
-        // subset  preserve      target     exact  subset  incompatible
-        RangeSatisfactionConfigCase::new(NotMet, Disabled, Equal, [Reuse, Hash, Hash]),
-        RangeSatisfactionConfigCase::new(NotMet, Disabled, Greater, [Hash, Hash, Hash]),
-        RangeSatisfactionConfigCase::new(NotMet, FileNotMet, Equal, [Reuse, Hash, Hash]),
-        RangeSatisfactionConfigCase::new(NotMet, FileNotMet, Greater, [Hash, Hash, Hash]),
-        RangeSatisfactionConfigCase::new(NotMet, FileMet, Equal, [Reuse, Hash, Hash]),
-        RangeSatisfactionConfigCase::new(NotMet, FileMet, Greater, [Reuse, Reuse, Hash]),
-        RangeSatisfactionConfigCase::new(Met, Disabled, Equal, [Reuse, Reuse, Hash]),
-        RangeSatisfactionConfigCase::new(Met, Disabled, Greater, [Reuse, Reuse, Hash]),
-        RangeSatisfactionConfigCase::new(Met, FileNotMet, Equal, [Reuse, Reuse, Hash]),
-        RangeSatisfactionConfigCase::new(Met, FileNotMet, Greater, [Reuse, Reuse, Hash]),
-        RangeSatisfactionConfigCase::new(Met, FileMet, Equal, [Reuse, Reuse, Hash]),
-        RangeSatisfactionConfigCase::new(Met, FileMet, Greater, [Reuse, Reuse, Hash]),
+        RangeSatisfactionConfigCase {
+            subset_met: false,
+            preserve_met: None,
+            increase_partitions: false,
+            expected_plans: [Reuse, Hash, Hash],
+        },
+        RangeSatisfactionConfigCase {
+            subset_met: false,
+            preserve_met: None,
+            increase_partitions: true,
+            expected_plans: [Hash, Hash, Hash],
+        },
+        RangeSatisfactionConfigCase {
+            subset_met: false,
+            preserve_met: Some(false),
+            increase_partitions: false,
+            expected_plans: [Reuse, Hash, Hash],
+        },
+        RangeSatisfactionConfigCase {
+            subset_met: false,
+            preserve_met: Some(false),
+            increase_partitions: true,
+            expected_plans: [Hash, Hash, Hash],
+        },
+        RangeSatisfactionConfigCase {
+            subset_met: false,
+            preserve_met: Some(true),
+            increase_partitions: false,
+            expected_plans: [Reuse, Hash, Hash],
+        },
+        RangeSatisfactionConfigCase {
+            subset_met: false,
+            preserve_met: Some(true),
+            increase_partitions: true,
+            expected_plans: [Reuse, Reuse, Hash],
+        },
+        RangeSatisfactionConfigCase {
+            subset_met: true,
+            preserve_met: None,
+            increase_partitions: false,
+            expected_plans: [Reuse, Reuse, Hash],
+        },
+        RangeSatisfactionConfigCase {
+            subset_met: true,
+            preserve_met: None,
+            increase_partitions: true,
+            expected_plans: [Reuse, Reuse, Hash],
+        },
+        RangeSatisfactionConfigCase {
+            subset_met: true,
+            preserve_met: Some(false),
+            increase_partitions: false,
+            expected_plans: [Reuse, Reuse, Hash],
+        },
+        RangeSatisfactionConfigCase {
+            subset_met: true,
+            preserve_met: Some(false),
+            increase_partitions: true,
+            expected_plans: [Reuse, Reuse, Hash],
+        },
+        RangeSatisfactionConfigCase {
+            subset_met: true,
+            preserve_met: Some(true),
+            increase_partitions: false,
+            expected_plans: [Reuse, Reuse, Hash],
+        },
+        RangeSatisfactionConfigCase {
+            subset_met: true,
+            preserve_met: Some(true),
+            increase_partitions: true,
+            expected_plans: [Reuse, Reuse, Hash],
+        },
     ];
     for config_case in config_cases {
         for (key_match, expected_plan) in [Exact, Subset, Incompatible]
@@ -875,13 +868,26 @@ fn range_satisfaction_config_matrix() -> Result<()> {
             let requirement =
                 Arc::new(KeyPartitioningRequirementExec::new(input, partition_keys));
 
-            let mut config = TestConfig::default().with_query_execution_partitions(
-                config_case.target_partitions.value(INPUT_PARTITIONS),
-            );
-            config.config.optimizer.subset_repartition_threshold =
-                config_case.subset_threshold.value(INPUT_PARTITIONS);
-            config.config.optimizer.preserve_file_partitions =
-                config_case.preserve_file_partitions.value(INPUT_PARTITIONS);
+            let target_partitions = if config_case.increase_partitions {
+                INPUT_PARTITIONS + 1
+            } else {
+                INPUT_PARTITIONS
+            };
+            let subset_threshold = if config_case.subset_met {
+                INPUT_PARTITIONS
+            } else {
+                INPUT_PARTITIONS + 1
+            };
+            let preserve_file_partitions = match config_case.preserve_met {
+                None => 0,
+                Some(true) => INPUT_PARTITIONS,
+                Some(false) => INPUT_PARTITIONS + 1,
+            };
+
+            let mut config =
+                TestConfig::default().with_query_execution_partitions(target_partitions);
+            config.config.optimizer.subset_repartition_threshold = subset_threshold;
+            config.config.optimizer.preserve_file_partitions = preserve_file_partitions;
 
             let plan = config.to_plan(requirement, &DISTRIB_DISTRIB_SORT);
             let plan = displayable(plan.as_ref()).indent(true).to_string();
