@@ -176,6 +176,58 @@ Plan with Metrics
 03)----AggregateExec: mode=Partial,<slt:ignore>aggr=[sum(t1.v1 * Int64(2)), min(t1.v1 % Int64(2))], ordering_mode=PartiallySorted([0]), metrics=[<slt:ignore>spill_count=0,<slt:ignore>]
 <slt:ignore>
 
+# ==================================================================================
+# Single mode: with one partition the whole aggregation runs in a `Single` mode
+# AggregateExec. min() keeps one intermediate state and avg() keeps two (sum +
+# count), so both single- and multi-state accumulators are spilled and merged.
+# ==================================================================================
+
+statement ok
+SET datafusion.execution.target_partitions = 1
+
+# Reference round: enough memory to aggregate without spilling.
+statement ok
+SET datafusion.runtime.memory_limit = '10M'
+
+query TT
+EXPLAIN ANALYZE
+SELECT round(v1, -4), v1 % 5000, min(v1 * 2), avg(v1)
+FROM generate_series(20000) AS t1(v1)
+GROUP BY round(v1, -4), v1 % 5000
+----
+Plan with Metrics
+01)AggregateExec: mode=Single,<slt:ignore>aggr=[min(t1.v1 * Int64(2)), avg(t1.v1)], ordering_mode=PartiallySorted([0]), metrics=[<slt:ignore>spill_count=0,<slt:ignore>]
+<slt:ignore>
+
+query IIIR rowsort
+SELECT round(v1, -4), v1 % 5000, min(v1 * 2), avg(v1)
+FROM generate_series(20000) AS t1(v1)
+GROUP BY round(v1, -4), v1 % 5000
+----
+60000 values hashing to 872df6cefd51f81820fc5c6e5d7480df
+
+# Spilling round: the same query under a 600 KB limit must spill.
+statement ok
+SET datafusion.runtime.memory_limit = '600K'
+
+query TT
+EXPLAIN ANALYZE
+SELECT round(v1, -4), v1 % 5000, min(v1 * 2), avg(v1)
+FROM generate_series(20000) AS t1(v1)
+GROUP BY round(v1, -4), v1 % 5000
+----
+Plan with Metrics
+01)AggregateExec: mode=Single,<slt:ignore>aggr=[min(t1.v1 * Int64(2)), avg(t1.v1)], ordering_mode=PartiallySorted([0]), metrics=[<slt:ignore>spilled_bytes=<slt:ignore> KB,<slt:ignore>]
+<slt:ignore>
+
+# Same result hash as the no-spill round above
+query IIIR rowsort
+SELECT round(v1, -4), v1 % 5000, min(v1 * 2), avg(v1)
+FROM generate_series(20000) AS t1(v1)
+GROUP BY round(v1, -4), v1 % 5000
+----
+60000 values hashing to 872df6cefd51f81820fc5c6e5d7480df
+
 statement ok
 RESET datafusion.runtime.memory_limit
 
