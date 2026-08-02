@@ -283,7 +283,7 @@ impl LogicalPlanBuilder {
                     && !can_cast_types(&data_type, field_type)
                 {
                     return exec_err!(
-                        "type mismatch and can't cast to got {} and {}",
+                        "Type mismatch and can't cast, received data of type {} for field of type {}",
                         data_type,
                         field_type
                     );
