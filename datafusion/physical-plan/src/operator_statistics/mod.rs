@@ -94,7 +94,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{Result, Statistics};
 
 use crate::ExecutionPlan;
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{StatisticsArgs, StatisticsContext};
 
 // ============================================================================
 // ExtendedStatistics: Statistics with type-safe extensions
@@ -267,7 +267,7 @@ impl StatisticsProvider for DefaultStatisticsProvider {
         plan: &dyn ExecutionPlan,
         _child_stats: &[ExtendedStatistics],
     ) -> Result<StatisticsResult> {
-        let base = plan.statistics_with_args(&StatisticsArgs::new())?;
+        let base = StatisticsContext::new().compute(plan, &StatisticsArgs::new())?;
         Ok(StatisticsResult::Computed(ExtendedStatistics::new_arc(
             base,
         )))
@@ -359,7 +359,7 @@ impl StatisticsRegistry {
     pub fn compute(&self, plan: &dyn ExecutionPlan) -> Result<ExtendedStatistics> {
         // Fast path: no providers registered, skip the walk entirely
         if self.providers.is_empty() {
-            let base = plan.statistics_with_args(&StatisticsArgs::new())?;
+            let base = StatisticsContext::new().compute(plan, &StatisticsArgs::new())?;
             return Ok(ExtendedStatistics::new_arc(base));
         }
 
@@ -383,7 +383,7 @@ impl StatisticsRegistry {
             }
         }
         // Fallback: use plan's built-in stats
-        let base = plan.statistics_with_args(&StatisticsArgs::new())?;
+        let base = StatisticsContext::new().compute(plan, &StatisticsArgs::new())?;
         Ok(ExtendedStatistics::new_arc(base))
     }
 
@@ -506,8 +506,9 @@ fn computed_with_row_count(
     plan: &dyn ExecutionPlan,
     num_rows: Precision<usize>,
 ) -> Result<StatisticsResult> {
-    let mut base =
-        Arc::unwrap_or_clone(plan.statistics_with_args(&StatisticsArgs::new())?);
+    let mut base = Arc::unwrap_or_clone(
+        StatisticsContext::new().compute(plan, &StatisticsArgs::new())?,
+    );
     rescale_byte_size(&mut base, num_rows);
     Ok(StatisticsResult::Computed(ExtendedStatistics::new(base)))
 }
@@ -1124,8 +1125,9 @@ mod tests {
             unimplemented!()
         }
 
-        fn statistics_with_args(
+        fn statistics_from_inputs(
             &self,
+            _input_stats: &[Arc<Statistics>],
             _args: &StatisticsArgs,
         ) -> Result<Arc<Statistics>> {
             Ok(Arc::new(self.stats.clone()))

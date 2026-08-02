@@ -21,11 +21,11 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{
-    Result, not_impl_err, plan_err,
+    Result, TableReference, not_impl_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
 };
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, TableSource};
-use sqlparser::ast::{Query, SetExpr, SetOperator, With};
+use sqlparser::ast::{Ident, Query, SetExpr, SetOperator, With};
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn plan_with_clause(
@@ -46,14 +46,24 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
             // Create a logical plan for the CTE
             let cte_plan = if is_recursive {
-                self.recursive_cte(&cte_name, *cte.query, planner_context)?
+                let columns = cte.alias.columns.iter().map(|c| c.name.clone()).collect();
+                self.recursive_cte(&cte_name, columns, *cte.query, planner_context)?
             } else {
                 self.non_recursive_cte(*cte.query, planner_context)?
             };
 
-            // Each `WITH` block can change the column names in the last
-            // projection (e.g. "WITH table(t1, t2) AS SELECT 1, 2").
-            let final_plan = self.apply_table_alias(cte_plan, cte.alias)?;
+            // Each `WITH` block can change the column names in the last projection
+            // (e.g. "WITH table(t1, t2) AS SELECT 1, 2"). Recursive CTEs apply those
+            // to the static term in recursive_cte(), so only the relation name here.
+            let final_plan = if is_recursive {
+                LogicalPlanBuilder::from(cte_plan)
+                    .alias(TableReference::bare(
+                        self.ident_normalizer.normalize(cte.alias.name),
+                    ))?
+                    .build()?
+            } else {
+                self.apply_table_alias(cte_plan, cte.alias)?
+            };
             // Export the CTE to the outer query
             planner_context.insert_cte(cte_name, final_plan);
         }
@@ -71,6 +81,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn recursive_cte(
         &self,
         cte_name: &str,
+        columns: Vec<Ident>,
         mut cte_query: Query,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
@@ -91,9 +102,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 set_quantifier,
             } => (left, right, set_quantifier),
             other => {
-                // If the query is not a UNION, then it is not a recursive CTE
+                // Not a UNION, so not actually a recursive CTE. The caller adds only
+                // the relation name for recursive CTEs, so apply the column aliases here.
                 *cte_query.body = other;
-                return self.non_recursive_cte(cte_query, planner_context);
+                let plan = self.non_recursive_cte(cte_query, planner_context)?;
+                return self.apply_expr_alias(plan, columns);
             }
         };
 
@@ -110,6 +123,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // ---------- Step 1: Compile the static term ------------------
         let static_plan = self.set_expr_to_plan(*left_expr, planner_context)?;
+
+        // Apply the declared column-list aliases (e.g. `t(n)`) to the static term, so
+        // the work table built from its schema below exposes the declared names.
+        let static_plan = self.apply_expr_alias(static_plan, columns)?;
 
         // Since the recursive CTEs include a component that references a
         // table with its name, like the example below:

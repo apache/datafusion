@@ -28,7 +28,9 @@ use datafusion_execution::registry::FunctionRegistry;
 use datafusion_expr::dml::{
     InsertOp, MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
 };
-use datafusion_expr::expr::{Alias, NullTreatment, Placeholder, Sort};
+use datafusion_expr::expr::{
+    Alias, Lambda, LambdaVariable, NullTreatment, Placeholder, Sort,
+};
 use datafusion_expr::expr::{Unnest, WildcardOptions};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::{
@@ -62,8 +64,20 @@ use super::{AsLogicalPlan, LogicalExtensionCodec};
 
 impl FromProto<&protobuf::UnnestOptions> for UnnestOptions {
     fn from_proto(opts: &protobuf::UnnestOptions) -> Self {
+        use datafusion_common::NullHandling;
+        use protobuf::unnest_options::NullHandling as ProtoNullHandling;
+        let null_handling = match ProtoNullHandling::try_from(opts.null_handling) {
+            Ok(ProtoNullHandling::Preserve) => NullHandling::Preserve,
+            Ok(ProtoNullHandling::Drop) => NullHandling::Drop,
+            Ok(ProtoNullHandling::PreserveAndExpandEmpty) => {
+                NullHandling::PreserveAndExpandEmpty
+            }
+            // Unknown enum values fall back to the default (Preserve), which
+            // matches DataFusion's historical behavior.
+            Err(_) => NullHandling::Preserve,
+        };
         Self {
-            preserve_nulls: opts.preserve_nulls,
+            null_handling,
             recursions: opts
                 .recursions
                 .iter()
@@ -679,7 +693,10 @@ pub fn parse_expr(
             if exprs.len() != 1 {
                 return Err(proto_error("Unnest must have exactly one expression"));
             }
-            Ok(Expr::Unnest(Unnest::new(exprs.swap_remove(0))))
+            Ok(Expr::Unnest(Unnest {
+                expr: Box::new(exprs.swap_remove(0)),
+                outer: unnest.outer,
+            }))
         }
         ExprType::InList(in_list) => Ok(Expr::InList(InList::new(
             Box::new(parse_required_expr(
@@ -715,6 +732,22 @@ pub fn parse_expr(
             };
             Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
                 scalar_fn,
+                parse_exprs(args, ctx, codec)?,
+            )))
+        }
+        ExprType::HigherOrderUdfExpr(protobuf::HigherOrderUdfExprNode {
+            fun_name,
+            args,
+            fun_definition,
+        }) => {
+            let hof_fn = match fun_definition {
+                Some(buf) => codec.try_decode_higher_order_function(fun_name, buf)?,
+                None => ctx
+                    .higher_order_function(fun_name.as_str())
+                    .or_else(|_| codec.try_decode_higher_order_function(fun_name, &[]))?,
+            };
+            Ok(Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
+                hof_fn,
                 parse_exprs(args, ctx, codec)?,
             )))
         }
@@ -790,6 +823,16 @@ pub fn parse_expr(
                 codec,
             )?;
             Ok(Expr::ScalarSubquery(subquery))
+        }
+        ExprType::Lambda(lambda) => Ok(Expr::Lambda(Lambda::new(
+            lambda.params.clone(),
+            parse_required_expr(lambda.body.as_deref(), ctx, "body", codec)?,
+        ))),
+        ExprType::LambdaVariable(lambda_variable) => {
+            Ok(Expr::LambdaVariable(LambdaVariable::new(
+                lambda_variable.name.clone(),
+                lambda_variable.field.as_ref().optional()?.map(Arc::new),
+            )))
         }
     }
 }

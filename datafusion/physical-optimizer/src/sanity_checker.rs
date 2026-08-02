@@ -30,9 +30,13 @@ use datafusion_common::config::{ConfigOptions, OptimizerOptions};
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::execution_plan::{
+    Boundedness, EmissionType, InvariantLevel,
+};
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
-use datafusion_physical_plan::{ExecutionPlanProperties, get_plan_string};
+use datafusion_physical_plan::{
+    ChildSatisfactionOptions, ExecutionPlanProperties, get_plan_string,
+};
 
 use crate::PhysicalOptimizerRule;
 use datafusion_physical_expr_common::sort_expr::format_physical_sort_requirement_list;
@@ -141,11 +145,12 @@ pub fn check_plan_sanity(
     optimizer_options: &OptimizerOptions,
 ) -> Result<()> {
     check_finiteness_requirements(plan.as_ref(), optimizer_options)?;
+    let input_distributions = plan.input_distribution_requirements();
 
     for ((idx, child), sort_req, dist_req) in izip!(
         plan.children().into_iter().enumerate(),
         plan.required_input_ordering(),
-        plan.required_input_distribution(),
+        input_distributions.per_child_distributions(),
     ) {
         let child_eq_props = child.equivalence_properties();
         if let Some(sort_req) = sort_req {
@@ -162,9 +167,12 @@ pub fn check_plan_sanity(
             }
         }
 
-        if !child
-            .output_partitioning()
-            .satisfaction(&dist_req, child_eq_props, true)
+        if !input_distributions
+            .child_satisfaction(
+                idx,
+                child.as_ref(),
+                ChildSatisfactionOptions::new().with_allow_subset(true),
+            )?
             .is_satisfied()
         {
             let plan_str = get_plan_string(plan);
@@ -177,6 +185,8 @@ pub fn check_plan_sanity(
             );
         }
     }
+
+    plan.check_invariants(InvariantLevel::Executable)?;
 
     Ok(())
 }

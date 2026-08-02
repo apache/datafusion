@@ -441,11 +441,11 @@ fn general_replace<O: OffsetSizeTrait>(
 
         // All elements are false, no need to replace, just copy original data
         if n <= 0 || !eq_array.has_true() {
-            mutable.extend(
+            mutable.try_extend(
                 original_idx.to_usize().unwrap(),
                 start.to_usize().unwrap(),
                 end.to_usize().unwrap(),
-            );
+            )?;
             offsets.push(offsets[row_index] + (end - start));
             valid.append_non_null();
             continue;
@@ -457,21 +457,25 @@ fn general_replace<O: OffsetSizeTrait>(
             if to_replace == Some(true) && counter < n {
                 // Flush any pending retain run before emitting the replacement.
                 if let Some(rs) = pending_retain.take() {
-                    mutable.extend(
+                    mutable.try_extend(
                         original_idx.to_usize().unwrap(),
                         (start + rs).to_usize().unwrap(),
                         (start + i).to_usize().unwrap(),
-                    );
+                    )?;
                 }
-                mutable.extend(replace_idx.to_usize().unwrap(), row_index, row_index + 1);
+                mutable.try_extend(
+                    replace_idx.to_usize().unwrap(),
+                    row_index,
+                    row_index + 1,
+                )?;
                 counter += 1;
                 if counter == n {
                     // copy original data for any matches past n
-                    mutable.extend(
+                    mutable.try_extend(
                         original_idx.to_usize().unwrap(),
                         (start + i).to_usize().unwrap() + 1,
                         end.to_usize().unwrap(),
-                    );
+                    )?;
                     break;
                 }
             } else if pending_retain.is_none() {
@@ -484,11 +488,11 @@ fn general_replace<O: OffsetSizeTrait>(
         if counter < n
             && let Some(rs) = pending_retain
         {
-            mutable.extend(
+            mutable.try_extend(
                 original_idx.to_usize().unwrap(),
                 (start + rs).to_usize().unwrap(),
                 end.to_usize().unwrap(),
-            );
+            )?;
         }
 
         offsets.push(offsets[row_index] + (end - start));
@@ -564,7 +568,7 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
             .take(max_replacements as usize)
             .peekable();
         if match_positions.peek().is_none() {
-            mutable.extend(0, start, end);
+            mutable.try_extend(0, start, end)?;
             offsets.push(offsets[row_index] + O::usize_as(row_len));
             continue;
         }
@@ -576,16 +580,16 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
         for match_pos in match_positions {
             // Retain elements before this match.
             if match_pos > prev_end {
-                mutable.extend(0, start + prev_end, start + match_pos);
+                mutable.try_extend(0, start + prev_end, start + match_pos)?;
             }
             // Emit the replacement element.
-            mutable.extend(1, 0, 1);
+            mutable.try_extend(1, 0, 1)?;
             prev_end = match_pos + 1;
         }
 
         // Copy remaining elements after the last replacement.
         if prev_end < row_len {
-            mutable.extend(0, start + prev_end, end);
+            mutable.try_extend(0, start + prev_end, end)?;
         }
 
         offsets.push(offsets[row_index] + O::usize_as(row_len));

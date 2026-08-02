@@ -17,13 +17,15 @@
 
 use crate::utils::{calculate_binary_decimal_math_cast, calculate_binary_math};
 
-use arrow::array::ArrayRef;
+use arrow::array::{Array, ArrayRef, AsArray};
 use arrow::datatypes::DataType::{
-    Decimal32, Decimal64, Decimal128, Decimal256, Float32, Float64,
+    Decimal32, Decimal64, Decimal128, Decimal256, Float32, Float64, Int8, Int16, Int32,
+    Int64, UInt8, UInt16, UInt32, UInt64,
 };
 use arrow::datatypes::{
-    ArrowNativeTypeOp, DataType, Decimal32Type, Decimal64Type, Decimal128Type,
-    Decimal256Type, DecimalType, Float32Type, Float64Type, Int32Type,
+    ArrowNativeTypeOp, ArrowPrimitiveType, DataType, Decimal32Type, Decimal64Type,
+    Decimal128Type, Decimal256Type, DecimalType, Float32Type, Float64Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow::datatypes::{Field, FieldRef};
 use arrow::error::ArrowError;
@@ -37,6 +39,7 @@ use datafusion_expr::{
     ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
+use num_traits::{PrimInt, Signed, cast, checked_pow};
 use std::sync::Arc;
 
 fn output_scale_for_decimal(precision: u8, input_scale: i8, decimal_places: i32) -> i8 {
@@ -185,6 +188,7 @@ impl RoundFunc {
             vec![TypeSignatureClass::Integer],
             NativeType::Int32,
         );
+        let integer = Coercion::new_exact(TypeSignatureClass::Integer);
         let float32 = Coercion::new_exact(TypeSignatureClass::Native(logical_float32()));
         let float64 = Coercion::new_implicit(
             TypeSignatureClass::Native(logical_float64()),
@@ -199,6 +203,11 @@ impl RoundFunc {
                         decimal_places.clone(),
                     ]),
                     TypeSignature::Coercible(vec![decimal]),
+                    TypeSignature::Coercible(vec![
+                        integer.clone(),
+                        decimal_places.clone(),
+                    ]),
+                    TypeSignature::Coercible(vec![integer]),
                     TypeSignature::Coercible(vec![
                         float32.clone(),
                         decimal_places.clone(),
@@ -216,6 +225,10 @@ impl RoundFunc {
 impl ScalarUDFImpl for RoundFunc {
     fn name(&self) -> &str {
         "round"
+    }
+
+    fn is_strict(&self) -> bool {
+        true
     }
 
     fn signature(&self) -> &Signature {
@@ -245,6 +258,7 @@ impl ScalarUDFImpl for RoundFunc {
         // extra precision to accommodate potential carry-over.
         let return_type =
             match input_type {
+                input_type if input_type.is_integer() => input_type.clone(),
                 Float32 => Float32,
                 Decimal32(precision, scale) => calculate_new_precision_scale::<
                     Decimal32Type,
@@ -308,6 +322,9 @@ impl ScalarUDFImpl for RoundFunc {
             };
 
             match (value_scalar, args.return_type()) {
+                (value_scalar, return_type) if return_type.is_integer() => {
+                    round_integer_scalar(value_scalar, return_type, dp)
+                }
                 (ScalarValue::Float32(Some(v)), _) => {
                     let rounded = round_float(*v, dp)?;
                     Ok(ColumnarValue::Scalar(ScalarValue::from(rounded)))
@@ -468,22 +485,22 @@ fn round_columnar(
     let decimal_places_is_array = matches!(decimal_places, ColumnarValue::Array(_));
 
     let arr: ArrayRef = match (value_array.data_type(), return_type) {
-        (Float64, _) => {
-            let result = calculate_binary_math::<Float64Type, Int32Type, Float64Type, _>(
-                value_array.as_ref(),
-                decimal_places,
-                round_float::<f64>,
-            )?;
-            result as _
+        (input_type, return_type)
+            if input_type == return_type && return_type.is_integer() =>
+        {
+            match decimal_places {
+                ColumnarValue::Scalar(ScalarValue::Int32(Some(dp))) if *dp >= 0 => {
+                    value_array
+                }
+                _ => round_integer_array(
+                    value_array.as_ref(),
+                    decimal_places,
+                    return_type,
+                )?,
+            }
         }
-        (Float32, _) => {
-            let result = calculate_binary_math::<Float32Type, Int32Type, Float32Type, _>(
-                value_array.as_ref(),
-                decimal_places,
-                round_float::<f32>,
-            )?;
-            result as _
-        }
+        (Float64, _) => round_float_column::<Float64Type>(&value_array, decimal_places)?,
+        (Float32, _) => round_float_column::<Float32Type>(&value_array, decimal_places)?,
         (Decimal32(input_precision, scale), Decimal32(precision, new_scale)) => {
             // reduce scale to reclaim integer precision
             let result = calculate_binary_decimal_math_cast::<
@@ -518,7 +535,7 @@ fn round_columnar(
                 },
                 *precision,
                 *new_scale,
-                &DataType::Int32,
+                &Int32,
             )?;
             result as _
         }
@@ -552,7 +569,7 @@ fn round_columnar(
                 },
                 *precision,
                 *new_scale,
-                &DataType::Int32,
+                &Int32,
             )?;
             result as _
         }
@@ -586,7 +603,7 @@ fn round_columnar(
                 },
                 *precision,
                 *new_scale,
-                &DataType::Int32,
+                &Int32,
             )?;
             result as _
         }
@@ -620,7 +637,7 @@ fn round_columnar(
                 },
                 *precision,
                 *new_scale,
-                &DataType::Int32,
+                &Int32,
             )?;
             result as _
         }
@@ -634,15 +651,257 @@ fn round_columnar(
     }
 }
 
+fn round_signed_integer<T>(
+    value: T,
+    decimal_places: i32,
+    type_name: &str,
+) -> Result<T, ArrowError>
+where
+    T: PrimInt + Signed,
+{
+    if decimal_places >= 0 || value == T::zero() {
+        return Ok(value);
+    }
+
+    let ten = cast::<_, T>(10).expect("10 fits in all integer types");
+    let Some(factor) = checked_pow(ten, decimal_places.unsigned_abs() as usize) else {
+        return Ok(T::zero());
+    };
+
+    let two = cast::<_, T>(2).expect("2 fits in all integer types");
+    let one = T::one();
+    let threshold = factor / two;
+    let mut quotient = value / factor;
+    let remainder = value % factor;
+
+    if remainder >= threshold {
+        quotient = quotient.checked_add(&one).ok_or_else(|| {
+            ArrowError::ComputeError(format!("Overflow while rounding {type_name}"))
+        })?;
+    } else if remainder <= -threshold {
+        quotient = quotient.checked_sub(&one).ok_or_else(|| {
+            ArrowError::ComputeError(format!("Overflow while rounding {type_name}"))
+        })?;
+    }
+
+    quotient.checked_mul(&factor).ok_or_else(|| {
+        ArrowError::ComputeError(format!("Overflow while rounding {type_name}"))
+    })
+}
+
+fn round_unsigned_integer<T>(
+    value: T,
+    decimal_places: i32,
+    type_name: &str,
+) -> Result<T, ArrowError>
+where
+    T: PrimInt,
+{
+    if decimal_places >= 0 || value == T::zero() {
+        return Ok(value);
+    }
+
+    let ten = cast::<_, T>(10).expect("10 fits in all integer types");
+    let Some(factor) = checked_pow(ten, decimal_places.unsigned_abs() as usize) else {
+        return Ok(T::zero());
+    };
+
+    let two = cast::<_, T>(2).expect("2 fits in all integer types");
+    let one = T::one();
+    let threshold = factor / two;
+    let mut quotient = value / factor;
+    let remainder = value % factor;
+
+    if remainder >= threshold {
+        quotient = quotient.checked_add(&one).ok_or_else(|| {
+            ArrowError::ComputeError(format!("Overflow while rounding {type_name}"))
+        })?;
+    }
+
+    quotient.checked_mul(&factor).ok_or_else(|| {
+        ArrowError::ComputeError(format!("Overflow while rounding {type_name}"))
+    })
+}
+
+fn round_integer_scalar(
+    value: &ScalarValue,
+    return_type: &DataType,
+    decimal_places: i32,
+) -> Result<ColumnarValue> {
+    match (value, return_type) {
+        (ScalarValue::Int8(Some(v)), Int8) => Ok(ColumnarValue::Scalar(
+            ScalarValue::Int8(Some(round_signed_integer(*v, decimal_places, "Int8")?)),
+        )),
+        (ScalarValue::Int16(Some(v)), Int16) => Ok(ColumnarValue::Scalar(
+            ScalarValue::Int16(Some(round_signed_integer(*v, decimal_places, "Int16")?)),
+        )),
+        (ScalarValue::Int32(Some(v)), Int32) => Ok(ColumnarValue::Scalar(
+            ScalarValue::Int32(Some(round_signed_integer(*v, decimal_places, "Int32")?)),
+        )),
+        (ScalarValue::Int64(Some(v)), Int64) => Ok(ColumnarValue::Scalar(
+            ScalarValue::Int64(Some(round_signed_integer(*v, decimal_places, "Int64")?)),
+        )),
+        (ScalarValue::UInt8(Some(v)), UInt8) => {
+            Ok(ColumnarValue::Scalar(ScalarValue::UInt8(Some(
+                round_unsigned_integer(*v, decimal_places, "UInt8")?,
+            ))))
+        }
+        (ScalarValue::UInt16(Some(v)), UInt16) => {
+            Ok(ColumnarValue::Scalar(ScalarValue::UInt16(Some(
+                round_unsigned_integer(*v, decimal_places, "UInt16")?,
+            ))))
+        }
+        (ScalarValue::UInt32(Some(v)), UInt32) => {
+            Ok(ColumnarValue::Scalar(ScalarValue::UInt32(Some(
+                round_unsigned_integer(*v, decimal_places, "UInt32")?,
+            ))))
+        }
+        (ScalarValue::UInt64(Some(v)), UInt64) => {
+            Ok(ColumnarValue::Scalar(ScalarValue::UInt64(Some(
+                round_unsigned_integer(*v, decimal_places, "UInt64")?,
+            ))))
+        }
+        _ => internal_err!(
+            "Unexpected integer round input/output types: {} -> {}",
+            value.data_type(),
+            return_type
+        ),
+    }
+}
+
+macro_rules! round_integer_array {
+    ($ARRAY:expr, $DP:expr, $ARRAY_TYPE:ty, $ROUND_FN:ident, $TYPE_NAME:expr) => {{
+        let array = $ARRAY.as_primitive::<$ARRAY_TYPE>();
+
+        let result = calculate_binary_math::<$ARRAY_TYPE, Int32Type, $ARRAY_TYPE, _>(
+            array,
+            $DP,
+            |v, dp| $ROUND_FN(v, dp, $TYPE_NAME),
+        )?;
+
+        Ok(result as ArrayRef)
+    }};
+}
+
+fn round_integer_array(
+    value_array: &dyn Array,
+    decimal_places: &ColumnarValue,
+    return_type: &DataType,
+) -> Result<ArrayRef> {
+    match return_type {
+        Int8 => round_integer_array!(
+            value_array,
+            decimal_places,
+            Int8Type,
+            round_signed_integer,
+            "Int8"
+        ),
+        Int16 => round_integer_array!(
+            value_array,
+            decimal_places,
+            Int16Type,
+            round_signed_integer,
+            "Int16"
+        ),
+        Int32 => round_integer_array!(
+            value_array,
+            decimal_places,
+            Int32Type,
+            round_signed_integer,
+            "Int32"
+        ),
+        Int64 => round_integer_array!(
+            value_array,
+            decimal_places,
+            Int64Type,
+            round_signed_integer,
+            "Int64"
+        ),
+        UInt8 => round_integer_array!(
+            value_array,
+            decimal_places,
+            UInt8Type,
+            round_unsigned_integer,
+            "UInt8"
+        ),
+        UInt16 => round_integer_array!(
+            value_array,
+            decimal_places,
+            UInt16Type,
+            round_unsigned_integer,
+            "UInt16"
+        ),
+        UInt32 => round_integer_array!(
+            value_array,
+            decimal_places,
+            UInt32Type,
+            round_unsigned_integer,
+            "UInt32"
+        ),
+        UInt64 => round_integer_array!(
+            value_array,
+            decimal_places,
+            UInt64Type,
+            round_unsigned_integer,
+            "UInt64"
+        ),
+        _ => internal_err!("Unexpected return type for integer round: {return_type}"),
+    }
+}
+
+/// Rounds a float array to `decimal_places`.
+///
+/// The shared `calculate_binary_math` kernel routes through `try_unary` and
+/// re-evaluates `round_float` (including `10f64.powi(decimal_places)` and a
+/// `Result` check) for every element. When `decimal_places` is a non-null
+/// scalar, the scaling factor can instead be hoisted out of the loop and the
+/// infallible `unary` kernel used, which the compiler can autovectorize.
+/// `unary` also computes over null slots, but it carries the input null buffer
+/// through to the output, so those values stay masked.
+fn round_float_column<PT>(
+    value_array: &ArrayRef,
+    decimal_places: &ColumnarValue,
+) -> Result<ArrayRef>
+where
+    PT: ArrowPrimitiveType,
+    PT::Native: num_traits::Float,
+{
+    // Bring `Float` into scope so `.round()` resolves on the `PT::Native`
+    // projection below.
+    use num_traits::Float;
+
+    if let ColumnarValue::Scalar(ScalarValue::Int32(Some(decimal_places))) =
+        decimal_places
+    {
+        let factor = round_factor::<PT::Native>(*decimal_places)?;
+        let result = value_array
+            .as_primitive::<PT>()
+            .unary::<_, PT>(|value| (value * factor).round() / factor);
+        return Ok(Arc::new(result) as ArrayRef);
+    }
+
+    let result = calculate_binary_math::<PT, Int32Type, PT, _>(
+        value_array.as_ref(),
+        decimal_places,
+        round_float::<PT::Native>,
+    )?;
+    Ok(result as _)
+}
+
+/// Computes the power-of-ten scaling factor used to round to `decimal_places`.
+fn round_factor<T: num_traits::Float>(decimal_places: i32) -> Result<T, ArrowError> {
+    T::from(10_f64.powi(decimal_places)).ok_or_else(|| {
+        ArrowError::ComputeError(format!(
+            "Invalid value for decimal places: {decimal_places}"
+        ))
+    })
+}
+
 fn round_float<T>(value: T, decimal_places: i32) -> Result<T, ArrowError>
 where
     T: num_traits::Float,
 {
-    let factor = T::from(10_f64.powi(decimal_places)).ok_or_else(|| {
-        ArrowError::ComputeError(format!(
-            "Invalid value for decimal places: {decimal_places}"
-        ))
-    })?;
+    let factor = round_factor::<T>(decimal_places)?;
     Ok((value * factor).round() / factor)
 }
 
@@ -732,6 +991,7 @@ mod test {
     use std::sync::Arc;
 
     use arrow::array::{ArrayRef, Float32Array, Float64Array, Int64Array};
+    use arrow::datatypes::DataType;
     use datafusion_common::DataFusionError;
     use datafusion_common::ScalarValue;
     use datafusion_common::cast::{as_float32_array, as_float64_array};
@@ -793,6 +1053,35 @@ mod test {
         let expected = Float64Array::from(vec![
             125.0, 125.2, 125.23, 125.235, 125.2345, 125.2345, 130.0, 100.0, 0.0, 0.0,
         ]);
+
+        assert_eq!(floats, &expected);
+    }
+
+    /// A scalar `decimal_places` takes the hoisted-factor `unary` path, which
+    /// computes over null slots as well. The nulls must survive into the output.
+    #[test]
+    fn test_round_f64_scalar_decimal_places_preserves_nulls() {
+        let value: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(125.2345),
+            None,
+            Some(-1.555),
+            None,
+        ]));
+
+        let result = super::round_columnar(
+            &ColumnarValue::Array(value),
+            &ColumnarValue::Scalar(ScalarValue::Int32(Some(2))),
+            4,
+            &DataType::Float64,
+        )
+        .expect("failed to initialize function round");
+        let ColumnarValue::Array(result) = result else {
+            panic!("expected an array result");
+        };
+        let floats =
+            as_float64_array(&result).expect("failed to initialize function round");
+
+        let expected = Float64Array::from(vec![Some(125.23), None, Some(-1.56), None]);
 
         assert_eq!(floats, &expected);
     }

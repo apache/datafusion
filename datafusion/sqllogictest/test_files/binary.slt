@@ -347,7 +347,7 @@ SELECT x'636166c3a9' || arrow_cast(x'68656c6c6f', 'FixedSizeBinary(5)'), arrow_t
 query ?T
 SELECT arrow_cast(x'6361', 'FixedSizeBinary(2)') || arrow_cast(x'68656c6c6f', 'FixedSizeBinary(5)'), arrow_typeof(arrow_cast(x'6361', 'FixedSizeBinary(2)') || arrow_cast(x'68656c6c6f', 'FixedSizeBinary(5)'));
 ----
-636168656c6c6f Binary
+636168656c6c6f FixedSizeBinary(7)
 
 # Byte pipe operator is allowed for mixed binary and text
 query T

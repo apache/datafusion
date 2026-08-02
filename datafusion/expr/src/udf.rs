@@ -209,6 +209,14 @@ impl ScalarUDF {
         self.inner.aliases()
     }
 
+    /// Returns true if this function always returns NULL when any argument is
+    /// NULL.
+    ///
+    /// See [`ScalarUDFImpl::is_strict`] for more details.
+    pub fn is_strict(&self) -> bool {
+        self.inner.is_strict()
+    }
+
     /// Returns this function's [`Signature`] (what input types are accepted).
     ///
     /// See [`ScalarUDFImpl::signature`] for more details.
@@ -370,6 +378,11 @@ impl ScalarUDF {
 
     pub fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
         self.inner.preserves_lex_ordering(inputs)
+    }
+
+    /// See [`ScalarUDFImpl::strictly_order_preserving`] for more details.
+    pub fn strictly_order_preserving(&self, inputs: &[ExprProperties]) -> Result<bool> {
+        self.inner.strictly_order_preserving(inputs)
     }
 
     /// See [`ScalarUDFImpl::coerce_types`] for more details.
@@ -693,6 +706,20 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         true
     }
 
+    /// Returns true if this function always returns NULL when any argument is
+    /// NULL.
+    ///
+    /// Strict functions are NULL-propagating: if any argument evaluates to
+    /// NULL, the function result is guaranteed to be NULL. Optimizer rules can
+    /// use this property when reasoning about expression nullability and
+    /// null-rejecting filters.
+    ///
+    /// Defaults to `false` because user-defined functions may choose to accept
+    /// NULL inputs and produce non-NULL results.
+    fn is_strict(&self) -> bool {
+        false
+    }
+
     /// Invoke the function returning the appropriate result.
     ///
     /// # Performance
@@ -961,8 +988,16 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// Returns true if the function preserves lexicographical ordering based on
     /// the input ordering.
     ///
-    /// For example, `concat(a || b)` preserves lexicographical ordering, but `abs(a)` does not.
+    /// See [`ExprProperties::preserves_lex_ordering`] for more details
     fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// Returns true if the function is strictly order-preserving with respect
+    /// to its `Ordered` inputs, i.e. `a.cmp(b) == f(a).cmp(f(b))`.
+    ///
+    /// See [`ExprProperties::strictly_order_preserving`] for more details
+    fn strictly_order_preserving(&self, _inputs: &[ExprProperties]) -> Result<bool> {
         Ok(false)
     }
 
@@ -1106,6 +1141,10 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.is_nullable(args, schema)
     }
 
+    fn is_strict(&self) -> bool {
+        self.inner.is_strict()
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         self.inner.invoke_with_args(args)
     }
@@ -1171,6 +1210,10 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
         self.inner.preserves_lex_ordering(inputs)
+    }
+
+    fn strictly_order_preserving(&self, inputs: &[ExprProperties]) -> Result<bool> {
+        self.inner.strictly_order_preserving(inputs)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {

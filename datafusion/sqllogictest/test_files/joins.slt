@@ -5402,10 +5402,10 @@ LEFT JOIN issue_19067_right r ON l.join_key = r.join_key
 ORDER BY l.id;
 ----
 physical_plan
-01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[id@2 as id, join_key@3 as left_key, join_key@0 as right_key, value@1 as value]
-03)----HashJoinExec: mode=CollectLeft, join_type=Right, on=[(join_key@0, join_key@1)]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[id@2 as id, join_key@3 as left_key, join_key@0 as right_key, value@1 as value]
+02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(join_key@0, join_key@1)]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement count 0
@@ -5543,7 +5543,7 @@ statement count 0
 DROP TABLE t2;
 
 statement ok
-CREATE TABLE t1(a INT, b INT) AS VALUES 
+CREATE TABLE t1(a INT, b INT) AS VALUES
   (NULL, 1), (NULL, 2), (NULL, 3), (NULL, 4), (NULL, 5);
 
 statement ok
@@ -5555,7 +5555,7 @@ CREATE TABLE t2(c INT) AS VALUES (1), (2);
 query II
 SELECT sub.a, sub.b FROM (
   SELECT * FROM t1 ORDER BY b LIMIT 1
-) sub 
+) sub
 JOIN t2 ON sub.a = t2.c;
 ----
 
@@ -5608,3 +5608,77 @@ set datafusion.execution.target_partitions = 4;
 
 statement ok
 reset datafusion.execution.batch_size;
+
+# Regression test: a `CollectLeft` `HashJoinExec` requires `SinglePartition` on its build
+# (left) child, and the `CoalescePartitionsExec` that satisfies it must survive the
+# sort-parallelization phase of `EnsureRequirements`. It used to be removed positionally
+# (the traversal descends into the join because the *probe* side is linked to a coalesce),
+# leaving a multi-partition build side that `SanityCheckPlan` rejects with
+# "does not satisfy distribution requirements: SinglePartition".
+
+statement ok
+set datafusion.execution.target_partitions = 8;
+
+# Keep the scan multi-partition as written, i.e. one partition per file.
+statement ok
+set datafusion.optimizer.repartition_file_scans = false;
+
+statement ok
+CREATE TABLE collect_left_src (id INT, ts INT) AS VALUES (1, 10), (2, 20), (3, 30);
+
+query I
+COPY (SELECT * FROM collect_left_src) TO 'test_files/scratch/joins/collect_left/0.parquet' STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT * FROM collect_left_src) TO 'test_files/scratch/joins/collect_left/1.parquet' STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT * FROM collect_left_src) TO 'test_files/scratch/joins/collect_left/2.parquet' STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT * FROM collect_left_src) TO 'test_files/scratch/joins/collect_left/3.parquet' STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE collect_left STORED AS PARQUET LOCATION 'test_files/scratch/joins/collect_left/';
+
+# The build side is the 4-partition scan; the probe side is the `DISTINCT ON` aggregate,
+# whose `CoalescePartitionsExec` is what makes the traversal reach the join.
+query I
+SELECT a.id
+FROM collect_left a
+LEFT JOIN (SELECT DISTINCT ON (id) id, ts FROM collect_left ORDER BY id, ts) f
+  ON a.id = f.id
+ORDER BY a.id;
+----
+1
+1
+1
+1
+2
+2
+2
+2
+3
+3
+3
+3
+
+statement ok
+DROP TABLE collect_left;
+
+statement ok
+DROP TABLE collect_left_src;
+
+statement ok
+reset datafusion.optimizer.repartition_file_scans;
+
+statement ok
+set datafusion.execution.target_partitions = 4;

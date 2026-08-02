@@ -514,7 +514,7 @@ impl SessionConfig {
     /// Extensions are opaque and the types are unknown to DataFusion itself, which makes them extremely flexible. [^1]
     ///
     /// Extensions are stored within an [`Arc`] so they do NOT require [`Clone`]. The are immutable. If you need to
-    /// modify their state over their lifetime -- e.g. for caches -- you need to establish some for of interior mutability.
+    /// modify their state over their lifetime -- e.g. for caches -- you need to establish some form of interior mutability.
     ///
     /// Extensions are indexed by their type `T`. If multiple values of the same type are provided, only the last one
     /// will be kept.

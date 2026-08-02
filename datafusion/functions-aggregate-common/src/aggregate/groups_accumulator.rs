@@ -441,10 +441,6 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
 
         Ok(arrays)
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
 }
 
 /// Extension trait for [`Vec`] to account for allocations.
