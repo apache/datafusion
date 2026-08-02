@@ -698,7 +698,7 @@ impl From<StreamType> for SendableRecordBatchStream {
             StreamType::FinalHash(stream) => Box::pin(stream),
             StreamType::SingleHash(stream) => Box::pin(stream),
             StreamType::OrderedPartialAggregate(stream) => stream.into_stream(),
-            StreamType::OrderedFinalAggregate(stream) => Box::pin(stream),
+            StreamType::OrderedFinalAggregate(stream) => stream.into_stream(),
             StreamType::GroupedHash(stream) => Box::pin(stream),
             StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
         }
