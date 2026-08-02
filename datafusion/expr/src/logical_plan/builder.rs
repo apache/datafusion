@@ -3034,4 +3034,25 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn test_values_with_schema_type_mismatch_error_message() {
+        // Date32 field, but the value is a Boolean, which cannot be cast to Date32.
+        let schema = Arc::new(
+            DFSchema::from_unqualified_fields(
+                vec![Field::new("a", DataType::Date32, false)].into(),
+                HashMap::new(),
+            )
+            .unwrap(),
+        );
+
+        let err = LogicalPlanBuilder::values_with_schema(vec![vec![lit(true)]], &schema)
+            .unwrap_err();
+
+        assert_eq!(
+            err.strip_backtrace(),
+            "Execution error: Type mismatch and can't cast, \
+         received data of type Boolean for field of type Date32"
+        );
+    }
 }
