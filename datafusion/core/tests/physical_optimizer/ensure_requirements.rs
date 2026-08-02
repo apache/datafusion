@@ -21,9 +21,15 @@
 //! so the tests live alongside the rest of the `physical_optimizer/` integration
 //! suite and can use real `ExecutionPlan`s where convenient.
 
+use insta::assert_snapshot;
+
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{TransformedResult, TreeNode};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
+use datafusion_physical_optimizer::ensure_requirements::enforce_sorting::{
+    PlanWithCorrespondingCoalescePartitions, parallelize_sorts,
+};
 
 use std::sync::Arc;
 
@@ -65,6 +71,19 @@ struct MockMultiPartitionExec {
 
 impl MockMultiPartitionExec {
     fn new(partition_count: usize) -> Self {
+        Self::with_partitioning(Partitioning::UnknownPartitioning(partition_count))
+    }
+
+    /// A source that is already partitioned on `a`, as an aggregate or a partitioned
+    /// join below the node under test would be.
+    fn hash_partitioned_on_a(partition_count: usize) -> Self {
+        Self::with_partitioning(Partitioning::Hash(
+            vec![Arc::new(Column::new("a", 0))],
+            partition_count,
+        ))
+    }
+
+    fn with_partitioning(partitioning: Partitioning) -> Self {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, false),
             Field::new("b", DataType::Int64, false),
@@ -81,7 +100,7 @@ impl MockMultiPartitionExec {
         }
         let properties = PlanProperties::new(
             eq,
-            Partitioning::UnknownPartitioning(partition_count),
+            partitioning,
             EmissionType::Incremental,
             Boundedness::Bounded,
         );
@@ -1251,4 +1270,128 @@ fn test_idempotent_union_projection_sort() {
     let plan: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 0, Some(21)));
 
     assert_idempotent(plan);
+}
+
+/// Builds the plan shape that phase 3a (`parallelize_sorts`) sees in the reproducer,
+/// i.e. the output of the distribution + sorting phases, not a freshly planned tree:
+///
+/// ```text
+/// CoalescePartitionsExec                 <- the node `parallelize_sorts` rewrites
+///   HashJoinExec: mode=CollectLeft
+///     CoalescePartitionsExec             <- satisfies `SinglePartition` on the build side
+///       <build>
+///     RepartitionExec: RoundRobinBatch
+///       CoalescePartitionsExec           <- links the join into the coalesce cascade
+///         MockMultiPartitionExec
+/// ```
+///
+/// Both coalesces below the join matter. The probe-side one is what makes
+/// `update_coalesce_ctx_children` mark the join as connected — it only skips children that
+/// require `SinglePartition`, and the probe side does not — so the walk descends into the
+/// join. The build-side one is the one that must survive.
+fn collect_left_plan_before_parallelize_sorts(
+    build: Arc<dyn ExecutionPlan>,
+    join_type: JoinType,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let build: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(build));
+    let probe: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+        Arc::new(CoalescePartitionsExec::new(Arc::new(
+            MockMultiPartitionExec::new(4),
+        ))),
+        Partitioning::RoundRobinBatch(TEST_TARGET_PARTITIONS),
+    )?);
+
+    let on = vec![(
+        Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+        Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+    )];
+    let join: Arc<dyn ExecutionPlan> = Arc::new(HashJoinExec::try_new(
+        build,
+        probe,
+        on,
+        None,
+        &join_type,
+        None,
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+        false,
+    )?);
+
+    Ok(Arc::new(CoalescePartitionsExec::new(join)))
+}
+
+/// Runs phase 3a of `EnsureRequirements` (`parallelize_sorts`) on its own, the same way
+/// the rule drives it, and checks the result with `SanityCheckPlan`.
+///
+/// The phase is driven directly rather than through `EnsureRequirements::optimize` because
+/// the earlier phases would rebuild the plan shape above into something that never reaches
+/// the code path under test.
+fn parallelize_sorts_and_sanity_check(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let ctx = PlanWithCorrespondingCoalescePartitions::new_default(plan);
+    let rewritten = ctx.transform_up(parallelize_sorts).data()?.plan;
+    SanityCheckPlan::new().optimize(Arc::clone(&rewritten), &test_config())?;
+    Ok(rewritten)
+}
+
+/// A `CollectLeft` `HashJoinExec` requires `Distribution::SinglePartition` on its build
+/// (left) child, so the distribution phase puts a `CoalescePartitionsExec` on top of a
+/// multi-partition build side. The sort-parallelization phase must not take that coalesce
+/// back out again.
+///
+/// It used to, because `remove_bottleneck_in_subplan` removed a coalesce found at
+/// `children[0]` positionally, without consulting the parent's distribution requirement for
+/// that child. The result was a build side left multi-partition with nothing to re-enforce
+/// distribution afterwards, which `SanityCheckPlan` rejected with "does not satisfy
+/// distribution requirements: SinglePartition".
+#[test]
+fn test_collect_left_join_keeps_build_side_coalesce() -> Result<()> {
+    let plan = collect_left_plan_before_parallelize_sorts(
+        Arc::new(MockMultiPartitionExec::new(4)),
+        JoinType::Left,
+    )?;
+
+    let rewritten = parallelize_sorts_and_sanity_check(plan)?;
+
+    // The build-side coalesce is retained; the probe-side one is still removed, which is
+    // the parallelization this phase exists for.
+    assert_snapshot!(plan_string(&rewritten), @r"
+    CoalescePartitionsExec
+      HashJoinExec: mode=CollectLeft, join_type=Left, on=[(a@0, a@0)]
+        CoalescePartitionsExec
+          MockMultiPartitionExec
+        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=4
+          MockMultiPartitionExec
+    ");
+
+    Ok(())
+}
+
+/// The same removal, with a build side that is already hash-partitioned on the join key
+/// rather than `UnknownPartitioning`. This is the shape a `JoinSelection` input swap leaves
+/// behind (a `CollectLeft` join reported as `join_type=Right`) when the build subtree is the
+/// output of an aggregate or a partitioned join: the build side satisfies the join's *hash*
+/// requirement but still not `SinglePartition`, so the coalesce is just as load-bearing.
+#[test]
+fn test_collect_left_join_keeps_hash_partitioned_build_side_coalesce() -> Result<()> {
+    let plan = collect_left_plan_before_parallelize_sorts(
+        Arc::new(MockMultiPartitionExec::hash_partitioned_on_a(
+            TEST_TARGET_PARTITIONS,
+        )),
+        JoinType::Right,
+    )?;
+
+    let rewritten = parallelize_sorts_and_sanity_check(plan)?;
+
+    assert_snapshot!(plan_string(&rewritten), @r"
+    CoalescePartitionsExec
+      HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@0, a@0)]
+        CoalescePartitionsExec
+          MockMultiPartitionExec
+        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=4
+          MockMultiPartitionExec
+    ");
+
+    Ok(())
 }
