@@ -35,12 +35,7 @@ string/
     - large_string.slt          // the entrypoint for large_string type
     - string_view.slt           // the entrypoint for string_view type and the string_view specific tests
     - string_literal.slt        // the tests for string literal
-    - string_extra.slt          // tests that need custom data or table setup
 ```
-
-The type-based entry point files run common setup for all tests, which makes
-additional per-test data or table setup harder to add. Tests that need custom
-setup should be placed in `string_extra.slt`.
 
 ## Pattern for Test Entry Point Files
 
