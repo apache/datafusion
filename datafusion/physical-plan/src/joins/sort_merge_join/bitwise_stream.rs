@@ -127,6 +127,7 @@ use crate::joins::utils::{JoinFilter, JoinKeyComparator, compare_join_arrays};
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, Time,
 };
+use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch};
@@ -234,9 +235,13 @@ pub(crate) struct BitwiseSortMergeJoinStream {
     // Inner key group buffer: all inner rows sharing the current join key.
     // Only populated when a filter is present. Unbounded — a single key
     // with many inner rows will buffer them all. See "Degenerate cases"
-    // in exec.rs. Spilled to disk when memory reservation fails.
+    // in exec.rs. Spilled to disk when memory reservation fails; one group
+    // can overflow the pool repeatedly, and every overflow appends to the
+    // same open spill file. The writer is finalized into `inner_key_spill`
+    // when evaluation starts (buffering for the group is complete by then).
     inner_key_buffer: Vec<RecordBatch>,
     inner_key_spill: Option<Arc<dyn SpillFile>>,
+    inner_key_spill_writer: Option<InProgressSpillFile>,
 
     // Join ON expressions, evaluated against each new batch to produce
     // the key arrays used for sorted key comparisons.
@@ -339,6 +344,7 @@ impl BitwiseSortMergeJoinStream {
             inner_key_arrays: vec![],
             matched: BooleanBufferBuilder::new(0),
             inner_key_buffer: vec![],
+            inner_key_spill_writer: None,
             inner_key_spill: None,
             on_outer,
             on_inner,
@@ -443,18 +449,21 @@ impl BitwiseSortMergeJoinStream {
         Ok(self.inner_self_cmp.as_ref().unwrap())
     }
 
-    /// Spill the in-memory inner key buffer to disk and clear it.
+    /// Spill the in-memory inner key buffer to disk and clear it. One key
+    /// group can spill repeatedly; every call appends to the group's single
+    /// open spill file.
     fn spill_inner_key_buffer(&mut self) -> Result<()> {
-        let spill_file = self
-            .spill_manager
-            .spill_record_batch_and_finish(
-                &self.inner_key_buffer,
-                "semi_anti_smj_inner_key_spill",
-            )?
-            .expect("inner_key_buffer is non-empty when spilling");
-        self.inner_key_buffer.clear();
+        if self.inner_key_spill_writer.is_none() {
+            self.inner_key_spill_writer = Some(
+                self.spill_manager
+                    .create_in_progress_file("semi_anti_smj_inner_key_spill")?,
+            );
+        }
+        let writer = self.inner_key_spill_writer.as_mut().unwrap();
+        for batch in self.inner_key_buffer.drain(..) {
+            writer.append_batch(&batch)?;
+        }
         self.inner_buffer_size = 0;
-        self.inner_key_spill = Some(spill_file);
         // Should succeed now — inner buffer has been spilled.
         self.try_resize_reservation()
     }
@@ -465,6 +474,7 @@ impl BitwiseSortMergeJoinStream {
     /// pool interactions (see apache/datafusion#20729).
     fn clear_inner_key_group(&mut self) {
         self.inner_key_buffer.clear();
+        self.inner_key_spill_writer = None;
         self.inner_key_spill = None;
         self.inner_buffer_size = 0;
     }
@@ -703,7 +713,9 @@ impl BitwiseSortMergeJoinStream {
 
         // buffer_inner_key_group must be called before this function
         debug_assert!(
-            !self.inner_key_buffer.is_empty() || self.inner_key_spill.is_some(),
+            !self.inner_key_buffer.is_empty()
+                || self.inner_key_spill_writer.is_some()
+                || self.inner_key_spill.is_some(),
             "process_key_match_with_filter called with no inner key data"
         );
         debug_assert!(
@@ -731,6 +743,12 @@ impl BitwiseSortMergeJoinStream {
             outer_group_len,
         )
         .count_ones();
+
+        // Evaluation starting means buffering for this group is complete, so
+        // the group's spill file (if any) can be finalized for reading.
+        if let Some(mut writer) = self.inner_key_spill_writer.take() {
+            self.inner_key_spill = writer.finish()?;
+        }
 
         // Process spilled inner batches first asynchronously.
         if matched_count < outer_group_len
