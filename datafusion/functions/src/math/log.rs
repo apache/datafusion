@@ -203,6 +203,10 @@ impl ScalarUDFImpl for LogFunc {
         }
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
         let (base_sort_properties, num_sort_properties) = if input.len() == 1 {
             // log(x) defaults to log(10, x)

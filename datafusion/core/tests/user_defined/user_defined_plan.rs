@@ -67,13 +67,14 @@ use arrow::{
     array::Int64Array, datatypes::SchemaRef, record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
+use datafusion::catalog::Session;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::{
     common::cast::as_int64_array,
     common::{DFSchemaRef, arrow_datafusion_err},
     error::{DataFusionError, Result},
     execution::{
-        context::{QueryPlanner, SessionState, TaskContext},
+        context::{QueryPlanner, TaskContext},
         runtime_env::RuntimeEnv,
     },
     logical_expr::{
@@ -99,6 +100,7 @@ use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 use async_trait::async_trait;
 use datafusion_common::cast::as_string_view_array;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use futures::{Stream, StreamExt};
 
 /// Execute the specified sql and return the resulting record batches
@@ -466,7 +468,7 @@ impl QueryPlanner for TopKQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session_state: &dyn Session,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Teach the default physical planner how to plan TopK nodes.
         let physical_planner =
@@ -518,7 +520,7 @@ impl OptimizerRule for TopKOptimizerRule {
         if let LogicalPlan::Sort(Sort { expr, input, .. }) = limit.input.as_ref()
             && expr.len() == 1
         {
-            // we found a sort with a single sort expr, replace with a a TopK
+            // we found a sort with a single sort expr, replace with a TopK
             return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                 node: Arc::new(TopKPlanNode {
                     k: fetch,
@@ -629,7 +631,8 @@ impl ExtensionPlanner for TopKPlanner {
         node: &dyn UserDefinedLogicalNode,
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
+        _session_state: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         Ok(
             if let Some(topk_node) = node.as_any().downcast_ref::<TopKPlanNode>() {
