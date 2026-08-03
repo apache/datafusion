@@ -35,12 +35,14 @@ impl AggregateHashTable<SingleMarker> {
         agg: &AggregateExec,
         partition: usize,
         output_schema: SchemaRef,
+        state_schema: SchemaRef,
         batch_size: usize,
     ) -> Result<Self> {
         Self::new_with_filters(
             agg,
             partition,
             output_schema,
+            state_schema,
             batch_size,
             agg.filter_expr.iter().cloned().collect(),
         )

@@ -139,6 +139,12 @@ SELECT to_date('01-14-2023 01:01:30+05:30', '%q', '%d-%m-%Y %H/%M/%S', '%+', '%m
 ----
 2023-01-13
 
+# Formatted pre-epoch datetimes retain their calendar date
+query D
+SELECT to_date('1969-12-31 12:00:00', '%Y-%m-%d %H:%M:%S');
+----
+1969-12-31
+
 statement error DataFusion error: Execution error: to_date function unsupported data type at index 1: List
 SELECT to_date('2022-08-03T14:38:50+05:30', make_array('%s', '%q', '%d-%m-%Y %H:%M:%S%#z', '%+'));
 
@@ -318,6 +324,14 @@ ORDER BY id
 ----
 1 2020-09-08
 2 NULL
+
+# Skipping NULL formats does not mask a later parse error.
+query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08' using format '%q': trailing input
+SELECT to_date('2020-09-08', NULL::VARCHAR, '%q')
+
+# Invalid format types are rejected before NULL input propagation.
+query error DataFusion error: Execution error: to_date function unsupported data type at index 1: Int64
+SELECT to_date(NULL::VARCHAR, 12345)
 
 statement ok
 create table ts_utf8_data(ts varchar(100), format varchar(100)) as values

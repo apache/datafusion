@@ -6147,3 +6147,77 @@ DROP TABLE elim_null_keys;
 
 statement ok
 DROP TABLE elim_null_lookup;
+
+# Regression test: a `CollectLeft` `HashJoinExec` requires `SinglePartition` on its build
+# (left) child, and the `CoalescePartitionsExec` that satisfies it must survive the
+# sort-parallelization phase of `EnsureRequirements`. It used to be removed positionally
+# (the traversal descends into the join because the *probe* side is linked to a coalesce),
+# leaving a multi-partition build side that `SanityCheckPlan` rejects with
+# "does not satisfy distribution requirements: SinglePartition".
+
+statement ok
+set datafusion.execution.target_partitions = 8;
+
+# Keep the scan multi-partition as written, i.e. one partition per file.
+statement ok
+set datafusion.optimizer.repartition_file_scans = false;
+
+statement ok
+CREATE TABLE collect_left_src (id INT, ts INT) AS VALUES (1, 10), (2, 20), (3, 30);
+
+query I
+COPY (SELECT * FROM collect_left_src) TO 'test_files/scratch/joins/collect_left/0.parquet' STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT * FROM collect_left_src) TO 'test_files/scratch/joins/collect_left/1.parquet' STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT * FROM collect_left_src) TO 'test_files/scratch/joins/collect_left/2.parquet' STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT * FROM collect_left_src) TO 'test_files/scratch/joins/collect_left/3.parquet' STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE collect_left STORED AS PARQUET LOCATION 'test_files/scratch/joins/collect_left/';
+
+# The build side is the 4-partition scan; the probe side is the `DISTINCT ON` aggregate,
+# whose `CoalescePartitionsExec` is what makes the traversal reach the join.
+query I
+SELECT a.id
+FROM collect_left a
+LEFT JOIN (SELECT DISTINCT ON (id) id, ts FROM collect_left ORDER BY id, ts) f
+  ON a.id = f.id
+ORDER BY a.id;
+----
+1
+1
+1
+1
+2
+2
+2
+2
+3
+3
+3
+3
+
+statement ok
+DROP TABLE collect_left;
+
+statement ok
+DROP TABLE collect_left_src;
+
+statement ok
+reset datafusion.optimizer.repartition_file_scans;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
