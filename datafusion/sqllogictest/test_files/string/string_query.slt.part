@@ -1329,8 +1329,8 @@ NULL NULL NULL NULL NULL NULL
 
 query II
 SELECT
-  CHARACTER_LENGTH(ascii_1),
-  CHARACTER_LENGTH(unicode_1)
+  arrow_cast(CHARACTER_LENGTH(ascii_1), 'Int64'),
+  arrow_cast(CHARACTER_LENGTH(unicode_1), 'Int64')
 FROM
     test_basic_operator
 ----
