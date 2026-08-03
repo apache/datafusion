@@ -24,6 +24,7 @@ use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, LargeStringArray, PrimitiveArray, StringArray,
     StringViewArray, builder::PrimitiveBuilder, cast::AsArray, downcast_primitive,
 };
+use arrow::array::{ArrayAccessor, StringArrayType};
 use arrow::datatypes::{DataType, i256};
 use datafusion_common::Result;
 use datafusion_common::exec_datafusion_err;
@@ -73,50 +74,6 @@ pub trait ArrowHashTable {
     fn find_or_insert(&mut self, row_idx: usize, replace_idx: usize) -> (usize, bool);
 }
 
-enum StringArrayType {
-    Utf8(StringArray),
-    Utf8View(StringViewArray),
-    LargeUtf8(LargeStringArray),
-}
-impl StringArrayType {
-    /// Extracts the string value at the given row index, handling nulls and different string types.
-    ///
-    /// Returns `None` if the value is null, otherwise `Some(value)`.
-    fn value(&self, row_idx: usize) -> Option<&str> {
-        let (is_null, value) = match self {
-            StringArrayType::Utf8(arr) => (arr.is_null(row_idx), arr.value(row_idx)),
-            StringArrayType::LargeUtf8(arr) => (arr.is_null(row_idx), arr.value(row_idx)),
-            StringArrayType::Utf8View(arr) => (arr.is_null(row_idx), arr.value(row_idx)),
-        };
-        if is_null { None } else { Some(value) }
-    }
-}
-impl<'a> TryFrom<&'a DataType> for StringArrayType {
-    type Error = ();
-
-    fn try_from(data_type: &'a DataType) -> std::result::Result<Self, Self::Error> {
-        let vals: Vec<&str> = Vec::new();
-        Ok(match data_type {
-            DataType::Utf8 => StringArrayType::Utf8(vals.into()),
-            DataType::Utf8View => StringArrayType::Utf8View(vals.into()),
-            DataType::LargeUtf8 => StringArrayType::LargeUtf8(vals.into()),
-            _ => return Err(()),
-        })
-    }
-}
-impl TryFrom<ArrayRef> for StringArrayType {
-    type Error = DataType;
-
-    fn try_from(arr: ArrayRef) -> std::result::Result<Self, DataType> {
-        Ok(match arr.data_type() {
-            DataType::Utf8 => StringArrayType::Utf8(arr.as_string().clone()),
-            DataType::LargeUtf8 => StringArrayType::LargeUtf8(arr.as_string().clone()),
-            DataType::Utf8View => StringArrayType::Utf8View(arr.as_string_view().clone()),
-            ty => return Err(ty.clone()),
-        })
-    }
-}
-
 /// Returns true if the given data type can be used as a top-K aggregation hash key.
 ///
 /// Supported types include Arrow primitives (integers, floats, decimals, intervals)
@@ -131,8 +88,11 @@ pub fn is_supported_hash_key_type(kt: &DataType) -> bool {
 }
 
 // An implementation of ArrowHashTable for String keys
-pub struct StringHashTable {
-    owned: StringArrayType,
+pub struct StringHashTable<S: Array>
+where
+    for<'a> &'a S: StringArrayType<'a>,
+{
+    owned: S,
     map: TopKHashTable<Option<String>>,
     rnd: RandomState,
 }
@@ -147,9 +107,13 @@ where
     rnd: RandomState,
 }
 
-impl StringHashTable {
-    pub fn new(limit: usize, data_type: &DataType) -> Self {
-        let owned = StringArrayType::try_from(data_type).expect("Unsupported data type");
+impl<S> StringHashTable<S>
+where
+    S: Array + From<Vec<Option<String>>>,
+    for<'a> &'a S: StringArrayType<'a>,
+{
+    pub fn new(limit: usize) -> Self {
+        let owned = S::from(Vec::new());
         Self {
             owned,
             map: TopKHashTable::new(limit, limit * 10),
@@ -158,9 +122,17 @@ impl StringHashTable {
     }
 }
 
-impl ArrowHashTable for StringHashTable {
+impl<S> ArrowHashTable for StringHashTable<S>
+where
+    S: Array + Clone + From<Vec<Option<String>>> + 'static,
+    for<'a> &'a S: StringArrayType<'a>,
+{
     fn set_batch(&mut self, ids: ArrayRef) {
-        self.owned = StringArrayType::try_from(ids).expect("Unsupported data type");
+        self.owned = ids
+            .as_any()
+            .downcast_ref::<S>()
+            .expect("Unsupported data type")
+            .clone();
     }
 
     fn len(&self) -> usize {
@@ -177,15 +149,15 @@ impl ArrowHashTable for StringHashTable {
 
     fn take_all(&mut self, indexes: Vec<usize>) -> ArrayRef {
         let ids = self.map.take_all(indexes);
-        match &self.owned {
-            StringArrayType::Utf8(_) => Arc::new(StringArray::from(ids)),
-            StringArrayType::LargeUtf8(_) => Arc::new(LargeStringArray::from(ids)),
-            StringArrayType::Utf8View(_) => Arc::new(StringViewArray::from(ids)),
-        }
+        Arc::new(S::from(ids))
     }
 
     fn find_or_insert(&mut self, row_idx: usize, replace_idx: usize) -> (usize, bool) {
-        let id = self.owned.value(row_idx);
+        let id = if self.owned.is_null(row_idx) {
+            None
+        } else {
+            Some((&self.owned).value(row_idx))
+        };
 
         // Compute hash and create equality closure for hash table lookup.
         let hash = self.rnd.hash_one(id);
@@ -410,9 +382,9 @@ pub fn new_hash_table(
 
     downcast_primitive! {
         kt => (downcast_helper, kt),
-        DataType::Utf8 => return Ok(Box::new(StringHashTable::new(limit, &DataType::Utf8))),
-        DataType::LargeUtf8 => return Ok(Box::new(StringHashTable::new(limit, &DataType::LargeUtf8))),
-        DataType::Utf8View => return Ok(Box::new(StringHashTable::new(limit, &DataType::Utf8View))),
+        DataType::Utf8 => return Ok(Box::new(StringHashTable::<StringArray>::new(limit))),
+        DataType::LargeUtf8 => return Ok(Box::new(StringHashTable::<LargeStringArray>::new(limit))),
+        DataType::Utf8View => return Ok(Box::new(StringHashTable::<StringViewArray>::new(limit))),
         _ => {}
     }
 
