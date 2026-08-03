@@ -40,7 +40,8 @@ use std::marker::PhantomData;
 
 /// Default precision — matches the historical hardcoded value.
 pub(crate) const DEFAULT_HLL_P: usize = 14_usize;
-/// Number of registers at the default precision.
+/// Number of registers at the default precision. Only used in tests.
+#[cfg(test)]
 pub(crate) const NUM_REGISTERS: usize = 1_usize << DEFAULT_HLL_P;
 
 /// Minimum and maximum supported precision values.
@@ -54,8 +55,8 @@ where
 {
     registers: Vec<u8>,
     p: usize,
-    q: usize,     // 64 - p
-    p_mask: u64,  // (1 << p) - 1
+    q: usize,    // 64 - p
+    p_mask: u64, // (1 << p) - 1
     phantom: PhantomData<T>,
 }
 
@@ -219,8 +220,10 @@ pub(crate) fn count_from_hashes(hashes: &[u64], p: usize) -> usize {
     let q = 64 - p;
     // For each touched register index keep the maximum rho. Sorting by
     // (index, rho) groups equal indices together with the max rho last.
-    let mut idx_rho: Vec<(usize, u8)> =
-        hashes.iter().map(|&hash| register_for_hash(hash, p)).collect();
+    let mut idx_rho: Vec<(usize, u8)> = hashes
+        .iter()
+        .map(|&hash| register_for_hash(hash, p))
+        .collect();
     idx_rho.sort_unstable();
 
     let mut histogram = [0u32; 64 - HLL_P_MIN + 2];
