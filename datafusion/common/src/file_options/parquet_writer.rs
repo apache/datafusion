@@ -473,7 +473,7 @@ mod tests {
             writer_version,
             compression: Some("zstd(22)".into()),
             dictionary_enabled: Some(!defaults.dictionary_enabled.unwrap_or(false)),
-            dictionary_page_size_limit: 42,
+            dictionary_page_size_limit: 43,
             statistics_enabled: Some("chunk".into()),
             max_row_group_size: 42,
             max_row_group_bytes: Some(MaxRowGroupBytes::try_new(42).unwrap()),
@@ -579,7 +579,7 @@ mod tests {
         TableParquetOptions {
             global: ParquetOptions {
                 // global options
-                data_pagesize_limit: props.dictionary_page_size_limit(),
+                data_pagesize_limit: props.data_page_size_limit(),
                 write_batch_size: props.write_batch_size(),
                 writer_version: props.writer_version().into(),
                 dictionary_page_size_limit: props.dictionary_page_size_limit(),

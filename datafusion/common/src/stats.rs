@@ -195,8 +195,12 @@ impl Precision<usize> {
     /// Return the estimate of applying a filter with estimated selectivity
     /// `selectivity` to this Precision. A selectivity of `1.0` means that all
     /// rows are selected. A selectivity of `0.5` means half the rows are
-    /// selected. Will always return inexact statistics.
+    /// selected. An exact zero is preserved, since filtering an empty input
+    /// cannot produce rows; any other known value is demoted to inexact.
     pub fn with_estimated_selectivity(self, selectivity: f64) -> Self {
+        if self == Precision::Exact(0) {
+            return self;
+        }
         self.map(|v| ((v as f64 * selectivity).ceil()) as usize)
             .to_inexact()
     }
@@ -1200,6 +1204,44 @@ mod tests {
         assert_eq!(*exact_precision.get_value().unwrap(), 42);
         assert_eq!(*inexact_precision.get_value().unwrap(), 23);
         assert_eq!(absent_precision.get_value(), None);
+    }
+
+    #[test]
+    fn test_with_estimated_selectivity() {
+        // Filtering an empty input cannot produce rows, so the zero stays exact.
+        assert_eq!(
+            Precision::Exact(0).with_estimated_selectivity(0.5),
+            Precision::Exact(0)
+        );
+        assert_eq!(
+            Precision::Exact(0).with_estimated_selectivity(1.0),
+            Precision::Exact(0)
+        );
+
+        // Any other known value is scaled and demoted, since the selectivity is
+        // itself an estimate.
+        assert_eq!(
+            Precision::Exact(100).with_estimated_selectivity(0.5),
+            Precision::Inexact(50)
+        );
+        assert_eq!(
+            Precision::Exact(100).with_estimated_selectivity(1.0),
+            Precision::Inexact(100)
+        );
+        assert_eq!(
+            Precision::Exact(3).with_estimated_selectivity(0.5),
+            Precision::Inexact(2)
+        );
+
+        // An inexact zero is an estimate, not a proof, and stays inexact.
+        assert_eq!(
+            Precision::Inexact(0).with_estimated_selectivity(0.5),
+            Precision::Inexact(0)
+        );
+        assert_eq!(
+            Precision::<usize>::Absent.with_estimated_selectivity(0.5),
+            Precision::Absent
+        );
     }
 
     #[test]
