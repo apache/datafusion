@@ -86,7 +86,7 @@ impl PhysicalPlanningContext {
     }
 
     /// Adds a mapping for each variable to the given qualifier. Existing
-    /// variables with conflicting names get shadowed
+    /// variables with conflicting names are shadowed.
     pub fn with_qualified_lambda_variables(
         mut self,
         qualifier: &TableReference,
