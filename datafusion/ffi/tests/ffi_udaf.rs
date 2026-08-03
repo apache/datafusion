@@ -21,8 +21,7 @@
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::Float64Array;
-    use datafusion::common::record_batch;
+    use arrow::array::{Float64Array, record_batch};
     use datafusion::error::Result;
     use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl};
     use datafusion::prelude::{SessionContext, col};

@@ -853,7 +853,7 @@ mod tests {
     use datafusion_common::stats::{ColumnStatistics, Precision};
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_plan::expressions::lit;
-    use datafusion_physical_plan::statistics::StatisticsArgs;
+    use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 
     use datafusion_physical_plan::ExecutionPlan;
 
@@ -986,7 +986,7 @@ mod tests {
         let values = MemorySourceConfig::try_new_as_values(schema, data)?;
 
         assert_eq!(
-            *values.statistics_with_args(&StatisticsArgs::new())?,
+            *StatisticsContext::new().compute(values.as_ref(), &StatisticsArgs::new())?,
             Statistics {
                 num_rows: Precision::Exact(rows),
                 total_byte_size: Precision::Exact(8), // not important

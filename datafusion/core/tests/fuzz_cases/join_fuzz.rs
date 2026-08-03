@@ -1008,14 +1008,12 @@ impl JoinFuzzTestCase {
 
             if join_tests.contains(&HjSmj) {
                 let err_msg_row_cnt = format!(
-                    "HashJoinExec and SortMergeJoinExec produced different row counts, batch_size: {}",
-                    &batch_size
+                    "HashJoinExec and SortMergeJoinExec produced different row counts, batch_size: {batch_size}"
                 );
                 assert_eq!(hj_rows, smj_rows, "{}", err_msg_row_cnt.as_str());
 
                 let err_msg_contents = format!(
-                    "SortMergeJoinExec and HashJoinExec produced different results, batch_size: {}",
-                    &batch_size
+                    "SortMergeJoinExec and HashJoinExec produced different results, batch_size: {batch_size}"
                 );
                 // row level compare if any of joins returns the result
                 // the reason is different formatting when there is no rows
@@ -1070,10 +1068,10 @@ impl JoinFuzzTestCase {
             let mut file = std::fs::File::create(&file_path).unwrap();
             println!(
                 "{}: Saving batch idx {} rows {} to parquet {}",
-                &out_name,
+                out_name,
                 idx,
                 batch.num_rows(),
-                &file_path
+                file_path
             );
             let mut writer = parquet::arrow::ArrowWriter::try_new(
                 &mut file,

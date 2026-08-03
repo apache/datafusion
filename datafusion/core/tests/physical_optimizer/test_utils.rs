@@ -275,6 +275,22 @@ pub fn bounded_window_exec_with_partition(
     partition_by: &[Arc<dyn PhysicalExpr>],
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
+    bounded_window_exec_with_can_repartition(
+        col_name,
+        sort_exprs,
+        partition_by,
+        input,
+        false,
+    )
+}
+
+pub fn bounded_window_exec_with_can_repartition(
+    col_name: &str,
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    partition_by: &[Arc<dyn PhysicalExpr>],
+    input: Arc<dyn ExecutionPlan>,
+    can_repartition: bool,
+) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect::<Vec<_>>();
     let schema = input.schema();
     let window_expr = create_window_expr(
@@ -296,7 +312,7 @@ pub fn bounded_window_exec_with_partition(
             vec![window_expr],
             Arc::clone(&input),
             InputOrderMode::Sorted,
-            false,
+            can_repartition,
         )
         .unwrap(),
     )
@@ -1002,7 +1018,11 @@ impl ExecutionPlan for TestScan {
         internal_err!("TestScan is for testing optimizer only, not for execution")
     }
 
-    fn statistics_with_args(&self, _args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
         Ok(Arc::new(Statistics::new_unknown(&self.schema)))
     }
 

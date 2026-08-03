@@ -32,7 +32,6 @@ use parquet::file::properties::{WriterProperties, WriterVersion};
 use rand::distr::Alphanumeric;
 use rand::distr::uniform::SampleUniform;
 use rand::prelude::*;
-use rand::rng;
 use std::fs::File;
 use std::io::Read;
 use std::ops::Range;
@@ -69,36 +68,36 @@ fn schema() -> SchemaRef {
     ]))
 }
 
-fn generate_batch() -> RecordBatch {
+fn generate_batch(rng: &mut StdRng) -> RecordBatch {
     let schema = schema();
     let len = WRITE_RECORD_BATCH_SIZE;
     RecordBatch::try_new(
         schema,
         vec![
-            generate_string_dictionary("prefix", 10, len, 1.0),
-            generate_string_dictionary("prefix", 10, len, 0.5),
-            generate_string_dictionary("prefix", 100, len, 1.0),
-            generate_string_dictionary("prefix", 100, len, 0.5),
-            generate_string_dictionary("prefix", 1000, len, 1.0),
-            generate_string_dictionary("prefix", 1000, len, 0.5),
-            generate_strings(0..100, len, 1.0),
-            generate_strings(0..100, len, 0.5),
-            generate_primitive::<Int64Type>(len, 1.0, -2000..2000),
-            generate_primitive::<Int64Type>(len, 0.5, -2000..2000),
-            generate_primitive::<Float64Type>(len, 1.0, -1000.0..1000.0),
-            generate_primitive::<Float64Type>(len, 0.5, -1000.0..1000.0),
+            generate_string_dictionary(rng, "prefix", 10, len, 1.0),
+            generate_string_dictionary(rng, "prefix", 10, len, 0.5),
+            generate_string_dictionary(rng, "prefix", 100, len, 1.0),
+            generate_string_dictionary(rng, "prefix", 100, len, 0.5),
+            generate_string_dictionary(rng, "prefix", 1000, len, 1.0),
+            generate_string_dictionary(rng, "prefix", 1000, len, 0.5),
+            generate_strings(rng, 0..100, len, 1.0),
+            generate_strings(rng, 0..100, len, 0.5),
+            generate_primitive::<Int64Type>(rng, len, 1.0, -2000..2000),
+            generate_primitive::<Int64Type>(rng, len, 0.5, -2000..2000),
+            generate_primitive::<Float64Type>(rng, len, 1.0, -1000.0..1000.0),
+            generate_primitive::<Float64Type>(rng, len, 0.5, -1000.0..1000.0),
         ],
     )
     .unwrap()
 }
 
 fn generate_string_dictionary(
+    rng: &mut StdRng,
     prefix: &str,
     cardinality: usize,
     len: usize,
     valid_percent: f64,
 ) -> ArrayRef {
-    let mut rng = rng();
     let strings: Vec<_> = (0..cardinality).map(|x| format!("{prefix}#{x}")).collect();
 
     Arc::new(DictionaryArray::<Int32Type>::from_iter((0..len).map(
@@ -110,11 +109,11 @@ fn generate_string_dictionary(
 }
 
 fn generate_strings(
+    rng: &mut StdRng,
     string_length_range: Range<usize>,
     len: usize,
     valid_percent: f64,
 ) -> ArrayRef {
-    let mut rng = rng();
     Arc::new(StringArray::from_iter((0..len).map(|_| {
         rng.random_bool(valid_percent).then(|| {
             let string_len = rng.random_range(string_length_range.clone());
@@ -126,6 +125,7 @@ fn generate_strings(
 }
 
 fn generate_primitive<T>(
+    rng: &mut StdRng,
     len: usize,
     valid_percent: f64,
     range: Range<T::Native>,
@@ -134,7 +134,6 @@ where
     T: ArrowPrimitiveType,
     T::Native: SampleUniform,
 {
-    let mut rng = rng();
     Arc::new(PrimitiveArray::<T>::from_iter((0..len).map(|_| {
         rng.random_bool(valid_percent)
             .then(|| rng.random_range(range.clone()))
@@ -160,8 +159,9 @@ fn generate_file() -> NamedTempFile {
     let mut writer =
         ArrowWriter::try_new(&mut named_file, schema, Some(properties)).unwrap();
 
+    let mut rng = StdRng::seed_from_u64(0);
     for _ in 0..NUM_BATCHES {
-        let batch = generate_batch();
+        let batch = generate_batch(&mut rng);
         writer.write(&batch).unwrap();
     }
 

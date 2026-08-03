@@ -1107,13 +1107,13 @@ mod tests {
         Ok(())
     }
 
-    /// Verifies that `partitioned_by_file_group` disables shared work stealing.
+    /// Verifies that declared output partitioning disables shared work stealing.
     #[tokio::test]
-    async fn morsel_partitioned_by_file_group_keeps_files_local() -> Result<()> {
+    async fn morsel_declared_output_partitioning_keeps_files_local() -> Result<()> {
         // same fixture as `morsel_shared_files_can_be_stolen` but marked as
         // preserve-partitioned
         let test = two_partition_morsel_test()
-            .with_partitioned_by_file_group(true)
+            .with_declared_output_partitioning(true)
             .with_file_stream_events(false);
 
         insta::assert_snapshot!(test.run().await.unwrap(), @r"
@@ -1366,7 +1366,7 @@ mod tests {
         morselizer: MockMorselizer,
         partition_files: BTreeMap<PartitionId, Vec<String>>,
         preserve_order: bool,
-        partitioned_by_file_group: bool,
+        declared_output_partitioning: bool,
         enable_file_stream_work_stealing: bool,
         file_stream_events: bool,
         build_streams_on_first_read: bool,
@@ -1381,7 +1381,7 @@ mod tests {
                 morselizer: MockMorselizer::new(),
                 partition_files: BTreeMap::new(),
                 preserve_order: false,
-                partitioned_by_file_group: false,
+                declared_output_partitioning: false,
                 enable_file_stream_work_stealing: true,
                 file_stream_events: true,
                 build_streams_on_first_read: false,
@@ -1418,13 +1418,13 @@ mod tests {
             self
         }
 
-        /// Marks the test scan as pre-partitioned by file group, which should
-        /// force each stream to keep its own files local.
-        fn with_partitioned_by_file_group(
+        /// Declares the test scan's output partitioning, which should force
+        /// each stream to keep its own files local.
+        fn with_declared_output_partitioning(
             mut self,
-            partitioned_by_file_group: bool,
+            declared_output_partitioning: bool,
         ) -> Self {
-            self.partitioned_by_file_group = partitioned_by_file_group;
+            self.declared_output_partitioning = declared_output_partitioning;
             self
         }
 
@@ -1630,6 +1630,16 @@ mod tests {
                     DataType::Int32,
                     false,
                 )])));
+            // Declaring an output partitioning marks the scan as pre-grouped, which
+            // keeps each stream's files local (disables shared work stealing).
+            let output_partitioning = self.declared_output_partitioning.then(|| {
+                datafusion_physical_expr::Partitioning::Hash(
+                    vec![Arc::new(
+                        datafusion_physical_expr::expressions::Column::new("i", 0),
+                    )],
+                    file_groups.len(),
+                )
+            });
             FileScanConfigBuilder::new(
                 ObjectStoreUrl::parse("test:///").unwrap(),
                 Arc::new(MockSource::new(table_schema)),
@@ -1637,7 +1647,7 @@ mod tests {
             .with_file_groups(file_groups)
             .with_limit(self.limit)
             .with_preserve_order(self.preserve_order)
-            .with_partitioned_by_file_group(self.partitioned_by_file_group)
+            .with_output_partitioning(output_partitioning)
             .build()
         }
     }

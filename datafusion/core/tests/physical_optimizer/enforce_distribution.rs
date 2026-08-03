@@ -20,8 +20,8 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    check_integrity, coalesce_partitions_exec, parquet_exec_with_sort,
-    parquet_exec_with_stats, repartition_exec, schema, sort_exec,
+    bounded_window_exec_with_can_repartition, check_integrity, coalesce_partitions_exec,
+    parquet_exec_with_sort, parquet_exec_with_stats, repartition_exec, schema, sort_exec,
     sort_exec_with_preserve_partitioning, sort_merge_join_exec,
     sort_preserving_merge_exec, union_exec,
 };
@@ -265,8 +265,12 @@ impl ExecutionPlan for SinglePartitionMaintainsOrderExec {
         vec![&self.input]
     }
 
-    fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+    fn input_distribution_requirements(
+        &self,
+    ) -> datafusion_physical_plan::InputDistributionRequirements {
+        datafusion_physical_plan::InputDistributionRequirements::new(vec![
+            Distribution::SinglePartition,
+        ])
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -817,6 +821,342 @@ fn range_grouping_set_aggregate_rehashes_with_grouping_id() -> Result<()> {
       RepartitionExec: partitioning=Hash([a@0, b@1, __grouping_id@2], 3), input_partitions=3
         AggregateExec: mode=Partial, gby=[(a@0 as a, NULL as b), (a@0 as a, b@1 as b)], aggr=[]
           DataSourceExec: file_groups={3 groups: [[p0], [p1], [p2]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20)], 3), file_type=parquet
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn range_inner_hash_join_rehashes_incompatible_range_partitioning() -> Result<()> {
+    let left = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let right = projection_exec_with_alias(
+        parquet_exec_with_output_partitioning(range_partitioning(
+            "a",
+            [10, 30, 40],
+            SortOptions::default(),
+        )?),
+        vec![
+            ("a".to_string(), "a1".to_string()),
+            ("b".to_string(), "b1".to_string()),
+        ],
+    );
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("a1", &right.schema())?) as _,
+    )];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(join, &DISTRIB_DISTRIB_SORT);
+
+    assert_plan!(
+        plan,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a1@0)]
+      RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
+        DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+      RepartitionExec: partitioning=Hash([a1@0], 4), input_partitions=4
+        ProjectionExec: expr=[a@0 as a1, b@1 as b1]
+          DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (30), (40)], 4), file_type=parquet
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn range_right_mark_hash_join_reuses_range_partitioning() -> Result<()> {
+    let left = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let right = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("a", &right.schema())?) as _,
+    )];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::RightMark);
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(join, &DISTRIB_DISTRIB_SORT);
+
+    assert_plan!(
+        plan,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=RightMark, on=[(a@0, a@0)]
+      DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+      DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn range_right_semi_hash_join_rehashes_incompatible_sort_options() -> Result<()> {
+    let left = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [20],
+        SortOptions::default(),
+    )?);
+    let right = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [20],
+        SortOptions {
+            descending: true,
+            nulls_first: true,
+        },
+    )?);
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("a", &right.schema())?) as _,
+    )];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::RightSemi);
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(join, &DISTRIB_DISTRIB_SORT);
+
+    assert_plan!(
+        plan,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(a@0, a@0)]
+      RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=2
+        DataSourceExec: file_groups={2 groups: [[p0], [p1]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(20)], 2), file_type=parquet
+      RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=2
+        DataSourceExec: file_groups={2 groups: [[p0], [p1]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 DESC], [(20)], 2), file_type=parquet
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn range_window_reuses_range_partitioning() -> Result<()> {
+    let input = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let window = bounded_window_exec_with_can_repartition(
+        "a",
+        vec![],
+        &[col("a", &schema())?],
+        input,
+        true,
+    );
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(window, &DISTRIB_DISTRIB_SORT);
+
+    assert_plan!(
+        plan,
+        @r#"
+    BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+        DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+    "#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn range_window_rehashes_incompatible_range_partitioning() -> Result<()> {
+    let input = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let window = bounded_window_exec_with_can_repartition(
+        "b",
+        vec![],
+        &[col("b", &schema())?],
+        input,
+        true,
+    );
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(window, &DISTRIB_DISTRIB_SORT);
+
+    assert_plan!(
+        plan,
+        @r#"
+    BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[true]
+        RepartitionExec: partitioning=Hash([b@1], 4), input_partitions=4
+          DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+    "#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn range_full_hash_join_reuses_compatible_range_partitioning() -> Result<()> {
+    let left = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let right = projection_exec_with_alias(
+        parquet_exec_with_output_partitioning(range_partitioning(
+            "a",
+            [10, 20, 30],
+            SortOptions::default(),
+        )?),
+        vec![
+            ("a".to_string(), "a1".to_string()),
+            ("b".to_string(), "b1".to_string()),
+        ],
+    );
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("a1", &right.schema())?) as _,
+    )];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::Full);
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(join, &DISTRIB_DISTRIB_SORT);
+
+    assert_plan!(
+        plan,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=Full, on=[(a@0, a1@0)]
+      DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+      ProjectionExec: expr=[a@0 as a1, b@1 as b1]
+        DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn range_full_hash_join_rehashes_incompatible_range_partitioning() -> Result<()> {
+    let left = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let right = projection_exec_with_alias(
+        parquet_exec_with_output_partitioning(range_partitioning(
+            "a",
+            [10, 30, 40],
+            SortOptions::default(),
+        )?),
+        vec![
+            ("a".to_string(), "a1".to_string()),
+            ("b".to_string(), "b1".to_string()),
+        ],
+    );
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("a1", &right.schema())?) as _,
+    )];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::Full);
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(join, &DISTRIB_DISTRIB_SORT);
+
+    assert_plan!(
+        plan,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=Full, on=[(a@0, a1@0)]
+      RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
+        DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+      RepartitionExec: partitioning=Hash([a1@0], 4), input_partitions=4
+        ProjectionExec: expr=[a@0 as a1, b@1 as b1]
+          DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (30), (40)], 4), file_type=parquet
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn range_left_mark_hash_join_reuses_range_partitioning() -> Result<()> {
+    let left = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let right = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("a", &right.schema())?) as _,
+    )];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::LeftMark);
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(join, &DISTRIB_DISTRIB_SORT);
+
+    assert_plan!(
+        plan,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=LeftMark, on=[(a@0, a@0)]
+      DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+      DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn range_left_anti_hash_join_rehashes_incompatible_null_options() -> Result<()> {
+    let left = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?);
+    let right = parquet_exec_with_output_partitioning(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions {
+            descending: false,
+            nulls_first: false,
+        },
+    )?);
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("a", &right.schema())?) as _,
+    )];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::LeftAnti);
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(join, &DISTRIB_DISTRIB_SORT);
+
+    assert_plan!(
+        plan,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(a@0, a@0)]
+      RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
+        DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+      RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
+        DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC NULLS LAST], [(10), (20), (30)], 4), file_type=parquet
     "
     );
 

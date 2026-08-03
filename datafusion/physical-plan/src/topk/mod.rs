@@ -307,6 +307,24 @@ impl TopKDynamicFilters {
 // Guesstimate for memory allocation: estimated number of bytes used per row in the RowConverter
 const ESTIMATED_BYTES_PER_ROW: usize = 20;
 
+/// Owned data of a row that was just evicted from a [`TopKHeap`].
+///
+/// Returned by [`TopKHeap::add`] so that callers (e.g. rank-aware
+/// wrappers that retain boundary ties) can decide whether to retain
+/// the evicted row externally. The underlying batch is captured
+/// before the heap's internal `RecordBatchStore` decrements the
+/// batch's use count, so the data remains accessible even if the
+/// heap drops its internal reference to the batch.
+#[derive(Debug, Clone)]
+pub(crate) struct EvictedRow {
+    /// The record batch the evicted row came from.
+    pub batch: RecordBatch,
+    /// Row index within `batch`.
+    pub index: usize,
+    /// Encoded ORDER BY tuple for the evicted row, in [`arrow::row`] format.
+    pub row_bytes: Vec<u8>,
+}
+
 pub(crate) fn build_sort_fields(
     ordering: &[PhysicalSortExpr],
     schema: &SchemaRef,
@@ -895,12 +913,16 @@ impl TopKHeap {
     /// Adds `row` to this heap. If inserting this new item would
     /// increase the size past `k`, removes the previously smallest
     /// item.
+    ///
+    /// Returns `Some(EvictedRow)` if an existing row was evicted to
+    /// make room for `row`, or `None` if the row was inserted into a
+    /// non-full heap.
     fn add(
         &mut self,
         batch_entry: &mut RecordBatchEntry,
         row: impl AsRef<[u8]>,
         index: usize,
-    ) {
+    ) -> Option<EvictedRow> {
         let batch_id = batch_entry.id;
         batch_entry.uses += 1;
 
@@ -910,6 +932,26 @@ impl TopKHeap {
         // Reuse storage for evicted item if possible
         if self.inner.len() == self.k {
             let mut prev_min = self.inner.peek_mut().unwrap();
+
+            // Capture evicted row data before `unuse` (which may GC the
+            // batch from the store) and `replace_with` (which overwrites
+            // `prev_min` in place). The batch comes from `self.store` for
+            // cross-batch evictions, or directly from `batch_entry` when
+            // a row evicts another row from the same in-flight batch
+            // (entry not yet registered in the store).
+            let evicted_batch = if prev_min.batch_id == batch_entry.id {
+                batch_entry.batch.clone()
+            } else {
+                self.store
+                    .get(prev_min.batch_id)
+                    .map(|entry| entry.batch.clone())
+                    .expect("evicted row's batch must be present in the store")
+            };
+            let evicted = EvictedRow {
+                batch: evicted_batch,
+                index: prev_min.index,
+                row_bytes: prev_min.row.clone(),
+            };
 
             // Update batch use
             if prev_min.batch_id == batch_entry.id {
@@ -924,12 +966,15 @@ impl TopKHeap {
             prev_min.replace_with(row, batch_id, index);
 
             self.owned_bytes += prev_min.owned_size();
+
+            Some(evicted)
         } else {
             let new_row = TopKRow::new(row, batch_id, index);
             self.owned_bytes += new_row.owned_size();
             // put the new row into the heap
             self.inner.push(new_row);
-        };
+            None
+        }
     }
 
     /// Returns the values stored in this heap, from values low to
@@ -1411,6 +1456,358 @@ impl PartitionedTopK {
             + self.scratch_rows.size()
             + self.heaps.values().map(|h| h.size()).sum::<usize>()
             + self.heaps.capacity() * (size_of::<OwnedRow>() + size_of::<TopKHeap>())
+    }
+}
+
+/// A run of rows from a single source [`RecordBatch`] that tied at the
+/// boundary when inserted. Stored as `(batch, indices)` and materialized
+/// at emit time via [`take_record_batch`].
+#[derive(Debug)]
+struct TieEntry {
+    batch: RecordBatch,
+    /// Indices into `batch` of the rows tied at the (then-current)
+    /// boundary. Always non-empty by construction.
+    row_indices: Vec<u32>,
+    /// `get_record_batch_memory_size(&batch)` captured at push time so
+    /// `RankPartitionState::size()` doesn't recurse through `batch`'s
+    /// columns on every `try_resize` call.
+    batch_bytes: usize,
+}
+
+/// Per-partition state for `RANK()` semantics.
+///
+/// Composes [`TopKHeap`] as the K-bounded core plus a sibling
+/// `Vec<TieEntry>` for boundary-tied rows. `RANK ≤ K` keeps the K
+/// best rows by ORDER BY plus every row tied at the K-th-best
+/// ORDER BY value — the boundary. So the total retained rows can
+/// exceed K when ties straddle the boundary.
+struct RankPartitionState {
+    heap: TopKHeap,
+    ties: Vec<TieEntry>,
+}
+
+impl RankPartitionState {
+    fn size(&self) -> usize {
+        let ties_buffer = self.ties.capacity() * size_of::<TieEntry>();
+        let ties_contents: usize = self
+            .ties
+            .iter()
+            .map(|t| t.row_indices.capacity() * size_of::<u32>() + t.batch_bytes)
+            .sum();
+        self.heap.size() + ties_buffer + ties_contents
+    }
+}
+
+/// Sibling to [`PartitionedTopK`] implementing `RANK()` semantics.
+///
+/// Per partition, retains the K-best rows plus every row tied at the
+/// K-th-best ORDER BY value (so `WHERE rk <= K` may keep more than K
+/// rows when ties straddle the boundary). Like [`PartitionedTopK`],
+/// the [`RowConverter`], [`MemoryReservation`], scratch [`Rows`]
+/// buffer, and [`TopKMetrics`] are shared across all partitions for
+/// this operator instance.
+///
+/// # Algorithm (per row)
+///
+/// For each incoming row, compare its encoded ORDER BY bytes against
+/// `heap.max()` — the K-th-best row, which is by definition the
+/// admission boundary. `heap.max()` is `None` until the heap fills
+/// to K rows:
+///
+/// - heap not full (`max() == None`) → forward to the heap
+/// - row's ob `==` max → push to ties (no heap call)
+/// - row's ob `>` max → drop
+/// - row's ob `<` max → forward to heap; on eviction, compare the
+///   new `heap.max()` to the evicted row's bytes: if equal, push
+///   evicted to ties (still tied at the new boundary's rank); else
+///   clear ties (boundary moved up, old ties no longer satisfy
+///   `rk ≤ K`)
+pub(crate) struct PartitionedTopKRank {
+    schema: SchemaRef,
+    metrics: TopKMetrics,
+    reservation: MemoryReservation,
+    /// ORDER BY expressions (excludes PARTITION BY).
+    expr: LexOrdering,
+    /// Encoder for ORDER BY columns. Reused across partitions.
+    row_converter: RowConverter,
+    /// Scratch row buffer reused across `insert_batch` calls.
+    scratch_rows: Rows,
+    /// PARTITION BY expressions.
+    partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    /// Encoder for the partition key.
+    partition_converter: RowConverter,
+    /// Scratch row buffer for partition-key encoding. Reused across
+    /// `insert_batch` calls (cleared + appended each batch) so we
+    /// avoid allocating a fresh `Rows` buffer every batch.
+    partition_scratch_rows: Rows,
+    /// One rank state per distinct partition key seen so far.
+    states: HashMap<OwnedRow, RankPartitionState>,
+    k: usize,
+    batch_size: usize,
+}
+
+impl PartitionedTopKRank {
+    #[expect(clippy::too_many_arguments)]
+    pub(crate) fn try_new(
+        partition_id: usize,
+        schema: SchemaRef,
+        partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
+        partition_sort_fields: Vec<SortField>,
+        order_expr: LexOrdering,
+        k: usize,
+        batch_size: usize,
+        runtime: &Arc<RuntimeEnv>,
+        metrics: &ExecutionPlanMetricsSet,
+    ) -> Result<Self> {
+        assert!(k > 0, "PartitionedTopKRank requires k > 0");
+        let reservation =
+            MemoryConsumer::new(format!("PartitionedTopKRank[{partition_id}]"))
+                .register(&runtime.memory_pool);
+
+        let order_sort_fields = build_sort_fields(&order_expr, &schema)?;
+        let row_converter = RowConverter::new(order_sort_fields)?;
+        let scratch_rows =
+            row_converter.empty_rows(batch_size, ESTIMATED_BYTES_PER_ROW * batch_size);
+
+        let partition_converter = RowConverter::new(partition_sort_fields)?;
+        let partition_scratch_rows = partition_converter
+            .empty_rows(batch_size, ESTIMATED_BYTES_PER_ROW * batch_size);
+
+        Ok(Self {
+            schema,
+            metrics: TopKMetrics::new(metrics, partition_id),
+            reservation,
+            expr: order_expr,
+            row_converter,
+            scratch_rows,
+            partition_exprs,
+            partition_converter,
+            partition_scratch_rows,
+            states: HashMap::new(),
+            k,
+            batch_size,
+        })
+    }
+
+    /// Demultiplex `batch` rows by partition key, encode the ORDER BY
+    /// columns once for the whole batch, and feed each partition's
+    /// rows through the rank classifier into its dedicated heap and
+    /// ties Vec.
+    pub(crate) fn insert_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+        let baseline = self.metrics.baseline.clone();
+        let _timer = baseline.elapsed_compute().timer();
+
+        let num_rows = batch.num_rows();
+        if num_rows == 0 {
+            return Ok(());
+        }
+
+        // Captured once so the per-tie push from this batch can reuse
+        // it (computing `get_record_batch_memory_size` is O(cols ×
+        // buffer walk) and we'd otherwise pay it per push and again
+        // per `try_resize` call).
+        let input_batch_bytes = get_record_batch_memory_size(batch);
+
+        // 1. Evaluate + encode partition columns into the reusable
+        //    scratch (cleared then appended).
+        let pk_arrays: Vec<ArrayRef> = self
+            .partition_exprs
+            .iter()
+            .map(|e| e.evaluate(batch).and_then(|v| v.into_array(num_rows)))
+            .collect::<Result<_>>()?;
+        self.partition_scratch_rows.clear();
+        self.partition_converter
+            .append(&mut self.partition_scratch_rows, &pk_arrays)?;
+        let pk_rows = &self.partition_scratch_rows;
+
+        // 2. Demultiplex row indices by partition key (per-batch).
+        let mut groups: HashMap<OwnedRow, Vec<u32>> = HashMap::new();
+        for i in 0..num_rows {
+            groups
+                .entry(pk_rows.row(i).owned())
+                .or_default()
+                .push(i as u32);
+        }
+
+        // 3. Evaluate ORDER BY columns on the full batch and encode ONCE.
+        let ob_arrays: Vec<ArrayRef> = self
+            .expr
+            .iter()
+            .map(|e| e.expr.evaluate(batch).and_then(|v| v.into_array(num_rows)))
+            .collect::<Result<_>>()?;
+        self.scratch_rows.clear();
+        self.row_converter
+            .append(&mut self.scratch_rows, &ob_arrays)?;
+
+        // 4. Per-partition: classify each row and dispatch.
+        let k = self.k;
+        let mut replacements: usize = 0;
+
+        for (pk, indices) in groups {
+            let state = self.states.entry(pk).or_insert_with(|| RankPartitionState {
+                heap: TopKHeap::new(k),
+                ties: Vec::new(),
+            });
+
+            // Equal indices for THIS batch only. Coalesced into a single
+            // tie entry at the end of the partition's loop. Discarded if
+            // the boundary moves up mid-loop (those rows were tied to the
+            // old boundary, which is now strictly worse than the new K-th).
+            let mut equal_indices: Vec<u32> = Vec::new();
+            // Lazy-registered: only attached if at least one row reaches
+            // the heap from this batch in this partition.
+            let mut entry: Option<RecordBatchEntry> = None;
+
+            for &orig_idx in &indices {
+                let row = self.scratch_rows.row(orig_idx as usize);
+
+                // Classify against the current K-th-best (the heap top).
+                // `heap.max()` returns `None` while the heap is filling,
+                // so unclassified rows fall through to the heap path.
+                let classification = state
+                    .heap
+                    .max()
+                    .map(|max_row| row.as_ref().cmp(max_row.row()));
+
+                match classification {
+                    Some(Ordering::Equal) => {
+                        equal_indices.push(orig_idx);
+                        continue;
+                    }
+                    Some(Ordering::Greater) => continue,
+                    Some(Ordering::Less) | None => {
+                        // Heap path: heap not yet full, or row strictly
+                        // better than the current boundary.
+                        let entry_ref = entry.get_or_insert_with(|| {
+                            state.heap.register_batch(batch.clone())
+                        });
+                        if let Some(EvictedRow {
+                            batch: evicted_batch,
+                            index: evicted_index,
+                            row_bytes: evicted_bytes,
+                        }) = state.heap.add(entry_ref, row, orig_idx as usize)
+                        {
+                            // Compare the new boundary (post-eviction heap
+                            // top) against the evicted row's bytes — both
+                            // already in encoded form, no clones needed.
+                            let boundary_changed = state
+                                .heap
+                                .max()
+                                .expect("heap was full to evict; must still be full")
+                                .row()
+                                != evicted_bytes.as_slice();
+                            if boundary_changed {
+                                // Boundary moved up — prior ties (across
+                                // all prior batches) and equal_indices
+                                // accumulated earlier in THIS batch were
+                                // tied to the old boundary, now strictly
+                                // worse than the new K-th-best. Discard.
+                                state.ties.clear();
+                                equal_indices.clear();
+                            } else {
+                                // Boundary unchanged — evicted row is tied
+                                // at the (unchanged) boundary; push as a
+                                // single-row entry.
+                                let batch_bytes =
+                                    get_record_batch_memory_size(&evicted_batch);
+                                state.ties.push(TieEntry {
+                                    batch: evicted_batch,
+                                    row_indices: vec![evicted_index as u32],
+                                    batch_bytes,
+                                });
+                            }
+                        }
+                        replacements += 1;
+                    }
+                }
+            }
+
+            if let Some(e) = entry {
+                state.heap.insert_batch_entry(e);
+                state.heap.maybe_compact()?;
+            }
+
+            // Commit this batch's ties as a single entry.
+            if !equal_indices.is_empty() {
+                state.ties.push(TieEntry {
+                    batch: batch.clone(),
+                    row_indices: equal_indices,
+                    batch_bytes: input_batch_bytes,
+                });
+            }
+        }
+
+        if replacements > 0 {
+            self.metrics.row_replacements.add(replacements);
+        }
+        self.reservation.try_resize(self.size())?;
+        Ok(())
+    }
+
+    /// Drain all heaps and ties in partition-key order and return the
+    /// rows as a stream of coalesced [`RecordBatch`]es ordered by
+    /// `(partition_keys, order_keys)`. Within a partition, heap rows
+    /// come first (sorted by ob), then tie rows (all sharing the
+    /// boundary ob).
+    pub(crate) fn emit(self) -> Result<SendableRecordBatchStream> {
+        let Self {
+            schema,
+            metrics,
+            reservation: _,
+            expr: _,
+            row_converter: _,
+            scratch_rows: _,
+            partition_exprs: _,
+            partition_converter: _,
+            partition_scratch_rows: _,
+            mut states,
+            k: _,
+            batch_size,
+        } = self;
+        let _timer = metrics.baseline.elapsed_compute().timer();
+
+        let mut sorted_pks: Vec<OwnedRow> = states.keys().cloned().collect();
+        sorted_pks.sort();
+
+        let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), batch_size);
+
+        for pk in sorted_pks {
+            let RankPartitionState { mut heap, ties, .. } =
+                states.remove(&pk).expect("key from states.keys()");
+            if let Some(batch) = heap.emit()? {
+                (&batch).record_output(&metrics.baseline);
+                coalescer.push_batch(batch)?;
+            }
+            for tie in ties {
+                let indices = UInt32Array::from(tie.row_indices);
+                let tie_batch = take_record_batch(&tie.batch, &indices)?;
+                (&tie_batch).record_output(&metrics.baseline);
+                coalescer.push_batch(tie_batch)?;
+            }
+        }
+        coalescer.finish_buffered_batch()?;
+
+        let mut out: Vec<Result<RecordBatch>> = Vec::new();
+        while let Some(b) = coalescer.next_completed_batch() {
+            out.push(Ok(b));
+        }
+
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            schema,
+            futures::stream::iter(out),
+        )))
+    }
+
+    /// Total memory currently held, including all per-partition states.
+    fn size(&self) -> usize {
+        size_of::<Self>()
+            + self.row_converter.size()
+            + self.partition_converter.size()
+            + self.scratch_rows.size()
+            + self.partition_scratch_rows.size()
+            + self.states.values().map(|s| s.size()).sum::<usize>()
+            + self.states.capacity()
+                * (size_of::<OwnedRow>() + size_of::<RankPartitionState>())
     }
 }
 
@@ -2370,6 +2767,399 @@ mod tests {
                 "| 2  | 7   |",
                 "| 3  | 1   |",
                 "| 3  | 3   |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    // ====================================================================
+    // PartitionedTopKRank operator tests
+    //
+    // These mirror the PartitionedTopK tests above plus three RANK-specific
+    // cases for the Equal / boundary-shift / boundary-unchanged-eviction
+    // arms in `PartitionedTopKRank::insert_batch`.
+    // ====================================================================
+
+    /// Builds a `(pk Int32, val Int32)` schema and a `PartitionedTopKRank`
+    /// keyed on `pk ASC` (partition) and `val ASC` (ORDER BY).
+    fn build_partitioned_topk_rank(
+        k: usize,
+    ) -> Result<(Arc<Schema>, PartitionedTopKRank)> {
+        build_partitioned_topk_rank_with_opts(k, SortOptions::default(), false)
+    }
+
+    /// Variant of [`build_partitioned_topk_rank`] that lets the test pick
+    /// the `val` column's `SortOptions` (direction, null ordering) and
+    /// nullability.
+    fn build_partitioned_topk_rank_with_opts(
+        k: usize,
+        val_sort_options: SortOptions,
+        val_nullable: bool,
+    ) -> Result<(Arc<Schema>, PartitionedTopKRank)> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("pk", DataType::Int32, false),
+            Field::new("val", DataType::Int32, val_nullable),
+        ]));
+
+        let pk_expr: Arc<dyn PhysicalExpr> = col("pk", schema.as_ref())?;
+        let pk_sort_expr = PhysicalSortExpr {
+            expr: Arc::clone(&pk_expr),
+            options: SortOptions::default(),
+        };
+        let val_sort_expr = PhysicalSortExpr {
+            expr: col("val", schema.as_ref())?,
+            options: val_sort_options,
+        };
+
+        let partition_sort_fields = build_sort_fields(&[pk_sort_expr], &schema)?;
+        let order_expr = LexOrdering::from([val_sort_expr]);
+
+        let state = PartitionedTopKRank::try_new(
+            0,
+            Arc::clone(&schema),
+            vec![pk_expr],
+            partition_sort_fields,
+            order_expr,
+            k,
+            8, // batch_size
+            &Arc::new(RuntimeEnv::default()),
+            &ExecutionPlanMetricsSet::new(),
+        )?;
+        Ok((schema, state))
+    }
+
+    /// Multiple distinct partition keys interleaved within a single
+    /// input batch — the per-batch demux, per-partition heap eviction,
+    /// and partition-key-ordered emit must all behave correctly. No
+    /// ties: result should match a `ROW_NUMBER` top-K under the same K.
+    #[tokio::test]
+    async fn test_partitioned_topk_rank_multi_partition_within_batch() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_rank(2)?;
+
+        // pk=1 vals: 10, 5, 8 → top-2 ASC = [5, 8]
+        // pk=2 vals: 20, 15   → top-2 ASC = [15, 20]
+        // pk=3 vals: 7        → top-2 ASC = [7]
+        let batch =
+            pk_val_batch(&schema, vec![1, 2, 1, 2, 1, 3], vec![10, 20, 5, 15, 8, 7])?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 5   |",
+                "| 1  | 8   |",
+                "| 2  | 15  |",
+                "| 2  | 20  |",
+                "| 3  | 7   |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// State must accumulate across `insert_batch` calls. A row in
+    /// batch 2 that's strictly better than the existing K-th must
+    /// evict it; an evicted row whose bytes match the new boundary
+    /// becomes a `TieEntry` pinned to the prior batch.
+    #[tokio::test]
+    async fn test_partitioned_topk_rank_cross_batch_eviction() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_rank(2)?;
+
+        // Batch 1: pk=1 fills the heap with [50, 40].
+        state.insert_batch(&pk_val_batch(&schema, vec![1, 1], vec![50, 40])?)?;
+
+        // Batch 2: pk=1 sees a smaller value (10) — it must evict 50;
+        // 60 > 40 so it's dropped. pk=2 appears mid-stream.
+        state.insert_batch(&pk_val_batch(&schema, vec![1, 2, 1], vec![10, 99, 60])?)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 10  |",
+                "| 1  | 40  |",
+                "| 2  | 99  |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// Empty input must produce an empty output stream, not panic.
+    #[tokio::test]
+    async fn test_partitioned_topk_rank_empty_input() -> Result<()> {
+        let (_schema, state) = build_partitioned_topk_rank(3)?;
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert!(results.is_empty(), "empty input → empty output");
+        Ok(())
+    }
+
+    /// `fetch = 1` is a common case (rk = 1 filter) and exercises the
+    /// boundary-defined-immediately path: after the first admission per
+    /// partition, `heap.max()` is `Some`, so every subsequent row goes
+    /// through full Equal/Greater/Less classification.
+    #[tokio::test]
+    async fn test_partitioned_topk_rank_fetch_one() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_rank(1)?;
+        state.insert_batch(&pk_val_batch(
+            &schema,
+            vec![1, 1, 2, 2, 3],
+            vec![3, 1, 9, 4, 7],
+        )?)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 1   |",
+                "| 2  | 4   |",
+                "| 3  | 7   |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// `ORDER BY val DESC` exercises the shared encoder's sort-direction
+    /// handling: the row converter flips the sort sign for `val` so
+    /// larger values compare smaller in row-encoded form. Each
+    /// partition keeps its top-K *largest* values.
+    #[tokio::test]
+    async fn test_partitioned_topk_rank_desc_ordering() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_rank_with_opts(
+            2,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+            false,
+        )?;
+
+        // pk=1 vals: 10, 5, 8, 12 → top-2 DESC = [12, 10]
+        // pk=2 vals: 20, 15, 25   → top-2 DESC = [25, 20]
+        let batch = pk_val_batch(
+            &schema,
+            vec![1, 2, 1, 2, 1, 1, 2],
+            vec![10, 20, 5, 15, 8, 12, 25],
+        )?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 12  |",
+                "| 1  | 10  |",
+                "| 2  | 25  |",
+                "| 2  | 20  |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// NULL sort values exercise the shared encoder's null-ordering
+    /// handling. With `ASC NULLS LAST`, NULLs sort *after* every
+    /// non-NULL value, so a partition whose only non-NULL value beats
+    /// a NULL must evict the NULL when `K = 1`. A partition that holds
+    /// only NULLs must still emit them.
+    #[tokio::test]
+    async fn test_partitioned_topk_rank_nulls_last_ordering() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_rank_with_opts(
+            1,
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+            true,
+        )?;
+
+        // pk=1 vals: NULL, 7, NULL → top-1 ASC NULLS LAST = [7]
+        // pk=2 vals: NULL          → top-1                 = [NULL]
+        // pk=3 vals: NULL, 4, 2    → top-1                 = [2]
+        let batch = nullable_pk_val_batch(
+            &schema,
+            vec![1, 2, 1, 1, 3, 3, 3],
+            vec![None, None, Some(7), None, None, Some(4), Some(2)],
+        )?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 7   |",
+                "| 2  |     |",
+                "| 3  | 2   |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// `ASC NULLS FIRST` (the `SortOptions::default()`) sorts NULLs
+    /// *before* every non-NULL value, so under `fetch = K` a partition's
+    /// NULLs are kept preferentially over larger non-NULL values.
+    #[tokio::test]
+    async fn test_partitioned_topk_rank_nulls_first_ordering() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_rank_with_opts(
+            2,
+            SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+            true,
+        )?;
+
+        // pk=1 vals: NULL, 5, NULL, 8 → top-2 ASC NULLS FIRST = [NULL, NULL]
+        // pk=2 vals: 7, NULL          → top-2                  = [NULL, 7]
+        // pk=3 vals: 3, 1             → top-2                  = [1, 3]
+        let batch = nullable_pk_val_batch(
+            &schema,
+            vec![1, 2, 1, 3, 1, 2, 1, 3],
+            vec![
+                None,
+                Some(7),
+                Some(5),
+                Some(3),
+                None,
+                None,
+                Some(8),
+                Some(1),
+            ],
+        )?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  |     |",
+                "| 1  |     |",
+                "| 2  |     |",
+                "| 2  | 7   |",
+                "| 3  | 1   |",
+                "| 3  | 3   |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// RANK-specific: heap fills with K rows tied at the same OB value,
+    /// then more rows at that same value arrive. They take the Equal arm
+    /// (heap is full, `heap.max() == row`) and accumulate as ties, while
+    /// strictly-greater rows are dropped. All retained rows have rank 1.
+    #[tokio::test]
+    async fn test_partitioned_topk_rank_boundary_ties_retained() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_rank(2)?;
+
+        // pk=1 vals: 5, 5, 10, 5
+        //   - first two 5s fill the heap (max=None until heap reaches K=2)
+        //   - third row 10 > 5 → drop (Greater)
+        //   - fourth row 5 == 5 → push to ties (Equal)
+        // Sorted RANKs: 5→1, 5→1, 5→1, 10→4. WHERE rk ≤ 2 keeps the three 5s.
+        let batch = pk_val_batch(&schema, vec![1, 1, 1, 1], vec![5, 5, 10, 5])?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 5   |",
+                "| 1  | 5   |",
+                "| 1  | 5   |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// RANK-specific: heap fills with K rows tied at value V, equal_indices
+    /// accumulate at V, then a strictly-better row arrives whose admission
+    /// shifts the boundary strictly below V. The boundary-changed branch
+    /// must clear both `state.ties` and the in-flight `equal_indices` —
+    /// otherwise the now-rank-> K rows at value V would leak into output.
+    #[tokio::test]
+    async fn test_partitioned_topk_rank_boundary_shifts_clears_ties() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_rank(2)?;
+
+        // pk=1 vals: 10, 10, 10, 5, 3
+        //   - first two 10s fill heap (max=10)
+        //   - third 10 → Equal → equal_indices=[2]
+        //   - 5 < 10 → admit, evict 10 → heap={5,10}, max=10 (unchanged).
+        //       Push evicted to ties: ties=[10@curr_batch[ev_idx]].
+        //   - 3 < 10 → admit, evict 10 → heap={3,5}, max=5 (CHANGED).
+        //       Clear ties AND equal_indices.
+        // Sorted RANKs: 3→1, 5→2, 10→3, 10→3, 10→3. WHERE rk ≤ 2 → [3, 5].
+        let batch = pk_val_batch(&schema, vec![1, 1, 1, 1, 1], vec![10, 10, 10, 5, 3])?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 3   |",
+                "| 1  | 5   |",
+                "+----+-----+",
+            ],
+            &results
+        );
+        Ok(())
+    }
+
+    /// RANK-specific: heap has multiple rows at boundary value V, then a
+    /// strictly-better row arrives. The heap evicts one V (popping
+    /// `prev_min`), but `heap.max()` is still V — boundary unchanged.
+    /// The evicted V row must be pushed as a `TieEntry`; without that
+    /// branch a `rk <= K` query would silently lose a tied row.
+    #[tokio::test]
+    async fn test_partitioned_topk_rank_eviction_at_unchanged_boundary() -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_rank(2)?;
+
+        // pk=1 vals: 10, 10, 5
+        //   - first two 10s fill the heap (max=10)
+        //   - 5 < 10 → admit, evict 10. New heap={5,10}, max=10 (unchanged).
+        //       Push the evicted 10 to ties.
+        // Sorted RANKs: 5→1, 10→2, 10→2. WHERE rk ≤ 2 → all 3 rows.
+        let batch = pk_val_batch(&schema, vec![1, 1, 1], vec![10, 10, 5])?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+----+-----+",
+                "| pk | val |",
+                "+----+-----+",
+                "| 1  | 5   |",
+                "| 1  | 10  |",
+                "| 1  | 10  |",
                 "+----+-----+",
             ],
             &results
