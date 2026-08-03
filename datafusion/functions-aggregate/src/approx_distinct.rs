@@ -575,7 +575,8 @@ impl GroupsAccumulator for HllGroupsAccumulator {
             }
             Some(nulls) => {
                 for row in nulls.valid_indices() {
-                    delta += self.groups[group_indices[row]].add_hash(self.hashes[row], p);
+                    delta +=
+                        self.groups[group_indices[row]].add_hash(self.hashes[row], p);
                 }
             }
         }
@@ -837,20 +838,36 @@ impl AggregateUDFImpl for ApproxDistinct {
             | DataType::Int16 => {
                 return get_fixed_domain_approx_accumulator(data_type);
             }
-            DataType::UInt32 => Box::new(NumericHLLAccumulator::<UInt32Type>::with_precision(p)),
-            DataType::UInt64 => Box::new(NumericHLLAccumulator::<UInt64Type>::with_precision(p)),
-            DataType::Int32 => Box::new(NumericHLLAccumulator::<Int32Type>::with_precision(p)),
-            DataType::Int64 => Box::new(NumericHLLAccumulator::<Int64Type>::with_precision(p)),
-            DataType::Date32 => Box::new(NumericHLLAccumulator::<Date32Type>::with_precision(p)),
-            DataType::Date64 => Box::new(NumericHLLAccumulator::<Date64Type>::with_precision(p)),
+            DataType::UInt32 => {
+                Box::new(NumericHLLAccumulator::<UInt32Type>::with_precision(p))
+            }
+            DataType::UInt64 => {
+                Box::new(NumericHLLAccumulator::<UInt64Type>::with_precision(p))
+            }
+            DataType::Int32 => {
+                Box::new(NumericHLLAccumulator::<Int32Type>::with_precision(p))
+            }
+            DataType::Int64 => {
+                Box::new(NumericHLLAccumulator::<Int64Type>::with_precision(p))
+            }
+            DataType::Date32 => {
+                Box::new(NumericHLLAccumulator::<Date32Type>::with_precision(p))
+            }
+            DataType::Date64 => {
+                Box::new(NumericHLLAccumulator::<Date64Type>::with_precision(p))
+            }
             DataType::Time32(TimeUnit::Second) => {
                 Box::new(NumericHLLAccumulator::<Time32SecondType>::with_precision(p))
             }
             DataType::Time32(TimeUnit::Millisecond) => {
-                Box::new(NumericHLLAccumulator::<Time32MillisecondType>::with_precision(p))
+                Box::new(
+                    NumericHLLAccumulator::<Time32MillisecondType>::with_precision(p),
+                )
             }
             DataType::Time64(TimeUnit::Microsecond) => {
-                Box::new(NumericHLLAccumulator::<Time64MicrosecondType>::with_precision(p))
+                Box::new(
+                    NumericHLLAccumulator::<Time64MicrosecondType>::with_precision(p),
+                )
             }
             DataType::Time64(TimeUnit::Nanosecond) => {
                 Box::new(NumericHLLAccumulator::<Time64NanosecondType>::with_precision(p))
@@ -858,24 +875,24 @@ impl AggregateUDFImpl for ApproxDistinct {
             DataType::Timestamp(TimeUnit::Second, _) => {
                 Box::new(NumericHLLAccumulator::<TimestampSecondType>::with_precision(p))
             }
-            DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                Box::new(NumericHLLAccumulator::<TimestampMillisecondType>::with_precision(p))
-            }
-            DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                Box::new(NumericHLLAccumulator::<TimestampMicrosecondType>::with_precision(p))
-            }
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                Box::new(NumericHLLAccumulator::<TimestampNanosecondType>::with_precision(p))
-            }
-            DataType::Interval(IntervalUnit::YearMonth) => {
-                Box::new(NumericHLLAccumulator::<IntervalYearMonthType>::with_precision(p))
-            }
+            DataType::Timestamp(TimeUnit::Millisecond, _) => Box::new(
+                NumericHLLAccumulator::<TimestampMillisecondType>::with_precision(p),
+            ),
+            DataType::Timestamp(TimeUnit::Microsecond, _) => Box::new(
+                NumericHLLAccumulator::<TimestampMicrosecondType>::with_precision(p),
+            ),
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => Box::new(
+                NumericHLLAccumulator::<TimestampNanosecondType>::with_precision(p),
+            ),
+            DataType::Interval(IntervalUnit::YearMonth) => Box::new(
+                NumericHLLAccumulator::<IntervalYearMonthType>::with_precision(p),
+            ),
             DataType::Interval(IntervalUnit::DayTime) => {
                 Box::new(NumericHLLAccumulator::<IntervalDayTimeType>::with_precision(p))
             }
-            DataType::Interval(IntervalUnit::MonthDayNano) => {
-                Box::new(NumericHLLAccumulator::<IntervalMonthDayNanoType>::with_precision(p))
-            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => Box::new(
+                NumericHLLAccumulator::<IntervalMonthDayNanoType>::with_precision(p),
+            ),
             DataType::Decimal32(_, _) => {
                 Box::new(NumericHLLAccumulator::<Decimal32Type>::with_precision(p))
             }
@@ -889,17 +906,19 @@ impl AggregateUDFImpl for ApproxDistinct {
                 Box::new(NumericHLLAccumulator::<Decimal256Type>::with_precision(p))
             }
             DataType::Duration(TimeUnit::Second) => {
-                Box::new(NumericHLLAccumulator::<DurationSecondType>::with_precision(p))
+                Box::new(NumericHLLAccumulator::<DurationSecondType>::with_precision(
+                    p,
+                ))
             }
-            DataType::Duration(TimeUnit::Millisecond) => {
-                Box::new(NumericHLLAccumulator::<DurationMillisecondType>::with_precision(p))
-            }
-            DataType::Duration(TimeUnit::Microsecond) => {
-                Box::new(NumericHLLAccumulator::<DurationMicrosecondType>::with_precision(p))
-            }
-            DataType::Duration(TimeUnit::Nanosecond) => {
-                Box::new(NumericHLLAccumulator::<DurationNanosecondType>::with_precision(p))
-            }
+            DataType::Duration(TimeUnit::Millisecond) => Box::new(
+                NumericHLLAccumulator::<DurationMillisecondType>::with_precision(p),
+            ),
+            DataType::Duration(TimeUnit::Microsecond) => Box::new(
+                NumericHLLAccumulator::<DurationMicrosecondType>::with_precision(p),
+            ),
+            DataType::Duration(TimeUnit::Nanosecond) => Box::new(
+                NumericHLLAccumulator::<DurationNanosecondType>::with_precision(p),
+            ),
             DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Utf8View
@@ -937,7 +956,9 @@ impl AggregateUDFImpl for ApproxDistinct {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         let data_type = args.expr_fields[0].data_type();
         if is_hll_groups_type(data_type) {
-            Ok(Box::new(HllGroupsAccumulator::with_precision(self.hll_precision)))
+            Ok(Box::new(HllGroupsAccumulator::with_precision(
+                self.hll_precision,
+            )))
         } else {
             not_impl_err!(
                 "GroupsAccumulator for 'approx_distinct' is not implemented for data type {data_type}"
@@ -1597,9 +1618,12 @@ mod tests {
 
     // --- ApproxDistinct with non-default precision ---
 
+    #[cfg(not(feature = "force_hash_collisions"))]
     use arrow::datatypes::{Schema, UnionFields, UnionMode};
+    #[cfg(not(feature = "force_hash_collisions"))]
     use std::sync::Arc;
 
+    #[cfg(not(feature = "force_hash_collisions"))]
     fn make_acc_args<'a>(
         schema: &'a Schema,
         return_field: &'a FieldRef,
@@ -1625,11 +1649,9 @@ mod tests {
 
         let func = ApproxDistinct::with_hll_precision(12).unwrap();
         let values: ArrayRef = Arc::new(Int64Array::from_iter_values(0..1000i64));
-        let expr_field: FieldRef =
-            Arc::new(Field::new("v", DataType::Int64, false));
+        let expr_field: FieldRef = Arc::new(Field::new("v", DataType::Int64, false));
         let schema = Schema::new(vec![(*expr_field).clone()]);
-        let return_field: FieldRef =
-            Arc::new(Field::new("r", DataType::UInt64, false));
+        let return_field: FieldRef = Arc::new(Field::new("r", DataType::UInt64, false));
         let acc_args = make_acc_args(&schema, &return_field, &expr_field);
         let mut acc = func.accumulator(acc_args).unwrap();
         acc.update_batch(&[values]).unwrap();
@@ -1658,11 +1680,9 @@ mod tests {
             UnionMode::Dense,
         );
         let func = ApproxDistinct::new();
-        let expr_field: FieldRef =
-            Arc::new(Field::new("v", union_type.clone(), false));
+        let expr_field: FieldRef = Arc::new(Field::new("v", union_type.clone(), false));
         let schema = Schema::new(vec![(*expr_field).clone()]);
-        let return_field: FieldRef =
-            Arc::new(Field::new("r", DataType::UInt64, false));
+        let return_field: FieldRef = Arc::new(Field::new("r", DataType::UInt64, false));
         let acc_args = make_acc_args(&schema, &return_field, &expr_field);
         let mut acc = func.accumulator(acc_args).unwrap();
         let result = acc.evaluate().unwrap();
@@ -1724,7 +1744,11 @@ mod tests {
             .unwrap();
 
         let result = final_acc.evaluate(EmitTo::All).unwrap();
-        let count = result.as_any().downcast_ref::<UInt64Array>().unwrap().value(0);
+        let count = result
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap()
+            .value(0);
         // p=12 → ~1.6% error; allow 10% margin
         assert!(count > 180 && count < 220, "count {count} out of range");
     }
