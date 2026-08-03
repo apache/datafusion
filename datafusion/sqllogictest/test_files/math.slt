@@ -148,9 +148,9 @@ SELECT
   round(arrow_cast(column1, 'Decimal256(40,2)'), column2)
 FROM (VALUES ('125.55', 1), ('-125.55', 0), ('125.55', -1), (NULL, 1)) AS t(column1, column2);
 ----
-125.6 125.6 125.6 125.6
--126 -126 -126 -126
-130 130 130 130
+125.60 125.60 125.60 125.60
+-126.00 -126.00 -126.00 -126.00
+130.00 130.00 130.00 130.00
 NULL NULL NULL NULL
 
 # Float arrays with scalar and per-row decimal places
