@@ -765,7 +765,6 @@ impl HashJoinStream {
 
         let timer = self.join_metrics.join_time.timer();
 
-<<<<<<< HEAD
         // Null-aware anti join semantics:
 
         // For LeftAnti: output LEFT (build) rows where LEFT.key NOT IN RIGHT.key
@@ -776,13 +775,6 @@ impl HashJoinStream {
         // 1. If LEFT (build) contains NULL, no RIGHT rows should be output
         // 2. RIGHT rows with NULL keys should not be output
         // 3. If LEFT (build) is empty, all RIGHT rows should be output
-=======
-        // Null-aware join bookkeeping:
-        // - LeftAnti needs global knowledge of probe-side NULLs/non-emptiness to implement NOT IN.
-        // - Uncorrelated LeftMark uses the same global probe-side state.
-        // - Correlated LeftMark records per-build-row NULL candidates below using
-        //   a separate correlation-scope lookup.
->>>>>>> 4be462017 (Add support for null aware mark-joins)
         if self.null_aware {
             match self.join_type {
                 JoinType::RightAnti => {
@@ -803,7 +795,6 @@ impl HashJoinStream {
                             .store(true, Ordering::Relaxed);
                     }
 
-<<<<<<< HEAD
                     // Check if probe side (RIGHT) contains NULL
                     // Since null_aware validation ensures single column join, we only check the first column
                     let probe_key_column = &state.values[0];
@@ -831,29 +822,23 @@ impl HashJoinStream {
                         return Ok(StatefulStreamResult::Continue);
                     }
                 }
-                _ => {}
-=======
-            // Check if the scalar NOT IN value key from the probe side contains NULL.
-            let probe_key_column = &state.values[0];
-            if probe_key_column.null_count() > 0 {
-                // Found NULL in probe side - set shared flag to prevent any output
-                build_side
-                    .left_data
-                    .probe_side_has_null
-                    .store(true, Ordering::Relaxed);
-            }
+                JoinType::LeftMark => {
+                    if state.batch.num_rows() > 0 {
+                        build_side
+                            .left_data
+                            .probe_side_non_empty
+                            .store(true, Ordering::Relaxed);
+                    }
 
-            // LeftAnti can short-circuit once the probe side contains NULL.
-            if self.join_type == JoinType::LeftAnti
-                && build_side
-                    .left_data
-                    .probe_side_has_null
-                    .load(Ordering::Relaxed)
-            {
-                timer.done();
-                self.state = HashJoinStreamState::FetchProbeBatch;
-                return Ok(StatefulStreamResult::Continue);
->>>>>>> 4be462017 (Add support for null aware mark-joins)
+                    let probe_key_column = &state.values[0];
+                    if probe_key_column.null_count() > 0 {
+                        build_side
+                            .left_data
+                            .probe_side_has_null
+                            .store(true, Ordering::Relaxed);
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -1159,7 +1144,7 @@ impl HashJoinStream {
                     .load(Ordering::Relaxed);
                 let build_key_column = &build_side.left_data.values()[0];
                 let null_indices_bitmap =
-                    if build_side.left_data.null_aware_state().is_some() {
+                    if build_side.left_data.null_aware_mark_scope_map().is_some() {
                         Some(build_side.left_data.null_indices_bitmap().lock())
                     } else {
                         None
@@ -1224,7 +1209,7 @@ fn mark_null_candidates_for_probe_batch(
     probe_indices_buffer: &mut Vec<u32>,
     build_indices_buffer: &mut Vec<u64>,
 ) -> Result<()> {
-    let Some(null_aware_state) = build_side.left_data.null_aware_state() else {
+    let Some(scope_map) = build_side.left_data.null_aware_mark_scope_map() else {
         return Ok(());
     };
 
@@ -1239,7 +1224,7 @@ fn mark_null_candidates_for_probe_batch(
     let build_scope_values = &build_side.left_data.values()[1..];
     let probe_scope_values = &state.values[1..];
 
-    let null_value_scope_map = null_aware_state.null_value_scope_map.as_ref();
+    let null_value_scope_map = build_side.left_data.null_value_scope_map();
     let probe_has_null_values = probe_value_key.null_count() > 0;
     if null_value_scope_map.is_none() && !probe_has_null_values {
         return Ok(());
@@ -1281,7 +1266,7 @@ fn mark_null_candidates_for_probe_batch(
         create_hashes(&probe_null_scope_values, random_state, hashes_buffer)?;
 
         scan_scope_matches_into_bitmap(
-            null_aware_state.scope_map.as_ref(),
+            scope_map,
             build_scope_values,
             &probe_null_scope_values,
             hashes_buffer,

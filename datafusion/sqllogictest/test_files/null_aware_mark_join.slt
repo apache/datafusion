@@ -481,6 +481,80 @@ a
 b
 c
 
+##########################################################
+## Dynamic filter pushdown into a null-aware mark join
+##########################################################
+
+# Regression test: with NOT NULL build-side keys, join dynamic filter pushdown
+# (on by default) stays enabled for a correlated null-aware mark join, and the
+# pushed filter must keep NULL-valued probe rows (`id IS NULL OR ...`) so
+# UNKNOWN marks survive. The probe side must be parquet-backed: MemTable scans
+# reject pushed filters and never exercise this path.
+
+statement ok
+COPY (SELECT * FROM (VALUES (1, 1, 'a'), (2, 1, 'b'), (3, 2, 'c'), (4, 3, 'd')) AS t(id, grp, value))
+TO 'test_files/scratch/null_aware_mark_join/outer.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (SELECT * FROM (VALUES (2, 1), (NULL, 1), (1, 2)) AS t(id, grp))
+TO 'test_files/scratch/null_aware_mark_join/inner.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE outer_pushdown_table (id BIGINT NOT NULL, grp BIGINT NOT NULL, value VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/null_aware_mark_join/outer.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE inner_pushdown_table (id BIGINT, grp BIGINT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/null_aware_mark_join/inner.parquet';
+
+query TT
+EXPLAIN SELECT value
+FROM outer_pushdown_table
+WHERE id NOT IN (
+  SELECT id
+  FROM inner_pushdown_table
+  WHERE inner_pushdown_table.grp = outer_pushdown_table.grp
+) OR value = 'zzz';
+----
+logical_plan
+01)Projection: outer_pushdown_table.value
+02)--Filter: NOT __correlated_sq_1.mark OR outer_pushdown_table.value = Utf8View("zzz")
+03)----Projection: outer_pushdown_table.value, __correlated_sq_1.mark
+04)------LeftMark Join: outer_pushdown_table.id = __correlated_sq_1.id, outer_pushdown_table.grp = __correlated_sq_1.grp null_aware
+05)--------TableScan: outer_pushdown_table projection=[id, grp, value]
+06)--------SubqueryAlias: __correlated_sq_1
+07)----------TableScan: inner_pushdown_table projection=[id, grp]
+physical_plan
+01)FilterExec: NOT mark@1 OR value@0 = zzz, projection=[value@0]
+02)--HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0), (grp@1, grp@1)], projection=[value@2, mark@3], null_aware
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/null_aware_mark_join/outer.parquet]]}, projection=[id, grp, value], file_type=parquet
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/null_aware_mark_join/inner.parquet]]}, projection=[id, grp], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+# `a` (grp 1 = {2, NULL}) is UNKNOWN and `b` matches, so only `c` (no match in
+# grp 2) and `d` (empty grp 3) pass. A dropped NULL probe row would wrongly
+# emit `a`.
+query T rowsort
+SELECT value
+FROM outer_pushdown_table
+WHERE id NOT IN (
+  SELECT id
+  FROM inner_pushdown_table
+  WHERE inner_pushdown_table.grp = outer_pushdown_table.grp
+) OR value = 'zzz';
+----
+c
+d
+
+statement ok
+DROP TABLE outer_pushdown_table;
+
+statement ok
+DROP TABLE inner_pushdown_table;
+
 statement ok
 reset datafusion.optimizer.prefer_hash_join;
 

@@ -474,20 +474,15 @@ impl HashJoinExecBuilder {
         // Validate null_aware flag
         if exec.null_aware {
             let join_type = exec.join_type();
-<<<<<<< HEAD
             let partition_mode = exec.partition_mode();
             if !matches!(
                 (join_type, partition_mode),
                 (JoinType::LeftAnti, _)
                     | (JoinType::RightAnti, PartitionMode::CollectLeft) // `PartitionMode::CollectLeft` is safe because `RightAnti` is probe-driven
+                    | (JoinType::LeftMark, _)
             ) {
                 return plan_err!(
-                    "null_aware can only be true for LeftAnti joins and RightAnti joins with `CollectLeft` `PartitionMode`, got {join_type} with {partition_mode}"
-=======
-            if !matches!(join_type, JoinType::LeftAnti | JoinType::LeftMark) {
-                return plan_err!(
-                    "null_aware can only be true for LeftAnti or LeftMark joins, got {join_type}"
->>>>>>> 4be462017 (Add support for null aware mark-joins)
+                    "null_aware can only be true for LeftAnti joins and RightAnti joins with `CollectLeft` `PartitionMode`, or LeftMark joins, got {join_type} with {partition_mode}"
                 );
             }
             let on = exec.on();
@@ -497,18 +492,22 @@ impl HashJoinExecBuilder {
                     on.len()
                 );
             }
-<<<<<<< HEAD
+            if *join_type == JoinType::RightAnti && on.len() != 1 {
+                return plan_err!(
+                    "null_aware RightAnti joins only support single column join key, got {} columns",
+                    on.len()
+                );
+            }
+            if *join_type == JoinType::LeftMark
+                && matches!(partition_mode, PartitionMode::Partitioned)
+            {
+                return plan_err!(
+                    "null_aware joins require PartitionMode::CollectLeft, got PartitionMode::Partitioned"
+                );
+            }
             if *join_type == JoinType::RightAnti && exec.filter.is_some() {
                 return plan_err!(
                     "null_aware RightAnti join does not support a join filter"
-=======
-            // Null-aware joins need global probe-side state (and a single build-side scope
-            // map for correlated LeftMark), so Partitioned would miss cross-partition rows
-            // and is forbidden.
-            if matches!(exec.partition_mode(), PartitionMode::Partitioned) {
-                return plan_err!(
-                    "null_aware joins require PartitionMode::CollectLeft, got PartitionMode::Partitioned"
->>>>>>> 4be462017 (Add support for null aware mark-joins)
                 );
             }
         }
@@ -952,10 +951,15 @@ impl HashJoinExec {
             return false;
         }
 
-        // A null-aware anti join emits a build-side NULL only when the probe
-        // is truly empty. The pushed filter can empty the probe by pruning
-        // every row, which would surface that NULL wrongly. A NOT NULL build
-        // key cannot produce such a NULL, so the filter stays there.
+        // Null-aware joins tolerate probe pruning only while the build side
+        // has no NULL keys (the pushed filter keeps NULL-valued probe rows via
+        // the `IS NULL` escape in `preserve_probe_nulls`, but prunes others):
+        // - LeftAnti emits a build-side NULL only when the probe is truly
+        //   empty, and pruning every probe row would surface that NULL wrongly.
+        // - Null-aware LeftMark marks a NULL-valued build row UNKNOWN when any
+        //   probe row shares its correlation scope, and a pruned probe row
+        //   would be missed by that scan.
+        // NOT NULL build keys rule out both, so the filter stays there.
         if self.null_aware
             && self.on.iter().any(|(build_key, _)| {
                 build_key.nullable(&self.left.schema()).unwrap_or(true)
@@ -2684,7 +2688,7 @@ fn new_join_hashmap(
 /// # Returns
 /// `JoinLeftData` containing the hash map, consolidated batch, join key values,
 /// visited indices bitmap, and computed bounds (if requested).
-#[expect(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 async fn collect_left_input(
     random_state: RandomState,
     left_stream: SendableRecordBatchStream,
@@ -7440,7 +7444,6 @@ mod tests {
         Ok(())
     }
 
-<<<<<<< HEAD
     /// Test null-aware RightAnti when build side (subquery) contains NULL
     /// Expected: no rows should be output
     #[apply(hash_join_exec_configs)]
@@ -7773,9 +7776,6 @@ mod tests {
     }
 
     /// Test that null_aware validation rejects non-LeftAnti join types
-=======
-    /// Test that null_aware validation rejects unsupported join types
->>>>>>> 4be462017 (Add support for null aware mark-joins)
     #[tokio::test]
     async fn test_null_aware_validation_wrong_join_type() {
         let left =
@@ -7802,7 +7802,6 @@ mod tests {
         );
 
         assert!(result.is_err());
-<<<<<<< HEAD
         assert!(result.unwrap_err().to_string().contains(
             "null_aware can only be true for LeftAnti joins and RightAnti joins"
         ));
@@ -7831,13 +7830,6 @@ mod tests {
             PartitionMode::Partitioned,
             NullEquality::NullEqualsNothing,
             true,
-=======
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("null_aware can only be true for LeftAnti or LeftMark joins")
->>>>>>> 4be462017 (Add support for null aware mark-joins)
         );
 
         assert!(result.is_err());
@@ -7924,7 +7916,6 @@ mod tests {
         );
     }
 
-<<<<<<< HEAD
     /// A null-aware `RightAnti` short-circuits on the build-side NULL before any
     /// filter runs, so the combination must be rejected at construction (and thus
     /// via protobuf decoding, which routes through the same builder). A filtered
@@ -8010,27 +8001,6 @@ mod tests {
             .unwrap()?;
         assert_eq!(right_key.column(0).null_count(), 0);
         assert_eq!(right_key.column(0).logical_null_count(), 1);
-=======
-    /// Test null-aware left mark join when probe side contains NULL.
-    /// Expected:
-    /// - matched rows => true
-    /// - unmatched non-NULL rows => NULL
-    /// - NULL build keys with non-empty probe side => NULL
-    #[apply(hash_join_exec_configs)]
-    #[tokio::test]
-    async fn test_null_aware_left_mark_probe_null(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size, false);
-
-        let left = build_table_two_cols(
-            ("c1", &vec![Some(1), Some(4), None]),
-            ("dummy", &vec![Some(10), Some(40), Some(0)]),
-        );
-
-        let right = build_table_two_cols(
-            ("c2", &vec![Some(1), Some(2), None]),
-            ("dummy", &vec![Some(100), Some(200), Some(300)]),
-        );
->>>>>>> 4be462017 (Add support for null aware mark-joins)
 
         let on = vec![(
             Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
@@ -8042,125 +8012,7 @@ mod tests {
             right,
             on,
             None,
-<<<<<<< HEAD
             &JoinType::LeftAnti,
-=======
-            &JoinType::LeftMark,
-            None,
-            PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            true, // null_aware = true
-        )?;
-
-        let stream = join.execute(0, task_ctx)?;
-        let batches = common::collect(stream).await?;
-
-        allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r"
-            +----+-------+------+
-            | c1 | dummy | mark |
-            +----+-------+------+
-            |    | 0     |      |
-            | 1  | 10    | true |
-            | 4  | 40    |      |
-            +----+-------+------+
-            ");
-        }
-
-        Ok(())
-    }
-
-    /// Test null-aware left mark join when probe side is empty.
-    /// Expected: all rows are marked false, including NULL build keys.
-    #[apply(hash_join_exec_configs)]
-    #[tokio::test]
-    async fn test_null_aware_left_mark_empty_probe(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size, false);
-
-        let left = build_table_two_cols(
-            ("c1", &vec![Some(1), None]),
-            ("dummy", &vec![Some(10), Some(0)]),
-        );
-
-        let right = build_table_two_cols(
-            ("c2", &Vec::<Option<i32>>::new()),
-            ("dummy", &Vec::<Option<i32>>::new()),
-        );
-
-        let on = vec![(
-            Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
-            Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
-        )];
-
-        let join = HashJoinExec::try_new(
-            left,
-            right,
-            on,
-            None,
-            &JoinType::LeftMark,
-            None,
-            PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            true, // null_aware = true
-        )?;
-
-        let stream = join.execute(0, task_ctx)?;
-        let batches = common::collect(stream).await?;
-
-        allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r"
-            +----+-------+-------+
-            | c1 | dummy | mark  |
-            +----+-------+-------+
-            |    | 0     | false |
-            | 1  | 10    | false |
-            +----+-------+-------+
-            ");
-        }
-
-        Ok(())
-    }
-
-    /// Test scalar correlated null-aware left mark join.
-    ///
-    /// The first key is the scalar NOT IN value key. The second key is the
-    /// correlated scope key, so the NULL on the probe side only affects group 1.
-    #[apply(hash_join_exec_configs)]
-    #[tokio::test]
-    async fn test_null_aware_left_mark_correlated_scope(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size, false);
-
-        let left = build_table_two_cols(
-            ("id", &vec![Some(1), Some(2), Some(3), None, None, Some(5)]),
-            (
-                "grp",
-                &vec![Some(1), Some(1), Some(1), Some(1), Some(2), Some(3)],
-            ),
-        );
-
-        let right = build_table_two_cols(
-            ("id", &vec![Some(2), None, Some(1)]),
-            ("grp", &vec![Some(1), Some(1), Some(2)]),
-        );
-
-        let on = vec![
-            (
-                Arc::new(Column::new_with_schema("id", &left.schema())?) as _,
-                Arc::new(Column::new_with_schema("id", &right.schema())?) as _,
-            ),
-            (
-                Arc::new(Column::new_with_schema("grp", &left.schema())?) as _,
-                Arc::new(Column::new_with_schema("grp", &right.schema())?) as _,
-            ),
-        ];
-
-        let join = HashJoinExec::try_new(
-            left,
-            right,
-            on,
-            None,
-            &JoinType::LeftMark,
->>>>>>> 4be462017 (Add support for null aware mark-joins)
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
@@ -8172,96 +8024,10 @@ mod tests {
 
         allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&batches), @r"
-<<<<<<< HEAD
             ++
             ++
             ");
         }
-=======
-            +----+-----+-------+
-            | id | grp | mark  |
-            +----+-----+-------+
-            |    | 1   |       |
-            |    | 2   |       |
-            | 1  | 1   |       |
-            | 2  | 1   | true  |
-            | 3  | 1   |       |
-            | 5  | 3   | false |
-            +----+-----+-------+
-            ");
-        }
-
-        Ok(())
-    }
-
-    /// Scalar correlated null-aware left mark join where neither side's value
-    /// key (`id`) contains NULL.
-    ///
-    /// This exercises the fast path in `mark_null_candidates_for_probe_batch`
-    /// that skips the correlation-scope NULL lookup when no value key is NULL.
-    /// With no NULL value keys, SQL `NOT IN` can never be UNKNOWN, so the mark
-    /// must be `true`/`false` only and never NULL, regardless of correlation
-    /// scope or empty subqueries (`grp = 3` has no matching probe rows).
-    #[apply(hash_join_exec_configs)]
-    #[tokio::test]
-    async fn test_null_aware_left_mark_correlated_no_value_nulls(
-        batch_size: usize,
-    ) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size, false);
-
-        let left = build_table_two_cols(
-            ("id", &vec![Some(1), Some(2), Some(3), Some(4)]),
-            ("grp", &vec![Some(1), Some(1), Some(2), Some(3)]),
-        );
-
-        let right = build_table_two_cols(
-            ("id", &vec![Some(2), Some(5)]),
-            ("grp", &vec![Some(1), Some(2)]),
-        );
-
-        let on = vec![
-            (
-                Arc::new(Column::new_with_schema("id", &left.schema())?) as _,
-                Arc::new(Column::new_with_schema("id", &right.schema())?) as _,
-            ),
-            (
-                Arc::new(Column::new_with_schema("grp", &left.schema())?) as _,
-                Arc::new(Column::new_with_schema("grp", &right.schema())?) as _,
-            ),
-        ];
-
-        let join = HashJoinExec::try_new(
-            left,
-            right,
-            on,
-            None,
-            &JoinType::LeftMark,
-            None,
-            PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            true,
-        )?;
-
-        let stream = join.execute(0, task_ctx)?;
-        let batches = common::collect(stream).await?;
-
-        // Every mark is true/false; no UNKNOWN is produced when value keys are
-        // non-null. `id=2` matches within `grp=1` (true); `id=4`'s `grp=3` has
-        // an empty correlated subquery (false); the rest find no equal value.
-        allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r"
-            +----+-----+-------+
-            | id | grp | mark  |
-            +----+-----+-------+
-            | 1  | 1   | false |
-            | 2  | 1   | true  |
-            | 3  | 2   | false |
-            | 4  | 3   | false |
-            +----+-----+-------+
-            ");
-        }
-
->>>>>>> 4be462017 (Add support for null aware mark-joins)
         Ok(())
     }
 
