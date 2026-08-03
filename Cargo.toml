@@ -279,6 +279,7 @@ unused_async = "warn"
 unused_rounding = "warn"
 used_underscore_binding = "warn"
 useless_transmute = "warn"
+verbose_file_reads = "warn"
 wildcard_dependencies = "warn"
 zero_sized_map_values = "warn"
 

@@ -444,7 +444,7 @@ impl From<ArrowSource> for Arc<dyn FileSource> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, io::Read};
+    use std::fs::File;
 
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_ipc::reader::{FileReader, StreamReader};
@@ -460,11 +460,8 @@ mod tests {
         for filename in ["example.arrow", "example_stream.arrow"] {
             let path = format!("tests/data/{filename}");
             let path_str = path.as_str();
-            let mut file = File::open(path_str)?;
-            let file_size = file.metadata()?.len();
-
-            let mut buffer = Vec::new();
-            file.read_to_end(&mut buffer)?;
+            let buffer = std::fs::read(path_str)?;
+            let file_size = buffer.len() as u64;
             let bytes = Bytes::from(buffer);
 
             let object_store = Arc::new(InMemory::new());
@@ -504,11 +501,8 @@ mod tests {
         let filename = "example.arrow";
         let path = format!("tests/data/{filename}");
         let path_str = path.as_str();
-        let mut file = File::open(path_str)?;
-        let file_size = file.metadata()?.len();
-
-        let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer)?;
+        let buffer = std::fs::read(path_str)?;
+        let file_size = buffer.len() as u64;
         let bytes = Bytes::from(buffer);
 
         let object_store = Arc::new(InMemory::new());
@@ -545,11 +539,8 @@ mod tests {
         let filename = "example_stream.arrow";
         let path = format!("tests/data/{filename}");
         let path_str = path.as_str();
-        let mut file = File::open(path_str)?;
-        let file_size = file.metadata()?.len();
-
-        let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer)?;
+        let buffer = std::fs::read(path_str)?;
+        let file_size = buffer.len() as u64;
         let bytes = Bytes::from(buffer);
 
         let object_store = Arc::new(InMemory::new());
@@ -610,11 +601,8 @@ mod tests {
         let filename = "example_stream.arrow";
         let path = format!("tests/data/{filename}");
         let path_str = path.as_str();
-        let mut file = File::open(path_str)?;
-        let file_size = file.metadata()?.len();
-
-        let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer)?;
+        let buffer = std::fs::read(path_str)?;
+        let file_size = buffer.len() as u64;
         let bytes = Bytes::from(buffer);
 
         let object_store = Arc::new(InMemory::new());
