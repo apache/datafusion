@@ -51,6 +51,7 @@ use crate::udaf::FFI_AggregateUDF;
 use crate::udf::FFI_ScalarUDF;
 use crate::udtf::FFI_TableFunction;
 use crate::udwf::FFI_WindowUDF;
+use crate::util::FFI_Option;
 
 mod async_provider;
 pub mod catalog;
@@ -119,9 +120,12 @@ pub struct ForeignLibraryModule {
 
     pub create_context_aware_optimizer_rule: extern "C" fn() -> FFI_PhysicalOptimizerRule,
 
+    /// Construct a query planner. When `library_a_planner` is provided the
+    /// planner delegates to it, as library C does after library A swaps planners.
     pub create_query_planner: extern "C" fn(
         logical_codec: FFI_LogicalExtensionCodec,
         physical_codec: FFI_PhysicalExtensionCodec,
+        library_a_planner: FFI_Option<FFI_QueryPlanner>,
     ) -> FFI_QueryPlanner,
 
     pub version: extern "C" fn() -> u64,

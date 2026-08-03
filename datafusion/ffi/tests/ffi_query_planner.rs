@@ -29,20 +29,22 @@ mod tests {
         DataFusionError, Result, TableReference, exec_err, not_impl_err,
     };
     use datafusion_execution::{TaskContext, TaskContextProvider};
-    use datafusion_expr::LogicalPlan;
     use datafusion_expr::logical_plan::Extension;
+    use datafusion_expr::{LogicalPlan, col};
     use datafusion_ffi::execution::FFI_TaskContextProvider;
     use datafusion_ffi::execution_plan::ForeignExecutionPlan;
     use datafusion_ffi::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
     use datafusion_ffi::proto::physical_extension_codec::FFI_PhysicalExtensionCodec;
-    use datafusion_ffi::query_planner::ForeignQueryPlanner;
+    use datafusion_ffi::query_planner::{FFI_QueryPlanner, ForeignQueryPlanner};
     use datafusion_ffi::table_provider::ForeignTableProvider;
     use datafusion_ffi::tests::{
         create_test_schema,
         utils::{get_module, get_module_copy},
     };
+    use datafusion_ffi::util::FFI_Option;
     use datafusion_physical_plan::ExecutionPlan;
     use datafusion_physical_plan::empty::EmptyExec;
+    use datafusion_physical_plan::sorts::sort::SortExec;
     use datafusion_physical_plan::union::UnionExec;
     use datafusion_proto::logical_plan::LogicalExtensionCodec;
     use datafusion_proto::physical_plan::{
@@ -63,7 +65,11 @@ mod tests {
             task_ctx_provider,
         );
 
-        let ffi_planner = (module.create_query_planner)(logical_codec, physical_codec);
+        let ffi_planner = (module.create_query_planner)(
+            logical_codec,
+            physical_codec,
+            FFI_Option::None,
+        );
         let planner: Arc<dyn QueryPlanner + Send + Sync> = (&ffi_planner).into();
 
         let any_ref: &dyn std::any::Any = planner.as_ref();
@@ -132,6 +138,12 @@ mod tests {
 
     /// Library A's physical codec reconstructs B's opaque foreign plan as an
     /// A-local test plan when the result returns from library C.
+    ///
+    /// Encoding sees B's node in one of two shapes. When A serializes a plan it
+    /// built itself, B's scan is a [`ForeignExecutionPlan`]. When library C
+    /// serializes a plan containing a node A previously handed it, the FFI handle
+    /// unwraps back to its home library, so A is asked to encode the very
+    /// [`EmptyExec`] its own `try_decode` produced.
     #[derive(Debug)]
     struct LibraryAPhysicalCodec;
 
@@ -155,8 +167,11 @@ mod tests {
             buf: &mut Vec<u8>,
             _proto_converter: &dyn PhysicalProtoConverterExtension,
         ) -> Result<()> {
-            if !node.is::<ForeignExecutionPlan>() {
-                return exec_err!("expected library B's plan to be foreign");
+            if !node.is::<ForeignExecutionPlan>() && !node.is::<EmptyExec>() {
+                return exec_err!(
+                    "expected library B's plan to be foreign or A-local; got {}",
+                    node.name()
+                );
             }
             buf.extend_from_slice(b"library-b-empty-exec");
             Ok(())
@@ -197,7 +212,11 @@ mod tests {
         // Library C: a foreign query planner sees B's scan result as opaque,
         // but can downcast its own UnionExec. Its result is serialized rather
         // than returned as FFI_ExecutionPlan.
-        let ffi_planner = (library_c.create_query_planner)(logical_codec, physical_codec);
+        let ffi_planner = (library_c.create_query_planner)(
+            logical_codec,
+            physical_codec,
+            FFI_Option::None,
+        );
         let planner: Arc<dyn QueryPlanner + Send + Sync> = (&ffi_planner).into();
         let planner_any: &dyn std::any::Any = planner.as_ref();
         assert!(planner_any.downcast_ref::<ForeignQueryPlanner>().is_some());
@@ -217,6 +236,102 @@ mod tests {
                 .iter()
                 .all(|child| !child.is::<ForeignExecutionPlan>())
         );
+
+        Ok(())
+    }
+
+    /// Exercises the deployment library C actually uses: library A hands its own
+    /// query planner to C, then installs C's planner on the session it already
+    /// owns. C plans by delegating back to A's captured planner.
+    ///
+    /// This is the case that requires serialized plans in both directions. C must
+    /// downcast the nodes A produced in order to rewrite them, and A must downcast
+    /// the nodes C produced in order to run its own passes over the result.
+    #[tokio::test]
+    async fn test_query_planner_swap_round_trips_type_identity() -> Result<()> {
+        // Library A: datafusion-python owns the session and codec registry. The
+        // physical optimizer rules are cleared so the assertions below observe
+        // planning alone.
+        let state = SessionStateBuilder::new_with_default_features()
+            .with_physical_optimizer_rules(vec![])
+            .build();
+        let ctx = Arc::new(SessionContext::new_with_state(state));
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
+        let ffi_task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
+        let logical_codec = FFI_LogicalExtensionCodec::new(
+            Arc::new(LibraryALogicalCodec::default()),
+            None,
+            ffi_task_ctx_provider.clone(),
+        );
+        let physical_codec = FFI_PhysicalExtensionCodec::new(
+            Arc::new(LibraryAPhysicalCodec),
+            None,
+            ffi_task_ctx_provider,
+        );
+
+        let library_b = get_module_copy("planner_swap_library_b")?;
+        let library_c = get_module_copy("planner_swap_library_c")?;
+
+        // Library B: a table provider that is foreign to both A and C.
+        let ffi_provider = (library_b.create_table)(true, logical_codec.clone());
+        let provider: Arc<dyn TableProvider> = (&ffi_provider).into();
+        ctx.register_table("library_b", provider)?;
+
+        // Library A exports its default planner *before* the swap. Fetching it
+        // afterwards through `FFI_SessionRef::query_planner` would hand library C
+        // its own planner back.
+        let library_a_planner = Arc::clone(ctx.state().query_planner());
+        let ffi_library_a_planner = FFI_QueryPlanner::new_with_ffi_codecs(
+            library_a_planner,
+            logical_codec.clone(),
+            physical_codec.clone(),
+        );
+
+        // Library C: builds its planner around A's planner.
+        let ffi_planner = (library_c.create_query_planner)(
+            logical_codec,
+            physical_codec,
+            FFI_Option::Some(ffi_library_a_planner),
+        );
+        let library_c_planner: Arc<dyn QueryPlanner + Send + Sync> =
+            (&ffi_planner).into();
+        let planner_any: &dyn std::any::Any = library_c_planner.as_ref();
+        assert!(planner_any.downcast_ref::<ForeignQueryPlanner>().is_some());
+
+        // Library A swaps C's planner into the session it already owns. Mutating
+        // the existing state keeps the `Arc<SessionContext>` identity stable, so
+        // the task context provider captured by the codecs above stays current.
+        let state_ref = ctx.state_ref();
+        let swapped = SessionStateBuilder::new_from_existing(state_ref.read().clone())
+            .with_query_planner(library_c_planner)
+            .build();
+        *state_ref.write() = swapped;
+
+        // A sort keeps a well-known, non-extension node at the root of A's
+        // physical plan. A projection or limit would be pushed into the scan,
+        // leaving only library B's opaque node for C to inspect.
+        let logical_plan = ctx
+            .table("library_b")
+            .await?
+            .sort(vec![col("a").sort(true, true)])?
+            .into_optimized_plan()?;
+
+        // Planning now runs A -> C -> A -> C -> A across three library images.
+        let physical_plan = ctx.state().create_physical_plan(&logical_plan).await?;
+
+        // Library A reconstructs C's result as A-local concrete nodes, including
+        // the plan that originated in B.
+        assert!(physical_plan.is::<UnionExec>());
+        assert!(!physical_plan.is::<ForeignExecutionPlan>());
+        let children = physical_plan.children();
+        assert_eq!(children.len(), 2);
+        for child in &children {
+            let sort = child
+                .downcast_ref::<SortExec>()
+                .expect("library A could not downcast the SortExec it planned");
+            assert!(sort.input().is::<EmptyExec>());
+            assert!(!sort.input().is::<ForeignExecutionPlan>());
+        }
 
         Ok(())
     }

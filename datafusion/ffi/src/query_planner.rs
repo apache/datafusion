@@ -38,6 +38,21 @@
 //! codec boundary reconstructs it in C. The query-planner boundary guarantees
 //! that C-local serializable nodes, and extension nodes understood by the
 //! configured codecs, are reconstructed for A when the completed plan returns.
+//!
+//! # Delegating back to library A
+//!
+//! C commonly wants A's built-in planning as a starting point, then rewrites the
+//! result. A must export its planner *before* installing C's planner on the
+//! session, and C must retain that handle: after the swap,
+//! [`Session::query_planner`] reports C's own planner, and
+//! [`Session::create_physical_plan`] dispatches to it, so either one is a
+//! self-call. Delegating to the retained handle is safe, because DataFusion's
+//! built-in physical planner never re-dispatches through [`Session`].
+//!
+//! Retain the planner rather than the session. [`FFI_QueryPlanner`] owns a
+//! reference-counted planner, so it outlives A's original session, whereas
+//! [`crate::session::FFI_SessionRef`] borrows its session with the lifetime
+//! erased.
 
 use std::ffi::c_void;
 use std::sync::Arc;
