@@ -67,15 +67,20 @@ use tokio::macros::support::thread_rng_n;
 /// Wraps a child stream so that every batch it yields is re-stamped with
 /// `schema` instead of the child's own schema.
 ///
-/// This is used by [`UnionExec`] when a child's output schema disagrees
-/// with the union's declared output schema -- in practice this only
-/// happens for nullability (the union's schema is nullable wherever *any*
-/// input's field is, but casts are only inserted between inputs when the
-/// *type* differs, not when only nullability does). Re-stamping is safe:
-/// the union's schema can only be *more* permissive than any single
-/// input's (nullability is combined with logical OR, never narrowed), and
-/// the underlying data type is unaffected -- only the `Field::nullable`
-/// flag (and equivalent metadata) changes.
+/// This is used by both [`UnionExec`] and [`InterleaveExec`] when a child's
+/// output schema disagrees with the operator's declared output schema --
+/// in practice this only happens for nullability (the declared schema is
+/// nullable wherever *any* input's field is, but casts are only inserted
+/// between inputs when the *type* differs, not when only nullability
+/// does). For [`UnionExec`], [`UnionExec::try_new`] guarantees this: it
+/// calls `calculate_union`, which rejects any input whose field data types
+/// don't match the computed union schema. [`InterleaveExec::try_new`] does
+/// not repeat that check -- its inputs are only ever produced by the
+/// optimizer rewriting an already-validated `UnionExec`, whose children's
+/// types are therefore already known to agree -- but if this wrapper ever
+/// did see a genuine data type mismatch (e.g. from a hand-built
+/// `InterleaveExec`), `RecordBatch::try_new_with_options` below reports it
+/// as an error rather than silently yielding a corrupt batch.
 struct SchemaConformingStream {
     schema: SchemaRef,
     inner: SendableRecordBatchStream,
@@ -1094,7 +1099,9 @@ mod tests {
         let interleave_schema = interleave.schema();
         assert!(interleave_schema.field(0).is_nullable());
 
-        for batch in collect(interleave, task_ctx).await? {
+        let batches = collect(interleave, task_ctx).await?;
+        assert!(!batches.is_empty());
+        for batch in &batches {
             assert_eq!(batch.schema(), interleave_schema);
         }
 

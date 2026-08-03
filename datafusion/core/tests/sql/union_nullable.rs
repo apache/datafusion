@@ -80,7 +80,7 @@ async fn union_all_mismatched_nullable(
 /// alone is not enough here -- it reflects the raw, pre-`Analyzer` plan (see
 /// `SessionState::create_logical_plan`), which for a `UNION` still has the
 /// first leg's un-coerced type.
-async fn analyzed_schema(df: &DataFrame) -> Result<Schema> {
+fn analyzed_schema(df: &DataFrame) -> Result<Schema> {
     Ok(df
         .clone()
         .into_optimized_plan()?
@@ -93,7 +93,7 @@ async fn analyzed_schema(df: &DataFrame) -> Result<Schema> {
 /// query's analyzed output schema field-for-field -- including
 /// nullability -- no matter which leg it came from.
 async fn assert_every_batch_matches_declared_schema(df: DataFrame) -> Result<()> {
-    let declared_schema = analyzed_schema(&df).await?;
+    let declared_schema = analyzed_schema(&df)?;
 
     let batches = df.collect().await?;
     assert!(!batches.is_empty());
@@ -115,8 +115,7 @@ async fn assert_every_batch_matches_declared_schema(df: DataFrame) -> Result<()>
 async fn union_all_same_type_left_not_null_right_nullable() -> Result<()> {
     let df = union_all_mismatched_nullable(false, true).await?;
     assert!(
-        analyzed_schema(&df)
-            .await?
+        analyzed_schema(&df)?
             .field_with_name("status")?
             .is_nullable()
     );
@@ -127,8 +126,7 @@ async fn union_all_same_type_left_not_null_right_nullable() -> Result<()> {
 async fn union_all_same_type_left_nullable_right_not_null() -> Result<()> {
     let df = union_all_mismatched_nullable(true, false).await?;
     assert!(
-        analyzed_schema(&df)
-            .await?
+        analyzed_schema(&df)?
             .field_with_name("status")?
             .is_nullable()
     );
@@ -138,7 +136,7 @@ async fn union_all_same_type_left_nullable_right_not_null() -> Result<()> {
 #[tokio::test]
 async fn union_all_same_type_both_not_null_stays_not_null() -> Result<()> {
     let df = union_all_mismatched_nullable(false, false).await?;
-    let declared_schema = analyzed_schema(&df).await?;
+    let declared_schema = analyzed_schema(&df)?;
     assert!(
         !declared_schema.field_with_name("status")?.is_nullable(),
         "status should remain NOT NULL when neither leg is nullable"
@@ -190,7 +188,7 @@ async fn union_all_widening_cast_also_fixes_nullable() -> Result<()> {
         )
         .await?;
 
-    let declared_schema = analyzed_schema(&df).await?;
+    let declared_schema = analyzed_schema(&df)?;
     assert_eq!(
         declared_schema.field_with_name("val")?.data_type(),
         &DataType::Int64
@@ -198,6 +196,7 @@ async fn union_all_widening_cast_also_fixes_nullable() -> Result<()> {
     assert!(declared_schema.field_with_name("val")?.is_nullable());
 
     let batches = df.collect().await?;
+    assert!(!batches.is_empty());
     for batch in &batches {
         assert_eq!(batch.schema().as_ref(), &declared_schema);
     }
