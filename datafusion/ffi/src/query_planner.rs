@@ -51,8 +51,7 @@
 //!
 //! Retain the planner rather than the session. [`FFI_QueryPlanner`] owns a
 //! reference-counted planner, so it outlives A's original session, whereas
-//! [`crate::session::FFI_SessionRef`] borrows its session with the lifetime
-//! erased.
+//! `FFI_SessionRef` borrows its session with the lifetime erased.
 
 use std::ffi::c_void;
 use std::sync::Arc;
