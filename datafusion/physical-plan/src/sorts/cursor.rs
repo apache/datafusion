@@ -410,10 +410,10 @@ impl CursorValues for StringViewArray {
 
     #[inline(always)]
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
-        // SAFETY: Prior assertions guarantee that l_idx and r_idx are valid indices.
-        // Null-checks are assumed to have been handled in the wrapper (e.g., ArrayValues).
-        // And the bound is checked in is_finished, it is safe to call get_unchecked
         if l.data_buffers().is_empty() && r.data_buffers().is_empty() {
+            // SAFETY: Prior assertions guarantee that l_idx and r_idx are valid indices.
+            // Null-checks are assumed to have been handled in the wrapper (e.g., ArrayValues).
+            // And the bound is checked in is_finished, it is safe to call get_unchecked
             let l_view = unsafe { l.views().get_unchecked(l_idx) };
             let r_view = unsafe { r.views().get_unchecked(r_idx) };
             return StringViewArray::inline_key_fast(*l_view)
