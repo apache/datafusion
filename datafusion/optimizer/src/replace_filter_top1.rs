@@ -63,7 +63,7 @@ use datafusion_expr::{ExprFunctionExt, LogicalPlanBuilder, lit};
 /// - filter predicate must be "top-1" (rn = 1, <= 1, < 2)
 /// - window has a `PARTITION BY` clause
 /// - gated behind the `optimizer.enable_row_number_to_aggregate` config option (off by default)
-/// - with duplicate `ORDER BY` keys, `row_number()` and this rewrite with `first_value` may pick different (but equally valid) tied rows - each path breaks ties determinsitically, but no guarentee the choices will be the same
+/// - with duplicate `ORDER BY` keys, `row_number()` and this rewrite with `first_value` may pick different (but equally valid) tied rows - each path breaks ties determinsitically, but no guarantee the choices will be the same
 #[derive(Default, Debug)]
 pub struct ReplaceFilterTop1 {}
 
@@ -260,6 +260,8 @@ fn validate_window_input(input: &Arc<LogicalPlan>) -> Option<WindowTop1<'_>> {
         return None;
     }
 
+    // Using the function *name* is safe because a session resolves one canonical
+    // UDF per name, so same-keyed members share an implementation.
     if window_function.fun.name() != "row_number" {
         return None;
     }
