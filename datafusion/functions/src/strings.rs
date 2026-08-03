@@ -39,7 +39,7 @@ use datafusion_common::cast::{
 use datafusion_expr_common::columnar_value::ColumnarValue;
 
 /// Trait abstracting concatenating string and binary collections.
-pub(crate) trait ConcatBuilder {
+pub trait ConcatBuilder {
     fn write<const CHECK_VALID: bool>(
         &mut self,
         column: &ColumnarValueRef,
@@ -61,13 +61,13 @@ pub(crate) trait ConcatBuilder {
 ///
 /// For the common "produce one `&str` per row" pattern, prefer
 /// `GenericStringArrayBuilder` instead.
-pub(crate) struct ConcatGenericStringBuilder<O: OffsetSizeTrait + ArrowNativeType> {
+pub struct ConcatGenericStringBuilder<O: OffsetSizeTrait + ArrowNativeType> {
     offsets_buffer: MutableBuffer,
     value_buffer: MutableBuffer,
     _phantom: PhantomData<O>,
 }
-pub(crate) type ConcatStringBuilder = ConcatGenericStringBuilder<i32>;
-pub(crate) type ConcatLargeStringBuilder = ConcatGenericStringBuilder<i64>;
+pub type ConcatStringBuilder = ConcatGenericStringBuilder<i32>;
+pub type ConcatLargeStringBuilder = ConcatGenericStringBuilder<i64>;
 
 impl<O: OffsetSizeTrait + ArrowNativeType> ConcatGenericStringBuilder<O> {
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
@@ -187,7 +187,7 @@ impl<O: OffsetSizeTrait + ArrowNativeType> ConcatBuilder
 ///
 /// For the common "produce one `&str` per row" pattern, prefer
 /// [`StringViewArrayBuilder`] instead.
-pub(crate) struct ConcatStringViewBuilder {
+pub struct ConcatStringViewBuilder {
     views: Vec<u128>,
     data: Vec<u8>,
     block: Vec<u8>,
@@ -1217,7 +1217,7 @@ pub(crate) fn append_view(
 }
 
 #[derive(Debug)]
-pub(crate) enum ColumnarValueRef<'a> {
+pub enum ColumnarValueRef<'a> {
     Scalar(&'a [u8]),
     NullableArray(&'a StringArray),
     NonNullableArray(&'a StringArray),
