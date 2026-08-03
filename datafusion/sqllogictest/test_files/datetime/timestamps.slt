@@ -1264,6 +1264,12 @@ SELECT DATE_BIN('5 month', '2022-01-01T00:00:00Z');
 ----
 2021-09-01T00:00:00
 
+# test with utf8view
+query P
+SELECT DATE_BIN(arrow_cast('5 month', 'Utf8View'), '2022-01-01T00:00:00Z');
+----
+2021-09-01T00:00:00
+
 # month interval with default start time
 query P
 SELECT DATE_BIN('1 month', '2022-01-01 00:00:00Z');
@@ -3522,6 +3528,28 @@ select to_time(time_str) from time_strings;
 
 statement ok
 drop table time_strings;
+
+# Table input with multiple formats
+# `%Q` is intentionally invalid; subsequent formats should still be tried.
+query D rowsort
+select to_time(
+    time_str,
+    '%Q',
+    '%H:%M:%S',
+    '%H-%M-%S',
+    '%H/%M/%S'
+) from (
+    values
+        ('12:30:45'),
+        ('14-25-30'),
+        ('09/05/01'),
+        (NULL)
+) as formatted_time_strings(time_str);
+----
+09:05:01
+12:30:45
+14:25:30
+NULL
 
 # Error cases
 

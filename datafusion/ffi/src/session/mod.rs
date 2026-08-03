@@ -730,6 +730,16 @@ mod tests {
         assert!(state.catalog_list().catalog("foreign_registered").is_some());
 
         let logical_plan = LogicalPlan::default();
+        assert_eq!(foreign_session.optimize(&logical_plan)?, logical_plan);
+        assert!(foreign_session.physical_optimizers().is_empty());
+        assert!(foreign_session.statistics_registry().is_none());
+        let planner_error = foreign_session
+            .query_planner()
+            .create_physical_plan(&logical_plan, &foreign_session)
+            .await
+            .unwrap_err();
+        assert!(planner_error.to_string().contains("does not expose"));
+
         let physical_plan = foreign_session.create_physical_plan(&logical_plan).await?;
         assert_eq!(
             format!("{physical_plan:?}"),
