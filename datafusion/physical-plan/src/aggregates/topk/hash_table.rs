@@ -190,12 +190,7 @@ where
         row_idx: usize,
         replace_idx: usize,
     ) -> (usize, InsertKind) {
-        let id = if self.owned.is_null(row_idx) {
-            None
-        } else {
-            Some((&self.owned).value(row_idx))
-        };
-
+        let id = some_value(&self.owned, row_idx);
         // Compute hash and create equality closure for hash table lookup.
         let hash = self.rnd.hash_one(id);
         let eq = move |mi: &Option<String>| id == mi.as_deref();
@@ -206,22 +201,14 @@ where
     }
 
     fn insert_null(&mut self, row_idx: usize) -> bool {
-        let id = if self.owned.is_null(row_idx) {
-            None
-        } else {
-            Some((&self.owned).value(row_idx))
-        };
+        let id = some_value(&self.owned, row_idx);
         let hash = self.rnd.hash_one(id);
         let eq = move |mi: &Option<String>| id == mi.as_deref();
         self.map.insert_null(hash, id.map(ToOwned::to_owned), eq)
     }
 
     fn remove_if_null(&mut self, row_idx: usize) -> bool {
-        let id = if self.owned.is_null(row_idx) {
-            None
-        } else {
-            Some((&self.owned).value(row_idx))
-        };
+        let id = some_value(&self.owned, row_idx);
         let hash = self.rnd.hash_one(id);
         let eq = move |mi: &Option<String>| id == mi.as_deref();
         self.map.remove_if_null(hash, eq)
@@ -249,11 +236,7 @@ where
 
     /// Computes the id and its hash for the given row, for hash table lookups
     fn id_and_hash(&self, row_idx: usize) -> (Option<VAL::Native>, u64) {
-        let id: Option<VAL::Native> = if self.owned.is_null(row_idx) {
-            None
-        } else {
-            Some(self.owned.value(row_idx))
-        };
+        let id: Option<VAL::Native> = some_value(&self.owned, row_idx);
         let hash: u64 = id.hash(&self.rnd);
         (id, hash)
     }
@@ -298,15 +281,8 @@ where
         row_idx: usize,
         replace_idx: usize,
     ) -> (usize, InsertKind) {
-        let id: Option<VAL::Native> = if self.owned.is_null(row_idx) {
-            None
-        } else {
-            Some(self.owned.value(row_idx))
-        };
-        // Compute hash and create equality closure for hash table lookup.
-        let hash: u64 = id.hash(&self.rnd);
+        let (id, hash) = self.id_and_hash(row_idx);
         let eq = |mi: &Option<VAL::Native>| id == *mi;
-
         // Use entry API to avoid double lookup
         self.map.find_or_insert(hash, id, replace_idx, eq)
     }
@@ -555,6 +531,15 @@ has_integer!(i8, i16, i32, i64, i128, i256);
 has_integer!(u8, u16, u32, u64);
 has_integer!(IntervalDayTime, IntervalMonthDayNano);
 hash_float!(f16, f32, f64);
+
+#[inline]
+fn some_value<A: ArrayAccessor>(array: A, index: usize) -> Option<A::Item> {
+    if array.is_null(index) {
+        None
+    } else {
+        Some(array.value(index))
+    }
+}
 
 pub fn new_hash_table(
     limit: usize,
