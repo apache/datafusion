@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 
 use super::*;
+use datafusion::assert_batches_eq;
 use datafusion_common::{ParamValues, ScalarValue, metadata::ScalarAndMetadata};
 use insta::assert_snapshot;
 
@@ -491,5 +492,41 @@ async fn test_recursive_cte_batch_schema_stable_with_order_by_limit() -> Result<
             "batch {i} schema field names leaked from recursive branch"
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn ordered_offset_subquery_preserves_selected_row() -> Result<()> {
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().set_usize("datafusion.optimizer.max_passes", 1),
+    );
+    let results = ctx
+        .sql(
+            "SELECT grp, COUNT(*) AS n
+             FROM (
+               SELECT grp, sort_key
+               FROM (
+                 VALUES ('physical_second', 2), ('sorted_first', 1)
+               ) AS t(grp, sort_key)
+               ORDER BY sort_key ASC NULLS LAST
+               OFFSET 1
+             ) q
+             GROUP BY grp
+             ORDER BY grp",
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_batches_eq!(
+        [
+            "+-----------------+---+",
+            "| grp             | n |",
+            "+-----------------+---+",
+            "| physical_second | 1 |",
+            "+-----------------+---+",
+        ],
+        &results
+    );
     Ok(())
 }
