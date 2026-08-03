@@ -37,6 +37,15 @@ const FE_UPWARD: i32 = 0x0800;
 #[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
 const FE_DOWNWARD: i32 = 0x0400;
 
+// Links `libc`, which provides the `fesetround`/`fegetround` symbols declared below.
+// There is no path reference to the crate, so `unused_extern_crates` cannot see the use.
+#[expect(unused_extern_crates)]
+#[cfg(all(
+    any(target_arch = "x86_64", target_arch = "aarch64"),
+    not(target_os = "windows")
+))]
+extern crate libc;
+
 #[cfg(all(
     any(target_arch = "x86_64", target_arch = "aarch64"),
     not(target_os = "windows")
