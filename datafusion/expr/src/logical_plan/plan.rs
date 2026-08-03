@@ -41,8 +41,9 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
-    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
-    grouping_set_expr_count, grouping_set_to_exprlist, merge_schema, split_conjunction,
+    check_aggregate_and_window_nesting, enumerate_grouping_sets, exprlist_to_fields,
+    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
+    merge_schema, split_conjunction,
 };
 use crate::{
     BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, GroupingSet,
@@ -1733,7 +1734,7 @@ impl LogicalPlan {
     /// ```
     pub fn display_indent(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
-        // that that can be formatted
+        // that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -1779,7 +1780,7 @@ impl LogicalPlan {
     /// ```
     pub fn display_indent_schema(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
-        // that that can be formatted
+        // that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -1799,7 +1800,7 @@ impl LogicalPlan {
     /// Users can use this format to visualize the plan in existing plan visualization tools, for example [dalibo](https://explain.dalibo.com/)
     pub fn display_pg_json(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
-        // that that can be formatted
+        // that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -1845,7 +1846,7 @@ impl LogicalPlan {
     /// ```
     pub fn display_graphviz(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
-        // that that can be formatted
+        // that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -1896,7 +1897,7 @@ impl LogicalPlan {
     /// ```
     pub fn display(&self) -> impl Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
-        // that that can be formatted
+        // that can be formatted
         struct Wrapper<'a>(&'a LogicalPlan);
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -2779,6 +2780,11 @@ pub struct Window {
 impl Window {
     /// Create a new window operator.
     pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
+        // Reject e.g. `sum(sum(x) OVER ()) OVER ()` here rather than letting it
+        // reach physical planning, which has no equivalent for a nested window
+        // function.
+        check_aggregate_and_window_nesting(window_expr.iter())?;
+
         let fields: Vec<(Option<TableReference>, Arc<Field>)> = input
             .schema()
             .iter()
@@ -3892,6 +3898,10 @@ impl Aggregate {
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
     ) -> Result<Self> {
+        // Reject e.g. `sum(sum(x))` here rather than letting it reach physical
+        // planning, which has no equivalent for a nested aggregate.
+        check_aggregate_and_window_nesting(group_expr.iter().chain(aggr_expr.iter()))?;
+
         let group_expr = enumerate_grouping_sets(group_expr)?;
 
         let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);

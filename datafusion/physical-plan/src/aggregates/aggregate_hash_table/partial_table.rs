@@ -50,6 +50,7 @@ impl AggregateHashTable<PartialMarker> {
         Self::new_with_filters(
             agg,
             partition,
+            Arc::clone(&output_schema),
             output_schema,
             batch_size,
             agg.filter_expr.iter().cloned().collect(),
@@ -66,14 +67,6 @@ impl AggregateHashTable<PartialMarker> {
         &mut self,
     ) -> Result<Option<RecordBatch>> {
         self.next_output_batch_inner(HashAggregateAccumulator::state)
-    }
-
-    pub(in crate::aggregates) fn can_skip_aggregation(&self) -> bool {
-        self.state
-            .building()
-            .accumulators
-            .iter()
-            .all(|acc| acc.supports_convert_to_state())
     }
 
     /// In skip-partial-aggregation optimization, when a decision has been made to skip
@@ -95,6 +88,7 @@ impl AggregateHashTable<PartialMarker> {
             group_by_metrics: self.group_by_metrics.clone(),
             input_schema: Arc::clone(&self.input_schema),
             output_schema: Arc::clone(&self.output_schema),
+            state_schema: Arc::clone(&self.state_schema),
             batch_size: self.batch_size,
             state: AggregateHashTableState::Building(AggregateHashTableBuffer {
                 group_by: Arc::clone(&state.group_by),

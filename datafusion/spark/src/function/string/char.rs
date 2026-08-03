@@ -112,6 +112,8 @@ fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
         integer_array.len(),
     );
 
+    // Each character encodes into this stack buffer, so no row allocates a `String`.
+    let mut encoded = [0u8; 4];
     for integer_opt in integer_array {
         match integer_opt {
             Some(integer) => {
@@ -119,7 +121,7 @@ fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
                     builder.append_value(""); // empty string for negative numbers.
                 } else {
                     match core::char::from_u32((integer % 256) as u32) {
-                        Some(ch) => builder.append_value(ch.to_string()),
+                        Some(ch) => builder.append_value(ch.encode_utf8(&mut encoded)),
                         None => {
                             return exec_err!(
                                 "requested character not compatible for encoding."

@@ -17,9 +17,10 @@
 
 //! A `Map<K, V>` / `PriorityQueue` combo that evicts the worst values after reaching `capacity`
 
-use crate::aggregates::topk::hash_table::{ArrowHashTable, new_hash_table};
+use crate::aggregates::topk::hash_table::{ArrowHashTable, InsertKind, new_hash_table};
 use crate::aggregates::topk::heap::{ArrowHeap, new_heap};
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, new_null_array};
+use arrow::compute::concat;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 
@@ -29,6 +30,11 @@ pub struct PriorityMap {
     heap: Box<dyn ArrowHeap + Send>,
     capacity: usize,
     mapper: Vec<(usize, usize)>,
+    val_type: DataType,
+    /// Mirror of the map's all-NULL group count, kept as a plain field so the
+    /// per-row `insert` path can check it without a `dyn` call (measured to
+    /// regress the topk_aggregate benchmarks when read through the trait)
+    null_count: usize,
 }
 
 impl PriorityMap {
@@ -40,9 +46,11 @@ impl PriorityMap {
     ) -> Result<Self> {
         Ok(Self {
             map: new_hash_table(capacity, key_type)?,
-            heap: new_heap(capacity, descending, val_type)?,
+            heap: new_heap(capacity, descending, val_type.clone())?,
             capacity,
             mapper: Vec::with_capacity(capacity),
+            val_type,
+            null_count: 0,
         })
     }
 
@@ -53,19 +61,47 @@ impl PriorityMap {
 
     pub fn insert(&mut self, row_idx: usize) -> Result<()> {
         assert!(self.map.len() <= self.capacity, "Overflow");
+        debug_assert_eq!(self.null_count, 0);
 
         // if we're full, and the new val is worse than all our values, just bail
         if self.heap.is_worse(row_idx) {
             return Ok(());
         }
+        self.insert_eligible(row_idx)
+    }
+
+    /// Insert a value while all-NULL groups are being tracked. This is kept
+    /// separate from [`Self::insert`] so the common no-NULL path does not pay
+    /// for NULL bookkeeping on every row.
+    pub fn insert_with_null_groups(&mut self, row_idx: usize) -> Result<()> {
+        // valued groups are capped at `capacity`; up to `capacity` additional
+        // all-NULL groups may be tracked alongside them
+        assert!(self.map.len() <= 2 * self.capacity, "Overflow");
+
+        if self.heap.is_worse(row_idx) {
+            // A group that was registered as all-NULL now has a value that
+            // loses to the current top-k: it can no longer reach the top-k,
+            // but it must not be emitted with a NULL value either
+            if self.null_count > 0 && self.map.remove_if_null(row_idx) {
+                self.null_count -= 1;
+            }
+            return Ok(());
+        }
+        self.insert_eligible(row_idx)
+    }
+
+    fn insert_eligible(&mut self, row_idx: usize) -> Result<()> {
         let map = &mut self.mapper;
 
         // handle new groups we haven't seen yet
         map.clear();
         let replace_idx = self.heap.worst_map_idx();
 
-        let (map_idx, did_insert) = self.map.find_or_insert(row_idx, replace_idx);
-        if did_insert {
+        let (map_idx, kind) = self.map.find_or_insert(row_idx, replace_idx);
+        if kind == InsertKind::ReplacedNull {
+            self.null_count -= 1;
+        }
+        if kind != InsertKind::Existing {
             self.heap.insert(row_idx, map_idx, map);
             self.map.update_heap_idx(map);
             return Ok(());
@@ -80,9 +116,35 @@ impl PriorityMap {
         Ok(())
     }
 
+    pub fn has_null_groups(&self) -> bool {
+        self.null_count > 0
+    }
+
+    /// Track a group whose aggregate values are all NULL, so it can be emitted
+    /// with a NULL value. MIN/MAX ignore NULL inputs, but an all-NULL group
+    /// must still appear in the aggregation output; such groups all tie on the
+    /// sort key, so tracking up to `capacity` of them preserves top-k semantics.
+    pub fn insert_null(&mut self, row_idx: usize) {
+        assert!(self.map.len() <= 2 * self.capacity, "Overflow");
+        if self.map.insert_null(row_idx) {
+            self.null_count += 1;
+        }
+    }
+
     pub fn emit(&mut self) -> Result<Vec<ArrayRef>> {
-        let (vals, map_idxs) = self.heap.drain();
+        let (vals, mut map_idxs) = self.heap.drain();
+        // Groups whose values are all NULL are tracked in the map only;
+        // append them with a NULL value so they are not lost from the output
+        let null_idxs = self.map.null_map_idxs();
+        let vals = if null_idxs.is_empty() {
+            vals
+        } else {
+            map_idxs.extend(null_idxs.iter().copied());
+            let nulls = new_null_array(&self.val_type, null_idxs.len());
+            concat(&[vals.as_ref(), nulls.as_ref()])?
+        };
         let ids = self.map.take_all(map_idxs);
+        self.null_count = 0;
         Ok(vec![ids, vals])
     }
 
@@ -488,6 +550,224 @@ mod tests {
         +----------+--------------+
         |          | 3            |
         | 1        | 1            |
+        +----------+--------------+
+        "
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn should_emit_all_null_groups() -> Result<()> {
+        let ids: ArrayRef = Arc::new(StringArray::from(vec!["1", "2"]));
+        let vals: ArrayRef = Arc::new(Int64Array::from(vec![None, None]));
+        let mut agg = PriorityMap::new(DataType::Utf8, DataType::Int64, 2, true)?;
+        agg.set_batch(ids, vals);
+        agg.insert_null(0);
+        agg.insert_null(1);
+        // re-registering an existing NULL group is a no-op
+        agg.insert_null(0);
+
+        let cols = agg.emit()?;
+        let batch = RecordBatch::try_new(test_schema(), cols)?;
+        let actual = format!("{}", pretty_format_batches(&[batch])?);
+        assert_snapshot!(actual, @r"
+        +----------+--------------+
+        | trace_id | timestamp_ms |
+        +----------+--------------+
+        | 1        |              |
+        | 2        |              |
+        +----------+--------------+
+        "
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn should_emit_null_groups_alongside_valued_groups() -> Result<()> {
+        let ids: ArrayRef = Arc::new(StringArray::from(vec!["1", "2", "3"]));
+        let vals: ArrayRef = Arc::new(Int64Array::from(vec![Some(7), None, Some(3)]));
+        let mut agg = PriorityMap::new(DataType::Utf8, DataType::Int64, 3, true)?;
+        agg.set_batch(ids, vals);
+        agg.insert(0)?;
+        agg.insert_null(1);
+        agg.insert_with_null_groups(2)?;
+
+        let cols = agg.emit()?;
+        let batch = RecordBatch::try_new(test_schema(), cols)?;
+        let actual = format!("{}", pretty_format_batches(&[batch])?);
+        assert_snapshot!(actual, @r"
+        +----------+--------------+
+        | trace_id | timestamp_ms |
+        +----------+--------------+
+        | 1        | 7            |
+        | 3        | 3            |
+        | 2        |              |
+        +----------+--------------+
+        "
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn should_cap_null_groups_at_limit() -> Result<()> {
+        let ids: ArrayRef = Arc::new(StringArray::from(vec!["1", "2", "3", "4", "5"]));
+        let vals: ArrayRef =
+            Arc::new(Int64Array::from(vec![None, None, None, None, None]));
+        let mut agg = PriorityMap::new(DataType::Utf8, DataType::Int64, 2, false)?;
+        agg.set_batch(ids, vals);
+        for row_idx in 0..5 {
+            agg.insert_null(row_idx);
+        }
+
+        let cols = agg.emit()?;
+        let batch = RecordBatch::try_new(test_schema(), cols)?;
+        let actual = format!("{}", pretty_format_batches(&[batch])?);
+        assert_snapshot!(actual, @r"
+        +----------+--------------+
+        | trace_id | timestamp_ms |
+        +----------+--------------+
+        | 1        |              |
+        | 2        |              |
+        +----------+--------------+
+        "
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn should_convert_null_group_to_valued() -> Result<()> {
+        let mut agg = PriorityMap::new(DataType::Utf8, DataType::Int64, 2, true)?;
+
+        // group "1" only produces NULLs in the first batch
+        let ids: ArrayRef = Arc::new(StringArray::from(vec!["1"]));
+        let vals: ArrayRef = Arc::new(Int64Array::from(vec![None]));
+        agg.set_batch(ids, vals);
+        agg.insert_null(0);
+
+        // group "1" produces a value in a later batch
+        let ids: ArrayRef = Arc::new(StringArray::from(vec!["1"]));
+        let vals: ArrayRef = Arc::new(Int64Array::from(vec![5]));
+        agg.set_batch(ids, vals);
+        agg.insert_with_null_groups(0)?;
+
+        let cols = agg.emit()?;
+        let batch = RecordBatch::try_new(test_schema(), cols)?;
+        let actual = format!("{}", pretty_format_batches(&[batch])?);
+        assert_snapshot!(actual, @r"
+        +----------+--------------+
+        | trace_id | timestamp_ms |
+        +----------+--------------+
+        | 1        | 5            |
+        +----------+--------------+
+        "
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn should_not_duplicate_valued_group_as_null() -> Result<()> {
+        let mut agg = PriorityMap::new(DataType::Utf8, DataType::Int64, 2, false)?;
+
+        // group "1" produces a value in the first batch
+        let ids: ArrayRef = Arc::new(StringArray::from(vec!["1"]));
+        let vals: ArrayRef = Arc::new(Int64Array::from(vec![5]));
+        agg.set_batch(ids, vals);
+        agg.insert(0)?;
+
+        // group "1" only produces NULLs in a later batch
+        let ids: ArrayRef = Arc::new(StringArray::from(vec!["1"]));
+        let vals: ArrayRef = Arc::new(Int64Array::from(vec![None]));
+        agg.set_batch(ids, vals);
+        agg.insert_null(0);
+
+        let cols = agg.emit()?;
+        let batch = RecordBatch::try_new(test_schema(), cols)?;
+        let actual = format!("{}", pretty_format_batches(&[batch])?);
+        assert_snapshot!(actual, @r"
+        +----------+--------------+
+        | trace_id | timestamp_ms |
+        +----------+--------------+
+        | 1        | 5            |
+        +----------+--------------+
+        "
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn should_evict_worst_when_converting_null_group() -> Result<()> {
+        let mut agg = PriorityMap::new(DataType::Utf8, DataType::Int64, 1, true)?;
+
+        // group "2" holds the single top-k slot
+        let ids: ArrayRef = Arc::new(StringArray::from(vec!["2"]));
+        let vals: ArrayRef = Arc::new(Int64Array::from(vec![10]));
+        agg.set_batch(ids, vals);
+        agg.insert(0)?;
+
+        // group "1" starts out all-NULL
+        let ids: ArrayRef = Arc::new(StringArray::from(vec!["1"]));
+        let vals: ArrayRef = Arc::new(Int64Array::from(vec![None]));
+        agg.set_batch(ids, vals);
+        agg.insert_null(0);
+
+        // group "1" produces a better value and evicts group "2"
+        let ids: ArrayRef = Arc::new(StringArray::from(vec!["1"]));
+        let vals: ArrayRef = Arc::new(Int64Array::from(vec![20]));
+        agg.set_batch(ids, vals);
+        agg.insert_with_null_groups(0)?;
+
+        let cols = agg.emit()?;
+        let batch = RecordBatch::try_new(test_schema(), cols)?;
+        let actual = format!("{}", pretty_format_batches(&[batch])?);
+        assert_snapshot!(actual, @r"
+        +----------+--------------+
+        | trace_id | timestamp_ms |
+        +----------+--------------+
+        | 1        | 20           |
+        +----------+--------------+
+        "
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn should_drop_null_group_that_loses_to_topk() -> Result<()> {
+        let mut agg = PriorityMap::new(DataType::Utf8, DataType::Int64, 1, true)?;
+
+        // group "1" starts out all-NULL
+        let ids: ArrayRef = Arc::new(StringArray::from(vec!["1"]));
+        let vals: ArrayRef = Arc::new(Int64Array::from(vec![None]));
+        agg.set_batch(ids, vals);
+        agg.insert_null(0);
+
+        // group "2" fills the single top-k slot
+        let ids: ArrayRef = Arc::new(StringArray::from(vec!["2"]));
+        let vals: ArrayRef = Arc::new(Int64Array::from(vec![10]));
+        agg.set_batch(ids, vals);
+        agg.insert_with_null_groups(0)?;
+
+        // group "1" produces a value that loses to the current top-k: the
+        // group can no longer reach the top-k and must not be emitted as NULL
+        let ids: ArrayRef = Arc::new(StringArray::from(vec!["1"]));
+        let vals: ArrayRef = Arc::new(Int64Array::from(vec![5]));
+        agg.set_batch(ids, vals);
+        agg.insert_with_null_groups(0)?;
+
+        let cols = agg.emit()?;
+        let batch = RecordBatch::try_new(test_schema(), cols)?;
+        let actual = format!("{}", pretty_format_batches(&[batch])?);
+        assert_snapshot!(actual, @r"
+        +----------+--------------+
+        | trace_id | timestamp_ms |
+        +----------+--------------+
+        | 2        | 10           |
         +----------+--------------+
         "
         );

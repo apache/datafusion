@@ -253,8 +253,11 @@ pub struct EmptyRelationNode {
 pub struct CreateExternalTableNode {
     #[prost(message, optional, tag = "9")]
     pub name: ::core::option::Option<TableReference>,
+    /// deprecated; use repeated locations
     #[prost(string, tag = "2")]
     pub location: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "16")]
+    pub locations: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, tag = "3")]
     pub file_type: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "4")]
@@ -667,10 +670,56 @@ pub struct ColumnUnnestListRecursion {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UnnestOptions {
-    #[prost(bool, tag = "1")]
-    pub preserve_nulls: bool,
+    #[prost(enumeration = "unnest_options::NullHandling", tag = "3")]
+    pub null_handling: i32,
     #[prost(message, repeated, tag = "2")]
     pub recursions: ::prost::alloc::vec::Vec<RecursionUnnestOption>,
+}
+/// Nested message and enum types in `UnnestOptions`.
+pub mod unnest_options {
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash,
+        PartialOrd,
+        Ord,
+        ::prost::Enumeration
+    )]
+    #[repr(i32)]
+    pub enum NullHandling {
+        /// Preserve nulls; empty lists produce no rows. The historical default.
+        Preserve = 0,
+        /// Drop both null and empty lists from the output.
+        Drop = 1,
+        /// Preserve nulls, and additionally expand empty lists into a single
+        /// NULL output row (outer-unnest semantics).
+        PreserveAndExpandEmpty = 2,
+    }
+    impl NullHandling {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Preserve => "PRESERVE",
+                Self::Drop => "DROP",
+                Self::PreserveAndExpandEmpty => "PRESERVE_AND_EXPAND_EMPTY",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "PRESERVE" => Some(Self::Preserve),
+                "DROP" => Some(Self::Drop),
+                "PRESERVE_AND_EXPAND_EMPTY" => Some(Self::PreserveAndExpandEmpty),
+                _ => None,
+            }
+        }
+    }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RecursionUnnestOption {
@@ -960,6 +1009,10 @@ pub struct NegativeNode {
 pub struct Unnest {
     #[prost(message, repeated, tag = "1")]
     pub exprs: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    /// When true, this Unnest expression has outer-unnest semantics: NULL and
+    /// empty input lists both produce a single NULL output row.
+    #[prost(bool, tag = "2")]
+    pub outer: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct InListNode {
@@ -1872,8 +1925,6 @@ pub struct FileScanExecConf {
     pub batch_size: ::core::option::Option<u64>,
     #[prost(message, optional, tag = "13")]
     pub projection_exprs: ::core::option::Option<ProjectionExprs>,
-    #[prost(bool, optional, tag = "14")]
-    pub partitioned_by_file_group: ::core::option::Option<bool>,
     #[prost(message, optional, tag = "15")]
     pub output_partitioning: ::core::option::Option<Partitioning>,
 }
@@ -2068,11 +2119,19 @@ pub struct JoinOn {
 pub struct EmptyExecNode {
     #[prost(message, optional, tag = "1")]
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    /// Number of output partitions. Absent (0) means a single partition, so that
+    /// plans encoded before this field existed decode to the previous default.
+    #[prost(uint32, tag = "2")]
+    pub partitions: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PlaceholderRowExecNode {
     #[prost(message, optional, tag = "1")]
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    /// Number of output partitions. Absent (0) means a single partition, so that
+    /// plans encoded before this field existed decode to the previous default.
+    #[prost(uint32, tag = "2")]
+    pub partitions: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProjectionExecNode {

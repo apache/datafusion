@@ -671,22 +671,43 @@ pub fn intersect_metadata_for_union<'a>(
 }
 
 /// UNNEST expression.
+///
+/// When `outer` is `true`, the unnest should preserve `NULL` and empty input
+/// lists by emitting a single `NULL` output row for each. When `false` (the
+/// historical default), the behavior is identical to the plain `UNNEST(col)`
+/// SQL form: `NULL` and empty input lists are dropped from the output.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Unnest {
     pub expr: Box<Expr>,
+    /// Outer-unnest behavior: also expand empty input lists into a single
+    /// `NULL` output row (in addition to preserving `NULL` input rows).
+    pub outer: bool,
 }
 
 impl Unnest {
-    /// Create a new Unnest expression.
+    /// Create a new Unnest expression with default (non-outer) semantics.
     pub fn new(expr: Expr) -> Self {
         Self {
             expr: Box::new(expr),
+            outer: false,
         }
     }
 
-    /// Create a new Unnest expression.
+    /// Create a new Unnest expression with default (non-outer) semantics.
     pub fn new_boxed(boxed: Box<Expr>) -> Self {
-        Self { expr: boxed }
+        Self {
+            expr: boxed,
+            outer: false,
+        }
+    }
+
+    /// Create a new Unnest expression with outer-unnest semantics: `NULL`
+    /// and empty input lists each produce a single `NULL` output row.
+    pub fn new_outer(expr: Expr) -> Self {
+        Self {
+            expr: Box::new(expr),
+            outer: true,
+        }
     }
 }
 
@@ -2431,11 +2452,19 @@ impl NormalizeEq for Expr {
             | (Expr::IsNotTrue(self_expr), Expr::IsNotTrue(other_expr))
             | (Expr::IsNotFalse(self_expr), Expr::IsNotFalse(other_expr))
             | (Expr::IsNotUnknown(self_expr), Expr::IsNotUnknown(other_expr))
-            | (Expr::Negative(self_expr), Expr::Negative(other_expr))
-            | (
-                Expr::Unnest(Unnest { expr: self_expr }),
-                Expr::Unnest(Unnest { expr: other_expr }),
-            ) => self_expr.normalize_eq(other_expr),
+            | (Expr::Negative(self_expr), Expr::Negative(other_expr)) => {
+                self_expr.normalize_eq(other_expr)
+            }
+            (
+                Expr::Unnest(Unnest {
+                    expr: self_expr,
+                    outer: self_outer,
+                }),
+                Expr::Unnest(Unnest {
+                    expr: other_expr,
+                    outer: other_outer,
+                }),
+            ) => self_outer == other_outer && self_expr.normalize_eq(other_expr),
             (
                 Expr::Between(Between {
                     expr: self_expr,
@@ -2883,7 +2912,9 @@ impl HashNode for Expr {
                 field.hash(state);
                 column.hash(state);
             }
-            Expr::Unnest(Unnest { expr: _expr }) => {}
+            Expr::Unnest(Unnest { expr: _expr, outer }) => {
+                outer.hash(state);
+            }
             Expr::HigherOrderFunction(HigherOrderFunction { func, args: _args }) => {
                 func.hash(state);
             }
@@ -3123,8 +3154,9 @@ impl Display for SchemaDisplay<'_> {
             }
             Expr::Negative(expr) => write!(f, "(- {})", SchemaDisplay(expr)),
             Expr::Not(expr) => write!(f, "NOT {}", SchemaDisplay(expr)),
-            Expr::Unnest(Unnest { expr }) => {
-                write!(f, "UNNEST({})", SchemaDisplay(expr))
+            Expr::Unnest(Unnest { expr, outer }) => {
+                let name = if *outer { "UNNEST_OUTER" } else { "UNNEST" };
+                write!(f, "{name}({})", SchemaDisplay(expr))
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 match func.schema_name(args) {
@@ -3398,8 +3430,9 @@ impl Display for SqlDisplay<'_> {
             }
             Expr::Negative(expr) => write!(f, "(- {})", SqlDisplay(expr)),
             Expr::Not(expr) => write!(f, "NOT {}", SqlDisplay(expr)),
-            Expr::Unnest(Unnest { expr }) => {
-                write!(f, "UNNEST({})", SqlDisplay(expr))
+            Expr::Unnest(Unnest { expr, outer }) => {
+                let name = if *outer { "UNNEST_OUTER" } else { "UNNEST" };
+                write!(f, "{name}({})", SqlDisplay(expr))
             }
             Expr::SimilarTo(Like {
                 negated,
@@ -3752,7 +3785,7 @@ impl Display for Expr {
                 }
             },
             Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
-            Expr::Unnest(Unnest { expr }) => {
+            Expr::Unnest(Unnest { expr, .. }) => {
                 write!(f, "{UNNEST_COLUMN_PREFIX}({expr})")
             }
             Expr::HigherOrderFunction(fun) => {

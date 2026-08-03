@@ -19,14 +19,14 @@
 /// when the feature integration-tests is built
 #[cfg(feature = "integration-tests")]
 mod tests {
-    use arrow::array::{Array, AsArray};
+    use arrow::array::{Array, AsArray, record_batch};
     use arrow::datatypes::DataType;
-    use datafusion::common::record_batch;
     use datafusion::error::Result;
     use datafusion::logical_expr::{ExpressionPlacement, ScalarUDF, ScalarUDFImpl};
     use datafusion::prelude::{SessionContext, col};
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::lit;
+    use datafusion_expr::sort_properties::ExprProperties;
     use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
     use std::sync::Arc;
@@ -91,8 +91,7 @@ mod tests {
         Ok(())
     }
 
-    /// This test validates that a producer's `placement` override survives the
-    /// FFI boundary instead of collapsing to the default `KeepInPlace`.
+    /// Checks planning-property overrides across the FFI boundary.
     #[tokio::test]
     async fn test_scalar_udf_placement() -> Result<()> {
         let module = get_module()?;
@@ -112,6 +111,12 @@ mod tests {
                 .placement(&[ExpressionPlacement::Literal, ExpressionPlacement::Column]),
             ExpressionPlacement::KeepInPlace
         );
+
+        let preserves = ExprProperties::new_unknown().with_preserves_lex_ordering(true);
+        let does_not_preserve = ExprProperties::new_unknown();
+
+        assert!(foreign_func.preserves_lex_ordering(std::slice::from_ref(&preserves))?);
+        assert!(!foreign_func.preserves_lex_ordering(&[preserves, does_not_preserve])?);
 
         Ok(())
     }

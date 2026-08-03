@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use datafusion_common::{Result, ScalarValue, Statistics, exec_err, internal_err};
 use datafusion_execution::TaskContext;
-use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
+use datafusion_expr::physical_planning_context::{ScalarSubqueryResults, SubqueryIndex};
 
 use crate::execution_plan::{CardinalityEffect, ExecutionPlan, PlanProperties};
 use crate::joins::utils::{OnceAsync, OnceFut};
@@ -202,9 +202,9 @@ impl ExecutionPlan for ScalarSubqueryExec {
     ) -> Result<SendableRecordBatchStream> {
         let subqueries = self.subqueries.clone();
         let results = self.results.clone();
-        let subquery_ctx = Arc::clone(&context);
+        let planning_ctx = Arc::clone(&context);
         let mut subquery_future = self.subquery_future.try_once(move || {
-            Ok(async move { execute_subqueries(subqueries, results, subquery_ctx).await })
+            Ok(async move { execute_subqueries(subqueries, results, planning_ctx).await })
         })?;
         let input = Arc::clone(&self.input);
         let schema = self.schema();
@@ -253,6 +253,68 @@ impl ExecutionPlan for ScalarSubqueryExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        let input = ctx.encode_child(self.input())?;
+        // Subquery indices are positional and recovered during decoding.
+        let subqueries =
+            ctx.encode_children(self.subqueries().iter().map(|subquery| &subquery.plan))?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::ScalarSubquery(Box::new(
+                    protobuf::ScalarSubqueryExecNode {
+                        input: Some(Box::new(input)),
+                        subqueries,
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl ScalarSubqueryExec {
+    /// Reconstruct a [`ScalarSubqueryExec`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let scalar_subquery = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::ScalarSubquery,
+            "ScalarSubqueryExec",
+        );
+        let results = ScalarSubqueryResults::new(scalar_subquery.subqueries.len());
+        let input_node = scalar_subquery.input.as_deref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "ScalarSubqueryExec is missing required field 'input'"
+            )
+        })?;
+        // The input's ScalarSubqueryExpr nodes must share this results container.
+        let input =
+            ctx.decode_child_with_scalar_subquery_results(input_node, results.clone())?;
+        let subqueries = scalar_subquery
+            .subqueries
+            .iter()
+            .enumerate()
+            .map(|(index, plan)| {
+                Ok(ScalarSubqueryLink {
+                    plan: ctx.decode_child(plan)?,
+                    index: SubqueryIndex::new(index),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Arc::new(Self::new(input, subqueries, results)))
     }
 }
 

@@ -88,6 +88,8 @@ pub mod metrics;
 pub mod operator_statistics;
 pub mod placeholder_row;
 pub mod projection;
+#[cfg(feature = "proto")]
+pub mod proto;
 pub mod recursive_query;
 pub mod repartition;
 pub mod scalar_subquery;
