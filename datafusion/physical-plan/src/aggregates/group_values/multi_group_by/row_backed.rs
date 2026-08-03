@@ -429,6 +429,84 @@ mod tests {
         assert_eq!(g0, 20);
     }
 
+    /// `take_n` preallocates the retained-row buffer from the known row
+    /// count and byte size - this tests that rebuild path with multiple emitted and multiple retained rows,
+    /// asserting that every emitted value and every shifted-down value is byte-for-byte unchanged.
+    #[test]
+    fn take_n_preallocated_rebuild_preserves_all_rows() {
+        let dt = DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Int32, true)),
+            1,
+        );
+        let mut col = RowsGroupColumn::try_new(dt).unwrap();
+
+        // Include an outer-null and an inner-null row to make sure the
+        // preallocated byte capacity covers variable-length encodings.
+        let input = fsl_i32(
+            vec![
+                Some(vec![Some(10)]),
+                Some(vec![Some(20)]),
+                None,
+                Some(vec![None]),
+                Some(vec![Some(50)]),
+            ],
+            1,
+        );
+        col.vectorized_append(&input, &[0, 1, 2, 3, 4]).unwrap();
+        assert_eq!(col.len(), 5);
+
+        // Emit the first three rows; two rows should remain and shift to front.
+        let emitted = col.take_n(3);
+        let emitted = emitted
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
+        assert_eq!(emitted.len(), 3);
+        assert_eq!(
+            emitted
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0),
+            10
+        );
+        assert_eq!(
+            emitted
+                .value(1)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0),
+            20
+        );
+        // Third emitted row was an outer-null.
+        assert!(emitted.is_null(2));
+
+        assert_eq!(col.len(), 2);
+
+        // Remaining rows (inner-null, then 50) must survive the rebuild intact.
+        let rest = Box::new(col).build();
+        let rest = rest.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+        assert_eq!(rest.len(), 2);
+
+        let r0 = rest
+            .value(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap()
+            .clone();
+        assert!(r0.is_null(0), "retained inner-null row must be preserved");
+
+        let r1 = rest
+            .value(1)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap()
+            .value(0);
+        assert_eq!(r1, 50);
+    }
+
     /// Works for `Struct<a: Int32>` too — proves the column is type-generic.
     #[test]
     fn struct_roundtrip() {
