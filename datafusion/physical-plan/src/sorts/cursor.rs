@@ -420,6 +420,8 @@ impl CursorValues for StringViewArray {
                 .cmp(&StringViewArray::inline_key_fast(*r_view));
         }
 
+        // SAFETY: Prior assertions guarantee that l_idx and r_idx are valid indices.
+        // Null-checks are assumed to have been handled in the wrapper (e.g., ArrayValues).
         unsafe { GenericByteViewArray::compare_unchecked(l, l_idx, r, r_idx) }
     }
 }

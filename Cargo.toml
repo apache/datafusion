@@ -309,7 +309,6 @@ unused_qualifications = "deny"
 # Keep this list sorted alphabetically.
 [workspace.lints.rustdoc]
 all = { level = "warn", priority = -1 }
-broken_intra_doc_links = "warn"
 # Part of the `all` group, but has too many violations today to enable:
 # https://github.com/apache/datafusion/issues/18467
 missing_crate_level_docs = "allow"
