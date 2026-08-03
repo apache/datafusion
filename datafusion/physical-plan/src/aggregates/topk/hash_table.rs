@@ -35,11 +35,6 @@ use std::fmt::Debug;
 use std::hash::BuildHasher;
 use std::sync::Arc;
 
-/// A "type alias" for Keys which are stored in our map
-pub trait KeyType: Clone + Comparable + Debug {}
-
-impl<T> KeyType for T where T: Clone + Comparable + Debug {}
-
 /// `heap_idx` assigned to groups whose aggregate values are all NULL. Such
 /// groups are tracked in the hash table only (they never enter the heap), so
 /// they can be emitted with a NULL aggregate value at the end.
@@ -49,9 +44,9 @@ const NULL_HEAP_IDX: usize = usize::MAX;
 /// 1. memoizes the hash
 /// 2. contains the key (ID)
 /// 3. contains the value (heap_idx - an index into the corresponding heap)
-pub struct HashTableItem<ID: KeyType> {
+pub struct HashTableItem<ID> {
     hash: u64,
-    pub id: ID,
+    pub id: Option<ID>,
     pub heap_idx: usize,
 }
 
@@ -59,10 +54,10 @@ pub struct HashTableItem<ID: KeyType> {
 /// 1. limits the number of entries to the top K
 /// 2. Allocates a capacity greater than top K to maintain a low-fill factor and prevent resizing
 /// 3. Tracks indexes to allow corresponding heap to refer to entries by index vs hash
-struct TopKHashTable<ID: KeyType> {
+struct TopKHashTable<ID> {
     map: HashTable<usize>,
     // Store the actual items separately to allow for index-based access
-    store: Vec<Option<HashTableItem<ID>>>,
+    store: Vec<HashTableItem<ID>>,
     // Free indexes in the store for reuse
     free_indices: Vec<usize>,
     // The maximum number of entries allowed
@@ -126,7 +121,7 @@ where
     for<'a> &'a S: StringArrayType<'a>,
 {
     owned: S,
-    map: TopKHashTable<Option<String>>,
+    map: TopKHashTable<String>,
     rnd: RandomState,
 }
 
@@ -136,7 +131,7 @@ where
     Option<<VAL as ArrowPrimitiveType>::Native>: Comparable,
 {
     owned: PrimitiveArray<VAL>,
-    map: TopKHashTable<Option<VAL::Native>>,
+    map: TopKHashTable<VAL::Native>,
     rnd: RandomState,
 }
 
@@ -316,7 +311,7 @@ where
 }
 
 use hashbrown::hash_table::Entry;
-impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
+impl<ID: PartialEq> TopKHashTable<ID> {
     pub fn new(limit: usize, capacity: usize) -> Self {
         Self {
             map: HashTable::with_capacity(capacity),
@@ -328,21 +323,21 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
     }
 
     pub fn heap_idx_at(&self, map_idx: usize) -> usize {
-        self.store[map_idx].as_ref().unwrap().heap_idx
+        self.store[map_idx].heap_idx
     }
 
     /// Remove the entry stored at `map_idx`, freeing its store slot for reuse
     fn remove_at(&mut self, map_idx: usize) {
-        let item_to_remove = self.store[map_idx].as_ref().unwrap();
+        let item_to_remove = &self.store[map_idx];
         let hash = item_to_remove.hash;
         let id_to_remove = &item_to_remove.id;
 
-        let eq = |&idx: &usize| self.store[idx].as_ref().unwrap().id == *id_to_remove;
-        let hasher = |idx: &usize| self.store[*idx].as_ref().unwrap().hash;
+        let eq = |&idx: &usize| self.store[idx].id == *id_to_remove;
+        let hasher = |idx: &usize| self.store[*idx].hash;
         match self.map.entry(hash, eq, hasher) {
             Entry::Occupied(entry) => {
                 let (removed_idx, _) = entry.remove();
-                self.store[removed_idx] = None;
+                self.store[removed_idx].id.take();
                 self.free_indices.push(removed_idx);
             }
             Entry::Vacant(_) => unreachable!(),
@@ -363,7 +358,7 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
 
     fn update_heap_idx(&mut self, mapper: &[(usize, usize)]) {
         for (m, h) in mapper {
-            self.store[*m].as_mut().unwrap().heap_idx = *h;
+            self.store[*m].heap_idx = *h;
         }
     }
 
@@ -374,16 +369,16 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
     pub fn find_or_insert(
         &mut self,
         hash: u64,
-        id: ID,
+        id: Option<ID>,
         replace_idx: usize,
-        mut eq: impl FnMut(&ID) -> bool,
+        mut eq: impl FnMut(&Option<ID>) -> bool,
     ) -> (usize, InsertKind) {
         // Check if entry exists - this is the only hash table lookup
         let mut replaced_null = false;
         {
-            let eq_fn = |idx: &usize| eq(&self.store[*idx].as_ref().unwrap().id);
+            let eq_fn = |idx: &usize| eq(&self.store[*idx].id);
             if let Some(&map_idx) = self.map.find(hash, eq_fn) {
-                if self.store[map_idx].as_ref().unwrap().heap_idx == NULL_HEAP_IDX {
+                if self.store[map_idx].heap_idx == NULL_HEAP_IDX {
                     // This group was registered as all-NULL but now produced a
                     // value: unregister it so it is inserted as a valued group
                     self.remove_at(map_idx);
@@ -399,15 +394,15 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
         let heap_idx = self.remove_if_full(replace_idx);
         let mi = HashTableItem::new(hash, id, heap_idx);
         let store_idx = if let Some(idx) = self.free_indices.pop() {
-            self.store[idx] = Some(mi);
+            self.store[idx] = mi;
             idx
         } else {
-            self.store.push(Some(mi));
+            self.store.push(mi);
             self.store.len() - 1
         };
 
         // Reserve space if needed
-        let hasher = |idx: &usize| self.store[*idx].as_ref().unwrap().hash;
+        let hasher = |idx: &usize| self.store[*idx].hash;
         if self.map.len() == self.map.capacity() {
             self.map.reserve(self.limit, hasher);
         }
@@ -430,10 +425,10 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
     pub fn insert_null(
         &mut self,
         hash: u64,
-        id: ID,
-        mut eq: impl FnMut(&ID) -> bool,
+        id: Option<ID>,
+        mut eq: impl FnMut(&Option<ID>) -> bool,
     ) -> bool {
-        let eq_fn = |idx: &usize| eq(&self.store[*idx].as_ref().unwrap().id);
+        let eq_fn = |idx: &usize| eq(&self.store[*idx].id);
         if self.map.find(hash, eq_fn).is_some() {
             return false;
         }
@@ -444,14 +439,14 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
 
         let mi = HashTableItem::new(hash, id, NULL_HEAP_IDX);
         let store_idx = if let Some(idx) = self.free_indices.pop() {
-            self.store[idx] = Some(mi);
+            self.store[idx] = mi;
             idx
         } else {
-            self.store.push(Some(mi));
+            self.store.push(mi);
             self.store.len() - 1
         };
 
-        let hasher = |idx: &usize| self.store[*idx].as_ref().unwrap().hash;
+        let hasher = |idx: &usize| self.store[*idx].hash;
         if self.map.len() == self.map.capacity() {
             self.map.reserve(self.limit, hasher);
         }
@@ -464,10 +459,14 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
     /// all-NULL group produces a value that loses to the current top-k: the
     /// group can no longer reach the top-k, but it must not be emitted with a
     /// NULL value either. Returns true if a NULL registration was removed.
-    pub fn remove_if_null(&mut self, hash: u64, mut eq: impl FnMut(&ID) -> bool) -> bool {
-        let eq_fn = |idx: &usize| eq(&self.store[*idx].as_ref().unwrap().id);
+    pub fn remove_if_null(
+        &mut self,
+        hash: u64,
+        mut eq: impl FnMut(&Option<ID>) -> bool,
+    ) -> bool {
+        let eq_fn = |idx: &usize| eq(&self.store[*idx].id);
         if let Some(&map_idx) = self.map.find(hash, eq_fn)
-            && self.store[map_idx].as_ref().unwrap().heap_idx == NULL_HEAP_IDX
+            && self.store[map_idx].heap_idx == NULL_HEAP_IDX
         {
             self.remove_at(map_idx);
             self.null_count -= 1;
@@ -481,11 +480,7 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
         self.store
             .iter()
             .enumerate()
-            .filter_map(|(idx, item)| {
-                item.as_ref()
-                    .filter(|item| item.heap_idx == NULL_HEAP_IDX)
-                    .map(|_| idx)
-            })
+            .filter_map(|(idx, item)| (item.heap_idx == NULL_HEAP_IDX).then_some(idx))
             .collect()
     }
 
@@ -493,10 +488,10 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
         self.map.len()
     }
 
-    pub fn take_all(&mut self, idxs: Vec<usize>) -> Vec<ID> {
+    pub fn take_all(&mut self, idxs: Vec<usize>) -> Vec<Option<ID>> {
         let ids = idxs
             .into_iter()
-            .map(|idx| self.store[idx].take().unwrap().id)
+            .map(|idx| self.store[idx].id.take())
             .collect();
         self.map.clear();
         self.store.clear();
@@ -506,8 +501,8 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
     }
 }
 
-impl<ID: KeyType> HashTableItem<ID> {
-    pub fn new(hash: u64, id: ID, heap_idx: usize) -> Self {
+impl<ID> HashTableItem<ID> {
+    pub fn new(hash: u64, id: Option<ID>, heap_idx: usize) -> Self {
         Self { hash, id, heap_idx }
     }
 }
@@ -603,7 +598,7 @@ mod tests {
     fn should_resize_properly() -> Result<()> {
         let mut heap_to_map = BTreeMap::<usize, usize>::new();
         // Create TopKHashTable with limit=5 and capacity=3 to force resizing
-        let mut map = TopKHashTable::<Option<String>>::new(5, 3);
+        let mut map = TopKHashTable::<String>::new(5, 3);
 
         // Insert 5 entries, tracking the heap-to-map index mapping
         for (heap_idx, id) in ["1", "2", "3", "4", "5"].iter().enumerate() {
@@ -636,7 +631,7 @@ mod tests {
 
     #[test]
     fn should_track_null_groups() -> Result<()> {
-        let mut map = TopKHashTable::<Option<String>>::new(2, 10);
+        let mut map = TopKHashTable::<String>::new(2, 10);
 
         let a = Some("a".to_string());
         let b = Some("b".to_string());
@@ -672,7 +667,7 @@ mod tests {
 
     #[test]
     fn should_reuse_all_freed_store_slots() -> Result<()> {
-        let mut map = TopKHashTable::<Option<String>>::new(1, 10);
+        let mut map = TopKHashTable::<String>::new(1, 10);
 
         let a = Some("a".to_string());
         let b = Some("b".to_string());
