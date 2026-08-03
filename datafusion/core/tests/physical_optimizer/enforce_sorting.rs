@@ -29,7 +29,7 @@ use crate::physical_optimizer::test_utils::{
     spr_repartition_exec, stream_exec_ordered, union_exec,
 };
 
-use arrow::compute::{SortOptions};
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::config::{ConfigOptions, CsvOptions};
 use datafusion_common::tree_node::{TreeNode, TransformedResult};
@@ -61,7 +61,7 @@ use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion::prelude::*;
 use arrow::array::{record_batch, Array, ArrayRef, Int32Array, RecordBatch};
-use arrow::datatypes::{Field};
+use arrow::datatypes::Field;
 use arrow_schema::Schema;
 use datafusion_execution::TaskContext;
 use datafusion_catalog::streaming::StreamingTable;

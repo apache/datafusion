@@ -428,6 +428,8 @@ fn test_cli_format<'a>(#[case] format: &'a str) {
 #[case("top2", ["--top-memory-consumers", "2"])]
 #[case("top3_default", [])]
 #[test]
+// `'a` is used by the signature below, but not by the per-case functions `rstest` generates.
+#[expect(unused_lifetimes)]
 fn test_cli_top_memory_consumers<'a>(
     #[case] snapshot_name: &str,
     #[case] top_memory_consumers: impl IntoIterator<Item = &'a str>,
@@ -446,6 +448,8 @@ fn test_cli_top_memory_consumers<'a>(
 #[case("no_track", ["--top-memory-consumers", "0"])]
 #[case("top2", ["--top-memory-consumers", "2"])]
 #[test]
+// `'a` is used by the signature below, but not by the per-case functions `rstest` generates.
+#[expect(unused_lifetimes)]
 fn test_cli_top_memory_consumers_with_mem_pool_type<'a>(
     #[case] snapshot_name: &str,
     #[case] top_memory_consumers: impl IntoIterator<Item = &'a str>,

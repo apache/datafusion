@@ -41,12 +41,6 @@ const FE_DOWNWARD: i32 = 0x0400;
     any(target_arch = "x86_64", target_arch = "aarch64"),
     not(target_os = "windows")
 ))]
-extern crate libc;
-
-#[cfg(all(
-    any(target_arch = "x86_64", target_arch = "aarch64"),
-    not(target_os = "windows")
-))]
 unsafe extern "C" {
     fn fesetround(round: i32);
     fn fegetround() -> i32;

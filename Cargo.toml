@@ -285,12 +285,25 @@ verbose_file_reads = "warn"
 wildcard_dependencies = "warn"
 zero_sized_map_values = "warn"
 
+# Keep this list sorted alphabetically.
 [workspace.lints.rust]
+# Part of the `rust_2018_idioms` group, but ~800 violations today:
+# https://github.com/apache/datafusion/issues/18467
+elided_lifetimes_in_paths = "allow"
+future_incompatible = { level = "warn", priority = -1 }
+nonstandard_style = { level = "warn", priority = -1 }
+rust_2018_idioms = { level = "warn", priority = -1 }
+rust_2021_prelude_collisions = "warn"
+semicolon_in_expressions_from_macros = "warn"
 unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(datafusion_coop, values("tokio", "tokio_fallback", "per_stream"))',
     "cfg(coverage)",
     "cfg(coverage_nightly)",
 ] }
+unsafe_op_in_unsafe_fn = "warn"
+unused_extern_crates = "warn"
+unused_import_braces = "warn"
+unused_lifetimes = "warn"
 unused_qualifications = "deny"
 
 # --------------------

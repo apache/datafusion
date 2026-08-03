@@ -21,7 +21,6 @@
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-extern crate proc_macro;
 use datafusion_doc::scalar_doc_sections::doc_sections_const;
 use proc_macro::TokenStream;
 use quote::quote;

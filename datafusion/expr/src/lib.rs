@@ -35,8 +35,6 @@
 //!
 //! The [expr_fn] module contains functions for creating expressions.
 
-extern crate core;
-
 mod higher_order_function;
 mod literal;
 mod operation;
