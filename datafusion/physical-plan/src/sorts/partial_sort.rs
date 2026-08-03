@@ -148,7 +148,7 @@ use log::trace;
 ///        +---+---+---+
 /// ```
 ///
-/// Once known complete, the uffered rows are sorted by the full `(a, b, c)`
+/// Once known complete, the buffered rows are sorted by the full `(a, b, c)`
 /// ordering and emitted as a [`RecordBatch`]; Any rows from the most recently
 /// seen prefix remain buffered (as more rows with the same prefix may arrive in
 /// future batches.
