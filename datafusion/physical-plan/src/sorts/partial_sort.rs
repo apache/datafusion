@@ -153,7 +153,7 @@ use log::trace;
 /// seen prefix remain buffered (as more rows with the same prefix may arrive in
 /// future batches.
 ///
-/// ```
+/// ```text
 ///          Emitted      <-- fully sorted on (a, b, c)
 ///        +---+---+---+
 ///        | a | b | c |
