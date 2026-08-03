@@ -1221,12 +1221,7 @@ impl AggregateExec {
         )?))
     }
 
-    fn should_use_partial_hash_stream(&self, context: &TaskContext) -> bool {
-        // TODO: implement memory-limited path and remove this limitation
-        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
-            return false;
-        }
-
+    fn should_use_partial_hash_stream(&self, _context: &TaskContext) -> bool {
         self.mode == AggregateMode::Partial
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
@@ -1245,12 +1240,7 @@ impl AggregateExec {
             && self.limit_options_supported_by_hash_stream()
     }
 
-    fn should_use_final_hash_stream(&self, context: &TaskContext) -> bool {
-        // TODO: implement memory-limited path and remove this limitation
-        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
-            return false;
-        }
-
+    fn should_use_final_hash_stream(&self, _context: &TaskContext) -> bool {
         matches!(
             self.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
@@ -3390,7 +3380,8 @@ mod tests {
             | 2 | 1             | 1.0         |
             | 3 | 1             | 2.0         |
             | 3 | 2             | 5.0         |
-            | 4 | 3             | 11.0        |
+            | 4 | 1             | 4.0         |
+            | 4 | 2             | 7.0         |
             +---+---------------+-------------+
             ");
             }
@@ -3427,8 +3418,8 @@ mod tests {
         assert!(final_stats.total_byte_size.get_value().is_some());
 
         let task_ctx = if spill {
-            // enlarge memory limit to let the final aggregation finish
-            new_spill_ctx(2, 2600)
+            // Enlarge the memory limit enough to replay spilled states.
+            new_spill_ctx(2, 4640)
         } else {
             Arc::clone(&task_ctx)
         };
@@ -3457,17 +3448,12 @@ mod tests {
         let spilled_bytes = metrics.spilled_bytes().unwrap();
         let spilled_rows = metrics.spilled_rows().unwrap();
 
+        assert_eq!(3, output_rows);
         if spill {
-            // When spilling, the output rows metrics become partial output size + final output size
-            // This is because final aggregation starts while partial aggregation is still emitting
-            assert_eq!(8, output_rows);
-
             assert!(spill_count > 0);
             assert!(spilled_bytes > 0);
             assert!(spilled_rows > 0);
         } else {
-            assert_eq!(3, output_rows);
-
             assert_eq!(0, spill_count);
             assert_eq!(0, spilled_bytes);
             assert_eq!(0, spilled_rows);
@@ -4495,7 +4481,7 @@ mod tests {
     async fn run_first_last_multi_partitions() -> Result<()> {
         for is_first_acc in [false, true] {
             for spill in [false, true] {
-                first_last_multi_partitions(is_first_acc, spill, 4200).await?
+                first_last_multi_partitions(is_first_acc, spill, 5000).await?
             }
         }
         Ok(())
