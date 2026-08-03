@@ -486,6 +486,14 @@ fn push_down_filters(
         // currently. `self_filters` are the predicates which are provided by the current node,
         // and tried to be pushed down over the child similarly.
 
+        assert_eq_or_internal_err!(
+            parent_filters.len(),
+            parent_filtered.len(),
+            "Filter pushdown expected {} to return one parent filter result per input filter for child {}",
+            node.name(),
+            child_idx
+        );
+
         // Filter out self_filters that contain volatile expressions and track indices
         let self_filtered = FilteredVec::new(&self_filters, allow_pushdown_for_expr);
 

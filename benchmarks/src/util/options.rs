@@ -30,7 +30,7 @@ use datafusion::{
 use datafusion_common::{DataFusionError, Result};
 use object_store::local::LocalFileSystem;
 
-use super::latency_object_store::LatencyObjectStore;
+use super::{latency_object_store::LatencyObjectStore, memory_pool::PeakRecordingPool};
 
 // Common benchmark options (don't use doc comments otherwise this doc
 // shows up in help files)
@@ -125,6 +125,9 @@ impl CommonOpt {
                     )));
                 }
             };
+            // Record the peak reservation so benchmarks can report it next to
+            // peak RSS. Purely observational: every call is delegated.
+            let pool: Arc<dyn MemoryPool> = Arc::new(PeakRecordingPool::new(pool));
             rt_builder = rt_builder
                 .with_memory_pool(pool)
                 .with_disk_manager_builder(DiskManagerBuilder::default());
