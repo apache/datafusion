@@ -583,10 +583,54 @@ impl GroupsAccumulator for AnyValueGroupsAccumulator {
 mod tests {
     use super::*;
     use arrow::array::{BinaryViewArray, Int64Array, StringArray, StringViewArray};
+    use arrow::datatypes::Schema;
+    use datafusion_physical_expr::expressions::col;
+
+    fn with_accumulator_args<T>(
+        data_type: DataType,
+        f: impl FnOnce(AccumulatorArgs<'_>) -> T,
+    ) -> T {
+        let schema = Schema::new(vec![Field::new("value", data_type.clone(), true)]);
+        let expr = col("value", &schema).unwrap();
+        let expr_fields = vec![expr.return_field(&schema).unwrap()];
+        let exprs = vec![expr];
+        let return_field = Field::new("any_value", data_type, true).into();
+
+        f(AccumulatorArgs {
+            return_field,
+            schema: &schema,
+            expr_fields: &expr_fields,
+            ignore_nulls: false,
+            order_bys: &[],
+            is_reversed: false,
+            name: "any_value(value)",
+            is_distinct: false,
+            exprs: &exprs,
+        })
+    }
+
+    #[test]
+    fn aggregate_udf_exposes_native_groups_accumulator() -> Result<()> {
+        let any_value = AnyValue::new();
+        assert!(with_accumulator_args(DataType::Int64, |args| {
+            any_value.groups_accumulator_supported(args)
+        }));
+
+        let mut acc = with_accumulator_args(DataType::Int64, |args| {
+            any_value.create_groups_accumulator(args)
+        })?;
+        let values = Arc::new(Int64Array::from(vec![Some(10), Some(20)])) as ArrayRef;
+        acc.update_batch(&[values], &[0, 1], None, 2)?;
+        let result = acc.evaluate(EmitTo::All)?;
+        let expected = Arc::new(Int64Array::from(vec![Some(10), Some(20)])) as ArrayRef;
+        assert_eq!(&result, &expected);
+        Ok(())
+    }
 
     #[test]
     fn groups_accumulator_uses_first_non_null_value() -> Result<()> {
         let mut acc = create_groups_accumulator(&DataType::Int64)?;
+        let initial_size = acc.size();
         let values = Arc::new(Int64Array::from(vec![
             None,
             Some(10),
@@ -598,10 +642,56 @@ mod tests {
         let filter = BooleanArray::from(vec![true, true, true, false, true, true]);
 
         acc.update_batch(&[values], &[0, 0, 0, 1, 1, 2], Some(&filter), 4)?;
+        assert!(acc.size() > initial_size);
         let result = acc.evaluate(EmitTo::All)?;
         let expected =
             Arc::new(Int64Array::from(vec![Some(10), None, Some(30), None])) as ArrayRef;
         assert_eq!(&result, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn specialized_factory_preserves_logical_data_types() -> Result<()> {
+        let data_types = vec![
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Float16,
+            DataType::Float32,
+            DataType::Float64,
+            DataType::Decimal32(7, 2),
+            DataType::Decimal64(12, 3),
+            DataType::Decimal128(24, 4),
+            DataType::Decimal256(48, 5),
+            DataType::Timestamp(TimeUnit::Second, Some("UTC".into())),
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Date32,
+            DataType::Date64,
+            DataType::Time32(TimeUnit::Second),
+            DataType::Time32(TimeUnit::Millisecond),
+            DataType::Time64(TimeUnit::Microsecond),
+            DataType::Time64(TimeUnit::Nanosecond),
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            DataType::Utf8View,
+            DataType::Binary,
+            DataType::LargeBinary,
+            DataType::BinaryView,
+        ];
+
+        for data_type in data_types {
+            let mut acc = create_groups_accumulator(&data_type)?;
+            let result = acc.evaluate(EmitTo::All)?;
+            assert_eq!(result.data_type(), &data_type);
+            assert!(result.is_empty());
+        }
         Ok(())
     }
 
@@ -709,6 +799,96 @@ mod tests {
             None,
         ])) as ArrayRef;
         assert_eq!(&result, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn bytes_groups_accumulator_state_merge_filter_and_size() -> Result<()> {
+        let mut partial = create_groups_accumulator(&DataType::Utf8)?;
+        let initial_size = partial.size();
+        let values = Arc::new(StringArray::from(vec![
+            None,
+            Some("first"),
+            Some("filtered"),
+            Some("second"),
+            Some("late"),
+        ])) as ArrayRef;
+        let filter = BooleanArray::from(vec![true, true, false, true, true]);
+        partial.update_batch(&[values], &[0, 0, 1, 1, 0], Some(&filter), 3)?;
+        assert!(partial.size() > initial_size);
+
+        let state = partial.state(EmitTo::All)?;
+        let expected_values =
+            Arc::new(StringArray::from(vec![Some("first"), Some("second"), None]))
+                as ArrayRef;
+        let expected_is_set =
+            Arc::new(BooleanArray::from(vec![true, true, false])) as ArrayRef;
+        assert_eq!(&state[0], &expected_values);
+        assert_eq!(&state[1], &expected_is_set);
+
+        let mut merged = create_groups_accumulator(&DataType::Utf8)?;
+        merged.merge_batch(&state, &[1, 0, 2], 4)?;
+        let result = merged.evaluate(EmitTo::All)?;
+        let expected = Arc::new(StringArray::from(vec![
+            Some("second"),
+            Some("first"),
+            None,
+            None,
+        ])) as ArrayRef;
+        assert_eq!(&result, &expected);
+
+        let converter = create_groups_accumulator(&DataType::Utf8)?;
+        let values =
+            Arc::new(StringArray::from(vec![Some("a"), None, Some("c")])) as ArrayRef;
+        let filter = BooleanArray::from(vec![Some(true), Some(true), None]);
+        let state = converter.convert_to_state(&[Arc::clone(&values)], Some(&filter))?;
+        let expected_is_set =
+            Arc::new(BooleanArray::from(vec![true, false, false])) as ArrayRef;
+        assert_eq!(&state[0], &values);
+        assert_eq!(&state[1], &expected_is_set);
+        Ok(())
+    }
+
+    #[test]
+    fn fallback_groups_accumulator_round_trips_partial_state() -> Result<()> {
+        let mut partial = create_groups_accumulator(&DataType::Boolean)?;
+        let initial_size = partial.size();
+        let values = Arc::new(BooleanArray::from(vec![
+            None,
+            Some(true),
+            Some(false),
+            Some(true),
+        ])) as ArrayRef;
+        let filter = BooleanArray::from(vec![true, true, false, true]);
+        partial.update_batch(&[values], &[0, 0, 1, 2], Some(&filter), 4)?;
+        assert!(partial.size() > initial_size);
+
+        let state = partial.state(EmitTo::All)?;
+        let mut merged = create_groups_accumulator(&DataType::Boolean)?;
+        merged.merge_batch(&state, &[2, 1, 0, 3], 4)?;
+
+        let first = merged.evaluate(EmitTo::First(2))?;
+        let expected_first =
+            Arc::new(BooleanArray::from(vec![Some(true), None])) as ArrayRef;
+        assert_eq!(&first, &expected_first);
+
+        let values =
+            Arc::new(BooleanArray::from(vec![Some(false), Some(true)])) as ArrayRef;
+        merged.update_batch(&[values], &[0, 1], None, 2)?;
+        let remaining = merged.evaluate(EmitTo::All)?;
+        let expected_remaining =
+            Arc::new(BooleanArray::from(vec![Some(true), Some(true)])) as ArrayRef;
+        assert_eq!(&remaining, &expected_remaining);
+
+        let converter = create_groups_accumulator(&DataType::Boolean)?;
+        let values =
+            Arc::new(BooleanArray::from(vec![Some(true), None, Some(false)])) as ArrayRef;
+        let filter = BooleanArray::from(vec![Some(true), Some(true), None]);
+        let state = converter.convert_to_state(&[Arc::clone(&values)], Some(&filter))?;
+        let expected_is_set =
+            Arc::new(BooleanArray::from(vec![true, false, false])) as ArrayRef;
+        assert_eq!(&state[0], &values);
+        assert_eq!(&state[1], &expected_is_set);
         Ok(())
     }
 }
