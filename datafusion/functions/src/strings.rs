@@ -184,9 +184,11 @@ impl<O: OffsetSizeTrait + ArrowNativeType> ConcatBuilder
 /// fragment) followed by a single `append_offset` to commit the row
 /// as a single string view. The output null buffer is supplied by the caller
 /// at `finish` time, avoiding per-row NULL handling work.
-///
-/// For the common "produce one `&str` per row" pattern, prefer
-/// [`StringViewArrayBuilder`] instead.
+//
+// Add below to the doc comment if StringViewArrayBuilder is made public:
+//
+// For the common "produce one `&str` per row" pattern, prefer
+// [`StringViewArrayBuilder`] instead.
 pub struct ConcatStringViewBuilder {
     views: Vec<u128>,
     data: Vec<u8>,
