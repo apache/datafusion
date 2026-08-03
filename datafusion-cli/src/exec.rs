@@ -148,7 +148,7 @@ pub async fn exec_from_repl(
                         Command::OutputFormat(subcommand) => {
                             if let Some(subcommand) = subcommand {
                                 if let Ok(command) = subcommand.parse::<OutputFormat>() {
-                                    if let Err(e) = command.execute(print_options).await {
+                                    if let Err(e) = command.execute(print_options) {
                                         eprintln!("{e}")
                                     }
                                 } else {

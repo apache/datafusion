@@ -252,3 +252,66 @@ ORDER BY a, b;
 ----
 a 1
 a0 1
+
+# Test that precision-losing int-to-float casts do not invalidate suffix sort keys.
+#
+# When CAST(Int32 AS Float32) collapses distinct integer values (e.g., 16777216 and
+# 16777217 both become 16777216.0), the suffix sort key (k) must still be sorted
+# correctly. Before the fix, the optimizer incorrectly reused the pre-existing sort
+# order and dropped the SortExec, producing wrong results.
+#
+# t1 is declared with a sort order, t2 is not — their results should be identical
+# since CAST(v AS FLOAT) is not injective for 32-bit integers.
+statement ok
+CREATE EXTERNAL TABLE t1_int_float (k int, v int)
+STORED AS CSV
+WITH ORDER (v DESC, k DESC)
+LOCATION '../core/tests/data/int_to_float_cast_precision.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE t2_int_float (k int, v int)
+STORED AS CSV
+LOCATION '../core/tests/data/int_to_float_cast_precision.csv'
+OPTIONS ('format.has_header' 'true');
+
+# Both queries must return the same result: k=2 before k=1.
+# (v_=16777216.0 for both rows; when tied on v_, DESC on k means k=2 comes first)
+query IR
+SELECT k, cast(v as float) v_ FROM t1_int_float ORDER BY v_ DESC, k DESC;
+----
+2 16777216
+1 16777216
+
+query IR
+SELECT k, cast(v as float) v_ FROM t2_int_float ORDER BY v_ DESC, k DESC;
+----
+2 16777216
+1 16777216
+
+# Widening cast (Int32 -> Int64) is strictly 1-to-1, so the optimizer CAN
+# legally reuse the pre-existing sort order and omit a SortExec.
+statement ok
+CREATE EXTERNAL TABLE t3_int_bigint (k int, v int)
+STORED AS CSV
+WITH ORDER (v DESC, k DESC)
+LOCATION '../core/tests/data/int_to_float_cast_precision.csv'
+OPTIONS ('format.has_header' 'true');
+
+# CAST(Int32 AS BIGINT) is injective, so suffix key ordering is preserved.
+query II
+SELECT k, cast(v as bigint) v_ FROM t3_int_bigint ORDER BY v_ DESC, k DESC;
+----
+1 16777217
+2 16777216
+
+# Cleanup
+statement ok
+DROP TABLE t1_int_float;
+
+statement ok
+DROP TABLE t2_int_float;
+
+statement ok
+DROP TABLE t3_int_bigint;
+

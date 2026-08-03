@@ -1703,6 +1703,76 @@ impl ExecutionPlan for RepartitionExec {
             cache: new_properties.into(),
         })))
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        let input = ctx.encode_child(self.input())?;
+
+        let partitioning = self.partitioning().try_to_proto(&ctx.expr_ctx())?;
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Repartition(Box::new(
+                    protobuf::RepartitionExecNode {
+                        input: Some(Box::new(input)),
+                        partitioning: Some(partitioning),
+                        preserve_order: self.preserve_order(),
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl RepartitionExec {
+    /// Reconstruct a [`RepartitionExec`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let repart = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Repartition,
+            "RepartitionExec",
+        );
+        let input = ctx.decode_required_child(
+            repart.input.as_deref(),
+            "RepartitionExec",
+            "input",
+        )?;
+        let input_schema = input.schema();
+
+        let partitioning = repart
+            .partitioning
+            .as_ref()
+            .map(|partitioning| {
+                Partitioning::try_from_proto(
+                    partitioning,
+                    &ctx.expr_ctx(input_schema.as_ref()),
+                )
+            })
+            .transpose()?
+            .flatten()
+            .ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "RepartitionExec is missing required field 'partitioning'"
+                )
+            })?;
+
+        let mut repart_exec = RepartitionExec::try_new(input, partitioning)?;
+        if repart.preserve_order {
+            repart_exec = repart_exec.with_preserve_order();
+        }
+        Ok(Arc::new(repart_exec))
+    }
 }
 
 impl RepartitionExec {
