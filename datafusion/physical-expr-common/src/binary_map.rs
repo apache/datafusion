@@ -19,12 +19,12 @@
 //! StringArray / LargeStringArray / BinaryArray / LargeBinaryArray.
 
 use arrow::array::{
-    Array, ArrayRef, BufferBuilder, GenericBinaryArray, GenericStringArray,
-    NullBufferBuilder, OffsetSizeTrait,
+    Array, ArrayRef, GenericBinaryArray, GenericStringArray, NullBufferBuilder,
+    OffsetSizeTrait,
     cast::AsArray,
     types::{ByteArrayType, GenericBinaryType, GenericStringType},
 };
-use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
@@ -218,8 +218,8 @@ where
     map: hashbrown::hash_table::HashTable<Entry<O, V>>,
     /// Total size of the map in bytes
     map_size: usize,
-    /// In progress arrow `Buffer` containing all values
-    buffer: BufferBuilder<u8>,
+    /// In progress buffer containing all values
+    buffer: Vec<u8>,
     /// Offsets into `buffer` for each distinct  value. These offsets as used
     /// directly to create the final `GenericBinaryArray`. The `i`th string is
     /// stored in the range `offsets[i]..offsets[i+1]` in `buffer`. Null values
@@ -248,7 +248,7 @@ where
             output_type,
             map: hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY),
             map_size: 0,
-            buffer: BufferBuilder::new(INITIAL_BUFFER_CAPACITY),
+            buffer: Vec::with_capacity(INITIAL_BUFFER_CAPACITY),
             offsets: vec![O::default()], // first offset is always 0
             random_state: RandomState::default(),
             hashes_buffer: vec![],
@@ -405,7 +405,7 @@ where
                     // Put the small values into buffer and offsets so it appears
                     // the output array, but store the actual bytes inline for
                     // comparison
-                    self.buffer.append_slice(value);
+                    self.buffer.extend_from_slice(value);
                     self.offsets.push(O::usize_as(self.buffer.len()));
                     let payload = make_payload_fn(Some(value));
                     let new_header = Entry {
@@ -433,7 +433,7 @@ where
                     // Need to compare the bytes in the buffer
                     // SAFETY: buffer is only appended to, and we correctly inserted values and offsets
                     let existing_value =
-                        unsafe { self.buffer.as_slice().get_unchecked(header.range()) };
+                        unsafe { self.buffer.get_unchecked(header.range()) };
                     value == existing_value
                 });
 
@@ -446,7 +446,7 @@ where
                     // appears the output array, and store that offset
                     // so the bytes can be compared if needed
                     let offset = self.buffer.len(); // offset of start for data
-                    self.buffer.append_slice(value);
+                    self.buffer.extend_from_slice(value);
                     self.offsets.push(O::usize_as(self.buffer.len()));
 
                     let payload = make_payload_fn(Some(value));
@@ -488,7 +488,7 @@ where
             map: _,
             map_size: _,
             offsets,
-            mut buffer,
+            buffer,
             random_state: _,
             hashes_buffer: _,
             null,
@@ -502,7 +502,7 @@ where
         // SAFETY: the offsets were constructed correctly in `insert_if_new` --
         // monotonically increasing, overflows were checked.
         let offsets = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets)) };
-        let values = buffer.finish();
+        let values = Buffer::from_vec(buffer);
 
         match output_type {
             OutputType::Binary => {
