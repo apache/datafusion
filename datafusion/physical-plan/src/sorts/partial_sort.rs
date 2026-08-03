@@ -131,7 +131,7 @@ use log::trace;
 /// ```
 ///
 /// Once a batch arrives that contains a new `(a, b)` prefix, e.g. `(0, 2)`:
-/// every buffered row fpr previous prefixes may be emitted:
+/// every buffered row for previous prefixes may be emitted:
 ///
 /// ```text
 ///            Buffer
