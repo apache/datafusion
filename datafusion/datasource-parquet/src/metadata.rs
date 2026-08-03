@@ -243,7 +243,12 @@ impl<'a> DFParquetMetadata<'a> {
     /// Resolve the [`PageIndexPolicy`] to use for a fetch.
     fn effective_page_index_policy(&self, cache_metadata: bool) -> PageIndexPolicy {
         self.page_index_policy.unwrap_or_else(|| {
+            // fetching the page index often requires a second IO (after the
+            // main metadata), so it is not free.
             if cache_metadata && self.file_metadata_cache.is_some() {
+                // When there is a cache available, retrieve the page index
+                // heuristically on the assumption it will be used multiple
+                // times
                 PageIndexPolicy::Optional
             } else {
                 PageIndexPolicy::Skip
