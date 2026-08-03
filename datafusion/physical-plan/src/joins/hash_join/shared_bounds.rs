@@ -593,7 +593,7 @@ impl SharedBuildAccumulator {
                         combine_membership_and_bounds(membership_expr, bounds_expr)
                     {
                         self.dynamic_filter
-                            .update(self.preserve_probe_nulls(filter_expr))?;
+                            .update(self.preserve_probe_nulls(filter_expr)?)?;
                     }
                 }
                 PartitionStatus::Pending => {
@@ -700,7 +700,7 @@ impl SharedBuildAccumulator {
                 };
 
                 self.dynamic_filter
-                    .update(self.preserve_probe_nulls(filter_expr))?;
+                    .update(self.preserve_probe_nulls(filter_expr)?)?;
             }
         }
 
@@ -717,32 +717,34 @@ impl SharedBuildAccumulator {
     fn preserve_probe_nulls(
         &self,
         filter_expr: Arc<dyn PhysicalExpr>,
-    ) -> Arc<dyn PhysicalExpr> {
+    ) -> Result<Arc<dyn PhysicalExpr>> {
         if self.null_equality != NullEquality::NullEqualsNull && !self.null_aware {
-            return filter_expr;
+            return Ok(filter_expr);
         }
         // Only a key that can actually be NULL needs the disjunct; a NOT NULL key never widens.
         // Null-aware joins are single-key; null-equal joins can be multi-key, so OR every nullable
         // key. If every key is NOT NULL the filter is left untouched, at full selectivity.
-        let any_key_is_null = self
-            .on_right
-            .iter()
-            // Widen on unresolved nullability: an extra NULL row is safe, a dropped one isn't.
-            .filter(|key| key.nullable(&self.probe_schema).unwrap_or(true))
-            .map(|key| {
-                Arc::new(IsNullExpr::new(Arc::clone(key))) as Arc<dyn PhysicalExpr>
-            })
-            .reduce(|acc, is_null| {
-                Arc::new(BinaryExpr::new(acc, Operator::Or, is_null))
-                    as Arc<dyn PhysicalExpr>
+        let mut any_key_is_null: Option<Arc<dyn PhysicalExpr>> = None;
+        for key in &self.on_right {
+            // `nullable` fails only when a key is out of sync with the probe schema. That is
+            // a construction bug, so surface it instead of widening around it.
+            if !key.nullable(&self.probe_schema)? {
+                continue;
+            }
+            let is_null =
+                Arc::new(IsNullExpr::new(Arc::clone(key))) as Arc<dyn PhysicalExpr>;
+            any_key_is_null = Some(match any_key_is_null {
+                Some(acc) => Arc::new(BinaryExpr::new(acc, Operator::Or, is_null)) as _,
+                None => is_null,
             });
+        }
         // Cheap null check first short-circuits before the costlier dynamic filter.
-        match any_key_is_null {
+        Ok(match any_key_is_null {
             Some(any_key_is_null) => {
                 Arc::new(BinaryExpr::new(any_key_is_null, Operator::Or, filter_expr))
             }
             None => filter_expr,
-        }
+        })
     }
 }
 
@@ -1130,7 +1132,7 @@ mod tests {
         let acc = null_equal_accumulator(probe_schema, on_right);
 
         // Only the nullable key earns an IS NULL disjunct; the NOT NULL key is left out.
-        let widened = acc.preserve_probe_nulls(lit(true));
+        let widened = acc.preserve_probe_nulls(lit(true)).unwrap();
         assert_eq!(format!("{widened}").matches("IS NULL").count(), 1);
     }
 
@@ -1146,7 +1148,19 @@ mod tests {
 
         // Every key is NOT NULL, so there is nothing to OR in and the filter is returned as-is.
         let filter = lit(true);
-        let result = acc.preserve_probe_nulls(Arc::clone(&filter));
+        let result = acc.preserve_probe_nulls(Arc::clone(&filter)).unwrap();
         assert_eq!(format!("{result}"), format!("{filter}"));
+    }
+
+    #[test]
+    fn preserve_probe_nulls_rejects_out_of_sync_key() {
+        let probe_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        // The key's column index points past the probe schema: a construction bug that
+        // must surface as an error, not get widened around.
+        let on_right: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("b", 1))];
+        let acc = null_equal_accumulator(probe_schema, on_right);
+
+        assert!(acc.preserve_probe_nulls(lit(true)).is_err());
     }
 }
