@@ -302,7 +302,11 @@ impl GroupColumn for RowsGroupColumn {
 
         // Shift the remaining rows to the front by rebuilding the buffer.
         // TODO: mirror the arrow-rs efficiency TODO in `GroupValuesRows::emit`.
-        let mut remaining = self.row_converter.empty_rows(0, 0);
+        let remaining_rows = self.group_values.num_rows() - n;
+        let remaining_bytes = self.group_values.lengths().skip(n).sum();
+        let mut remaining = self
+            .row_converter
+            .empty_rows(remaining_rows, remaining_bytes);
         for row in self.group_values.iter().skip(n) {
             remaining.push(row);
         }
