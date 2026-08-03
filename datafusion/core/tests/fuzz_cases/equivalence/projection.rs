@@ -179,20 +179,27 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
                         let err_msg = format!(
                             "Error in test case requirement:{ordering:?}, expected: {expected:?}, eq_properties: {eq_properties}, projected_eq: {projected_eq}, projection_mapping: {projection_mapping:?}"
                         );
-                        let may_overflow = ordering.iter().any(|sort_expr| {
-                            projection_mapping.iter().any(|(source, targets)| {
-                                targets
-                                    .iter()
-                                    .any(|(target, _)| target.eq(&sort_expr.expr))
-                                    && contains_overflowable_arithmetic(source)
-                            })
-                        });
+                        // Same reasoning as in `ordering.rs`: only keys from
+                        // the first `+`/`-` source onwards are inconclusive,
+                        // so assert on the longest prefix without one.
+                        let conclusive_prefix = LexOrdering::new(
+                            ordering
+                                .iter()
+                                .take_while(|sort_expr| {
+                                    !projection_mapping.iter().any(|(source, targets)| {
+                                        targets
+                                            .iter()
+                                            .any(|(target, _)| target.eq(&sort_expr.expr))
+                                            && contains_overflowable_arithmetic(source)
+                                    })
+                                })
+                                .cloned(),
+                        );
                         if projected_eq.ordering_satisfy(ordering)? {
                             assert!(expected, "{err_msg}");
-                        } else if !may_overflow {
-                            // A rejection is only conclusive without `+`/`-`:
-                            // the sample can be sorted even when possible
-                            // overflow makes the ordering underivable.
+                        } else if let Some(prefix) = conclusive_prefix
+                            && !projected_eq.ordering_satisfy(prefix)?
+                        {
                             assert!(!expected, "{err_msg}");
                         }
                     }

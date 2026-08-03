@@ -144,15 +144,25 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
                 let err_msg = format!(
                     "Error in test case requirement:{ordering:?}, expected: {expected:?}, eq_properties: {eq_properties}",
                 );
-                let may_overflow = ordering
-                    .iter()
-                    .any(|sort_expr| contains_overflowable_arithmetic(&sort_expr.expr));
+                // A rejection turns inconclusive only from the first `+`/`-`
+                // key onwards, since possible overflow makes an ordering
+                // underivable even when the sample happens to be sorted. A
+                // table sorted by the full ordering is sorted by every prefix
+                // of it, so a rejected arithmetic-free prefix still proves
+                // the rejection is genuine.
+                let conclusive_prefix = LexOrdering::new(
+                    ordering
+                        .iter()
+                        .take_while(|sort_expr| {
+                            !contains_overflowable_arithmetic(&sort_expr.expr)
+                        })
+                        .cloned(),
+                );
                 if eq_properties.ordering_satisfy(ordering)? {
                     assert!(expected, "{err_msg}");
-                } else if !may_overflow {
-                    // A rejection is only conclusive without `+`/`-`: the
-                    // sample can be sorted even when possible overflow makes
-                    // the ordering underivable.
+                } else if let Some(prefix) = conclusive_prefix
+                    && !eq_properties.ordering_satisfy(prefix)?
+                {
                     assert!(!expected, "{err_msg}");
                 }
             }

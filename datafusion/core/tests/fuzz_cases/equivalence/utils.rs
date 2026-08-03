@@ -210,12 +210,7 @@ fn add_equal_conditions_test() -> Result<()> {
     Ok(())
 }
 
-/// Checks if the table (RecordBatch) remains unchanged when sorted according to the provided `required_ordering`.
-///
-/// The function works by adding a unique column of ascending integers to the original table. This column ensures
-/// that rows that are otherwise indistinguishable (e.g., if they have the same values in all other columns) can
-/// still be differentiated. When sorting the extended table, the unique column acts as a tie-breaker to produce
-/// deterministic sorting results.
+/// Returns `true` if `expr` contains a `+` or `-` anywhere in its tree.
 ///
 /// The equivalence framework conservatively discards orderings derived from
 /// `+`/`-` expressions, because wrapping overflow can break them over the
@@ -229,6 +224,13 @@ pub fn contains_overflowable_arithmetic(expr: &Arc<dyn PhysicalExpr>) -> bool {
     .unwrap()
 }
 
+/// Checks if the table (RecordBatch) remains unchanged when sorted according to the provided `required_ordering`.
+///
+/// The function works by adding a unique column of ascending integers to the original table. This column ensures
+/// that rows that are otherwise indistinguishable (e.g., if they have the same values in all other columns) can
+/// still be differentiated. When sorting the extended table, the unique column acts as a tie-breaker to produce
+/// deterministic sorting results.
+///
 /// If the table remains the same after sorting with the added unique column, it indicates that the table was
 /// already sorted according to `required_ordering` to begin with.
 pub fn is_table_same_after_sort(
