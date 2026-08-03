@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::{array::StringViewArray, datatypes::DataType};
+use arrow::{
+    array::{Array, StringViewArray},
+    datatypes::DataType,
+};
 use datafusion_common::{
     Result, ScalarValue,
     cast::as_binary_array,
@@ -32,7 +35,10 @@ use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 use std::sync::Arc;
 
-use crate::crypto::basic::{DigestAlgorithm, digest_process};
+use crate::{
+    crypto::basic::{DigestAlgorithm, digest_process},
+    strings::StringViewArrayBuilder,
+};
 
 #[user_doc(
     doc_section(label = "Hashing Functions"),
@@ -107,11 +113,12 @@ fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(match value {
         ColumnarValue::Array(array) => {
             let binary_array = as_binary_array(&array)?;
-            let string_array: StringViewArray = binary_array
-                .iter()
-                .map(|opt| opt.map(|b| encode_bytes(b, HexCase::Lower)))
-                .collect();
-            ColumnarValue::Array(Arc::new(string_array))
+            let mut string_builder =
+                StringViewArrayBuilder::with_capacity(binary_array.len());
+            binary_array.iter().flatten().for_each(|b| {
+                string_builder.append_value(&encode_bytes(b, HexCase::Lower));
+            });
+            ColumnarValue::Array(Arc::new(string_builder.finish(None)?))
         }
         ColumnarValue::Scalar(ScalarValue::Binary(opt)) => ColumnarValue::Scalar(
             ScalarValue::Utf8View(opt.map(|b| encode_bytes(&b, HexCase::Lower))),

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, AsArray, BinaryArrayType, Int32Array, StringArray};
+use arrow::array::{ArrayRef, AsArray, BinaryArrayType, Int32Array, StringBuilder};
 use arrow::datatypes::{DataType, Int32Type};
 use datafusion_common::types::{
     NativeType, logical_binary, logical_int32, logical_string,
@@ -216,33 +216,41 @@ where
     BinaryArrType: BinaryArrayType<'a>,
     I: Iterator<Item = Option<i32>>,
 {
-    let array = values
+    let mut builder = StringBuilder::with_capacity(values.len(), values.len() * 128);
+
+    values
         .iter()
         .zip(bit_lengths)
-        .map(|(value, bit_length)| match (value, bit_length) {
-            (Some(value), Some(224)) => {
-                let mut digest = sha2::Sha224::default();
-                digest.update(value);
-                Some(encode_bytes(&digest.finalize(), HexCase::Lower))
+        .for_each(|(value, bit_length)| {
+            match (value, bit_length) {
+                (Some(value), Some(224)) => {
+                    let mut digest = sha2::Sha224::default();
+                    digest.update(value);
+                    builder
+                        .append_value(&encode_bytes(&digest.finalize(), HexCase::Lower));
+                }
+                (Some(value), Some(0 | 256)) => {
+                    let mut digest = sha2::Sha256::default();
+                    digest.update(value);
+                    builder
+                        .append_value(&encode_bytes(&digest.finalize(), HexCase::Lower));
+                }
+                (Some(value), Some(384)) => {
+                    let mut digest = sha2::Sha384::default();
+                    digest.update(value);
+                    builder
+                        .append_value(&encode_bytes(&digest.finalize(), HexCase::Lower));
+                }
+                (Some(value), Some(512)) => {
+                    let mut digest = sha2::Sha512::default();
+                    digest.update(value);
+                    builder
+                        .append_value(&encode_bytes(&digest.finalize(), HexCase::Lower));
+                }
+                // Unknown bit-lengths go to null, same as in Spark
+                _ => builder.append_null(),
             }
-            (Some(value), Some(0 | 256)) => {
-                let mut digest = sha2::Sha256::default();
-                digest.update(value);
-                Some(encode_bytes(&digest.finalize(), HexCase::Lower))
-            }
-            (Some(value), Some(384)) => {
-                let mut digest = sha2::Sha384::default();
-                digest.update(value);
-                Some(encode_bytes(&digest.finalize(), HexCase::Lower))
-            }
-            (Some(value), Some(512)) => {
-                let mut digest = sha2::Sha512::default();
-                digest.update(value);
-                Some(encode_bytes(&digest.finalize(), HexCase::Lower))
-            }
-            // Unknown bit-lengths go to null, same as in Spark
-            _ => None,
-        })
-        .collect::<StringArray>();
-    Arc::new(array)
+        });
+
+    Arc::new(builder.finish())
 }
