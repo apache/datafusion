@@ -155,14 +155,6 @@ fn create_column_bounds_predicate(
     right_expr: &PhysicalExprRef,
     column_bounds: &ColumnBounds,
 ) -> Arc<dyn PhysicalExpr> {
-    if column_bounds.min == column_bounds.max {
-        return Arc::new(BinaryExpr::new(
-            Arc::clone(right_expr),
-            Operator::Eq,
-            lit(column_bounds.min.clone()),
-        ));
-    }
-
     let min_expr = Arc::new(BinaryExpr::new(
         Arc::clone(right_expr),
         Operator::GtEq,
@@ -537,31 +529,37 @@ impl SharedBuildAccumulator {
     }
 
     /// Builds the complete dynamic-filter predicate for one build partition.
+    /// The elision count is returned separately so it can be committed only
+    /// after the complete dynamic filter has been installed successfully.
     fn create_partition_filter(
         &self,
         partition: &PartitionData,
-    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+    ) -> Result<(Option<Arc<dyn PhysicalExpr>>, usize)> {
         let Some(source) = partition.pushdown.membership_source() else {
-            return Ok(create_bounds_predicate(&self.on_right, &partition.bounds));
+            return Ok((
+                create_bounds_predicate(&self.on_right, &partition.bounds),
+                0,
+            ));
         };
 
-        self.create_non_empty_partition_filter(partition, source)
-            .map(Some)
+        let (filter_expr, membership_predicates_elided) =
+            self.create_non_empty_partition_filter(partition, source)?;
+        Ok((Some(filter_expr), membership_predicates_elided))
     }
 
-    /// Builds the predicate for a partition that has membership data.
+    /// Builds the predicate for a partition that has membership data, together
+    /// with the number of membership predicates omitted from that expression.
     fn create_non_empty_partition_filter(
         &self,
         partition: &PartitionData,
         source: MembershipSource<'_>,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
+    ) -> Result<(Arc<dyn PhysicalExpr>, usize)> {
         if let Some(bounds_expr) = complete_integer_domain_bounds_predicate(
             source,
             &partition.bounds,
             &self.on_right,
         ) {
-            self.membership_predicates_elided.add(1);
-            return Ok(bounds_expr);
+            return Ok((bounds_expr, 1));
         }
 
         let membership_expr = create_membership_predicate(
@@ -571,7 +569,7 @@ impl SharedBuildAccumulator {
             self.probe_schema.as_ref(),
         )?;
 
-        Ok(
+        Ok((
             if let Some(bounds_expr) =
                 create_bounds_predicate(&self.on_right, &partition.bounds)
             {
@@ -580,7 +578,8 @@ impl SharedBuildAccumulator {
             } else {
                 membership_expr
             },
-        )
+            0,
+        ))
     }
 
     /// Report build-side data from a partition
@@ -740,15 +739,16 @@ impl SharedBuildAccumulator {
     }
 
     fn build_filter(&self, finalize_input: FinalizeInput) -> Result<()> {
-        match finalize_input {
+        let membership_predicates_elided = match finalize_input {
             FinalizeInput::CollectLeft(partition) => match partition {
                 PartitionStatus::Reported(partition_data) => {
-                    if let Some(filter_expr) =
-                        self.create_partition_filter(&partition_data)?
-                    {
+                    let (filter_expr, membership_predicates_elided) =
+                        self.create_partition_filter(&partition_data)?;
+                    if let Some(filter_expr) = filter_expr {
                         self.dynamic_filter
                             .update(self.null_aware_filter(filter_expr))?;
                     }
+                    membership_predicates_elided
                 }
                 PartitionStatus::Pending => {
                     return datafusion_common::internal_err!(
@@ -778,6 +778,7 @@ impl SharedBuildAccumulator {
                 let mut real_branches = Vec::new();
                 let mut empty_partition_ids = Vec::new();
                 let mut has_canceled_unknown = false;
+                let mut membership_predicates_elided = 0;
 
                 for (partition_id, partition) in partitions.iter().enumerate() {
                     match partition {
@@ -787,8 +788,12 @@ impl SharedBuildAccumulator {
                                 empty_partition_ids.push(partition_id);
                                 continue;
                             };
-                            let then_expr = self
-                                .create_non_empty_partition_filter(partition, source)?;
+                            let (then_expr, partition_membership_predicates_elided) =
+                                self.create_non_empty_partition_filter(
+                                    partition, source,
+                                )?;
+                            membership_predicates_elided +=
+                                partition_membership_predicates_elided;
                             real_branches.push((
                                 lit(ScalarValue::UInt64(Some(partition_id as u64))),
                                 then_expr,
@@ -842,9 +847,12 @@ impl SharedBuildAccumulator {
 
                 self.dynamic_filter
                     .update(self.null_aware_filter(filter_expr))?;
+                membership_predicates_elided
             }
-        }
+        };
 
+        self.membership_predicates_elided
+            .add(membership_predicates_elided);
         Ok(())
     }
 
@@ -927,6 +935,8 @@ pub(super) fn completed_partitions_for_test(acc: &SharedBuildAccumulator) -> usi
 mod tests {
     use super::*;
 
+    use crate::joins::join_hash_map::JoinHashMapU32;
+    use crate::joins::utils::JoinHashMapType;
     use arrow::array::{ArrayRef, Int32Array, UInt64Array};
     use datafusion_physical_expr::expressions::{Column, Literal};
 
@@ -1026,6 +1036,12 @@ mod tests {
 
     fn array_map(values: &[i32]) -> PushdownStrategy {
         PushdownStrategy::Map(array_map_from_i32(values))
+    }
+
+    fn regular_hash_map_with_hashes(hashes: &[u64]) -> PushdownStrategy {
+        let mut map = JoinHashMapU32::with_capacity(hashes.len());
+        map.update_from_iter(Box::new(hashes.iter().enumerate()), 0);
+        PushdownStrategy::Map(Arc::new(Map::HashMap(Box::new(map))))
     }
 
     fn bounds(min: i32, max: i32) -> PartitionBounds {
@@ -1146,15 +1162,6 @@ mod tests {
     }
 
     #[test]
-    fn singleton_bounds_use_equality_predicate() {
-        let on_right = test_on_right();
-        let expr = create_bounds_predicate(&on_right, &bounds(7, 7))
-            .expect("singleton bounds should create a predicate");
-
-        assert_top_binary_op(&expr, Operator::Eq);
-    }
-
-    #[test]
     fn collect_left_contiguous_integer_membership_uses_bounds_only() {
         let acc = make_collect_left_accumulator_for_test();
 
@@ -1249,6 +1256,68 @@ mod tests {
                 .downcast_ref::<HashTableLookupExpr>()
                 .is_some()
         );
+    }
+
+    #[test]
+    fn collect_left_contiguous_regular_hash_map_uses_bounds_only() {
+        let acc = make_collect_left_accumulator_for_test();
+
+        acc.build_filter(FinalizeInput::CollectLeft(reported(
+            regular_hash_map_with_hashes(&[10, 11, 12]),
+            bounds(1, 3),
+        )))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert!(
+            binary_expr(&expr)
+                .right()
+                .downcast_ref::<HashTableLookupExpr>()
+                .is_none()
+        );
+        assert_eq!(acc.membership_predicates_elided.value(), 1);
+    }
+
+    #[test]
+    fn collect_left_gapped_regular_hash_map_membership_is_retained() {
+        let acc = make_collect_left_accumulator_for_test();
+
+        acc.build_filter(FinalizeInput::CollectLeft(reported(
+            regular_hash_map_with_hashes(&[10, 12]),
+            bounds(1, 3),
+        )))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert!(
+            binary_expr(&expr)
+                .right()
+                .downcast_ref::<HashTableLookupExpr>()
+                .is_some()
+        );
+        assert_eq!(acc.membership_predicates_elided.value(), 0);
+    }
+
+    #[test]
+    fn collect_left_regular_hash_map_collision_is_conservative() {
+        let acc = make_collect_left_accumulator_for_test();
+
+        // Three contiguous keys that produce only two distinct hashes do not
+        // satisfy the lower-bound proof, even though the key domain is complete.
+        acc.build_filter(FinalizeInput::CollectLeft(reported(
+            regular_hash_map_with_hashes(&[10, 10, 12]),
+            bounds(1, 3),
+        )))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert!(
+            binary_expr(&expr)
+                .right()
+                .downcast_ref::<HashTableLookupExpr>()
+                .is_some()
+        );
+        assert_eq!(acc.membership_predicates_elided.value(), 0);
     }
 
     #[test]
@@ -1402,19 +1471,24 @@ mod tests {
 
         let partitioned = make_accumulator_for_test(
             AccumulatedBuildData::Partitioned {
-                partitions: vec![PartitionStatus::Pending],
+                partitions: vec![PartitionStatus::Pending; 2],
                 completed_partitions: 0,
             },
             invalid_test_on_right(),
         );
         assert!(
             partitioned
-                .build_filter(FinalizeInput::Partitioned(vec![reported(
-                    in_list(&[1, 3]),
-                    no_bounds(),
-                )]))
+                .build_filter(FinalizeInput::Partitioned(vec![
+                    reported(in_list(&[1, 2, 3]), bounds(1, 3)),
+                    reported(in_list(&[1, 3]), no_bounds()),
+                ]))
                 .is_err(),
             "Partitioned must propagate membership-expression construction errors"
+        );
+        assert_eq!(
+            partitioned.membership_predicates_elided.value(),
+            0,
+            "failed finalization must not report an uninstalled elision"
         );
     }
 
