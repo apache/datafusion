@@ -28,23 +28,15 @@ use datafusion::{
     prelude::SessionContext,
 };
 use datafusion_cli::{
-    cli_context::CliSessionContext, exec::exec_from_repl,
-    object_storage::instrumented::InstrumentedObjectStoreRegistry,
-    print_options::PrintOptions,
+    cli_context::CliSessionContext,
+    entry_point::{CliError, CliSession},
+    exec::exec_from_repl,
 };
 use object_store::ObjectStore;
 
 /// This is a toy example of a custom session context that unions the input plan with itself.
 struct MyUnionerContext {
     ctx: SessionContext,
-}
-
-impl Default for MyUnionerContext {
-    fn default() -> Self {
-        Self {
-            ctx: SessionContext::new(),
-        }
-    }
 }
 
 #[async_trait::async_trait]
@@ -83,16 +75,14 @@ impl CliSessionContext for MyUnionerContext {
 
 #[tokio::main]
 /// Runs the example.
-pub async fn main() {
-    let my_ctx = MyUnionerContext::default();
-
-    let mut print_options = PrintOptions {
-        format: datafusion_cli::print_format::PrintFormat::Automatic,
-        quiet: false,
-        maxrows: datafusion_cli::print_options::MaxRows::Unlimited,
-        color: true,
-        instrumented_registry: Arc::new(InstrumentedObjectStoreRegistry::new()),
-    };
-
-    exec_from_repl(&my_ctx, &mut print_options).await.unwrap();
+pub async fn main() -> Result<(), CliError> {
+    let CliSession {
+        ctx,
+        args: _,
+        mut print_options,
+        ..
+    } = CliSession::builder().build()?;
+    let my_ctx = MyUnionerContext { ctx };
+    exec_from_repl(&my_ctx, &mut print_options).await?;
+    Ok(())
 }
