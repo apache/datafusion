@@ -939,10 +939,15 @@ impl HashJoinExec {
             return false;
         }
 
-        // A null-aware anti join emits a build-side NULL only when the probe
-        // is truly empty. The pushed filter can empty the probe by pruning
-        // every row, which would surface that NULL wrongly. A NOT NULL build
-        // key cannot produce such a NULL, so the filter stays there.
+        // Null-aware joins tolerate probe pruning only while the build side
+        // has no NULL keys (the pushed filter keeps NULL-valued probe rows via
+        // the `IS NULL` escape in `null_aware_filter`, but prunes others):
+        // - LeftAnti emits a build-side NULL only when the probe is truly
+        //   empty, and pruning every probe row would surface that NULL wrongly.
+        // - Null-aware LeftMark marks a NULL-valued build row UNKNOWN when any
+        //   probe row shares its correlation scope, and a pruned probe row
+        //   would be missed by that scan.
+        // NOT NULL build keys rule out both, so the filter stays there.
         if self.null_aware
             && self.on.iter().any(|(build_key, _)| {
                 build_key.nullable(&self.left.schema()).unwrap_or(true)
