@@ -30,7 +30,7 @@ use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::projection::{ProjectionExec, make_with_child};
 use crate::sort_pushdown::SortOrderPushdownResult;
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, check_if_same_properties};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
@@ -232,9 +232,16 @@ impl ExecutionPlan for CoalescePartitionsExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        let stats =
-            Arc::unwrap_or_clone(args.compute_child_statistics(&self.input, None)?);
+    fn child_stats_requests(&self, _partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(None)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let stats = input_stats[0].as_ref().clone();
         Ok(Arc::new(stats.with_fetch(self.fetch, 0, 1)?))
     }
 
@@ -338,6 +345,56 @@ impl ExecutionPlan for CoalescePartitionsExec {
                     r
                 }
             })
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Merge(Box::new(
+                    protobuf::CoalescePartitionsExecNode {
+                        input: Some(Box::new(input)),
+                        fetch: self.fetch().map(|f| f as u32),
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl CoalescePartitionsExec {
+    /// Reconstruct a [`CoalescePartitionsExec`] from its protobuf representation.
+    ///
+    /// The exact inverse of [`ExecutionPlan::try_to_proto`]. Note the protobuf
+    /// variant is named `Merge` (node [`CoalescePartitionsExecNode`]).
+    ///
+    /// [`CoalescePartitionsExecNode`]: datafusion_proto_models::protobuf::CoalescePartitionsExecNode
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let merge = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Merge,
+            "CoalescePartitionsExec",
+        );
+        let input = ctx.decode_required_child(
+            merge.input.as_deref(),
+            "CoalescePartitionsExec",
+            "input",
+        )?;
+        Ok(Arc::new(
+            CoalescePartitionsExec::new(input)
+                .with_fetch(merge.fetch.map(|f| f as usize)),
+        ))
     }
 }
 

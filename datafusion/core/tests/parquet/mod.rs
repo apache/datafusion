@@ -330,11 +330,10 @@ impl ContextWithParquet {
                     custom_schema,
                     custom_batches,
                 )
-                .await
             }
             Unit::Page(row_per_page) => {
                 config = config.with_parquet_page_index_pruning(true);
-                make_test_file_page(scenario, row_per_page).await
+                make_test_file_page(scenario, row_per_page)
             }
             Unit::RowGroupAndPage(row_per_group, row_per_page) => {
                 config = config.with_parquet_bloom_filter_pruning(true);
@@ -347,7 +346,6 @@ impl ContextWithParquet {
                     custom_schema,
                     custom_batches,
                 )
-                .await
             }
         };
         let parquet_path = file.path().to_string_lossy();
@@ -1173,7 +1171,7 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
 }
 
 /// Create a test parquet file with various data types
-async fn make_test_file_rg(
+fn make_test_file_rg(
     scenario: Scenario,
     row_per_group: usize,
     row_per_page: Option<usize>,
@@ -1219,7 +1217,7 @@ async fn make_test_file_rg(
     output_file
 }
 
-async fn make_test_file_page(scenario: Scenario, row_per_page: usize) -> NamedTempFile {
+fn make_test_file_page(scenario: Scenario, row_per_page: usize) -> NamedTempFile {
     let mut output_file = tempfile::Builder::new()
         .prefix("parquet_page_pruning")
         .suffix(".parquet")

@@ -84,7 +84,7 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation,
 };
 use crate::projection::ProjectionExec;
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, SortOrderPushdownResult, check_if_same_properties,
@@ -299,8 +299,16 @@ impl ExecutionPlan for CooperativeExec {
         Ok(make_cooperative(child_stream))
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        args.compute_child_statistics(&self.input, args.partition())
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        Ok(Arc::clone(&input_stats[0]))
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -360,6 +368,50 @@ impl ExecutionPlan for CooperativeExec {
                 Ok(SortOrderPushdownResult::Unsupported)
             }
         }
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Cooperative(Box::new(
+                    protobuf::CooperativeExecNode {
+                        input: Some(Box::new(input)),
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl CooperativeExec {
+    /// Reconstruct a [`CooperativeExec`] from its protobuf representation.
+    ///
+    /// The exact inverse of [`ExecutionPlan::try_to_proto`].
+    ///
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let cooperative = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Cooperative,
+            "CooperativeExec",
+        );
+        let input = ctx.decode_required_child(
+            cooperative.input.as_deref(),
+            "CooperativeExec",
+            "input",
+        )?;
+        Ok(Arc::new(CooperativeExec::new(input)))
     }
 }
 

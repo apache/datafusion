@@ -30,7 +30,6 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
-use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::{ColumnarValue, Documentation, Expr, Volatility, lit};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
@@ -252,10 +251,6 @@ impl ScalarUDFImpl for ConcatFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
-    }
-
-    fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
-        Ok(true)
     }
 }
 

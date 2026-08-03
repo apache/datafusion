@@ -11,6 +11,7 @@ SELECT COUNT(*) > 0 from hits;
 true
 
 run
-SELECT "CounterID", AVG(length("URL")) AS l, COUNT(*) AS c FROM hits WHERE "URL" <> '' GROUP BY "CounterID" HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25;
+-- DataFusion length(...) counts characters; use octet_length(...) for ClickBench byte-length semantics.
+SELECT "CounterID", AVG(octet_length("URL")) AS l, COUNT(*) AS c FROM hits WHERE "URL" <> '' GROUP BY "CounterID" HAVING COUNT(*) > 100000 ORDER BY l DESC LIMIT 25;
 
 result sql_benchmarks/clickbench/results/${CLICKBENCH_TYPE:-single}/q27.csv
