@@ -57,7 +57,9 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_physical_expr::expressions::DynamicFilterTracking;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::{BaselineMetrics, Count, Gauge};
-use datafusion_pruning::{PruningPredicate, build_pruning_predicate};
+use datafusion_pruning::{
+    PruningPredicate, build_pruning_predicate_with_max_in_list_size,
+};
 
 use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
@@ -142,6 +144,11 @@ pub(crate) struct RowGroupPruner {
     /// Metric for `PruningPredicate::prune` failures (evaluating an
     /// already-built predicate against row-group statistics).
     predicate_evaluation_errors: Count,
+    /// Cap on the `IN (...)` list size that the pruning predicate will
+    /// rewrite into per-value statistics checks. Longer lists skip
+    /// container-level pruning. Sourced from
+    /// `datafusion.execution.parquet.pruning_max_in_list_size`.
+    pruning_max_in_list_size: usize,
 }
 
 impl RowGroupPruner {
@@ -151,6 +158,7 @@ impl RowGroupPruner {
         parquet_metadata: Arc<ParquetMetaData>,
         predicate_creation_errors: Count,
         predicate_evaluation_errors: Count,
+        pruning_max_in_list_size: usize,
     ) -> Self {
         let tracking = DynamicFilterTracking::classify(&predicate);
         Self {
@@ -162,6 +170,7 @@ impl RowGroupPruner {
             pruning_predicate: None,
             predicate_creation_errors,
             predicate_evaluation_errors,
+            pruning_max_in_list_size,
         }
     }
 
@@ -186,10 +195,11 @@ impl RowGroupPruner {
             .watcher()
             .is_some_and(|tracker| tracker.changed());
         if self.needs_initial_build || dynamic_changed {
-            self.pruning_predicate = build_pruning_predicate(
+            self.pruning_predicate = build_pruning_predicate_with_max_in_list_size(
                 Arc::clone(&self.predicate),
                 &self.arrow_schema,
                 &self.predicate_creation_errors,
+                self.pruning_max_in_list_size,
             );
             self.needs_initial_build = false;
         }
@@ -436,6 +446,7 @@ mod tests {
         BinaryExpr, Column, DynamicFilterPhysicalExpr, lit,
     };
     use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
+    use datafusion_pruning::MAX_LIST_VALUE_SIZE_REWRITE;
     use parquet::arrow::ArrowWriter;
     use parquet::file::metadata::ParquetMetaDataPushDecoder;
     use parquet::file::properties::WriterProperties;
@@ -514,6 +525,7 @@ mod tests {
             Arc::clone(&meta),
             creation,
             evaluation,
+            MAX_LIST_VALUE_SIZE_REWRITE,
         );
 
         // RG0 (0..1000) is entirely below threshold → fully prunable.
@@ -545,6 +557,7 @@ mod tests {
             Arc::clone(&meta),
             creation,
             evaluation,
+            MAX_LIST_VALUE_SIZE_REWRITE,
         );
 
         // Initial threshold 500 → only the lower half of RG0 fails, so RG0
@@ -590,6 +603,7 @@ mod tests {
             Arc::clone(&meta),
             creation,
             evaluation,
+            MAX_LIST_VALUE_SIZE_REWRITE,
         );
         // No pruning predicate could be built → conservatively keep RGs.
         assert!(!pruner.should_prune(&[0]));

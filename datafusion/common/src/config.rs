@@ -1189,6 +1189,22 @@ config_namespace! {
         /// parquet reader setting. 0 means no caching.
         pub max_predicate_cache_size: Option<usize>, default = None
 
+        /// Maximum number of values in an `IN (...)` list for which the
+        /// pruning predicate will rewrite the list into a chain of per-value
+        /// statistics checks. Lists longer than this fall back to the
+        /// unhandled-predicate hook (defaulting to "keep the container"),
+        /// which effectively skips container-level pruning for large IN
+        /// lists.
+        ///
+        /// Higher values keep row-group / file-range statistics pruning
+        /// effective for larger IN lists (for example, REST endpoints that
+        /// filter by a batch of ~25-100 identifiers), at the cost of a
+        /// larger rewritten predicate expression evaluated for every
+        /// container. Set to 0 to disable the rewrite path entirely.
+        ///
+        /// The default of 20 preserves the previous hardcoded behaviour.
+        pub pruning_max_in_list_size: usize, default = 20
+
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
 

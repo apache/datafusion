@@ -248,6 +248,7 @@ impl ParquetOptions {
             coerce_int96_tz: _,  // not used for writer props
             skip_arrow_metadata: _,
             max_predicate_cache_size: _,
+            pruning_max_in_list_size: _,
         } = self;
 
         let mut builder = WriterProperties::builder()

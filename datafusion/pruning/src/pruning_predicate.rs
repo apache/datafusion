@@ -388,7 +388,29 @@ pub fn build_pruning_predicate(
     file_schema: &SchemaRef,
     predicate_creation_errors: &Count,
 ) -> Option<Arc<PruningPredicate>> {
-    match PruningPredicate::try_new(predicate, Arc::clone(file_schema)) {
+    build_pruning_predicate_with_max_in_list_size(
+        predicate,
+        file_schema,
+        predicate_creation_errors,
+        MAX_LIST_VALUE_SIZE_REWRITE,
+    )
+}
+
+/// Same as [`build_pruning_predicate`] but with an explicit cap on the size
+/// of `IN (...)` lists rewritten into per-value statistics checks. Query
+/// engines typically pass `datafusion.execution.pruning_max_in_list_size`
+/// here.
+pub fn build_pruning_predicate_with_max_in_list_size(
+    predicate: Arc<dyn PhysicalExpr>,
+    file_schema: &SchemaRef,
+    predicate_creation_errors: &Count,
+    max_in_list_size: usize,
+) -> Option<Arc<PruningPredicate>> {
+    match PruningPredicate::try_new_with_max_in_list_size(
+        predicate,
+        Arc::clone(file_schema),
+        max_in_list_size,
+    ) {
         Ok(pruning_predicate) => {
             if !pruning_predicate.always_true() {
                 return Some(Arc::new(pruning_predicate));
@@ -461,7 +483,19 @@ impl PruningPredicate {
     /// returns a new expression.
     /// It is recommended that you pass the expressions through [`PhysicalExprSimplifier`]
     /// before calling this method to make sure the expressions can be used for pruning.
-    pub fn try_new(mut expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
+    pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
+        Self::try_new_with_max_in_list_size(expr, schema, MAX_LIST_VALUE_SIZE_REWRITE)
+    }
+
+    /// Same as [`PruningPredicate::try_new`] but with an explicit cap on the
+    /// size of `IN (...)` lists rewritten into per-value statistics checks.
+    /// Query engines typically pass
+    /// `datafusion.execution.pruning_max_in_list_size` here.
+    pub fn try_new_with_max_in_list_size(
+        mut expr: Arc<dyn PhysicalExpr>,
+        schema: SchemaRef,
+        max_in_list_size: usize,
+    ) -> Result<Self> {
         // Get a (simpler) snapshot of the physical expr here to use with `PruningPredicate`.
         // In particular this unravels any `DynamicFilterPhysicalExpr`s by snapshotting them
         // so that PruningPredicate can work with a static expression.
@@ -487,6 +521,7 @@ impl PruningPredicate {
             &schema,
             &mut required_columns,
             &unhandled_hook,
+            max_in_list_size,
         );
         let predicate_schema = required_columns.schema();
         // Simplify the newly created predicate to get rid of redundant casts, comparisons, etc.
@@ -1360,20 +1395,26 @@ fn build_is_null_column_expr(
     }
 }
 
-/// The maximum number of entries in an `InList` that might be rewritten into
-/// an OR chain
-const MAX_LIST_VALUE_SIZE_REWRITE: usize = 20;
+/// Default maximum number of entries in an `IN (...)` list that will be
+/// rewritten into a chain of per-value min/max checks by
+/// [`build_predicate_expression`]. Callers threading a [`PredicateRewriter`]
+/// can override this via [`PredicateRewriter::with_max_in_list_size`], and
+/// query engines can wire it from the
+/// `datafusion.execution.pruning_max_in_list_size` config option.
+pub const MAX_LIST_VALUE_SIZE_REWRITE: usize = 20;
 
 /// Rewrite a predicate expression in terms of statistics (min/max/null_counts)
 /// for use as a [`PruningPredicate`].
 pub struct PredicateRewriter {
     unhandled_hook: Arc<dyn UnhandledPredicateHook>,
+    max_in_list_size: usize,
 }
 
 impl Default for PredicateRewriter {
     fn default() -> Self {
         Self {
             unhandled_hook: Arc::new(ConstantUnhandledPredicateHook::default()),
+            max_in_list_size: MAX_LIST_VALUE_SIZE_REWRITE,
         }
     }
 }
@@ -1386,10 +1427,24 @@ impl PredicateRewriter {
 
     /// Set the unhandled hook to be used when a predicate can not be rewritten
     pub fn with_unhandled_hook(
-        self,
+        mut self,
         unhandled_hook: Arc<dyn UnhandledPredicateHook>,
     ) -> Self {
-        Self { unhandled_hook }
+        self.unhandled_hook = unhandled_hook;
+        self
+    }
+
+    /// Set the maximum size of an `IN (...)` list that will be rewritten into a
+    /// chain of per-value statistics checks. Lists longer than this fall back
+    /// to the unhandled-predicate hook (typically "keep the container"),
+    /// effectively skipping container-level pruning for large IN lists.
+    ///
+    /// The default (see [`MAX_LIST_VALUE_SIZE_REWRITE`]) preserves the
+    /// historical behaviour. Callers wiring config through can override via
+    /// `datafusion.execution.pruning_max_in_list_size`.
+    pub fn with_max_in_list_size(mut self, max_in_list_size: usize) -> Self {
+        self.max_in_list_size = max_in_list_size;
+        self
     }
 
     /// Translate logical filter expression into pruning predicate
@@ -1400,7 +1455,8 @@ impl PredicateRewriter {
     ///
     /// Returns the pruning predicate as an [`PhysicalExpr`]
     ///
-    /// Notice: Does not handle [`phys_expr::InListExpr`] greater than 20, which will fall back to calling `unhandled_hook`
+    /// Notice: `IN (...)` lists longer than `max_in_list_size` (default
+    /// [`MAX_LIST_VALUE_SIZE_REWRITE`]) fall back to calling `unhandled_hook`.
     pub fn rewrite_predicate_to_statistics_predicate(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
@@ -1412,6 +1468,7 @@ impl PredicateRewriter {
             &Arc::new(schema.clone()),
             &mut required_columns,
             &self.unhandled_hook,
+            self.max_in_list_size,
         )
     }
 }
@@ -1424,12 +1481,15 @@ impl PredicateRewriter {
 ///
 /// Returns the pruning predicate as an [`PhysicalExpr`]
 ///
-/// Notice: Does not handle [`phys_expr::InListExpr`] greater than 20, which will fall back to calling `unhandled_hook`
+/// `max_in_list_size` is the largest `IN (...)` list that will be rewritten
+/// into a chain of per-value statistics checks; longer lists fall back to
+/// `unhandled_hook`.
 fn build_predicate_expression(
     expr: &Arc<dyn PhysicalExpr>,
     schema: &SchemaRef,
     required_columns: &mut RequiredColumns,
     unhandled_hook: &Arc<dyn UnhandledPredicateHook>,
+    max_in_list_size: usize,
 ) -> Arc<dyn PhysicalExpr> {
     if is_always_false(expr) {
         // Shouldn't return `unhandled_hook.handle(expr)`
@@ -1464,9 +1524,7 @@ fn build_predicate_expression(
         }
     }
     if let Some(in_list) = expr.downcast_ref::<phys_expr::InListExpr>() {
-        if !in_list.list().is_empty()
-            && in_list.list().len() <= MAX_LIST_VALUE_SIZE_REWRITE
-        {
+        if !in_list.list().is_empty() && in_list.list().len() <= max_in_list_size {
             let eq_op = if in_list.negated() {
                 Operator::NotEq
             } else {
@@ -1494,6 +1552,7 @@ fn build_predicate_expression(
                 schema,
                 required_columns,
                 unhandled_hook,
+                max_in_list_size,
             );
         } else {
             return unhandled_hook.handle(expr);
@@ -1528,10 +1587,20 @@ fn build_predicate_expression(
     };
 
     if op == Operator::And || op == Operator::Or {
-        let left_expr =
-            build_predicate_expression(&left, schema, required_columns, unhandled_hook);
-        let right_expr =
-            build_predicate_expression(&right, schema, required_columns, unhandled_hook);
+        let left_expr = build_predicate_expression(
+            &left,
+            schema,
+            required_columns,
+            unhandled_hook,
+            max_in_list_size,
+        );
+        let right_expr = build_predicate_expression(
+            &right,
+            schema,
+            required_columns,
+            unhandled_hook,
+            max_in_list_size,
+        );
         // simplify boolean expression if applicable
         let expr = match (&left_expr, op, &right_expr) {
             (left, Operator::And, right)
@@ -3323,6 +3392,58 @@ mod tests {
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
+        Ok(())
+    }
+
+    // With the configurable cap, a caller that raises
+    // `max_in_list_size` above the default gets the IN list rewritten
+    // into a per-value min/max chain instead of falling through to `true`.
+    // This verifies both `PredicateRewriter::with_max_in_list_size` and the
+    // recursive OR path inside `build_predicate_expression`.
+    #[test]
+    fn row_group_predicate_in_list_rewritten_at_raised_cap() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        // 25 items — above the default 20, below a raised cap of 32.
+        let expr = col("c1").in_list((1..=25).map(lit).collect(), false);
+        let physical = logical2physical(&expr, &schema);
+        let rewriter = PredicateRewriter::new().with_max_in_list_size(32);
+        let predicate_expr =
+            rewriter.rewrite_predicate_to_statistics_predicate(&physical, &schema);
+        // At the raised cap, IN is rewritten into per-value min/max checks
+        // OR'd together; the resulting predicate must not collapse to
+        // `true` (which is what the default cap produces).
+        assert_ne!(
+            predicate_expr.to_string(),
+            "true",
+            "IN(25) with raised cap must rewrite into a statistics-based predicate, not fall through to `true`"
+        );
+        // Sanity: the rewritten predicate references per-value literals.
+        assert!(
+            predicate_expr.to_string().contains(" <= 1 ")
+                && predicate_expr.to_string().contains(" <= 25 "),
+            "rewritten predicate should include per-value bounds for each IN entry, got: {predicate_expr}"
+        );
+        Ok(())
+    }
+
+    // Guard: when the cap is 0 (opt-out) the IN branch is skipped entirely
+    // regardless of list length, so even a small IN falls through to the
+    // unhandled hook.
+    #[test]
+    fn row_group_predicate_in_list_disabled_at_zero_cap() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let expr = col("c1").in_list(vec![lit(1), lit(2), lit(3)], false);
+        let physical = logical2physical(&expr, &schema);
+        let rewriter = PredicateRewriter::new().with_max_in_list_size(0);
+        let predicate_expr =
+            rewriter.rewrite_predicate_to_statistics_predicate(&physical, &schema);
+        assert_eq!(
+            predicate_expr.to_string(),
+            "true",
+            "cap=0 must skip IN rewrite even for small lists"
+        );
         Ok(())
     }
 
@@ -5760,6 +5881,7 @@ mod tests {
             &Arc::new(schema.clone()),
             required_columns,
             &unhandled_hook,
+            MAX_LIST_VALUE_SIZE_REWRITE,
         )
     }
 
