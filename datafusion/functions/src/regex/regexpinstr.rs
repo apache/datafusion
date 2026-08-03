@@ -454,6 +454,10 @@ mod tests {
         test_case_sensitive_regexp_instr_empty_pattern::<GenericStringArray<i32>>();
         test_case_sensitive_regexp_instr_empty_pattern::<GenericStringArray<i64>>();
         test_case_sensitive_regexp_instr_empty_pattern::<StringViewArray>();
+
+        test_case_sensitive_regexp_instr_zero_width_pattern::<GenericStringArray<i32>>();
+        test_case_sensitive_regexp_instr_zero_width_pattern::<GenericStringArray<i64>>();
+        test_case_sensitive_regexp_instr_zero_width_pattern::<StringViewArray>();
     }
 
     fn regexp_instr_with_scalar_values(args: &[ScalarValue]) -> Result<ColumnarValue> {
@@ -491,6 +495,29 @@ mod tests {
                 assert_eq!(v, Some(expected), "regexp_instr scalar test failed");
             }
             _ => panic!("Unexpected result"),
+        }
+
+        for (value, regex) in [
+            (
+                ScalarValue::Utf8(None),
+                ScalarValue::Utf8(Some(String::new())),
+            ),
+            (
+                ScalarValue::LargeUtf8(None),
+                ScalarValue::LargeUtf8(Some(String::new())),
+            ),
+            (
+                ScalarValue::Utf8View(None),
+                ScalarValue::Utf8View(Some(String::new())),
+            ),
+        ] {
+            let re = regexp_instr_with_scalar_values(&[value, regex]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                    assert_eq!(v, None, "regexp_instr NULL scalar test failed");
+                }
+                _ => panic!("Unexpected result"),
+            }
         }
     }
     fn test_case_sensitive_regexp_instr_scalar() {
@@ -821,6 +848,20 @@ mod tests {
             Arc::new(nth),
         ])
         .unwrap();
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    fn test_case_sensitive_regexp_instr_zero_width_pattern<A>()
+    where
+        A: From<Vec<&'static str>> + Array + 'static,
+    {
+        let values = A::from(vec!["abc"]);
+        let regex = A::from(vec!["x*"]);
+        let start = Int64Array::from(vec![4]);
+        let expected = Int64Array::from(vec![4]);
+
+        let re = regexp_instr_func(&[Arc::new(values), Arc::new(regex), Arc::new(start)])
+            .unwrap();
         assert_eq!(re.as_ref(), &expected);
     }
 }
