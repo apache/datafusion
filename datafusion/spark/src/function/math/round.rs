@@ -124,46 +124,6 @@ impl ScalarUDFImpl for SparkRound {
     }
 }
 
-/// Extract the scale (decimal places) from the second argument.
-/// Returns `Some(0)` if no second argument is provided.
-/// Returns `None` if the scale argument is NULL (Spark returns NULL for `round(expr, NULL)`).
-fn get_scale(args: &[ColumnarValue]) -> Result<Option<i32>> {
-    if args.len() < 2 {
-        return Ok(Some(0));
-    }
-
-    match &args[1] {
-        ColumnarValue::Scalar(ScalarValue::Int8(Some(v))) => Ok(Some(i32::from(*v))),
-        ColumnarValue::Scalar(ScalarValue::Int16(Some(v))) => Ok(Some(i32::from(*v))),
-        ColumnarValue::Scalar(ScalarValue::Int32(Some(v))) => Ok(Some(*v)),
-        ColumnarValue::Scalar(ScalarValue::Int64(Some(v))) => {
-            i32::try_from(*v).map(Some).map_err(|_| {
-                (exec_err!("round scale {v} is out of supported i32 range")
-                    as Result<(), _>)
-                    .unwrap_err()
-            })
-        }
-        ColumnarValue::Scalar(ScalarValue::UInt8(Some(v))) => Ok(Some(i32::from(*v))),
-        ColumnarValue::Scalar(ScalarValue::UInt16(Some(v))) => Ok(Some(i32::from(*v))),
-        ColumnarValue::Scalar(ScalarValue::UInt32(Some(v))) => {
-            i32::try_from(*v).map(Some).map_err(|_| {
-                (exec_err!("round scale {v} is out of supported i32 range")
-                    as Result<(), _>)
-                    .unwrap_err()
-            })
-        }
-        ColumnarValue::Scalar(ScalarValue::UInt64(Some(v))) => {
-            i32::try_from(*v).map(Some).map_err(|_| {
-                (exec_err!("round scale {v} is out of supported i32 range")
-                    as Result<(), _>)
-                    .unwrap_err()
-            })
-        }
-        ColumnarValue::Scalar(sv) if sv.is_null() => Ok(None),
-        other => exec_err!("Unsupported type for round scale: {}", other.data_type()),
-    }
-}
-
 /// Round a floating-point value to the given number of decimal places using
 /// HALF_UP rounding mode (ties round away from zero).
 ///
@@ -423,7 +383,7 @@ fn spark_round(args: &[ColumnarValue], enable_ansi_mode: bool) -> Result<Columna
         return exec_err!("round requires 1 or 2 arguments, got {}", args.len());
     }
 
-    let scale = match get_scale(args)? {
+    let scale = match super::scale::get_scale("round", args)? {
         Some(s) => s,
         None => {
             // NULL scale → return NULL with the same data type as the first argument
