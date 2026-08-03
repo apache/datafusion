@@ -792,6 +792,13 @@ impl Alias {
 /// A `Box<Expr>` for the recursive children of [`BinaryExpr`]. A long binary-operator chain
 /// (e.g. `a OR b OR c OR ...`) builds an `Expr` as deep as the chain, and dropping it
 /// recursively would overflow the stack. This wrapper's `Drop` tears the chain down iteratively.
+///
+/// A newtype, rather than `impl Drop` on [`Expr`] or [`BinaryExpr`], keeps both of those types
+/// free of `Drop`, so they can still be destructured by value (E0509). Pattern matches like
+/// `BinaryExpr { left, op, right }` moving the fields out are pervasive in rewrites.
+///
+/// Only `BinaryExpr` carries it: a flat `WHERE x = 1 OR x = 2 OR ...` grows the tree one level
+/// per predicate, so the binary chain is the shape that gets deep from ordinary query text.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct BoxedExpr(Box<Expr>);
 
@@ -809,13 +816,14 @@ impl BoxedExpr {
     }
 
     /// Take the inner `Box<Expr>` out without running the iterative `Drop`.
-    pub fn into_inner(mut self) -> Box<Expr> {
-        let inner = mem::replace(
-            &mut self.0,
-            Box::new(Expr::Literal(ScalarValue::Null, None)),
-        );
-        // `self` now holds a leaf and drops in O(1).
-        inner
+    ///
+    /// Rewrites call this for every `BinaryExpr` they visit, so it must not allocate a
+    /// placeholder box; the same heap allocation flows through the rewrite untouched.
+    pub fn into_inner(self) -> Box<Expr> {
+        let this = mem::ManuallyDrop::new(self);
+        // SAFETY: `this.0` is read exactly once, and suppressing the destructor means
+        // the original is never dropped, so the box is not freed twice.
+        unsafe { std::ptr::read(&this.0) }
     }
 }
 
@@ -852,18 +860,21 @@ impl AsRef<Expr> for BoxedExpr {
 
 impl Drop for BoxedExpr {
     fn drop(&mut self) {
-        // Detach each `BinaryExpr`'s children into a heap stack before the node drops, so an
-        // arbitrarily deep chain is torn down iteratively instead of recursing.
+        // Detach a `BinaryExpr`'s binary children into a heap stack before the node drops, so
+        // an arbitrarily long chain is torn down iteratively instead of recursing. Non-binary
+        // children stay in place: they cannot extend the binary spine, and a chain nested
+        // deeper inside them restarts this loop from its own `BoxedExpr`. A binary expression
+        // over two leaves (the common case) takes neither the writes nor the allocation.
         fn detach(expr: &mut Expr, stack: &mut Vec<Expr>) {
             if let Expr::BinaryExpr(b) = expr {
-                stack.push(mem::replace(
-                    b.left.0.as_mut(),
-                    Expr::Literal(ScalarValue::Null, None),
-                ));
-                stack.push(mem::replace(
-                    b.right.0.as_mut(),
-                    Expr::Literal(ScalarValue::Null, None),
-                ));
+                for child in [&mut b.left, &mut b.right] {
+                    if matches!(child.0.as_ref(), Expr::BinaryExpr(_)) {
+                        stack.push(mem::replace(
+                            child.0.as_mut(),
+                            Expr::Literal(ScalarValue::Null, None),
+                        ));
+                    }
+                }
             }
         }
 
@@ -871,7 +882,7 @@ impl Drop for BoxedExpr {
         detach(self.0.as_mut(), &mut stack);
         while let Some(mut expr) = stack.pop() {
             detach(&mut expr, &mut stack);
-            // `expr` drops here; its children were detached, so the drop is shallow.
+            // `expr` drops here; its binary children were detached, so the drop is shallow.
         }
     }
 }
