@@ -20,10 +20,10 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    bounded_window_exec_with_can_repartition, check_integrity, coalesce_partitions_exec,
-    parquet_exec_with_sort, parquet_exec_with_stats, repartition_exec, schema, sort_exec,
-    sort_exec_with_preserve_partitioning, sort_merge_join_exec,
-    sort_preserving_merge_exec, union_exec,
+    RequirementsTestExec, bounded_window_exec_with_can_repartition, check_integrity,
+    coalesce_partitions_exec, parquet_exec_with_sort, parquet_exec_with_stats,
+    repartition_exec, schema, sort_exec, sort_exec_with_preserve_partitioning,
+    sort_merge_join_exec, sort_preserving_merge_exec, union_exec,
 };
 
 use arrow::array::{RecordBatch, UInt8Array, UInt64Array};
@@ -70,7 +70,6 @@ use datafusion_physical_plan::joins::utils::JoinOn;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::test::exec::KeyPartitioningRequirementExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlanProperties, PlanProperties, displayable,
@@ -749,140 +748,59 @@ impl TestConfig {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum RangeKeyMatch {
-    Exact,
-    Subset,
-    Incompatible,
-}
-
-#[derive(Debug, Clone, Copy)]
 enum ExpectedPlan {
     Reuse,
     Hash,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct RangeSatisfactionConfigCase {
-    subset_met: bool,
-    preserve_met: Option<bool>,
-    increase_partitions: bool,
-    // Expected plans for Exact, Subset, and Incompatible keys, respectively.
-    expected_plans: [ExpectedPlan; 3],
-}
-
 #[test]
 fn range_satisfaction_config_matrix() -> Result<()> {
     const INPUT_PARTITIONS: usize = 4;
+    const MET: usize = INPUT_PARTITIONS;
+    const NOT_MET: usize = INPUT_PARTITIONS + 1;
+    const DISABLED: usize = 0;
+    const EQUAL: usize = INPUT_PARTITIONS;
+    const GREATER: usize = INPUT_PARTITIONS + 1;
     use ExpectedPlan::{Hash, Reuse};
-    use RangeKeyMatch::{Exact, Incompatible, Subset};
 
     let config_cases = [
-        RangeSatisfactionConfigCase {
-            subset_met: false,
-            preserve_met: None,
-            increase_partitions: false,
-            expected_plans: [Reuse, Hash, Hash],
-        },
-        RangeSatisfactionConfigCase {
-            subset_met: false,
-            preserve_met: None,
-            increase_partitions: true,
-            expected_plans: [Hash, Hash, Hash],
-        },
-        RangeSatisfactionConfigCase {
-            subset_met: false,
-            preserve_met: Some(false),
-            increase_partitions: false,
-            expected_plans: [Reuse, Hash, Hash],
-        },
-        RangeSatisfactionConfigCase {
-            subset_met: false,
-            preserve_met: Some(false),
-            increase_partitions: true,
-            expected_plans: [Hash, Hash, Hash],
-        },
-        RangeSatisfactionConfigCase {
-            subset_met: false,
-            preserve_met: Some(true),
-            increase_partitions: false,
-            expected_plans: [Reuse, Hash, Hash],
-        },
-        RangeSatisfactionConfigCase {
-            subset_met: false,
-            preserve_met: Some(true),
-            increase_partitions: true,
-            expected_plans: [Reuse, Reuse, Hash],
-        },
-        RangeSatisfactionConfigCase {
-            subset_met: true,
-            preserve_met: None,
-            increase_partitions: false,
-            expected_plans: [Reuse, Reuse, Hash],
-        },
-        RangeSatisfactionConfigCase {
-            subset_met: true,
-            preserve_met: None,
-            increase_partitions: true,
-            expected_plans: [Reuse, Reuse, Hash],
-        },
-        RangeSatisfactionConfigCase {
-            subset_met: true,
-            preserve_met: Some(false),
-            increase_partitions: false,
-            expected_plans: [Reuse, Reuse, Hash],
-        },
-        RangeSatisfactionConfigCase {
-            subset_met: true,
-            preserve_met: Some(false),
-            increase_partitions: true,
-            expected_plans: [Reuse, Reuse, Hash],
-        },
-        RangeSatisfactionConfigCase {
-            subset_met: true,
-            preserve_met: Some(true),
-            increase_partitions: false,
-            expected_plans: [Reuse, Reuse, Hash],
-        },
-        RangeSatisfactionConfigCase {
-            subset_met: true,
-            preserve_met: Some(true),
-            increase_partitions: true,
-            expected_plans: [Reuse, Reuse, Hash],
-        },
+        // subset  preserve  target   exact  subset  incompatible
+        (NOT_MET, DISABLED, EQUAL, [Reuse, Hash, Hash]),
+        (NOT_MET, DISABLED, GREATER, [Hash, Hash, Hash]),
+        (NOT_MET, NOT_MET, EQUAL, [Reuse, Hash, Hash]),
+        (NOT_MET, NOT_MET, GREATER, [Hash, Hash, Hash]),
+        (NOT_MET, MET, EQUAL, [Reuse, Hash, Hash]),
+        (NOT_MET, MET, GREATER, [Reuse, Reuse, Hash]),
+        (MET, DISABLED, EQUAL, [Reuse, Reuse, Hash]),
+        (MET, DISABLED, GREATER, [Reuse, Reuse, Hash]),
+        (MET, NOT_MET, EQUAL, [Reuse, Reuse, Hash]),
+        (MET, NOT_MET, GREATER, [Reuse, Reuse, Hash]),
+        (MET, MET, EQUAL, [Reuse, Reuse, Hash]),
+        (MET, MET, GREATER, [Reuse, Reuse, Hash]),
     ];
-    for config_case in config_cases {
-        for (key_match, expected_plan) in [Exact, Subset, Incompatible]
-            .into_iter()
-            .zip(config_case.expected_plans)
-        {
+    for (subset_threshold, preserve_file_partitions, target_partitions, expected) in
+        config_cases
+    {
+        let key_cases = [
+            ("exact", vec![col("a", &schema())?], expected[0]),
+            (
+                "subset",
+                vec![col("a", &schema())?, col("b", &schema())?],
+                expected[1],
+            ),
+            ("incompatible", vec![col("b", &schema())?], expected[2]),
+        ];
+        for (key_match, partition_keys, expected_plan) in key_cases {
             let input = parquet_exec_with_output_partitioning(range_partitioning(
                 "a",
                 [10, 20, 30],
                 SortOptions::default(),
             )?);
-            let partition_keys = match key_match {
-                Exact => vec![col("a", &schema())?],
-                Subset => vec![col("a", &schema())?, col("b", &schema())?],
-                Incompatible => vec![col("b", &schema())?],
-            };
-            let requirement =
-                Arc::new(KeyPartitioningRequirementExec::new(input, partition_keys));
-
-            let target_partitions = if config_case.increase_partitions {
-                INPUT_PARTITIONS + 1
-            } else {
-                INPUT_PARTITIONS
-            };
-            let subset_threshold = if config_case.subset_met {
-                INPUT_PARTITIONS
-            } else {
-                INPUT_PARTITIONS + 1
-            };
-            let preserve_file_partitions = match config_case.preserve_met {
-                None => 0,
-                Some(true) => INPUT_PARTITIONS,
-                Some(false) => INPUT_PARTITIONS + 1,
-            };
+            let requirement = RequirementsTestExec::new(input)
+                .with_required_input_distribution(Distribution::KeyPartitioned(
+                    partition_keys,
+                ))
+                .into_arc();
 
             let mut config =
                 TestConfig::default().with_query_execution_partitions(target_partitions);
@@ -905,8 +823,10 @@ fn range_satisfaction_config_matrix() -> Result<()> {
             };
             assert!(
                 matches_expected,
-                "unexpected optimized plan for key_match={key_match:?}, \
-                 config={config_case:?}:\n{plan}"
+                "unexpected optimized plan for key_match={key_match}, \
+                 subset_threshold={subset_threshold}, \
+                 preserve_file_partitions={preserve_file_partitions}, \
+                 target_partitions={target_partitions}:\n{plan}"
             );
         }
     }
