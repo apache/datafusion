@@ -63,6 +63,7 @@ use datafusion_expr::{ExprFunctionExt, LogicalPlanBuilder, lit};
 /// - filter predicate must be "top-1" (rn = 1, <= 1, < 2)
 /// - window has a `PARTITION BY` clause
 /// - gated behind the `optimizer.enable_row_number_to_aggregate` config option (off by default)
+/// - with duplicate `ORDER BY` keys, `row_number()` and this rewrite with `first_value` may pick different (but equally valid) tied rows - each path breaks ties determinsitically, but no guarentee the choices will be the same
 #[derive(Default, Debug)]
 pub struct ReplaceFilterTop1 {}
 
@@ -108,15 +109,15 @@ impl OptimizerRule for ReplaceFilterTop1 {
             return Ok(Transformed::no(plan));
         };
 
-        // Resolve the rn name the filter references (projection alias if present)
-        let rn_ref_name = match projection {
-            None => rn_col.name.clone(),
-            Some(p) => match rn_passthrough_name(p, &rn_col) {
-                Some(name) => name,
+        // Resolve the rn column the filter references (projection alias if present)
+        let rn_ref = match projection {
+            None => rn_col.clone(),
+            Some(p) => match rn_passthrough_column(p, &rn_col) {
+                Some(col) => col,
                 None => return Ok(Transformed::no(plan)),
             },
         };
-        if !has_valid_predicate(predicate, &rn_ref_name) {
+        if !has_valid_predicate(predicate, &rn_ref) {
             return Ok(Transformed::no(plan));
         }
 
@@ -190,28 +191,24 @@ impl OptimizerRule for ReplaceFilterTop1 {
     }
 }
 
-/// Validating that the filter predicate is `rn_name` == 1 (or equivalent)
-fn has_valid_predicate(predicate: &Expr, rn_name: &str) -> bool {
+/// Validating that the filter predicate is `rn_col` == 1 (or equivalent)
+fn has_valid_predicate(predicate: &Expr, rn_ref: &Column) -> bool {
     let Expr::BinaryExpr(BinaryExpr { left, right, op }) = predicate else {
         return false;
     };
 
-    let (name, op, val) = match (&**left, &**right) {
-        (
-            Expr::Column(Column { name, .. }),
-            Expr::Literal(ScalarValue::UInt64(Some(val)), _),
-        ) => (name, *op, *val),
-        (
-            Expr::Literal(ScalarValue::UInt64(Some(val)), _),
-            Expr::Column(Column { name, .. }),
-        ) => {
+    let (col, op, val) = match (&**left, &**right) {
+        (Expr::Column(col), Expr::Literal(ScalarValue::UInt64(Some(val)), _)) => {
+            (col, *op, *val)
+        }
+        (Expr::Literal(ScalarValue::UInt64(Some(val)), _), Expr::Column(col)) => {
             let Some(op) = op.swap() else { return false };
-            (name, op, *val)
+            (col, op, *val)
         }
         _ => return false,
     };
 
-    name.as_str() == rn_name
+    col == rn_ref
         && match op {
             Operator::Lt => val == 2,
             Operator::Eq | Operator::LtEq => val == 1,
@@ -283,22 +280,23 @@ fn validate_window_input(input: &Arc<LogicalPlan>) -> Option<WindowTop1<'_>> {
 
 /// Return the projection output name for a plain passthrough of `rn_col`
 /// or `None` if unsafe (dropped, duplicated, used inside computed expr that wecan't fold to the constant integer `1`)
-fn rn_passthrough_name(projection: &Projection, rn_col: &Column) -> Option<String> {
-    let mut rn_output_name = None;
-    for (expr, (_, field)) in projection.expr.iter().zip(projection.schema.iter()) {
+fn rn_passthrough_column(projection: &Projection, rn_col: &Column) -> Option<Column> {
+    let mut rn_output: Option<Column> = None;
+    for (expr, (qualifier, field)) in projection.expr.iter().zip(projection.schema.iter())
+    {
         let is_passthrough = matches!(unalias(expr), Expr::Column(c) if c == rn_col);
         if is_passthrough {
-            if rn_output_name.is_some() {
+            if rn_output.is_some() {
                 // rn exposed under more than one output column.
                 return None;
             }
-            rn_output_name = Some(field.name().clone());
+            rn_output = Some(Column::new(qualifier.cloned(), field.name().clone()));
         } else if expr.column_refs().iter().any(|c| *c == rn_col) {
             // rn used inside a non-passthrough (like a computed) expression.
             return None;
         }
     }
-    rn_output_name
+    rn_output
 }
 
 /// Unalias expression reference
@@ -561,6 +559,31 @@ Projection: test.c, test.a, test.b, UInt64(1) AS rn
     }
 
     // ---------- rewrite does not fire ----------
+
+    #[test]
+    fn no_rewrite_payload_filter_shares_rn_alias_name() -> Result<()> {
+        // The rn output is aliased under qualifier `w` as `b`, while the filter
+        // targets the *payload* column `test.b` (same bare name, different
+        // qualifier). Matching on name alone would treat the payload filter as
+        // the top-1 predicate and silently drop it, producing wrong results.
+        // Carrying the qualifier through keeps `w.b` distinct from `test.b`, so
+        // the rule must not fire.
+        let plan = top1_plan_with_projection(
+            vec![col("a")],
+            |rn| {
+                vec![
+                    col("test.a"),
+                    col("test.b"),
+                    col("test.c"),
+                    rn.alias_qualified(Some("w"), "b"),
+                ]
+            },
+            |_| col("test.b").eq(lit(1u64)),
+        )?;
+        let optimized = rewrite(plan)?;
+        assert!(!optimized.transformed);
+        Ok(())
+    }
 
     #[test]
     fn no_rewrite_rn_eq_2() -> Result<()> {
