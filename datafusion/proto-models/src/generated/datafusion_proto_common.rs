@@ -821,6 +821,9 @@ pub struct ParquetOptions {
     /// default = false
     #[prost(bool, tag = "34")]
     pub force_filter_selections: bool,
+    /// default = true
+    #[prost(bool, tag = "38")]
+    pub split_row_groups_by_range: bool,
     /// default = 1024 * 1024
     #[prost(uint64, tag = "7")]
     pub data_pagesize_limit: u64,

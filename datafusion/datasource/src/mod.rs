@@ -46,6 +46,7 @@ pub mod projection;
 #[cfg(feature = "proto")]
 mod proto;
 pub mod schema_adapter;
+pub mod shared_file_state;
 pub mod sink;
 pub mod source;
 mod statistics;
