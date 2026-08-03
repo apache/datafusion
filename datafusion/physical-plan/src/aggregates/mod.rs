@@ -1379,7 +1379,7 @@ impl AggregateExec {
             group_expr_mapping
                 .iter()
                 .flat_map(|(_, target_cols)| {
-                    target_cols.iter().flat_map(|(expr, _)| {
+                    target_cols.iter().filter_map(|(expr, _)| {
                         expr.downcast_ref::<Column>().map(|c| c.index())
                     })
                 })
