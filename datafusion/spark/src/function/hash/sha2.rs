@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, AsArray, BinaryArrayType, BinaryViewBuilder, Int32Array};
+use arrow::array::{
+    ArrayRef, AsArray, BinaryArrayType, BinaryBuilder, Int32Array, StringArray,
+};
 use arrow::datatypes::{DataType, Int32Type};
 use datafusion_common::types::{
     NativeType, logical_binary, logical_int32, logical_string,
@@ -252,7 +254,7 @@ where
     BinaryArrType: BinaryArrayType<'a>,
     I: Iterator<Item = Option<i32>>,
 {
-    let mut byte_builder = BinaryViewBuilder::with_capacity(values.len());
+    let mut byte_builder = BinaryBuilder::with_capacity(values.len(), values.len() * 2);
     let mut hex_bytes = Vec::with_capacity(128);
 
     values
@@ -294,8 +296,10 @@ where
         });
 
     let str_array = unsafe {
+        let binary_array = byte_builder.finish();
+        let (offsets, values, nulls) = binary_array.into_parts();
         // Safe: `encode_bytes_into` only writes ASCII hex digits, so the bytes are valid UTF-8.
-        byte_builder.finish().to_string_view_unchecked()
+        StringArray::new_unchecked(offsets, values, nulls)
     };
     Arc::new(str_array)
 }
