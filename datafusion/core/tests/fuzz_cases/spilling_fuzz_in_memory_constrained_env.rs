@@ -53,12 +53,10 @@ use futures::StreamExt;
 use arrow::array::Int32Array;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_execution::memory_pool::{
-    MemoryPool, TrackConsumersPool, UnboundedMemoryPool,
-};
+use datafusion_benchmarks::util::PeakRecordingPool;
+use datafusion_execution::memory_pool::{MemoryPool, UnboundedMemoryPool};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
 use datafusion_physical_plan::spill::SpillManager;
-use std::num::NonZeroUsize;
 
 #[tokio::test]
 async fn test_sort_with_limited_memory() -> Result<()> {
@@ -486,12 +484,15 @@ async fn run_sort_preserving_merge_peak_memory_with_spilled_input(
             .with_round_robin_repartition(round_robin),
     );
 
-    // TrackConsumersPool wraps an unbounded pool so the merge never OOMs;
-    // we keep the typed Arc to call .metrics() after the run.
-    let tracking_pool = Arc::new(TrackConsumersPool::new(
+    // PeakRecordingPool records peak reserved bytes as a running high-water mark
+    // (via grow/shrink deltas), independent of any per-consumer registration
+    // bookkeeping - unlike TrackConsumersPool, whose tracked-consumer entry (and
+    // its peak) gets discarded the moment the consumer unregisters, which now
+    // happens mid-poll (inside the drain loop below) rather than when the
+    // caller eventually drops the returned stream.
+    let tracking_pool = Arc::new(PeakRecordingPool::new(Arc::new(
         UnboundedMemoryPool::default(),
-        NonZeroUsize::new(10).unwrap(),
-    ));
+    )));
     let runtime = RuntimeEnvBuilder::new()
         .with_memory_pool(Arc::clone(&tracking_pool) as Arc<dyn MemoryPool>)
         .build()?;
@@ -508,9 +509,7 @@ async fn run_sort_preserving_merge_peak_memory_with_spilled_input(
     }
     assert_eq!(total_rows, 2 * num_batches * num_rows_per_batch);
 
-    let mut metrics = tracking_pool.metrics();
-    metrics.sort_by_key(|m| std::cmp::Reverse(m.peak));
-    let peak_bytes: usize = metrics.iter().map(|m| m.peak).sum();
+    let peak_bytes = tracking_pool.peak_reserved();
 
     // in the single column case, the cursor takes up an ipc_batch_size worth of memory due to the
     // IPC roundtrip issue
@@ -532,6 +531,10 @@ async fn run_sort_preserving_merge_peak_memory_with_spilled_input(
         max_peak += 2 * cursor_unit;
     };
 
+    assert!(
+        peak_bytes > 0,
+        "peak reservation {peak_bytes} should be greater than 0"
+    );
     assert!(
         peak_bytes <= max_peak,
         "peak reservation {peak_bytes} bytes exceeds max_peak ({max_peak} bytes); \
