@@ -898,17 +898,6 @@ pub(crate) fn build_streaming_stream(
         inflight_start: 0,
         clear_idx: 0,
         resident_bytes: 0,
-        // 1MB matches object_store's own OBJECT_STORE_COALESCE_DEFAULT, and
-        // measurement agrees: on ClickBench (page-index copy, 50ms latency,
-        // 8 partitions) a 4MB gap merged away 59 requests but pulled 157MB of
-        // unprojected columns with them, and ran *slower* — with several
-        // partitions fetching concurrently, a saved round trip is worth much
-        // less than the naive latency x bandwidth break-even suggests. At 1MB
-        // bytes fetched return to parity with the unscheduled path.
-        coalesce_gap: std::env::var("DF_FETCH_COALESCE")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(1024 * 1024),
         cursor: 0,
         buffers,
         slot: ReaderSlot::Idle(reader),
@@ -942,9 +931,6 @@ pub(crate) struct StreamingScanState {
     /// Scan start for dropping pages the cursor has passed.
     clear_idx: usize,
     resident_bytes: u64,
-    /// Merge fetch ranges whose gap is at most this many bytes (deliberate
-    /// over-fetch that collapses GET count for scattered page plans).
-    coalesce_gap: u64,
     /// Selected rows emitted so far.
     cursor: u64,
     buffers: SharedBuffers,
@@ -1023,67 +1009,33 @@ impl StreamingScanState {
         }
     }
 
-    /// Fetch ranges for a wave of plan pages: merge page ranges whose file
-    /// gap is <= `coalesce_gap` into single requests ("buy the shelf
-    /// section") — deliberate over-fetch of small gaps that collapses the
-    /// object-store GET count for scattered page-precise plans. The gap
-    /// bytes are dropped after slicing (only page bytes are installed), so
-    /// window accounting stays page-based; the backing allocation lives
-    /// until its last page clears.
+    /// Byte ranges this wave still needs: the plan pages in
+    /// `[start_idx, end_idx)` not already staged.
+    ///
+    /// Deliberately no range merging. `ObjectStore::get_ranges` already
+    /// coalesces (1MB gap) for every store using the default implementation —
+    /// S3, GCS, Azure — while `LocalFileSystem` and friends override it and
+    /// coalesce not at all. A second pass here can therefore only raise the
+    /// effective threshold, never lower it, and it merges without knowing the
+    /// medium. Measurement agreed: a 4MB gap merged away 59 requests on
+    /// ClickBench but pulled 157MB of unprojected columns with them and ran
+    /// slower. The merge decision belongs to the layer that knows its own
+    /// round-trip cost.
     fn wave_ranges(&self, start_idx: usize, end_idx: usize) -> Vec<Range<u64>> {
-        // Skip pages an earlier wave's gap fill already staged.
-        let mut sorted: Vec<Range<u64>> = self.plan[start_idx..end_idx]
+        let mut ranges: Vec<Range<u64>> = self.plan[start_idx..end_idx]
             .iter()
             .filter(|p| !self.buffers.contains(p.range().start))
             .map(|p| p.range().clone())
             .collect();
-        sorted.sort_by_key(|r| r.start);
-        let mut merged: Vec<Range<u64>> = Vec::with_capacity(sorted.len());
-        for r in sorted {
-            match merged.last_mut() {
-                Some(last) if r.start.saturating_sub(last.end) <= self.coalesce_gap => {
-                    last.end = last.end.max(r.end);
-                }
-                _ => merged.push(r),
-            }
-        }
-        merged
+        ranges.sort_by_key(|r| r.start);
+        ranges
     }
 
-    /// Install a fetched wave: slice each plan page's bytes out of the
-    /// merged fetch results and stage them in the shared buffers.
-    fn install_wave(
-        &mut self,
-        start_idx: usize,
-        end_idx: usize,
-        fetched: &[Range<u64>],
-        data: &[Bytes],
-    ) {
-        // Install every planned page the fetched blobs cover — not just this
-        // wave's. Coalescing deliberately over-fetches the gaps between
-        // pages, and those gaps routinely contain pages planned for a *later*
-        // wave (a different column, or later rows). Slicing them out now is
-        // free; discarding them means paying to fetch the same bytes twice,
-        // which measured as ~10% of all bytes read on ClickBench.
-        let _ = end_idx;
-        for idx in start_idx..self.plan.len() {
-            let page = &self.plan[idx];
-            if page.cleared || self.buffers.contains(page.range().start) {
-                continue;
-            }
-            let i = fetched.partition_point(|r| r.start <= page.range().start);
-            if i == 0 || page.range().end > fetched[i - 1].end {
-                // Not covered by this fetch. Pages are ordered by decode
-                // need rather than file offset, so this says nothing about
-                // whether later pages are covered — keep scanning.
-                continue;
-            }
-            let i = i - 1;
-            let offset = (page.range().start - fetched[i].start) as usize;
-            let len = page.planned.len() as usize;
-            self.buffers
-                .insert(page.range(), data[i].slice(offset..offset + len));
-            self.resident_bytes += len as u64;
+    /// Stage a landed wave. Each fetched range is exactly one plan page.
+    fn install_wave(&mut self, ranges: &[Range<u64>], data: &[Bytes]) {
+        for (range, bytes) in ranges.iter().zip(data) {
+            self.resident_bytes += range.end - range.start;
+            self.buffers.insert(range, bytes.clone());
         }
         PEAK_STAGED_BYTES
             .fetch_max(self.resident_bytes, std::sync::atomic::Ordering::Relaxed);
@@ -1108,12 +1060,7 @@ impl StreamingScanState {
                         self.slot = ReaderSlot::Idle(reader);
                         match result {
                             Ok(data) => {
-                                self.install_wave(
-                                    self.inflight_start,
-                                    self.fetched_idx,
-                                    &ranges,
-                                    &data,
-                                );
+                                self.install_wave(&ranges, &data);
                             }
                             Err(e) => {
                                 return Some((Err(DataFusionError::from(e)), self));
@@ -1144,7 +1091,7 @@ impl StreamingScanState {
                         self.slot = ReaderSlot::Idle(reader);
                         match result {
                             Ok(data) => {
-                                self.install_wave(self.fetched_idx, end, &ranges, &data);
+                                self.install_wave(&ranges, &data);
                                 self.fetched_idx = end;
                             }
                             Err(e) => {
