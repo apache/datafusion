@@ -279,6 +279,29 @@ SELECT id, UNNEST(items) FROM orders;
 items (implicit lateral references such as `FROM orders AS t, UNNEST(t.items)`
 are not currently supported).
 
+### `unnest_outer`
+
+`unnest_outer(col)` is the outer-unnest peer to `UNNEST(col)`. The two differ
+only in how `NULL` and empty input lists are handled:
+
+| Form                | `NULL` input list | Empty input list |
+| ------------------- | ----------------- | ---------------- |
+| `UNNEST(col)`       | dropped           | dropped          |
+| `unnest_outer(col)` | one `NULL` row    | one `NULL` row   |
+
+```sql
+SELECT id, unnest_outer(tags) AS tag FROM rows;
+```
+
+An input row with an empty `tags` array or `NULL` `tags` produces one output
+row whose `tag` is `NULL`, instead of being dropped. This is analogous to the
+outer variant offered by other engines (Spark `explode_outer`, Hive `EXPLODE OUTER`, Snowflake `FLATTEN(OUTER => true)`).
+
+`unnest_outer` cannot be mixed with `unnest` in the same `SELECT` — the
+unnest plan node carries a single null-handling mode for all its output
+columns, so a mix would be ambiguous. The planner returns an error in that
+case.
+
 ## WHERE clause
 
 ```text
