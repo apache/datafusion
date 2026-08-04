@@ -1925,8 +1925,8 @@ mod tests {
         let dict_vocab: ArrayRef = Arc::new(StringArray::from(vec!["cat", "dog"]));
 
         // Each row has a unique label (forcing a new group) and alternates
-        // between the two dictionary values.  Int16 keys are used so that
-        // 129 groups don't hit the Int8 overflow limit (i8::MAX = 127).
+        // between the two dictionary values.  Int8 keys are used; only 2
+        // distinct values exist so the key type never overflows.
         let labels: ArrayRef = Arc::new(StringArray::from(
             (0..n_groups).map(|i| format!("g{i}")).collect::<Vec<_>>(),
         ));
