@@ -1204,3 +1204,671 @@ async fn test_physical_expr_adapter_factory_reuse_across_tables() {
     ];
     assert_batches_eq!(expected, &batches);
 }
+
+// ---------------------------------------------------------------------------
+// Nested projection pruning: when the table schema declares a nested column
+// narrower than the physical parquet file, the scan should only read the
+// leaves the declared schema names, instead of reading the whole column and
+// discarding the extra subfields in the adapter-inserted cast.
+//
+// Each test registers two tables against the *same* physical file: `t_narrow`
+// (the declared schema under test) and `t_full` (the file's own physical
+// schema, so no cast is inserted and the scan always reads every leaf). That
+// gives a same-context upper bound to compare `bytes_scanned` against,
+// without needing a config flag to disable pruning.
+// ---------------------------------------------------------------------------
+
+mod nested_projection_pruning {
+    use super::*;
+    use arrow::buffer::NullBuffer;
+    use datafusion::physical_plan::collect;
+    use datafusion_physical_plan::metrics::MetricsSet;
+
+    use crate::parquet::utils::MetricsFinder;
+
+    const NUM_ELEMENTS: usize = 64;
+    const PAD_LEN: usize = 2048;
+
+    /// Physical item struct written to the file: the narrow fields plus fat
+    /// pads the narrow table schema will not mention. `x` is Int32 in the
+    /// file (the narrow schema declares Int64 to also exercise leaf
+    /// promotion).
+    fn wide_item_fields() -> Fields {
+        Fields::from(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("y", DataType::Utf8, true),
+            Field::new("pad_a", DataType::Utf8, false),
+            Field::new("pad_b", DataType::Utf8, false),
+            Field::new("pad_c", DataType::Utf8, false),
+        ])
+    }
+
+    /// The narrow item struct one table declares: a subset of the physical
+    /// fields in a different order, a promoted leaf type for `x`, plus `z`
+    /// which does not exist in the file (null-filled by the cast).
+    fn narrow_item_fields() -> Fields {
+        Fields::from(vec![
+            Field::new("y", DataType::Utf8, true),
+            Field::new("x", DataType::Int64, true),
+            Field::new("z", DataType::Int64, true),
+        ])
+    }
+
+    fn wide_struct_values(validity: Option<NullBuffer>) -> StructArray {
+        let pad = |seed: usize| {
+            let base = "x".repeat(PAD_LEN);
+            Arc::new(StringArray::from_iter_values(
+                (0..NUM_ELEMENTS).map(|i| format!("{}{base}", seed + i)),
+            )) as ArrayRef
+        };
+        StructArray::new(
+            wide_item_fields(),
+            vec![
+                Arc::new(Int32Array::from_iter_values(0..NUM_ELEMENTS as i32)),
+                Arc::new(StringArray::from_iter_values(
+                    (0..NUM_ELEMENTS).map(|i| format!("y-{i}")),
+                )),
+                pad(1000),
+                pad(2000),
+                pad(3000),
+            ],
+            validity,
+        )
+    }
+
+    fn wide_list_schema() -> SchemaRef {
+        let item = Arc::new(Field::new(
+            "item",
+            DataType::Struct(wide_item_fields()),
+            true,
+        ));
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("events", DataType::List(item), true),
+        ]))
+    }
+
+    /// File batch: `id Int32`, `events List<wide struct>` (one element per row).
+    fn wide_list_batch() -> RecordBatch {
+        let schema = wide_list_schema();
+        let item = match schema.field(1).data_type() {
+            DataType::List(item) => Arc::clone(item),
+            other => unreachable!("expected List, got {other:?}"),
+        };
+        let events = ListArray::new(
+            item,
+            OffsetBuffer::from_lengths(std::iter::repeat_n(1, NUM_ELEMENTS)),
+            Arc::new(wide_struct_values(None)),
+            None,
+        );
+        RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from_iter_values(0..NUM_ELEMENTS as i32)),
+                Arc::new(events),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn narrow_list_table_schema() -> SchemaRef {
+        let item = Arc::new(Field::new(
+            "item",
+            DataType::Struct(narrow_item_fields()),
+            true,
+        ));
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("events", DataType::List(item), true),
+        ]))
+    }
+
+    fn wide_struct_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("s", DataType::Struct(wide_item_fields()), true),
+        ]))
+    }
+
+    /// File batch: `id Int32`, `s <wide struct>`, with per-row struct
+    /// validity so struct-level nullability can be asserted.
+    fn wide_struct_batch() -> RecordBatch {
+        // rows 0, 10, 20, ... have a NULL struct
+        let validity =
+            NullBuffer::from((0..NUM_ELEMENTS).map(|i| i % 10 != 0).collect::<Vec<_>>());
+        RecordBatch::try_new(
+            wide_struct_schema(),
+            vec![
+                Arc::new(Int32Array::from_iter_values(0..NUM_ELEMENTS as i32)),
+                Arc::new(wide_struct_values(Some(validity))),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn narrow_struct_table_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("s", DataType::Struct(narrow_item_fields()), true),
+        ]))
+    }
+
+    /// Registers `t_narrow` (the schema under test) and `t_full` (the file's
+    /// own physical schema, so no cast is inserted) against the same store.
+    async fn register_narrow_and_full(
+        ctx: &SessionContext,
+        store: Arc<dyn ObjectStore>,
+        narrow_schema: SchemaRef,
+        full_schema: SchemaRef,
+    ) {
+        let store_url = ObjectStoreUrl::parse("memory://").unwrap();
+        ctx.register_object_store(store_url.as_ref(), store);
+
+        for (name, schema) in [("t_narrow", narrow_schema), ("t_full", full_schema)] {
+            let config = ListingTableConfig::new(
+                ListingTableUrl::parse("memory:///data/").unwrap(),
+            )
+            .infer_options(&ctx.state())
+            .await
+            .unwrap()
+            .with_schema(schema)
+            .with_expr_adapter_factory(Arc::new(DefaultPhysicalExprAdapterFactory));
+            let table = ListingTable::try_new(config).unwrap();
+            ctx.register_table(name, Arc::new(table)).unwrap();
+        }
+    }
+
+    async fn setup_with_config(
+        batches: Vec<(&str, RecordBatch)>,
+        narrow_schema: SchemaRef,
+        full_schema: SchemaRef,
+        cfg: SessionConfig,
+    ) -> SessionContext {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        for (name, batch) in batches {
+            write_parquet(batch, Arc::clone(&store), &format!("data/{name}")).await;
+        }
+        let ctx = SessionContext::new_with_config(cfg);
+        register_narrow_and_full(&ctx, store, narrow_schema, full_schema).await;
+        ctx
+    }
+
+    async fn setup(
+        batches: Vec<(&str, RecordBatch)>,
+        narrow_schema: SchemaRef,
+        full_schema: SchemaRef,
+    ) -> SessionContext {
+        setup_with_config(
+            batches,
+            narrow_schema,
+            full_schema,
+            SessionConfig::new().with_collect_statistics(false),
+        )
+        .await
+    }
+
+    async fn run(ctx: &SessionContext, sql: &str) -> (Vec<RecordBatch>, MetricsSet) {
+        let df = ctx.sql(sql).await.unwrap();
+        let (state, logical) = df.into_parts();
+        let plan = state.create_physical_plan(&logical).await.unwrap();
+        let batches = collect(Arc::clone(&plan), state.task_ctx()).await.unwrap();
+        let metrics = MetricsFinder::find_metrics(plan.as_ref()).unwrap();
+        (batches, metrics)
+    }
+
+    fn bytes_scanned(metrics: &MetricsSet) -> usize {
+        metrics
+            .sum(|m| m.value().name() == "bytes_scanned")
+            .map(|v| v.as_usize())
+            .expect("bytes_scanned metric")
+    }
+
+    /// Run `narrow_sql` against `t_narrow` and `full_sql` against `t_full`;
+    /// assert the narrow scan read strictly less than half of the full
+    /// scan's bytes (the pads dominate the file), and return the narrow
+    /// scan's results for correctness assertions.
+    ///
+    /// The two SQL strings need not have the same shape: a `get_field` over
+    /// a narrowed struct clips to the *cast target*, not further down to the
+    /// specific field accessed (see `prunes_get_field_on_narrowed_struct`),
+    /// so comparing against the same `get_field` query on `t_full` would
+    /// unfairly compare this clip against `get_field`'s own, more precise,
+    /// single-leaf pruning (which only applies when there is no cast in the
+    /// way). Callers that aren't in that situation can just pass the same
+    /// query shape with the table name substituted.
+    async fn assert_prunes(
+        batches: Vec<(&str, RecordBatch)>,
+        narrow_schema: SchemaRef,
+        full_schema: SchemaRef,
+        narrow_sql: &str,
+        full_sql: &str,
+    ) -> Vec<RecordBatch> {
+        let ctx = setup(batches, narrow_schema, full_schema).await;
+
+        let (result_narrow, metrics_narrow) = run(&ctx, narrow_sql).await;
+        let (_result_full, metrics_full) = run(&ctx, full_sql).await;
+
+        let (narrow_bytes, full_bytes) =
+            (bytes_scanned(&metrics_narrow), bytes_scanned(&metrics_full));
+        assert!(
+            narrow_bytes * 2 < full_bytes,
+            "expected pruned scan to read less than half of {full_bytes} bytes, \
+             read {narrow_bytes}: {narrow_sql}"
+        );
+        result_narrow
+    }
+
+    #[tokio::test]
+    async fn prunes_list_of_struct() {
+        // Narrow schema over the wide file: subset of fields, reordered,
+        // promoted leaf (x: Int32 -> Int64), missing subfield z null-filled.
+        let batches = assert_prunes(
+            vec![("wide.parquet", wide_list_batch())],
+            narrow_list_table_schema(),
+            wide_list_schema(),
+            "SELECT events FROM t_narrow ORDER BY id",
+            "SELECT events FROM t_full ORDER BY id",
+        )
+        .await;
+
+        let events = batches[0].column(0);
+        let list = events.as_any().downcast_ref::<ListArray>().unwrap();
+        let items = list
+            .values()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert_eq!(items.fields().len(), 3);
+        let x = items
+            .column_by_name("x")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(x.value(5), 5);
+        let z = items.column_by_name("z").unwrap();
+        assert_eq!(z.null_count(), z.len(), "z is not in the file");
+    }
+
+    #[tokio::test]
+    async fn prunes_top_level_struct() {
+        assert_prunes(
+            vec![("wide.parquet", wide_struct_batch())],
+            narrow_struct_table_schema(),
+            wide_struct_schema(),
+            "SELECT s FROM t_narrow ORDER BY id",
+            "SELECT s FROM t_full ORDER BY id",
+        )
+        .await;
+    }
+
+    /// Struct-level nullability must survive the clip: rows where the struct
+    /// itself is NULL stay NULL (not `{y: NULL, x: NULL, z: NULL}`).
+    #[tokio::test]
+    async fn preserves_struct_nullability() {
+        let batches = assert_prunes(
+            vec![("wide.parquet", wide_struct_batch())],
+            narrow_struct_table_schema(),
+            wide_struct_schema(),
+            "SELECT id, s IS NULL AS s_null, s FROM t_narrow ORDER BY id",
+            "SELECT id, s IS NULL AS s_null, s FROM t_full ORDER BY id",
+        )
+        .await;
+
+        let combined = concat_batches(&batches[0].schema(), &batches).unwrap();
+        let s_null = combined
+            .column(1)
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+        for i in 0..NUM_ELEMENTS {
+            assert_eq!(s_null.value(i), i % 10 == 0, "row {i}");
+        }
+    }
+
+    /// `get_field` on a schema-narrowed struct becomes
+    /// `get_field(CAST(s), 'x')`; the read clips to the cast target (every
+    /// field the *narrow* schema declares), not further down to just `x`.
+    /// The fair "no clipping happened" baseline is therefore reading every
+    /// physical leaf of `s` (`SELECT s FROM t_full`), not the same
+    /// `get_field` query against `t_full` — that query needs no cast at all
+    /// and takes `get_field`'s own, more precise, single-leaf pushdown path.
+    #[tokio::test]
+    async fn prunes_get_field_on_narrowed_struct() {
+        let batches = assert_prunes(
+            vec![("wide.parquet", wide_struct_batch())],
+            narrow_struct_table_schema(),
+            wide_struct_schema(),
+            "SELECT s['x'] AS x FROM t_narrow ORDER BY id",
+            "SELECT s FROM t_full ORDER BY id",
+        )
+        .await;
+        let combined = concat_batches(&batches[0].schema(), &batches).unwrap();
+        let x = combined
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(x.value(5), 5);
+        assert_eq!(x.value(NUM_ELEMENTS - 1), NUM_ELEMENTS as i64 - 1);
+    }
+
+    /// Mixed access: the whole (narrowed) column and a subfield of it.
+    #[tokio::test]
+    async fn prunes_mixed_struct_and_subfield_access() {
+        assert_prunes(
+            vec![("wide.parquet", wide_struct_batch())],
+            narrow_struct_table_schema(),
+            wide_struct_schema(),
+            "SELECT s, s['y'] AS y FROM t_narrow ORDER BY id",
+            "SELECT s, s['y'] AS y FROM t_full ORDER BY id",
+        )
+        .await;
+    }
+
+    /// Predicate on a primitive column with filter pushdown enabled while
+    /// the projected nested column is clipped.
+    #[tokio::test]
+    async fn prunes_with_filter_pushdown() {
+        let mut cfg = SessionConfig::new().with_collect_statistics(false);
+        cfg.options_mut().execution.parquet.pushdown_filters = true;
+        let ctx = setup_with_config(
+            vec![("wide.parquet", wide_list_batch())],
+            narrow_list_table_schema(),
+            wide_list_schema(),
+            cfg,
+        )
+        .await;
+
+        let filter = "WHERE id >= 32 ORDER BY id";
+        let (result_narrow, metrics_narrow) =
+            run(&ctx, &format!("SELECT events FROM t_narrow {filter}")).await;
+        let (_result_full, metrics_full) =
+            run(&ctx, &format!("SELECT events FROM t_full {filter}")).await;
+
+        let combined =
+            concat_batches(&result_narrow[0].schema(), &result_narrow).unwrap();
+        assert_eq!(combined.num_rows(), NUM_ELEMENTS / 2);
+        assert!(bytes_scanned(&metrics_narrow) * 2 < bytes_scanned(&metrics_full));
+    }
+
+    /// A scan over two files where one matches the table schema exactly (no
+    /// cast is inserted) and one is wider (clipped): both must be read
+    /// correctly in the same scan.
+    #[tokio::test]
+    async fn mixed_files_narrow_and_wide() {
+        // The physically-narrow file has exactly the table's item struct.
+        let narrow_item = narrow_item_fields();
+        let item = Arc::new(Field::new(
+            "item",
+            DataType::Struct(narrow_item.clone()),
+            true,
+        ));
+        let events = ListArray::new(
+            Arc::clone(&item),
+            OffsetBuffer::from_lengths([1]),
+            Arc::new(StructArray::new(
+                narrow_item,
+                vec![
+                    Arc::new(StringArray::from(vec![Some("y-narrow")])) as ArrayRef,
+                    Arc::new(Int64Array::from(vec![Some(4242)])) as ArrayRef,
+                    Arc::new(Int64Array::from(vec![Some(7)])) as ArrayRef,
+                ],
+                None,
+            )),
+            None,
+        );
+        let narrow_batch = RecordBatch::try_new(
+            narrow_list_table_schema(),
+            vec![
+                Arc::new(Int32Array::from(vec![NUM_ELEMENTS as i32])),
+                Arc::new(events),
+            ],
+        )
+        .unwrap();
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        write_parquet(wide_list_batch(), Arc::clone(&store), "data/wide.parquet").await;
+        write_parquet(narrow_batch, Arc::clone(&store), "data/narrow.parquet").await;
+
+        let ctx = test_context();
+        register_memory_listing_table(
+            &ctx,
+            store,
+            "memory:///data/",
+            narrow_list_table_schema(),
+        )
+        .await;
+
+        let (batches, _) = run(
+            &ctx,
+            "SELECT id, e['x'] AS x, e['z'] AS z \
+             FROM (SELECT id, unnest(events) AS e FROM t) ORDER BY id",
+        )
+        .await;
+        let combined = concat_batches(&batches[0].schema(), &batches).unwrap();
+        assert_eq!(combined.num_rows(), NUM_ELEMENTS + 1);
+        let x = combined
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(x.value(NUM_ELEMENTS), 4242, "row from the narrow file");
+        let z = combined.column(2);
+        // z is null-filled for the wide file, present in the narrow file
+        assert_eq!(z.null_count(), NUM_ELEMENTS);
+    }
+
+    /// Regression test for the exact shape reported in
+    /// `datafusion-comet#4859`: a two-level `array<struct<...,
+    /// items: array<struct<...>>>>` column, with a dropped struct sibling
+    /// (`latency_parts`), a dropped map sibling (`feature_map`), a dropped
+    /// nested-struct sibling (`diagnostics`), and dropped top-level sibling
+    /// columns (`dimension_id`, `region_code`, `raw_payload`) — structurally
+    /// the same `ReadSchema`/`InputSchema` pair from the issue (field names
+    /// kept representative, not verbatim), which let Comet's production
+    /// query read 1.35 TB where plain Spark, given the same pruned
+    /// `ReadSchema`, read 30.9 GB.
+    #[tokio::test]
+    async fn comet_4859_two_level_nested_list_regression() {
+        use arrow::array::{Float64Array, new_null_array};
+
+        const NUM_ROWS: usize = 8;
+        const EVENTS_PER_ROW: usize = 2;
+        const ITEMS_PER_EVENT: usize = 2;
+        const NUM_EVENTS: usize = NUM_ROWS * EVENTS_PER_ROW;
+        const NUM_ITEMS: usize = NUM_EVENTS * ITEMS_PER_EVENT;
+
+        // items: array<struct<group_id, entity_id, metric_value, feature_map, diagnostics, pad>>
+        let map_type = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Float64, true),
+                ])),
+                false,
+            )),
+            false,
+        );
+        let diagnostics_type = DataType::Struct(Fields::from(vec![
+            Field::new("module_id", DataType::Utf8, true),
+            Field::new("trace_id", DataType::Utf8, true),
+        ]));
+        let wide_item_struct_fields = Fields::from(vec![
+            Field::new("group_id", DataType::Int64, false),
+            Field::new("entity_id", DataType::Int64, false),
+            Field::new("metric_value", DataType::Float64, false),
+            Field::new("feature_map", map_type.clone(), true),
+            Field::new("diagnostics", diagnostics_type.clone(), true),
+            Field::new("pad", DataType::Utf8, false),
+        ]);
+        let pad_base = "x".repeat(PAD_LEN);
+        let items_struct = StructArray::new(
+            wide_item_struct_fields.clone(),
+            vec![
+                Arc::new(Int64Array::from_iter_values(0..NUM_ITEMS as i64)),
+                Arc::new(Int64Array::from_iter_values(
+                    (0..NUM_ITEMS).map(|i| 100 + i as i64),
+                )),
+                Arc::new(Float64Array::from_iter_values(
+                    (0..NUM_ITEMS).map(|i| i as f64 * 1.5),
+                )),
+                new_null_array(&map_type, NUM_ITEMS),
+                new_null_array(&diagnostics_type, NUM_ITEMS),
+                Arc::new(StringArray::from_iter_values(
+                    (0..NUM_ITEMS).map(|i| format!("{i:08}{pad_base}")),
+                )),
+            ],
+            None,
+        );
+        let items_item_field = Arc::new(Field::new(
+            "item",
+            DataType::Struct(wide_item_struct_fields),
+            true,
+        ));
+        let items_list = ListArray::new(
+            Arc::clone(&items_item_field),
+            OffsetBuffer::from_lengths(std::iter::repeat_n(ITEMS_PER_EVENT, NUM_EVENTS)),
+            Arc::new(items_struct),
+            None,
+        );
+
+        // events: array<struct<is_available, event_time_ms, event_token, latency_parts, items>>
+        let latency_type = DataType::Struct(Fields::from(vec![
+            Field::new("queue_time_ms", DataType::Int64, true),
+            Field::new("retry_count", DataType::Int32, true),
+        ]));
+        let wide_event_fields = Fields::from(vec![
+            Field::new("is_available", DataType::Boolean, false),
+            Field::new("event_time_ms", DataType::Int64, false),
+            Field::new("event_token", DataType::Utf8, false),
+            Field::new("latency_parts", latency_type.clone(), true),
+            Field::new("items", DataType::List(items_item_field), true),
+        ]);
+        let events_struct = StructArray::new(
+            wide_event_fields.clone(),
+            vec![
+                Arc::new(BooleanArray::from_iter(
+                    (0..NUM_EVENTS).map(|i| Some(i % 2 == 0)),
+                )),
+                Arc::new(Int64Array::from_iter_values(0..NUM_EVENTS as i64)),
+                Arc::new(StringArray::from_iter_values(
+                    (0..NUM_EVENTS).map(|i| format!("token-{i}")),
+                )),
+                new_null_array(&latency_type, NUM_EVENTS),
+                Arc::new(items_list),
+            ],
+            None,
+        );
+        let events_item_field = Arc::new(Field::new(
+            "item",
+            DataType::Struct(wide_event_fields),
+            true,
+        ));
+        let events_list = ListArray::new(
+            Arc::clone(&events_item_field),
+            OffsetBuffer::from_lengths(std::iter::repeat_n(EVENTS_PER_ROW, NUM_ROWS)),
+            Arc::new(events_struct),
+            None,
+        );
+
+        let wide_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("is_flagged", DataType::Boolean, false),
+            Field::new("dimension_id", DataType::Int64, true),
+            Field::new("region_code", DataType::Utf8, true),
+            Field::new(
+                "events",
+                DataType::List(Arc::clone(&events_item_field)),
+                true,
+            ),
+            Field::new("raw_payload", DataType::Utf8, true),
+        ]));
+        let wide_batch = RecordBatch::try_new(
+            Arc::clone(&wide_schema),
+            vec![
+                Arc::new(Int32Array::from_iter_values(0..NUM_ROWS as i32)),
+                Arc::new(BooleanArray::from_iter(
+                    (0..NUM_ROWS).map(|i| Some(i % 3 == 0)),
+                )),
+                new_null_array(&DataType::Int64, NUM_ROWS),
+                new_null_array(&DataType::Utf8, NUM_ROWS),
+                Arc::new(events_list),
+                new_null_array(&DataType::Utf8, NUM_ROWS),
+            ],
+        )
+        .unwrap();
+
+        let narrow_item_type = DataType::Struct(Fields::from(vec![
+            Field::new("group_id", DataType::Int64, true),
+            Field::new("entity_id", DataType::Int64, true),
+            Field::new("metric_value", DataType::Float64, true),
+        ]));
+        let narrow_event_type = DataType::Struct(Fields::from(vec![
+            Field::new("is_available", DataType::Boolean, true),
+            Field::new("event_time_ms", DataType::Int64, true),
+            Field::new(
+                "items",
+                DataType::List(Arc::new(Field::new("item", narrow_item_type, true))),
+                true,
+            ),
+        ]));
+        let narrow_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("is_flagged", DataType::Boolean, false),
+            Field::new(
+                "events",
+                DataType::List(Arc::new(Field::new("item", narrow_event_type, true))),
+                true,
+            ),
+        ]));
+
+        let batches = assert_prunes(
+            vec![("wide.parquet", wide_batch)],
+            narrow_schema,
+            wide_schema,
+            "SELECT events FROM t_narrow ORDER BY id",
+            "SELECT events FROM t_full ORDER BY id",
+        )
+        .await;
+
+        let events = batches[0].column(0);
+        let events_list = events.as_any().downcast_ref::<ListArray>().unwrap();
+        let event_structs = events_list
+            .values()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        // event_token and latency_parts are dropped; only is_available,
+        // event_time_ms, and items survive.
+        assert_eq!(event_structs.fields().len(), 3);
+
+        let items_list = event_structs
+            .column_by_name("items")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        let item_structs = items_list
+            .values()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        // feature_map, diagnostics, and pad are dropped; only group_id,
+        // entity_id, and metric_value survive, at the *inner* list<struct>
+        // nested two levels deep inside the outer one.
+        assert_eq!(item_structs.fields().len(), 3);
+        assert_eq!(item_structs.len(), NUM_ITEMS);
+        let group_id = item_structs
+            .column_by_name("group_id")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(
+            group_id.values(),
+            &(0..NUM_ITEMS as i64).collect::<Vec<_>>()
+        );
+    }
+}
