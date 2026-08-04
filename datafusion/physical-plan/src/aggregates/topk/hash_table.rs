@@ -153,6 +153,11 @@ where
             rnd: RandomState::default(),
         }
     }
+
+    #[inline]
+    fn eq_fn(id: Option<&str>) -> impl Fn(&Option<String>) -> bool {
+        move |mi| id == mi.as_deref()
+    }
 }
 
 impl<S> ArrowHashTable for StringHashTable<S>
@@ -193,25 +198,27 @@ where
         let id = some_value(&self.owned, row_idx);
         // Compute hash and create equality closure for hash table lookup.
         let hash = self.rnd.hash_one(id);
-        let eq = move |mi: &Option<String>| id == mi.as_deref();
 
         // Use entry API to avoid double lookup
-        self.map
-            .find_or_insert(hash, id.map(ToOwned::to_owned), replace_idx, eq)
+        self.map.find_or_insert(
+            hash,
+            id.map(ToOwned::to_owned),
+            replace_idx,
+            Self::eq_fn(id),
+        )
     }
 
     fn insert_null(&mut self, row_idx: usize) -> bool {
         let id = some_value(&self.owned, row_idx);
         let hash = self.rnd.hash_one(id);
-        let eq = move |mi: &Option<String>| id == mi.as_deref();
-        self.map.insert_null(hash, id.map(ToOwned::to_owned), eq)
+        self.map
+            .insert_null(hash, id.map(ToOwned::to_owned), Self::eq_fn(id))
     }
 
     fn remove_if_null(&mut self, row_idx: usize) -> bool {
         let id = some_value(&self.owned, row_idx);
         let hash = self.rnd.hash_one(id);
-        let eq = move |mi: &Option<String>| id == mi.as_deref();
-        self.map.remove_if_null(hash, eq)
+        self.map.remove_if_null(hash, Self::eq_fn(id))
     }
 
     fn null_map_idxs(&self) -> Vec<usize> {
@@ -235,10 +242,16 @@ where
     }
 
     /// Computes the id and its hash for the given row, for hash table lookups
+    #[inline]
     fn id_and_hash(&self, row_idx: usize) -> (Option<VAL::Native>, u64) {
         let id: Option<VAL::Native> = some_value(&self.owned, row_idx);
         let hash: u64 = id.hash(&self.rnd);
         (id, hash)
+    }
+
+    #[inline]
+    fn eq_fn(id: Option<VAL::Native>) -> impl Fn(&Option<VAL::Native>) -> bool {
+        move |mi| id == *mi
     }
 }
 
@@ -282,21 +295,19 @@ where
         replace_idx: usize,
     ) -> (usize, InsertKind) {
         let (id, hash) = self.id_and_hash(row_idx);
-        let eq = |mi: &Option<VAL::Native>| id == *mi;
         // Use entry API to avoid double lookup
-        self.map.find_or_insert(hash, id, replace_idx, eq)
+        self.map
+            .find_or_insert(hash, id, replace_idx, Self::eq_fn(id))
     }
 
     fn insert_null(&mut self, row_idx: usize) -> bool {
         let (id, hash) = self.id_and_hash(row_idx);
-        let eq = move |mi: &Option<VAL::Native>| id == *mi;
-        self.map.insert_null(hash, id, eq)
+        self.map.insert_null(hash, id, Self::eq_fn(id))
     }
 
     fn remove_if_null(&mut self, row_idx: usize) -> bool {
         let (id, hash) = self.id_and_hash(row_idx);
-        let eq = move |mi: &Option<VAL::Native>| id == *mi;
-        self.map.remove_if_null(hash, eq)
+        self.map.remove_if_null(hash, Self::eq_fn(id))
     }
 
     fn null_map_idxs(&self) -> Vec<usize> {
