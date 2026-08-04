@@ -1337,6 +1337,49 @@ each partition’s state.</p>
 <h3><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.94.0<a class="headerlink" href="#msrv-updated-to-1-94-0" title="Link to this heading">#</a></h3>
 <p>The Minimum Supported Rust Version (MSRV) has been updated to <a class="reference external" href="https://releases.rs/docs/1.94.0/"><code class="docutils literal notranslate"><span class="pre">1.94.0</span></code></a>.</p>
 </section>
+<section id="cachedparquetfilereader-removed-parquetfilereader-fields-are-now-private">
+<h3><code class="docutils literal notranslate"><span class="pre">CachedParquetFileReader</span></code> removed; <code class="docutils literal notranslate"><span class="pre">ParquetFileReader</span></code> fields are now private<a class="headerlink" href="#cachedparquetfilereader-removed-parquetfilereader-fields-are-now-private" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">CachedParquetFileReader</span></code> duplicated <code class="docutils literal notranslate"><span class="pre">ParquetFileReader</span></code> and has been removed;
+<code class="docutils literal notranslate"><span class="pre">ParquetFileReader</span></code>’s fields are also now private, with
+<code class="docutils literal notranslate"><span class="pre">file_metrics()</span></code> and <code class="docutils literal notranslate"><span class="pre">partitioned_file()</span></code> accessors added for the two that
+were previously public.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Code that names the <code class="docutils literal notranslate"><span class="pre">CachedParquetFileReader</span></code> type.</p></li>
+<li><p>Code that constructs a <code class="docutils literal notranslate"><span class="pre">ParquetFileReader</span></code> directly via a struct literal, or
+reads/writes its fields.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">ParquetFileReader::new</span></code> is no longer public; build a reader through
+<code class="docutils literal notranslate"><span class="pre">ParquetFileReaderFactory::create_reader</span></code> (via <code class="docutils literal notranslate"><span class="pre">DefaultParquetFileReaderFactory</span></code>
+or <code class="docutils literal notranslate"><span class="pre">CachedParquetFileReaderFactory</span></code>) instead of constructing one directly:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">inner</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ParquetObjectReader</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">Arc</span><span class="p">::</span><span class="n">clone</span><span class="p">(</span><span class="o">&amp;</span><span class="n">store</span><span class="p">),</span><span class="w"> </span><span class="n">location</span><span class="p">).</span><span class="n">with_file_size</span><span class="p">(</span><span class="n">size</span><span class="p">);</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">reader</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CachedParquetFileReader</span><span class="p">::</span><span class="n">new</span><span class="p">(</span>
+<span class="w">    </span><span class="n">file_metrics</span><span class="p">,</span>
+<span class="w">    </span><span class="n">store</span><span class="p">,</span>
+<span class="w">    </span><span class="n">inner</span><span class="p">,</span>
+<span class="w">    </span><span class="n">partitioned_file</span><span class="p">,</span>
+<span class="w">    </span><span class="n">metadata_cache</span><span class="p">,</span>
+<span class="w">    </span><span class="n">metadata_size_hint</span><span class="p">,</span>
+<span class="p">);</span>
+
+<span class="c1">// After</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">reader</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CachedParquetFileReaderFactory</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">store</span><span class="p">,</span><span class="w"> </span><span class="n">metadata_cache</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">create_reader</span><span class="p">(</span><span class="n">partition_index</span><span class="p">,</span><span class="w"> </span><span class="n">partitioned_file</span><span class="p">,</span><span class="w"> </span><span class="n">metadata_size_hint</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">metrics</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Replace field access with the new accessor methods:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">bytes_scanned</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">reader</span><span class="p">.</span><span class="n">file_metrics</span><span class="p">.</span><span class="n">bytes_scanned</span><span class="p">.</span><span class="n">value</span><span class="p">();</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">location</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="n">reader</span><span class="p">.</span><span class="n">partitioned_file</span><span class="p">.</span><span class="n">object_meta</span><span class="p">.</span><span class="n">location</span><span class="p">;</span>
+
+<span class="c1">// After</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">bytes_scanned</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">reader</span><span class="p">.</span><span class="n">file_metrics</span><span class="p">().</span><span class="n">bytes_scanned</span><span class="p">.</span><span class="n">value</span><span class="p">();</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">location</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="n">reader</span><span class="p">.</span><span class="n">partitioned_file</span><span class="p">().</span><span class="n">object_meta</span><span class="p">.</span><span class="n">location</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
 <section id="array-distance-scalar-function-now-rejects-multidimensional-arrays">
 <h3><code class="docutils literal notranslate"><span class="pre">array_distance</span></code> scalar function now rejects multidimensional arrays<a class="headerlink" href="#array-distance-scalar-function-now-rejects-multidimensional-arrays" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">array_distance</span></code> only supports one-dimensional arrays. Previously, when given
@@ -1431,6 +1474,7 @@ supports one-dimensional arrays.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#windowexpr-evaluate-stateful-now-takes-a-windowevalcontext"><code class="docutils literal notranslate"><span class="pre">WindowExpr::evaluate_stateful</span></code> now takes a <code class="docutils literal notranslate"><span class="pre">WindowEvalContext</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#partitionbatchstate-most-recent-row-removed"><code class="docutils literal notranslate"><span class="pre">PartitionBatchState::most_recent_row</span></code> removed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#msrv-updated-to-1-94-0"><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.94.0</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cachedparquetfilereader-removed-parquetfilereader-fields-are-now-private"><code class="docutils literal notranslate"><span class="pre">CachedParquetFileReader</span></code> removed; <code class="docutils literal notranslate"><span class="pre">ParquetFileReader</span></code> fields are now private</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#array-distance-scalar-function-now-rejects-multidimensional-arrays"><code class="docutils literal notranslate"><span class="pre">array_distance</span></code> scalar function now rejects multidimensional arrays</a></li>
 </ul>
 </li>
