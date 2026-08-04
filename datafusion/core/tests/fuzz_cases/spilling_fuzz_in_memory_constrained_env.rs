@@ -305,25 +305,37 @@ async fn test_sort_with_limited_memory_and_oversized_record_batch() -> Result<()
 #[tokio::test]
 async fn test_sort_preserving_merge_peak_memory_with_spilled_input_round_robin()
 -> Result<()> {
-    run_sort_preserving_merge_peak_memory_with_spilled_input(true, false).await
+    run_sort_preserving_merge_peak_memory_with_spilled_input(true, false, false).await
 }
 
 #[tokio::test]
 async fn test_sort_preserving_merge_peak_memory_with_spilled_input_no_round_robin()
 -> Result<()> {
-    run_sort_preserving_merge_peak_memory_with_spilled_input(false, false).await
+    run_sort_preserving_merge_peak_memory_with_spilled_input(false, false, false).await
 }
 
 #[tokio::test]
 async fn test_sort_preserving_merge_peak_memory_with_spilled_input_round_robin_multi_column()
 -> Result<()> {
-    run_sort_preserving_merge_peak_memory_with_spilled_input(true, true).await
+    run_sort_preserving_merge_peak_memory_with_spilled_input(true, true, false).await
 }
 
 #[tokio::test]
 async fn test_sort_preserving_merge_peak_memory_with_spilled_input_no_round_robin_multi_column()
 -> Result<()> {
-    run_sort_preserving_merge_peak_memory_with_spilled_input(false, true).await
+    run_sort_preserving_merge_peak_memory_with_spilled_input(false, true, false).await
+}
+
+#[tokio::test]
+async fn test_sort_preserving_merge_peak_memory_with_spilled_input_round_robin_tied_values()
+-> Result<()> {
+    run_sort_preserving_merge_peak_memory_with_spilled_input(true, false, true).await
+}
+
+#[tokio::test]
+async fn test_sort_preserving_merge_peak_memory_with_spilled_input_no_round_robin_tied_values()
+-> Result<()> {
+    run_sort_preserving_merge_peak_memory_with_spilled_input(false, false, true).await
 }
 
 /// Intended to measure the maximum number of record batches held in memory by
@@ -343,6 +355,7 @@ async fn test_sort_preserving_merge_peak_memory_with_spilled_input_no_round_robi
 async fn run_sort_preserving_merge_peak_memory_with_spilled_input(
     round_robin: bool,
     multi_column_sort: bool,
+    tied_values: bool,
 ) -> Result<()> {
     let num_batches = 10usize;
     let num_rows_per_batch = 100usize;
@@ -362,15 +375,21 @@ async fn run_sort_preserving_merge_peak_memory_with_spilled_input(
 
     for stream_idx in 0..2usize {
         // Each stream covers a non-overlapping key range so both are individually
-        // sorted: stream 0 → [0, 1000), stream 1 → [1000, 2000).
+        // sorted: stream 0 → [0, 1000), stream 1 → [1000, 2000). When
+        // `tied_values` is set, every row of every batch in both streams
+        // instead carries the same sort key, so every comparison between the
+        // two streams is a tie.
         let batches: Vec<RecordBatch> = (0..num_batches)
             .map(|b| {
                 // Interleave streams: stream 0 → even slots [0,200,400,...],
                 // stream 1 → odd slots [100,300,500,...] so the merge
                 // alternates between them on every batch.
                 let base = ((b * 2 + stream_idx) * num_rows_per_batch) as i32;
-                let sort_col: Int32Array =
-                    (base..base + num_rows_per_batch as i32).collect();
+                let sort_col: Int32Array = if tied_values {
+                    std::iter::repeat_n(0, num_rows_per_batch).collect()
+                } else {
+                    (base..base + num_rows_per_batch as i32).collect()
+                };
                 let payload_col: StringArray =
                     std::iter::repeat_n(large_string.as_str(), num_rows_per_batch)
                         .map(Some)
