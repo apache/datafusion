@@ -94,7 +94,7 @@ is not obvious from reading the code itself. Great comments make the code easier
 to reason about for readers with the expected background, and help future
 maintainers.
 
-Some practical guidelines for writing (and reviewing) comments:
+Some practical guidelines for reviewing comments:
 
 1. The code has adequate comments, focused on the **rationale** for any
    non-obvious change (the "why"), not a restatement of what the code does
