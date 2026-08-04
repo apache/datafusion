@@ -173,11 +173,9 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// must not be returned. This method is shallow and does not include dynamic
     /// expressions produced by child plans.
     ///
-    /// Each returned expression must have a stable, node-unique
-    /// [`PhysicalExpr::expression_id`]. The returned [`Arc`]s allow callers to
-    /// retain access to the live runtime state after this plan is no longer
-    /// borrowed. The default implementation reports that this node produces no
-    /// dynamic expressions.
+    /// Each returned expression must have a [`PhysicalExpr::expression_id`]
+    /// since all dynamic expressions such as [`DynamicFilterPhysicalExpr`]
+    /// have an expression id.
     fn dynamic_expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         Vec::new()
     }
@@ -1334,6 +1332,7 @@ macro_rules! check_len {
     };
 }
 
+/// All dynamic expressions must have an expression id.
 fn check_dynamic_expression_invariants<P: ExecutionPlan + ?Sized>(
     plan: &P,
 ) -> Result<()> {
