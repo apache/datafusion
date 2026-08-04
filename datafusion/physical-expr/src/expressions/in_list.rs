@@ -38,6 +38,7 @@ use datafusion_expr::{ColumnarValue, expr_vec_fmt};
 
 mod array_static_filter;
 mod branchless_filter;
+mod byte_view_filter;
 mod fixed_size_binary_filter;
 mod primitive_filter;
 mod result;
@@ -216,7 +217,7 @@ impl InListExpr {
             expr,
             list,
             negated,
-            Some(instantiate_static_filter(array)?),
+            Some(instantiate_static_filter(array, &expr_data_type)?),
         ))
     }
 
@@ -243,7 +244,7 @@ impl InListExpr {
 
         // Try to create a static filter if all list expressions are constants
         let static_filter = match try_evaluate_constant_list(&list, schema)? {
-            Some(in_array) => Some(instantiate_static_filter(in_array)?),
+            Some(in_array) => Some(instantiate_static_filter(in_array, &expr_data_type)?),
             None => None, // Non-constant expressions, fall back to dynamic evaluation
         };
 
@@ -3607,6 +3608,23 @@ mod tests {
                 wrap_in_dict(Arc::clone(&utf8_needle)),
                 wrap_in_dict(Arc::clone(&utf8_in)),
             )?
+        );
+
+        // Utf8View in_array, Utf8View and Dict(Utf8View) needles
+        let utf8view_in =
+            Arc::new(StringViewArray::from(vec!["a", "b", "c", "d", "e"])) as ArrayRef;
+        let utf8view_needle =
+            Arc::new(StringViewArray::from(vec!["a", "missing", "b"])) as ArrayRef;
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(
+                Arc::clone(&utf8view_needle),
+                Arc::clone(&utf8view_in),
+            )?
+        );
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(wrap_in_dict(utf8view_needle), utf8view_in)?
         );
 
         // Struct in_array, Struct needle: multi-column join
