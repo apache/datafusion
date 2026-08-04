@@ -551,10 +551,19 @@ impl ParquetOpenState {
             }
             ParquetOpenState::PruneWithStatistics(prepared) => {
                 let prepared_row_groups = (*prepared).prune_row_groups()?;
-                if should_load_page_index(
-                    prepared_row_groups.prepared.page_pruning_predicate.as_ref(),
-                    &prepared_row_groups.row_groups,
-                ) {
+                // EXPERIMENT: the streaming policy plans at page granularity,
+                // which requires the offset index. Page-index loading is
+                // otherwise driven purely by whether *pruning* can use it, so
+                // without this the streaming path silently falls back to the
+                // push decoder on every scan that has no prunable predicate.
+                let streaming_needs_page_index =
+                    matches!(FetchPolicy::from_env(), FetchPolicy::Streaming { .. });
+                if streaming_needs_page_index
+                    || should_load_page_index(
+                        prepared_row_groups.prepared.page_pruning_predicate.as_ref(),
+                        &prepared_row_groups.row_groups,
+                    )
+                {
                     Ok(ParquetOpenState::LoadPageIndex(
                         prepared_row_groups.load_page_index().boxed(),
                     ))
