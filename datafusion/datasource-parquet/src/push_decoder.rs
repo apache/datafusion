@@ -35,11 +35,13 @@
 //! The opener constructs both halves and hands the state off to
 //! [`PushDecoderStreamState::into_stream`] for consumption.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
+use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
+use bytes::Bytes;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use log::debug;
@@ -109,6 +111,114 @@ impl DecoderBuilderConfig<'_> {
 #[derive(Debug, Clone)]
 pub(crate) struct RgPlanEntry {
     pub(crate) rg_index: usize,
+}
+
+/// EXPERIMENT: peak bytes staged in the push decoder (buffered but not yet
+/// handed to a reader), max over all streams since last reset. Benchmarks
+/// reset and read this between runs.
+pub static PEAK_STAGED_BYTES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+fn note_staged_bytes(decoder: &ParquetPushDecoder) {
+    PEAK_STAGED_BYTES.fetch_max(
+        decoder.buffered_bytes(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+/// EXPERIMENT: how the stream schedules I/O relative to decode.
+///
+/// - `Off`: current main behavior — fetch exactly what the decoder asks
+///   for, when it asks for it. I/O and decode strictly alternate.
+/// - `Batched`: PR #23492 behavior — when the decoder asks for the current
+///   row group's ranges, append the complete projected ranges of upcoming
+///   row groups to the *same* blocking fetch, as long as
+///   `buffered + staged <= budget`. Fewer round trips, but no overlap.
+/// - `Pipelined`: when a row group's reader is handed over for decode,
+///   spawn a *background* fetch for upcoming row groups' projected ranges
+///   within the same byte budget. Decode of the current RG overlaps with
+///   I/O for the next ones.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum FetchPolicy {
+    Off,
+    Batched { budget: u64 },
+    Pipelined { budget: u64 },
+}
+
+impl FetchPolicy {
+    pub(crate) fn from_env() -> Self {
+        let budget = std::env::var("DF_FETCH_BUDGET")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(20 * 1024 * 1024);
+        match std::env::var("DF_FETCH_POLICY").as_deref() {
+            Ok("batched") => FetchPolicy::Batched { budget },
+            Ok("pipelined") => FetchPolicy::Pipelined { budget },
+            _ => FetchPolicy::Off,
+        }
+    }
+}
+
+/// Payload returned by a background prefetch task: the lent reader, the
+/// ranges it fetched, and the fetch result.
+type PrefetchResult = (
+    Box<dyn AsyncFileReader>,
+    Vec<Range<u64>>,
+    parquet::errors::Result<Vec<Bytes>>,
+);
+
+/// The file reader is either available inline or lent out to a background
+/// prefetch task (only under [`FetchPolicy::Pipelined`]).
+pub(crate) enum ReaderSlot {
+    Idle(Box<dyn AsyncFileReader>),
+    Busy(tokio::task::JoinHandle<PrefetchResult>),
+    /// Transient state while ownership moves between the two above.
+    Empty,
+}
+
+/// Compute the complete projected byte ranges of upcoming row groups that
+/// fit in `budget` given `staged_bytes` already accounted for. Mirrors the
+/// logic in PR #23492. `entries` must already exclude the row group
+/// currently being fetched/decoded.
+fn upcoming_row_group_ranges<'a>(
+    entries: impl Iterator<Item = &'a RgPlanEntry>,
+    projection: &ProjectionMask,
+    metadata: &ParquetMetaData,
+    prefetched_row_groups: &mut HashSet<usize>,
+    mut staged_bytes: u64,
+    budget: u64,
+) -> Vec<Range<u64>> {
+    let mut ranges = Vec::new();
+    if staged_bytes >= budget {
+        return ranges;
+    }
+    for entry in entries {
+        if prefetched_row_groups.contains(&entry.rg_index) {
+            continue;
+        }
+        let row_group = metadata.row_group(entry.rg_index);
+        let row_group_ranges = row_group
+            .columns()
+            .iter()
+            .enumerate()
+            .filter(|(column_idx, _)| projection.leaf_included(*column_idx))
+            .map(|(_, column)| {
+                let (start, len) = column.byte_range();
+                start..start + len
+            })
+            .collect::<Vec<_>>();
+        let row_group_bytes = row_group_ranges
+            .iter()
+            .map(|range| range.end - range.start)
+            .sum::<u64>();
+        if staged_bytes.saturating_add(row_group_bytes) > budget {
+            break;
+        }
+        ranges.extend(row_group_ranges);
+        staged_bytes += row_group_bytes;
+        prefetched_row_groups.insert(entry.rg_index);
+    }
+    ranges
 }
 
 /// Runtime row-group pruner driven by a dynamic predicate (e.g. the
@@ -243,7 +353,13 @@ pub(crate) struct PushDecoderStreamState {
     pub(crate) decoder: Option<ParquetPushDecoder>,
     pub(crate) active_reader: Option<ParquetRecordBatchReader>,
     pub(crate) rg_plan: VecDeque<RgPlanEntry>,
-    pub(crate) reader: Box<dyn AsyncFileReader>,
+    pub(crate) reader: ReaderSlot,
+    /// EXPERIMENT: fetch scheduling policy (see [`FetchPolicy`]).
+    pub(crate) fetch_policy: FetchPolicy,
+    /// Parquet metadata used to compute projected ranges of upcoming RGs.
+    pub(crate) parquet_metadata: Arc<ParquetMetaData>,
+    /// Row groups whose projected ranges were already staged speculatively.
+    pub(crate) prefetched_row_groups: HashSet<usize>,
     /// Per-file projection: the mask installed on every decoder and the
     /// per-batch transform applied by [`Self::project_batch`].
     pub(crate) decoder_projection: DecoderProjection,
@@ -372,22 +488,77 @@ impl PushDecoderStreamState {
             // Step 3: drive the decoder.
             let decoder = self.decoder.as_mut().expect("decoder present");
             match decoder.try_next_reader() {
-                Ok(DecodeResult::NeedsData(ranges)) => {
-                    let data = self
-                        .reader
+                Ok(DecodeResult::NeedsData(mut ranges)) => {
+                    // EXPERIMENT: if a background prefetch is in flight,
+                    // land it first — it may cover (part of) the request.
+                    if matches!(self.reader, ReaderSlot::Busy(_)) {
+                        let ReaderSlot::Busy(handle) =
+                            std::mem::replace(&mut self.reader, ReaderSlot::Empty)
+                        else {
+                            unreachable!()
+                        };
+                        let (reader, fetched_ranges, result) = match handle.await {
+                            Ok(v) => v,
+                            Err(e) => {
+                                return Some((
+                                    Err(DataFusionError::External(Box::new(e))),
+                                    self,
+                                ));
+                            }
+                        };
+                        self.reader = ReaderSlot::Idle(reader);
+                        match result {
+                            Ok(data) => {
+                                let decoder =
+                                    self.decoder.as_mut().expect("decoder present");
+                                if let Err(e) = decoder.push_ranges(fetched_ranges, data)
+                                {
+                                    return Some((Err(DataFusionError::from(e)), self));
+                                }
+                                note_staged_bytes(decoder);
+                            }
+                            Err(e) => {
+                                return Some((Err(DataFusionError::from(e)), self));
+                            }
+                        }
+                        // Re-poll the decoder: the prefetched data may have
+                        // satisfied this request entirely.
+                        continue;
+                    }
+
+                    // EXPERIMENT: batched policy (PR #23492) — extend the
+                    // blocking fetch with upcoming row groups' ranges.
+                    if let FetchPolicy::Batched { budget } = self.fetch_policy {
+                        let buffered = self
+                            .decoder
+                            .as_ref()
+                            .expect("decoder present")
+                            .buffered_bytes();
+                        let required: u64 = ranges.iter().map(|r| r.end - r.start).sum();
+                        ranges.extend(upcoming_row_group_ranges(
+                            self.rg_plan.iter().skip(1),
+                            self.decoder_projection.projection_mask(),
+                            &self.parquet_metadata,
+                            &mut self.prefetched_row_groups,
+                            buffered.saturating_add(required),
+                            budget,
+                        ));
+                    }
+
+                    let ReaderSlot::Idle(reader) = &mut self.reader else {
+                        unreachable!("reader is idle here")
+                    };
+                    let data = reader
                         .get_byte_ranges(ranges.clone())
                         .await
                         .map_err(DataFusionError::from);
                     match data {
                         Ok(data) => {
-                            if let Err(e) = self
-                                .decoder
-                                .as_mut()
-                                .expect("decoder present")
-                                .push_ranges(ranges, data)
-                            {
+                            let decoder = self.decoder.as_mut().expect("decoder present");
+                            if let Err(e) = decoder.push_ranges(ranges, data) {
                                 return Some((Err(DataFusionError::from(e)), self));
                             }
+                            note_staged_bytes(decoder);
                         }
                         Err(e) => return Some((Err(e), self)),
                     }
@@ -398,6 +569,74 @@ impl PushDecoderStreamState {
                     // the decoder is about to read).
                     self.rg_plan.pop_front();
                     self.active_reader = Some(reader);
+
+                    // EXPERIMENT: pipelined policy — while this RG decodes,
+                    // fetch upcoming RGs' projected ranges in the background
+                    // within the byte budget.
+                    if let FetchPolicy::Pipelined { budget } = self.fetch_policy
+                        && matches!(self.reader, ReaderSlot::Idle(_))
+                    {
+                        let buffered = self
+                            .decoder
+                            .as_ref()
+                            .expect("decoder present")
+                            .buffered_bytes();
+                        // Hysteresis: without this, once the budget is
+                        // mostly full of staged data every spawn only has
+                        // ~one RG of headroom and the fetch degrades to
+                        // one round trip per RG. Waiting until at least
+                        // half the budget is free keeps gulps large. The
+                        // final row groups are always eligible so the
+                        // tail doesn't stall.
+                        let headroom = budget.saturating_sub(buffered);
+                        let remaining_bytes: u64 = self
+                            .rg_plan
+                            .iter()
+                            .filter(|e| !self.prefetched_row_groups.contains(&e.rg_index))
+                            .map(|e| {
+                                let rg = self.parquet_metadata.row_group(e.rg_index);
+                                rg.columns()
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(i, _)| {
+                                        self.decoder_projection
+                                            .projection_mask()
+                                            .leaf_included(*i)
+                                    })
+                                    .map(|(_, c)| c.byte_range().1)
+                                    .sum::<u64>()
+                            })
+                            .sum();
+                        if headroom < (budget / 2).min(remaining_bytes) {
+                            continue;
+                        }
+                        let prefetch_ranges = upcoming_row_group_ranges(
+                            self.rg_plan.iter(),
+                            self.decoder_projection.projection_mask(),
+                            &self.parquet_metadata,
+                            &mut self.prefetched_row_groups,
+                            buffered,
+                            budget,
+                        );
+                        if !prefetch_ranges.is_empty() {
+                            let ReaderSlot::Idle(mut reader) =
+                                std::mem::replace(&mut self.reader, ReaderSlot::Empty)
+                            else {
+                                unreachable!()
+                            };
+                            // POC: a raw tokio JoinHandle so the prefetch
+                            // detaches (runs to completion) if the stream
+                            // is dropped mid-fetch; a mergeable version
+                            // would use `SpawnedTask` for cancel-safety.
+                            #[expect(clippy::disallowed_methods)]
+                            let handle = tokio::task::spawn(async move {
+                                let result =
+                                    reader.get_byte_ranges(prefetch_ranges.clone()).await;
+                                (reader, prefetch_ranges, result)
+                            });
+                            self.reader = ReaderSlot::Busy(handle);
+                        }
+                    }
                 }
                 Ok(DecodeResult::Finished) => return None,
                 Err(e) => {
