@@ -48,7 +48,6 @@ criterion = { workspace = true, features = ["html_reports"] }
 datafusion = { workspace = true, default-features = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-common-runtime = { workspace = true }
-datafusion-execution = { workspace = true }
 env_logger = { workspace = true }
 futures = { workspace = true }
 libmimalloc-sys = { version = "0.1", optional = true }
