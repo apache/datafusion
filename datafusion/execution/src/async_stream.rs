@@ -92,7 +92,11 @@ pub fn async_try_stream<T, E, F: Future<Output = Result<(), E>>>(
     let (try_emitter, mut emitter, receiver) = try_tx_rx::<T, E>();
     AsyncStream::new(receiver, async move {
         if let Err(e) = generator(try_emitter).await {
-            emitter.emit(Err(e)).await
+            // Fill the slot without suspending so this future completes in the same
+            // poll that yields `Err(e)`: the stream terminates immediately and the
+            // emitter state is dropped (a consumer may never poll again after an
+            // error, which would otherwise keep this future suspended inside `emit`)
+            emitter.set(Err(e));
         }
     })
 }
@@ -168,13 +172,19 @@ impl<T> Emitter<T> {
     /// been awaited, because doing so would silently overwrite the unconsumed
     /// value.
     pub fn emit(&mut self, value: T) -> impl FusedFuture<Output = ()> {
+        self.set(value);
+        Emit { done: false }
+    }
+
+    /// Places `value` in the slot without suspending the generator. Only useful
+    /// as the very last action before the generator future completes, since
+    /// nothing yields control back to the consumer in between.
+    fn set(&mut self, value: T) {
         let mut guard = self.slot.lock();
         match guard.deref_mut() {
             Some(_) => panic!("Misuse: await was not called after calling emit"),
             slot => *slot = Some(value),
         }
-
-        Emit { done: false }
     }
 }
 
@@ -653,6 +663,59 @@ mod test {
             std::iter::repeat_n(123, 9).map(Ok).collect::<Vec<_>>(),
             values
         );
+    }
+
+    struct DropGuard(Arc<AtomicUsize>);
+
+    impl Drop for DropGuard {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn generator_freed_on_done() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let guard = DropGuard(Arc::clone(&drops));
+
+        let s = async_stream(|mut emitter| async move {
+            let _guard = guard;
+            emitter.emit(1).await;
+        });
+        pin_mut!(s);
+
+        assert_eq!(s.next().await, Some(1));
+        assert_eq!(s.next().await, None);
+
+        // State captured by the generator is dropped as soon as it completes
+        // (async blocks drop their locals on return), even though the stream
+        // itself is still alive
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert_eq!(s.next().await, None);
+    }
+
+    #[tokio::test]
+    async fn generator_freed_on_emitted_error() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let guard = DropGuard(Arc::clone(&drops));
+
+        let s = async_try_stream(|mut emitter| async move {
+            let _guard = guard;
+            emitter.emit(1).await;
+            Err("boom")
+        });
+        pin_mut!(s);
+
+        assert_eq!(s.next().await, Some(Ok(1)));
+        assert_eq!(s.next().await, Some(Err("boom")));
+
+        // The stream terminates in the same poll that yields the error, so the
+        // generator state is freed even if the consumer never polls again
+        assert!(s.is_terminated());
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+
+        // Polling again after the error just returns None
+        assert_eq!(s.next().await, None);
     }
 
     use pin_project_lite::pin_project;

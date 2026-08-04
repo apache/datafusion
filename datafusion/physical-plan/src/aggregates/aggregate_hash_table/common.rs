@@ -82,6 +82,10 @@ pub(in crate::aggregates) struct AggregateHashTable<AggrMode> {
     /// Output schema: group columns followed by aggregate state or final values.
     pub(super) output_schema: SchemaRef,
 
+    /// Intermediate-state schema used when memory pressure requires the table
+    /// to spill its current state.
+    pub(super) state_schema: SchemaRef,
+
     /// Maximum rows per emitted output batch, from config `batch_size`.
     pub(super) batch_size: usize,
 
@@ -97,6 +101,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         agg: &AggregateExec,
         partition: usize,
         output_schema: SchemaRef,
+        state_schema: SchemaRef,
         batch_size: usize,
         filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
     ) -> Result<Self> {
@@ -133,6 +138,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             group_by_metrics: GroupByMetrics::new(&agg.metrics, partition),
             input_schema,
             output_schema,
+            state_schema,
             batch_size,
             state: AggregateHashTableState::Building(AggregateHashTableBuffer {
                 group_by: Arc::clone(&agg.group_by),
@@ -282,9 +288,46 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         }
     }
 
+    pub(in crate::aggregates) fn group_by_metrics(&self) -> &GroupByMetrics {
+        &self.group_by_metrics
+    }
+
     /// Returns the number of distinct groups accumulated so far.
     pub(in crate::aggregates) fn building_group_count(&self) -> usize {
         self.state.building().group_values.len()
+    }
+
+    /// Takes every intermediate aggregate state and resets the table so it can
+    /// continue accumulating raw input.
+    ///
+    /// Unlike normal single aggregation output, this materializes intermediate
+    /// states rather than final values. The states can therefore be merged after
+    /// spilling without finalizing the same group more than once.
+    pub(in crate::aggregates) fn take_state_batch(
+        &mut self,
+    ) -> Result<Option<RecordBatch>> {
+        let state_schema = Arc::clone(&self.state_schema);
+        let state = self.state.building_mut();
+        if state.group_values.is_empty() {
+            return Ok(None);
+        }
+
+        let mut output = state.group_values.emit(EmitTo::All)?;
+        for acc in &mut state.accumulators {
+            output.extend(acc.state(EmitTo::All)?);
+        }
+
+        let batch = RecordBatch::try_new(state_schema, output)?;
+        debug_assert!(batch.num_rows() > 0);
+
+        // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
+        // key/index buffers too so the memory reservation can be released
+        // before the batch is sorted for spilling.
+        state.group_values.clear_shrink(0);
+        state.batch_group_indices.clear();
+        state.batch_group_indices.shrink_to_fit();
+
+        Ok(Some(batch))
     }
 
     pub(in crate::aggregates) fn is_building(&self) -> bool {
