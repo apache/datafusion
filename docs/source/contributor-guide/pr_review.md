@@ -122,16 +122,20 @@ Guidelines for evaluating tests:
 1. Prefer `sqllogictest` (`.slt`) tests or DataFrame API tests where
    possible, as they exercise **user visible behavior** and are less coupled
    to internal implementation details than unit tests.
-2. Verify test coverage of changed code using the `codecov` check on the PR
+2. Verify tests cover edge cases and common failure scenarios, not just the 
+   common successful path. However, it is NOT necessary to test every possible 
+   error path, especially if it is difficult to trigger or unlikely to occur in 
+   practice.
+3. Verify test coverage of changed code using the `codecov` check on the PR
    or run [`cargo llvm-cov`] locally for an HTML report. Use judgement about
    any uncovered lines (e.g. error paths that are hard to trigger may be
    fine) -- the goal is confidence in the change, not slavishly hitting some
    coverage number.
-3. Avoid tests with lots of repeated boilerplate: when many tests share
+4. Avoid tests with lots of repeated boilerplate: when many tests share
    near-identical setup, it is hard to understand what is different
    (and thus what is actually being tested) between them. Make the _difference_
    between cases obvious.
-4. Check that tests assert on specific expected values or plans (e.g. via
+5. Check that tests assert on specific expected values or plans (e.g. via
    `insta` snapshots or `.slt` expected output) rather than merely checking
    "no error occurred".
 
