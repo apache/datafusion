@@ -106,29 +106,52 @@
                     "direct": {}
                   },
                   "virtualTable": {
-                    "values": [{
-                      "fields": [{
-                        "i8": 2,
-                        "nullable": false
-                      }, {
-                        "i8": 1,
-                        "nullable": false
-                      }, {
-                        "i8": 3,
-                        "nullable": false
-                      }]
-                    }, {
-                      "fields": [{
-                        "i8": 4,
-                        "nullable": false
-                      }, {
-                        "i8": 1,
-                        "nullable": false
-                      }, {
-                        "i8": 2,
-                        "nullable": false
-                      }]
-                    }]
+                    "expressions": [
+                      {
+                        "fields": [
+                          {
+                            "literal": {
+                              "i8": 2,
+                              "nullable": false
+                            }
+                          },
+                          {
+                            "literal": {
+                              "i8": 1,
+                              "nullable": false
+                            }
+                          },
+                          {
+                            "literal": {
+                              "i8": 3,
+                              "nullable": false
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "fields": [
+                          {
+                            "literal": {
+                              "i8": 4,
+                              "nullable": false
+                            }
+                          },
+                          {
+                            "literal": {
+                              "i8": 1,
+                              "nullable": false
+                            }
+                          },
+                          {
+                            "literal": {
+                              "i8": 2,
+                              "nullable": false
+                            }
+                          }
+                        ]
+                      }
+                    ]
                   }
                 }
               }

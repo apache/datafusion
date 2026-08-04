@@ -31,6 +31,9 @@ use arrow::datatypes::{
 use datafusion_common::Result;
 
 use super::array_static_filter::ArrayStaticFilter;
+use super::branchless_filter::{
+    BranchlessFilter, BranchlessFilterType, BranchlessNative,
+};
 use super::primitive_filter::*;
 use super::static_filter::StaticFilter;
 
@@ -159,7 +162,7 @@ mod tests {
     use arrow::array::UInt32Array;
     use arrow::datatypes::UInt32Type;
 
-    use super::super::primitive_filter::BranchlessFilterType;
+    use super::super::branchless_filter::BranchlessFilterType;
     use super::*;
 
     fn uint32_array(values: Vec<Option<u32>>) -> ArrayRef {
