@@ -2679,6 +2679,25 @@ async fn roundtrip_empty_projection() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_memory_source_empty_projection() -> Result<()> {
+    // Memory scan: `Some(vec![])` must not decode back as `None`
+    let ctx = SessionContext::new();
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Int64, false),
+        ])),
+        vec![
+            Arc::new(arrow::array::StringArray::from(vec!["Tom"])),
+            Arc::new(arrow::array::Int64Array::from(vec![18i64])),
+        ],
+    )?;
+    ctx.register_batch("tmem", batch)?;
+    let sql = "select 1 from tmem";
+    roundtrip_test_sql_with_context(sql, &ctx).await
+}
+
+#[tokio::test]
 async fn roundtrip_physical_plan_node() {
     use datafusion::prelude::*;
     use datafusion_proto::physical_plan::{
@@ -3225,51 +3244,6 @@ async fn roundtrip_memory_source() -> Result<()> {
         .create_physical_plan()
         .await?;
     roundtrip_test(plan)
-}
-
-#[tokio::test]
-async fn roundtrip_memory_source_empty_projection() -> Result<()> {
-    use datafusion::datasource::memory::MemorySourceConfig;
-
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int64, false),
-        Field::new("b", DataType::Utf8, false),
-    ]));
-    let batch = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![
-            Arc::new(arrow::array::Int64Array::from(vec![1, 2])),
-            Arc::new(arrow::array::StringArray::from(vec!["x", "y"])),
-        ],
-    )?;
-
-    // `Some(vec![])` projects away every column, which is not the same as
-    // `None` (keep all columns)
-    let source =
-        MemorySourceConfig::try_new(&[vec![batch]], Arc::clone(&schema), Some(vec![]))?;
-    let plan = DataSourceExec::from_data_source(source);
-    assert_eq!(plan.schema().fields().len(), 0);
-
-    let ctx = SessionContext::new();
-    let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter {};
-    let decoded = roundtrip_test_and_return(plan, &ctx, &codec, &proto_converter)?;
-
-    let decoded_source = decoded
-        .downcast_ref::<DataSourceExec>()
-        .ok_or_else(|| {
-            internal_datafusion_err!("Expected DataSourceExec after roundtrip")
-        })?
-        .data_source()
-        .downcast_ref::<MemorySourceConfig>()
-        .ok_or_else(|| {
-            internal_datafusion_err!("Expected MemorySourceConfig after roundtrip")
-        })?
-        .clone();
-
-    assert_eq!(decoded_source.projection(), &Some(vec![]));
-    assert_eq!(decoded.schema().fields().len(), 0);
-    Ok(())
 }
 
 #[tokio::test]
