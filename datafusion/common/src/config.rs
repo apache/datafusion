@@ -1076,6 +1076,17 @@ config_namespace! {
         ///
         /// Disabled by default, set to a number greater than 0 for enabling it.
         pub hash_join_buffering_capacity: usize, default = 0
+
+        /// Number of input streams to prefetch ahead-of-time for `ProgressiveEvalExec`.
+        /// Since `ProgressiveEvalExec` only polls one stream at a time in order,
+        /// we do not need to prefetch all streams at once, saving resources. However, if the
+        /// streams' IO time is much greater than their CPU/processing time, prefetching them will
+        /// help improve performance.
+        /// Default is 1 which means we will prefetch one extra stream before it is polled.
+        /// 0 means streams are only fetched immediately before they are required.
+        /// Increase this value if IO time to read a stream is often much more than CPU time to
+        /// process the previous one.
+        pub progressive_eval_num_prefetch_input_streams: usize, default = 1
     }
 }
 
