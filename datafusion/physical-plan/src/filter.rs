@@ -384,7 +384,8 @@ impl FilterExec {
                     input_num_rows.with_estimated_selectivity(selectivity);
                 let mut cs = input_stats.to_inexact().column_statistics;
                 for (idx, col_stat) in cs.iter_mut().enumerate() {
-                    col_stat.byte_size = scale_byte_size(col_stat.byte_size, selectivity);
+                    col_stat.byte_size =
+                        col_stat.byte_size.with_estimated_selectivity(selectivity);
                     col_stat.null_count = if null_rejecting_columns.contains(&idx) {
                         Precision::Exact(0)
                     } else {
@@ -1030,16 +1031,6 @@ fn interval_bound_to_precision(
     }
 }
 
-/// Scales a column's `byte_size` by the estimated filter `selectivity`. An
-/// exact zero is preserved: an empty column stays exactly empty after
-/// filtering.
-fn scale_byte_size(byte_size: Precision<usize>, selectivity: f64) -> Precision<usize> {
-    match byte_size {
-        Precision::Exact(0) => Precision::Exact(0),
-        byte_size => byte_size.with_estimated_selectivity(selectivity),
-    }
-}
-
 /// Caps a row-bounded column statistic (a null count or distinct count) at the
 /// filtered row estimate, since a column cannot have more nulls or distinct
 /// values than it has rows. Known counts are demoted to inexact because the
@@ -1133,8 +1124,9 @@ fn collect_new_statistics(
                 } else {
                     cap_at_rows(input_column_stats[idx].null_count, filtered_num_rows)
                 };
-                let byte_size =
-                    scale_byte_size(input_column_stats[idx].byte_size, selectivity);
+                let byte_size = input_column_stats[idx]
+                    .byte_size
+                    .with_estimated_selectivity(selectivity);
                 ColumnStatistics {
                     null_count: capped_null_count,
                     max_value,
@@ -2910,6 +2902,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_filter_statistics_preserves_exactly_empty_input() -> Result<()> {
+        // A satisfiable predicate over an exactly empty input: the filter cannot
+        // produce rows, so the whole estimate stays exact.
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let input_stats = Statistics {
+            num_rows: Precision::Exact(0),
+            total_byte_size: Precision::Exact(0),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(0),
+                byte_size: Precision::Exact(0),
+                ..Default::default()
+            }],
+        };
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        ));
+
+        let input = Arc::new(StatisticsExec::new(input_stats, schema));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics =
+            StatisticsContext::new().compute(filter.as_ref(), &StatisticsArgs::new())?;
+
+        assert_eq!(statistics.num_rows, Precision::Exact(0));
+        assert_eq!(statistics.total_byte_size, Precision::Exact(0));
+        assert_eq!(
+            statistics.column_statistics[0].byte_size,
+            Precision::Exact(0)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_filter_statistics_empty_input_equality_ndv_zero() -> Result<()> {
         let cases: Vec<(&str, Schema, Statistics, Arc<dyn PhysicalExpr>)> = vec![
             (
@@ -2963,12 +2991,12 @@ mod tests {
 
             assert_eq!(
                 statistics.num_rows,
-                Precision::Inexact(0),
+                Precision::Exact(0),
                 "case '{desc}': row count mismatch"
             );
             assert_eq!(
                 statistics.column_statistics[0].distinct_count,
-                Precision::Inexact(0),
+                Precision::Exact(0),
                 "case '{desc}': NDV should be capped at zero rows"
             );
         }

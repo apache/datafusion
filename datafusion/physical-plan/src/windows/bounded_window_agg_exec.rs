@@ -60,7 +60,8 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
 use datafusion_physical_expr::window::{
-    PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowState,
+    PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowEvalContext,
+    WindowState,
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
@@ -333,7 +334,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
             InputDistributionRequirements::new(vec![Distribution::KeyPartitioned(
                 self.partition_keys(),
             )])
-            .allow_range_satisfaction_for_key_partitioning()
         }
     }
 
@@ -401,6 +401,55 @@ impl ExecutionPlan for BoundedWindowAggExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use super::proto::encode_physical_window_expr;
+        use datafusion_proto_common::protobuf_common::EmptyMessage;
+        use datafusion_proto_models::protobuf;
+        use protobuf::window_agg_exec_node::InputOrderMode as ProtoInputOrderMode;
+
+        let input = ctx.encode_child(self.input())?;
+        let window_expr = self
+            .window_expr()
+            .iter()
+            .map(|expr| encode_physical_window_expr(expr, ctx))
+            .collect::<Result<Vec<_>>>()?;
+        let partition_keys = self
+            .partition_keys()
+            .iter()
+            .map(|expr| ctx.encode_expr(expr))
+            .collect::<Result<Vec<_>>>()?;
+        // A `Some(input_order_mode)` is what tells the shared `Window` decode
+        // arm to rebuild a `BoundedWindowAggExec` rather than a `WindowAggExec`.
+        let input_order_mode = match &self.input_order_mode {
+            InputOrderMode::Linear => ProtoInputOrderMode::Linear(EmptyMessage {}),
+            InputOrderMode::PartiallySorted(columns) => {
+                ProtoInputOrderMode::PartiallySorted(
+                    protobuf::PartiallySortedInputOrderMode {
+                        columns: columns.iter().map(|column| *column as u64).collect(),
+                    },
+                )
+            }
+            InputOrderMode::Sorted => ProtoInputOrderMode::Sorted(EmptyMessage {}),
+        };
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Window(Box::new(
+                    protobuf::WindowAggExecNode {
+                        input: Some(Box::new(input)),
+                        window_expr,
+                        partition_keys,
+                        input_order_mode: Some(input_order_mode),
+                    },
+                )),
+            ),
+        }))
     }
 }
 
@@ -478,25 +527,6 @@ trait PartitionSearcher: Send {
             }
         }
 
-        if self.is_mode_linear() {
-            // In `Linear` mode, it is guaranteed that the first ORDER BY column
-            // is sorted across partitions. Note that only the first ORDER BY
-            // column is guaranteed to be ordered. As a counter example, consider
-            // the case, `PARTITION BY b, ORDER BY a, c` when the input is sorted
-            // by `[a, b, c]`. In this case, `BoundedWindowAggExec` mode will be
-            // `Linear`. However, we cannot guarantee that the last row of the
-            // input data will be the "last" data in terms of the ordering requirement
-            // `[a, c]` -- it will be the "last" data in terms of `[a, b, c]`.
-            // Hence, only column `a` should be used as a guarantee of the "last"
-            // data across partitions. For other modes (`Sorted`, `PartiallySorted`),
-            // we do not need to keep track of the most recent row guarantee across
-            // partitions. Since leading ordering separates partitions, guaranteed
-            // by the most recent row, already prune the previous partitions completely.
-            let last_row = get_last_row_batch(&record_batch)?;
-            for (_, partition_batch) in partition_buffers.iter_mut() {
-                partition_batch.set_most_recent_row(last_row.clone());
-            }
-        }
         self.mark_partition_end(partition_buffers);
 
         *input_buffer = if input_buffer.num_rows() == 0 {
@@ -962,6 +992,24 @@ pub struct BoundedWindowAggStream {
     /// Search mode for partition columns. This determines the algorithm with
     /// which we group each partition.
     search_mode: Box<dyn PartitionSearcher>,
+    /// In `Linear` mode, a single-row batch containing the most recent input
+    /// row (whichever partition that row belongs to); `None` in other modes
+    /// and before the first non-empty batch arrives. Since in `Linear` mode
+    /// the input is sorted by the first ORDER BY column, no future input row
+    /// -- in any partition -- can precede this row in that column. Every
+    /// partition's evaluation consults this bound to decide whether pending
+    /// window frames can be finalized before the partition receives more
+    /// data (which in turn allows buffered state to be pruned). Note that
+    /// only the first ORDER BY column provides this guarantee. As a counter
+    /// example, consider `PARTITION BY b, ORDER BY a, c` when the input is
+    /// sorted by `[a, b, c]`: the mode will be `Linear`, but the last row of
+    /// the input is the "last" data in terms of `[a, b, c]`, not in terms of
+    /// the ordering requirement `[a, c]`. Hence, only column `a` can serve
+    /// as a guarantee of the "last" data across partitions. In the `Sorted`
+    /// and `PartiallySorted` modes, the leading ordering separates
+    /// partitions, so finished partitions are pruned eagerly instead and no
+    /// such bound is needed.
+    most_recent_row: Option<RecordBatch>,
 }
 
 impl BoundedWindowAggStream {
@@ -1006,27 +1054,34 @@ impl BoundedWindowAggStream {
         baseline_metrics: BaselineMetrics,
         search_mode: Box<dyn PartitionSearcher>,
     ) -> Result<Self> {
-        let state = window_expr.iter().map(|_| IndexMap::new()).collect();
+        let state = window_expr.iter().map(|_| IndexMap::default()).collect();
         let empty_batch = RecordBatch::new_empty(Arc::clone(&schema));
         Ok(Self {
             schema,
             input,
             input_buffer: empty_batch,
-            partition_buffers: IndexMap::new(),
+            partition_buffers: IndexMap::default(),
             window_agg_states: state,
             finished: false,
             window_expr,
             baseline_metrics,
             search_mode,
+            most_recent_row: None,
         })
     }
 
     fn compute_aggregates(&mut self) -> Result<Option<RecordBatch>> {
         // calculate window cols
+        let eval_ctx = WindowEvalContext::default()
+            .with_most_recent_row(self.most_recent_row.as_ref());
         for (cur_window_expr, state) in
             self.window_expr.iter().zip(&mut self.window_agg_states)
         {
-            cur_window_expr.evaluate_stateful(&self.partition_buffers, state)?;
+            cur_window_expr.evaluate_stateful(
+                &self.partition_buffers,
+                state,
+                &eval_ctx,
+            )?;
         }
 
         let schema = Arc::clone(&self.schema);
@@ -1070,6 +1125,9 @@ impl BoundedWindowAggStream {
                 // stopped when dropped.
                 let _timer = elapsed_compute.timer();
 
+                if self.search_mode.is_mode_linear() && batch.num_rows() > 0 {
+                    self.most_recent_row = Some(get_last_row_batch(&batch)?);
+                }
                 self.search_mode.update_partition_batch(
                     &mut self.input_buffer,
                     batch,
@@ -1140,10 +1198,15 @@ impl BoundedWindowAggStream {
         // Retract no longer needed parts during window calculations from partition batch:
         for (partition_row, n_prune) in n_prune_each_partition.iter() {
             let pb_state = &mut self.partition_buffers[partition_row];
+            pb_state.n_out_row = 0;
+
+            // If there is nothing to prune, leave the batch as-is
+            if *n_prune == 0 {
+                continue;
+            }
 
             let batch = &pb_state.record_batch;
             pb_state.record_batch = batch.slice(*n_prune, batch.num_rows() - n_prune);
-            pb_state.n_out_row = 0;
 
             // Update state indices since we have pruned some rows from the beginning:
             for window_agg_state in self.window_agg_states.iter_mut() {
