@@ -1181,6 +1181,16 @@ config_namespace! {
         /// (reading) Use any available bloom filters when reading parquet files
         pub bloom_filter_on_read: bool, default = true
 
+        /// (reading) Use fully dictionary-encoded `BYTE_ARRAY` (Utf8/Binary)
+        /// column chunks as an exact row-group membership index when reading
+        /// parquet files. Unlike bloom filters, a fully dictionary-encoded
+        /// column chunk's dictionary is the exact, complete set of the row
+        /// group's distinct values, so this can prune both `IN`/`=` and
+        /// `NOT IN`/`!=` predicates. Only column chunks whose page encoding
+        /// statistics prove every data page came from the dictionary are
+        /// used; chunks that fell back to `PLAIN` encoding are ignored.
+        pub dictionary_filter_on_read: bool, default = false
+
         /// (reading) The maximum predicate cache size, in bytes. When
         /// `pushdown_filters` is enabled, sets the maximum memory used to cache
         /// the results of predicate evaluation between filter evaluation and

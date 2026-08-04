@@ -91,3 +91,7 @@ harness = false
 [[bench]]
 name = "parquet_metadata_statistics"
 harness = false
+
+[[bench]]
+name = "parquet_dictionary_pruning"
+harness = false

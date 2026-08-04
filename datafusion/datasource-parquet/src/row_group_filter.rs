@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use super::{ParquetAccessPlan, ParquetFileMetrics, RowGroupAccess};
 use crate::bloom_filter::BloomFilterStatistics;
+use crate::dictionary_filter::DictionaryStatistics;
 use arrow::array::{ArrayRef, BooleanArray, UInt64Array};
 use arrow::datatypes::Schema;
 use datafusion_common::pruning::PruningStatistics;
@@ -450,6 +451,48 @@ impl RowGroupAccessPlanFilter {
                 self.access_plan.skip(idx)
             } else {
                 metrics.row_groups_pruned_bloom_filter.add_matched(1);
+            }
+        }
+    }
+
+    /// Prune remaining row groups using loaded Parquet dictionary pages and
+    /// the [`PruningPredicate`].
+    ///
+    /// Updates this set with row groups that should not be scanned.
+    /// `row_group_dictionaries[idx]` contains the exact dictionary values for
+    /// the parquet row group at index `idx`.
+    ///
+    /// # Panics
+    /// if `row_group_dictionaries` does not have the same number of row groups as this set
+    pub fn prune_by_dictionary(
+        &mut self,
+        predicate: &PruningPredicate,
+        metrics: &ParquetFileMetrics,
+        row_group_dictionaries: &[DictionaryStatistics],
+    ) {
+        assert_eq!(row_group_dictionaries.len(), self.access_plan.len());
+        for (idx, stats) in row_group_dictionaries.iter().enumerate() {
+            if !self.access_plan.should_scan(idx) {
+                continue;
+            }
+
+            // Can this group be pruned?
+            let prune_group = match predicate.prune(stats) {
+                Ok(values) => !values[0],
+                Err(e) => {
+                    log::debug!(
+                        "Error evaluating row group predicate on dictionary: {e}"
+                    );
+                    metrics.predicate_evaluation_errors.add(1);
+                    false
+                }
+            };
+
+            if prune_group {
+                metrics.row_groups_pruned_dictionary.add_pruned(1);
+                self.access_plan.skip(idx)
+            } else {
+                metrics.row_groups_pruned_dictionary.add_matched(1);
             }
         }
     }

@@ -1,0 +1,201 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# End-to-end SLT for **row-group pruning by Parquet dictionaries**
+# (`datafusion.execution.parquet.dictionary_filter_on_read`).
+#
+# Some stores use a low-cardinality string column's Parquet dictionary as a
+# makeshift row-group index: when the whole column chunk is dictionary
+# encoded, the dictionary page is the exact, complete set of that row
+# group's distinct values, so a row group can be skipped without reading any
+# data pages if a required value isn't in its dictionary. Unlike bloom
+# filters, this is exact in both directions, so it can also prune `!=`/`NOT
+# IN` when a row group's dictionary is a subset of the excluded values.
+#
+# Builds a 3-row-group parquet file where each row group has exactly one
+# distinct value of `s`:
+#   RG 0: "alpha",  RG 1: "beta",  RG 2: "gamma"
+
+statement ok
+set datafusion.explain.analyze_level = summary;
+
+statement ok
+CREATE TABLE source_data AS VALUES
+  ('alpha'), ('alpha'), ('alpha'),
+  ('beta'), ('beta'), ('beta'),
+  ('gamma'), ('gamma'), ('gamma');
+
+statement ok
+COPY (SELECT column1 as s FROM source_data)
+TO 'test_files/scratch/parquet_dictionary_pruning/data.parquet'
+STORED AS PARQUET
+OPTIONS (
+  'format.max_row_group_size' '3'
+);
+
+statement ok
+drop table source_data;
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_dictionary_pruning/data.parquet';
+
+# Sanity: query returns the right rows regardless of the config below.
+query T rowsort
+SELECT s FROM t;
+----
+alpha
+alpha
+alpha
+beta
+beta
+beta
+gamma
+gamma
+gamma
+
+########
+# Off by default: no dictionary pruning happens without opting in.
+########
+
+query error DataFusion error: Error during planning: SHOW \[VARIABLE\] is not supported unless information_schema is enabled
+SHOW datafusion.execution.parquet.dictionary_filter_on_read
+
+query TT
+explain analyze select s from t where s = 'delta';
+----
+Plan with Metrics
+01)FilterExec: s@0 = delta, metrics=[output_rows=0, elapsed_compute=<slt:ignore>, selectivity=N/A (0/0)]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, metrics=[output_rows=0, elapsed_compute=<slt:ignore>]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_dictionary_pruning/data.parquet]]}, projection=[s], file_type=parquet, predicate=s@0 = delta, pruning_predicate=s_null_count@2 != row_count@3 AND s_min@0 <= delta AND delta <= s_max@1, required_guarantees=[s in (delta)], metrics=[output_rows=0, elapsed_compute=<slt:ignore>, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=3 total → 0 matched, row_groups_pruned_bloom_filter=0 total → 0 matched, row_groups_pruned_dictionary=0 total → 0 matched, page_index_pages_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, bytes_scanned=<slt:ignore>, page_index_load_skipped=1, row_groups_pruned_dynamic_filter=0, metadata_load_time=<slt:ignore>]
+
+statement ok
+set datafusion.execution.parquet.dictionary_filter_on_read = true;
+
+########
+# `IN`/`=` direction: a value absent from every row group's dictionary
+# prunes all of them without reading any data pages.
+########
+
+query TT
+explain analyze select s from t where s = 'delta';
+----
+Plan with Metrics
+01)FilterExec: s@0 = delta, metrics=[output_rows=0, elapsed_compute=<slt:ignore>, selectivity=N/A (0/0)]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, metrics=[output_rows=0, elapsed_compute=<slt:ignore>]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_dictionary_pruning/data.parquet]]}, projection=[s], file_type=parquet, predicate=s@0 = delta, pruning_predicate=s_null_count@2 != row_count@3 AND s_min@0 <= delta AND delta <= s_max@1, required_guarantees=[s in (delta)], metrics=[output_rows=0, elapsed_compute=<slt:ignore>, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=3 total → 0 matched, row_groups_pruned_bloom_filter=0 total → 0 matched, row_groups_pruned_dictionary=0 total → 0 matched, page_index_pages_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, bytes_scanned=<slt:ignore>, page_index_load_skipped=1, row_groups_pruned_dynamic_filter=0, metadata_load_time=<slt:ignore>]
+
+query TT
+explain analyze select s from t where s IN ('delta', 'epsilon');
+----
+Plan with Metrics
+01)FilterExec: s@0 = delta OR s@0 = epsilon, metrics=[output_rows=0, elapsed_compute=<slt:ignore>, selectivity=N/A (0/0)]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, metrics=[output_rows=0, elapsed_compute=<slt:ignore>]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_dictionary_pruning/data.parquet]]}, projection=[s], file_type=parquet, predicate=s@0 = delta OR s@0 = epsilon, pruning_predicate=s_null_count@2 != row_count@3 AND s_min@0 <= delta AND delta <= s_max@1 OR s_null_count@2 != row_count@3 AND s_min@0 <= epsilon AND epsilon <= s_max@1, required_guarantees=[s in (delta, epsilon)], metrics=[output_rows=0, elapsed_compute=<slt:ignore>, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=3 total → 0 matched, row_groups_pruned_bloom_filter=0 total → 0 matched, row_groups_pruned_dictionary=0 total → 0 matched, page_index_pages_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, bytes_scanned=<slt:ignore>, page_index_load_skipped=1, row_groups_pruned_dynamic_filter=0, metadata_load_time=<slt:ignore>]
+
+# A value that IS present in one row group's dictionary is not pruned.
+query T
+select s from t where s = 'beta';
+----
+beta
+beta
+beta
+
+########
+# `!=`/`NOT IN` direction: exact dictionaries can prune this too, unlike
+# bloom filters. Each row group has exactly one distinct value, so `s !=
+# 'alpha'` can never be true for rows in the row group whose only value is
+# "alpha".
+########
+
+query T rowsort
+select s from t where s != 'alpha';
+----
+beta
+beta
+beta
+gamma
+gamma
+gamma
+
+query TT
+explain analyze select s from t where s != 'alpha';
+----
+Plan with Metrics
+01)FilterExec: s@0 != alpha, metrics=[output_rows=6, elapsed_compute=<slt:ignore>, selectivity=100% (6/6)]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, metrics=[output_rows=6, elapsed_compute=<slt:ignore>]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_dictionary_pruning/data.parquet]]}, projection=[s], file_type=parquet, predicate=s@0 != alpha, pruning_predicate=s_null_count@2 != row_count@3 AND (s_min@0 != alpha OR alpha != s_max@1), required_guarantees=[s not in (alpha)], metrics=[output_rows=6, elapsed_compute=<slt:ignore>, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=3 total → 2 matched -> 2 fully matched, row_groups_pruned_bloom_filter=2 total → 2 matched, row_groups_pruned_dictionary=2 total → 2 matched, page_index_pages_pruned=0 total → 0 matched, page_index_pages_skipped_by_fully_matched=2, limit_pruned_row_groups=0 total → 0 matched, bytes_scanned=<slt:ignore>, page_index_load_skipped=1, row_groups_pruned_dynamic_filter=0, metadata_load_time=<slt:ignore>]
+
+########
+# Encoding-stats gate: a column with a large, high-cardinality dictionary
+# falls back to `PLAIN` for some data pages. Since not every value is
+# guaranteed to be drawn from the dictionary, it must not be used for
+# pruning even though a value may look absent.
+########
+
+statement ok
+CREATE TABLE wide_source_data AS
+SELECT 'value_' || i AS s FROM generate_series(0, 4999) t(i);
+
+statement ok
+COPY wide_source_data
+TO 'test_files/scratch/parquet_dictionary_pruning/wide.parquet'
+STORED AS PARQUET
+OPTIONS (
+  'format.dictionary_page_size_limit' '64'
+);
+
+statement ok
+drop table wide_source_data;
+
+statement ok
+CREATE EXTERNAL TABLE wide
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_dictionary_pruning/wide.parquet';
+
+# `value_4999` is written late enough that the tiny dictionary size limit
+# above has already forced a `PLAIN` fallback for it; it must still be
+# found (not incorrectly pruned).
+query T
+select s from wide where s = 'value_4999';
+----
+value_4999
+
+query TT
+explain analyze select s from wide where s = 'value_4999';
+----
+Plan with Metrics
+01)FilterExec: s@0 = value_4999, metrics=[output_rows=1, elapsed_compute=<slt:ignore>, selectivity=0.02% (1/5.00 K)]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, metrics=[output_rows=5.00 K, elapsed_compute=<slt:ignore>]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_dictionary_pruning/wide.parquet]]}, projection=[s], file_type=parquet, predicate=s@0 = value_4999, pruning_predicate=s_null_count@2 != row_count@3 AND s_min@0 <= value_4999 AND value_4999 <= s_max@1, required_guarantees=[s in (value_4999)], metrics=[output_rows=5.00 K, elapsed_compute=<slt:ignore>, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, row_groups_pruned_dictionary=1 total → 1 matched, page_index_pages_pruned=2 total → 2 matched, limit_pruned_row_groups=0 total → 0 matched, bytes_scanned=<slt:ignore>, row_groups_pruned_dynamic_filter=0, metadata_load_time=<slt:ignore>]
+
+statement ok
+drop table wide;
+
+########
+# Clean up after the test
+########
+
+statement ok
+drop table t;
+
+statement ok
+RESET datafusion.execution.parquet.dictionary_filter_on_read;
+
+statement ok
+RESET datafusion.explain.analyze_level;

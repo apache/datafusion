@@ -926,6 +926,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             data_page_row_count_limit: value.data_page_row_count_limit as u64,
             encoding_opt: value.encoding.clone().map(protobuf::parquet_options::EncodingOpt::Encoding),
             bloom_filter_on_read: value.bloom_filter_on_read,
+            dictionary_filter_on_read: value.dictionary_filter_on_read,
             bloom_filter_on_write: value.bloom_filter_on_write,
             bloom_filter_fpp_opt: value.bloom_filter_fpp.map(protobuf::parquet_options::BloomFilterFppOpt::BloomFilterFpp),
             bloom_filter_ndv_opt: value.bloom_filter_ndv.map(protobuf::parquet_options::BloomFilterNdvOpt::BloomFilterNdv),

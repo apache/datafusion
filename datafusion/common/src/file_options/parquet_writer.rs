@@ -242,6 +242,7 @@ impl ParquetOptions {
             maximum_parallel_row_group_writers: _,
             maximum_buffered_record_batches_per_stream: _,
             bloom_filter_on_read: _, // reads not used for writer props
+            dictionary_filter_on_read: _, // reads not used for writer props
             schema_force_view_types: _,
             binary_as_string: _, // not used for writer props
             coerce_int96: _,     // not used for writer props
@@ -500,6 +501,7 @@ mod tests {
             maximum_buffered_record_batches_per_stream: defaults
                 .maximum_buffered_record_batches_per_stream,
             bloom_filter_on_read: defaults.bloom_filter_on_read,
+            dictionary_filter_on_read: defaults.dictionary_filter_on_read,
             schema_force_view_types: defaults.schema_force_view_types,
             binary_as_string: defaults.binary_as_string,
             skip_arrow_metadata: defaults.skip_arrow_metadata,
@@ -620,6 +622,8 @@ mod tests {
                 maximum_buffered_record_batches_per_stream: global_options_defaults
                     .maximum_buffered_record_batches_per_stream,
                 bloom_filter_on_read: global_options_defaults.bloom_filter_on_read,
+                dictionary_filter_on_read: global_options_defaults
+                    .dictionary_filter_on_read,
                 max_predicate_cache_size: global_options_defaults
                     .max_predicate_cache_size,
                 schema_force_view_types: global_options_defaults.schema_force_view_types,

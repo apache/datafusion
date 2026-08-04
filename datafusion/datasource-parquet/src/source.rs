@@ -479,6 +479,23 @@ impl ParquetSource {
         self.table_parquet_options.global.bloom_filter_on_read
     }
 
+    /// If enabled, the reader will use fully dictionary-encoded `BYTE_ARRAY`
+    /// column chunks as an exact row-group membership index. Defaults to
+    /// false.
+    pub fn with_dictionary_filter_on_read(
+        mut self,
+        dictionary_filter_on_read: bool,
+    ) -> Self {
+        self.table_parquet_options.global.dictionary_filter_on_read =
+            dictionary_filter_on_read;
+        self
+    }
+
+    /// Return the value described in [`Self::with_dictionary_filter_on_read`]
+    fn dictionary_filter_on_read(&self) -> bool {
+        self.table_parquet_options.global.dictionary_filter_on_read
+    }
+
     /// Return the maximum predicate cache size, in bytes, used when
     /// `pushdown_filters`
     pub fn max_predicate_cache_size(&self) -> Option<usize> {
@@ -638,6 +655,7 @@ impl FileSource for ParquetSource {
             force_filter_selections: self.force_filter_selections(),
             enable_page_index: self.enable_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
+            enable_dictionary_filter: self.dictionary_filter_on_read(),
             enable_row_group_stats_pruning: self.table_parquet_options.global.pruning,
             coerce_int96,
             coerce_int96_tz,
