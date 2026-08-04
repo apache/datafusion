@@ -976,8 +976,10 @@ pub(crate) fn build_streaming_stream(
     }
     let sync_reader = builder.build()?;
 
+    let total_plan_bytes: u64 = plan.iter().map(|p| p.range.end - p.range.start).sum();
     let state = StreamingScanState {
         plan,
+        total_plan_bytes,
         total_selected,
         batch_size: batch_size as u64,
         window,
@@ -1001,6 +1003,12 @@ pub(crate) fn build_streaming_stream(
 
 pub(crate) struct StreamingScanState {
     plan: Vec<PlanPage>,
+    /// Total bytes across all plan pages. Plans that fit the window are
+    /// fetched in one wave (see the inline-fetch site) — splitting a small
+    /// file's fetch into a required wave plus a readahead wave costs an
+    /// extra round trip per file, which dominates many-small-file workloads
+    /// (measured: TPC-DS under simulated latency).
+    total_plan_bytes: u64,
     total_selected: u64,
     batch_size: u64,
     window: u64,
@@ -1125,10 +1133,16 @@ impl StreamingScanState {
                         continue;
                     }
                     ReaderSlot::Idle(mut reader) => {
-                        // Fetch only the pages the next batch requires —
-                        // readahead happens in the background (step 2), so
-                        // the blocking fetch stays small and TTFB low.
-                        let end = self.next_gulp_end(true);
+                        // When the whole plan fits the readahead window
+                        // (small files), fetch it in a single wave — the
+                        // extra round trip of a required-only wave would
+                        // dominate. For plans larger than the window, fetch
+                        // only what the next batch requires so the blocking
+                        // wave — and therefore time-to-first-batch — stays
+                        // small; readahead happens in the background
+                        // (step 2).
+                        let required_only = self.total_plan_bytes > self.window;
+                        let end = self.next_gulp_end(required_only);
                         let ranges: Vec<Range<u64>> = self.plan[self.fetched_idx..end]
                             .iter()
                             .map(|p| p.range.clone())
