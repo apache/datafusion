@@ -763,7 +763,7 @@ impl LinearSearch {
             let entry = self.row_map_batch.find_mut(hash, |(_, group_idx)| {
                 let row = get_row_at_idx(columns, row_idx as usize).unwrap();
                 // Handle hash collisions with an equality check:
-                row.eq(&keys[*group_idx])
+                row == keys[*group_idx]
             });
             let group_idx = if let Some((_, group_idx)) = entry {
                 *group_idx
