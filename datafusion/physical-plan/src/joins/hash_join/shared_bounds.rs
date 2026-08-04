@@ -282,10 +282,12 @@ pub(crate) enum PartitionBuildData {
         partition_id: usize,
         pushdown: PushdownStrategy,
         bounds: PartitionBounds,
+        keys_have_null: bool,
     },
     CollectLeft {
         pushdown: PushdownStrategy,
         bounds: PartitionBounds,
+        keys_have_null: bool,
     },
 }
 
@@ -294,6 +296,9 @@ pub(crate) enum PartitionBuildData {
 struct PartitionData {
     bounds: PartitionBounds,
     pushdown: PushdownStrategy,
+    /// Whether any build key of this partition is NULL. Decides whether the pushed
+    /// filter must keep probe-side NULL rows for a null-equal join to match them.
+    keys_have_null: bool,
 }
 
 /// Build-side data organized by partition mode
@@ -469,6 +474,7 @@ impl SharedBuildAccumulator {
                     partition_id,
                     pushdown,
                     bounds,
+                    keys_have_null,
                 },
                 AccumulatedBuildData::Partitioned {
                     partitions,
@@ -478,11 +484,18 @@ impl SharedBuildAccumulator {
                 if matches!(partitions[partition_id], PartitionStatus::Pending) {
                     *completed_partitions += 1;
                 }
-                partitions[partition_id] =
-                    PartitionStatus::Reported(PartitionData { pushdown, bounds });
+                partitions[partition_id] = PartitionStatus::Reported(PartitionData {
+                    pushdown,
+                    bounds,
+                    keys_have_null,
+                });
             }
             (
-                PartitionBuildData::CollectLeft { pushdown, bounds },
+                PartitionBuildData::CollectLeft {
+                    pushdown,
+                    bounds,
+                    keys_have_null,
+                },
                 AccumulatedBuildData::CollectLeft {
                     data,
                     reported_count,
@@ -490,7 +503,11 @@ impl SharedBuildAccumulator {
                 },
             ) => {
                 if matches!(data, PartitionStatus::Pending) {
-                    *data = PartitionStatus::Reported(PartitionData { pushdown, bounds });
+                    *data = PartitionStatus::Reported(PartitionData {
+                        pushdown,
+                        bounds,
+                        keys_have_null,
+                    });
                 }
                 *reported_count += 1;
             }
@@ -592,8 +609,10 @@ impl SharedBuildAccumulator {
                     if let Some(filter_expr) =
                         combine_membership_and_bounds(membership_expr, bounds_expr)
                     {
-                        self.dynamic_filter
-                            .update(self.preserve_probe_nulls(filter_expr)?)?;
+                        self.dynamic_filter.update(self.preserve_probe_nulls(
+                            filter_expr,
+                            partition_data.keys_have_null,
+                        )?)?;
                     }
                 }
                 PartitionStatus::Pending => {
@@ -624,6 +643,7 @@ impl SharedBuildAccumulator {
                 let mut real_branches = Vec::new();
                 let mut empty_partition_ids = Vec::new();
                 let mut has_canceled_unknown = false;
+                let mut keys_have_null = false;
 
                 for (partition_id, partition) in partitions.iter().enumerate() {
                     match partition {
@@ -633,6 +653,7 @@ impl SharedBuildAccumulator {
                             empty_partition_ids.push(partition_id);
                         }
                         PartitionStatus::Reported(partition) => {
+                            keys_have_null |= partition.keys_have_null;
                             let membership_expr = create_membership_predicate(
                                 &self.on_right,
                                 partition.pushdown.clone(),
@@ -655,6 +676,9 @@ impl SharedBuildAccumulator {
                         }
                         PartitionStatus::CanceledUnknown => {
                             has_canceled_unknown = true;
+                            // A canceled partition's build content is unknown, so it
+                            // may hold a NULL key.
+                            keys_have_null = true;
                         }
                         PartitionStatus::Pending => {
                             return datafusion_common::internal_err!(
@@ -700,7 +724,7 @@ impl SharedBuildAccumulator {
                 };
 
                 self.dynamic_filter
-                    .update(self.preserve_probe_nulls(filter_expr)?)?;
+                    .update(self.preserve_probe_nulls(filter_expr, keys_have_null)?)?;
             }
         }
 
@@ -717,8 +741,16 @@ impl SharedBuildAccumulator {
     fn preserve_probe_nulls(
         &self,
         filter_expr: Arc<dyn PhysicalExpr>,
+        build_keys_have_null: bool,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        if self.null_equality != NullEquality::NullEqualsNull && !self.null_aware {
+        // A null-aware anti join needs every probe NULL no matter what the build holds: one
+        // probe NULL makes `NOT IN` unknown for every build row. A null-equal join needs probe
+        // NULLs only to match an actual build-side NULL, so a NULL-free build keeps the filter
+        // at full selectivity.
+        let needs_probe_nulls = self.null_aware
+            || (self.null_equality == NullEquality::NullEqualsNull
+                && build_keys_have_null);
+        if !needs_probe_nulls {
             return Ok(filter_expr);
         }
         // Only a key that can actually be NULL needs the disjunct; a NOT NULL key never widens.
@@ -879,7 +911,11 @@ mod tests {
     }
 
     fn reported(pushdown: PushdownStrategy, bounds: PartitionBounds) -> PartitionStatus {
-        PartitionStatus::Reported(PartitionData { pushdown, bounds })
+        PartitionStatus::Reported(PartitionData {
+            pushdown,
+            bounds,
+            keys_have_null: false,
+        })
     }
 
     fn current_expr(acc: &SharedBuildAccumulator) -> PhysicalExprRef {
@@ -1060,6 +1096,7 @@ mod tests {
                     partition_id: 0,
                     pushdown: PushdownStrategy::Empty,
                     bounds: PartitionBounds::new(vec![]),
+                    keys_have_null: false,
                 },
             )
             .unwrap();
@@ -1097,9 +1134,11 @@ mod tests {
         assert_eq!(completed, 1);
     }
 
-    fn null_equal_accumulator(
+    fn null_semantics_accumulator(
         probe_schema: Arc<Schema>,
         on_right: Vec<PhysicalExprRef>,
+        null_equality: NullEquality,
+        null_aware: bool,
     ) -> SharedBuildAccumulator {
         SharedBuildAccumulator {
             inner: Mutex::new(AccumulatorState {
@@ -1114,9 +1153,21 @@ mod tests {
             on_right,
             repartition_random_state: SeededRandomState::with_seed(1),
             probe_schema,
-            null_equality: NullEquality::NullEqualsNull,
-            null_aware: false,
+            null_equality,
+            null_aware,
         }
+    }
+
+    fn null_equal_accumulator(
+        probe_schema: Arc<Schema>,
+        on_right: Vec<PhysicalExprRef>,
+    ) -> SharedBuildAccumulator {
+        null_semantics_accumulator(
+            probe_schema,
+            on_right,
+            NullEquality::NullEqualsNull,
+            false,
+        )
     }
 
     #[test]
@@ -1132,7 +1183,7 @@ mod tests {
         let acc = null_equal_accumulator(probe_schema, on_right);
 
         // Only the nullable key earns an IS NULL disjunct; the NOT NULL key is left out.
-        let widened = acc.preserve_probe_nulls(lit(true)).unwrap();
+        let widened = acc.preserve_probe_nulls(lit(true), true).unwrap();
         assert_eq!(format!("{widened}").matches("IS NULL").count(), 1);
     }
 
@@ -1148,7 +1199,7 @@ mod tests {
 
         // Every key is NOT NULL, so there is nothing to OR in and the filter is returned as-is.
         let filter = lit(true);
-        let result = acc.preserve_probe_nulls(Arc::clone(&filter)).unwrap();
+        let result = acc.preserve_probe_nulls(Arc::clone(&filter), true).unwrap();
         assert_eq!(format!("{result}"), format!("{filter}"));
     }
 
@@ -1161,6 +1212,40 @@ mod tests {
         let on_right: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("b", 1))];
         let acc = null_equal_accumulator(probe_schema, on_right);
 
-        assert!(acc.preserve_probe_nulls(lit(true)).is_err());
+        assert!(acc.preserve_probe_nulls(lit(true), true).is_err());
+    }
+
+    #[test]
+    fn preserve_probe_nulls_skips_wrap_when_build_has_no_nulls() {
+        let probe_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let on_right: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("a", 0))];
+        let acc = null_equal_accumulator(probe_schema, on_right);
+
+        // A NULL-free build has nothing for a probe NULL to null-match, so the
+        // filter keeps its full selectivity.
+        let filter = lit(true);
+        let result = acc
+            .preserve_probe_nulls(Arc::clone(&filter), false)
+            .unwrap();
+        assert_eq!(format!("{result}"), format!("{filter}"));
+    }
+
+    #[test]
+    fn preserve_probe_nulls_wraps_null_aware_regardless_of_build() {
+        let probe_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let on_right: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("a", 0))];
+        let acc = null_semantics_accumulator(
+            probe_schema,
+            on_right,
+            NullEquality::NullEqualsNothing,
+            true,
+        );
+
+        // One probe NULL collapses `NOT IN` for every build row, so the wrap must not
+        // depend on the build content.
+        let widened = acc.preserve_probe_nulls(lit(true), false).unwrap();
+        assert_eq!(format!("{widened}").matches("IS NULL").count(), 1);
     }
 }
