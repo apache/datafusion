@@ -533,7 +533,10 @@ has_integer!(IntervalDayTime, IntervalMonthDayNano);
 hash_float!(f16, f32, f64);
 
 #[inline]
-fn some_value<A: ArrayAccessor>(array: A, index: usize) -> Option<A::Item> {
+fn some_value<'a, A>(array: &'a A, index: usize) -> Option<<&'a A as ArrayAccessor>::Item>
+where
+    &'a A: ArrayAccessor,
+{
     if array.is_null(index) {
         None
     } else {
