@@ -2212,6 +2212,26 @@ pub(super) fn equal_rows_arr(
         return Ok((Vec::<u64>::new().into(), Vec::<u32>::new().into()));
     }
 
+    // Fast path: single-column keys of a specialized type run a monomorphized
+    // equality loop, avoiding the per-pair boxed `DynComparator` dispatch and
+    // `Ordering` computation of the general `JoinKeyComparator` path. Falls
+    // through to the general path for multi-column keys and unspecialized
+    // types (e.g. floats, dictionaries, nested).
+    let single_col_fast_path = if left_arrays.len() == 1 {
+        equal_rows_single_col(
+            indices_left,
+            indices_right,
+            left_arrays[0].as_ref(),
+            right_arrays[0].as_ref(),
+            null_equality,
+        )
+    } else {
+        None
+    };
+    if let Some(res) = single_col_fast_path {
+        return Ok(res);
+    }
+
     let sort_options = vec![SortOptions::default(); left_arrays.len()];
     let comparator =
         JoinKeyComparator::new(left_arrays, right_arrays, &sort_options, null_equality)?;
@@ -2232,6 +2252,87 @@ pub(super) fn equal_rows_arr(
     }
 
     Ok((left_filtered.into(), right_filtered.into()))
+}
+
+/// Specialized single-column equi-join key filtering.
+///
+/// Dispatches once on the key column's type and runs a monomorphized equality
+/// loop with typed value comparison. This avoids the per-pair boxed
+/// `DynComparator` call and the three-way `Ordering` computation used by the
+/// general [`JoinKeyComparator`] path, which dominates for high-fanout
+/// single-column joins (e.g. long string keys with near-100% match rates).
+///
+/// Returns `None` for types it does not specialize (including when the left and
+/// right key types differ, handled by the failed downcast) so the caller falls
+/// back to the general path. Floats are intentionally excluded so their `-0.0` /
+/// `NaN` semantics stay on the exact same code path as before.
+fn equal_rows_single_col(
+    indices_left: &UInt64Array,
+    indices_right: &UInt32Array,
+    left: &dyn Array,
+    right: &dyn Array,
+    null_equality: NullEquality,
+) -> Option<(UInt64Array, UInt32Array)> {
+    let null_equals_null = matches!(null_equality, NullEquality::NullEqualsNull);
+
+    macro_rules! eq_loop {
+        ($T:ty) => {{
+            let l = left.as_any().downcast_ref::<$T>()?;
+            let r = right.as_any().downcast_ref::<$T>()?;
+
+            let mut left_filtered = Vec::with_capacity(indices_left.len());
+            let mut right_filtered = Vec::with_capacity(indices_right.len());
+
+            for (left_idx, right_idx) in
+                indices_left.values().iter().zip(indices_right.values())
+            {
+                let i = *left_idx as usize;
+                let j = *right_idx as usize;
+
+                let is_equal = match (l.is_null(i), r.is_null(j)) {
+                    (false, false) => l.value(i) == r.value(j),
+                    (true, true) => null_equals_null,
+                    _ => false,
+                };
+
+                if is_equal {
+                    left_filtered.push(*left_idx);
+                    right_filtered.push(*right_idx);
+                }
+            }
+
+            return Some((left_filtered.into(), right_filtered.into()));
+        }};
+    }
+
+    match left.data_type() {
+        DataType::Boolean => eq_loop!(BooleanArray),
+        DataType::Int8 => eq_loop!(Int8Array),
+        DataType::Int16 => eq_loop!(Int16Array),
+        DataType::Int32 => eq_loop!(Int32Array),
+        DataType::Int64 => eq_loop!(Int64Array),
+        DataType::UInt8 => eq_loop!(UInt8Array),
+        DataType::UInt16 => eq_loop!(UInt16Array),
+        DataType::UInt32 => eq_loop!(UInt32Array),
+        DataType::UInt64 => eq_loop!(UInt64Array),
+        DataType::Decimal128(..) => eq_loop!(Decimal128Array),
+        DataType::Binary => eq_loop!(BinaryArray),
+        DataType::LargeBinary => eq_loop!(LargeBinaryArray),
+        DataType::BinaryView => eq_loop!(BinaryViewArray),
+        DataType::FixedSizeBinary(_) => eq_loop!(FixedSizeBinaryArray),
+        DataType::Utf8 => eq_loop!(StringArray),
+        DataType::LargeUtf8 => eq_loop!(LargeStringArray),
+        DataType::Utf8View => eq_loop!(StringViewArray),
+        DataType::Date32 => eq_loop!(Date32Array),
+        DataType::Date64 => eq_loop!(Date64Array),
+        DataType::Timestamp(time_unit, _) => match time_unit {
+            TimeUnit::Second => eq_loop!(TimestampSecondArray),
+            TimeUnit::Millisecond => eq_loop!(TimestampMillisecondArray),
+            TimeUnit::Microsecond => eq_loop!(TimestampMicrosecondArray),
+            TimeUnit::Nanosecond => eq_loop!(TimestampNanosecondArray),
+        },
+        _ => None,
+    }
 }
 
 /// Pre-built comparator for join key columns that eliminates per-row type
@@ -4588,6 +4689,177 @@ mod tests {
         .unwrap();
         assert_eq!(left_filtered, UInt64Array::from(vec![0, 1, 2, 3]));
         assert_eq!(right_filtered, UInt32Array::from(vec![1, 0, 2, 3]));
+    }
+
+    #[test]
+    fn test_equal_rows_arr_single_string_col_fast_path() {
+        // Single-column string keys exercise the specialized fast path,
+        // including null handling under both null-equality modes.
+        let left: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("long_shared_join_key_value"),
+            None,
+            Some("long_shared_join_key_value"),
+            Some("other"),
+        ]));
+        let right: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("long_shared_join_key_value"),
+            None,
+            Some("mismatch"),
+            None,
+        ]));
+        let left_indices = UInt64Array::from(vec![0, 1, 2, 3]);
+        let right_indices = UInt32Array::from(vec![0, 1, 2, 3]);
+
+        // NullEqualsNothing: only the (0,0) value pair matches; both-null drops.
+        let (left_filtered, right_filtered) = equal_rows_arr(
+            &left_indices,
+            &right_indices,
+            &[Arc::clone(&left)],
+            &[Arc::clone(&right)],
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
+        assert_eq!(left_filtered, UInt64Array::from(vec![0]));
+        assert_eq!(right_filtered, UInt32Array::from(vec![0]));
+
+        // NullEqualsNull: the both-null (1,1) pair now also matches.
+        let (left_filtered, right_filtered) = equal_rows_arr(
+            &left_indices,
+            &right_indices,
+            &[left],
+            &[right],
+            NullEquality::NullEqualsNull,
+        )
+        .unwrap();
+        assert_eq!(left_filtered, UInt64Array::from(vec![0, 1]));
+        assert_eq!(right_filtered, UInt32Array::from(vec![0, 1]));
+    }
+
+    #[test]
+    fn test_equal_rows_arr_single_col_covers_all_specialized_types() {
+        // Drive every specialized single-column fast-path arm. Each case has a
+        // matching pair at index 0 and a non-matching pair at index 1, so a
+        // correct arm keeps exactly the first pair.
+        fn check(left: ArrayRef, right: ArrayRef) {
+            let (left_filtered, right_filtered) = equal_rows_arr(
+                &UInt64Array::from(vec![0, 1]),
+                &UInt32Array::from(vec![0, 1]),
+                &[left],
+                &[right],
+                NullEquality::NullEqualsNothing,
+            )
+            .unwrap();
+            assert_eq!(left_filtered, UInt64Array::from(vec![0]));
+            assert_eq!(right_filtered, UInt32Array::from(vec![0]));
+        }
+
+        check(
+            Arc::new(BooleanArray::from(vec![true, false])),
+            Arc::new(BooleanArray::from(vec![true, true])),
+        );
+        check(
+            Arc::new(Int8Array::from(vec![1, 2])),
+            Arc::new(Int8Array::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(Int16Array::from(vec![1, 2])),
+            Arc::new(Int16Array::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(Int64Array::from(vec![1, 2])),
+            Arc::new(Int64Array::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(UInt8Array::from(vec![1, 2])),
+            Arc::new(UInt8Array::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(UInt16Array::from(vec![1, 2])),
+            Arc::new(UInt16Array::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(UInt32Array::from(vec![1, 2])),
+            Arc::new(UInt32Array::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(UInt64Array::from(vec![1, 2])),
+            Arc::new(UInt64Array::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(Decimal128Array::from(vec![1i128, 2])),
+            Arc::new(Decimal128Array::from(vec![1i128, 3])),
+        );
+        check(
+            Arc::new(BinaryArray::from_iter_values([b"a".as_ref(), b"b"])),
+            Arc::new(BinaryArray::from_iter_values([b"a".as_ref(), b"c"])),
+        );
+        check(
+            Arc::new(LargeBinaryArray::from_iter_values([b"a".as_ref(), b"b"])),
+            Arc::new(LargeBinaryArray::from_iter_values([b"a".as_ref(), b"c"])),
+        );
+        check(
+            Arc::new(BinaryViewArray::from_iter_values([b"a".as_ref(), b"b"])),
+            Arc::new(BinaryViewArray::from_iter_values([b"a".as_ref(), b"c"])),
+        );
+        check(
+            Arc::new(
+                FixedSizeBinaryArray::try_from_iter([[1u8], [2u8]].into_iter()).unwrap(),
+            ),
+            Arc::new(
+                FixedSizeBinaryArray::try_from_iter([[1u8], [3u8]].into_iter()).unwrap(),
+            ),
+        );
+        check(
+            Arc::new(LargeStringArray::from(vec!["a", "b"])),
+            Arc::new(LargeStringArray::from(vec!["a", "c"])),
+        );
+        check(
+            Arc::new(StringViewArray::from(vec!["a", "b"])),
+            Arc::new(StringViewArray::from(vec!["a", "c"])),
+        );
+        check(
+            Arc::new(Date32Array::from(vec![1, 2])),
+            Arc::new(Date32Array::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(Date64Array::from(vec![1, 2])),
+            Arc::new(Date64Array::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(TimestampSecondArray::from(vec![1, 2])),
+            Arc::new(TimestampSecondArray::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(TimestampMillisecondArray::from(vec![1, 2])),
+            Arc::new(TimestampMillisecondArray::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(TimestampMicrosecondArray::from(vec![1, 2])),
+            Arc::new(TimestampMicrosecondArray::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(TimestampNanosecondArray::from(vec![1, 2])),
+            Arc::new(TimestampNanosecondArray::from(vec![1, 3])),
+        );
+    }
+
+    #[test]
+    fn test_equal_rows_arr_single_float_col_uses_general_path() {
+        // Floats are intentionally not specialized: the fast path returns
+        // `None` and the general comparator handles them (covers the
+        // fall-through arm).
+        let left: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0]));
+        let right: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 3.0]));
+        let (left_filtered, right_filtered) = equal_rows_arr(
+            &UInt64Array::from(vec![0, 1]),
+            &UInt32Array::from(vec![0, 1]),
+            &[left],
+            &[right],
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
+        assert_eq!(left_filtered, UInt64Array::from(vec![0]));
+        assert_eq!(right_filtered, UInt32Array::from(vec![0]));
     }
 
     #[test]
