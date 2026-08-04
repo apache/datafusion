@@ -22,7 +22,9 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::aggregate::AggregateFunctionExpr;
-use crate::window::window_expr::{AggregateWindowExpr, WindowFn, filter_array};
+use crate::window::window_expr::{
+    AggregateWindowExpr, WindowEvalContext, WindowFn, filter_array,
+};
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, PlainAggregateWindowExpr, WindowExpr,
 };
@@ -102,8 +104,9 @@ impl WindowExpr for SlidingAggregateWindowExpr {
         &self,
         partition_batches: &PartitionBatches,
         window_agg_state: &mut PartitionWindowAggStates,
+        eval_ctx: &WindowEvalContext<'_>,
     ) -> Result<()> {
-        self.aggregate_evaluate_stateful(partition_batches, window_agg_state)
+        self.aggregate_evaluate_stateful(partition_batches, window_agg_state, eval_ctx)
     }
 
     fn partition_by(&self) -> &[Arc<dyn PhysicalExpr>] {

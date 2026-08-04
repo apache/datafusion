@@ -102,12 +102,8 @@ EXPLAIN SELECT DISTINCT p.x FROM t_pk p LEFT JOIN t_orders o ON p.x = o.x;
 ----
 logical_plan
 01)Aggregate: groupBy=[[p.x]], aggr=[[]]
-02)--Projection: p.x
-03)----Left Join: p.x = o.x
-04)------SubqueryAlias: p
-05)--------TableScan: t_pk projection=[x]
-06)------SubqueryAlias: o
-07)--------TableScan: t_orders projection=[x]
+02)--SubqueryAlias: p
+03)----TableScan: t_pk projection=[x]
 
 statement ok
 drop table t_orders;
@@ -283,7 +279,7 @@ logical_plan
 10)--------------TableScan: t_null projection=[x]
 
 # 5.2 The ORDER BY variant: `g.x` is NULL for both rows, so the `g.cnt`
-# tie-breaker is what orders them. 
+# tie-breaker is what orders them.
 query II
 SELECT g.x, g.cnt
   FROM t_probe a

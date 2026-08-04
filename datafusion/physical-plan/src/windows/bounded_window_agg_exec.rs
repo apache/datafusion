@@ -43,7 +43,7 @@ use crate::{
 
 use arrow::compute::take_record_batch;
 use arrow::{
-    array::{Array, ArrayRef, RecordBatchOptions, UInt32Builder},
+    array::{Array, ArrayRef, RecordBatchOptions, UInt32Array, UInt32Builder},
     compute::{concat, concat_batches, sort_to_indices, take_arrays},
     datatypes::SchemaRef,
     record_batch::RecordBatch,
@@ -60,7 +60,8 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
 use datafusion_physical_expr::window::{
-    PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowState,
+    PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowEvalContext,
+    WindowState,
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
@@ -526,25 +527,6 @@ trait PartitionSearcher: Send {
             }
         }
 
-        if self.is_mode_linear() {
-            // In `Linear` mode, it is guaranteed that the first ORDER BY column
-            // is sorted across partitions. Note that only the first ORDER BY
-            // column is guaranteed to be ordered. As a counter example, consider
-            // the case, `PARTITION BY b, ORDER BY a, c` when the input is sorted
-            // by `[a, b, c]`. In this case, `BoundedWindowAggExec` mode will be
-            // `Linear`. However, we cannot guarantee that the last row of the
-            // input data will be the "last" data in terms of the ordering requirement
-            // `[a, c]` -- it will be the "last" data in terms of `[a, b, c]`.
-            // Hence, only column `a` should be used as a guarantee of the "last"
-            // data across partitions. For other modes (`Sorted`, `PartiallySorted`),
-            // we do not need to keep track of the most recent row guarantee across
-            // partitions. Since leading ordering separates partitions, guaranteed
-            // by the most recent row, already prune the previous partitions completely.
-            let last_row = get_last_row_batch(&record_batch)?;
-            for (_, partition_batch) in partition_buffers.iter_mut() {
-                partition_batch.set_most_recent_row(last_row.clone());
-            }
-        }
         self.mark_partition_end(partition_buffers);
 
         *input_buffer = if input_buffer.num_rows() == 0 {
@@ -682,17 +664,25 @@ impl PartitionSearcher for LinearSearch {
             evaluate_partition_by_column_values(record_batch, window_expr)?;
         // NOTE: In Linear or PartiallySorted modes, we are sure that
         //       `partition_bys` are not empty.
-        // Calculate indices for each partition and construct a new record
-        // batch from the rows at these indices for each partition:
-        self.get_per_partition_indices(&partition_bys, record_batch)?
+        let (mut keys, permutation, bounds) =
+            self.compute_partition_permutation(&partition_bys, record_batch)?;
+        if keys.len() == 1 {
+            // The batch contains a single partition, so the gather below
+            // would be an identity permutation; use the batch as-is.
+            let key = keys.remove(0);
+            return Ok(vec![(key, record_batch.clone())]);
+        }
+        // Reorder the batch with a single `take` so that each partition's
+        // rows become contiguous, then hand each partition a zero-copy slice
+        // of the result. The slices share the gathered batch's buffers;
+        // `PartitionBatchState::extend` copies out of them the next time the
+        // partition receives rows.
+        let gathered = take_record_batch(record_batch, &UInt32Array::from(permutation))?;
+        Ok(keys
             .into_iter()
-            .map(|(row, indices)| {
-                let mut new_indices = UInt32Builder::with_capacity(indices.len());
-                new_indices.append_slice(&indices);
-                let indices = new_indices.finish();
-                Ok((row, take_record_batch(record_batch, &indices)?))
-            })
-            .collect()
+            .zip(bounds.windows(2))
+            .map(|(key, bound)| (key, gathered.slice(bound[0], bound[1] - bound[0])))
+            .collect())
     }
 
     fn prune(&mut self, n_out: usize) {
@@ -746,42 +736,66 @@ impl LinearSearch {
         }
     }
 
-    /// Calculate indices of each partition (according to PARTITION BY expression)
-    /// `columns` contain partition by expression results.
-    fn get_per_partition_indices(
+    /// Splits the rows of `batch` by partition, according to the PARTITION BY
+    /// expression results in `columns`. Returns the distinct partition keys
+    /// in first-appearance order, a permutation of the row indices of
+    /// `batch` that groups each partition's rows together, and the
+    /// boundaries of each partition's run of rows within that permutation:
+    /// partition `p` occupies `permutation[bounds[p]..bounds[p + 1]]`, and
+    /// its indices are in ascending (stream) order.
+    fn compute_partition_permutation(
         &mut self,
         columns: &[ArrayRef],
         batch: &RecordBatch,
-    ) -> Result<Vec<(PartitionKey, Vec<u32>)>> {
-        let mut batch_hashes = vec![0; batch.num_rows()];
+    ) -> Result<(Vec<PartitionKey>, Vec<u32>, Vec<usize>)> {
+        let num_rows = batch.num_rows();
+        let mut batch_hashes = vec![0; num_rows];
         create_hashes(columns, &self.random_state, &mut batch_hashes)?;
         self.input_buffer_hashes.extend(&batch_hashes);
         // reset row_map for new calculation
         self.row_map_batch.clear();
-        // res stores PartitionKey and row indices (indices where these partition occurs in the `batch`) for each partition.
-        let mut result: Vec<(PartitionKey, Vec<u32>)> = vec![];
+        let mut keys: Vec<PartitionKey> = vec![];
+        // Partition id of each row, in row order:
+        let mut row_partition_ids = Vec::with_capacity(num_rows);
+        // Number of rows in each partition:
+        let mut counts: Vec<usize> = vec![];
         for (hash, row_idx) in batch_hashes.into_iter().zip(0u32..) {
             let entry = self.row_map_batch.find_mut(hash, |(_, group_idx)| {
-                // We can safely get the first index of the partition indices
-                // since partition indices has one element during initialization.
                 let row = get_row_at_idx(columns, row_idx as usize).unwrap();
-                // Handle hash collusions with an equality check:
-                row.eq(&result[*group_idx].0)
+                // Handle hash collisions with an equality check:
+                row == keys[*group_idx]
             });
-            if let Some((_, group_idx)) = entry {
-                result[*group_idx].1.push(row_idx)
+            let group_idx = if let Some((_, group_idx)) = entry {
+                *group_idx
             } else {
-                self.row_map_batch.insert_unique(
-                    hash,
-                    (hash, result.len()),
-                    |(hash, _)| *hash,
-                );
-                let row = get_row_at_idx(columns, row_idx as usize)?;
-                // This is a new partition its only index is row_idx for now.
-                result.push((row, vec![row_idx]));
-            }
+                let group_idx = keys.len();
+                self.row_map_batch
+                    .insert_unique(hash, (hash, group_idx), |(hash, _)| *hash);
+                keys.push(get_row_at_idx(columns, row_idx as usize)?);
+                counts.push(0);
+                group_idx
+            };
+            row_partition_ids.push(group_idx);
+            counts[group_idx] += 1;
         }
-        Ok(result)
+        // A prefix sum over the counts gives each partition's run boundaries
+        // in the permutation.
+        let mut bounds = Vec::with_capacity(counts.len() + 1);
+        let mut total = 0;
+        bounds.push(0);
+        for count in counts {
+            total += count;
+            bounds.push(total);
+        }
+        // Scatter each row's index into its partition's run. Visiting rows
+        // in ascending order keeps each run in ascending row order.
+        let mut cursors: Vec<usize> = bounds[..bounds.len() - 1].to_vec();
+        let mut permutation = vec![0u32; num_rows];
+        for (row_idx, group_idx) in row_partition_ids.into_iter().enumerate() {
+            permutation[cursors[group_idx]] = row_idx as u32;
+            cursors[group_idx] += 1;
+        }
+        Ok((keys, permutation, bounds))
     }
 
     /// Calculates partition keys and result indices for each partition.
@@ -1010,6 +1024,24 @@ pub struct BoundedWindowAggStream {
     /// Search mode for partition columns. This determines the algorithm with
     /// which we group each partition.
     search_mode: Box<dyn PartitionSearcher>,
+    /// In `Linear` mode, a single-row batch containing the most recent input
+    /// row (whichever partition that row belongs to); `None` in other modes
+    /// and before the first non-empty batch arrives. Since in `Linear` mode
+    /// the input is sorted by the first ORDER BY column, no future input row
+    /// -- in any partition -- can precede this row in that column. Every
+    /// partition's evaluation consults this bound to decide whether pending
+    /// window frames can be finalized before the partition receives more
+    /// data (which in turn allows buffered state to be pruned). Note that
+    /// only the first ORDER BY column provides this guarantee. As a counter
+    /// example, consider `PARTITION BY b, ORDER BY a, c` when the input is
+    /// sorted by `[a, b, c]`: the mode will be `Linear`, but the last row of
+    /// the input is the "last" data in terms of `[a, b, c]`, not in terms of
+    /// the ordering requirement `[a, c]`. Hence, only column `a` can serve
+    /// as a guarantee of the "last" data across partitions. In the `Sorted`
+    /// and `PartiallySorted` modes, the leading ordering separates
+    /// partitions, so finished partitions are pruned eagerly instead and no
+    /// such bound is needed.
+    most_recent_row: Option<RecordBatch>,
 }
 
 impl BoundedWindowAggStream {
@@ -1066,15 +1098,22 @@ impl BoundedWindowAggStream {
             window_expr,
             baseline_metrics,
             search_mode,
+            most_recent_row: None,
         })
     }
 
     fn compute_aggregates(&mut self) -> Result<Option<RecordBatch>> {
         // calculate window cols
+        let eval_ctx = WindowEvalContext::default()
+            .with_most_recent_row(self.most_recent_row.as_ref());
         for (cur_window_expr, state) in
             self.window_expr.iter().zip(&mut self.window_agg_states)
         {
-            cur_window_expr.evaluate_stateful(&self.partition_buffers, state)?;
+            cur_window_expr.evaluate_stateful(
+                &self.partition_buffers,
+                state,
+                &eval_ctx,
+            )?;
         }
 
         let schema = Arc::clone(&self.schema);
@@ -1118,6 +1157,9 @@ impl BoundedWindowAggStream {
                 // stopped when dropped.
                 let _timer = elapsed_compute.timer();
 
+                if self.search_mode.is_mode_linear() && batch.num_rows() > 0 {
+                    self.most_recent_row = Some(get_last_row_batch(&batch)?);
+                }
                 self.search_mode.update_partition_batch(
                     &mut self.input_buffer,
                     batch,
@@ -1188,10 +1230,15 @@ impl BoundedWindowAggStream {
         // Retract no longer needed parts during window calculations from partition batch:
         for (partition_row, n_prune) in n_prune_each_partition.iter() {
             let pb_state = &mut self.partition_buffers[partition_row];
+            pb_state.n_out_row = 0;
+
+            // If there is nothing to prune, leave the batch as-is
+            if *n_prune == 0 {
+                continue;
+            }
 
             let batch = &pb_state.record_batch;
             pb_state.record_batch = batch.slice(*n_prune, batch.num_rows() - n_prune);
-            pb_state.n_out_row = 0;
 
             // Update state indices since we have pruned some rows from the beginning:
             for window_agg_state in self.window_agg_states.iter_mut() {
@@ -1922,6 +1969,90 @@ mod tests {
             plan.cardinality_effect(),
             CardinalityEffect::Equal
         ));
+        Ok(())
+    }
+
+    /// Checks the per-partition batches that `LinearSearch` splits an input
+    /// batch into: partitions appear in first-appearance order, rows within a
+    /// partition keep their stream order, NULL keys form their own partition,
+    /// and a single-partition batch is passed through without copying.
+    #[test]
+    fn test_linear_search_evaluate_partition_batches() -> Result<()> {
+        use super::{LinearSearch, PartitionSearcher};
+        use arrow::array::{Int32Array, Int64Array};
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int64, false),
+        ]));
+        let window_expr = create_window_expr(
+            &WindowFunctionDefinition::AggregateUDF(count_udaf()),
+            "count".to_string(),
+            &[col("b", &schema)?],
+            &[col("a", &schema)?],
+            &[],
+            Arc::new(WindowFrame::new(None)),
+            Arc::clone(&schema),
+            false,
+            false,
+            None,
+        )?;
+        let mut searcher = LinearSearch::new(vec![], Arc::clone(&schema));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![
+                    Some(1),
+                    Some(2),
+                    Some(1),
+                    None,
+                    Some(2),
+                    Some(1),
+                ])),
+                Arc::new(Int64Array::from(vec![10, 20, 11, 30, 21, 12])),
+            ],
+        )?;
+        let result =
+            searcher.evaluate_partition_batches(&batch, &[Arc::clone(&window_expr)])?;
+        assert_eq!(result.len(), 3);
+        let expected = [
+            (
+                ScalarValue::Int32(Some(1)),
+                vec![Some(1); 3],
+                vec![10i64, 11, 12],
+            ),
+            (ScalarValue::Int32(Some(2)), vec![Some(2); 2], vec![20, 21]),
+            (ScalarValue::Int32(None), vec![None], vec![30]),
+        ];
+        for ((key, partition_batch), (exp_key, exp_a, exp_b)) in
+            result.iter().zip(expected)
+        {
+            assert_eq!(key, &vec![exp_key]);
+            let exp_batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(exp_a)),
+                    Arc::new(Int64Array::from(exp_b)),
+                ],
+            )?;
+            assert_eq!(partition_batch, &exp_batch);
+        }
+
+        let single = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(7), Some(7)])),
+                Arc::new(Int64Array::from(vec![70, 71])),
+            ],
+        )?;
+        let result = searcher.evaluate_partition_batches(&single, &[window_expr])?;
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, vec![ScalarValue::Int32(Some(7))]);
+        assert_eq!(result[0].1, single);
+        // The whole batch belongs to one partition, so its columns are reused
+        // rather than gathered into a new batch.
+        assert!(Arc::ptr_eq(result[0].1.column(0), single.column(0)));
         Ok(())
     }
 }
