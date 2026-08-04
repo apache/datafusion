@@ -716,6 +716,11 @@ impl SharedBuffers {
     fn remove(&self, start: u64) {
         self.inner.lock().unwrap().remove(&start);
     }
+
+    /// Whether the page starting at `start` is already staged.
+    fn contains(&self, start: u64) -> bool {
+        self.inner.lock().unwrap().contains_key(&start)
+    }
 }
 
 impl Length for SharedBuffers {
@@ -893,10 +898,17 @@ pub(crate) fn build_streaming_stream(
         inflight_start: 0,
         clear_idx: 0,
         resident_bytes: 0,
+        // 1MB matches object_store's own OBJECT_STORE_COALESCE_DEFAULT, and
+        // measurement agrees: on ClickBench (page-index copy, 50ms latency,
+        // 8 partitions) a 4MB gap merged away 59 requests but pulled 157MB of
+        // unprojected columns with them, and ran *slower* — with several
+        // partitions fetching concurrently, a saved round trip is worth much
+        // less than the naive latency x bandwidth break-even suggests. At 1MB
+        // bytes fetched return to parity with the unscheduled path.
         coalesce_gap: std::env::var("DF_FETCH_COALESCE")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(4 * 1024 * 1024),
+            .unwrap_or(1024 * 1024),
         cursor: 0,
         buffers,
         slot: ReaderSlot::Idle(reader),
@@ -1019,8 +1031,10 @@ impl StreamingScanState {
     /// window accounting stays page-based; the backing allocation lives
     /// until its last page clears.
     fn wave_ranges(&self, start_idx: usize, end_idx: usize) -> Vec<Range<u64>> {
+        // Skip pages an earlier wave's gap fill already staged.
         let mut sorted: Vec<Range<u64>> = self.plan[start_idx..end_idx]
             .iter()
+            .filter(|p| !self.buffers.contains(p.range().start))
             .map(|p| p.range().clone())
             .collect();
         sorted.sort_by_key(|r| r.start);
@@ -1045,10 +1059,28 @@ impl StreamingScanState {
         fetched: &[Range<u64>],
         data: &[Bytes],
     ) {
-        for page in &self.plan[start_idx..end_idx] {
-            let i = fetched.partition_point(|r| r.start <= page.range().start) - 1;
+        // Install every planned page the fetched blobs cover — not just this
+        // wave's. Coalescing deliberately over-fetches the gaps between
+        // pages, and those gaps routinely contain pages planned for a *later*
+        // wave (a different column, or later rows). Slicing them out now is
+        // free; discarding them means paying to fetch the same bytes twice,
+        // which measured as ~10% of all bytes read on ClickBench.
+        let _ = end_idx;
+        for idx in start_idx..self.plan.len() {
+            let page = &self.plan[idx];
+            if page.cleared || self.buffers.contains(page.range().start) {
+                continue;
+            }
+            let i = fetched.partition_point(|r| r.start <= page.range().start);
+            if i == 0 || page.range().end > fetched[i - 1].end {
+                // Not covered by this fetch. Pages are ordered by decode
+                // need rather than file offset, so this says nothing about
+                // whether later pages are covered — keep scanning.
+                continue;
+            }
+            let i = i - 1;
             let offset = (page.range().start - fetched[i].start) as usize;
-            let len = (page.planned.len()) as usize;
+            let len = page.planned.len() as usize;
             self.buffers
                 .insert(page.range(), data[i].slice(offset..offset + len));
             self.resident_bytes += len as u64;

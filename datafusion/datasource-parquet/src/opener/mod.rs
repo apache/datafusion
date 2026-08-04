@@ -1440,7 +1440,23 @@ impl RowGroupsPrunedParquetOpen {
                         }
                         _ => Ok(stream),
                     };
+                } else {
+                    // The streaming path needs page locations. Falling back
+                    // silently makes "did it even run?" unanswerable without
+                    // a benchmark round-trip, which is exactly how the
+                    // no-page-index ClickBench files went unnoticed.
+                    debug!(
+                        "streaming fetch policy requested but {} has no offset index; \
+                         falling back to row-group-granular push decoding",
+                        prepared.file_name
+                    );
                 }
+            } else {
+                debug!(
+                    "streaming fetch policy requested but pushdown filters are \
+                     active for {}; falling back to row-group-granular push decoding",
+                    prepared.file_name
+                );
             }
         }
 
