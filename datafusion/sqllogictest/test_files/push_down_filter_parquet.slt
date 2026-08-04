@@ -1087,10 +1087,130 @@ SELECT mnej_build.a, mnej_build.b, mnej_probe.a, mnej_probe.b FROM mnej_build JO
 2 NULL 2 NULL
 
 statement ok
+set datafusion.explain.analyze_categories = 'rows';
+
+# After execution the populated filter shows the applied predicate: an IS NULL disjunct
+# per key ahead of the build-side membership check, because the build holds a NULL.
+query TT
+EXPLAIN ANALYZE SELECT mnej_build.a, mnej_build.b, mnej_probe.a, mnej_probe.b FROM mnej_build JOIN mnej_probe ON (mnej_build.a IS NOT DISTINCT FROM mnej_probe.a) AND (mnej_build.b IS NOT DISTINCT FROM mnej_probe.b)
+----
+Plan with Metrics
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)], NullsEqual: true, metrics=[output_rows=2, output_batches=1, array_map_created_count=0, build_input_batches=1, build_input_rows=2, input_batches=1, input_rows=3, avg_fanout=100% (2/2), probe_hit_rate=66.67% (2/3)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/mnej_build.parquet]]}, projection=[a, b], file_type=parquet, metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=0, pushdown_rows_pruned=0, predicate_cache_inner_records=0, predicate_cache_records=0, scan_efficiency_ratio=16.42% (133/810)]
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/mnej_probe.parquet]]}, projection=[a, b], file_type=parquet, predicate=DynamicFilter [ a@0 IS NULL OR b@1 IS NULL OR a@0 >= 1 AND a@0 <= 2 AND b@1 >= 10 AND b@1 <= 10 AND struct(a@0, b@1) IN (SET) ([{c0:1,c1:10}, {c0:2,c1:}]) ], dynamic_rg_pruning=eligible, pruning_predicate=a_null_count@0 > 0 OR b_null_count@1 > 0 OR a_null_count@0 != row_count@3 AND a_max@2 >= 1 AND a_null_count@0 != row_count@3 AND a_min@4 <= 2 AND b_null_count@1 != row_count@3 AND b_max@5 >= 10 AND b_null_count@1 != row_count@3 AND b_min@6 <= 10, required_guarantees=[], metrics=[output_rows=3, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=3, pushdown_rows_pruned=0, predicate_cache_inner_records=6, predicate_cache_records=6, scan_efficiency_ratio=18.16% (148/815)]
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+statement ok
 drop table mnej_build;
 
 statement ok
 drop table mnej_probe;
+
+
+# A NULL-free build has nothing for a probe NULL to null-match, so the pushed filter
+# skips the IS NULL widening and keeps its full selectivity.
+statement ok
+COPY (SELECT * FROM (VALUES (11), (22)) v(id)) TO 'test_files/scratch/push_down_filter_parquet/nnb_build.parquet' STORED AS PARQUET;
+
+statement ok
+COPY (SELECT * FROM (VALUES (11), (33), (NULL)) v(id)) TO 'test_files/scratch/push_down_filter_parquet/nnb_probe.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE nnb_build STORED AS PARQUET LOCATION 'test_files/scratch/push_down_filter_parquet/nnb_build.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE nnb_probe STORED AS PARQUET LOCATION 'test_files/scratch/push_down_filter_parquet/nnb_probe.parquet';
+
+query II rowsort
+SELECT nnb_build.id, nnb_probe.id FROM nnb_build JOIN nnb_probe ON nnb_build.id IS NOT DISTINCT FROM nnb_probe.id
+----
+11 11
+
+statement ok
+set datafusion.explain.analyze_categories = 'rows';
+
+# No IS NULL disjunct in the populated filter: the probe NULL can be pruned safely.
+query TT
+EXPLAIN ANALYZE SELECT nnb_build.id, nnb_probe.id FROM nnb_build JOIN nnb_probe ON nnb_build.id IS NOT DISTINCT FROM nnb_probe.id
+----
+Plan with Metrics
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], NullsEqual: true, metrics=[output_rows=1, output_batches=1, array_map_created_count=1, build_input_batches=1, build_input_rows=2, input_batches=1, input_rows=1, avg_fanout=100% (1/1), probe_hit_rate=100% (1/1)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/nnb_build.parquet]]}, projection=[id], file_type=parquet, metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=0, pushdown_rows_pruned=0, predicate_cache_inner_records=0, predicate_cache_records=0, scan_efficiency_ratio=13.71% (68/496)]
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/nnb_probe.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ id@0 >= 11 AND id@0 <= 22 AND id@0 IN (SET) ([11, 22]) ], dynamic_rg_pruning=eligible, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 >= 11 AND id_null_count@1 != row_count@2 AND id_min@3 <= 22 AND (id_null_count@1 != row_count@2 AND id_min@3 <= 11 AND 11 <= id_max@0 OR id_null_count@1 != row_count@2 AND id_min@3 <= 22 AND 22 <= id_max@0), required_guarantees=[id in (11, 22)], metrics=[output_rows=1, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=1 total → 1 matched, page_index_rows_pruned=3 total → 3 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=1, pushdown_rows_pruned=2, predicate_cache_inner_records=3, predicate_cache_records=1, scan_efficiency_ratio=14.45% (74/512)]
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+statement ok
+drop table nnb_build;
+
+statement ok
+drop table nnb_probe;
+
+
+# Partitioned mode: the per-partition CASE filter gets the same IS NULL widening, so a
+# probe NULL routed to a pruning branch still reaches the join.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold = 0;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold_rows = 0;
+
+# Two files per side so each scan starts with multiple partitions and the join
+# runs real hash routing instead of collapsing to a single branch.
+statement ok
+COPY (SELECT * FROM (VALUES (11), (22)) v(id)) TO 'test_files/scratch/push_down_filter_parquet/pnej_probe/1.parquet' STORED AS PARQUET;
+
+statement ok
+COPY (SELECT * FROM (VALUES (33), (NULL)) v(id)) TO 'test_files/scratch/push_down_filter_parquet/pnej_probe/2.parquet' STORED AS PARQUET;
+
+statement ok
+COPY (SELECT * FROM (VALUES (11)) v(id)) TO 'test_files/scratch/push_down_filter_parquet/pnej_build/1.parquet' STORED AS PARQUET;
+
+statement ok
+COPY (SELECT * FROM (VALUES (NULL)) v(id)) TO 'test_files/scratch/push_down_filter_parquet/pnej_build/2.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE pnej_probe STORED AS PARQUET LOCATION 'test_files/scratch/push_down_filter_parquet/pnej_probe/';
+
+statement ok
+CREATE EXTERNAL TABLE pnej_build STORED AS PARQUET LOCATION 'test_files/scratch/push_down_filter_parquet/pnej_build/';
+
+query TT
+EXPLAIN SELECT pnej_build.id, pnej_probe.id FROM pnej_build JOIN pnej_probe ON pnej_build.id IS NOT DISTINCT FROM pnej_probe.id
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(id@0, id@0)], NullsEqual: true
+02)--RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=2
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/pnej_build/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/pnej_build/2.parquet]]}, projection=[id], file_type=parquet
+04)--RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=2
+05)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/pnej_probe/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/pnej_probe/2.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+query II rowsort
+SELECT pnej_build.id, pnej_probe.id FROM pnej_build JOIN pnej_probe ON pnej_build.id IS NOT DISTINCT FROM pnej_probe.id
+----
+11 11
+NULL NULL
+
+statement ok
+drop table pnej_build;
+
+statement ok
+drop table pnej_probe;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+RESET datafusion.optimizer.hash_join_single_partition_threshold;
+
+statement ok
+RESET datafusion.optimizer.hash_join_single_partition_threshold_rows;
 
 
 ########
