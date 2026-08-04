@@ -30,7 +30,7 @@ use datafusion_common::Result;
 use datafusion_common::exec_datafusion_err;
 use datafusion_common::hash_utils::RandomState;
 use half::f16;
-use hashbrown::hash_table::HashTable;
+use hashbrown::hash_table::{Entry, HashTable};
 use std::fmt::Debug;
 use std::hash::BuildHasher;
 use std::sync::Arc;
@@ -310,7 +310,12 @@ where
     }
 }
 
-use hashbrown::hash_table::Entry;
+impl<ID> HashTableItem<ID> {
+    #[inline]
+    pub fn is_null(&self) -> bool {
+        self.heap_idx == NULL_HEAP_IDX
+    }
+}
 impl<ID: PartialEq> TopKHashTable<ID> {
     pub fn new(limit: usize, capacity: usize) -> Self {
         Self {
@@ -378,7 +383,7 @@ impl<ID: PartialEq> TopKHashTable<ID> {
         {
             let eq_fn = |idx: &usize| eq(&self.store[*idx].id);
             if let Some(&map_idx) = self.map.find(hash, eq_fn) {
-                if self.store[map_idx].heap_idx == NULL_HEAP_IDX {
+                if self.store[map_idx].is_null() {
                     // This group was registered as all-NULL but now produced a
                     // value: unregister it so it is inserted as a valued group
                     self.remove_at(map_idx);
@@ -466,7 +471,7 @@ impl<ID: PartialEq> TopKHashTable<ID> {
     ) -> bool {
         let eq_fn = |idx: &usize| eq(&self.store[*idx].id);
         if let Some(&map_idx) = self.map.find(hash, eq_fn)
-            && self.store[map_idx].heap_idx == NULL_HEAP_IDX
+            && self.store[map_idx].is_null()
         {
             self.remove_at(map_idx);
             self.null_count -= 1;
@@ -480,7 +485,9 @@ impl<ID: PartialEq> TopKHashTable<ID> {
         self.store
             .iter()
             .enumerate()
-            .filter_map(|(idx, item)| (item.heap_idx == NULL_HEAP_IDX).then_some(idx))
+            .filter_map(|(idx, item)| {
+                (item.id.is_some() && item.is_null()).then_some(idx)
+            })
             .collect()
     }
 
