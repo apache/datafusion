@@ -1424,6 +1424,46 @@ mod tests {
     };
 
     #[test]
+    fn test_try_new_with_schema_metadata_only_replaces_metadata() -> Result<()> {
+        let input_schema = Arc::new(Schema::new(vec![Field::new(
+            "input",
+            DataType::Int32,
+            false,
+        )]));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(input_schema));
+        let field_metadata =
+            HashMap::from([("field-key".to_string(), "field-value".to_string())]);
+        let schema_metadata =
+            HashMap::from([("schema-key".to_string(), "schema-value".to_string())]);
+        let metadata_schema = Schema::new_with_metadata(
+            vec![
+                Field::new("ignored", DataType::Utf8, true)
+                    .with_metadata(field_metadata.clone()),
+            ],
+            schema_metadata.clone(),
+        );
+
+        let projection = ProjectionExec::try_new_with_schema_metadata(
+            [ProjectionExpr {
+                expr: Arc::new(Column::new("input", 0)),
+                alias: "output".to_string(),
+            }],
+            input,
+            &metadata_schema,
+        )?;
+
+        let expected_schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("output", DataType::Int32, false)
+                    .with_metadata(field_metadata),
+            ],
+            schema_metadata,
+        ));
+        assert_eq!(projection.schema(), expected_schema);
+        Ok(())
+    }
+
+    #[test]
     fn test_collect_column_indices() -> Result<()> {
         let expr = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("b", 7)),
