@@ -1845,6 +1845,11 @@ mod tests {
     }
 
     // Reproduces the bug where `state()` emits reversed values but non-reversed
+    // orderings when the optimizer sets is_input_pre_ordered=true + reverse=true
+    // (DESC aggregate with ASC pre-sorted input). The partial states are fed into
+    // a final accumulator via merge_batch; without the fix the ordering keys and
+    // values are mismatched so the final sort produces wrong order.
+    #[test]
     fn desc_order_partial_final_merge_correct() -> Result<()> {
         use arrow::array::Int64Array;
         use datafusion_physical_expr::expressions::Column;
