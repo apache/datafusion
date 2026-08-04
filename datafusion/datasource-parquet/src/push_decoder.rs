@@ -987,6 +987,10 @@ pub(crate) fn build_streaming_stream(
         inflight_start: 0,
         clear_idx: 0,
         resident_bytes: 0,
+        coalesce_gap: std::env::var("DF_FETCH_COALESCE")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(4 * 1024 * 1024),
         cursor: 0,
         buffers,
         slot: ReaderSlot::Idle(reader),
@@ -1020,6 +1024,9 @@ pub(crate) struct StreamingScanState {
     /// Scan start for dropping pages the cursor has passed.
     clear_idx: usize,
     resident_bytes: u64,
+    /// Merge fetch ranges whose gap is at most this many bytes (deliberate
+    /// over-fetch that collapses GET count for scattered page plans).
+    coalesce_gap: u64,
     /// Selected rows emitted so far.
     cursor: u64,
     buffers: SharedBuffers,
@@ -1098,6 +1105,52 @@ impl StreamingScanState {
         }
     }
 
+    /// Fetch ranges for a wave of plan pages: merge page ranges whose file
+    /// gap is <= `coalesce_gap` into single requests ("buy the shelf
+    /// section") — deliberate over-fetch of small gaps that collapses the
+    /// object-store GET count for scattered page-precise plans. The gap
+    /// bytes are dropped after slicing (only page bytes are installed), so
+    /// window accounting stays page-based; the backing allocation lives
+    /// until its last page clears.
+    fn wave_ranges(&self, start_idx: usize, end_idx: usize) -> Vec<Range<u64>> {
+        let mut sorted: Vec<Range<u64>> = self.plan[start_idx..end_idx]
+            .iter()
+            .map(|p| p.range.clone())
+            .collect();
+        sorted.sort_by_key(|r| r.start);
+        let mut merged: Vec<Range<u64>> = Vec::with_capacity(sorted.len());
+        for r in sorted {
+            match merged.last_mut() {
+                Some(last) if r.start.saturating_sub(last.end) <= self.coalesce_gap => {
+                    last.end = last.end.max(r.end);
+                }
+                _ => merged.push(r),
+            }
+        }
+        merged
+    }
+
+    /// Install a fetched wave: slice each plan page's bytes out of the
+    /// merged fetch results and stage them in the shared buffers.
+    fn install_wave(
+        &mut self,
+        start_idx: usize,
+        end_idx: usize,
+        fetched: &[Range<u64>],
+        data: &[Bytes],
+    ) {
+        for page in &self.plan[start_idx..end_idx] {
+            let i = fetched.partition_point(|r| r.start <= page.range.start) - 1;
+            let offset = (page.range.start - fetched[i].start) as usize;
+            let len = (page.range.end - page.range.start) as usize;
+            self.buffers
+                .insert(&page.range, data[i].slice(offset..offset + len));
+            self.resident_bytes += len as u64;
+        }
+        PEAK_STAGED_BYTES
+            .fetch_max(self.resident_bytes, std::sync::atomic::Ordering::Relaxed);
+    }
+
     async fn transition(mut self) -> Option<(Result<RecordBatch>, Self)> {
         loop {
             // 1. Land the in-flight fetch when the next batch needs it (or
@@ -1117,13 +1170,11 @@ impl StreamingScanState {
                         self.slot = ReaderSlot::Idle(reader);
                         match result {
                             Ok(data) => {
-                                for (range, bytes) in ranges.iter().zip(data) {
-                                    self.buffers.insert(range, bytes);
-                                    self.resident_bytes += range.end - range.start;
-                                }
-                                PEAK_STAGED_BYTES.fetch_max(
-                                    self.resident_bytes,
-                                    std::sync::atomic::Ordering::Relaxed,
+                                self.install_wave(
+                                    self.inflight_start,
+                                    self.fetched_idx,
+                                    &ranges,
+                                    &data,
                                 );
                             }
                             Err(e) => {
@@ -1141,24 +1192,21 @@ impl StreamingScanState {
                         // wave — and therefore time-to-first-batch — stays
                         // small; readahead happens in the background
                         // (step 2).
-                        let required_only = self.total_plan_bytes > self.window;
+                        // "Fill the cart": a blocking wave is a round trip
+                        // we pay either way, so extend it with readahead up
+                        // to the window — EXCEPT the file's very first wave
+                        // of a larger-than-window plan, which stays
+                        // required-only so time-to-first-batch tracks the
+                        // first pages rather than the window.
+                        let required_only =
+                            self.fetched_idx == 0 && self.total_plan_bytes > self.window;
                         let end = self.next_gulp_end(required_only);
-                        let ranges: Vec<Range<u64>> = self.plan[self.fetched_idx..end]
-                            .iter()
-                            .map(|p| p.range.clone())
-                            .collect();
+                        let ranges = self.wave_ranges(self.fetched_idx, end);
                         let result = reader.get_byte_ranges(ranges.clone()).await;
                         self.slot = ReaderSlot::Idle(reader);
                         match result {
                             Ok(data) => {
-                                for (range, bytes) in ranges.iter().zip(data) {
-                                    self.buffers.insert(range, bytes);
-                                    self.resident_bytes += range.end - range.start;
-                                }
-                                PEAK_STAGED_BYTES.fetch_max(
-                                    self.resident_bytes,
-                                    std::sync::atomic::Ordering::Relaxed,
-                                );
+                                self.install_wave(self.fetched_idx, end, &ranges, &data);
                                 self.fetched_idx = end;
                             }
                             Err(e) => {
@@ -1184,10 +1232,7 @@ impl StreamingScanState {
                     .sum();
                 let tail = end == self.plan.len();
                 if end > self.fetched_idx && (gulp_bytes >= self.window / 2 || tail) {
-                    let ranges: Vec<Range<u64>> = self.plan[self.fetched_idx..end]
-                        .iter()
-                        .map(|p| p.range.clone())
-                        .collect();
+                    let ranges = self.wave_ranges(self.fetched_idx, end);
                     let ReaderSlot::Idle(mut reader) =
                         std::mem::replace(&mut self.slot, ReaderSlot::Empty)
                     else {
