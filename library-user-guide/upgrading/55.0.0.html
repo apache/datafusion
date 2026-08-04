@@ -1259,6 +1259,80 @@ on a non-future value does not compile:</p>
 </ul>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/23827">PR #23827</a> for details.</p>
 </section>
+<section id="windowexpr-evaluate-stateful-now-takes-a-windowevalcontext">
+<h3><code class="docutils literal notranslate"><span class="pre">WindowExpr::evaluate_stateful</span></code> now takes a <code class="docutils literal notranslate"><span class="pre">WindowEvalContext</span></code><a class="headerlink" href="#windowexpr-evaluate-stateful-now-takes-a-windowevalcontext" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">WindowExpr::evaluate_stateful</span></code> (and the provided
+<code class="docutils literal notranslate"><span class="pre">AggregateWindowExpr::aggregate_evaluate_stateful</span></code> method) take a new
+<code class="docutils literal notranslate"><span class="pre">WindowEvalContext</span></code> argument carrying stream-level information that is shared
+by all partitions:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="k">fn</span><span class="w"> </span><span class="nf">evaluate_stateful</span><span class="p">(</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">    </span><span class="n">partition_batches</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">PartitionBatches</span><span class="p">,</span>
+<span class="w">    </span><span class="n">window_agg_state</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">mut</span><span class="w"> </span><span class="n">PartitionWindowAggStates</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span>
+
+<span class="c1">// After</span>
+<span class="k">fn</span><span class="w"> </span><span class="nf">evaluate_stateful</span><span class="p">(</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">    </span><span class="n">partition_batches</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">PartitionBatches</span><span class="p">,</span>
+<span class="w">    </span><span class="n">window_agg_state</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">mut</span><span class="w"> </span><span class="n">PartitionWindowAggStates</span><span class="p">,</span>
+<span class="w">    </span><span class="n">eval_ctx</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">WindowEvalContext</span><span class="o">&lt;&#39;</span><span class="nb">_</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">WindowEvalContext</span></code> currently carries the most recent input row, which
+previously lived in each partition’s <code class="docutils literal notranslate"><span class="pre">PartitionBatchState</span></code> (see the next
+section). The struct is <code class="docutils literal notranslate"><span class="pre">#[non_exhaustive]</span></code> so that fields can be added
+without further signature changes: construct it with
+<code class="docutils literal notranslate"><span class="pre">WindowEvalContext::default()</span></code> and set fields through its builder methods.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Implementations of the <code class="docutils literal notranslate"><span class="pre">WindowExpr</span></code> trait that override <code class="docutils literal notranslate"><span class="pre">evaluate_stateful</span></code>
+must add the new parameter.</p></li>
+<li><p>Callers of <code class="docutils literal notranslate"><span class="pre">evaluate_stateful</span></code> or <code class="docutils literal notranslate"><span class="pre">aggregate_evaluate_stateful</span></code> must pass a
+context.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion_physical_expr</span><span class="p">::</span><span class="n">window</span><span class="p">::</span><span class="n">WindowEvalContext</span><span class="p">;</span>
+
+<span class="c1">// Before</span>
+<span class="n">window_expr</span><span class="p">.</span><span class="n">evaluate_stateful</span><span class="p">(</span><span class="o">&amp;</span><span class="n">partition_batches</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">window_agg_state</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="c1">// After</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">eval_ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">WindowEvalContext</span><span class="p">::</span><span class="n">default</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_most_recent_row</span><span class="p">(</span><span class="n">most_recent_row</span><span class="p">.</span><span class="n">as_ref</span><span class="p">());</span>
+<span class="n">window_expr</span><span class="p">.</span><span class="n">evaluate_stateful</span><span class="p">(</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="n">partition_batches</span><span class="p">,</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">window_agg_state</span><span class="p">,</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="n">eval_ctx</span><span class="p">,</span>
+<span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Pass <code class="docutils literal notranslate"><span class="pre">WindowEvalContext::default()</span></code> when no most-recent-row watermark is
+available (for example, when the input is sorted by the partition keys and
+partition ends are detected directly).</p>
+</section>
+<section id="partitionbatchstate-most-recent-row-removed">
+<h3><code class="docutils literal notranslate"><span class="pre">PartitionBatchState::most_recent_row</span></code> removed<a class="headerlink" href="#partitionbatchstate-most-recent-row-removed" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">most_recent_row</span></code> field and the <code class="docutils literal notranslate"><span class="pre">set_most_recent_row</span></code> method have been
+removed from <code class="docutils literal notranslate"><span class="pre">datafusion_expr::window_state::PartitionBatchState</span></code>. The most
+recent input row is a property of the whole input stream rather than
+per-partition state: every partition observed the same value. It is now
+tracked once by the operator driving the evaluation and passed to window
+expressions through the new <code class="docutils literal notranslate"><span class="pre">WindowEvalContext</span></code> argument of
+<code class="docutils literal notranslate"><span class="pre">WindowExpr::evaluate_stateful</span></code> described above.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Code that read <code class="docutils literal notranslate"><span class="pre">PartitionBatchState::most_recent_row</span></code> or called
+<code class="docutils literal notranslate"><span class="pre">set_most_recent_row</span></code>, such as custom streaming window operators.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Track the most recent input row once per stream (for example, a one-row
+slice of the last non-empty input batch) and pass it to window expressions
+via <code class="docutils literal notranslate"><span class="pre">WindowEvalContext::with_most_recent_row</span></code> instead of copying it into
+each partition’s state.</p>
+</section>
 <section id="msrv-updated-to-1-94-0">
 <h3><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.94.0<a class="headerlink" href="#msrv-updated-to-1-94-0" title="Link to this heading">#</a></h3>
 <p>The Minimum Supported Rust Version (MSRV) has been updated to <a class="reference external" href="https://releases.rs/docs/1.94.0/"><code class="docutils literal notranslate"><span class="pre">1.94.0</span></code></a>.</p>
@@ -1354,6 +1428,8 @@ supports one-dimensional arrays.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#catalog-planner-and-optimizer-contracts-moved-to-datafusion-session">Catalog, planner, and optimizer contracts moved to <code class="docutils literal notranslate"><span class="pre">datafusion-session</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#unused-async-removed-from-several-public-functions">Unused <code class="docutils literal notranslate"><span class="pre">async</span></code> removed from several public functions</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#movingmin-and-movingmax-changed-to-pub-crate"><code class="docutils literal notranslate"><span class="pre">MovingMin</span></code> and <code class="docutils literal notranslate"><span class="pre">MovingMax</span></code> changed to <code class="docutils literal notranslate"><span class="pre">pub(crate)</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#windowexpr-evaluate-stateful-now-takes-a-windowevalcontext"><code class="docutils literal notranslate"><span class="pre">WindowExpr::evaluate_stateful</span></code> now takes a <code class="docutils literal notranslate"><span class="pre">WindowEvalContext</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#partitionbatchstate-most-recent-row-removed"><code class="docutils literal notranslate"><span class="pre">PartitionBatchState::most_recent_row</span></code> removed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#msrv-updated-to-1-94-0"><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.94.0</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#array-distance-scalar-function-now-rejects-multidimensional-arrays"><code class="docutils literal notranslate"><span class="pre">array_distance</span></code> scalar function now rejects multidimensional arrays</a></li>
 </ul>
