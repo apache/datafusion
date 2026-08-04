@@ -18,9 +18,9 @@
 //! Schema-driven nested projection pruning.
 //!
 //! When a scan's projection consumes a nested column only through a cast to a
-//! *narrower* nested type — e.g. the file contains
+//! *narrower* nested type, for example the file contains
 //! `events: List<Struct<x, y, z, ...>>` but the expression is
-//! `CAST(events AS List<Struct<x, y>>)` — the parquet reader does not need to
+//! `CAST(events AS List<Struct<x, y>>)`, the parquet reader does not need to
 //! fetch or decode the leaves the cast target never names. This module
 //! computes which parquet leaves survive such a cast, and the Arrow type the
 //! reader will emit for them, by walking the physical and target type trees
@@ -31,7 +31,7 @@
 //! column narrower than the physical parquet file: the physical expression
 //! adapter rewrites the projected column into exactly such a whole-column
 //! cast (see `datafusion_physical_expr_adapter`). Engines like Spark
-//! communicate nested projection pruning to the scan this way — as a clipped
+//! communicate nested projection pruning to the scan this way, as a clipped
 //! read *schema* rather than as `get_field` expressions.
 //!
 //! # Safety of clipping
@@ -57,8 +57,8 @@
 //! are deliberately not clipped: the runtime cast routes maps through Arrow's
 //! positional struct cast, which requires all children to be present. Nor are
 //! `ListView`/`LargeListView`/`Dictionary` wrappers clipped here, even though
-//! `cast_column` does recurse through them by name — a conservative choice
-//! (safe, since the worst case is still just a full read) left as a
+//! `cast_column` does recurse through them by name. That is a conservative
+//! choice (safe, since the worst case is still just a full read) left as a
 //! candidate follow-up rather than something this module currently handles.
 
 use std::sync::Arc;
@@ -67,7 +67,7 @@ use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
 /// The single child type one level of container nesting wraps, or `None` for
 /// a type this module does not descend through (leaves, `Struct`, `Map`, and
-/// wrapper kinds this module intentionally does not clip — see the module
+/// wrapper kinds this module intentionally does not clip, see the module
 /// doc). Shared by [`count_leaves`] and [`contains_struct`], which otherwise
 /// need to agree on the exact same set of container variants.
 fn nested_child(dt: &DataType) -> Option<&DataType> {
@@ -161,8 +161,8 @@ fn clip_type(
                 clip_type(p_item.data_type(), t_item.data_type(), next_leaf, kept);
             DataType::LargeList(field_with_type(p_item, pruned))
         }
-        // Anything else — leaf pairs, wrapper-kind mismatches, maps,
-        // dictionaries, fixed-size lists, views — is kept wholesale.
+        // Anything else, leaf pairs, wrapper-kind mismatches, maps,
+        // dictionaries, fixed-size lists, views, is kept wholesale.
         _ => keep_all_leaves(physical, next_leaf, kept),
     }
 }
@@ -309,7 +309,7 @@ mod tests {
         );
     }
 
-    /// List<Struct> — the headline case.
+    /// List<Struct>, the headline case.
     #[test]
     fn clip_list_of_struct() {
         let physical = list_of(struct_of(vec![int64("x"), utf8("y"), utf8("pad")]));
@@ -319,7 +319,7 @@ mod tests {
         assert_eq!(emitted, list_of(struct_of(vec![int64("x"), utf8("y")])));
     }
 
-    /// Two levels of `list<struct>` nesting, the inner one also narrowed —
+    /// Two levels of `list<struct>` nesting, the inner one also narrowed,
     /// the `events: array<struct<..., items: array<struct<...>>>>` shape
     /// reported in `datafusion-comet#4859`, where a sibling struct field at
     /// the outer level (`aux`, standing in for that report's
@@ -399,7 +399,7 @@ mod tests {
     /// code: `validate_struct_compatibility` rejects it during physical
     /// planning (see the module doc), so `clip_for_cast` is only ever called
     /// with targets that overlap at every nesting level. If it were reached
-    /// anyway, the generic catch-all keeps every leaf — still safe, just
+    /// anyway, the generic catch-all keeps every leaf, still safe, just
     /// unpruned.
     #[test]
     fn no_clip_on_zero_overlap() {

@@ -1531,7 +1531,7 @@ mod nested_projection_pruning {
     /// field the *narrow* schema declares), not further down to just `x`.
     /// The fair "no clipping happened" baseline is therefore reading every
     /// physical leaf of `s` (`SELECT s FROM t_full`), not the same
-    /// `get_field` query against `t_full` — that query needs no cast at all
+    /// `get_field` query against `t_full`. That query needs no cast at all
     /// and takes `get_field`'s own, more precise, single-leaf pushdown path.
     #[tokio::test]
     async fn prunes_get_field_on_narrowed_struct() {
@@ -1664,7 +1664,7 @@ mod nested_projection_pruning {
     /// items: array<struct<...>>>>` column, with a dropped struct sibling
     /// (`latency_parts`), a dropped map sibling (`feature_map`), a dropped
     /// nested-struct sibling (`diagnostics`), and dropped top-level sibling
-    /// columns (`dimension_id`, `region_code`, `raw_payload`) — structurally
+    /// columns (`dimension_id`, `region_code`, `raw_payload`), structurally
     /// the same `ReadSchema`/`InputSchema` pair from the issue (field names
     /// kept representative, not verbatim), which let Comet's production
     /// query read 1.35 TB where plain Spark, given the same pruned

@@ -271,7 +271,7 @@ fn scan_bytes(ctx: &SessionContext, rt: &Runtime, sql: &str) -> usize {
 /// `narrow` selects from a wide file through a narrow declared schema, `full`
 /// through the full schema, and `floor` from a physically-narrow file.
 /// Nested projection pruning clips the narrow read to the declared leaves, so
-/// `narrow` should read substantially less than `full` — close to `floor`,
+/// `narrow` should read substantially less than `full`, close to `floor`,
 /// the cost of a file that never had the extra leaves to begin with.
 fn assert_scan_prunes(
     ctx: &SessionContext,

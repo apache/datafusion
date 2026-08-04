@@ -496,12 +496,12 @@ pub(crate) fn build_projection_read_plan(
 ///   (see `crate::nested_schema_pruning`);
 /// - roots consumed only through `get_field` accesses keep the union of the
 ///   leaves those accesses reach, as before;
-/// - any other referenced root — a cast that can't be safely clipped (see
+/// - any other referenced root, a cast that can't be safely clipped (see
 ///   `nested_schema_pruning::clip_for_cast`), or a root reached by both a
 ///   cast and a `get_field` access (not produced by
 ///   `DefaultPhysicalExprAdapter`, which always routes a `get_field` over a
 ///   narrowed column through the same cast rather than a separate access,
-///   but a custom `PhysicalExprAdapter` could in principle inject both) —
+///   but a custom `PhysicalExprAdapter` could in principle inject both),
 ///   falls back to a full read of that root.
 fn build_read_plan_with_cast_clipping(
     file_schema: &Schema,
@@ -542,7 +542,7 @@ fn build_read_plan_with_cast_clipping(
 
         // Defensive: the arrow type's leaf count must agree with the
         // parquet schema (it can diverge if the file embeds a different
-        // arrow schema). If not, never risk a wrong mask — read the whole
+        // arrow schema). If not, never risk a wrong mask: read the whole
         // root.
         if root_leaves.len() != count_leaves(physical_type) {
             fallback_roots.insert(root);
@@ -1048,7 +1048,7 @@ mod test {
 
         let read_plan = build_projection_read_plan(exprs, &file_schema, schema_descr);
 
-        // Only id's leaf (0) and s.value's leaf (1) should be read — s.label
+        // Only id's leaf (0) and s.value's leaf (1) should be read: s.label
         // and s.pad are clipped away.
         let expected_mask = ProjectionMask::leaves(schema_descr, [0, 1]);
         assert_eq!(read_plan.projection_mask, expected_mask);
