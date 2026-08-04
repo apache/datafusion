@@ -144,6 +144,13 @@ pub struct FunctionalDependence {
     /// such as after LEFT JOIN or RIGHT JOIN operations, this property may
     /// change.
     pub nullable: bool,
+    /// The NULL-comparison semantics under which this dependency holds. The
+    /// conservative default, [`NullEquality::NullEqualsNothing`], means it
+    /// holds only across rows whose determinant contains no NULLs; e.g. a
+    /// nullable `UNIQUE` constraint permits multiple NULL rows that may differ.
+    /// [`NullEquality::NullEqualsNull`] means it also holds when NULL
+    /// determinant values are treated as equal; e.g. a `GROUP BY` key.
+    pub null_equality: NullEquality,
     // The functional dependency mode:
     pub mode: Dependency,
 }
@@ -168,6 +175,8 @@ impl FunctionalDependence {
             source_indices,
             target_indices,
             nullable,
+            // Assume the dependency does not hold across NULL rows by default:
+            null_equality: NullEquality::NullEqualsNothing,
             // Start with the least restrictive mode by default:
             mode: Dependency::Multi,
         }
@@ -177,46 +186,43 @@ impl FunctionalDependence {
         self.mode = mode;
         self
     }
+
+    pub fn with_null_equality(mut self, null_equality: NullEquality) -> Self {
+        self.null_equality = null_equality;
+        self
+    }
+
+    /// Returns `true` if this dependency remains usable for operations that
+    /// treat NULL determinant values as equal (`GROUP BY`, `DISTINCT` and
+    /// sorting, which place all NULL keys together): it must hold under
+    /// NULLs-are-equal semantics, have a non-nullable determinant (e.g. a
+    /// `PRIMARY KEY`), or have no nullable source field in the given `schema`.
+    pub fn is_valid_across_nulls(&self, schema: &DFSchema) -> bool {
+        self.null_equality == NullEquality::NullEqualsNull
+            || !self.nullable
+            || self
+                .source_indices
+                .iter()
+                .all(|&source_idx| !schema.field(source_idx).is_nullable())
+    }
 }
 
 /// This object encapsulates all functional dependencies in a given relation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionalDependencies {
     deps: Vec<FunctionalDependence>,
-    null_equalities: Vec<NullEquality>,
 }
 
 impl FunctionalDependencies {
     /// Creates an empty `FunctionalDependencies` object.
     pub fn empty() -> Self {
-        Self {
-            deps: vec![],
-            null_equalities: vec![],
-        }
+        Self { deps: vec![] }
     }
 
     /// Creates a new `FunctionalDependencies` object from a vector of
     /// `FunctionalDependence` objects.
     pub fn new(dependencies: Vec<FunctionalDependence>) -> Self {
-        let null_equalities = vec![NullEquality::NullEqualsNothing; dependencies.len()];
-        Self::new_with_null_equalities(dependencies, null_equalities)
-    }
-
-    fn new_with_null_equalities(
-        dependencies: Vec<FunctionalDependence>,
-        null_equalities: Vec<NullEquality>,
-    ) -> Self {
-        debug_assert_eq!(dependencies.len(), null_equalities.len());
-        Self {
-            deps: dependencies,
-            null_equalities,
-        }
-    }
-
-    fn iter_with_null_equality(
-        &self,
-    ) -> impl Iterator<Item = (&FunctionalDependence, NullEquality)> {
-        self.deps.iter().zip(self.null_equalities.iter().copied())
+        Self { deps: dependencies }
     }
 
     /// Creates a new `FunctionalDependencies` object from the given constraints.
@@ -263,7 +269,6 @@ impl FunctionalDependencies {
     /// Merges the given functional dependencies with these.
     pub fn extend(&mut self, other: FunctionalDependencies) {
         self.deps.extend(other.deps);
-        self.null_equalities.extend(other.null_equalities);
     }
 
     /// Sanity checks if functional dependencies are valid. For example, if
@@ -320,16 +325,13 @@ impl FunctionalDependencies {
         n_out: usize,
     ) -> FunctionalDependencies {
         let mut projected_func_dependencies = vec![];
-        let mut projected_null_equalities = vec![];
-        for (
-            FunctionalDependence {
-                source_indices,
-                target_indices,
-                nullable,
-                mode,
-            },
+        for FunctionalDependence {
+            source_indices,
+            target_indices,
+            nullable,
             null_equality,
-        ) in self.iter_with_null_equality()
+            mode,
+        } in &self.deps
         {
             let new_source_indices =
                 update_elements_with_matching_indices(source_indices, proj_indices);
@@ -348,15 +350,12 @@ impl FunctionalDependencies {
                     new_target_indices,
                     *nullable,
                 )
-                .with_mode(*mode);
+                .with_mode(*mode)
+                .with_null_equality(*null_equality);
                 projected_func_dependencies.push(new_func_dependence);
-                projected_null_equalities.push(null_equality);
             }
         }
-        FunctionalDependencies::new_with_null_equalities(
-            projected_func_dependencies,
-            projected_null_equalities,
-        )
+        FunctionalDependencies::new(projected_func_dependencies)
     }
 
     /// This function joins this set of functional dependencies with the `other`
@@ -415,24 +414,13 @@ impl FunctionalDependencies {
     /// - If the dependency in question is PRIMARY KEY (i.e. not nullable), a new
     ///   null value turns it into UNIQUE mode.
     fn downgrade_dependencies(&mut self) {
-        let dependencies = std::mem::take(&mut self.deps);
-        let null_equalities = std::mem::take(&mut self.null_equalities);
-        let mut retained_dependencies = Vec::with_capacity(dependencies.len());
-        let mut retained_null_equalities = Vec::with_capacity(null_equalities.len());
-
-        for (mut dependency, _) in dependencies.into_iter().zip(null_equalities) {
-            // A dependency whose determinant was already nullable becomes
-            // invalid. A non-nullable determinant becomes nullable, and NULL
-            // values introduced by the join are not equal to one another.
-            if !dependency.nullable {
-                dependency.nullable = true;
-                retained_dependencies.push(dependency);
-                retained_null_equalities.push(NullEquality::NullEqualsNothing);
-            }
-        }
-
-        self.deps = retained_dependencies;
-        self.null_equalities = retained_null_equalities;
+        // Delete nullable dependencies, since they are no longer valid:
+        self.deps.retain(|item| !item.nullable);
+        // Survivors become nullable, and the new NULLs are not equal to one another:
+        self.deps.iter_mut().for_each(|item| {
+            item.nullable = true;
+            item.null_equality = NullEquality::NullEqualsNothing;
+        });
     }
 
     /// This function ensures that functional dependencies involving uniquely
@@ -469,22 +457,19 @@ pub fn aggregate_functional_dependencies(
     aggr_schema: &DFSchema,
 ) -> FunctionalDependencies {
     let mut aggregate_func_dependencies = vec![];
-    let mut aggregate_null_equalities = vec![];
     let aggr_input_fields = aggr_input_schema.field_names();
     let aggr_fields = aggr_schema.fields();
     // Association covers the whole table:
     let target_indices = (0..aggr_schema.fields().len()).collect::<Vec<_>>();
     // Get functional dependencies of the schema:
     let func_dependencies = aggr_input_schema.functional_dependencies();
-    for (
-        FunctionalDependence {
-            source_indices,
-            nullable,
-            mode,
-            ..
-        },
-        input_null_equality,
-    ) in func_dependencies.iter_with_null_equality()
+    for FunctionalDependence {
+        source_indices,
+        nullable,
+        null_equality,
+        mode,
+        ..
+    } in &func_dependencies.deps
     {
         // Keep source indices in a `HashSet` to prevent duplicate entries:
         let mut new_source_indices = vec![];
@@ -520,14 +505,13 @@ pub fn aggregate_functional_dependencies(
         };
         // All of the composite indices occur in the GROUP BY expression:
         if new_source_indices.len() == source_indices.len() {
-            // GROUP BY treats NULL values as equal. When this determinant
-            // covers the complete grouping key, at most one output row exists
-            // for its NULL value too.
+            // GROUP BY treats NULLs as equal: a determinant covering the
+            // complete grouping key gets at most one output row per NULL too.
             let output_null_equality =
                 if new_source_indices.len() == group_by_expr_names.len() {
                     NullEquality::NullEqualsNull
                 } else {
-                    input_null_equality
+                    *null_equality
                 };
             aggregate_func_dependencies.push(
                 FunctionalDependence::new(
@@ -535,9 +519,9 @@ pub fn aggregate_functional_dependencies(
                     target_indices.clone(),
                     *nullable,
                 )
-                .with_mode(mode),
+                .with_mode(mode)
+                .with_null_equality(output_null_equality),
             );
-            aggregate_null_equalities.push(output_null_equality);
         }
     }
 
@@ -562,15 +546,13 @@ pub fn aggregate_functional_dependencies(
             // Use nullable property of the GROUP BY expression:
             aggregate_func_dependencies.push(
                 FunctionalDependence::new(source_indices, target_indices, nullable)
-                    .with_mode(Dependency::Single),
+                    .with_mode(Dependency::Single)
+                    // Grouping collapses NULL keys into a single group:
+                    .with_null_equality(NullEquality::NullEqualsNull),
             );
-            aggregate_null_equalities.push(NullEquality::NullEqualsNull);
         }
     }
-    FunctionalDependencies::new_with_null_equalities(
-        aggregate_func_dependencies,
-        aggregate_null_equalities,
-    )
+    FunctionalDependencies::new(aggregate_func_dependencies)
 }
 
 /// Returns target indices, for the determinant keys that are inside
@@ -680,24 +662,16 @@ pub fn get_required_sort_exprs_indices(
         };
 
         // A sort expression is removable if its value is functionally determined
-        // by fields that already appear earlier in the sort order. A nullable
-        // dependency is only valid here when its determinant treats NULLs as
-        // equal (for example, a GROUP BY key), or no determinant field can be NULL.
-        let removable =
-            dependencies
-                .iter_with_null_equality()
-                .any(|(dependency, null_equality)| {
-                    dependency.target_indices.contains(&field_idx)
-                        && dependency
-                            .source_indices
-                            .iter()
-                            .all(|source_idx| known_field_indices.contains(source_idx))
-                        && (null_equality == NullEquality::NullEqualsNull
-                            || !dependency.nullable
-                            || dependency.source_indices.iter().all(|&source_idx| {
-                                !schema.field(source_idx).is_nullable()
-                            }))
-                });
+        // by fields that already appear earlier in the sort order (and the
+        // dependency remains valid across NULL rows).
+        let removable = dependencies.deps.iter().any(|dependency| {
+            dependency.target_indices.contains(&field_idx)
+                && dependency
+                    .source_indices
+                    .iter()
+                    .all(|source_idx| known_field_indices.contains(source_idx))
+                && dependency.is_valid_across_nulls(schema)
+        });
 
         if removable {
             continue;
