@@ -163,7 +163,6 @@ zstd = { workspace = true, optional = true }
 async-trait = { workspace = true }
 criterion = { workspace = true, features = ["async_tokio", "async_futures"] }
 ctor = { workspace = true }
-datafusion-benchmarks = { path = "../../benchmarks" }
 dashmap = "6.2.1"
 datafusion-doc = { workspace = true }
 datafusion-functions-window-common = { workspace = true }

@@ -1715,7 +1715,6 @@ dependencies = [
  "criterion",
  "ctor",
  "dashmap",
- "datafusion-benchmarks",
  "datafusion-catalog",
  "datafusion-catalog-listing",
  "datafusion-common",

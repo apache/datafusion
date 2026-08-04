@@ -49,9 +49,7 @@ use std::{
     },
 };
 
-use datafusion::execution::memory_pool::{
-    MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation,
-};
+use super::{MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation};
 use datafusion_common::Result;
 
 /// Wraps a [`MemoryPool`], recording the high-water mark of
@@ -227,7 +225,7 @@ impl MemoryPool for PeakRecordingPool {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::execution::memory_pool::GreedyMemoryPool;
+    use crate::memory_pool::GreedyMemoryPool;
 
     use super::*;
 
@@ -360,8 +358,8 @@ mod tests {
     /// This test pins that.
     #[test]
     fn records_reservations_arriving_through_the_arrow_adapter() {
+        use crate::memory_pool::arrow::ArrowMemoryPool;
         use arrow_buffer::MemoryPool as ArrowMemoryPoolTrait;
-        use datafusion_execution::memory_pool::arrow::ArrowMemoryPool;
 
         let (recording, pool) = pool(4096);
 

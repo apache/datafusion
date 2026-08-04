@@ -53,8 +53,9 @@ use futures::StreamExt;
 use arrow::array::Int32Array;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_benchmarks::util::PeakRecordingPool;
-use datafusion_execution::memory_pool::{MemoryPool, UnboundedMemoryPool};
+use datafusion_execution::memory_pool::{
+    MemoryPool, PeakRecordingPool, UnboundedMemoryPool,
+};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
 use datafusion_physical_plan::spill::SpillManager;
 
