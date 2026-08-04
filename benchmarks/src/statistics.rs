@@ -77,7 +77,6 @@ impl RunOpt {
         );
 
         let mut reports = vec![];
-        let mut successful_reports = vec![];
         for query_path in query_files(&self.query_path, self.query.as_deref())? {
             let query = query_path
                 .file_stem()
@@ -104,11 +103,8 @@ impl RunOpt {
                     },
                 };
                 print_query_report(&report, previous.as_deref());
-                if report.success {
-                    successful_reports.push(report.clone());
-                    store_report(&result_path, &successful_reports)?;
-                }
                 reports.push(report);
+                store_report(&result_path, &reports)?;
             }
         }
         print_q_error_summary(
