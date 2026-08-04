@@ -3228,6 +3228,51 @@ async fn roundtrip_memory_source() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_memory_source_empty_projection() -> Result<()> {
+    use datafusion::datasource::memory::MemorySourceConfig;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, false),
+        Field::new("b", DataType::Utf8, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(arrow::array::Int64Array::from(vec![1, 2])),
+            Arc::new(arrow::array::StringArray::from(vec!["x", "y"])),
+        ],
+    )?;
+
+    // `Some(vec![])` projects away every column, which is not the same as
+    // `None` (keep all columns)
+    let source =
+        MemorySourceConfig::try_new(&[vec![batch]], Arc::clone(&schema), Some(vec![]))?;
+    let plan = DataSourceExec::from_data_source(source);
+    assert_eq!(plan.schema().fields().len(), 0);
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let decoded = roundtrip_test_and_return(plan, &ctx, &codec, &proto_converter)?;
+
+    let decoded_source = decoded
+        .downcast_ref::<DataSourceExec>()
+        .ok_or_else(|| {
+            internal_datafusion_err!("Expected DataSourceExec after roundtrip")
+        })?
+        .data_source()
+        .downcast_ref::<MemorySourceConfig>()
+        .ok_or_else(|| {
+            internal_datafusion_err!("Expected MemorySourceConfig after roundtrip")
+        })?
+        .clone();
+
+    assert_eq!(decoded_source.projection(), &Some(vec![]));
+    assert_eq!(decoded.schema().fields().len(), 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_listing_table_with_schema_metadata() -> Result<()> {
     let ctx = SessionContext::new();
     let file_format = JsonFormat::default();
