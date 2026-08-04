@@ -1200,17 +1200,43 @@ async fn test_hashjoin_dynamic_filter_pushdown_range_partitioned() {
     use datafusion_common::JoinType;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
-    // Keep the fixture, execution, and assertions parallel to
-    // `test_hashjoin_dynamic_filter_pushdown_partitioned`. The Range layout,
-    // router, and preserve-file-partitions coverage are the intentional deltas.
+    // Rough sketch of the Range-partitioned MRE we're trying to recreate. The
+    // test hand-wires identical Range repartitioning because SQL planning does
+    // not currently derive the split points:
     //
-    // Plan under test:
+    // EXPLAIN
+    // SELECT *
+    // FROM build
+    // JOIN probe
+    //   ON build.a = probe.a AND build.b = probe.b;
     //
-    // HashJoinExec: mode=Partitioned, on=[(a, a), (b, b)]
-    // ├── RepartitionExec: Range([a ASC, b ASC], [(aa, bb)])
-    // │   └── DataSourceExec: build [(aa, ba), (ab, bb)]
-    // └── RepartitionExec: Range([a ASC, b ASC], [(aa, bb)])
-    //     └── DataSourceExec: probe [(aa, ba), ..., (ad, bd)], DynamicFilter
+    // +---------------+------------------------------------------------------------+
+    // | plan_type     | plan                                                       |
+    // +---------------+------------------------------------------------------------+
+    // | physical_plan | ┌───────────────────────────┐                              |
+    // |               | │        HashJoinExec       │                              |
+    // |               | │    --------------------   ├──────────────┐               |
+    // |               | │ on: (a = a), (b = b)      │              │               |
+    // |               | └─────────────┬─────────────┘              │               |
+    // |               | ┌─────────────┴─────────────┐┌─────────────┴─────────────┐ |
+    // |               | │      RepartitionExec      ││      RepartitionExec      │ |
+    // |               | │    --------------------   ││    --------------------   │ |
+    // |               | │ partition_count(in->out): ││ partition_count(in->out): │ |
+    // |               | │           1 -> 2          ││           1 -> 2          │ |
+    // |               | │                           ││                           │ |
+    // |               | │    partitioning_scheme:   ││    partitioning_scheme:   │ |
+    // |               | │ Range([a ASC, b ASC], 2)  ││ Range([a ASC, b ASC], 2)  │ |
+    // |               | │      split: (aa, bb)      ││      split: (aa, bb)      │ |
+    // |               | └─────────────┬─────────────┘└─────────────┬─────────────┘ |
+    // |               | ┌─────────────┴─────────────┐┌─────────────┴─────────────┐ |
+    // |               | │ DataSourceExec (build)    ││ DataSourceExec (probe)    │ |
+    // |               | │    --------------------   ││    --------------------   │ |
+    // |               | │ rows: (aa,ba), (ab,bb)    ││ rows: (aa,ba) ... (ad,bd) │ |
+    // |               | │                           ││ predicate: DynamicFilter  │ |
+    // |               | │                           ││ range CASE -> filter_0/1  │ |
+    // |               | └───────────────────────────┘└───────────────────────────┘ |
+    // |               |                                                            |
+    // +---------------+------------------------------------------------------------+
 
     // Create build side with limited values
     let build_batches = vec![
