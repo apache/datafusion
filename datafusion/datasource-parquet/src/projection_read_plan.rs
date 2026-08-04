@@ -541,7 +541,7 @@ fn build_read_plan_with_cast_clipping(
         let root_leaves = leaves_by_root.get(&root).map_or(&[][..], Vec::as_slice);
 
         // Defensive: the arrow type's leaf count must agree with the
-        // parquet schema (it can diverge if the file embeds a different
+        // Parquet schema (it can diverge if the file embeds a different
         // arrow schema). If not, never risk a wrong mask: read the whole
         // root.
         if root_leaves.len() != count_leaves(physical_type) {

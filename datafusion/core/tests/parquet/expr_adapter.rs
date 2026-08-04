@@ -1207,7 +1207,7 @@ async fn test_physical_expr_adapter_factory_reuse_across_tables() {
 
 // ---------------------------------------------------------------------------
 // Nested projection pruning: when the table schema declares a nested column
-// narrower than the physical parquet file, the scan should only read the
+// narrower than the physical Parquet file, the scan should only read the
 // leaves the declared schema names, instead of reading the whole column and
 // discarding the extra subfields in the adapter-inserted cast.
 //

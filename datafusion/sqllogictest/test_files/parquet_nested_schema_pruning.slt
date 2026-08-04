@@ -17,7 +17,7 @@
 
 ##########
 # Nested projection pruning: a table whose declared nested type is narrower
-# than the parquet file's physical type reads only the declared leaves.
+# than the Parquet file's physical type reads only the declared leaves.
 # The bytes-scanned assertions live in the Rust tests
 # (datafusion/core/tests/parquet/expr_adapter.rs); this file covers the
 # end-to-end SQL correctness path.

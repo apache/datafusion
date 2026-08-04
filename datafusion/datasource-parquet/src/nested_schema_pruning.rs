@@ -20,15 +20,15 @@
 //! When a scan's projection consumes a nested column only through a cast to a
 //! *narrower* nested type, for example the file contains
 //! `events: List<Struct<x, y, z, ...>>` but the expression is
-//! `CAST(events AS List<Struct<x, y>>)`, the parquet reader does not need to
+//! `CAST(events AS List<Struct<x, y>>)`, the Parquet reader does not need to
 //! fetch or decode the leaves the cast target never names. This module
-//! computes which parquet leaves survive such a cast, and the Arrow type the
+//! computes which Parquet leaves survive such a cast, and the Arrow type the
 //! reader will emit for them, by walking the physical and target type trees
 //! in parallel and matching struct fields by name (the equivalent of Spark's
 //! `ParquetReadSupport.clipParquetSchema`).
 //!
 //! This situation arises whenever a table's logical schema declares a nested
-//! column narrower than the physical parquet file: the physical expression
+//! column narrower than the physical Parquet file: the physical expression
 //! adapter rewrites the projected column into exactly such a whole-column
 //! cast (see `datafusion_physical_expr_adapter`). Engines like Spark
 //! communicate nested projection pruning to the scan this way, as a clipped
@@ -41,7 +41,7 @@
 //! children exclusively by looking up the *target* field names, recursively
 //! through list wrappers. Physical subtrees not named by the target are
 //! provably dead: removing them from the read cannot change the cast's
-//! output. Struct-level nullability is preserved because the parquet reader
+//! output. Struct-level nullability is preserved because the Parquet reader
 //! reconstructs ancestor validity from the definition levels of any surviving
 //! leaf, and every struct level clipped here keeps at least one leaf: a
 //! struct cast with zero field-name overlap at *any* nesting depth is
@@ -84,7 +84,7 @@ fn nested_child(dt: &DataType) -> Option<&DataType> {
     }
 }
 
-/// Clip `physical` against `cast_target`, returning the parquet leaves the
+/// Clip `physical` against `cast_target`, returning the Parquet leaves the
 /// cast actually consumes (as offsets relative to the root column's first
 /// leaf, sorted ascending and non-empty) together with the Arrow type the
 /// reader will emit for exactly those leaves.
@@ -108,7 +108,7 @@ pub(crate) fn clip_for_cast(
     Some((kept, pruned_type))
 }
 
-/// Number of parquet leaf columns a (parquet-derived) Arrow type occupies.
+/// Number of Parquet leaf columns a (Parquet-derived) Arrow type occupies.
 pub(crate) fn count_leaves(dt: &DataType) -> usize {
     match dt {
         DataType::Struct(fields) => {
