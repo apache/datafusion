@@ -23,8 +23,10 @@ submitting.
 ## Compute the diff
 
 ```bash
-git fetch apache main
-git diff $(git merge-base HEAD apache/main)
+# find the remote that points at apache/datafusion (e.g. `apache`, `upstream`, or `origin`)
+UPSTREAM=$(git remote -v | grep -m1 'apache/datafusion' | cut -f1)
+git fetch $UPSTREAM main
+git diff $(git merge-base HEAD $UPSTREAM/main)
 ```
 
 ## Review checklist
