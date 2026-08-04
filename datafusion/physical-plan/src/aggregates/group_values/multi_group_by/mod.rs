@@ -1616,6 +1616,20 @@ mod tests {
         let utf8 = || Field::new("v", DataType::Utf8, true);
         let int32 = || Field::new("v", DataType::Int32, true);
         let f16 = || Field::new("v", DataType::Float16, true);
+        // A leaf that neither has a specialized `GroupColumn` nor is accepted
+        // by the row-backed fallback (`RowsGroupColumn::supports_type` rejects
+        // `RunEndEncoded` anywhere in the subtree), so nesting it keeps the
+        // whole type unsupported.
+        let ree = || {
+            Field::new(
+                "v",
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    Arc::new(Field::new("values", DataType::Int64, true)),
+                ),
+                true,
+            )
+        };
 
         let supported_cases: Vec<DataType> = vec![
             DataType::Int8,
@@ -1649,6 +1663,8 @@ mod tests {
             // Nested
             DataType::List(Arc::new(int32())),
             DataType::LargeList(Arc::new(int32())),
+            DataType::List(Arc::new(f16())),
+            DataType::LargeList(Arc::new(f16())),
             DataType::List(Arc::new(utf8())),
             DataType::List(Arc::new(Field::new(
                 "v",
@@ -1685,12 +1701,12 @@ mod tests {
             DataType::Time32(arrow::datatypes::TimeUnit::Microsecond),
             DataType::Time32(arrow::datatypes::TimeUnit::Nanosecond),
             // Nested with an unsupported leaf
-            DataType::List(Arc::new(f16())),
-            DataType::LargeList(Arc::new(f16())),
+            DataType::List(Arc::new(ree())),
+            DataType::LargeList(Arc::new(ree())),
             // Deeply nested unsupported
             DataType::List(Arc::new(Field::new(
                 "v",
-                DataType::List(Arc::new(f16())),
+                DataType::List(Arc::new(ree())),
                 true,
             ))),
         ];
