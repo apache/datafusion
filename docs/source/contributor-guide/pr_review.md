@@ -106,6 +106,8 @@ Some practical guidelines for writing comments:
    valid as the code evolves.
 4. New public APIs have doc comments, including examples where appropriate
    (doc examples are also tested by CI, so they double as test coverage).
+5. When documenting modules, functions, or fields, start with simple examples and intuitive explanations, and optionally add formal, math-like definitions when necessary. This makes the implementation easier to reason about.
+6. When something is confusing on first read, treat that as a good opportunity to improve the comments.
 
 [rustdoc intra-doc links]: https://doc.rust-lang.org/rustdoc/write-documentation/linking-to-items-by-name.html
 
