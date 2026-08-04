@@ -26,12 +26,12 @@ as the understanding of the contributor.
 Review bandwidth is currently our most limited resource, and reviews from the
 broader community are both welcomed and encouraged. Reviewing PRs is a great way
 to learn the codebase, and you do not need to be a committer to leave valuable
-review feedback. In fact one of the best ways to become a committer is to
+review feedback. In fact, one of the best ways to become a committer is to
 thoughtfully review other PRs.
 
 Please ensure any comments you leave contain a rationale and suggested
 alternative -- it is frustrating to be told "don't do it this way" without any
-clear reason or alternate provided.
+clear reason or alternative provided.
 
 The criteria in this guide are also a useful checklist when preparing your own
 PR for review.
@@ -46,7 +46,7 @@ Some helpful links:
 [prs waiting for review]: https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+-review%3Aapproved+-is%3Adraft+
 [approved prs waiting for merge]: https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+review%3Aapproved+-is%3Adraft
 
-The overall PR lifecycle (CI triggering, approval, the 24 hour rule for
+The overall PR lifecycle (CI triggering, approval, the 24-hour rule for
 "major" PRs, and merging) is described in the
 [Pull Request Overview](index.md#pull-request-overview) section of the
 contributor guide.
@@ -62,7 +62,7 @@ Practical tips:
    is still valuable: a partial review (e.g. "I reviewed the tests and they
    look good") helps the next reviewer focus their time.
 5. Anything that does not need to block the current PR can be noted as a
-   potential follow up (ideally by filing an issue), keeping the PR focused
+   potential follow-up (ideally by filing an issue), keeping the PR focused
    and quick to merge.
 
 [github cli]: https://cli.github.com/
@@ -89,16 +89,16 @@ Check that the description:
 
 ## Review the Code Comments
 
-The goal of code comments is help future readers of the code understand what is
-not obvious from reading the code itself. Great comments make the code easier to
-reason about for readers with the expected background, and help future maintainers.
+The goal of code comments is to help future readers of the code understand what
+is not obvious from reading the code itself. Great comments make the code easier
+to reason about for readers with the expected background, and help future
+maintainers.
 
-Some practical guidelines for writing comments:
+Some practical guidelines for writing (and reviewing) comments:
 
-1. The code has adequate comments, and that the comments focus on the
-   **rationale** for any non-obvious change (the "why"), not a restatement of
-   what the code does (the "what"), which is typically clear from reading the
-   code itself.
+1. The code has adequate comments, focused on the **rationale** for any
+   non-obvious change (the "why"), not a restatement of what the code does
+   (the "what"), which is typically clear from reading the code itself.
 2. Comments do not narrate irrelevant internal implementation details or the
    history of how the change was developed (this is common in LLM-assisted
    code, e.g. "// changed to use a HashMap" or "// this handles the case
@@ -109,8 +109,12 @@ Some practical guidelines for writing comments:
    valid as the code evolves.
 4. New public APIs have doc comments, including examples where appropriate
    (doc examples are also tested by CI, so they double as test coverage).
-5. When documenting modules, functions, or fields, start with simple examples and intuitive explanations, and optionally add formal, math-like definitions when necessary. This makes the implementation easier to reason about.
-6. When something is confusing on first read, treat that as a good opportunity to improve the comments.
+5. When documenting modules, functions, or fields, start with simple examples
+   and intuitive explanations, and optionally add formal, math-like
+   definitions when necessary. This makes the implementation easier to reason
+   about.
+6. When something is confusing on first read, treat that as a good
+   opportunity to improve the comments.
 
 [rustdoc intra-doc links]: https://doc.rust-lang.org/rustdoc/write-documentation/linking-to-items-by-name.html
 
@@ -126,15 +130,14 @@ Guidelines for evaluating tests:
 1. Prefer `sqllogictest` (`.slt`) tests or DataFrame API tests where
    possible, as they exercise **user visible behavior** and are less coupled
    to internal implementation details than unit tests.
-2. Verify tests cover edge cases and common failure scenarios, not just the 
-   common successful path. However, it is NOT necessary to test every possible 
-   error path, especially if it is difficult to trigger or unlikely to occur in 
+2. Verify tests cover edge cases and common failure scenarios, not just the
+   common successful path. However, it is NOT necessary to test every possible
+   error path, especially if it is difficult to trigger or unlikely to occur in
    practice.
-3. Verify test coverage of changed code using the `codecov` check on the PR
-   or run [`cargo llvm-cov`] locally for an HTML report. Use judgement about
-   any uncovered lines (e.g. error paths that are hard to trigger may be
-   fine) -- the goal is confidence in the change, not slavishly hitting some
-   coverage number.
+3. Verify test coverage of changed code using the `codecov` check on the PR,
+   or by running [`cargo llvm-cov`] locally for an HTML report. Use judgement
+   about any uncovered lines -- the goal is confidence in the change, not
+   slavishly hitting some coverage number.
 4. Avoid tests with lots of repeated boilerplate: when many tests share
    near-identical setup, it is hard to understand what is different
    (and thus what is actually being tested) between them. Make the _difference_
@@ -188,7 +191,7 @@ When reviewing:
 
 ## Best Practices for Reviewers
 
-Here are some suggested best practices for reviewers to follow when reviewing PRs.
+Here are some suggested best practices to follow when reviewing PRs.
 
 ### Review Tone: Thank Contributors and Praise Good Work Specifically
 
@@ -204,7 +207,7 @@ the author has a clear path to merge.
 
 ### Defer Non-Blocking Work to Follow-On Issues
 
-Explicitly move non-critical suggestions to "follow on PR" status and file
+Explicitly defer non-critical suggestions to a follow-on PR and file
 (or ask the author to file) issues for them, so good PRs merge quickly
 without scope creep.
 
@@ -226,6 +229,6 @@ so the approval carries reviewable evidence.
 
 ### Invite Additional Committers on Core Changes
 
-For changes to core, widely-shared code, leave the PR open for other
+For changes to core, widely shared code, leave the PR open for other
 committers to look at and cc those who know the area, even after you have
 approved.
