@@ -54,7 +54,9 @@ use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ParquetRecordBatchReader, RowSelectionPolicy,
 };
 use parquet::arrow::async_reader::AsyncFileReader;
-use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
+use parquet::arrow::push_decoder::{
+    ParquetPushDecoder, ParquetPushDecoderBuilder, PlannedRange, plan_scan_ranges,
+};
 use parquet::errors::ParquetError;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::reader::{ChunkReader, Length};
@@ -768,160 +770,64 @@ impl ChunkReader for SharedBuffers {
     }
 }
 
-/// One fetchable unit of the streaming plan: a page (or a row group's
-/// dictionary region), with its position in *selected-row* space so the
-/// driver knows when it becomes needed and when it can be dropped.
+/// A planned page plus the stream's eviction bookkeeping.
+///
+/// The page itself (byte range + the span of selected rows it serves) comes
+/// from arrow-rs's [`plan_scan_ranges`]; the only thing DataFusion adds is
+/// whether the decode cursor has passed it and its bytes were released.
 struct PlanPage {
-    range: Range<u64>,
-    /// First selected row (in output order) this page contributes to.
-    sel_start: u64,
-    /// One past the last selected row this page contributes to. Dictionary
-    /// regions span their whole row group so they stay resident until the
-    /// row group is fully decoded.
-    sel_end: u64,
+    planned: PlannedRange,
     cleared: bool,
 }
 
-/// Prefix-sum view over a `RowSelection`: how many rows are selected before
-/// a given raw row index (raw = concatenated rows of the scanned row groups
-/// in scan order).
-struct SelectedPrefix {
-    /// (raw_start, selected_before, skip) per selector run.
-    runs: Vec<(u64, u64, bool)>,
-    total_raw: u64,
-    total_selected: u64,
-}
-
-impl SelectedPrefix {
-    fn new(selection: Option<&RowSelection>, total_raw: u64) -> Self {
-        let Some(selection) = selection else {
-            return Self {
-                runs: vec![(0, 0, false)],
-                total_raw,
-                total_selected: total_raw,
-            };
-        };
-        let mut runs = Vec::new();
-        let mut raw = 0u64;
-        let mut selected = 0u64;
-        for selector in selection.iter() {
-            runs.push((raw, selected, selector.skip));
-            raw += selector.row_count as u64;
-            if !selector.skip {
-                selected += selector.row_count as u64;
-            }
-        }
-        // Rows past the end of the selection are not selected.
-        runs.push((raw, selected, true));
-        Self {
-            runs,
-            total_raw,
-            total_selected: selected,
-        }
-    }
-
-    fn selected_before(&self, raw: u64) -> u64 {
-        let raw = raw.min(self.total_raw);
-        let idx = self.runs.partition_point(|(start, _, _)| *start <= raw) - 1;
-        let (start, selected, skip) = self.runs[idx];
-        if skip {
-            selected
-        } else {
-            selected + (raw - start)
-        }
+impl PlanPage {
+    fn range(&self) -> &Range<u64> {
+        &self.planned.range
     }
 }
 
-/// Opaque prebuilt streaming fetch plan (see [`build_streaming_plan`]).
+/// Opaque prebuilt streaming fetch plan.
 pub(crate) struct StreamingPlan {
     pages: Vec<PlanPage>,
     total_selected: u64,
     file_end: u64,
 }
 
-/// Build the streaming fetch plan: every projected page (plus per-RG
-/// dictionary regions) in decode-need order. Returns `None` when the
-/// offset index is unavailable — the caller falls back to the push-decoder
-/// path. Borrows only, so callers can probe feasibility before committing
-/// resources to the streaming path.
+/// Build the streaming fetch plan by asking arrow-rs which pages this scan
+/// will read, in the order decoding needs them.
+///
+/// Returns `None` when arrow-rs cannot plan at page granularity (no offset
+/// index) — the caller falls back to the push-decoder path. Borrows only, so
+/// callers can probe feasibility before committing resources.
 pub(crate) fn build_streaming_plan(
     metadata: &ParquetMetaData,
     row_group_indexes: &[usize],
     projection: &ProjectionMask,
     selection: Option<&RowSelection>,
 ) -> Option<StreamingPlan> {
-    let offset_index = metadata.offset_index()?;
-    let total_raw: u64 = row_group_indexes
+    let plan = plan_scan_ranges(metadata, row_group_indexes, projection, selection)?;
+    // `SharedBuffers` reports a file length to the sync reader; the end of the
+    // last projected column chunk is an upper bound on anything it will read.
+    let file_end = row_group_indexes
         .iter()
-        .map(|&rg| metadata.row_group(rg).num_rows() as u64)
-        .sum();
-    let prefix = SelectedPrefix::new(selection, total_raw);
-
-    let mut plan: Vec<PlanPage> = Vec::new();
-    let mut file_end = 0u64;
-    let mut rg_raw_start = 0u64;
-    for &rg_idx in row_group_indexes {
-        let rg = metadata.row_group(rg_idx);
-        let rg_rows = rg.num_rows() as u64;
-        let rg_sel_start = prefix.selected_before(rg_raw_start);
-        let rg_sel_end = prefix.selected_before(rg_raw_start + rg_rows);
-        for (col_idx, column) in rg.columns().iter().enumerate() {
-            let (chunk_start, chunk_len) = column.byte_range();
-            file_end = file_end.max(chunk_start + chunk_len);
-            if !projection.leaf_included(col_idx) {
-                continue;
-            }
-            let locations = offset_index
-                .get(rg_idx)
-                .and_then(|cols| cols.get(col_idx))?
-                .page_locations();
-            if locations.is_empty() {
-                return None;
-            }
-            if rg_sel_start == rg_sel_end {
-                // No selected rows in this row group at all.
-                continue;
-            }
-            // Dictionary region: everything before the first data page.
-            let first_page = locations[0].offset as u64;
-            if first_page != chunk_start {
-                plan.push(PlanPage {
-                    range: chunk_start..first_page,
-                    sel_start: rg_sel_start,
-                    sel_end: rg_sel_end,
-                    cleared: false,
-                });
-            }
-            for (i, loc) in locations.iter().enumerate() {
-                let raw_first = rg_raw_start + loc.first_row_index as u64;
-                let raw_end = locations
-                    .get(i + 1)
-                    .map(|next| rg_raw_start + next.first_row_index as u64)
-                    .unwrap_or(rg_raw_start + rg_rows);
-                let sel_start = prefix.selected_before(raw_first);
-                let sel_end = prefix.selected_before(raw_end);
-                if sel_start == sel_end {
-                    // Page contains no selected rows: never fetched (page
-                    // skipping preserved).
-                    continue;
-                }
-                let start = loc.offset as u64;
-                plan.push(PlanPage {
-                    range: start..start + loc.compressed_page_size as u64,
-                    sel_start,
-                    sel_end,
-                    cleared: false,
-                });
-            }
-        }
-        rg_raw_start += rg_rows;
-    }
-    // Need order: by first selected row, dictionaries (wider spans) first
-    // among equals so they are resident before their data pages decode.
-    plan.sort_by_key(|p| (p.sel_start, std::cmp::Reverse(p.sel_end), p.range.start));
+        .flat_map(|&rg| {
+            metadata.row_group(rg).columns().iter().map(|c| {
+                let (start, len) = c.byte_range();
+                start + len
+            })
+        })
+        .max()
+        .unwrap_or(0);
     Some(StreamingPlan {
-        pages: plan,
-        total_selected: prefix.total_selected,
+        total_selected: plan.total_selected_rows,
+        pages: plan
+            .ranges
+            .into_iter()
+            .map(|planned| PlanPage {
+                planned,
+                cleared: false,
+            })
+            .collect(),
         file_end,
     })
 }
@@ -976,7 +882,7 @@ pub(crate) fn build_streaming_stream(
     }
     let sync_reader = builder.build()?;
 
-    let total_plan_bytes: u64 = plan.iter().map(|p| p.range.end - p.range.start).sum();
+    let total_plan_bytes: u64 = plan.iter().map(|p| p.planned.len()).sum();
     let state = StreamingScanState {
         plan,
         total_plan_bytes,
@@ -1052,7 +958,7 @@ impl StreamingScanState {
         };
         self.plan
             .get(first_unlanded)
-            .is_some_and(|p| p.sel_start < needed)
+            .is_some_and(|p| p.planned.first_row < needed)
     }
 
     /// Extent of the next fetch starting at `fetched_idx`. When
@@ -1064,8 +970,8 @@ impl StreamingScanState {
         let mut bytes = 0u64;
         let mut end = self.fetched_idx;
         while let Some(page) = self.plan.get(end) {
-            let len = page.range.end - page.range.start;
-            let required = page.sel_start < needed;
+            let len = page.planned.len();
+            let required = page.planned.first_row < needed;
             if !required
                 && (required_only || self.resident_bytes + bytes + len > self.window)
             {
@@ -1086,12 +992,12 @@ impl StreamingScanState {
         let mut idx = self.clear_idx;
         while idx < landed_end {
             let page = &mut self.plan[idx];
-            if page.sel_start > self.cursor {
+            if page.planned.first_row > self.cursor {
                 break;
             }
-            if !page.cleared && page.sel_end <= self.cursor {
-                self.buffers.remove(page.range.start);
-                self.resident_bytes -= page.range.end - page.range.start;
+            if !page.cleared && page.planned.last_row <= self.cursor {
+                self.buffers.remove(page.range().start);
+                self.resident_bytes -= page.planned.len();
                 page.cleared = true;
             }
             idx += 1;
@@ -1115,7 +1021,7 @@ impl StreamingScanState {
     fn wave_ranges(&self, start_idx: usize, end_idx: usize) -> Vec<Range<u64>> {
         let mut sorted: Vec<Range<u64>> = self.plan[start_idx..end_idx]
             .iter()
-            .map(|p| p.range.clone())
+            .map(|p| p.range().clone())
             .collect();
         sorted.sort_by_key(|r| r.start);
         let mut merged: Vec<Range<u64>> = Vec::with_capacity(sorted.len());
@@ -1140,11 +1046,11 @@ impl StreamingScanState {
         data: &[Bytes],
     ) {
         for page in &self.plan[start_idx..end_idx] {
-            let i = fetched.partition_point(|r| r.start <= page.range.start) - 1;
-            let offset = (page.range.start - fetched[i].start) as usize;
-            let len = (page.range.end - page.range.start) as usize;
+            let i = fetched.partition_point(|r| r.start <= page.range().start) - 1;
+            let offset = (page.range().start - fetched[i].start) as usize;
+            let len = (page.planned.len()) as usize;
             self.buffers
-                .insert(&page.range, data[i].slice(offset..offset + len));
+                .insert(page.range(), data[i].slice(offset..offset + len));
             self.resident_bytes += len as u64;
         }
         PEAK_STAGED_BYTES
@@ -1228,7 +1134,7 @@ impl StreamingScanState {
                 let end = self.next_gulp_end(false);
                 let gulp_bytes: u64 = self.plan[self.fetched_idx..end]
                     .iter()
-                    .map(|p| p.range.end - p.range.start)
+                    .map(|p| p.planned.len())
                     .sum();
                 let tail = end == self.plan.len();
                 if end > self.fetched_idx && (gulp_bytes >= self.window / 2 || tail) {
