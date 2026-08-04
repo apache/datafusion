@@ -63,7 +63,7 @@ use datafusion_expr::{ExprFunctionExt, LogicalPlanBuilder, lit};
 /// - filter predicate must be "top-1" (rn = 1, <= 1, < 2)
 /// - window has a `PARTITION BY` clause
 /// - gated behind the `optimizer.enable_row_number_to_aggregate` config option (off by default)
-/// - with duplicate `ORDER BY` keys, `row_number()` and this rewrite with `first_value` may pick different (but equally valid) tied rows - each path breaks ties determinsitically, but no guarantee the choices will be the same
+/// - with duplicate `ORDER BY` keys, `row_number()` and this rewrite with `first_value` may pick different (but equally valid) tied rows - each path breaks ties deterministically, but no guarantee the choices will be the same
 #[derive(Default, Debug)]
 pub struct ReplaceFilterTop1 {}
 
