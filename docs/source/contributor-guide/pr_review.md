@@ -69,8 +69,9 @@ Practical tips:
 
 ## Review the PR Description
 
-The PR description is often what users and contributors will find when they run
-`git log` / `git blame` and ask "why is the code like this?".
+The PR description is often what users and contributors will find when they have
+a question about the intention behind a change, or when the code itself is not
+clear. The PR description also becomes the extended commit message.
 
 Check that the description:
 
