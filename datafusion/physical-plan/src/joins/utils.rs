@@ -2217,16 +2217,19 @@ pub(super) fn equal_rows_arr(
     // `Ordering` computation of the general `JoinKeyComparator` path. Falls
     // through to the general path for multi-column keys and unspecialized
     // types (e.g. floats, dictionaries, nested).
-    if left_arrays.len() == 1 {
-        if let Some(res) = equal_rows_single_col(
+    let single_col_fast_path = if left_arrays.len() == 1 {
+        equal_rows_single_col(
             indices_left,
             indices_right,
             left_arrays[0].as_ref(),
             right_arrays[0].as_ref(),
             null_equality,
-        ) {
-            return res;
-        }
+        )
+    } else {
+        None
+    };
+    if let Some(res) = single_col_fast_path {
+        return Ok(res);
     }
 
     let sort_options = vec![SortOptions::default(); left_arrays.len()];
@@ -2259,21 +2262,17 @@ pub(super) fn equal_rows_arr(
 /// general [`JoinKeyComparator`] path, which dominates for high-fanout
 /// single-column joins (e.g. long string keys with near-100% match rates).
 ///
-/// Returns `None` for types it does not specialize so the caller falls back to
-/// the general path. Floats are intentionally excluded so their `-0.0` / `NaN`
-/// semantics stay on the exact same code path as before.
+/// Returns `None` for types it does not specialize (including when the left and
+/// right key types differ, handled by the failed downcast) so the caller falls
+/// back to the general path. Floats are intentionally excluded so their `-0.0` /
+/// `NaN` semantics stay on the exact same code path as before.
 fn equal_rows_single_col(
     indices_left: &UInt64Array,
     indices_right: &UInt32Array,
     left: &dyn Array,
     right: &dyn Array,
     null_equality: NullEquality,
-) -> Option<Result<(UInt64Array, UInt32Array)>> {
-    // Equi-join keys must share a type; otherwise fall back.
-    if left.data_type() != right.data_type() {
-        return None;
-    }
-
+) -> Option<(UInt64Array, UInt32Array)> {
     let null_equals_null = matches!(null_equality, NullEquality::NullEqualsNull);
 
     macro_rules! eq_loop {
@@ -2287,14 +2286,7 @@ fn equal_rows_single_col(
             for (left_idx, right_idx) in
                 indices_left.values().iter().zip(indices_right.values())
             {
-                let i = match usize::try_from(*left_idx) {
-                    Ok(i) => i,
-                    Err(_) => {
-                        return Some(Err(internal_datafusion_err!(
-                            "Join index {left_idx} can not be represented as usize"
-                        )));
-                    }
-                };
+                let i = *left_idx as usize;
                 let j = *right_idx as usize;
 
                 let is_equal = match (l.is_null(i), r.is_null(j)) {
@@ -2309,7 +2301,7 @@ fn equal_rows_single_col(
                 }
             }
 
-            return Some(Ok((left_filtered.into(), right_filtered.into())));
+            return Some((left_filtered.into(), right_filtered.into()));
         }};
     }
 
@@ -4741,6 +4733,133 @@ mod tests {
         .unwrap();
         assert_eq!(left_filtered, UInt64Array::from(vec![0, 1]));
         assert_eq!(right_filtered, UInt32Array::from(vec![0, 1]));
+    }
+
+    #[test]
+    fn test_equal_rows_arr_single_col_covers_all_specialized_types() {
+        // Drive every specialized single-column fast-path arm. Each case has a
+        // matching pair at index 0 and a non-matching pair at index 1, so a
+        // correct arm keeps exactly the first pair.
+        fn check(left: ArrayRef, right: ArrayRef) {
+            let (left_filtered, right_filtered) = equal_rows_arr(
+                &UInt64Array::from(vec![0, 1]),
+                &UInt32Array::from(vec![0, 1]),
+                &[left],
+                &[right],
+                NullEquality::NullEqualsNothing,
+            )
+            .unwrap();
+            assert_eq!(left_filtered, UInt64Array::from(vec![0]));
+            assert_eq!(right_filtered, UInt32Array::from(vec![0]));
+        }
+
+        check(
+            Arc::new(BooleanArray::from(vec![true, false])),
+            Arc::new(BooleanArray::from(vec![true, true])),
+        );
+        check(
+            Arc::new(Int8Array::from(vec![1, 2])),
+            Arc::new(Int8Array::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(Int16Array::from(vec![1, 2])),
+            Arc::new(Int16Array::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(Int64Array::from(vec![1, 2])),
+            Arc::new(Int64Array::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(UInt8Array::from(vec![1, 2])),
+            Arc::new(UInt8Array::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(UInt16Array::from(vec![1, 2])),
+            Arc::new(UInt16Array::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(UInt32Array::from(vec![1, 2])),
+            Arc::new(UInt32Array::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(UInt64Array::from(vec![1, 2])),
+            Arc::new(UInt64Array::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(Decimal128Array::from(vec![1i128, 2])),
+            Arc::new(Decimal128Array::from(vec![1i128, 3])),
+        );
+        check(
+            Arc::new(BinaryArray::from_iter_values([b"a".as_ref(), b"b"])),
+            Arc::new(BinaryArray::from_iter_values([b"a".as_ref(), b"c"])),
+        );
+        check(
+            Arc::new(LargeBinaryArray::from_iter_values([b"a".as_ref(), b"b"])),
+            Arc::new(LargeBinaryArray::from_iter_values([b"a".as_ref(), b"c"])),
+        );
+        check(
+            Arc::new(BinaryViewArray::from_iter_values([b"a".as_ref(), b"b"])),
+            Arc::new(BinaryViewArray::from_iter_values([b"a".as_ref(), b"c"])),
+        );
+        check(
+            Arc::new(
+                FixedSizeBinaryArray::try_from_iter([[1u8], [2u8]].into_iter()).unwrap(),
+            ),
+            Arc::new(
+                FixedSizeBinaryArray::try_from_iter([[1u8], [3u8]].into_iter()).unwrap(),
+            ),
+        );
+        check(
+            Arc::new(LargeStringArray::from(vec!["a", "b"])),
+            Arc::new(LargeStringArray::from(vec!["a", "c"])),
+        );
+        check(
+            Arc::new(StringViewArray::from(vec!["a", "b"])),
+            Arc::new(StringViewArray::from(vec!["a", "c"])),
+        );
+        check(
+            Arc::new(Date32Array::from(vec![1, 2])),
+            Arc::new(Date32Array::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(Date64Array::from(vec![1, 2])),
+            Arc::new(Date64Array::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(TimestampSecondArray::from(vec![1, 2])),
+            Arc::new(TimestampSecondArray::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(TimestampMillisecondArray::from(vec![1, 2])),
+            Arc::new(TimestampMillisecondArray::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(TimestampMicrosecondArray::from(vec![1, 2])),
+            Arc::new(TimestampMicrosecondArray::from(vec![1, 3])),
+        );
+        check(
+            Arc::new(TimestampNanosecondArray::from(vec![1, 2])),
+            Arc::new(TimestampNanosecondArray::from(vec![1, 3])),
+        );
+    }
+
+    #[test]
+    fn test_equal_rows_arr_single_float_col_uses_general_path() {
+        // Floats are intentionally not specialized: the fast path returns
+        // `None` and the general comparator handles them (covers the
+        // fall-through arm).
+        let left: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0]));
+        let right: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 3.0]));
+        let (left_filtered, right_filtered) = equal_rows_arr(
+            &UInt64Array::from(vec![0, 1]),
+            &UInt32Array::from(vec![0, 1]),
+            &[left],
+            &[right],
+            NullEquality::NullEqualsNothing,
+        )
+        .unwrap();
+        assert_eq!(left_filtered, UInt64Array::from(vec![0]));
+        assert_eq!(right_filtered, UInt32Array::from(vec![0]));
     }
 
     #[test]
