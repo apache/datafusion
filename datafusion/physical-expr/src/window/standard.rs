@@ -22,7 +22,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use super::{StandardWindowFunctionExpr, WindowExpr};
-use crate::window::window_expr::{WindowFn, get_orderby_values};
+use crate::window::window_expr::{WindowEvalContext, WindowFn, get_orderby_values};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{EquivalenceProperties, PhysicalExpr};
 
@@ -157,6 +157,7 @@ impl WindowExpr for StandardWindowExpr {
         &self,
         partition_batches: &PartitionBatches,
         window_agg_state: &mut PartitionWindowAggStates,
+        _eval_ctx: &WindowEvalContext<'_>,
     ) -> Result<()> {
         let field = self.expr.field()?;
         let out_type = field.data_type();

@@ -67,7 +67,7 @@ name = "datafusion_functions"
 [dependencies]
 arrow = { workspace = true }
 arrow-buffer = { workspace = true }
-base64 = { version = "0.22", optional = true }
+base64 = { version = "0.23", optional = true }
 blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.8", optional = true }
 chrono = { workspace = true }
@@ -407,4 +407,4 @@ required-features = ["math_expressions"]
 [[bench]]
 harness = false
 name = "dictionary_encoding"
-required-features = ["string_expressions"]
+required-features = ["string_expressions", "unicode_expressions"]
