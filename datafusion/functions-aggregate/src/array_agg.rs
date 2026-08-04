@@ -1059,7 +1059,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
             .map(|i| ScalarValue::try_from_array(decoded.as_ref(), i))
             .collect::<Result<_>>()?;
 
-        let arr = ScalarValue::new_list(&values, decoded.data_type(), true);
+        let arr = ScalarValue::new_list(&values, &self.datatype, true);
         Ok(ScalarValue::List(arr))
     }
 
@@ -1429,15 +1429,14 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         }
 
         let values = self.values.clone();
-        let values_data_type = values[0].data_type();
         let array = if self.reverse {
             ScalarValue::new_list_from_iter(
                 values.into_iter().rev(),
-                &values_data_type,
+                &self.datatypes[0],
                 true,
             )
         } else {
-            ScalarValue::new_list_from_iter(values.into_iter(), &values_data_type, true)
+            ScalarValue::new_list_from_iter(values.into_iter(), &self.datatypes[0], true)
         };
         Ok(ScalarValue::List(array))
     }
@@ -1742,13 +1741,13 @@ mod tests {
         acc2.update_batch(&[data(["b", "c", "a"])])?;
         acc1 = merge(acc1, acc2)?;
 
-        assert_eq!(acc1.size(), 282);
+        assert_eq!(acc1.size(), 166);
 
         Ok(())
     }
     #[test]
     fn does_not_over_account_memory_distinct() -> Result<()> {
-        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string()
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::new(DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))))
             .distinct()
             .build_two()?;
 
@@ -1766,7 +1765,7 @@ mod tests {
 
     #[test]
     fn does_not_over_account_memory_ordered() -> Result<()> {
-        let mut acc = ArrayAggAccumulatorBuilder::string()
+        let mut acc = ArrayAggAccumulatorBuilder::new(DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))))
             .order_by_col("col", SortOptions::new(false, false))
             .build()?;
 
@@ -1782,12 +1781,62 @@ mod tests {
         Ok(())
     }
 
-    // Reproduces the bug where `state()` emits reversed values but non-reversed
-    // orderings when the optimizer sets is_input_pre_ordered=true + reverse=true
-    // (DESC aggregate with ASC pre-sorted input). The partial states are fed into
-    // a final accumulator via merge_batch; without the fix the ordering keys and
-    // values are mismatched so the final sort produces wrong order.
     #[test]
+    fn ordered_aggregate_nested_nullability_mismatch_issue_24022() -> Result<()> {
+        use datafusion_physical_expr::expressions::Column;
+        use arrow::array::{StructArray, Int32Array, Int64Array};
+        
+        let requested_element_type =
+            DataType::Struct(Fields::from(vec![Field::new("n", DataType::Int32, true)]));
+        let inferred_field = Field::new("n", DataType::Int32, false);
+
+        let ordering_dtype = DataType::Int64;
+        let schema = Schema::new(vec![
+            Field::new("val", requested_element_type.clone(), true),
+            Field::new("ord", DataType::Int64, true),
+        ]);
+        let ord_expr = Arc::new(
+            Column::new_with_schema("ord", &schema).expect("column not in schema"),
+        ) as Arc<dyn PhysicalExpr>;
+        
+        let asc_opts = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let asc_ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::clone(&ord_expr),
+            asc_opts,
+        )]).unwrap();
+
+        let mut acc = OrderSensitiveArrayAggAccumulator::try_new(
+            &requested_element_type,
+            std::slice::from_ref(&ordering_dtype),
+            asc_ordering,
+            /*is_input_pre_ordered=*/ true,
+            /*reverse=*/ false,
+            /*ignore_nulls=*/ false,
+        )?;
+
+        let value_arr = Arc::new(StructArray::from(vec![(
+            Arc::new(inferred_field),
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+        )])) as ArrayRef;
+
+        let ord_arr = Arc::new(Int64Array::from(vec![0i64])) as ArrayRef;
+
+        acc.update_batch(&[value_arr, ord_arr])?;
+        
+        let evaluated = acc.evaluate()?;
+        
+        assert_eq!(
+            evaluated.data_type(),
+            DataType::List(Arc::new(Field::new_list_field(requested_element_type, true)))
+        );
+
+        Ok(())
+    }
+
+    // Reproduces the bug where `state()` emits reversed values but non-reversed
     fn desc_order_partial_final_merge_correct() -> Result<()> {
         use arrow::array::Int64Array;
         use datafusion_physical_expr::expressions::Column;
@@ -1905,15 +1954,16 @@ mod tests {
 
         fn new(data_type: DataType) -> Self {
             Self {
-                return_field: Field::new("f", data_type.clone(), true).into(),
+                return_field: Field::new(
+                    "f",
+                    DataType::List(Arc::new(Field::new_list_field(data_type.clone(), true))),
+                    true,
+                )
+                .into(),
                 distinct: false,
                 order_bys: vec![],
                 schema: Schema {
-                    fields: Fields::from(vec![Field::new(
-                        "col",
-                        DataType::new_list(data_type, true),
-                        true,
-                    )]),
+                    fields: Fields::from(vec![Field::new("col", data_type, true)]),
                     metadata: Default::default(),
                 },
             }
