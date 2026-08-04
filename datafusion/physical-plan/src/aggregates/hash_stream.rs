@@ -396,6 +396,10 @@ impl FinalSpillContext {
         } = self;
 
         let spill_schema = Arc::clone(spill_manager.schema());
+        // The merge and replay table are two components of the same aggregate
+        // operator. Keep them under one consumer registration so a fair memory
+        // pool does not divide this operator's quota between its own phases.
+        let merge_reservation = reservation.new_empty();
         let merged = StreamingMergeBuilder::new()
             .with_schema(spill_schema)
             .with_spill_manager(spill_manager)
@@ -403,7 +407,7 @@ impl FinalSpillContext {
             .with_expressions(&spill_expr)
             .with_metrics(baseline_metrics.intermediate())
             .with_batch_size(batch_size)
-            .with_reservation(reservation)
+            .with_reservation(merge_reservation)
             .build()?;
         let replay = OrderedFinalAggregateStream::new_with_input_and_metrics(
             &final_agg,
@@ -414,6 +418,7 @@ impl FinalSpillContext {
             baseline_metrics.clone(),
             group_by_metrics,
             None,
+            reservation,
         )?;
         Ok(Box::pin(replay))
     }

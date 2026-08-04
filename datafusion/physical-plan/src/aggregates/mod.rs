@@ -3418,7 +3418,7 @@ mod tests {
         assert!(final_stats.total_byte_size.get_value().is_some());
 
         let task_ctx = if spill {
-            // Enlarge the memory limit enough to replay spilled states.
+            // enlarge memory limit to let the final aggregation finish
             new_spill_ctx(2, 4640)
         } else {
             Arc::clone(&task_ctx)
