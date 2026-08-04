@@ -1187,8 +1187,8 @@ ORDER BY l.range_key;
 
 ##########
 # TEST 31: Full Outer Join Incompatible Range Repartitions
-# Same as TEST 10, but for Full: differing split points between the two
-# Range-partitioned inputs still require Hash repartitioning to co-partition.
+# For Full joins, differing split points between the two Range-partitioned
+# inputs still require Hash repartitioning to co-partition.
 ##########
 
 query TT
