@@ -211,6 +211,26 @@ Plan with Metrics
 03)----ProjectionExec: expr=[col1@0 as col1, upper(col2@1) as col2_upper], metrics=[output_rows=2, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=1, expr_0_eval_time=<slt:ignore>, expr_1_eval_time=<slt:ignore>]
 04)------DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
 
+# Verify CsvSink exposes rows_written, bytes_written, and elapsed_compute metrics
+query TT
+EXPLAIN ANALYZE COPY (SELECT col1, upper(col2) AS col2_upper FROM source_table ORDER BY col1) TO 'test_files/scratch/copy/table_csv_metrics.csv' STORED AS CSV;
+----
+Plan with Metrics
+01)DataSinkExec: sink=CsvSink(file_groups=[]), metrics=[elapsed_compute=<slt:ignore>, bytes_written=<slt:ignore>, rows_written=2]
+02)--SortExec: expr=[col1@0 ASC NULLS LAST], preserve_partitioning=[false], metrics=[output_rows=2, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=<slt:ignore>, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0]
+03)----ProjectionExec: expr=[col1@0 as col1, upper(col2@1) as col2_upper], metrics=[output_rows=2, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=1, expr_0_eval_time=<slt:ignore>, expr_1_eval_time=<slt:ignore>]
+04)------DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+
+# Verify JsonSink exposes rows_written, bytes_written, and elapsed_compute metrics
+query TT
+EXPLAIN ANALYZE COPY (SELECT col1, upper(col2) AS col2_upper FROM source_table ORDER BY col1) TO 'test_files/scratch/copy/table_json_metrics.json' STORED AS JSON;
+----
+Plan with Metrics
+01)DataSinkExec: sink=JsonSink(file_groups=[]), metrics=[elapsed_compute=<slt:ignore>, bytes_written=<slt:ignore>, rows_written=2]
+02)--SortExec: expr=[col1@0 ASC NULLS LAST], preserve_partitioning=[false], metrics=[output_rows=2, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=<slt:ignore>, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0]
+03)----ProjectionExec: expr=[col1@0 as col1, upper(col2@1) as col2_upper], metrics=[output_rows=2, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=1, expr_0_eval_time=<slt:ignore>, expr_1_eval_time=<slt:ignore>]
+04)------DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+
 # Copy to directory as partitioned files with keep_partition_by_columns enabled
 query I
 COPY (values ('1', 'a'), ('2', 'b'), ('3', 'c')) TO 'test_files/scratch/copy/partitioned_table4/' STORED AS parquet PARTITIONED BY (column1)
