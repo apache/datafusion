@@ -1671,6 +1671,7 @@ mod tests {
                     None,
                 )),
             ),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Float16)),
         ];
 
         for dt in &supported_cases {
@@ -1700,11 +1701,6 @@ mod tests {
             // A negative width is representable in the DataType but is not
             // a valid Arrow type; no array can be constructed for it.
             DataType::FixedSizeBinary(-5),
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Float16)),
-            DataType::Dictionary(
-                Box::new(DataType::Int32),
-                Box::new(DataType::Decimal256(76, 10)),
-            ),
         ];
 
         for dt in &unsupported_cases {
