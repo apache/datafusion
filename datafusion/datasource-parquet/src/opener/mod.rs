@@ -1387,6 +1387,54 @@ impl RowGroupsPrunedParquetOpen {
             prepared.virtual_state.as_deref(),
         )?;
 
+        // EXPERIMENT: streaming (batch-granular) scan path, selected via
+        // DF_FETCH_POLICY=streaming. Bypasses the push decoder entirely: a
+        // long-lived sync reader pulls from a shared buffer that the stream
+        // driver fills with exactly the page ranges each batch needs (plus
+        // bounded readahead). Falls back to the push-decoder path when row
+        // filters are active or the offset index is unavailable.
+        if let FetchPolicy::Streaming { window } = FetchPolicy::from_env() {
+            let pushdown_active =
+                prepared.pushdown_filters && prepared.predicate.is_some();
+            if !pushdown_active {
+                let streaming_access_plan = prepare_access_plan(access_plan.clone())?;
+                if let Some(streaming_plan) = crate::push_decoder::build_streaming_plan(
+                    &file_metadata,
+                    &streaming_access_plan.row_group_indexes,
+                    decoder_projection.projection_mask(),
+                    streaming_access_plan.row_selection.as_ref(),
+                ) {
+                    let stream = crate::push_decoder::build_streaming_stream(
+                        streaming_plan,
+                        crate::push_decoder::StreamingScanConfig {
+                            reader_metadata: reader_metadata.clone(),
+                            row_group_indexes: streaming_access_plan.row_group_indexes,
+                            row_selection: streaming_access_plan.row_selection,
+                            decoder_projection,
+                            batch_size: prepared.batch_size,
+                            limit: prepared.limit,
+                            reader: prepared.async_file_reader,
+                            baseline_metrics: prepared.baseline_metrics,
+                            window,
+                        },
+                    )?;
+                    let files_ranges_pruned_statistics =
+                        prepared.file_metrics.files_ranges_pruned_statistics.clone();
+                    return match prepared.file_pruner {
+                        Some(file_pruner) if file_pruner.is_watching() => {
+                            Ok(EarlyStoppingStream::new(
+                                stream,
+                                file_pruner,
+                                files_ranges_pruned_statistics,
+                            )
+                            .boxed())
+                        }
+                        _ => Ok(stream),
+                    };
+                }
+            }
+        }
+
         let (decoder, rg_plan) = {
             let pushdown_predicate = prepared
                 .pushdown_filters

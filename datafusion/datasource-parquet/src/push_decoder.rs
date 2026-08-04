@@ -47,13 +47,17 @@ use futures::stream::BoxStream;
 use log::debug;
 use parquet::DecodeResult;
 use parquet::arrow::ProjectionMask;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::arrow_reader::RowSelection;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ParquetRecordBatchReader, RowSelectionPolicy,
 };
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
+use parquet::errors::ParquetError;
 use parquet::file::metadata::ParquetMetaData;
+use parquet::file::reader::{ChunkReader, Length};
 
 use datafusion_common::{DataFusionError, Result};
 use datafusion_physical_expr::expressions::DynamicFilterTracking;
@@ -138,11 +142,19 @@ fn note_staged_bytes(decoder: &ParquetPushDecoder) {
 ///   spawn a *background* fetch for upcoming row groups' projected ranges
 ///   within the same byte budget. Decode of the current RG overlaps with
 ///   I/O for the next ones.
+/// - `Streaming`: batch-granular readiness. One long-lived *sync*
+///   [`ParquetRecordBatchReader`] pulls bytes through a shared in-memory
+///   buffer; the stream driver computes, from the offset index, exactly
+///   which page ranges the next batch needs, awaits their fetch, and keeps
+///   a background readahead of up to `window` bytes in flight. Falls back
+///   to `Off` when preconditions don't hold (no offset index, or row
+///   filters are active). See [`StreamingScanState`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum FetchPolicy {
     Off,
     Batched { budget: u64 },
     Pipelined { budget: u64 },
+    Streaming { window: u64 },
 }
 
 impl FetchPolicy {
@@ -154,6 +166,7 @@ impl FetchPolicy {
         match std::env::var("DF_FETCH_POLICY").as_deref() {
             Ok("batched") => FetchPolicy::Batched { budget },
             Ok("pipelined") => FetchPolicy::Pipelined { budget },
+            Ok("streaming") => FetchPolicy::Streaming { window: budget },
             _ => FetchPolicy::Off,
         }
     }
@@ -659,6 +672,547 @@ impl PushDecoderStreamState {
 
     fn project_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
         self.decoder_projection.map(batch)
+    }
+}
+
+// ===========================================================================
+// EXPERIMENT: `FetchPolicy::Streaming` — batch-granular readiness.
+//
+// One long-lived *sync* `ParquetRecordBatchReader` pulls bytes through
+// [`SharedBuffers`] (an in-memory `ChunkReader`). The stream driver computes
+// from the offset index exactly which page ranges the next batch needs,
+// awaits their fetch (with up to `window` bytes of background readahead),
+// then calls `next()` — which therefore never blocks on I/O. Dictionary
+// pages are fetched and decoded once per row group (the reader persists),
+// and page bytes are dropped as soon as the decode cursor passes them, so
+// resident memory is bounded by the readahead window rather than row-group
+// size.
+// ===========================================================================
+
+/// In-memory byte store shared between the fetch side (inserts ranges as
+/// they land) and the sync parquet reader (reads through `ChunkReader`).
+/// Reads must be fully contained in a previously inserted range; the stream
+/// driver guarantees this by construction, so a miss is a bug, not a wait.
+#[derive(Clone)]
+pub(crate) struct SharedBuffers {
+    inner: Arc<std::sync::Mutex<std::collections::BTreeMap<u64, Bytes>>>,
+    file_len: u64,
+}
+
+impl SharedBuffers {
+    fn new(file_len: u64) -> Self {
+        Self {
+            inner: Arc::new(std::sync::Mutex::new(Default::default())),
+            file_len,
+        }
+    }
+
+    fn insert(&self, range: &Range<u64>, data: Bytes) {
+        self.inner.lock().unwrap().insert(range.start, data);
+    }
+
+    fn remove(&self, start: u64) {
+        self.inner.lock().unwrap().remove(&start);
+    }
+}
+
+impl Length for SharedBuffers {
+    fn len(&self) -> u64 {
+        self.file_len
+    }
+}
+
+pub(crate) struct SharedBuffersRead {
+    buffers: SharedBuffers,
+    pos: u64,
+}
+
+impl std::io::Read for SharedBuffersRead {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = buf.len().min((self.buffers.file_len - self.pos) as usize);
+        if n == 0 {
+            return Ok(0);
+        }
+        let bytes = self
+            .buffers
+            .get_bytes(self.pos, n)
+            .map_err(std::io::Error::other)?;
+        buf[..n].copy_from_slice(&bytes);
+        self.pos += n as u64;
+        Ok(n)
+    }
+}
+
+impl ChunkReader for SharedBuffers {
+    type T = SharedBuffersRead;
+
+    fn get_read(&self, start: u64) -> parquet::errors::Result<Self::T> {
+        Ok(SharedBuffersRead {
+            buffers: self.clone(),
+            pos: start,
+        })
+    }
+
+    fn get_bytes(&self, start: u64, length: usize) -> parquet::errors::Result<Bytes> {
+        let guard = self.inner.lock().unwrap();
+        if let Some((&rstart, bytes)) = guard.range(..=start).next_back() {
+            let offset = start - rstart;
+            if offset as usize + length <= bytes.len() {
+                return Ok(bytes.slice(offset as usize..offset as usize + length));
+            }
+        }
+        Err(ParquetError::General(format!(
+            "streaming scan buffer miss: {start}..{} not resident",
+            start + length as u64
+        )))
+    }
+}
+
+/// One fetchable unit of the streaming plan: a page (or a row group's
+/// dictionary region), with its position in *selected-row* space so the
+/// driver knows when it becomes needed and when it can be dropped.
+struct PlanPage {
+    range: Range<u64>,
+    /// First selected row (in output order) this page contributes to.
+    sel_start: u64,
+    /// One past the last selected row this page contributes to. Dictionary
+    /// regions span their whole row group so they stay resident until the
+    /// row group is fully decoded.
+    sel_end: u64,
+    cleared: bool,
+}
+
+/// Prefix-sum view over a `RowSelection`: how many rows are selected before
+/// a given raw row index (raw = concatenated rows of the scanned row groups
+/// in scan order).
+struct SelectedPrefix {
+    /// (raw_start, selected_before, skip) per selector run.
+    runs: Vec<(u64, u64, bool)>,
+    total_raw: u64,
+    total_selected: u64,
+}
+
+impl SelectedPrefix {
+    fn new(selection: Option<&RowSelection>, total_raw: u64) -> Self {
+        let Some(selection) = selection else {
+            return Self {
+                runs: vec![(0, 0, false)],
+                total_raw,
+                total_selected: total_raw,
+            };
+        };
+        let mut runs = Vec::new();
+        let mut raw = 0u64;
+        let mut selected = 0u64;
+        for selector in selection.iter() {
+            runs.push((raw, selected, selector.skip));
+            raw += selector.row_count as u64;
+            if !selector.skip {
+                selected += selector.row_count as u64;
+            }
+        }
+        // Rows past the end of the selection are not selected.
+        runs.push((raw, selected, true));
+        Self {
+            runs,
+            total_raw,
+            total_selected: selected,
+        }
+    }
+
+    fn selected_before(&self, raw: u64) -> u64 {
+        let raw = raw.min(self.total_raw);
+        let idx = self.runs.partition_point(|(start, _, _)| *start <= raw) - 1;
+        let (start, selected, skip) = self.runs[idx];
+        if skip {
+            selected
+        } else {
+            selected + (raw - start)
+        }
+    }
+}
+
+/// Opaque prebuilt streaming fetch plan (see [`build_streaming_plan`]).
+pub(crate) struct StreamingPlan {
+    pages: Vec<PlanPage>,
+    total_selected: u64,
+    file_end: u64,
+}
+
+/// Build the streaming fetch plan: every projected page (plus per-RG
+/// dictionary regions) in decode-need order. Returns `None` when the
+/// offset index is unavailable — the caller falls back to the push-decoder
+/// path. Borrows only, so callers can probe feasibility before committing
+/// resources to the streaming path.
+pub(crate) fn build_streaming_plan(
+    metadata: &ParquetMetaData,
+    row_group_indexes: &[usize],
+    projection: &ProjectionMask,
+    selection: Option<&RowSelection>,
+) -> Option<StreamingPlan> {
+    let offset_index = metadata.offset_index()?;
+    let total_raw: u64 = row_group_indexes
+        .iter()
+        .map(|&rg| metadata.row_group(rg).num_rows() as u64)
+        .sum();
+    let prefix = SelectedPrefix::new(selection, total_raw);
+
+    let mut plan: Vec<PlanPage> = Vec::new();
+    let mut file_end = 0u64;
+    let mut rg_raw_start = 0u64;
+    for &rg_idx in row_group_indexes {
+        let rg = metadata.row_group(rg_idx);
+        let rg_rows = rg.num_rows() as u64;
+        let rg_sel_start = prefix.selected_before(rg_raw_start);
+        let rg_sel_end = prefix.selected_before(rg_raw_start + rg_rows);
+        for (col_idx, column) in rg.columns().iter().enumerate() {
+            let (chunk_start, chunk_len) = column.byte_range();
+            file_end = file_end.max(chunk_start + chunk_len);
+            if !projection.leaf_included(col_idx) {
+                continue;
+            }
+            let locations = offset_index
+                .get(rg_idx)
+                .and_then(|cols| cols.get(col_idx))?
+                .page_locations();
+            if locations.is_empty() {
+                return None;
+            }
+            if rg_sel_start == rg_sel_end {
+                // No selected rows in this row group at all.
+                continue;
+            }
+            // Dictionary region: everything before the first data page.
+            let first_page = locations[0].offset as u64;
+            if first_page != chunk_start {
+                plan.push(PlanPage {
+                    range: chunk_start..first_page,
+                    sel_start: rg_sel_start,
+                    sel_end: rg_sel_end,
+                    cleared: false,
+                });
+            }
+            for (i, loc) in locations.iter().enumerate() {
+                let raw_first = rg_raw_start + loc.first_row_index as u64;
+                let raw_end = locations
+                    .get(i + 1)
+                    .map(|next| rg_raw_start + next.first_row_index as u64)
+                    .unwrap_or(rg_raw_start + rg_rows);
+                let sel_start = prefix.selected_before(raw_first);
+                let sel_end = prefix.selected_before(raw_end);
+                if sel_start == sel_end {
+                    // Page contains no selected rows: never fetched (page
+                    // skipping preserved).
+                    continue;
+                }
+                let start = loc.offset as u64;
+                plan.push(PlanPage {
+                    range: start..start + loc.compressed_page_size as u64,
+                    sel_start,
+                    sel_end,
+                    cleared: false,
+                });
+            }
+        }
+        rg_raw_start += rg_rows;
+    }
+    // Need order: by first selected row, dictionaries (wider spans) first
+    // among equals so they are resident before their data pages decode.
+    plan.sort_by_key(|p| (p.sel_start, std::cmp::Reverse(p.sel_end), p.range.start));
+    Some(StreamingPlan {
+        pages: plan,
+        total_selected: prefix.total_selected,
+        file_end,
+    })
+}
+
+pub(crate) struct StreamingScanConfig {
+    pub reader_metadata: ArrowReaderMetadata,
+    pub row_group_indexes: Vec<usize>,
+    pub row_selection: Option<RowSelection>,
+    pub decoder_projection: DecoderProjection,
+    pub batch_size: usize,
+    pub limit: Option<usize>,
+    pub reader: Box<dyn AsyncFileReader>,
+    pub baseline_metrics: BaselineMetrics,
+    pub window: u64,
+}
+
+/// Build the streaming (batch-granular) scan stream from a prebuilt plan.
+pub(crate) fn build_streaming_stream(
+    plan: StreamingPlan,
+    config: StreamingScanConfig,
+) -> Result<BoxStream<'static, Result<RecordBatch>>> {
+    let StreamingScanConfig {
+        reader_metadata,
+        row_group_indexes,
+        row_selection,
+        decoder_projection,
+        batch_size,
+        limit,
+        reader,
+        baseline_metrics,
+        window,
+    } = config;
+    let StreamingPlan {
+        pages: plan,
+        total_selected,
+        file_end,
+    } = plan;
+
+    let buffers = SharedBuffers::new(file_end);
+    let mut builder = ParquetRecordBatchReaderBuilder::new_with_metadata(
+        buffers.clone(),
+        reader_metadata,
+    )
+    .with_projection(decoder_projection.projection_mask().clone())
+    .with_batch_size(batch_size)
+    .with_row_groups(row_group_indexes);
+    if let Some(selection) = row_selection {
+        builder = builder.with_row_selection(selection);
+    }
+    if let Some(limit) = limit {
+        builder = builder.with_limit(limit);
+    }
+    let sync_reader = builder.build()?;
+
+    let state = StreamingScanState {
+        plan,
+        total_selected,
+        batch_size: batch_size as u64,
+        window,
+        fetched_idx: 0,
+        inflight_start: 0,
+        clear_idx: 0,
+        resident_bytes: 0,
+        cursor: 0,
+        buffers,
+        slot: ReaderSlot::Idle(reader),
+        sync_reader,
+        decoder_projection,
+        baseline_metrics,
+    };
+    Ok(
+        futures::stream::unfold(state, |state| async move { state.transition().await })
+            .fuse()
+            .boxed(),
+    )
+}
+
+pub(crate) struct StreamingScanState {
+    plan: Vec<PlanPage>,
+    total_selected: u64,
+    batch_size: u64,
+    window: u64,
+    /// Plan pages `[0, fetched_idx)` have been requested (resident or in
+    /// the single in-flight background fetch).
+    fetched_idx: usize,
+    /// Start of the in-flight slice when the slot is `Busy`.
+    inflight_start: usize,
+    /// Scan start for dropping pages the cursor has passed.
+    clear_idx: usize,
+    resident_bytes: u64,
+    /// Selected rows emitted so far.
+    cursor: u64,
+    buffers: SharedBuffers,
+    slot: ReaderSlot,
+    sync_reader: ParquetRecordBatchReader,
+    decoder_projection: DecoderProjection,
+    baseline_metrics: BaselineMetrics,
+}
+
+impl StreamingScanState {
+    /// First selected row not yet guaranteed decodable: pages whose
+    /// `sel_start` is below this must be resident before the next batch.
+    fn needed_end(&self) -> u64 {
+        (self.cursor + self.batch_size).min(self.total_selected)
+    }
+
+    /// Whether any not-yet-landed plan page is required for the next batch.
+    fn required_pending(&self) -> bool {
+        let needed = self.needed_end();
+        let first_unlanded = match self.slot {
+            ReaderSlot::Busy(_) => self.inflight_start,
+            _ => self.fetched_idx,
+        };
+        self.plan
+            .get(first_unlanded)
+            .is_some_and(|p| p.sel_start < needed)
+    }
+
+    /// Extent of the next fetch starting at `fetched_idx`. When
+    /// `required_only`, stop at the pages the next batch needs (keeps the
+    /// blocking inline fetch — and therefore time-to-first-batch — minimal);
+    /// otherwise extend with readahead while the window has room.
+    fn next_gulp_end(&self, required_only: bool) -> usize {
+        let needed = self.needed_end();
+        let mut bytes = 0u64;
+        let mut end = self.fetched_idx;
+        while let Some(page) = self.plan.get(end) {
+            let len = page.range.end - page.range.start;
+            let required = page.sel_start < needed;
+            if !required
+                && (required_only || self.resident_bytes + bytes + len > self.window)
+            {
+                break;
+            }
+            bytes += len;
+            end += 1;
+        }
+        end
+    }
+
+    /// Drop resident pages the decode cursor has fully passed.
+    fn clear_consumed(&mut self) {
+        let landed_end = match self.slot {
+            ReaderSlot::Busy(_) => self.inflight_start,
+            _ => self.fetched_idx,
+        };
+        let mut idx = self.clear_idx;
+        while idx < landed_end {
+            let page = &mut self.plan[idx];
+            if page.sel_start > self.cursor {
+                break;
+            }
+            if !page.cleared && page.sel_end <= self.cursor {
+                self.buffers.remove(page.range.start);
+                self.resident_bytes -= page.range.end - page.range.start;
+                page.cleared = true;
+            }
+            idx += 1;
+        }
+        while self
+            .plan
+            .get(self.clear_idx)
+            .is_some_and(|page| page.cleared)
+        {
+            self.clear_idx += 1;
+        }
+    }
+
+    async fn transition(mut self) -> Option<(Result<RecordBatch>, Self)> {
+        loop {
+            // 1. Land the in-flight fetch when the next batch needs it (or
+            //    when there is nothing left to decode without it).
+            if self.required_pending() {
+                match std::mem::replace(&mut self.slot, ReaderSlot::Empty) {
+                    ReaderSlot::Busy(handle) => {
+                        let (reader, ranges, result) = match handle.await {
+                            Ok(v) => v,
+                            Err(e) => {
+                                return Some((
+                                    Err(DataFusionError::External(Box::new(e))),
+                                    self,
+                                ));
+                            }
+                        };
+                        self.slot = ReaderSlot::Idle(reader);
+                        match result {
+                            Ok(data) => {
+                                for (range, bytes) in ranges.iter().zip(data) {
+                                    self.buffers.insert(range, bytes);
+                                    self.resident_bytes += range.end - range.start;
+                                }
+                                PEAK_STAGED_BYTES.fetch_max(
+                                    self.resident_bytes,
+                                    std::sync::atomic::Ordering::Relaxed,
+                                );
+                            }
+                            Err(e) => {
+                                return Some((Err(DataFusionError::from(e)), self));
+                            }
+                        }
+                        continue;
+                    }
+                    ReaderSlot::Idle(mut reader) => {
+                        // Fetch only the pages the next batch requires —
+                        // readahead happens in the background (step 2), so
+                        // the blocking fetch stays small and TTFB low.
+                        let end = self.next_gulp_end(true);
+                        let ranges: Vec<Range<u64>> = self.plan[self.fetched_idx..end]
+                            .iter()
+                            .map(|p| p.range.clone())
+                            .collect();
+                        let result = reader.get_byte_ranges(ranges.clone()).await;
+                        self.slot = ReaderSlot::Idle(reader);
+                        match result {
+                            Ok(data) => {
+                                for (range, bytes) in ranges.iter().zip(data) {
+                                    self.buffers.insert(range, bytes);
+                                    self.resident_bytes += range.end - range.start;
+                                }
+                                PEAK_STAGED_BYTES.fetch_max(
+                                    self.resident_bytes,
+                                    std::sync::atomic::Ordering::Relaxed,
+                                );
+                                self.fetched_idx = end;
+                            }
+                            Err(e) => {
+                                return Some((Err(DataFusionError::from(e)), self));
+                            }
+                        }
+                        continue;
+                    }
+                    ReaderSlot::Empty => unreachable!("slot never left empty"),
+                }
+            }
+
+            // 2. Required data resident: start background readahead when the
+            //    slot is idle and at least half the window is free (or the
+            //    tail is all that remains).
+            if matches!(self.slot, ReaderSlot::Idle(_))
+                && self.fetched_idx < self.plan.len()
+            {
+                let end = self.next_gulp_end(false);
+                let gulp_bytes: u64 = self.plan[self.fetched_idx..end]
+                    .iter()
+                    .map(|p| p.range.end - p.range.start)
+                    .sum();
+                let tail = end == self.plan.len();
+                if end > self.fetched_idx && (gulp_bytes >= self.window / 2 || tail) {
+                    let ranges: Vec<Range<u64>> = self.plan[self.fetched_idx..end]
+                        .iter()
+                        .map(|p| p.range.clone())
+                        .collect();
+                    let ReaderSlot::Idle(mut reader) =
+                        std::mem::replace(&mut self.slot, ReaderSlot::Empty)
+                    else {
+                        unreachable!()
+                    };
+                    self.inflight_start = self.fetched_idx;
+                    self.fetched_idx = end;
+                    // The repo's `SpawnedTask` aborts on drop; this POC
+                    // documents detach-on-drop semantics instead.
+                    #[expect(clippy::disallowed_methods)]
+                    let handle = tokio::task::spawn(async move {
+                        let result = reader.get_byte_ranges(ranges.clone()).await;
+                        (reader, ranges, result)
+                    });
+                    self.slot = ReaderSlot::Busy(handle);
+                }
+            }
+
+            // 3. Decode one batch — never blocks: its pages are resident.
+            let timer = self.baseline_metrics.elapsed_compute().timer();
+            let next = self.sync_reader.next();
+            match next {
+                Some(Ok(batch)) => {
+                    self.cursor += batch.num_rows() as u64;
+                    let result = self.decoder_projection.map(&batch);
+                    drop(timer);
+                    self.clear_consumed();
+                    return Some((result, self));
+                }
+                Some(Err(e)) => {
+                    drop(timer);
+                    return Some((Err(DataFusionError::from(e)), self));
+                }
+                None => {
+                    drop(timer);
+                    return None;
+                }
+            }
+        }
     }
 }
 
