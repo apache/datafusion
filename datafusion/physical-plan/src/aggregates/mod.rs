@@ -1671,10 +1671,8 @@ impl AggregateExec {
                 }
                 num_rows
             } else if value == 0 {
-                // `limit_options` becomes a soft limit on the groups built
-                // while consuming input rows. `init_empty_grouping_sets` creates
-                // these rows independently of the input, so the limit does not
-                // apply to them.
+                // The limit bounds groups built from input rows, not the rows
+                // the empty grouping sets contribute.
                 child_statistics
                     .num_rows
                     .map(|_| self.output_rows_for_empty_input(partition))
