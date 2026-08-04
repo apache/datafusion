@@ -67,12 +67,8 @@ use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_extension_codec,
     physical_plan_to_bytes_with_extension_codec,
 };
-use datafusion_proto::logical_plan::{
-    DefaultLogicalExtensionCodec, LogicalExtensionCodec,
-};
-use datafusion_proto::physical_plan::{
-    DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
-};
+use datafusion_proto::logical_plan::LogicalExtensionCodec;
+use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use datafusion_session::{QueryPlanner, Session};
 use stabby::vec::Vec as SVec;
 use tokio::runtime::Handle;
@@ -151,7 +147,7 @@ unsafe extern "C" fn create_physical_plan_fn_wrapper(
         let session = sresult_return!(
             session
                 .as_local()
-                .map(Ok::<&(dyn Session + Send + Sync), DataFusionError>)
+                .map(Ok::<&dyn Session, DataFusionError>)
                 .unwrap_or_else(|| {
                     foreign_session = Some(ForeignSession::try_from(&session)?);
                     Ok(foreign_session.as_ref().unwrap())
@@ -223,25 +219,26 @@ impl Clone for FFI_QueryPlanner {
 impl FFI_QueryPlanner {
     /// Creates an [`FFI_QueryPlanner`] with native extension codecs.
     ///
-    /// Missing codecs use DataFusion's defaults. `runtime` and
-    /// `task_ctx_provider` support codec callbacks across the FFI boundary.
+    /// Both codecs are required so that the caller states which extension nodes
+    /// survive the boundary. Pass
+    /// [`DefaultLogicalExtensionCodec`](datafusion_proto::logical_plan::DefaultLogicalExtensionCodec)
+    /// and
+    /// [`DefaultPhysicalExtensionCodec`](datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec)
+    /// when no custom nodes are involved. `runtime` and `task_ctx_provider`
+    /// support codec callbacks across the FFI boundary.
     pub fn new(
         planner: Arc<dyn QueryPlanner + Send + Sync>,
         runtime: Option<Handle>,
         task_ctx_provider: impl Into<FFI_TaskContextProvider>,
-        logical_codec: Option<Arc<dyn LogicalExtensionCodec>>,
-        physical_codec: Option<Arc<dyn PhysicalExtensionCodec + Send>>,
+        logical_codec: Arc<dyn LogicalExtensionCodec>,
+        physical_codec: Arc<dyn PhysicalExtensionCodec>,
     ) -> Self {
         let task_ctx_provider = task_ctx_provider.into();
-        let logical_codec =
-            logical_codec.unwrap_or_else(|| Arc::new(DefaultLogicalExtensionCodec {}));
         let logical_codec = FFI_LogicalExtensionCodec::new(
             logical_codec,
             runtime.clone(),
             task_ctx_provider.clone(),
         );
-        let physical_codec =
-            physical_codec.unwrap_or_else(|| Arc::new(DefaultPhysicalExtensionCodec {}));
         let physical_codec =
             FFI_PhysicalExtensionCodec::new(physical_codec, runtime, task_ctx_provider);
         Self::new_with_ffi_codecs(planner, logical_codec, physical_codec)
@@ -249,8 +246,9 @@ impl FFI_QueryPlanner {
 
     /// Creates an [`FFI_QueryPlanner`] using prebuilt FFI extension codecs.
     ///
-    /// If `planner` is already foreign, this returns its original FFI handle
-    /// rather than adding another wrapper layer.
+    /// If `planner` is already foreign, this re-exports its original FFI handle
+    /// rather than adding another wrapper layer. The handle still adopts the
+    /// codecs supplied here, so they are never silently discarded.
     pub fn new_with_ffi_codecs(
         planner: Arc<dyn QueryPlanner + Send + Sync>,
         logical_codec: FFI_LogicalExtensionCodec,
@@ -258,7 +256,10 @@ impl FFI_QueryPlanner {
     ) -> Self {
         let any_ref: &dyn std::any::Any = planner.as_ref();
         if let Some(planner) = any_ref.downcast_ref::<ForeignQueryPlanner>() {
-            return planner.0.clone();
+            let mut planner = planner.0.clone();
+            planner.logical_codec = logical_codec;
+            planner.physical_codec = physical_codec;
+            return planner;
         }
 
         let private_data = Box::new(QueryPlannerPrivateData { planner });
@@ -356,6 +357,8 @@ mod tests {
     use datafusion_execution::TaskContextProvider;
     use datafusion_expr::LogicalPlanBuilder;
     use datafusion_physical_plan::empty::EmptyExec;
+    use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
+    use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
 
     use super::*;
 
@@ -381,8 +384,8 @@ mod tests {
             Arc::new(EmptyQueryPlanner),
             None,
             &task_ctx_provider,
-            None,
-            None,
+            Arc::new(DefaultLogicalExtensionCodec {}),
+            Arc::new(DefaultPhysicalExtensionCodec {}),
         )
     }
 

@@ -155,12 +155,12 @@ unsafe impl Send for FFI_SessionRef {}
 unsafe impl Sync for FFI_SessionRef {}
 
 struct SessionPrivateData<'a> {
-    session: &'a (dyn Session + Send + Sync),
+    session: &'a dyn Session,
     runtime: Option<Handle>,
 }
 
 impl FFI_SessionRef {
-    fn inner(&self) -> &(dyn Session + Send + Sync) {
+    fn inner(&self) -> &dyn Session {
         let private_data = self.private_data as *const SessionPrivateData;
         unsafe { (*private_data).session }
     }
@@ -418,7 +418,7 @@ impl Drop for FFI_SessionRef {
 impl FFI_SessionRef {
     /// Creates a new [`FFI_SessionRef`].
     pub fn new(
-        session: &(dyn Session + Send + Sync),
+        session: &dyn Session,
         runtime: Option<Handle>,
         logical_codec: FFI_LogicalExtensionCodec,
     ) -> Self {
@@ -432,7 +432,7 @@ impl FFI_SessionRef {
 
     /// Creates a new [`FFI_SessionRef`] using existing FFI codecs.
     pub fn new_with_ffi_codecs(
-        session: &(dyn Session + Send + Sync),
+        session: &dyn Session,
         runtime: Option<Handle>,
         logical_codec: FFI_LogicalExtensionCodec,
         physical_codec: FFI_PhysicalExtensionCodec,
@@ -495,7 +495,7 @@ unsafe impl Send for ForeignSession {}
 unsafe impl Sync for ForeignSession {}
 
 impl FFI_SessionRef {
-    pub fn as_local(&self) -> Option<&(dyn Session + Send + Sync)> {
+    pub fn as_local(&self) -> Option<&dyn Session> {
         if (self.library_marker_id)() == crate::get_library_marker_id() {
             return Some(self.inner());
         }
