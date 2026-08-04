@@ -33,6 +33,7 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl, PartitionedFile,
 };
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     ArrowSource, FileGroup, FileOutputMode, FileScanConfig, FileScanConfigBuilder,
@@ -3214,6 +3215,24 @@ async fn roundtrip_logical_plan_sort_merge_join() -> Result<()> {
     let query = "SELECT t1.* FROM t0 join t1 on t0.a = t1.a";
     let plan = ctx.sql(query).await?.create_physical_plan().await?;
     roundtrip_test(plan)
+}
+
+#[test]
+fn roundtrip_memory_source_projections() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+
+    // `None` (all columns), `Some(vec![])` (no columns) and a partial projection are
+    // three distinct output schemas and must each survive a round-trip.
+    for projection in [None, Some(vec![]), Some(vec![1])] {
+        let source =
+            MemorySourceConfig::try_new(&[vec![]], Arc::clone(&schema), projection)?;
+        roundtrip_test(Arc::new(DataSourceExec::new(Arc::new(source))))?;
+    }
+
+    Ok(())
 }
 
 #[tokio::test]
