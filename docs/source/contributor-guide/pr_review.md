@@ -88,10 +88,9 @@ Check that the description:
 
 ## Review the Code Comments
 
-Well written code comments are what makes the codebase understandable to the
-next contributor.
+The goal of code comments is not only for the code to be understandable after a reader spends time studying the implementation. It should make the implementation easy to understand for readers with the expected background.
 
-Check that:
+Some practical guidelines for writing comments:
 
 1. The code has adequate comments, and that the comments focus on the
    **rationale** for any non-obvious change (the "why"), not a restatement of
