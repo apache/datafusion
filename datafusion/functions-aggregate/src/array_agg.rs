@@ -1747,9 +1747,11 @@ mod tests {
     }
     #[test]
     fn does_not_over_account_memory_distinct() -> Result<()> {
-        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::new(DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))))
-            .distinct()
-            .build_two()?;
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::new(DataType::List(
+            Arc::new(Field::new_list_field(DataType::Utf8, true)),
+        ))
+        .distinct()
+        .build_two()?;
 
         acc1.update_batch(&[string_list_data([
             vec!["a", "b", "c"],
@@ -1765,9 +1767,11 @@ mod tests {
 
     #[test]
     fn does_not_over_account_memory_ordered() -> Result<()> {
-        let mut acc = ArrayAggAccumulatorBuilder::new(DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))))
-            .order_by_col("col", SortOptions::new(false, false))
-            .build()?;
+        let mut acc = ArrayAggAccumulatorBuilder::new(DataType::List(Arc::new(
+            Field::new_list_field(DataType::Utf8, true),
+        )))
+        .order_by_col("col", SortOptions::new(false, false))
+        .build()?;
 
         acc.update_batch(&[string_list_data([
             vec!["a", "b", "c"],
@@ -1783,9 +1787,9 @@ mod tests {
 
     #[test]
     fn ordered_aggregate_nested_nullability_mismatch_issue_24022() -> Result<()> {
+        use arrow::array::{Int32Array, Int64Array, StructArray};
         use datafusion_physical_expr::expressions::Column;
-        use arrow::array::{StructArray, Int32Array, Int64Array};
-        
+
         let requested_element_type =
             DataType::Struct(Fields::from(vec![Field::new("n", DataType::Int32, true)]));
         let inferred_field = Field::new("n", DataType::Int32, false);
@@ -1798,7 +1802,7 @@ mod tests {
         let ord_expr = Arc::new(
             Column::new_with_schema("ord", &schema).expect("column not in schema"),
         ) as Arc<dyn PhysicalExpr>;
-        
+
         let asc_opts = SortOptions {
             descending: false,
             nulls_first: false,
@@ -1806,7 +1810,8 @@ mod tests {
         let asc_ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
             Arc::clone(&ord_expr),
             asc_opts,
-        )]).unwrap();
+        )])
+        .unwrap();
 
         let mut acc = OrderSensitiveArrayAggAccumulator::try_new(
             &requested_element_type,
@@ -1825,12 +1830,15 @@ mod tests {
         let ord_arr = Arc::new(Int64Array::from(vec![0i64])) as ArrayRef;
 
         acc.update_batch(&[value_arr, ord_arr])?;
-        
+
         let evaluated = acc.evaluate()?;
-        
+
         assert_eq!(
             evaluated.data_type(),
-            DataType::List(Arc::new(Field::new_list_field(requested_element_type, true)))
+            DataType::List(Arc::new(Field::new_list_field(
+                requested_element_type,
+                true
+            )))
         );
 
         Ok(())
@@ -1956,7 +1964,10 @@ mod tests {
             Self {
                 return_field: Field::new(
                     "f",
-                    DataType::List(Arc::new(Field::new_list_field(data_type.clone(), true))),
+                    DataType::List(Arc::new(Field::new_list_field(
+                        data_type.clone(),
+                        true,
+                    ))),
                     true,
                 )
                 .into(),
