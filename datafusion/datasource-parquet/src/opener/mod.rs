@@ -66,8 +66,7 @@ use datafusion_physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
 };
 use datafusion_pruning::{
-    FilePruner, PruningPredicate, build_pruning_predicate,
-    build_pruning_predicate_with_max_in_list_size,
+    FilePruner, PruningPredicate, build_pruning_predicate_with_max_in_list_size,
 };
 
 #[cfg(feature = "parquet_encryption")]
@@ -1710,7 +1709,6 @@ mod test {
         CachedParquetFileReaderFactory, DefaultParquetFileReaderFactory,
         ParquetFileReaderFactory, ParquetRowSelection, RowGroupAccess,
     };
-    use datafusion_pruning::MAX_LIST_VALUE_SIZE_REWRITE;
     use arrow::array::{RecordBatch, record_batch};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
@@ -1735,6 +1733,7 @@ mod test {
         DefaultPhysicalExprAdapterFactory, replace_columns_with_literals,
     };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+    use datafusion_pruning::MAX_LIST_VALUE_SIZE_REWRITE;
     use futures::StreamExt;
     use futures::stream::BoxStream;
     use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};

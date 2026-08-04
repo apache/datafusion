@@ -424,6 +424,7 @@ mod parquet {
                     parquet_options::StatisticsEnabledOpt::StatisticsEnabled(enabled)
                 }),
                 max_row_group_size: global_options.global.max_row_group_size as u64,
+                pruning_max_in_list_size: global_options.global.pruning_max_in_list_size as u64,
                 created_by: global_options.global.created_by.clone(),
                 column_index_truncate_length_opt: global_options.global.column_index_truncate_length.map(|length| {
                     parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(length as u64)
@@ -570,6 +571,7 @@ mod parquet {
                     },
                 ),
                 max_row_group_size: proto.max_row_group_size as usize,
+                pruning_max_in_list_size: proto.pruning_max_in_list_size as usize,
                 created_by: proto.created_by.clone(),
                 column_index_truncate_length: proto
                     .column_index_truncate_length_opt
