@@ -77,36 +77,67 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
         }
     }
 
-    fn into_dict(values: ArrayRef, group_to_inner: &[usize]) -> ArrayRef {
+    /// Build a `DictionaryArray` from `values` (all inner slots) and the
+    /// per-group slot mapping.  The null inner slot, if any, is excluded from
+    /// the values array and its groups emit a null key — so it never consumes
+    /// a key index regardless of where it sits in `inner`.
+    fn into_dict(
+        values: ArrayRef,
+        group_to_inner: &[usize],
+        null_inner_slot: Option<usize>,
+    ) -> ArrayRef {
+        let Some(null_slot) = null_inner_slot else {
+            // Fast path: no null group — raw slot indices are valid keys.
+            let keys: PrimitiveArray<K> = group_to_inner
+                .iter()
+                .map(|&slot| Some(K::Native::usize_as(slot)))
+                .collect();
+            return Arc::new(DictionaryArray::<K>::new(keys, values));
+        };
+
+        // Build a compact remap: each non-null slot gets a contiguous key
+        // starting from 0; the null slot is skipped entirely.
+        let n = values.len();
+        let mut remap = vec![0usize; n];
+        let mut next = 0usize;
+        for (i, mapped) in remap.iter_mut().enumerate() {
+            if i != null_slot {
+                *mapped = next;
+                next += 1;
+            }
+        }
+
         let keys: PrimitiveArray<K> = group_to_inner
             .iter()
             .map(|&slot| {
-                if values.is_null(slot) {
+                if slot == null_slot {
                     None
                 } else {
-                    Some(K::Native::usize_as(slot))
+                    Some(K::Native::usize_as(remap[slot]))
                 }
             })
             .collect();
-        Arc::new(DictionaryArray::<K>::new(keys, values))
+
+        // Compact values array: drop the null slot so key indices stay tight.
+        let compact_indices: Int64Array = (0..n)
+            .filter(|&i| i != null_slot)
+            .map(|i| i as i64)
+            .collect();
+        let compact =
+            take(&*values, &compact_indices, None).expect("compact values in into_dict");
+        Arc::new(DictionaryArray::<K>::new(keys, compact))
     }
 
     // https://github.com/apache/datafusion/issues/23127
-    // Null groups emit a null key, not a key index into the values array, so the
-    // null inner slot does not consume a key index.
+    // Null groups emit a null key (None), not a slot index, so the null inner
+    // slot never consumes a key index regardless of its position in inner.
     fn check_key_overflow(&self) -> Result<()> {
-        // Keys are raw slot indices. The null slot is excluded from key count
-        // only when it occupies the last position — any non-null slot above it
-        // still emits that slot's raw index as a key.
-        let inner_len = self.inner.len();
-        let null_slot_excluded = self.null_inner_slot.is_some_and(|s| s + 1 == inner_len);
-        let max_key_count = inner_len - null_slot_excluded as usize;
-        if !Self::key_type_fits(max_key_count) {
-            let non_null_slots = inner_len - self.null_inner_slot.is_some() as usize;
+        let non_null_count = self.inner.len() - self.null_inner_slot.is_some() as usize;
+        if !Self::key_type_fits(non_null_count) {
             return exec_err!(
                 "Dictionary key type {:?} cannot represent {} distinct values",
                 K::DATA_TYPE,
-                non_null_slots
+                non_null_count
             );
         }
         Ok(())
@@ -422,8 +453,9 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
     }
 
     fn build(self: Box<Self>) -> ArrayRef {
+        let null_inner_slot = self.null_inner_slot;
         let values = self.inner.build();
-        Self::into_dict(values, &self.group_to_inner)
+        Self::into_dict(values, &self.group_to_inner, null_inner_slot)
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
@@ -433,6 +465,12 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
         let mut emit_old_to_new = vec![usize::MAX; old_inner_len];
         let mut emit_new_to_old: Vec<usize> = Vec::new();
         for &old in &self.group_to_inner[..n] {
+            // Null groups emit a null key (None) and need no slot in the
+            // values array, so excluding them keeps key indices tight and
+            // prevents overflow at key-type capacity.
+            if all_inner_values.is_null(old) {
+                continue;
+            }
             if emit_old_to_new[old] == usize::MAX {
                 emit_old_to_new[old] = emit_new_to_old.len();
                 emit_new_to_old.push(old);
@@ -518,30 +556,64 @@ mod tests {
         UInt8Array,
     };
     use arrow::compute::cast;
-    use arrow::datatypes::{DataType, Int32Type, UInt8Type};
+    use arrow::datatypes::{DataType, Int8Type, Int32Type, UInt8Type};
     use datafusion_physical_expr::binary_map::OutputType;
     use std::sync::Arc;
 
     fn utf8_col() -> DictionaryGroupValuesColumn<Int32Type> {
-        let field = Field::new("", DataType::Utf8, true);
-        DictionaryGroupValuesColumn::<Int32Type>::new(
+        let f = Field::new("", DataType::Utf8, true);
+        DictionaryGroupValuesColumn::new(
             Box::new(ByteGroupValueBuilder::<i32>::new(OutputType::Utf8)),
-            &field,
+            &f,
         )
     }
 
-    fn dict_arr(keys: &[Option<i32>], values: &[Option<&str>]) -> ArrayRef {
+    fn int8_col() -> DictionaryGroupValuesColumn<Int8Type> {
+        let f = Field::new("", DataType::Utf8, true);
+        DictionaryGroupValuesColumn::new(
+            Box::new(ByteGroupValueBuilder::<i32>::new(OutputType::Utf8)),
+            &f,
+        )
+    }
+
+    fn uint8_col() -> DictionaryGroupValuesColumn<UInt8Type> {
+        let f = Field::new("", DataType::Utf8, true);
+        DictionaryGroupValuesColumn::new(
+            Box::new(ByteGroupValueBuilder::<i32>::new(OutputType::Utf8)),
+            &f,
+        )
+    }
+
+    fn i32_dict(keys: &[Option<i32>], values: &[Option<&str>]) -> ArrayRef {
         Arc::new(DictionaryArray::<Int32Type>::new(
             Int32Array::from(keys.to_vec()),
             Arc::new(StringArray::from(values.to_vec())),
         ))
     }
 
+    fn i8_dict(keys: &[Option<i8>], values: &[Option<&str>]) -> ArrayRef {
+        use arrow::array::Int8Array;
+        Arc::new(DictionaryArray::<Int8Type>::new(
+            Int8Array::from(keys.to_vec()),
+            Arc::new(StringArray::from(values.to_vec())),
+        ))
+    }
+
+    fn u8_dict(keys: &[Option<u8>], values: &[Option<&str>]) -> ArrayRef {
+        Arc::new(DictionaryArray::<UInt8Type>::new(
+            UInt8Array::from(keys.to_vec()),
+            Arc::new(StringArray::from(values.to_vec())),
+        ))
+    }
+
     fn str_values(arr: &ArrayRef) -> Vec<Option<String>> {
         let plain = cast(arr.as_ref(), &DataType::Utf8).unwrap();
-        let strings = plain.as_any().downcast_ref::<StringArray>().unwrap();
-        (0..strings.len())
-            .map(|i| strings.is_valid(i).then(|| strings.value(i).to_owned()))
+        plain
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .iter()
+            .map(|v| v.map(|s| s.to_owned()))
             .collect()
     }
 
@@ -555,356 +627,215 @@ mod tests {
         buf
     }
 
-    // Null key and null-valued dict entry both map to the null group.
-    #[test]
-    fn null_key_and_null_value_in_dict() {
-        let mut col = utf8_col();
-        // Row 0: null key, Row 1: key→null value, Row 2: key→"b"
-        let input = dict_arr(&[None, Some(0), Some(1)], &[None, Some("b")]);
-        for row in 0..3 {
-            col.append_val(&input, row).unwrap();
-        }
-
-        assert!(col.equal_to(0, &input, 1));
-        assert!(col.equal_to(1, &input, 0));
-        assert!(!col.equal_to(0, &input, 2));
-        assert!(!col.equal_to(2, &input, 0));
-
-        let out = Box::new(col).build();
-        assert_eq!(out.as_dictionary::<Int32Type>().values().len(), 2);
-        assert_eq!(str_values(&out), vec![None, None, Some("b".into())]);
-    }
-
-    #[test]
-    fn take_n_remaps_slots_across_batches() {
-        use crate::aggregates::group_values::multi_group_by::primitive::PrimitiveGroupValueBuilder;
-        use arrow::array::UInt64Array;
-        use arrow::datatypes::UInt64Type;
-
-        let field = Field::new("", DataType::UInt64, true);
-        let mut col = DictionaryGroupValuesColumn::<Int32Type>::new(
-            Box::new(PrimitiveGroupValueBuilder::<UInt64Type, true>::new(
-                DataType::UInt64,
-            )),
-            &field,
-        );
-
-        let u64_val = |arr: &ArrayRef, pos: usize| {
-            let dict = arr.as_dictionary::<Int32Type>();
-            dict.values()
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .unwrap()
-                .value(dict.key(pos).unwrap())
-        };
-
-        let batch1: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
-            Int32Array::from(vec![Some(0), Some(1), None, Some(2), Some(0)]),
-            Arc::new(UInt64Array::from(vec![10u64, 20, 30])),
-        ));
-        col.vectorized_append(&batch1, &[0, 1, 2, 3, 4]).unwrap();
-
-        let emitted = col.take_n(3);
-        assert_eq!(u64_val(&emitted, 0), 10);
-        assert_eq!(u64_val(&emitted, 1), 20);
-        assert!(emitted.as_dictionary::<Int32Type>().key(2).is_none());
-
-        let batch2: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
-            Int32Array::from(vec![None, Some(0)]),
-            Arc::new(UInt64Array::from(vec![99u64])),
-        ));
-        col.vectorized_append(&batch2, &[0, 1]).unwrap();
-
-        let mut buf = all_true(2);
-        col.vectorized_equal_to(&[2, 3], &batch2, &[0, 1], &mut buf);
-        assert_eq!(bool_vec(&buf), vec![true, true]);
-
-        let out = Box::new(col).build();
-        assert_eq!(u64_val(&out, 0), 30);
-        assert_eq!(u64_val(&out, 1), 10);
-        assert!(out.as_dictionary::<Int32Type>().key(2).is_none());
-        assert_eq!(u64_val(&out, 3), 99);
-    }
-
-    // Regression: https://github.com/apache/datafusion/issues/23127
-    #[test]
-    fn key_type_overflow_returns_error() {
-        let field = Field::new("", DataType::Utf8, true);
-        let mut col = DictionaryGroupValuesColumn::<UInt8Type>::new(
-            Box::new(ByteGroupValueBuilder::<i32>::new(OutputType::Utf8)),
-            &field,
-        );
-
-        let strs: Vec<String> = (0..=255u16).map(|i| i.to_string()).collect();
-        let str_refs: Vec<Option<&str>> = strs.iter().map(|s| Some(s.as_str())).collect();
-        let full: ArrayRef = Arc::new(DictionaryArray::<UInt8Type>::new(
-            UInt8Array::from((0..=255u8).map(Some).collect::<Vec<_>>()),
-            Arc::new(StringArray::from(str_refs)),
-        ));
-        col.vectorized_append(&full, &(0..256).collect::<Vec<_>>())
-            .unwrap();
-
-        let extra: ArrayRef = Arc::new(DictionaryArray::<UInt8Type>::new(
-            UInt8Array::from(vec![Some(0u8)]),
-            Arc::new(StringArray::from(vec![Some("overflow")])),
-        ));
-        assert!(col.append_val(&extra, 0).is_err());
-    }
-
-    // A null value alongside 256 non-null values must not itself trigger an
-    // overflow: null groups emit a null key, not a key index. Adding a 257th
-    // non-null value after the null should be what triggers the error.
-    #[test]
-    fn null_does_not_count_toward_key_overflow() {
-        let field = Field::new("", DataType::Utf8, true);
-        let mut col = DictionaryGroupValuesColumn::<UInt8Type>::new(
-            Box::new(ByteGroupValueBuilder::<i32>::new(OutputType::Utf8)),
-            &field,
-        );
-
-        // Fill all 256 UInt8 key slots (indices 0..=255) with distinct non-null values.
-        let strs: Vec<String> = (0..=255u16).map(|i| i.to_string()).collect();
-        let str_refs: Vec<Option<&str>> = strs.iter().map(|s| Some(s.as_str())).collect();
-        let full: ArrayRef = Arc::new(DictionaryArray::<UInt8Type>::new(
-            UInt8Array::from((0..=255u8).map(Some).collect::<Vec<_>>()),
-            Arc::new(StringArray::from(str_refs)),
-        ));
-        col.vectorized_append(&full, &(0..256).collect::<Vec<_>>())
-            .unwrap();
-
-        // Null does not consume a key index — appending it must succeed.
-        let null_arr: ArrayRef = Arc::new(DictionaryArray::<UInt8Type>::new(
-            UInt8Array::from(vec![None]),
-            Arc::new(StringArray::from(vec![Some("dummy")])),
-        ));
-        col.append_val(&null_arr, 0).unwrap();
-
-        // A 257th distinct non-null value now exceeds UInt8's capacity.
-        let extra: ArrayRef = Arc::new(DictionaryArray::<UInt8Type>::new(
-            UInt8Array::from(vec![Some(0u8)]),
-            Arc::new(StringArray::from(vec![Some("overflow")])),
-        ));
-        assert!(col.append_val(&extra, 0).is_err());
-    }
-
-    // Regression: null mid-array means the last slot is non-null, so the max
-    // emitted key equals inner.len()-1, not inner.len()-2.
-    #[test]
-    fn key_overflow_null_slot_mid_array() {
-        use arrow::array::Int8Array;
-        use arrow::datatypes::Int8Type;
-
-        let field = Field::new("", DataType::Utf8, true);
-        let mut col = DictionaryGroupValuesColumn::<Int8Type>::new(
-            Box::new(ByteGroupValueBuilder::<i32>::new(OutputType::Utf8)),
-            &field,
-        );
-
-        // 100 non-null values in slots 0..99
-        let strs100: Vec<String> = (0u8..100).map(|i| format!("s{i}")).collect();
-        let refs100: Vec<Option<&str>> =
-            strs100.iter().map(|s| Some(s.as_str())).collect();
-        let b1: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::new(
-            Int8Array::from((0i8..100).map(Some).collect::<Vec<_>>()),
-            Arc::new(StringArray::from(refs100)),
-        ));
-        col.vectorized_append(&b1, &(0usize..100).collect::<Vec<_>>())
-            .unwrap();
-
-        // null lands at slot 100 (mid-array)
-        let null_batch: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::new(
-            Int8Array::from(vec![None]),
-            Arc::new(StringArray::from(vec![Some("x")])),
-        ));
-        col.append_val(&null_batch, 0).unwrap();
-
-        // 28 more non-null values fill slots 101..128; slot 128 exceeds Int8::MAX
-        let strs28: Vec<String> = (100u8..128).map(|i| format!("s{i}")).collect();
-        let refs28: Vec<Option<&str>> = strs28.iter().map(|s| Some(s.as_str())).collect();
-        let b2: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::new(
-            Int8Array::from((0i8..28).map(Some).collect::<Vec<_>>()),
-            Arc::new(StringArray::from(refs28)),
-        ));
-        assert!(
-            col.vectorized_append(&b2, &(0usize..28).collect::<Vec<_>>())
-                .is_err()
-        );
-    }
-
-    // Helpers shared by the three overflow boundary tests below.
-    fn int8_utf8_col() -> DictionaryGroupValuesColumn<arrow::datatypes::Int8Type> {
-        use arrow::datatypes::Int8Type;
-        let field = Field::new("", DataType::Utf8, true);
-        DictionaryGroupValuesColumn::<Int8Type>::new(
-            Box::new(ByteGroupValueBuilder::<i32>::new(OutputType::Utf8)),
-            &field,
-        )
-    }
-
-    fn int8_dict(keys: &[Option<i8>], values: &[Option<&str>]) -> ArrayRef {
-        use arrow::array::Int8Array;
-        use arrow::datatypes::Int8Type;
-        Arc::new(DictionaryArray::<Int8Type>::new(
-            Int8Array::from(keys.to_vec()),
-            Arc::new(StringArray::from(values.to_vec())),
-        ))
-    }
-
-    fn distinct_strs(start: usize, end: usize) -> ArrayRef {
+    // Builds an Int8-keyed dict of `end-start` distinct strings "v{start}".."v{end-1}".
+    fn distinct_i8_dict(start: usize, end: usize) -> ArrayRef {
         let strs: Vec<String> = (start..end).map(|i| format!("v{i}")).collect();
         let refs: Vec<Option<&str>> = strs.iter().map(|s| Some(s.as_str())).collect();
-        int8_dict(
+        i8_dict(
             &(0..strs.len()).map(|i| Some(i as i8)).collect::<Vec<_>>(),
             &refs,
         )
     }
 
-    // null mid-array: last slot is non-null, so slot 128 overflows Int8
+    // Builds a UInt8-keyed dict of `count` distinct strings "u0".."u{count-1}".
+    fn distinct_u8_dict(count: usize) -> ArrayRef {
+        let strs: Vec<String> = (0..count).map(|i| format!("u{i}")).collect();
+        let refs: Vec<Option<&str>> = strs.iter().map(|s| Some(s.as_str())).collect();
+        u8_dict(
+            &(0..count).map(|i| Some(i as u8)).collect::<Vec<_>>(),
+            &refs,
+        )
+    }
+
     #[test]
-    fn overflow_null_mid_pushes_over() {
-        let mut col = int8_utf8_col();
-        // 100 non-null, then null at slot 100, then 28 more non-null (slots 101..128)
-        col.vectorized_append(&distinct_strs(0, 100), &(0..100).collect::<Vec<_>>())
-            .unwrap();
-        col.append_val(&int8_dict(&[None], &[Some("x")]), 0)
-            .unwrap();
-        assert!(
-            col.vectorized_append(&distinct_strs(100, 128), &(0..28).collect::<Vec<_>>())
-                .is_err()
+    fn repeated_values_are_deduplicated_in_inner_store() {
+        let mut col = utf8_col();
+        let arr = i32_dict(
+            &[Some(0), Some(1), Some(0), Some(1), Some(0)],
+            &[Some("a"), Some("b")],
+        );
+        col.vectorized_append(&arr, &[0, 1, 2, 3, 4]).unwrap();
+        let out = Box::new(col).build();
+        assert_eq!(out.as_dictionary::<Int32Type>().values().len(), 2);
+        assert_eq!(
+            str_values(&out),
+            vec![
+                Some("a".into()),
+                Some("b".into()),
+                Some("a".into()),
+                Some("b".into()),
+                Some("a".into()),
+            ]
         );
     }
 
-    // null last: 128 non-null values fill slots 0..127 (Int8::MAX), null at 128 is ok
     #[test]
-    fn overflow_null_last_at_max() {
-        let mut col = int8_utf8_col();
-        col.vectorized_append(&distinct_strs(0, 128), &(0..128).collect::<Vec<_>>())
-            .unwrap();
-        col.append_val(&int8_dict(&[None], &[Some("x")]), 0)
-            .unwrap();
-    }
-
-    // null last: 127 non-null values, one below the limit
-    #[test]
-    fn overflow_null_last_just_below_max() {
-        let mut col = int8_utf8_col();
-        col.vectorized_append(&distinct_strs(0, 127), &(0..127).collect::<Vec<_>>())
-            .unwrap();
-        col.append_val(&int8_dict(&[None], &[Some("x")]), 0)
-            .unwrap();
-    }
-
-    // take_n compacts emitted values to only those referenced by the emitted groups.
-    #[test]
-    fn take_n_emits_compact_values() {
+    fn null_key_and_null_valued_entry_both_map_to_null_group() {
         let mut col = utf8_col();
-        // Four groups: [a, b, c, a] — three distinct values
-        let arr = dict_arr(
-            &[Some(0), Some(1), Some(2), Some(0)],
+        let input = i32_dict(&[None, Some(0), Some(1)], &[None, Some("b")]);
+        for row in 0..3 {
+            col.append_val(&input, row).unwrap();
+        }
+        assert!(col.equal_to(0, &input, 1));
+        assert!(!col.equal_to(0, &input, 2));
+        let out = Box::new(col).build();
+        assert_eq!(out.as_dictionary::<Int32Type>().values().len(), 1);
+        assert_eq!(str_values(&out), vec![None, None, Some("b".into())]);
+    }
+
+    #[test]
+    fn take_n_compacts_emitted_values_and_remaps_remaining_slots() {
+        let mut col = utf8_col();
+        let b1 = i32_dict(
+            &[Some(0), Some(1), None, Some(2)],
             &[Some("a"), Some("b"), Some("c")],
         );
-        col.vectorized_append(&arr, &[0, 1, 2, 3]).unwrap();
+        col.vectorized_append(&b1, &[0, 1, 2, 3]).unwrap();
 
-        // Emit 2 groups (a, b); "c" is only referenced by the remaining group.
         let emitted = col.take_n(2);
-
-        // Emitted values array must contain only "a" and "b", not "c".
         assert_eq!(emitted.as_dictionary::<Int32Type>().values().len(), 2);
         assert_eq!(
             str_values(&emitted),
             vec![Some("a".into()), Some("b".into())]
         );
-        // Remaining group still resolves correctly.
+
+        let b2 = i32_dict(&[None, Some(0)], &[Some("z")]);
+        col.vectorized_append(&b2, &[0, 1]).unwrap();
+
+        let mut buf = all_true(2);
+        col.vectorized_equal_to(&[0, 1], &b2, &[0, 1], &mut buf);
+        assert_eq!(bool_vec(&buf), vec![true, false]);
+
         let out = Box::new(col).build();
-        assert_eq!(str_values(&out), vec![Some("c".into()), Some("a".into())]);
+        assert_eq!(
+            str_values(&out),
+            vec![None, Some("c".into()), None, Some("z".into())]
+        );
     }
 
-    // Regression: take_n must not panic when null appears before a non-null
-    // slot in remaining groups at Int8 key capacity (EmitTo::First boundary).
     #[test]
-    fn take_n_key_limit_null_first_in_remaining() {
-        let mut col = int8_utf8_col();
-
-        // Fill Int8 capacity: 128 non-null values at slots 0..127.
-        col.vectorized_append(&distinct_strs(0, 128), &(0..128).collect::<Vec<_>>())
-            .unwrap();
-        // Null at slot 128 (last) — still valid for Int8.
-        col.append_val(&int8_dict(&[None], &[Some("x")]), 0)
-            .unwrap();
-        // Re-append v0..v127 (reuses slots 0..127 via dedup).
-        // group_to_inner is now [0..127, 128(null), 0..127].
-        col.vectorized_append(&distinct_strs(0, 128), &(0..128).collect::<Vec<_>>())
-            .unwrap();
-
-        // take_n(1) emits group 0 (v0). In remaining, null (old slot 128) appears
-        // before old slot 0 — without the null-last fix this panics.
-        let emitted = col.take_n(1);
-        assert_eq!(str_values(&emitted), vec![Some("v0".into())]);
-    }
-
-    // build_lookup_table must use the incoming batch's hashes, not
-    // stale ones left by the last vectorized_append call.
-    #[test]
-    fn vectorized_equal_to_uses_current_batch_hashes() {
+    fn vectorized_equal_to_does_not_use_stale_hashes_from_prior_append() {
         let mut col = utf8_col();
-
-        let batch1 = dict_arr(&[Some(0)], &[Some("a"), Some("b")]);
-        col.vectorized_append(&batch1, &[0]).unwrap();
-
-        // values = ["z", "a"]; key 0 → "a" at val_idx 1.
-        // Stale hashes would probe val_idx 1 with hash("b") and miss.
-        let batch2 = dict_arr(&[Some(1)], &[Some("z"), Some("a")]);
+        col.vectorized_append(&i32_dict(&[Some(0)], &[Some("a"), Some("b")]), &[0])
+            .unwrap();
+        let batch2 = i32_dict(&[Some(1)], &[Some("z"), Some("a")]);
         let mut buf = all_true(1);
         col.vectorized_equal_to(&[0], &batch2, &[0], &mut buf);
         assert_eq!(bool_vec(&buf), vec![true]);
     }
 
     #[test]
-    fn append_only_stores_referenced_values() {
-        let mut col = utf8_col();
-        let values = Arc::new(StringArray::from(vec![
-            Some("a"),
-            Some("b"),
-            Some("c"),
-            Some("d"),
-            Some("e"),
-            Some("f"),
-            Some("g"),
-            Some("h"),
-            Some("i"),
-            Some("j"),
-        ]));
-        let keys = Int32Array::from(vec![
-            Some(0), // a
-            Some(2), // c
-            Some(7), // h
-            Some(0),
-            Some(2),
-            Some(7),
-            Some(7),
-            Some(0),
-            Some(2),
-        ]);
-        let input: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(keys, values));
+    fn null_does_not_consume_a_key_slot_int8_null_first_mid_and_last() {
+        let rows128 = (0..128).collect::<Vec<_>>();
 
-        col.vectorized_append(&input, &[0, 1, 2, 3, 4, 5, 6, 7, 8])
+        let mut col = int8_col(); // null-last: 128 non-null + null — ok
+        col.vectorized_append(&distinct_i8_dict(0, 128), &rows128)
+            .unwrap();
+        col.append_val(&i8_dict(&[None], &[Some("x")]), 0).unwrap();
+
+        let mut col = int8_col(); // null-first: null + 128 non-null — ok; 129th — error
+        col.append_val(&i8_dict(&[None], &[Some("x")]), 0).unwrap();
+        col.vectorized_append(&distinct_i8_dict(0, 128), &rows128)
+            .unwrap();
+        assert!(
+            col.append_val(&i8_dict(&[Some(0)], &[Some("overflow")]), 0)
+                .is_err()
+        );
+
+        let mut col = int8_col(); // null-mid: 100 + null + 28 = 128 total — ok; 129th — error
+        col.vectorized_append(&distinct_i8_dict(0, 100), &(0..100).collect::<Vec<_>>())
+            .unwrap();
+        col.append_val(&i8_dict(&[None], &[Some("x")]), 0).unwrap();
+        col.vectorized_append(&distinct_i8_dict(100, 128), &(0..28).collect::<Vec<_>>())
+            .unwrap();
+        assert!(
+            col.append_val(&i8_dict(&[Some(0)], &[Some("v128")]), 0)
+                .is_err()
+        );
+
+        let mut col = int8_col(); // build() null-first: 128 values (null excluded), null → None
+        col.append_val(&i8_dict(&[None], &[Some("x")]), 0).unwrap();
+        col.vectorized_append(&distinct_i8_dict(0, 128), &rows128)
+            .unwrap();
+        let out = Box::new(col).build();
+        assert_eq!(out.as_dictionary::<Int8Type>().values().len(), 128);
+        assert_eq!(str_values(&out)[0], None);
+        assert_eq!(str_values(&out)[1], Some("v0".into()));
+    }
+
+    #[test]
+    fn null_does_not_consume_a_key_slot_uint8_null_first_and_last() {
+        let rows256 = (0..256).collect::<Vec<_>>();
+
+        let mut col = uint8_col(); // null-first: null + 256 non-null — ok; 257th — error
+        col.append_val(&u8_dict(&[None], &[Some("x")]), 0).unwrap();
+        col.vectorized_append(&distinct_u8_dict(256), &rows256)
+            .unwrap();
+        assert!(
+            col.append_val(&u8_dict(&[Some(0)], &[Some("overflow")]), 0)
+                .is_err()
+        );
+
+        let mut col = uint8_col(); // build() null-first: 256 values (null excluded), last correct
+        col.append_val(&u8_dict(&[None], &[Some("x")]), 0).unwrap();
+        col.vectorized_append(&distinct_u8_dict(256), &rows256)
+            .unwrap();
+        let out = Box::new(col).build();
+        assert_eq!(out.as_dictionary::<UInt8Type>().values().len(), 256);
+        assert_eq!(str_values(&out)[0], None);
+        assert_eq!(str_values(&out)[256], Some("u255".into()));
+    }
+
+    #[test]
+    fn take_n_null_does_not_steal_key_slot_at_capacity() {
+        let rows128 = (0..128).collect::<Vec<_>>();
+
+        // Int8 null-first + 128 non-null; emit all 129 — no panic, null → None
+        let mut col = int8_col();
+        col.append_val(&i8_dict(&[None], &[Some("x")]), 0).unwrap();
+        col.vectorized_append(&distinct_i8_dict(0, 128), &rows128)
+            .unwrap();
+        let emitted = col.take_n(129);
+        assert!(emitted.as_dictionary::<Int8Type>().key(0).is_none());
+        assert_eq!(str_values(&emitted)[1], Some("v0".into()));
+        assert_eq!(str_values(&emitted)[128], Some("v127".into()));
+
+        // UInt8 null-first + 256 non-null; emit all 257 — last must be "u255" not "u0" (wrap guard)
+        let mut col = uint8_col();
+        col.append_val(&u8_dict(&[None], &[Some("x")]), 0).unwrap();
+        col.vectorized_append(&distinct_u8_dict(256), &(0..256).collect::<Vec<_>>())
+            .unwrap();
+        let emitted = col.take_n(257);
+        assert!(emitted.as_dictionary::<UInt8Type>().key(0).is_none());
+        assert_eq!(str_values(&emitted)[1], Some("u0".into()));
+        assert_eq!(str_values(&emitted)[256], Some("u255".into()));
+    }
+
+    #[test]
+    fn take_n_repeated_emissions_null_at_int8_capacity() {
+        let rows128 = (0..128).collect::<Vec<_>>();
+        let mut col = int8_col();
+        col.vectorized_append(&distinct_i8_dict(0, 128), &rows128)
+            .unwrap();
+        col.append_val(&i8_dict(&[None], &[Some("x")]), 0).unwrap();
+        col.vectorized_append(&distinct_i8_dict(0, 128), &rows128)
             .unwrap();
 
+        let first_half = col.take_n(64);
+        assert_eq!(str_values(&first_half)[0], Some("v0".into()));
+        assert_eq!(str_values(&first_half)[63], Some("v63".into()));
+        assert_eq!(first_half.as_dictionary::<Int8Type>().values().len(), 64);
+
+        let second_half = col.take_n(64);
+        assert_eq!(str_values(&second_half)[0], Some("v64".into()));
+        assert_eq!(str_values(&second_half)[63], Some("v127".into()));
+
+        let null_group = col.take_n(1);
+        assert!(null_group.as_dictionary::<Int8Type>().key(0).is_none());
+
         let out = Box::new(col).build();
-        assert_eq!(out.as_dictionary::<Int32Type>().values().len(), 3);
-        assert_eq!(
-            str_values(&out),
-            vec![
-                Some("a".into()),
-                Some("c".into()),
-                Some("h".into()),
-                Some("a".into()),
-                Some("c".into()),
-                Some("h".into()),
-                Some("h".into()),
-                Some("a".into()),
-                Some("c".into()),
-            ]
-        );
+        assert_eq!(str_values(&out)[0], Some("v0".into()));
+        assert_eq!(str_values(&out)[127], Some("v127".into()));
+        assert_eq!(out.as_dictionary::<Int8Type>().values().len(), 128);
     }
 }
