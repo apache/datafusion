@@ -27,12 +27,10 @@ use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::to_char;
-use rand::Rng;
-use rand::prelude::IndexedRandom;
-use rand::rngs::ThreadRng;
+use rand::prelude::*;
 
 fn pick_date_in_range(
-    rng: &mut ThreadRng,
+    rng: &mut StdRng,
     start_date: NaiveDate,
     end_date: NaiveDate,
 ) -> NaiveDate {
@@ -41,7 +39,7 @@ fn pick_date_in_range(
     start_date + TimeDelta::try_days(random_days).unwrap()
 }
 
-fn generate_date32_array(rng: &mut ThreadRng) -> Date32Array {
+fn generate_date32_array(rng: &mut StdRng) -> Date32Array {
     let mut data: Vec<i32> = vec![];
     let unix_days_from_ce = NaiveDate::from_ymd_opt(1970, 1, 1)
         .unwrap()
@@ -62,7 +60,7 @@ fn generate_date32_array(rng: &mut ThreadRng) -> Date32Array {
     Date32Array::from(data)
 }
 
-fn generate_date64_array(rng: &mut ThreadRng) -> Date64Array {
+fn generate_date64_array(rng: &mut StdRng) -> Date64Array {
     let start_date = "1970-01-01"
         .parse::<NaiveDate>()
         .expect("Date should parse");
@@ -96,21 +94,21 @@ const DATETIME_PATTERNS: [&str; 8] = [
     "%c",
 ];
 
-fn pick_date_pattern(rng: &mut ThreadRng) -> String {
+fn pick_date_pattern(rng: &mut StdRng) -> String {
     (*DATE_PATTERNS
         .choose(rng)
         .expect("Empty list of date patterns"))
     .to_string()
 }
 
-fn pick_date_time_pattern(rng: &mut ThreadRng) -> String {
+fn pick_date_time_pattern(rng: &mut StdRng) -> String {
     (*DATETIME_PATTERNS
         .choose(rng)
         .expect("Empty list of date time patterns"))
     .to_string()
 }
 
-fn pick_date_and_date_time_mixed_pattern(rng: &mut ThreadRng) -> String {
+fn pick_date_and_date_time_mixed_pattern(rng: &mut StdRng) -> String {
     match rng.random_bool(0.5) {
         true => pick_date_pattern(rng),
         false => pick_date_time_pattern(rng),
@@ -118,8 +116,8 @@ fn pick_date_and_date_time_mixed_pattern(rng: &mut ThreadRng) -> String {
 }
 
 fn generate_pattern_array(
-    rng: &mut ThreadRng,
-    pick_fn: impl Fn(&mut ThreadRng) -> String,
+    rng: &mut StdRng,
+    pick_fn: impl Fn(&mut StdRng) -> String,
 ) -> StringArray {
     let mut data = Vec::with_capacity(1000);
 
@@ -130,15 +128,15 @@ fn generate_pattern_array(
     StringArray::from(data)
 }
 
-fn generate_date_pattern_array(rng: &mut ThreadRng) -> StringArray {
+fn generate_date_pattern_array(rng: &mut StdRng) -> StringArray {
     generate_pattern_array(rng, pick_date_pattern)
 }
 
-fn generate_datetime_pattern_array(rng: &mut ThreadRng) -> StringArray {
+fn generate_datetime_pattern_array(rng: &mut StdRng) -> StringArray {
     generate_pattern_array(rng, pick_date_time_pattern)
 }
 
-fn generate_mixed_pattern_array(rng: &mut ThreadRng) -> StringArray {
+fn generate_mixed_pattern_array(rng: &mut StdRng) -> StringArray {
     generate_pattern_array(rng, pick_date_and_date_time_mixed_pattern)
 }
 
@@ -146,7 +144,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let config_options = Arc::new(ConfigOptions::default());
 
     c.bench_function("to_char_array_date_only_patterns_1000", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let data_arr = generate_date32_array(&mut rng);
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
@@ -173,7 +171,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("to_char_array_datetime_patterns_1000", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let data_arr = generate_date64_array(&mut rng);
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
@@ -200,7 +198,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("to_char_array_mixed_patterns_1000", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let data_arr = generate_date64_array(&mut rng);
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
@@ -227,7 +225,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("to_char_scalar_date_only_pattern_1000", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let data_arr = generate_date32_array(&mut rng);
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
@@ -253,7 +251,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("to_char_scalar_datetime_pattern_1000", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let data_arr = generate_date64_array(&mut rng);
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
@@ -285,7 +283,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     // Covers full fallback (every row triggers the cast)
     c.bench_function("to_char_array_date32_datetime_patterns_1000", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let data_arr = generate_date32_array(&mut rng);
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
@@ -313,7 +311,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     // Covers partial fallback (roughly half the rows trigger it)
     c.bench_function("to_char_array_date32_mixed_patterns_1000", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let data_arr = generate_date32_array(&mut rng);
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);

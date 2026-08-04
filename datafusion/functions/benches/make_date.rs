@@ -25,10 +25,9 @@ use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::make_date;
-use rand::Rng;
-use rand::rngs::ThreadRng;
+use rand::prelude::*;
 
-fn years(rng: &mut ThreadRng) -> Int32Array {
+fn years(rng: &mut StdRng) -> Int32Array {
     let mut years = vec![];
     for _ in 0..8192 {
         years.push(rng.random_range(1900..2050));
@@ -37,7 +36,7 @@ fn years(rng: &mut ThreadRng) -> Int32Array {
     Int32Array::from(years)
 }
 
-fn months(rng: &mut ThreadRng) -> Int32Array {
+fn months(rng: &mut StdRng) -> Int32Array {
     let mut months = vec![];
     for _ in 0..8192 {
         months.push(rng.random_range(1..13));
@@ -46,7 +45,7 @@ fn months(rng: &mut ThreadRng) -> Int32Array {
     Int32Array::from(months)
 }
 
-fn days(rng: &mut ThreadRng) -> Int32Array {
+fn days(rng: &mut StdRng) -> Int32Array {
     let mut days = vec![];
     for _ in 0..8192 {
         days.push(rng.random_range(1..29));
@@ -56,7 +55,7 @@ fn days(rng: &mut ThreadRng) -> Int32Array {
 }
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("make_date_col_col_col_8192", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let years_array = Arc::new(years(&mut rng)) as ArrayRef;
         let batch_len = years_array.len();
         let years = ColumnarValue::Array(years_array);
@@ -86,7 +85,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("make_date_scalar_col_col_8192", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let year = ColumnarValue::Scalar(ScalarValue::Int32(Some(2025)));
         let months_arr = Arc::new(months(&mut rng)) as ArrayRef;
         let batch_len = months_arr.len();
@@ -116,7 +115,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("make_date_scalar_scalar_col_8192", |b| {
-        let mut rng = rand::rng();
+        let mut rng = StdRng::seed_from_u64(0);
         let year = ColumnarValue::Scalar(ScalarValue::Int32(Some(2025)));
         let month = ColumnarValue::Scalar(ScalarValue::Int32(Some(11)));
         let day_arr = Arc::new(days(&mut rng));
