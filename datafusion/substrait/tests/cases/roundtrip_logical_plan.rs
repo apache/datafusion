@@ -1136,7 +1136,7 @@ async fn aggregate_identical_measures() -> Result<()> {
     assert_snapshot!(
         plan,
         @r"
-    Projection: __common_expr_1 AS sum_a_1, __common_expr_1 AS sum(data.a)__temp__0 AS sum_a_2
+    Projection: __common_expr_1 AS sum_a_1, __common_expr_1 AS sum_a_2
       Aggregate: groupBy=[[]], aggr=[[sum(data.a) AS __common_expr_1]]
         TableScan: data projection=[a]
     "
@@ -1644,7 +1644,7 @@ async fn duplicate_column() -> Result<()> {
     assert_snapshot!(
     plan,
     @r"
-    Projection: data.a + Int64(1) AS sum_a, data.a + Int64(1) AS data.a + Int64(1)__temp__0 AS sum_a_2
+    Projection: data.a + Int64(1) AS sum_a, data.a + Int64(1) AS sum_a_2
       Projection: data.a + Int64(1)
         TableScan: data projection=[a]
     "
