@@ -546,6 +546,8 @@ mod parquet {
                 pushdown_filters: proto.pushdown_filters,
                 reorder_filters: proto.reorder_filters,
                 force_filter_selections: proto.force_filter_selections,
+                // not serialized: an experimental reading option, defaults off
+                bounded_streaming: false,
                 data_pagesize_limit: proto.data_pagesize_limit as usize,
                 write_batch_size: proto.write_batch_size as usize,
                 writer_version,

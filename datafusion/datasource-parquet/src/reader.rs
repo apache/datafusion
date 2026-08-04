@@ -122,6 +122,23 @@ impl AsyncFileReader for ParquetFileReader {
         self.inner.get_byte_ranges(ranges)
     }
 
+    fn get_bytes_stream(
+        &mut self,
+        range: Range<u64>,
+    ) -> Option<
+        BoxFuture<
+            'static,
+            parquet::errors::Result<
+                futures::stream::BoxStream<'static, parquet::errors::Result<Bytes>>,
+            >,
+        >,
+    > {
+        let bytes_scanned = range.end - range.start;
+        let stream = self.inner.get_bytes_stream(range)?;
+        self.file_metrics.bytes_scanned.add(bytes_scanned as usize);
+        Some(stream)
+    }
+
     fn get_metadata<'a>(
         &'a mut self,
         options: Option<&'a ArrowReaderOptions>,
@@ -286,6 +303,23 @@ impl AsyncFileReader for CachedParquetFileReader {
         let total: u64 = ranges.iter().map(|r| r.end - r.start).sum();
         self.file_metrics.bytes_scanned.add(total as usize);
         self.inner.get_byte_ranges(ranges)
+    }
+
+    fn get_bytes_stream(
+        &mut self,
+        range: Range<u64>,
+    ) -> Option<
+        BoxFuture<
+            'static,
+            parquet::errors::Result<
+                futures::stream::BoxStream<'static, parquet::errors::Result<Bytes>>,
+            >,
+        >,
+    > {
+        let bytes_scanned = range.end - range.start;
+        let stream = self.inner.get_bytes_stream(range)?;
+        self.file_metrics.bytes_scanned.add(bytes_scanned as usize);
+        Some(stream)
     }
 
     fn get_metadata<'a>(

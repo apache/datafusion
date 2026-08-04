@@ -47,9 +47,10 @@ use parquet::DecodeResult;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{
-    ArrowReaderMetadata, ParquetRecordBatchReader, RowSelectionPolicy,
+    ArrowReaderMetadata, BoundedStreamingOptions, ParquetRecordBatchReader,
+    RowSelectionPolicy,
 };
-use parquet::arrow::async_reader::AsyncFileReader;
+use parquet::arrow::async_reader::{AdaptiveFetcher, AsyncFileReader};
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
 use parquet::file::metadata::ParquetMetaData;
 
@@ -75,6 +76,10 @@ pub(crate) struct DecoderBuilderConfig<'a> {
     pub(crate) arrow_reader_metrics: &'a ArrowReaderMetrics,
     pub(crate) force_filter_selections: bool,
     pub(crate) decoder_limit: Option<usize>,
+    /// See [`ParquetOptions::bounded_streaming`]
+    ///
+    /// [`ParquetOptions::bounded_streaming`]: datafusion_common::config::ParquetOptions::bounded_streaming
+    pub(crate) bounded_streaming: bool,
 }
 
 impl DecoderBuilderConfig<'_> {
@@ -102,7 +107,40 @@ impl DecoderBuilderConfig<'_> {
         if let Some(limit) = self.decoder_limit {
             builder = builder.with_limit(limit);
         }
+        if self.bounded_streaming {
+            builder = builder.with_bounded_streaming(BoundedStreamingOptions::default());
+        }
         builder
+    }
+}
+
+/// How [`PushDecoderStreamState`] fetches the byte ranges the decoder asks
+/// for.
+pub(crate) enum FetchState {
+    /// Fetch each `NeedsData` request in full via
+    /// [`AsyncFileReader::get_byte_ranges`]
+    Plain(Box<dyn AsyncFileReader>),
+    /// Bounded streaming: small coalesced ranges are materialized as in
+    /// `Plain`; large column chunks are consumed incrementally, window by
+    /// window. See [`ParquetOptions::bounded_streaming`].
+    ///
+    /// [`ParquetOptions::bounded_streaming`]: datafusion_common::config::ParquetOptions::bounded_streaming
+    Adaptive(Box<AdaptiveFetcher<Box<dyn AsyncFileReader>>>),
+}
+
+impl FetchState {
+    /// Wrap `reader` for bounded streaming when enabled (and a tokio runtime
+    /// is available to drive streamed request bodies; without one, fall back
+    /// to the plain path, which behaves identically to the option being off).
+    pub(crate) fn new(reader: Box<dyn AsyncFileReader>, bounded_streaming: bool) -> Self {
+        if bounded_streaming && let Ok(handle) = tokio::runtime::Handle::try_current() {
+            return Self::Adaptive(Box::new(AdaptiveFetcher::new(
+                BoundedStreamingOptions::default(),
+                handle,
+                reader,
+            )));
+        }
+        Self::Plain(reader)
     }
 }
 
@@ -243,7 +281,7 @@ pub(crate) struct PushDecoderStreamState {
     pub(crate) decoder: Option<ParquetPushDecoder>,
     pub(crate) active_reader: Option<ParquetRecordBatchReader>,
     pub(crate) rg_plan: VecDeque<RgPlanEntry>,
-    pub(crate) reader: Box<dyn AsyncFileReader>,
+    pub(crate) reader: FetchState,
     /// Per-file projection: the mask installed on every decoder and the
     /// per-batch transform applied by [`Self::project_batch`].
     pub(crate) decoder_projection: DecoderProjection,
@@ -373,13 +411,22 @@ impl PushDecoderStreamState {
             let decoder = self.decoder.as_mut().expect("decoder present");
             match decoder.try_next_reader() {
                 Ok(DecodeResult::NeedsData(ranges)) => {
-                    let data = self
-                        .reader
-                        .get_byte_ranges(ranges.clone())
-                        .await
-                        .map_err(DataFusionError::from);
-                    match data {
-                        Ok(data) => {
+                    let fetched = match &mut self.reader {
+                        FetchState::Plain(reader) => reader
+                            .get_byte_ranges(ranges.clone())
+                            .await
+                            .map(|data| (ranges, data)),
+                        FetchState::Adaptive(fetcher) => {
+                            // The adaptive fetcher may return only part of the
+                            // request (the decoder's next window); the decoder
+                            // re-requests what is still missing on the next
+                            // iteration.
+                            let plan = decoder.upcoming_fetch_plan();
+                            fetcher.fetch_more(ranges, plan).await
+                        }
+                    };
+                    match fetched {
+                        Ok((ranges, data)) => {
                             if let Err(e) = self
                                 .decoder
                                 .as_mut()
@@ -389,7 +436,7 @@ impl PushDecoderStreamState {
                                 return Some((Err(DataFusionError::from(e)), self));
                             }
                         }
-                        Err(e) => return Some((Err(e), self)),
+                        Err(e) => return Some((Err(DataFusionError::from(e)), self)),
                     }
                 }
                 Ok(DecodeResult::Data(reader)) => {

@@ -1189,6 +1189,17 @@ config_namespace! {
         /// parquet reader setting. 0 means no caching.
         pub max_predicate_cache_size: Option<usize>, default = None
 
+        /// (reading) If true, large parquet column chunks are read with
+        /// bounded streaming: instead of buffering every projected column
+        /// chunk of a row group in memory before decoding, chunks over a
+        /// threshold are fetched with a single ranged request each whose body
+        /// feeds the decoder incrementally through a bounded buffer. This
+        /// bounds reader memory by the buffer size rather than the row group
+        /// size, and overlaps decoding with data transfer. Requires the
+        /// parquet offset index (see `enable_page_index`); row groups without
+        /// one, or with pushed-down filters, fall back to the buffered path.
+        pub bounded_streaming: bool, default = false
+
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
 
