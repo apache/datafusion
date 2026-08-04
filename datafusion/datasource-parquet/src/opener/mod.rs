@@ -1397,11 +1397,20 @@ impl RowGroupsPrunedParquetOpen {
         )?;
 
         // EXPERIMENT: streaming (batch-granular) scan path, selected via
-        // DF_FETCH_POLICY=streaming. Bypasses the push decoder entirely: a
-        // long-lived sync reader pulls from a shared buffer that the stream
-        // driver fills with exactly the page ranges each batch needs (plus
-        // bounded readahead). Falls back to the push-decoder path when row
-        // filters are active or the offset index is unavailable.
+        // DF_FETCH_POLICY=streaming. A long-lived sync
+        // `ParquetRecordBatchReader` pulls from a shared buffer that the
+        // stream driver fills with exactly the page ranges each batch needs
+        // (plus bounded readahead). Falls back to the push-decoder path when
+        // row filters are active or the offset index is unavailable.
+        //
+        // Note this does not drive `ParquetPushDecoder`: only the *plan* —
+        // which pages this scan reads, in decode order — comes from arrow-rs
+        // (`plan_scan_ranges`, which merely lives in that crate's
+        // `push_decoder` module). The decoder itself cannot be used here
+        // because `NeedsData` resolves only at row-group granularity, so it
+        // cannot say what the next *batch* needs. Teaching it to would let
+        // this path drop `SharedBuffers` and the sync reader entirely and go
+        // back to being a pure scheduler; see apache/arrow-rs#10555.
         if let FetchPolicy::Streaming { window } = FetchPolicy::from_env() {
             let pushdown_active =
                 prepared.pushdown_filters && prepared.predicate.is_some();
