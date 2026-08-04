@@ -29,6 +29,7 @@ use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
+use datafusion::sql::parser::DFParser;
 use datafusion_common::stats::Precision;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -84,11 +85,7 @@ impl RunOpt {
                 .to_string_lossy()
                 .to_string();
             let sql = fs::read_to_string(query_path)?;
-            for (statement, sql) in sql
-                .split(';')
-                .filter(|sql| !sql.trim().is_empty())
-                .enumerate()
-            {
+            for (statement, sql) in sql_statements(&sql)?.iter().enumerate() {
                 let statement = statement + 1;
                 let report = match self.report_query(&ctx, sql).await {
                     Ok(operators) => QueryReport {
@@ -568,6 +565,15 @@ impl<'a> OperatorIdentifier<'a> {
 fn serialize_report(report: &[QueryReport]) -> Result<String> {
     serde_json::to_string_pretty(report)
         .map_err(|error| DataFusionError::External(Box::new(error)))
+}
+
+fn sql_statements(sql: &str) -> Result<Vec<String>> {
+    DFParser::parse_sql(sql).map(|statements| {
+        statements
+            .into_iter()
+            .map(|statement| statement.to_string())
+            .collect()
+    })
 }
 
 fn query_files(path: &Path, query: Option<&str>) -> Result<Vec<PathBuf>> {
