@@ -1397,10 +1397,10 @@ fn build_is_null_column_expr(
 
 /// Default maximum number of entries in an `IN (...)` list that will be
 /// rewritten into a chain of per-value min/max checks by
-/// [`build_predicate_expression`]. Callers threading a [`PredicateRewriter`]
+/// `build_predicate_expression`. Callers threading a [`PredicateRewriter`]
 /// can override this via [`PredicateRewriter::with_max_in_list_size`], and
 /// query engines can wire it from the
-/// `datafusion.execution.pruning_max_in_list_size` config option.
+/// `datafusion.execution.parquet.pruning_max_in_list_size` config option.
 pub const MAX_LIST_VALUE_SIZE_REWRITE: usize = 20;
 
 /// Rewrite a predicate expression in terms of statistics (min/max/null_counts)
