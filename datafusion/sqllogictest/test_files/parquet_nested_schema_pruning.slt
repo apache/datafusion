@@ -81,3 +81,30 @@ SELECT id, e['x'] FROM (SELECT id, unnest(events) AS e FROM narrow) ORDER BY id,
 1 10
 2 20
 2 21
+
+# `full` declares the file's physical schema exactly, so no cast is inserted
+# and the scan always reads every leaf: a same-context baseline for the
+# bytes_scanned comparison below.
+statement ok
+CREATE EXTERNAL TABLE full_schema (
+  id INT,
+  events ARRAY<STRUCT<x INT, y VARCHAR, pad_a VARCHAR, pad_b VARCHAR>>,
+  s STRUCT<x INT, y VARCHAR, pad VARCHAR>
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_nested_schema_pruning/wide.parquet';
+
+# bytes_scanned is a literal (not <slt:ignore>) checked-in value: narrow
+# reads fewer bytes than full_schema because the cast-clipped leaves drop
+# pad_a, pad_b, and pad. A future change that widens the narrow read shows
+# up here as a bytes_scanned mismatch.
+query TT
+explain analyze select events from narrow;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=172<slt:ignore>]
+
+query TT
+explain analyze select events from full_schema;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=312<slt:ignore>]
+
