@@ -7093,11 +7093,28 @@ mod tests {
         )?;
 
         assert!(join.allow_join_dynamic_filter_pushdown(session_config.options()));
+
+        let hash_join = join
+            .builder()
+            .with_new_children(vec![
+                Arc::new(PartitionedTestExec::try_new(
+                    join.left().schema(),
+                    Partitioning::Hash(vec![Arc::clone(&on[0].0)], 2),
+                )?),
+                Arc::new(PartitionedTestExec::try_new(
+                    join.right().schema(),
+                    Partitioning::Hash(vec![Arc::clone(&on[0].1)], 2),
+                )?),
+            ])?
+            .build()?;
+        assert!(hash_join.allow_join_dynamic_filter_pushdown(session_config.options()));
+
         session_config
             .options_mut()
             .optimizer
             .preserve_file_partitions = 1;
         assert!(join.allow_join_dynamic_filter_pushdown(session_config.options()));
+        assert!(!hash_join.allow_join_dynamic_filter_pushdown(session_config.options()));
 
         let mismatched_right_partitioning =
             Partitioning::Range(RangePartitioning::try_new(

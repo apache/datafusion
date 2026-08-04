@@ -845,6 +845,7 @@ mod tests {
     use super::*;
 
     use arrow::array::{ArrayRef, BooleanArray, Int32Array};
+    use arrow::compute::SortOptions;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::SplitPoint;
     use datafusion_physical_expr::expressions::{Column, Literal};
@@ -1132,6 +1133,101 @@ mod tests {
         assert_eq!(
             result,
             &BooleanArray::from(vec![false, true, true, true, false, true, true, false,])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn partitioned_range_dynamic_filter_routes_compound_nullable_keys() -> Result<()> {
+        let probe_schema = Arc::new(Schema::new(vec![
+            Field::new("probe_key", DataType::Int32, true),
+            Field::new("probe_tie", DataType::Int32, true),
+        ]));
+        let on_right: Vec<PhysicalExprRef> = vec![
+            Arc::new(Column::new("probe_key", 0)),
+            Arc::new(Column::new("probe_tie", 1)),
+        ];
+        let mut acc = make_accumulator_for_test(
+            AccumulatedBuildData::Partitioned {
+                partitions: vec![PartitionStatus::Pending; 4],
+                completed_partitions: 0,
+            },
+            on_right,
+        );
+        acc.probe_schema = Arc::clone(&probe_schema);
+        acc.probe_range_partitioning = Some(RangePartitioning::try_new(
+            [
+                PhysicalSortExpr::new(
+                    Arc::clone(&acc.on_right[0]),
+                    SortOptions::new(false, true),
+                ),
+                PhysicalSortExpr::new(
+                    Arc::clone(&acc.on_right[1]),
+                    SortOptions::new(false, false),
+                ),
+            ]
+            .into(),
+            vec![
+                SplitPoint::new(vec![
+                    ScalarValue::Int32(None),
+                    ScalarValue::Int32(Some(10)),
+                ]),
+                SplitPoint::new(vec![ScalarValue::Int32(None), ScalarValue::Int32(None)]),
+                SplitPoint::new(vec![
+                    ScalarValue::Int32(Some(10)),
+                    ScalarValue::Int32(None),
+                ]),
+            ],
+        )?);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(PushdownStrategy::Empty, no_bounds()),
+            PartitionStatus::CanceledUnknown,
+            reported(PushdownStrategy::Empty, no_bounds()),
+            PartitionStatus::CanceledUnknown,
+        ]))?;
+
+        let expr = current_expr(&acc);
+        let case = case_expr(&expr);
+        assert!(case.expr().is_none());
+        assert_eq!(case.when_then_expr().len(), 3);
+
+        let batch = RecordBatch::try_new(
+            probe_schema,
+            vec![
+                Arc::new(Int32Array::from(vec![
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(9),
+                    Some(10),
+                    Some(10),
+                    Some(11),
+                ])),
+                Arc::new(Int32Array::from(vec![
+                    Some(9),
+                    Some(10),
+                    Some(11),
+                    None,
+                    None,
+                    Some(9),
+                    None,
+                    None,
+                ])),
+            ],
+        )?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = result
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .expect("dynamic filter should evaluate to BooleanArray");
+        assert_eq!(
+            result,
+            &BooleanArray::from(
+                vec![false, true, true, false, false, false, true, true,]
+            )
         );
 
         Ok(())
