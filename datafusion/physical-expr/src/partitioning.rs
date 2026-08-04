@@ -25,6 +25,10 @@ pub use datafusion_common::SplitPoint;
 use datafusion_common::{Result, validate_range_split_points};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+#[cfg(feature = "proto")]
+use datafusion_physical_expr_common::sort_expr::{
+    sort_exprs_try_from_proto, sort_exprs_try_to_proto,
+};
 use std::fmt;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -513,6 +517,156 @@ impl Partitioning {
             }
         }
     }
+}
+
+/// Protobuf conversions for [`Partitioning`].
+///
+/// Child expressions (hash keys, range orderings) and `ScalarValue` split
+/// points are (de)serialized through the expression-level context, so this is
+/// the single copy of the partitioning wire format: `RepartitionExec` and
+/// `datafusion-proto`'s central serializer route through it, and the remaining
+/// per-plan migrations (`FileScanConfig` and friends) are meant to do the same
+/// rather than grow another copy.
+///
+/// [`protobuf::Partitioning`]: datafusion_proto_models::protobuf::Partitioning
+#[cfg(feature = "proto")]
+impl Partitioning {
+    /// Serialize this partitioning into its protobuf representation.
+    pub fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<datafusion_proto_models::protobuf::Partitioning> {
+        use datafusion_proto_models::protobuf;
+
+        let partition_method = match self {
+            Partitioning::RoundRobinBatch(n) => {
+                protobuf::partitioning::PartitionMethod::RoundRobin(wire_partition_count(
+                    *n,
+                )?)
+            }
+            Partitioning::Hash(exprs, n) => {
+                protobuf::partitioning::PartitionMethod::Hash(
+                    protobuf::PhysicalHashRepartition {
+                        hash_expr: ctx.encode_children_expressions(exprs)?,
+                        partition_count: wire_partition_count(*n)?,
+                    },
+                )
+            }
+            Partitioning::Range(range) => {
+                let sort_expr = sort_exprs_try_to_proto(range.ordering().iter(), ctx)?;
+                let split_point = range
+                    .split_points()
+                    .iter()
+                    .map(|split_point| {
+                        let value = split_point
+                            .values()
+                            .iter()
+                            .map(|value| value.try_into().map_err(Into::into))
+                            .collect::<Result<Vec<_>>>()?;
+                        Ok(protobuf::PhysicalRangeSplitPoint { value })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                protobuf::partitioning::PartitionMethod::Range(
+                    protobuf::PhysicalRangePartitioning {
+                        sort_expr,
+                        split_point,
+                    },
+                )
+            }
+            Partitioning::UnknownPartitioning(n) => {
+                protobuf::partitioning::PartitionMethod::Unknown(wire_partition_count(
+                    *n,
+                )?)
+            }
+        };
+        Ok(protobuf::Partitioning {
+            partition_method: Some(partition_method),
+        })
+    }
+
+    /// Reconstruct a [`Partitioning`] from its protobuf representation.
+    ///
+    /// Returns `Ok(None)` when the message carries no `partition_method`, which
+    /// the wire format uses to mean "no output partitioning declared"; callers
+    /// for which it is required should turn that into their own error.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::Partitioning,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Option<Self>> {
+        use datafusion_common::{ScalarValue, internal_datafusion_err, internal_err};
+        use datafusion_proto_models::protobuf;
+
+        let Some(partition_method) = node.partition_method.as_ref() else {
+            return Ok(None);
+        };
+        let partitioning = match partition_method {
+            protobuf::partitioning::PartitionMethod::RoundRobin(n) => {
+                Partitioning::RoundRobinBatch(partition_count(*n)?)
+            }
+            protobuf::partitioning::PartitionMethod::Hash(hash) => {
+                let exprs = hash
+                    .hash_expr
+                    .iter()
+                    .map(|expr| ctx.decode(expr))
+                    .collect::<Result<Vec<_>>>()?;
+                Partitioning::Hash(exprs, partition_count(hash.partition_count)?)
+            }
+            protobuf::partitioning::PartitionMethod::Unknown(n) => {
+                Partitioning::UnknownPartitioning(partition_count(*n)?)
+            }
+            protobuf::partitioning::PartitionMethod::Range(range) => {
+                let sort_exprs = sort_exprs_try_from_proto(&range.sort_expr, ctx)?;
+                let sort_expr_count = sort_exprs.len();
+                let ordering = LexOrdering::new(sort_exprs).ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Range partitioning requires non-empty ordering"
+                    )
+                })?;
+                if ordering.len() != sort_expr_count {
+                    return internal_err!(
+                        "Range partitioning ordering must not contain duplicate expressions"
+                    );
+                }
+                let split_points = range
+                    .split_point
+                    .iter()
+                    .map(|split_point| {
+                        let values = split_point
+                            .value
+                            .iter()
+                            .map(|value| ScalarValue::try_from(value).map_err(Into::into))
+                            .collect::<Result<Vec<_>>>()?;
+                        Ok(SplitPoint::new(values))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Partitioning::Range(RangePartitioning::try_new(ordering, split_points)?)
+            }
+        };
+        Ok(Some(partitioning))
+    }
+}
+
+/// Narrow a wire partition count to `usize`.
+#[cfg(feature = "proto")]
+fn partition_count(count: u64) -> Result<usize> {
+    usize::try_from(count).map_err(|_| {
+        datafusion_common::internal_datafusion_err!(
+            "Partition count {count} exceeds usize::MAX"
+        )
+    })
+}
+
+/// Widen a partition count to its `u64` wire representation.
+///
+/// The mirror of [`partition_count`]: an out-of-range count is an error on both
+/// sides rather than a silent truncation on the way out.
+#[cfg(feature = "proto")]
+fn wire_partition_count(count: usize) -> Result<u64> {
+    u64::try_from(count).map_err(|_| {
+        datafusion_common::internal_datafusion_err!(
+            "Partition count {count} exceeds u64::MAX"
+        )
+    })
 }
 
 impl PartialEq for Partitioning {
@@ -1136,5 +1290,241 @@ mod tests {
         );
 
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "proto"))]
+mod ordering_proto_tests {
+    use std::sync::Arc;
+
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_physical_expr_common::sort_expr::{
+        LexRequirement, PhysicalSortExpr, PhysicalSortRequirement,
+        sort_exprs_try_from_proto, sort_exprs_try_to_proto,
+    };
+
+    use crate::expressions::Column;
+    use crate::proto_test_util::{StubDecoder, StubEncoder};
+
+    fn schema() -> Schema {
+        Schema::new(vec![Field::new("a", DataType::Int32, false)])
+    }
+
+    fn sort_expr(descending: bool, nulls_first: bool) -> PhysicalSortExpr {
+        PhysicalSortExpr::new(
+            Arc::new(Column::new("a", 0)),
+            SortOptions {
+                descending,
+                nulls_first,
+            },
+        )
+    }
+
+    #[test]
+    fn sort_exprs_round_trip_preserves_options_and_order() {
+        let encoder = StubEncoder::ok();
+        let encode_ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let exprs = vec![sort_expr(true, false), sort_expr(false, true)];
+
+        let nodes = sort_exprs_try_to_proto(&exprs, &encode_ctx).unwrap();
+        // `asc` is the inverse of `descending` on the wire.
+        assert_eq!(
+            nodes
+                .iter()
+                .map(|node| (node.asc, node.nulls_first))
+                .collect::<Vec<_>>(),
+            vec![(false, false), (true, true)]
+        );
+
+        let schema = schema();
+        let decoder = StubDecoder::ok();
+        let decode_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let decoded = sort_exprs_try_from_proto(&nodes, &decode_ctx).unwrap();
+        assert_eq!(
+            decoded.iter().map(|expr| expr.options).collect::<Vec<_>>(),
+            exprs.iter().map(|expr| expr.options).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn sort_exprs_accepts_owned_requirements() {
+        let encoder = StubEncoder::ok();
+        let encode_ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let requirement = LexRequirement::from([PhysicalSortRequirement::new(
+            Arc::new(Column::new("a", 0)),
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+        )]);
+
+        let nodes = sort_exprs_try_to_proto(
+            requirement
+                .iter()
+                .map(|req| PhysicalSortExpr::from(req.clone())),
+            &encode_ctx,
+        )
+        .unwrap();
+
+        assert_eq!(nodes.len(), 1);
+        assert!(!nodes[0].asc);
+        assert!(nodes[0].nulls_first);
+    }
+
+    #[test]
+    fn sort_exprs_propagate_encode_errors() {
+        let encoder = StubEncoder::failing_on(2);
+        let encode_ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let exprs = vec![sort_expr(false, false), sort_expr(true, true)];
+
+        let err = sort_exprs_try_to_proto(&exprs, &encode_ctx).unwrap_err();
+        assert!(err.to_string().contains("stub encode failure on call 2"));
+    }
+
+    #[test]
+    fn sort_exprs_reject_missing_inner_expr() {
+        let encoder = StubEncoder::ok();
+        let encode_ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let mut nodes =
+            sort_exprs_try_to_proto(&[sort_expr(false, false)], &encode_ctx).unwrap();
+        nodes[0].expr = None;
+
+        let schema = schema();
+        let decoder = StubDecoder::ok();
+        let decode_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let err = sort_exprs_try_from_proto(&nodes, &decode_ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("PhysicalSortExpr is missing required field 'expr'")
+        );
+    }
+}
+
+/// Partition counts are `usize` in memory and `u64` on the wire, so every
+/// counted [`Partitioning`] variant crosses a width boundary in both
+/// directions. These pin that neither crossing wraps or panics.
+#[cfg(all(test, feature = "proto"))]
+mod partition_count_proto_tests {
+    use std::sync::Arc;
+
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_proto_models::protobuf;
+
+    use super::{Partitioning, partition_count, wire_partition_count};
+    use crate::expressions::Column;
+    use crate::proto_test_util::{StubDecoder, StubEncoder, column_node};
+
+    fn partitioning_node(
+        method: protobuf::partitioning::PartitionMethod,
+    ) -> protobuf::Partitioning {
+        protobuf::Partitioning {
+            partition_method: Some(method),
+        }
+    }
+
+    /// The counted variants, each carrying `count`. `Range` is excluded: it
+    /// derives its partition count from its split points rather than reading
+    /// one off the wire.
+    fn counted_methods(count: u64) -> Vec<protobuf::partitioning::PartitionMethod> {
+        use protobuf::partitioning::PartitionMethod;
+
+        vec![
+            PartitionMethod::RoundRobin(count),
+            PartitionMethod::Unknown(count),
+            PartitionMethod::Hash(protobuf::PhysicalHashRepartition {
+                hash_expr: vec![column_node("a")],
+                partition_count: count,
+            }),
+        ]
+    }
+
+    #[test]
+    fn partition_count_round_trips_at_the_usize_ceiling() {
+        // `usize::MAX` is the largest count that can exist in memory, so it has
+        // to widen onto the wire and narrow back unchanged.
+        let wire = wire_partition_count(usize::MAX).unwrap();
+        assert_eq!(wire, u64::try_from(usize::MAX).unwrap());
+        assert_eq!(partition_count(wire).unwrap(), usize::MAX);
+    }
+
+    #[test]
+    fn out_of_range_partition_count_is_reported_not_wrapped() {
+        // A count wider than the target's `usize` can only be reached by
+        // decoding on a narrower host than the one that encoded. That used to
+        // wrap (`as usize`) or panic (`unwrap`); it is an error now. On a
+        // 64-bit target every `u64` fits, so the same input has to decode
+        // losslessly instead of being rejected.
+        let narrowed = partition_count(u64::MAX);
+
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(narrowed.unwrap(), usize::MAX);
+
+        #[cfg(not(target_pointer_width = "64"))]
+        assert!(
+            narrowed
+                .unwrap_err()
+                .to_string()
+                .contains("Partition count 18446744073709551615 exceeds usize::MAX")
+        );
+    }
+
+    #[test]
+    fn try_from_proto_narrows_every_counted_variant() {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let decoder = StubDecoder::ok();
+        let decode_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        for method in counted_methods(u64::MAX) {
+            let decoded =
+                Partitioning::try_from_proto(&partitioning_node(method), &decode_ctx);
+
+            #[cfg(target_pointer_width = "64")]
+            assert_eq!(decoded.unwrap().unwrap().partition_count(), usize::MAX);
+
+            #[cfg(not(target_pointer_width = "64"))]
+            assert!(
+                decoded
+                    .unwrap_err()
+                    .to_string()
+                    .contains("exceeds usize::MAX")
+            );
+        }
+    }
+
+    #[test]
+    fn try_to_proto_widens_every_counted_variant() {
+        use protobuf::partitioning::PartitionMethod;
+
+        let encoder = StubEncoder::ok();
+        let encode_ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let hash_key: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+
+        let encoded = [
+            Partitioning::RoundRobinBatch(usize::MAX),
+            Partitioning::UnknownPartitioning(usize::MAX),
+            Partitioning::Hash(vec![hash_key], usize::MAX),
+        ]
+        .iter()
+        .map(|partitioning| {
+            match partitioning
+                .try_to_proto(&encode_ctx)
+                .unwrap()
+                .partition_method
+            {
+                Some(PartitionMethod::RoundRobin(n) | PartitionMethod::Unknown(n)) => n,
+                Some(PartitionMethod::Hash(hash)) => hash.partition_count,
+                other => panic!("expected a counted partition method, got {other:?}"),
+            }
+        })
+        .collect::<Vec<_>>();
+
+        // Every variant widens to the same wire value, with no truncation.
+        assert_eq!(encoded, vec![u64::try_from(usize::MAX).unwrap(); 3]);
     }
 }

@@ -97,6 +97,9 @@ struct OrderedFinalSpillContext {
 enum OrderedFinalAggregateState {
     ReadingInput {
         table: OrderedAggregateTable<FinalMarker>,
+        /// None if either
+        /// - Disk Manager doesn't enable temporary file creation
+        /// - The group keys are fully ordered, it's expected to use bounded memory
         spill_context: Option<Box<OrderedFinalSpillContext>>,
     },
     Spilling {
@@ -292,7 +295,7 @@ impl OrderedFinalAggregateStream {
         clippy::too_many_arguments,
         reason = "keeps replay metric reuse explicit"
     )]
-    fn new_with_input_and_metrics(
+    pub(in crate::aggregates) fn new_with_input_and_metrics(
         agg: &AggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
@@ -440,6 +443,8 @@ impl OrderedFinalAggregateStream {
                     Ok(()) => {}
                     Err(e @ DataFusionError::ResourcesExhausted(_)) => {
                         let Some(spill_context) = spill_context else {
+                            // `None` means spilling is not supported, see comments
+                            // at `OrderedFinalAggregateState` for details.
                             return ControlFlow::Break((
                                 Poll::Ready(Some(Err(e))),
                                 OrderedFinalAggregateState::Done,

@@ -68,7 +68,7 @@ SELECT length('')
 ----
 0
 
-query I
+query ?
 SELECT length(arrow_cast('', 'Dictionary(Int32, Utf8)'))
 ----
 0
@@ -83,7 +83,7 @@ SELECT length('josé')
 ----
 4
 
-query I
+query ?
 SELECT length(arrow_cast('josé', 'Dictionary(Int32, Utf8)'))
 ----
 4
@@ -507,6 +507,84 @@ SELECT initcap(arrow_cast('foo', 'Dictionary(Int32, Utf8)'))
 ----
 Foo
 
+query TTTT
+SELECT initcap(arrow_cast('foo BAR', 'Dictionary(Int32, LargeUtf8)')),
+       arrow_typeof(initcap(arrow_cast('foo BAR', 'Dictionary(Int32, LargeUtf8)'))),
+       initcap(arrow_cast(
+           arrow_cast('foo BAR', 'Dictionary(Int32, Utf8)'),
+           'Dictionary(Int32, Utf8View)'
+       )),
+       arrow_typeof(initcap(arrow_cast(
+           arrow_cast('foo BAR', 'Dictionary(Int32, Utf8)'),
+           'Dictionary(Int32, Utf8View)'
+       )))
+----
+Foo Bar Dictionary(Int32, LargeUtf8) Foo Bar Dictionary(Int32, Utf8View)
+
+query ?T
+SELECT initcap(arrow_cast(
+           arrow_cast('foo BAR', 'Dictionary(UInt32, Utf8)'),
+           'Dictionary(Int32, Dictionary(UInt32, Utf8))'
+       )),
+       arrow_typeof(initcap(arrow_cast(
+           arrow_cast('foo BAR', 'Dictionary(UInt32, Utf8)'),
+           'Dictionary(Int32, Dictionary(UInt32, Utf8))'
+       )))
+----
+Foo Bar Dictionary(Int32, Dictionary(UInt32, Utf8))
+
+statement ok
+CREATE TABLE unicode_dictionary_test AS
+SELECT column1 AS id,
+       arrow_cast(column2, 'Dictionary(Int32, Utf8)') AS dict_col,
+       arrow_cast(
+           arrow_cast(column2, 'Dictionary(UInt32, Utf8)'),
+           'Dictionary(Int32, Dictionary(UInt32, Utf8))'
+       ) AS nested_dict_col
+FROM (VALUES
+(1, 'foo BAR'),
+(2, 'éclair CAFÉ'),
+(3, NULL));
+
+query T?TT
+SELECT initcap(dict_col), initcap(nested_dict_col),
+       arrow_typeof(initcap(dict_col)),
+       arrow_typeof(initcap(nested_dict_col))
+FROM unicode_dictionary_test
+ORDER BY id
+----
+Foo Bar Foo Bar Dictionary(Int32, Utf8) Dictionary(Int32, Dictionary(UInt32, Utf8))
+Éclair Café Éclair Café Dictionary(Int32, Utf8) Dictionary(Int32, Dictionary(UInt32, Utf8))
+NULL NULL Dictionary(Int32, Utf8) Dictionary(Int32, Dictionary(UInt32, Utf8))
+
+query TTTT
+SELECT reverse(arrow_cast('foo BAR', 'Dictionary(Int32, LargeUtf8)')),
+       arrow_typeof(reverse(arrow_cast('foo BAR', 'Dictionary(Int32, LargeUtf8)'))),
+       reverse(arrow_cast(
+           arrow_cast('foo BAR', 'Dictionary(Int32, Utf8)'),
+           'Dictionary(Int32, Utf8View)'
+       )),
+       arrow_typeof(reverse(arrow_cast(
+           arrow_cast('foo BAR', 'Dictionary(Int32, Utf8)'),
+           'Dictionary(Int32, Utf8View)'
+       )))
+----
+RAB oof Dictionary(Int32, LargeUtf8) RAB oof Dictionary(Int32, Utf8View)
+
+query T?TT
+SELECT reverse(dict_col), reverse(nested_dict_col),
+       arrow_typeof(reverse(dict_col)),
+       arrow_typeof(reverse(nested_dict_col))
+FROM unicode_dictionary_test
+ORDER BY id
+----
+RAB oof RAB oof Dictionary(Int32, Utf8) Dictionary(Int32, Dictionary(UInt32, Utf8))
+ÉFAC rialcé ÉFAC rialcé Dictionary(Int32, Utf8) Dictionary(Int32, Dictionary(UInt32, Utf8))
+NULL NULL Dictionary(Int32, Utf8) Dictionary(Int32, Dictionary(UInt32, Utf8))
+
+statement ok
+DROP TABLE unicode_dictionary_test
+
 query ?
 SELECT ascii(arrow_cast('é', 'Dictionary(Int32, Utf8)'))
 ----
@@ -688,10 +766,38 @@ SELECT character_length('foo')
 ----
 3
 
-query I
+query ?
 SELECT character_length(arrow_cast('foo', 'Dictionary(Int32, Utf8)'))
 ----
 3
+
+query ?T
+SELECT character_length(arrow_cast(
+           arrow_cast('é', 'Dictionary(UInt32, Utf8)'),
+           'Dictionary(Int32, Dictionary(UInt32, Utf8))'
+       )),
+       arrow_typeof(character_length(arrow_cast(
+           arrow_cast('é', 'Dictionary(UInt32, Utf8)'),
+           'Dictionary(Int32, Dictionary(UInt32, Utf8))'
+       )))
+----
+1 Dictionary(Int32, Dictionary(UInt32, Int32))
+
+query ?T?T
+SELECT character_length(arrow_cast('foo', 'Dictionary(Int32, LargeUtf8)')),
+       arrow_typeof(character_length(
+           arrow_cast('foo', 'Dictionary(Int32, LargeUtf8)')
+       )),
+       character_length(arrow_cast(
+           arrow_cast('foo', 'Dictionary(Int32, Utf8)'),
+           'Dictionary(Int32, Utf8View)'
+       )),
+       arrow_typeof(character_length(arrow_cast(
+           arrow_cast('foo', 'Dictionary(Int32, Utf8)'),
+           'Dictionary(Int32, Utf8View)'
+       )))
+----
+3 Dictionary(Int32, Int64) 3 Dictionary(Int32, Int32)
 
 query I
 SELECT octet_length('foo')
@@ -753,6 +859,17 @@ ORDER BY id
 ----
 3 3 Dictionary(Int32, Int32) Dictionary(Int32, Dictionary(UInt32, Int32))
 2 2 Dictionary(Int32, Int32) Dictionary(Int32, Dictionary(UInt32, Int32))
+NULL NULL Dictionary(Int32, Int32) Dictionary(Int32, Dictionary(UInt32, Int32))
+
+query ??TT
+SELECT character_length(dict_col), character_length(nested_dict_col),
+       arrow_typeof(character_length(dict_col)),
+       arrow_typeof(character_length(nested_dict_col))
+FROM string_length_dictionary_test
+ORDER BY id
+----
+3 3 Dictionary(Int32, Int32) Dictionary(Int32, Dictionary(UInt32, Int32))
+1 1 Dictionary(Int32, Int32) Dictionary(Int32, Dictionary(UInt32, Int32))
 NULL NULL Dictionary(Int32, Int32) Dictionary(Int32, Dictionary(UInt32, Int32))
 
 query ??TT
