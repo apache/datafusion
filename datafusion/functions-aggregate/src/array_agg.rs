@@ -1833,13 +1833,70 @@ mod tests {
 
         let evaluated = acc.evaluate()?;
 
-        assert_eq!(
-            evaluated.data_type(),
-            DataType::List(Arc::new(Field::new_list_field(
-                requested_element_type,
-                true
-            )))
-        );
+        if let ScalarValue::List(arr) = evaluated {
+            assert_eq!(
+                arr.data_type(),
+                &DataType::List(Arc::new(Field::new_list_field(
+                    requested_element_type.clone(),
+                    true
+                )))
+            );
+
+            let expected_struct_array = StructArray::from(vec![(
+                Arc::new(Field::new("n", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+            )]);
+            let expected_array = Arc::new(expected_struct_array) as ArrayRef;
+            assert_eq!(&arr.value(0), &expected_array);
+        } else {
+            panic!("Expected ScalarValue::List");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_aggregate_nested_nullability_mismatch_issue_24022() -> Result<()> {
+        use arrow::array::{Int32Array, StructArray};
+        use datafusion_common::ScalarValue;
+
+        let requested_element_type =
+            DataType::Struct(Fields::from(vec![Field::new("n", DataType::Int32, true)]));
+        let inferred_field = Field::new("n", DataType::Int32, false);
+
+        let mut acc = DistinctArrayAggAccumulator::try_new(
+            &requested_element_type,
+            None,
+            /*ignore_nulls=*/ false,
+        )?;
+
+        let value_arr = Arc::new(StructArray::from(vec![(
+            Arc::new(inferred_field),
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+        )])) as ArrayRef;
+
+        acc.update_batch(&[value_arr])?;
+
+        let evaluated = acc.evaluate()?;
+
+        if let ScalarValue::List(arr) = evaluated {
+            assert_eq!(
+                arr.data_type(),
+                &DataType::List(Arc::new(Field::new_list_field(
+                    requested_element_type.clone(),
+                    true
+                )))
+            );
+
+            let expected_struct_array = StructArray::from(vec![(
+                Arc::new(Field::new("n", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+            )]);
+            let expected_array = Arc::new(expected_struct_array) as ArrayRef;
+            assert_eq!(&arr.value(0), &expected_array);
+        } else {
+            panic!("Expected ScalarValue::List");
+        }
 
         Ok(())
     }
