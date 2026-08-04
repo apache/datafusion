@@ -62,7 +62,7 @@ Practical tips:
    is still valuable: a partial review (e.g. "I reviewed the tests and they
    look good") helps the next reviewer focus their time.
 5. Anything that does not need to block the current PR can be noted as a
-   potential follow up (ideally by filing a ticket), keeping the PR focused
+   potential follow up (ideally by filing an issue), keeping the PR focused
    and quick to merge.
 
 [github cli]: https://cli.github.com/
@@ -199,10 +199,10 @@ If you are not ready to approve, list concretely what you would need to see
 before approving (e.g. "benchmark results and an upgrade guide entry") so
 the author has a clear path to merge.
 
-### Defer Non-Blocking Work to Follow-On Tickets
+### Defer Non-Blocking Work to Follow-On Issues
 
 Explicitly move non-critical suggestions to "follow on PR" status and file
-(or ask the author to file) tickets for them, so good PRs merge quickly
+(or ask the author to file) issues for them, so good PRs merge quickly
 without scope creep.
 
 Similarly, when a PR mixes refactoring with behavior changes or fixes a narrow
