@@ -657,3 +657,47 @@ fn collect_parquet_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn parses_sql_statements_without_splitting_string_literals() {
+        let statements = sql_statements("SELECT ';'; SELECT 2").unwrap();
+
+        assert_eq!(statements.len(), 2);
+        assert!(statements[0].contains("';'"));
+    }
+
+    #[test]
+    fn persists_failed_reports() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("statistics.json");
+        let reports = vec![QueryReport {
+            query: "q1".to_string(),
+            statement: 1,
+            operators: vec![],
+            success: false,
+            error: Some("expected failure".to_string()),
+        }];
+
+        store_report(&path, &reports).unwrap();
+        assert_eq!(load_comparison_report(&path).unwrap(), Some(reports));
+    }
+
+    #[tokio::test]
+    async fn rejects_duplicate_table_names() {
+        let directory = tempdir().unwrap();
+        let path = directory.path();
+        fs::write(path.join("foo.parquet"), b"").unwrap();
+        fs::create_dir(path.join("foo")).unwrap();
+        fs::write(path.join("foo/part.parquet"), b"").unwrap();
+
+        let error = register_parquet_files(&SessionContext::new(), path)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("duplicate table foo"));
+    }
+}
