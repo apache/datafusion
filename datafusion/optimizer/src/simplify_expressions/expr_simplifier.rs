@@ -2574,6 +2574,32 @@ mod tests {
     }
 
     #[test]
+    fn test_simplify_swapped_operands_in_xor_no_canonicalize() {
+        // `expr_contains` guards the XOR rules, so `delete_xor_in_complex_expr` has to
+        // use the same equality relation. Comparing structurally there while the guard
+        // normalizes makes the rule rebuild its input and still report `Transformed::yes`,
+        // which spins the simplifier until it hits the cycle limit.
+
+        // (c4 + c4_non_null) ^ (c4_non_null + c4) --> 0
+        let expr = bitwise_xor(
+            col("c4") + col("c4_non_null"),
+            col("c4_non_null") + col("c4"),
+        );
+        let (simplified, cycles) = simplify_no_canonicalize_with_cycle_count(expr);
+        assert_eq!(simplified, lit(0_u32));
+        assert_eq!(cycles, 2);
+
+        // (c4 + c4_non_null) ^ ((c4_non_null + c4) ^ c4) --> c4
+        let expr = bitwise_xor(
+            col("c4") + col("c4_non_null"),
+            bitwise_xor(col("c4_non_null") + col("c4"), col("c4")),
+        );
+        let (simplified, cycles) = simplify_no_canonicalize_with_cycle_count(expr);
+        assert_eq!(simplified, col("c4"));
+        assert_eq!(cycles, 2);
+    }
+
+    #[test]
     fn test_simplify_eq_not_self() {
         // `expr_a`: column `c2` is nullable, so `c2 = c2` simplifies to `c2 IS NOT NULL OR NULL`
         // This ensures the expression is only true when `c2` is not NULL, accounting for SQL's NULL semantics.
@@ -3661,11 +3687,17 @@ mod tests {
     }
 
     fn simplify_no_canonicalize(expr: Expr) -> Expr {
+        simplify_no_canonicalize_with_cycle_count(expr).0
+    }
+
+    fn simplify_no_canonicalize_with_cycle_count(expr: Expr) -> (Expr, u32) {
         let schema = expr_test_schema();
-        ExprSimplifier::new(SimplifyContext::builder().with_schema(schema).build())
-            .with_canonicalize(false)
-            .simplify(expr)
-            .unwrap()
+        let (transformed, count) =
+            ExprSimplifier::new(SimplifyContext::builder().with_schema(schema).build())
+                .with_canonicalize(false)
+                .simplify_with_cycle_count_transformed(expr)
+                .unwrap();
+        (transformed.data, count)
     }
 
     fn try_simplify_with_cycle_count(expr: Expr) -> Result<(Expr, u32)> {

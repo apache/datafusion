@@ -49,6 +49,12 @@ pub fn expr_contains(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
 
 /// Deletes all 'needles' or remains one 'needle' that are found in a chain of xor
 /// expressions. Such as: A ^ (A ^ (B ^ A))
+///
+/// Matching uses [`NormalizeEq`] to stay consistent with the [`expr_contains`]
+/// guard on the XOR rules. A structural comparison here would let the guard fire
+/// on operands this function then fails to delete, so the rule would rebuild its
+/// input and still report a transformation, spinning the simplifier until it hits
+/// the cycle limit.
 pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr, is_left: bool) -> Expr {
     /// Deletes recursively 'needles' in a chain of xor expressions
     fn recursive_delete_xor_in_expr(
@@ -62,10 +68,10 @@ pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr, is_left: bool) -> 
             {
                 let left_expr = recursive_delete_xor_in_expr(left, needle, xor_counter);
                 let right_expr = recursive_delete_xor_in_expr(right, needle, xor_counter);
-                if left_expr == *needle {
+                if left_expr.normalize_eq(needle) {
                     *xor_counter += 1;
                     return right_expr;
-                } else if right_expr == *needle {
+                } else if right_expr.normalize_eq(needle) {
                     *xor_counter += 1;
                     return left_expr;
                 }
@@ -82,7 +88,7 @@ pub fn delete_xor_in_complex_expr(expr: &Expr, needle: &Expr, is_left: bool) -> 
 
     let mut xor_counter: i32 = 0;
     let result_expr = recursive_delete_xor_in_expr(expr, needle, &mut xor_counter);
-    if result_expr == *needle {
+    if result_expr.normalize_eq(needle) {
         return needle.clone();
     } else if xor_counter % 2 == 0 {
         if is_left {
