@@ -89,7 +89,9 @@ Check that the description:
 
 ## Review the Code Comments
 
-The goal of code comments is not only for the code to be understandable after a reader spends time studying the implementation. It should make the implementation easy to understand for readers with the expected background.
+The goal of code comments is help future readers of the code understand what is
+not obvious from reading the code itself. Great comments make the code easier to
+reason about for readers with the expected background, and help future maintainers.
 
 Some practical guidelines for writing comments:
 
