@@ -1650,6 +1650,7 @@ mod tests {
                     None,
                 )),
             ),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Float16)),
         ];
 
         for dt in &supported_cases {
@@ -1677,7 +1678,6 @@ mod tests {
             DataType::Time64(arrow::datatypes::TimeUnit::Millisecond),
             DataType::Time32(arrow::datatypes::TimeUnit::Microsecond),
             DataType::Time32(arrow::datatypes::TimeUnit::Nanosecond),
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Float16)),
             DataType::Dictionary(
                 Box::new(DataType::Int32),
                 Box::new(DataType::Decimal256(76, 10)),
