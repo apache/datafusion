@@ -1,0 +1,3742 @@
+aggregate_functions:
+- description: Returns the approximate number of distinct input values calculated using the HyperLogLog algorithm.
+  impls:
+  - args:
+    - name: expression
+      value: any
+    decomposable: MANY
+    deterministic: true
+    intermediate: i64
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  name: approx_distinct
+- description: Returns the approximate median (50th percentile) of input values. It is an alias of `approx_percentile_cont(0.5) WITHIN GROUP (ORDER BY x)`.
+  impls:
+  - args:
+    - name: expression
+      value: float
+    decomposable: NONE
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  name: approx_median
+- description: Returns the approximate percentile of input values using the t-digest algorithm.
+  impls:
+  - args:
+    - name: expression
+      value: float
+    - name: percentile
+      value: fp64
+    decomposable: NONE
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: float
+    - name: percentile
+      value: fp64
+    - name: centroids
+      value: integer
+    decomposable: NONE
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  name: approx_percentile_cont
+- description: Returns the weighted approximate percentile of input values using the t-digest algorithm.
+  impls:
+  - args:
+    - name: expression
+      value: float
+    - name: weight
+      value: float
+    - name: percentile
+      value: fp64
+    decomposable: NONE
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: float
+    - name: weight
+      value: float
+    - name: percentile
+      value: fp64
+    - name: centroids
+      value: integer
+    decomposable: NONE
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  name: approx_percentile_cont_with_weight
+- description: |-
+    Returns an array created from the expression elements. If ordering is required, elements are inserted in the specified order.
+    This aggregation function can only mix DISTINCT and ORDER BY if the ordering expression is exactly the same as the argument expression.
+  impls:
+  - args:
+    - name: expression
+      value: any
+    decomposable: MANY
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  name: array_agg
+- description: Returns the average of numeric values in the specified column.
+  impls:
+  - args:
+    - name: expression
+      value: decimal
+    decomposable: MANY
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: duration
+    decomposable: MANY
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: fp64
+    decomposable: MANY
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  metadata:
+    datafusion:
+      aliases:
+      - mean
+  name: avg
+- description: Computes the bitwise AND of all non-null input values.
+  impls:
+  - args:
+    - name: expression
+      value: integer
+    decomposable: MANY
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  name: bit_and
+- description: Computes the bitwise OR of all non-null input values.
+  impls:
+  - args:
+    - name: expression
+      value: integer
+    decomposable: MANY
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  name: bit_or
+- description: Computes the bitwise exclusive OR of all non-null input values.
+  impls:
+  - args:
+    - name: expression
+      value: integer
+    decomposable: MANY
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  name: bit_xor
+- description: Returns true if all non-null input values are true, otherwise false.
+  impls:
+  - args:
+    - name: expression
+      value: boolean
+    decomposable: MANY
+    deterministic: true
+    intermediate: boolean
+    nullability: MIRROR
+    ordered: false
+    return: boolean
+    sessionDependent: false
+  name: bool_and
+- description: Returns true if all non-null input values are true, otherwise false.
+  impls:
+  - args:
+    - name: expression
+      value: boolean
+    decomposable: MANY
+    deterministic: true
+    intermediate: boolean
+    nullability: MIRROR
+    ordered: false
+    return: boolean
+    sessionDependent: false
+  name: bool_or
+- description: Returns the coefficient of correlation between two numeric values.
+  impls:
+  - args:
+    - name: y
+      value: fp64
+    - name: x
+      value: fp64
+    decomposable: MANY
+    deterministic: true
+    intermediate: fp64
+    nullability: MIRROR
+    ordered: false
+    return: fp64
+    sessionDependent: false
+  name: corr
+- description: Returns the number of non-null values in the specified column. To include null values in the total count, use `count(*)`.
+  impls:
+  - args:
+    - name: expression
+      value: any
+    decomposable: MANY
+    deterministic: true
+    intermediate: i64
+    nullability: DECLARED_OUTPUT
+    ordered: false
+    return: any
+    sessionDependent: false
+    variadic:
+      min: 1.0
+      parameterConsistency: INCONSISTENT
+  - decomposable: MANY
+    deterministic: true
+    intermediate: i64
+    nullability: DECLARED_OUTPUT
+    ordered: false
+    return: i64
+    sessionDependent: false
+  name: count
+- description: Returns the sample covariance of a set of number pairs.
+  impls:
+  - args:
+    - name: expression1
+      value: fp64
+    - name: expression2
+      value: fp64
+    decomposable: MANY
+    deterministic: true
+    intermediate: fp64
+    nullability: MIRROR
+    ordered: false
+    return: fp64
+    sessionDependent: false
+  name: covar_pop
+- description: Returns the sample covariance of a set of number pairs.
+  impls:
+  - args:
+    - name: expression1
+      value: fp64
+    - name: expression2
+      value: fp64
+    decomposable: MANY
+    deterministic: true
+    intermediate: fp64
+    nullability: MIRROR
+    ordered: false
+    return: fp64
+    sessionDependent: false
+  metadata:
+    datafusion:
+      aliases:
+      - covar
+  name: covar_samp
+- description: Returns the first element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.
+  impls:
+  - args:
+    - name: expression
+      value: any
+    decomposable: MANY
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  name: first_value
+- description: Returns 1 if the data is aggregated across the specified column, or 0 if it is not aggregated in the result set.
+  impls:
+  - args:
+    - name: expression
+      value: any
+    decomposable: MANY
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+    variadic:
+      min: 1.0
+      parameterConsistency: INCONSISTENT
+  name: grouping
+- description: Returns the last element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.
+  impls:
+  - args:
+    - name: expression
+      value: any
+    decomposable: MANY
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  name: last_value
+- description: Returns the maximum value in the specified column.
+  impls:
+  - args:
+    - name: expression
+      value: any1
+    decomposable: MANY
+    deterministic: true
+    intermediate: any1
+    nullability: MIRROR
+    ordered: false
+    return: any1
+    sessionDependent: false
+  name: max
+- description: Returns the median value in the specified column.
+  impls:
+  - args:
+    - name: expression
+      value: decimal
+    decomposable: NONE
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: float
+    decomposable: NONE
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: fp64
+    decomposable: NONE
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  name: median
+- description: Returns the minimum value in the specified column.
+  impls:
+  - args:
+    - name: expression
+      value: any1
+    decomposable: MANY
+    deterministic: true
+    intermediate: any1
+    nullability: MIRROR
+    ordered: false
+    return: any1
+    sessionDependent: false
+  name: min
+- description: Returns the nth value in a group of values.
+  impls:
+  - args:
+    - name: expression
+      value: any
+    - name: n
+      value: any
+    decomposable: MANY
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  name: nth_value
+- description: Returns the exact percentile of input values, interpolating between values if needed.
+  impls:
+  - args:
+    - name: expr
+      value: float
+    - name: percentile
+      value: fp64
+    decomposable: NONE
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  metadata:
+    datafusion:
+      aliases:
+      - quantile_cont
+  name: percentile_cont
+- description: Computes the average of the independent variable (input) expression_x for the non-null paired data points.
+  impls:
+  - args:
+    - name: expression_y
+      value: fp64
+    - name: expression_x
+      value: fp64
+    decomposable: MANY
+    deterministic: true
+    intermediate: fp64
+    nullability: MIRROR
+    ordered: false
+    return: fp64
+    sessionDependent: false
+  name: regr_avgx
+- description: Computes the average of the dependent variable (output) expression_y for the non-null paired data points.
+  impls:
+  - args:
+    - name: expression_y
+      value: fp64
+    - name: expression_x
+      value: fp64
+    decomposable: MANY
+    deterministic: true
+    intermediate: fp64
+    nullability: MIRROR
+    ordered: false
+    return: fp64
+    sessionDependent: false
+  name: regr_avgy
+- description: Counts the number of non-null paired data points.
+  impls:
+  - args:
+    - name: expression_y
+      value: fp64
+    - name: expression_x
+      value: fp64
+    decomposable: MANY
+    deterministic: true
+    intermediate: i64
+    nullability: MIRROR
+    ordered: false
+    return: u64
+    sessionDependent: false
+  name: regr_count
+- description: Computes the y-intercept of the linear regression line. For the equation (y = kx + b), this function returns b.
+  impls:
+  - args:
+    - name: expression_y
+      value: fp64
+    - name: expression_x
+      value: fp64
+    decomposable: MANY
+    deterministic: true
+    intermediate: fp64
+    nullability: MIRROR
+    ordered: false
+    return: fp64
+    sessionDependent: false
+  name: regr_intercept
+- description: Computes the square of the correlation coefficient between the independent and dependent variables.
+  impls:
+  - args:
+    - name: expression_y
+      value: fp64
+    - name: expression_x
+      value: fp64
+    decomposable: MANY
+    deterministic: true
+    intermediate: fp64
+    nullability: MIRROR
+    ordered: false
+    return: fp64
+    sessionDependent: false
+  name: regr_r2
+- description: 'Returns the slope of the linear regression line for non-null pairs in aggregate columns. Given input column Y and X: regr_slope(Y, X) returns the slope (k in Y = k*X + b) using minimal RSS fitting.'
+  impls:
+  - args:
+    - name: expression_y
+      value: fp64
+    - name: expression_x
+      value: fp64
+    decomposable: MANY
+    deterministic: true
+    intermediate: fp64
+    nullability: MIRROR
+    ordered: false
+    return: fp64
+    sessionDependent: false
+  name: regr_slope
+- description: Computes the sum of squares of the independent variable.
+  impls:
+  - args:
+    - name: expression_y
+      value: fp64
+    - name: expression_x
+      value: fp64
+    decomposable: MANY
+    deterministic: true
+    intermediate: fp64
+    nullability: MIRROR
+    ordered: false
+    return: fp64
+    sessionDependent: false
+  name: regr_sxx
+- description: Computes the sum of products of paired data points.
+  impls:
+  - args:
+    - name: expression_y
+      value: fp64
+    - name: expression_x
+      value: fp64
+    decomposable: MANY
+    deterministic: true
+    intermediate: fp64
+    nullability: MIRROR
+    ordered: false
+    return: fp64
+    sessionDependent: false
+  name: regr_sxy
+- description: Computes the sum of squares of the dependent variable.
+  impls:
+  - args:
+    - name: expression_y
+      value: fp64
+    - name: expression_x
+      value: fp64
+    decomposable: MANY
+    deterministic: true
+    intermediate: fp64
+    nullability: MIRROR
+    ordered: false
+    return: fp64
+    sessionDependent: false
+  name: regr_syy
+- description: Returns the standard deviation of a set of numbers.
+  impls:
+  - args:
+    - name: expression
+      value: fp64
+    decomposable: MANY
+    deterministic: true
+    intermediate: fp64
+    nullability: MIRROR
+    ordered: false
+    return: fp64
+    sessionDependent: false
+  metadata:
+    datafusion:
+      aliases:
+      - stddev_samp
+  name: stddev
+- description: Returns the population standard deviation of a set of numbers.
+  impls:
+  - args:
+    - name: expression
+      value: fp64
+    decomposable: MANY
+    deterministic: true
+    intermediate: fp64
+    nullability: MIRROR
+    ordered: false
+    return: fp64
+    sessionDependent: false
+  name: stddev_pop
+- description: Concatenates the values of string expressions and places separator values between them. If ordering is required, strings are concatenated in the specified order. This aggregation function can only mix DISTINCT and ORDER BY if the ordering expression is exactly the same as the first argument expression.
+  impls:
+  - args:
+    - name: expression
+      value: string
+    - name: delimiter
+      value: string
+    decomposable: MANY
+    deterministic: true
+    intermediate: string
+    nullability: MIRROR
+    ordered: false
+    return: string
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: string
+    - name: delimiter
+      value: any
+    decomposable: MANY
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  name: string_agg
+- description: Returns the sum of all values in the specified column.
+  impls:
+  - args:
+    - name: expression
+      value: decimal
+    decomposable: MANY
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: u64
+    decomposable: MANY
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: i64
+    decomposable: MANY
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: fp64
+    decomposable: MANY
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: duration
+    decomposable: MANY
+    deterministic: true
+    intermediate: any
+    nullability: MIRROR
+    ordered: false
+    return: any
+    sessionDependent: false
+  name: sum
+- description: Returns the statistical sample variance of a set of numbers.
+  impls:
+  - args:
+    - name: expression
+      value: fp64
+    decomposable: MANY
+    deterministic: true
+    intermediate: fp64
+    nullability: MIRROR
+    ordered: false
+    return: fp64
+    sessionDependent: false
+  metadata:
+    datafusion:
+      aliases:
+      - var_samp
+      - var_sample
+  name: var
+- description: Returns the statistical population variance of a set of numbers.
+  impls:
+  - args:
+    - name: expression
+      value: fp64
+    decomposable: MANY
+    deterministic: true
+    intermediate: fp64
+    nullability: MIRROR
+    ordered: false
+    return: fp64
+    sessionDependent: false
+  metadata:
+    datafusion:
+      aliases:
+      - var_population
+  name: var_pop
+scalar_functions:
+- description: Returns the absolute value of a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: i8
+    deterministic: true
+    nullability: MIRROR
+    return: i8
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: i16
+    deterministic: true
+    nullability: MIRROR
+    return: i16
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: i32
+    deterministic: true
+    nullability: MIRROR
+    return: i32
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: i64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: u8
+    deterministic: true
+    nullability: MIRROR
+    return: u8
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: u16
+    deterministic: true
+    nullability: MIRROR
+    return: u16
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: u32
+    deterministic: true
+    nullability: MIRROR
+    return: u32
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: u64
+    deterministic: true
+    nullability: MIRROR
+    return: u64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  name: abs
+- description: Returns the arc cosine or inverse cosine of a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: acos
+- description: Returns the area hyperbolic cosine or inverse hyperbolic cosine of a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: acosh
+- description: Casts a value to a specific Arrow data type.
+  impls:
+  - args:
+    - name: expression
+      value: any
+    - name: datatype
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: arrow_cast
+- description: Returns a struct containing the Arrow field information of the expression, including name, data type, nullability, and metadata.
+  impls:
+  - args:
+    - name: expression
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: arrow_field
+- description: Returns the metadata of the input expression. If a key is provided, returns the value for that key. If no key is provided, returns a Map of all metadata.
+  impls:
+  - args:
+    - name: expression
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: any
+    - name: key
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: arrow_metadata
+- description: Casts a value to a specific Arrow data type, returning NULL if the cast fails.
+  impls:
+  - args:
+    - name: expression
+      value: any
+    - name: datatype
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: arrow_try_cast
+- description: Returns the name of the underlying [Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) of the expression.
+  impls:
+  - args:
+    - name: expression
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: arrow_typeof
+- description: Returns the first Unicode scalar value of a string.
+  impls:
+  - args:
+    - name: str
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: ascii
+- description: Returns the arc sine or inverse sine of a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: asin
+- description: Returns the area hyperbolic sine or inverse hyperbolic sine of a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: asinh
+- description: Returns the arc tangent or inverse tangent of a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: atan
+- description: Returns the arc tangent or inverse tangent of `expression_y / expression_x`.
+  impls:
+  - args:
+    - name: expression_y
+      value: fp32
+    - name: expression_x
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  - args:
+    - name: expression_y
+      value: fp64
+    - name: expression_x
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  name: atan2
+- description: Returns the area hyperbolic tangent or inverse hyperbolic tangent of a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: atanh
+- description: Returns the bit length of a string.
+  impls:
+  - args:
+    - name: str
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: bit_length
+- description: Trims the specified trim string from the start and end of a string. If no trim string is provided, all spaces are removed from the start and end of the input string.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: trim_str
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: str
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  metadata:
+    datafusion:
+      aliases:
+      - trim
+  name: btrim
+- description: Casts the first argument to the data type of the second argument. Only the type of the second argument is used; its value is ignored.
+  impls:
+  - args:
+    - name: expression
+      value: any
+    - name: reference
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: cast_to_type
+- description: Returns the cube root of a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: cbrt
+- description: Returns the nearest integer greater than or equal to a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: decimal
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: ceil
+- description: Returns the number of characters in a string.
+  impls:
+  - args:
+    - name: str
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: i32
+    sessionDependent: false
+  - args:
+    - name: str
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: i64
+    sessionDependent: false
+  metadata:
+    datafusion:
+      aliases:
+      - char_length
+      - length
+  name: character_length
+- description: Returns a string containing the character with the specified Unicode scalar value.
+  impls:
+  - args:
+    - name: expression
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  name: chr
+- description: Returns the first of its arguments that is not _null_. Returns _null_ if all arguments are _null_. This function is often used to substitute a default value for _null_ values.
+  impls:
+  - args:
+    - value: any1
+    deterministic: true
+    nullability: MIRROR
+    return: any1
+    sessionDependent: false
+    variadic:
+      min: 1.0
+      parameterConsistency: CONSISTENT
+  name: coalesce
+- description: Concatenates multiple strings together.
+  impls:
+  - args:
+    - name: str
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+    variadic:
+      min: 1.0
+      parameterConsistency: CONSISTENT
+  - args:
+    - name: str
+      value: binary
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+    variadic:
+      min: 1.0
+      parameterConsistency: CONSISTENT
+  name: concat
+- description: Concatenates multiple strings together with a specified separator.
+  impls:
+  - args:
+    - name: separator
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+    variadic:
+      min: 1.0
+      parameterConsistency: CONSISTENT
+  name: concat_ws
+- description: Return true if search_str is found within string (case-sensitive).
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: search_str
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: contains
+- description: Returns the cosine of a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: cos
+- description: Returns the hyperbolic cosine of a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: cosh
+- description: Returns the cotangent of a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: cot
+- description: |2
+
+    Returns the current date in the session time zone.
+
+    The `current_date()` return value is determined at query time and will return the same date, no matter when in the query plan the function executes.
+  impls:
+  - deterministic: true
+    nullability: MIRROR
+    return: date
+    sessionDependent: true
+  metadata:
+    datafusion:
+      aliases:
+      - today
+  name: current_date
+- description: |2
+
+    Returns the current time in the session time zone.
+
+    The `current_time()` return value is determined at query time and will return the same time, no matter when in the query plan the function executes.
+
+    The session time zone can be set using the statement 'SET datafusion.execution.time_zone = desired time zone'. The time zone can be a value like +00:00, 'Europe/London' etc.
+  impls:
+  - deterministic: true
+    nullability: MIRROR
+    return: time<ns>
+    sessionDependent: true
+  name: current_time
+- description: |2
+
+    Calculates time intervals and returns the start of the interval nearest to the specified timestamp. Use `date_bin` to downsample time series data by grouping rows into time-based "bins" or "windows" and applying an aggregate or selector function to each window.
+
+    For example, if you "bin" or "window" data into 15 minute intervals, an input timestamp of `2023-01-01T18:18:18Z` will be updated to the start time of the 15 minute bin it is in: `2023-01-01T18:15:00Z`.
+  impls:
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: timestamp<ns>
+    - name: origin-timestamp
+      value: timestamp<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp<ns>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: timestamp_tz<ns>
+    - name: origin-timestamp
+      value: timestamp_tz<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp_tz<ns>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: timestamp<ns>
+    - name: origin-timestamp
+      value: timestamp<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp<ns>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: timestamp_tz<ns>
+    - name: origin-timestamp
+      value: timestamp_tz<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp_tz<ns>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: timestamp<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp<ns>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: timestamp_tz<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp_tz<ns>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: timestamp<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp<ns>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: timestamp_tz<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp_tz<ns>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: time<ns>
+    - name: origin-timestamp
+      value: time<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: time<ns>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: time<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: time<ns>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: time<ns>
+    - name: origin-timestamp
+      value: time<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: time<ns>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: time<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: time<ns>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: timestamp<us>
+    - name: origin-timestamp
+      value: timestamp<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp<us>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: timestamp_tz<us>
+    - name: origin-timestamp
+      value: timestamp_tz<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp_tz<us>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: timestamp<us>
+    - name: origin-timestamp
+      value: timestamp<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp<us>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: timestamp_tz<us>
+    - name: origin-timestamp
+      value: timestamp_tz<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp_tz<us>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: timestamp<us>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp<us>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: timestamp_tz<us>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp_tz<us>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: timestamp<us>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp<us>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: timestamp_tz<us>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp_tz<us>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: time<us>
+    - name: origin-timestamp
+      value: time<us>
+    deterministic: true
+    nullability: MIRROR
+    return: time<us>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: time<us>
+    deterministic: true
+    nullability: MIRROR
+    return: time<us>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: time<us>
+    - name: origin-timestamp
+      value: time<us>
+    deterministic: true
+    nullability: MIRROR
+    return: time<us>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: time<us>
+    deterministic: true
+    nullability: MIRROR
+    return: time<us>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: timestamp<ms>
+    - name: origin-timestamp
+      value: timestamp<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp<ms>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: timestamp_tz<ms>
+    - name: origin-timestamp
+      value: timestamp_tz<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp_tz<ms>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: timestamp<ms>
+    - name: origin-timestamp
+      value: timestamp<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp<ms>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: timestamp_tz<ms>
+    - name: origin-timestamp
+      value: timestamp_tz<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp_tz<ms>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: timestamp<ms>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp<ms>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: timestamp_tz<ms>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp_tz<ms>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: timestamp<ms>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp<ms>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: timestamp_tz<ms>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp_tz<ms>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: time<ms>
+    - name: origin-timestamp
+      value: time<ms>
+    deterministic: true
+    nullability: MIRROR
+    return: time<ms>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: time<ms>
+    deterministic: true
+    nullability: MIRROR
+    return: time<ms>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: time<ms>
+    - name: origin-timestamp
+      value: time<ms>
+    deterministic: true
+    nullability: MIRROR
+    return: time<ms>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: time<ms>
+    deterministic: true
+    nullability: MIRROR
+    return: time<ms>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: timestamp<s>
+    - name: origin-timestamp
+      value: timestamp<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp<s>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: timestamp_tz<s>
+    - name: origin-timestamp
+      value: timestamp_tz<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp_tz<s>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: timestamp<s>
+    - name: origin-timestamp
+      value: timestamp<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp<s>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: timestamp_tz<s>
+    - name: origin-timestamp
+      value: timestamp_tz<ns>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp_tz<s>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: timestamp<s>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp<s>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: timestamp_tz<s>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp_tz<s>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: timestamp<s>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp<s>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: timestamp_tz<s>
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp_tz<s>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: time<s>
+    - name: origin-timestamp
+      value: time<s>
+    deterministic: true
+    nullability: MIRROR
+    return: time<s>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_month_day_nano
+    - name: expression
+      value: time<s>
+    deterministic: true
+    nullability: MIRROR
+    return: time<s>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: time<s>
+    - name: origin-timestamp
+      value: time<s>
+    deterministic: true
+    nullability: MIRROR
+    return: time<s>
+    sessionDependent: false
+  - args:
+    - name: interval
+      value: interval_day_time
+    - name: expression
+      value: time<s>
+    deterministic: true
+    nullability: MIRROR
+    return: time<s>
+    sessionDependent: false
+  name: date_bin
+- description: Returns the specified part of the date as an integer.
+  impls:
+  - args:
+    - name: part
+      value: string
+    - name: expression
+      value: timestamp
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: part
+      value: string
+    - name: expression
+      value: date
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: part
+      value: string
+    - name: expression
+      value: time
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: part
+      value: string
+    - name: expression
+      value: interval
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: part
+      value: string
+    - name: expression
+      value: duration
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  metadata:
+    datafusion:
+      aliases:
+      - datepart
+  name: date_part
+- description: Truncates a timestamp or time value to a specified precision.
+  impls:
+  - args:
+    - name: precision
+      value: string
+    - name: expression
+      value: timestamp
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: precision
+      value: string
+    - name: expression
+      value: time
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  metadata:
+    datafusion:
+      aliases:
+      - datetrunc
+  name: date_trunc
+- description: Decode binary data from textual representation in string.
+  impls:
+  - args:
+    - name: expression
+      value: binary
+    - name: format
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: decode
+- description: Converts radians to degrees.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: degrees
+- description: Encode binary data into a textual representation.
+  impls:
+  - args:
+    - name: expression
+      value: binary
+    - name: format
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: encode
+- description: Tests if a string ends with a substring.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: substr
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: ends_with
+- description: Returns the base-e exponential of a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: exp
+- description: Factorial of a non-negative integer. Errors if the argument is negative or the result overflows.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: i64
+    sessionDependent: false
+  name: factorial
+- description: Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: strlist
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: i32
+    sessionDependent: false
+  - args:
+    - name: str
+      value: string
+    - name: strlist
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: i64
+    sessionDependent: false
+  name: find_in_set
+- description: Returns the nearest integer less than or equal to a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: decimal
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: floor
+- description: Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`). Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`) return the corresponding timestamp.
+  impls:
+  - args:
+    - name: expression
+      value: i64
+    - name: timezone
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp<s>
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: timestamp<s>
+    sessionDependent: false
+  name: from_unixtime
+- description: Returns the greatest common divisor of `expression_x` and `expression_y`. Returns 0 if both inputs are zero.
+  impls:
+  - args:
+    - name: expression_x
+      value: i64
+    - name: expression_y
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: i64
+    sessionDependent: false
+  name: gcd
+- description: |-
+    Returns a field within a map or a struct with the given key.
+        Supports nested field access by providing multiple field names.
+        Note: most users invoke `get_field` indirectly via field access
+        syntax such as `my_struct_col['field_name']` which results in a call to
+        `get_field(my_struct_col, 'field_name')`.
+        Nested access like `my_struct['a']['b']` is optimized to a single call:
+        `get_field(my_struct, 'a', 'b')`.
+  impls:
+  - args:
+    - name: expression
+      value: any
+    - name: field_name
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    variadic:
+      min: 1.0
+      parameterConsistency: CONSISTENT
+  name: get_field
+- description: Returns the greatest value in a list of expressions. Returns _null_ if all expressions are _null_.
+  impls:
+  - args:
+    - value: any1
+    deterministic: true
+    nullability: MIRROR
+    return: any1
+    sessionDependent: false
+    variadic:
+      min: 1.0
+      parameterConsistency: CONSISTENT
+  name: greatest
+- description: Capitalizes the first character in each word in the input string. Words are delimited by non-alphanumeric characters.
+  impls:
+  - args:
+    - name: str
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: initcap
+- description: Returns true if a given number is +NaN or -NaN otherwise returns false.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: numeric
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: isnan
+- description: Returns true if a given number is +0.0 or -0.0 otherwise returns false.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: numeric
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: iszero
+- description: Returns the least common multiple of `expression_x` and `expression_y`. Returns 0 if either input is zero.
+  impls:
+  - args:
+    - name: expression_x
+      value: i64
+    - name: expression_y
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: i64
+    sessionDependent: false
+  name: lcm
+- description: Returns the smallest value in a list of expressions. Returns _null_ if all expressions are _null_.
+  impls:
+  - args:
+    - value: any1
+    deterministic: true
+    nullability: MIRROR
+    return: any1
+    sessionDependent: false
+    variadic:
+      min: 1.0
+      parameterConsistency: CONSISTENT
+  name: least
+- description: Returns a specified number of characters from the left side of a string.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: n
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  name: left
+- description: Returns the [`Levenshtein distance`](https://en.wikipedia.org/wiki/Levenshtein_distance) between the two given strings.
+  impls:
+  - args:
+    - name: str1
+      value: string
+    - name: str2
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: levenshtein
+- description: Returns the natural logarithm of a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: ln
+- description: Returns the base-x logarithm of a number. Can either provide a specified base, or if omitted then takes the base-10 of a number.
+  impls:
+  - args:
+    - name: base
+      value: decimal
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: base
+      value: float
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: base
+      value: float
+    - name: numeric_expression
+      value: decimal
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: base
+      value: float
+    - name: numeric_expression
+      value: float
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: log
+- description: Returns the base-10 logarithm of a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: log10
+- description: Returns the base-2 logarithm of a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: log2
+- description: Converts a string to lower-case.
+  impls:
+  - args:
+    - name: str
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: lower
+- description: Pads the left side of a string with another string to a specified string length.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: n
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  - args:
+    - name: str
+      value: string
+    - name: n
+      value: i64
+    - name: padding_str
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  name: lpad
+- description: Trims the specified trim string from the beginning of a string. If no trim string is provided, spaces are removed from the start of the input string.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: trim_str
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: str
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: ltrim
+- description: Make a date from year/month/day component parts.
+  impls:
+  - args:
+    - name: year
+      value: i32
+    - name: month
+      value: i32
+    - name: day
+      value: i32
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: make_date
+- description: Make a time from hour/minute/second component parts.
+  impls:
+  - args:
+    - name: hour
+      value: i32
+    - name: minute
+      value: i32
+    - name: second
+      value: i32
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: make_time
+- description: |-
+    Returns an Arrow struct using the specified name and input expressions pairs.
+    For information on comparing and ordering struct values (including `NULL` handling),
+    see [Comparison and Ordering](struct_coercion.md#comparison-and-ordering).
+  impls:
+  - args:
+    - name: expression_n_name
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    variadic:
+      min: 1.0
+      parameterConsistency: INCONSISTENT
+  name: named_struct
+- description: |-
+    Returns the first argument if it's not _NaN_.
+    Returns the second argument otherwise.
+  impls:
+  - args:
+    - name: expression_x
+      value: fp16
+    - name: expression_y
+      value: fp16
+    deterministic: true
+    nullability: MIRROR
+    return: fp16
+    sessionDependent: false
+  - args:
+    - name: expression_x
+      value: fp32
+    - name: expression_y
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  - args:
+    - name: expression_x
+      value: fp64
+    - name: expression_y
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  name: nanvl
+- description: |2
+
+    Returns the current timestamp in the system configured timezone (None by default).
+
+    The `now()` return value is determined at query time and will return the same timestamp, no matter when in the query plan the function executes.
+  impls:
+  - deterministic: true
+    nullability: MIRROR
+    return: timestamp<ns>
+    sessionDependent: true
+  metadata:
+    datafusion:
+      aliases:
+      - current_timestamp
+  name: now
+- description: |-
+    Returns _null_ if _expression1_ equals _expression2_; otherwise it returns _expression1_.
+    This can be used to perform the inverse operation of [`coalesce`](#coalesce).
+  impls:
+  - args:
+    - name: expression1
+      value: any1
+    - name: expression2
+      value: any1
+    deterministic: true
+    nullability: MIRROR
+    return: any1
+    sessionDependent: false
+  name: nullif
+- description: Returns _expression2_ if _expression1_ is NULL otherwise it returns _expression1_ and _expression2_ is not evaluated. This function can be used to substitute a default value for NULL values.
+  impls:
+  - args:
+    - name: expression1
+      value: boolean
+    - name: expression2
+      value: boolean
+    deterministic: true
+    nullability: MIRROR
+    return: boolean
+    sessionDependent: false
+  - args:
+    - name: expression1
+      value: u8
+    - name: expression2
+      value: u8
+    deterministic: true
+    nullability: MIRROR
+    return: u8
+    sessionDependent: false
+  - args:
+    - name: expression1
+      value: u16
+    - name: expression2
+      value: u16
+    deterministic: true
+    nullability: MIRROR
+    return: u16
+    sessionDependent: false
+  - args:
+    - name: expression1
+      value: u32
+    - name: expression2
+      value: u32
+    deterministic: true
+    nullability: MIRROR
+    return: u32
+    sessionDependent: false
+  - args:
+    - name: expression1
+      value: u64
+    - name: expression2
+      value: u64
+    deterministic: true
+    nullability: MIRROR
+    return: u64
+    sessionDependent: false
+  - args:
+    - name: expression1
+      value: i8
+    - name: expression2
+      value: i8
+    deterministic: true
+    nullability: MIRROR
+    return: i8
+    sessionDependent: false
+  - args:
+    - name: expression1
+      value: i16
+    - name: expression2
+      value: i16
+    deterministic: true
+    nullability: MIRROR
+    return: i16
+    sessionDependent: false
+  - args:
+    - name: expression1
+      value: i32
+    - name: expression2
+      value: i32
+    deterministic: true
+    nullability: MIRROR
+    return: i32
+    sessionDependent: false
+  - args:
+    - name: expression1
+      value: i64
+    - name: expression2
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: i64
+    sessionDependent: false
+  - args:
+    - name: expression1
+      value: fp32
+    - name: expression2
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  - args:
+    - name: expression1
+      value: fp64
+    - name: expression2
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: expression1
+      value: string
+    - name: expression2
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  metadata:
+    datafusion:
+      aliases:
+      - ifnull
+  name: nvl
+- description: Returns _expression2_ if _expression1_ is not NULL; otherwise it returns _expression3_.
+  impls:
+  - args:
+    - name: expression1
+      value: any
+    - name: expression2
+      value: any1
+    - name: expression3
+      value: any1
+    deterministic: true
+    nullability: MIRROR
+    return: any1
+    sessionDependent: false
+  name: nvl2
+- description: Returns the length of a string in bytes.
+  impls:
+  - args:
+    - name: str
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: octet_length
+- description: Returns the string which is replaced by another string from the specified position and specified count length.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: substr
+      value: string
+    - name: pos
+      value: i64
+    - name: count
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  - args:
+    - name: str
+      value: string
+    - name: substr
+      value: string
+    - name: pos
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  name: overlay
+- description: Returns an approximate value of π.
+  impls:
+  - deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  name: pi
+- description: Returns a base expression raised to the power of an exponent.
+  impls:
+  - args:
+    - name: base
+      value: decimal
+    - name: exponent
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: base
+      value: decimal
+    - name: exponent
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: base
+      value: fp64
+    - name: exponent
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  metadata:
+    datafusion:
+      aliases:
+      - pow
+  name: power
+- description: Converts degrees to radians.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: radians
+- description: |-
+    Returns a random float value in the range [0, 1).
+    The random seed is unique to each row.
+  impls:
+  - deterministic: false
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  metadata:
+    datafusion:
+      aliases:
+      - rand
+  name: random
+- description: Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: regexp
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: i64
+    sessionDependent: false
+  - args:
+    - name: str
+      value: string
+    - name: regexp
+      value: string
+    - name: start
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: i64
+    sessionDependent: false
+  - args:
+    - name: str
+      value: string
+    - name: regexp
+      value: string
+    - name: start
+      value: i64
+    - name: flags
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: i64
+    sessionDependent: false
+  name: regexp_count
+- description: Returns the position in a string where the specified occurrence of a POSIX regular expression is located.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: regexp
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: i64
+    sessionDependent: false
+  - args:
+    - name: str
+      value: string
+    - name: regexp
+      value: string
+    - name: start
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: i64
+    sessionDependent: false
+  - args:
+    - name: str
+      value: string
+    - name: regexp
+      value: string
+    - name: start
+      value: i64
+    - name: N
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: i64
+    sessionDependent: false
+  - args:
+    - name: str
+      value: string
+    - name: regexp
+      value: string
+    - name: start
+      value: i64
+    - name: N
+      value: i64
+    - name: flags
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: i64
+    sessionDependent: false
+  - args:
+    - name: str
+      value: string
+    - name: regexp
+      value: string
+    - name: start
+      value: i64
+    - name: N
+      value: i64
+    - name: flags
+      value: string
+    - name: subexpr
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: i64
+    sessionDependent: false
+  name: regexp_instr
+- description: Returns true if a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has at least one match in a string, false otherwise.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: regexp
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: str
+      value: string
+    - name: regexp
+      value: string
+    - name: flags
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: regexp_like
+- description: Returns the first [regular expression](https://docs.rs/regex/latest/regex/#syntax) matches in a string.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: regexp
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: list<string>
+    sessionDependent: false
+  - args:
+    - name: str
+      value: string
+    - name: regexp
+      value: string
+    - name: flags
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: list<string>
+    sessionDependent: false
+  name: regexp_match
+- description: Replaces substrings in a string that match a [regular expression](https://docs.rs/regex/latest/regex/#syntax).
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: regexp
+      value: string
+    - name: replacement
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  - args:
+    - name: str
+      value: string
+    - name: regexp
+      value: string
+    - name: replacement
+      value: string
+    - name: flags
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  name: regexp_replace
+- description: Returns a string with an input string repeated a specified number.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: n
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: repeat
+- description: Replaces all occurrences of a specified substring in a string with a new substring.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: substr
+      value: string
+    - name: replacement
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: replace
+- description: Reverses the character order of a string.
+  impls:
+  - args:
+    - name: str
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  name: reverse
+- description: Returns a specified number of characters from the right side of a string.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: n
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  name: right
+- description: Rounds a number to the nearest integer.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: decimal
+    - name: decimal_places
+      value: i32
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: decimal
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    - name: decimal_places
+      value: i32
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp64
+    - name: decimal_places
+      value: i32
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: round
+- description: Pads the right side of a string with another string to a specified string length.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: n
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  - args:
+    - name: str
+      value: string
+    - name: n
+      value: i64
+    - name: padding_str
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  name: rpad
+- description: Trims the specified trim string from the end of a string. If no trim string is provided, all spaces are removed from the end of the input string.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: trim_str
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: str
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: rtrim
+- description: |-
+    Returns the sign of a number.
+    Negative numbers return `-1`.
+    Zero and positive numbers return `1`.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: signum
+- description: Returns the sine of a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: sin
+- description: Returns the hyperbolic sine of a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: sinh
+- description: Splits a string based on a specified delimiter and returns the substring in the specified position.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: delimiter
+      value: string
+    - name: pos
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: split_part
+- description: Returns the square root of a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: sqrt
+- description: Tests if a string starts with a substring.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: substr
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: starts_with
+- description: Returns the starting position of a specified substring in a string. Positions begin at 1. If the substring does not exist in the string, the function returns 0.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: substr
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  metadata:
+    datafusion:
+      aliases:
+      - instr
+      - position
+  name: strpos
+- description: |-
+    Returns an Arrow struct using the specified input expressions optionally named.
+    Fields in the returned struct use the optional name or the `cN` naming convention.
+    For example: `c0`, `c1`, `c2`, etc.
+    For information on comparing and ordering struct values (including `NULL` handling),
+    see [Comparison and Ordering](struct_coercion.md#comparison-and-ordering).
+  impls:
+  - args:
+    - value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    variadic:
+      min: 1.0
+      parameterConsistency: INCONSISTENT
+  metadata:
+    datafusion:
+      aliases:
+      - row
+  name: struct
+- description: Extracts a substring of a specified number of characters from a specific starting position in a string.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: start_pos
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  - args:
+    - name: str
+      value: string
+    - name: start_pos
+      value: i64
+    - name: length
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  metadata:
+    datafusion:
+      aliases:
+      - substring
+  name: substr
+- description: |-
+    Returns the substring from str before count occurrences of the delimiter delim.
+    If count is positive, everything to the left of the final delimiter (counting from the left) is returned.
+    If count is negative, everything to the right of the final delimiter (counting from the right) is returned.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: delim
+      value: string
+    - name: count
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  metadata:
+    datafusion:
+      aliases:
+      - substring_index
+  name: substr_index
+- description: Returns the tangent of a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: tan
+- description: Returns the hyperbolic tangent of a number.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: tanh
+- description: Returns a string representation of a date, time, timestamp or duration based on a [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html). Unlike the PostgreSQL equivalent of this function numerical formatting is not supported.
+  impls:
+  - args:
+    - name: expression
+      value: date
+    - name: format
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: time<ns>
+    - name: format
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: time<us>
+    - name: format
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: time<ms>
+    - name: format
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: time<s>
+    - name: format
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: timestamp_tz<ns>
+    - name: format
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: timestamp<ns>
+    - name: format
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: timestamp_tz<us>
+    - name: format
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: timestamp<us>
+    - name: format
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: timestamp_tz<ms>
+    - name: format
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: timestamp<ms>
+    - name: format
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: timestamp_tz<s>
+    - name: format
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: timestamp<s>
+    - name: format
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: duration<ns>
+    - name: format
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: duration<us>
+    - name: format
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: duration<ms>
+    - name: format
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  - args:
+    - name: expression
+      value: duration<s>
+    - name: format
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  metadata:
+    datafusion:
+      aliases:
+      - date_format
+  name: to_char
+- description: |-
+    Converts a value to a date (`YYYY-MM-DD`).
+    Supports strings, numeric and timestamp types as input.
+    Strings are parsed as YYYY-MM-DD (e.g. '2023-07-20') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided.
+    Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T00:00:00Z`).
+    Returns the corresponding date.
+
+    Note: `to_date` returns Date32, which represents its values as the number of days since unix epoch(`1970-01-01`) stored as signed 32 bit value. The largest supported date value is `9999-12-31`.
+  impls:
+  - args:
+    - name: expression
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    variadic:
+      min: 1.0
+      parameterConsistency: INCONSISTENT
+  name: to_date
+- description: Converts an integer to a hexadecimal string.
+  impls:
+  - args:
+    - name: int
+      value: integer
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: to_hex
+- description: Converts a timestamp with a timezone to a timestamp without a timezone (with no offset or timezone information). This function handles daylight saving time changes.
+  impls:
+  - args:
+    - name: expression
+      value: timestamp
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: to_local_time
+- description: |-
+    Converts a value to a time (`HH:MM:SS.nnnnnnnnn`).
+    Supports strings and timestamps as input.
+    Strings are parsed as `HH:MM:SS`, `HH:MM:SS.nnnnnnnnn`, or `HH:MM` if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided.
+    Timestamps will have the time portion extracted.
+    Returns the corresponding time.
+
+    Note: `to_time` returns Time64(Nanosecond), which represents the time of day in nanoseconds since midnight.
+  impls:
+  - args:
+    - name: expression
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    variadic:
+      min: 1.0
+      parameterConsistency: INCONSISTENT
+  name: to_time
+- description: "\nConverts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000<TZ>`) in the session time zone. Supports strings,\ninteger, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')\nif no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. \nStrings that parse without a time zone are treated as if they are in the\nsession time zone, or UTC if no session time zone is set.\nIntegers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`).\n\nNote: `to_timestamp` returns `Timestamp(ns, TimeZone)` where the time zone is the session time zone. The supported range\nfor integer input is between`-9223372037` and `9223372036`. Supported range for string input is between\n`1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds`\nfor the input outside of supported bounds.\n\nThe session time zone can be set using the statement `SET TIMEZONE = 'desired time zone'`.\nThe time zone can be a value like +00:00, 'Europe/London' etc.\n"
+  impls:
+  - args:
+    - name: expression
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    variadic:
+      min: 1.0
+      parameterConsistency: INCONSISTENT
+  name: to_timestamp
+- description: "\nConverts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000<TZ>`) in the session time zone. Supports strings,\ninteger, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')\nif no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. \nStrings that parse without a time zone are treated as if they are in the\nsession time zone, or UTC if no session time zone is set.\nIntegers, unsigned integers, and doubles are interpreted as microseconds since the unix epoch (`1970-01-01T00:00:00Z`).\n\nThe session time zone can be set using the statement `SET TIMEZONE = 'desired time zone'`.\nThe time zone can be a value like +00:00, 'Europe/London' etc.\n"
+  impls:
+  - args:
+    - name: expression
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    variadic:
+      min: 1.0
+      parameterConsistency: INCONSISTENT
+  name: to_timestamp_micros
+- description: "\nConverts a value to a timestamp (`YYYY-MM-DDT00:00:00.000<TZ>`) in the session time zone. Supports strings,\ninteger, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')\nif no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. \nStrings that parse without a time zone are treated as if they are in the\nsession time zone, or UTC if no session time zone is set.\nIntegers, unsigned integers, and doubles are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`).\n\nThe session time zone can be set using the statement `SET TIMEZONE = 'desired time zone'`.\nThe time zone can be a value like +00:00, 'Europe/London' etc.\n"
+  impls:
+  - args:
+    - name: expression
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    variadic:
+      min: 1.0
+      parameterConsistency: INCONSISTENT
+  name: to_timestamp_millis
+- description: "\nConverts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000<TZ>`) in the session time zone. Supports strings,\ninteger, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')\nif no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. \nStrings that parse without a time zone are treated as if they are in the\nsession time zone. Integers, unsigned integers, and doubles are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`).\n\nThe session time zone can be set using the statement `SET TIMEZONE = 'desired time zone'`.\nThe time zone can be a value like +00:00, 'Europe/London' etc.\n"
+  impls:
+  - args:
+    - name: expression
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    variadic:
+      min: 1.0
+      parameterConsistency: INCONSISTENT
+  name: to_timestamp_nanos
+- description: "\nConverts a value to a timestamp (`YYYY-MM-DDT00:00:00<TZ>`) in the session time zone. Supports strings,\ninteger, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')\nif no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. \nStrings that parse without a time zone are treated as if they are in the\nsession time zone, or UTC if no session time zone is set.\nIntegers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`).\n\nThe session time zone can be set using the statement `SET TIMEZONE = 'desired time zone'`.\nThe time zone can be a value like +00:00, 'Europe/London' etc.\n"
+  impls:
+  - args:
+    - name: expression
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    variadic:
+      min: 1.0
+      parameterConsistency: INCONSISTENT
+  name: to_timestamp_seconds
+- description: |2-
+
+    Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00`).
+    Supports strings, dates, timestamps, integer, unsigned integer, and float types as input.
+    Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+    if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+    Integers, unsigned integers, and floats are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00`).
+  impls:
+  - args:
+    - name: expression
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    variadic:
+      min: 1.0
+      parameterConsistency: INCONSISTENT
+  name: to_unixtime
+- description: Performs character-wise substitution based on a mapping.
+  impls:
+  - args:
+    - name: str
+      value: string
+    - name: from
+      value: string
+    - name: to
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  name: translate
+- description: Truncates a number to a whole number or truncated to the specified decimal places.
+  impls:
+  - args:
+    - name: numeric_expression
+      value: fp32
+    - name: decimal_places
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp64
+    - name: decimal_places
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp64
+    deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+  - args:
+    - name: numeric_expression
+      value: fp32
+    deterministic: true
+    nullability: MIRROR
+    return: fp32
+    sessionDependent: false
+  name: trunc
+- description: Casts the first argument to the data type of the second argument, returning NULL if the cast fails. Only the type of the second argument is used; its value is ignored.
+  impls:
+  - args:
+    - name: expression
+      value: any
+    - name: reference
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: try_cast_to_type
+- description: Returns the value of the given field in the union when selected, or NULL otherwise.
+  impls:
+  - args:
+    - name: union
+      value: any
+    - name: field_name
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: union_extract
+- description: Returns the name of the currently selected field in the union
+  impls:
+  - args:
+    - name: union
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: union_tag
+- description: Converts a string to upper-case.
+  impls:
+  - args:
+    - name: str
+      value: string
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+  name: upper
+- description: Returns [`UUID v4`](https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_%28random%29) string value which is unique per row.
+  impls:
+  - deterministic: false
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  name: uuid
+- description: Returns the version of DataFusion.
+  impls:
+  - deterministic: true
+    nullability: MIRROR
+    return: string
+    sessionDependent: false
+  name: version
+- description: Attaches Arrow field metadata (key/value pairs) to the input expression. Keys must be non-empty constant strings and values must be constant strings (empty values are allowed). Existing metadata on the input field is preserved; new keys overwrite on collision. This is the inverse of `arrow_metadata`.
+  impls:
+  - args:
+    - name: expression
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    variadic:
+      min: 1.0
+      parameterConsistency: INCONSISTENT
+  name: with_metadata
+urn: extension:org.apache.datafusion:functions
+window_functions:
+- description: 'Relative rank of the current row: (number of rows preceding or peer with the current row) / (total rows).'
+  impls:
+  - deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+    window_type: PARTITION
+  name: cume_dist
+- description: Returns the rank of the current row without gaps. This function ranks rows in a dense manner, meaning consecutive ranks are assigned even for identical values.
+  impls:
+  - deterministic: true
+    nullability: MIRROR
+    return: u64
+    sessionDependent: false
+    window_type: PARTITION
+  name: dense_rank
+- description: Returns value evaluated at the row that is the first row of the window frame.
+  impls:
+  - deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    window_type: PARTITION
+  - args:
+    - name: expression
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    window_type: PARTITION
+  - args:
+    - name: expression
+      value: any
+    - value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    window_type: PARTITION
+  name: first_value
+- description: Returns value evaluated at the row that is offset rows before the current row within the partition; if there is no such row, instead return default (which must be of the same type as value).
+  impls:
+  - args:
+    - name: expr
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    window_type: PARTITION
+  - args:
+    - name: expr
+      value: any
+    - name: offset
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    window_type: PARTITION
+  - args:
+    - name: expr
+      value: any
+    - name: offset
+      value: any
+    - name: default
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    window_type: PARTITION
+  name: lag
+- description: Returns value evaluated at the row that is the last row of the window frame.
+  impls:
+  - deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    window_type: PARTITION
+  - args:
+    - name: expression
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    window_type: PARTITION
+  - args:
+    - name: expression
+      value: any
+    - value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    window_type: PARTITION
+  name: last_value
+- description: Returns value evaluated at the row that is offset rows after the current row within the partition; if there is no such row, instead return default (which must be of the same type as value).
+  impls:
+  - args:
+    - name: expr
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    window_type: PARTITION
+  - args:
+    - name: expr
+      value: any
+    - name: offset
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    window_type: PARTITION
+  - args:
+    - name: expr
+      value: any
+    - name: offset
+      value: any
+    - name: default
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    window_type: PARTITION
+  name: lead
+- description: Returns the value evaluated at the nth row of the window frame (counting from 1). Returns NULL if no such row exists.
+  impls:
+  - deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    window_type: PARTITION
+  - args:
+    - name: expression
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    window_type: PARTITION
+  - args:
+    - name: expression
+      value: any
+    - name: n
+      value: any
+    deterministic: true
+    nullability: MIRROR
+    return: any
+    sessionDependent: false
+    window_type: PARTITION
+  name: nth_value
+- description: Integer ranging from 1 to the argument value, dividing the partition as equally as possible
+  impls:
+  - args:
+    - name: expression
+      value: u64
+    deterministic: true
+    nullability: MIRROR
+    return: u64
+    sessionDependent: false
+    window_type: PARTITION
+  - args:
+    - name: expression
+      value: u32
+    deterministic: true
+    nullability: MIRROR
+    return: u64
+    sessionDependent: false
+    window_type: PARTITION
+  - args:
+    - name: expression
+      value: u16
+    deterministic: true
+    nullability: MIRROR
+    return: u64
+    sessionDependent: false
+    window_type: PARTITION
+  - args:
+    - name: expression
+      value: u8
+    deterministic: true
+    nullability: MIRROR
+    return: u64
+    sessionDependent: false
+    window_type: PARTITION
+  - args:
+    - name: expression
+      value: i64
+    deterministic: true
+    nullability: MIRROR
+    return: u64
+    sessionDependent: false
+    window_type: PARTITION
+  - args:
+    - name: expression
+      value: i32
+    deterministic: true
+    nullability: MIRROR
+    return: u64
+    sessionDependent: false
+    window_type: PARTITION
+  - args:
+    - name: expression
+      value: i16
+    deterministic: true
+    nullability: MIRROR
+    return: u64
+    sessionDependent: false
+    window_type: PARTITION
+  - args:
+    - name: expression
+      value: i8
+    deterministic: true
+    nullability: MIRROR
+    return: u64
+    sessionDependent: false
+    window_type: PARTITION
+  name: ntile
+- description: Returns the percentage rank of the current row within its partition. The value ranges from 0 to 1 and is computed as `(rank - 1) / (total_rows - 1)`.
+  impls:
+  - deterministic: true
+    nullability: MIRROR
+    return: fp64
+    sessionDependent: false
+    window_type: PARTITION
+  name: percent_rank
+- description: Returns the rank of the current row within its partition, allowing gaps between ranks. This function provides a ranking similar to `row_number`, but skips ranks for identical values.
+  impls:
+  - deterministic: true
+    nullability: MIRROR
+    return: u64
+    sessionDependent: false
+    window_type: PARTITION
+  name: rank
+- description: Number of the current row within its partition, counting from 1.
+  impls:
+  - deterministic: true
+    nullability: MIRROR
+    return: u64
+    sessionDependent: false
+    window_type: PARTITION
+  name: row_number

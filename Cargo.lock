@@ -2705,6 +2705,7 @@ dependencies = [
  "pbjson-types",
  "prost",
  "serde_json",
+ "serde_yaml",
  "substrait",
  "tokio",
  "url",
