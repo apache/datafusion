@@ -75,5 +75,9 @@ url = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
+# Enables `arrow_buffer_pool` for this crate's own tests only (e.g. the
+# ArrowMemoryPool-adapter test in peak_recording.rs), without turning it on
+# as a default feature for consumers of this crate.
 chrono = { workspace = true }
+datafusion-execution = { path = ".", features = ["arrow_buffer_pool"] }
 insta = { workspace = true }
