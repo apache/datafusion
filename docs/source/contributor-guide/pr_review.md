@@ -88,10 +88,9 @@ Check that the description:
 
 ## Review the Code Comments
 
-Well written code comments are what makes the codebase understandable to the
-next contributor.
+The goal of code comments is not only for the code to be understandable after a reader spends time studying the implementation. It should make the implementation easy to understand for readers with the expected background.
 
-Check that:
+Some practical guidelines for writing comments:
 
 1. The code has adequate comments, and that the comments focus on the
    **rationale** for any non-obvious change (the "why"), not a restatement of
@@ -107,6 +106,8 @@ Check that:
    valid as the code evolves.
 4. New public APIs have doc comments, including examples where appropriate
    (doc examples are also tested by CI, so they double as test coverage).
+5. When documenting modules, functions, or fields, start with simple examples and intuitive explanations, and optionally add formal, math-like definitions when necessary. This makes the implementation easier to reason about.
+6. When something is confusing on first read, treat that as a good opportunity to improve the comments.
 
 [rustdoc intra-doc links]: https://doc.rust-lang.org/rustdoc/write-documentation/linking-to-items-by-name.html
 
