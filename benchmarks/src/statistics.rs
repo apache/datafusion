@@ -30,6 +30,7 @@ use datafusion::physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use datafusion::sql::parser::DFParser;
+use datafusion_common::config_err;
 use datafusion_common::stats::Precision;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -625,6 +626,9 @@ async fn register_parquet_files(ctx: &SessionContext, path: &Path) -> Result<()>
                 .to_string();
             (table.clone(), path.join(table))
         };
+        if tables.contains_key(&table) {
+            return config_err!("Tried to register duplicate table {table}");
+        }
         tables.insert(table, table_path);
     }
 
