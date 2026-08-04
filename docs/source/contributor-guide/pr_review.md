@@ -225,7 +225,7 @@ with the fix reverted.
 
 Rather than a bare "LGTM", say what you actually checked ("traced the state
 transitions by hand", "confirmed the hasher change cannot affect ordering")
-so the approval carries reviewable evidence.
+so it is clear what was verified and what was not.
 
 ### Invite Additional Committers on Core Changes
 
