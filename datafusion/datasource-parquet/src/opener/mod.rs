@@ -1488,7 +1488,7 @@ impl RowGroupsPrunedParquetOpen {
             reader: prepared.async_file_reader,
             parquet_metadata: Arc::clone(&file_metadata),
             prefetch_size: prepared.prefetch_size,
-            prefetched_row_groups: std::collections::HashSet::new(),
+            prefetched_row_groups: HashSet::new(),
             decoder_projection,
             arrow_reader_metrics,
             predicate_cache_inner_records,

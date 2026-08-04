@@ -35,7 +35,7 @@
 //! The opener constructs both halves and hands the state off to
 //! [`PushDecoderStreamState::into_stream`] for consumption.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -54,7 +54,7 @@ use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
 use parquet::file::metadata::ParquetMetaData;
 
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, HashSet, Result};
 use datafusion_physical_expr::expressions::DynamicFilterTracking;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::{BaselineMetrics, Count, Gauge};
@@ -582,7 +582,6 @@ mod tests {
         let (metadata, _) = build_three_rg_file();
         let rg0 = column_range(&metadata, 0);
         let rg1 = column_range(&metadata, 1);
-        let rg2 = column_range(&metadata, 2);
         let rg_plan = (0..3).map(|rg_index| RgPlanEntry { rg_index }).collect();
         let budget = ((rg0.end - rg0.start) + (rg1.end - rg1.start)) as usize;
         let mut prefetched = HashSet::new();
@@ -597,9 +596,9 @@ mod tests {
             &mut prefetched,
         );
 
+        // RG2 does not fit in the budget, so it is left out entirely.
         assert_eq!(ranges, vec![rg0, rg1]);
         assert_eq!(prefetched, HashSet::from([1]));
-        assert!(!ranges.contains(&rg2));
     }
 
     #[test]
