@@ -36,6 +36,7 @@ use sqlparser::ast::{
     BinaryOperator, Expr as SQLExpr, Interval, UnaryOperator, Value, ValueWithSpan,
 };
 use sqlparser::parser::ParserError::ParserError;
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::ops::Neg;
 use std::str::FromStr;
@@ -73,22 +74,27 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         unsigned_number: &str,
         negative: bool,
     ) -> Result<Expr> {
-        let mut signed_number =
-            String::with_capacity(unsigned_number.len() + usize::from(negative));
-        if negative {
-            signed_number.push('-');
-        }
         // remove underscores, since the Rust parser used here does not support them
-        unsigned_number.bytes().for_each(|b| {
-            if b != b'_' {
-                signed_number.push(b as char);
+        let signed_number = if !negative && !unsigned_number.contains('_') {
+            Cow::Borrowed(unsigned_number)
+        } else {
+            let mut signed_number =
+                String::with_capacity(unsigned_number.len() + usize::from(negative));
+            if negative {
+                signed_number.push('-');
             }
-        });
+            unsigned_number.bytes().for_each(|b| {
+                if b != b'_' {
+                    signed_number.push(b as char);
+                }
+            });
+            Cow::Owned(signed_number)
+        };
 
         let unsigned_number = if negative {
             &signed_number[1..]
         } else {
-            signed_number.as_str()
+            &signed_number
         };
 
         // Try to parse as i64 first, then u64 if negative is false, then decimal or f64
