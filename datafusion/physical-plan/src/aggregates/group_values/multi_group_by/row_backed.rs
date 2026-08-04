@@ -213,8 +213,13 @@ impl RowsGroupColumn {
             .row_converter
             .convert_rows(rows)
             .expect("row conversion during emit");
-        debug_assert_eq!(arrays.len(), 1, "single-field row converter");
-        let array = arrays.swap_remove(0);
+        assert_eq!(
+            arrays.len(),
+            1,
+            "Single field row converter must produce exactly one array, actual length is {}",
+            arrays.len()
+        );
+        let array = arrays.pop().unwrap();
         encode_array_if_necessary(&array, &self.output_type)
             .expect("dictionary re-encode during emit")
     }
