@@ -16,9 +16,10 @@
 // under the License.
 
 use arrow::array::{
-    ArrayRef, BooleanArray, Int64Array, ListArray, MapArray, StringArray, StructArray,
+    Array, ArrayRef, BooleanArray, Int64Array, ListArray, MapArray, StringArray,
+    StructArray,
 };
-use arrow::buffer::OffsetBuffer;
+use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Fields, Float64Type, Int64Type, Schema};
 use arrow::util::bench_util::{
@@ -59,10 +60,11 @@ fn prepare_typed_groups_accumulator(
     };
 
     let value_field: Arc<Field> = Field::new("value", value_type.clone(), true).into();
-    let accumulator_args = AccumulatorArgs {
+    let value_expr = col("value", &schema).unwrap();
+    let make_args = || AccumulatorArgs {
         return_field: Arc::clone(&value_field),
         schema: &schema,
-        expr_fields: &[value_field],
+        expr_fields: std::slice::from_ref(&value_field),
         ignore_nulls: false,
         order_bys: std::slice::from_ref(&sort_expr),
         is_reversed: false,
@@ -72,21 +74,33 @@ fn prepare_typed_groups_accumulator(
             "LAST_VALUE(value ORDER BY ord)"
         },
         is_distinct: false,
-        exprs: &[col("value", &schema).unwrap()],
+        exprs: std::slice::from_ref(&value_expr),
     };
 
     // Mirror the planner: use the native GroupsAccumulator when this value type
-    // is supported, otherwise fall back to a GroupsAccumulatorAdapter wrapping
-    // one per-group Accumulator. Because the same benchmark case then runs the
-    // fallback on a build without native nested support and the native path on
-    // a build with it, the benchmark bot's before/after diff surfaces the win
-    // directly — no separate comparison case needed.
-    let result = if is_first {
-        FirstValue::new().create_groups_accumulator(accumulator_args)
+    // is supported and otherwise fall back to a GroupsAccumulatorAdapter around
+    // one per-group Accumulator. Deciding with `groups_accumulator_supported`
+    // (rather than catching `create_groups_accumulator` errors) keeps genuine
+    // construction failures loud. The same case then runs the fallback on a
+    // build without native nested support and the native path on one with it,
+    // so a before/after benchmark run surfaces the win directly.
+    let supported = if is_first {
+        FirstValue::new().groups_accumulator_supported(make_args())
     } else {
-        LastValue::new().create_groups_accumulator(accumulator_args)
+        LastValue::new().groups_accumulator_supported(make_args())
     };
-    result.unwrap_or_else(|_| build_fallback_adapter(is_first, value_type))
+    if !supported {
+        return build_fallback_adapter(is_first, value_type);
+    }
+    if is_first {
+        FirstValue::new()
+            .create_groups_accumulator(make_args())
+            .unwrap()
+    } else {
+        LastValue::new()
+            .create_groups_accumulator(make_args())
+            .unwrap()
+    }
 }
 
 /// Build the *fallback* grouped accumulator for a value type: a
@@ -337,9 +351,20 @@ fn trivial_update_bench(
     });
 }
 
-/// A 3-field struct value column `(Int64, Utf8, Float64)` — the shape produced
-/// by rewriting three peer `first_value(col ORDER BY o)` calls into a single
-/// `first_value(named_struct(..) ORDER BY o)` (the coalesce-peers optimization).
+/// A top-level validity buffer with roughly `null_density` nulls, so the
+/// generated nested arrays have null *values* (not just null inner
+/// fields/elements) — matching the `nulls={pct}%` semantics of the primitive
+/// benchmarks, where the value itself is null. Returns `None` at 0% so the
+/// arrays stay fully valid. Derived from arrow's own null generator for a
+/// deterministic, density-accurate pattern.
+fn top_level_nulls(n: usize, null_density: f32) -> Option<NullBuffer> {
+    create_primitive_array::<Int64Type>(n, null_density)
+        .nulls()
+        .cloned()
+}
+
+/// A 3-field struct value column `Struct<Int64, Utf8, Float64>`. `null_density`
+/// controls both the struct-level null values and the inner field nulls.
 fn create_struct_array(n: usize, null_density: f32) -> ArrayRef {
     let a = Arc::new(create_primitive_array::<Int64Type>(n, null_density)) as ArrayRef;
     let b =
@@ -350,9 +375,11 @@ fn create_struct_array(n: usize, null_density: f32) -> ArrayRef {
         Field::new("c1", DataType::Utf8, true),
         Field::new("c2", DataType::Float64, true),
     ]);
-    // Struct-level nulls stay None: `named_struct` never produces a null
-    // struct, only null fields — match that shape here.
-    Arc::new(StructArray::new(fields, vec![a, b, d], None))
+    Arc::new(StructArray::new(
+        fields,
+        vec![a, b, d],
+        top_level_nulls(n, null_density),
+    ))
 }
 
 /// A `List<Int64>` value column with fixed-size lists of `list_len` elements.
@@ -363,7 +390,12 @@ fn create_list_array(n: usize, list_len: usize, null_density: f32) -> ArrayRef {
     )) as ArrayRef;
     let offsets = OffsetBuffer::from_lengths(std::iter::repeat_n(list_len, n));
     let field = Arc::new(Field::new_list_field(DataType::Int64, true));
-    Arc::new(ListArray::new(field, offsets, child, None))
+    Arc::new(ListArray::new(
+        field,
+        offsets,
+        child,
+        top_level_nulls(n, null_density),
+    ))
 }
 
 /// A `Map<Utf8, Int64>` value column with `entries_per_row` entries per row.
@@ -384,7 +416,13 @@ fn create_map_array(n: usize, entries_per_row: usize, null_density: f32) -> Arra
     let offsets = OffsetBuffer::from_lengths(std::iter::repeat_n(entries_per_row, n));
     let map_field =
         Arc::new(Field::new("entries", DataType::Struct(entry_fields), false));
-    Arc::new(MapArray::new(map_field, offsets, entries, None, false))
+    Arc::new(MapArray::new(
+        map_field,
+        offsets,
+        entries,
+        top_level_nulls(n, null_density),
+        false,
+    ))
 }
 
 /// A composite `List<Struct<a: Int64, b: Utf8>>` column — a list whose
@@ -393,7 +431,8 @@ fn create_map_array(n: usize, entries_per_row: usize, null_density: f32) -> Arra
 /// handle.
 fn create_list_of_struct_array(n: usize, list_len: usize, null_density: f32) -> ArrayRef {
     let total = n * list_len;
-    let a = Arc::new(create_primitive_array::<Int64Type>(total, null_density)) as ArrayRef;
+    let a =
+        Arc::new(create_primitive_array::<Int64Type>(total, null_density)) as ArrayRef;
     let b =
         Arc::new(create_string_array_with_len::<i32>(total, null_density, 8)) as ArrayRef;
     let struct_fields = Fields::from(vec![
@@ -405,7 +444,12 @@ fn create_list_of_struct_array(n: usize, list_len: usize, null_density: f32) -> 
     let offsets = OffsetBuffer::from_lengths(std::iter::repeat_n(list_len, n));
     let list_field =
         Arc::new(Field::new_list_field(DataType::Struct(struct_fields), true));
-    Arc::new(ListArray::new(list_field, offsets, child, None))
+    Arc::new(ListArray::new(
+        list_field,
+        offsets,
+        child,
+        top_level_nulls(n, null_density),
+    ))
 }
 
 fn first_last_nested_benchmark(c: &mut Criterion) {
