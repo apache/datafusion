@@ -356,6 +356,11 @@ mod tests {
     /// bytes show up in this peak without further changes — as long as the
     /// adapter is built from the `RuntimeEnv`'s pool, which is the wrapped one.
     /// This test pins that.
+    ///
+    /// Only compiled with `--features arrow_buffer_pool`, since that's what
+    /// gates `crate::memory_pool::arrow` and `arrow_buffer::MemoryPool` in the
+    /// first place; not part of this crate's default feature set.
+    #[cfg(feature = "arrow_buffer_pool")]
     #[test]
     fn records_reservations_arriving_through_the_arrow_adapter() {
         use crate::memory_pool::arrow::ArrowMemoryPool;
