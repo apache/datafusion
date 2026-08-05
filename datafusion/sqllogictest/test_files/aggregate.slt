@@ -1200,6 +1200,11 @@ select approx_median(NULL), arrow_typeof(approx_median(NULL)) from median_table;
 ----
 NULL Null
 
+query RT
+select median(NULL), arrow_typeof(median(NULL));
+----
+NULL Float64
+
 # median decimal
 statement ok
 create table t(c decimal(10, 4)) as values (0.0001), (0.0002), (0.0003), (0.0004), (0.0005), (0.0006);
