@@ -283,7 +283,7 @@ impl LogicalPlanBuilder {
                     && !can_cast_types(&data_type, field_type)
                 {
                     return exec_err!(
-                        "Type mismatch and can't cast, received data of type {} for field of type {}",
+                        "Types don't match and no valid cast exists, received data of type {} for field of type {}",
                         data_type,
                         field_type
                     );
@@ -3051,7 +3051,7 @@ mod tests {
 
         assert_eq!(
             err.strip_backtrace(),
-            "Execution error: Type mismatch and can't cast, \
+            "Execution error: Types don't match and no valid cast exists, \
          received data of type Boolean for field of type Date32"
         );
     }
