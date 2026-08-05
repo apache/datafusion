@@ -15,14 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Benchmarks for row-filter pushdown with predicates that share a
-//! common struct-field prefix.
+//! Benchmarks for row-filter pushdown with predicates that reach several struct
+//! leaves under a common prefix.
 //!
-//! The existing `parquet_struct_query` bench exercises single-field
-//! struct predicates only; `parquet_struct_projection` has no `WHERE`
-//! clause. Neither drives the row-filter planner with multiple
-//! conjunctions over the same struct root, which is the case the
-//! `StructAccessTree` planning path is intended to accelerate.
+//! The existing `parquet_struct_query` bench exercises single-field struct
+//! predicates only; `parquet_struct_projection` has no `WHERE` clause. Neither
+//! drives the row-filter planner with multiple accesses under the same struct
+//! root.
+//!
+//! Two properties of the planner shape these queries, and both are easy to get
+//! wrong:
+//!
+//! * `execution.parquet.pushdown_filters` must be enabled. It defaults to
+//!   `false`, in which case no row filter is built and every case below
+//!   degenerates to a plain scan.
+//! * The predicate must be a *single* conjunct. `build_row_filter` calls
+//!   `split_conjunction` before building filter candidates, and each candidate
+//!   collects its own access paths, so `s['a'] = 5 AND s['b'] = 5` becomes two
+//!   independent single-access candidates and never reaches multi-access
+//!   planning. The cases below use the `(s['a'] + s['b']) = 10` form so every
+//!   access lands in one candidate.
+//!
+//! Nested access is written `s['inner']['x']`, which the planner represents as a
+//! single flattened `get_field(s, 'inner', 'x')`. That form is pushdown-eligible;
+//! a chained `get_field(get_field(s, 'inner'), 'x')` is not.
 //!
 //! Dataset schema:
 //!
@@ -36,15 +52,16 @@
 //! );
 //! ```
 //!
-//! All struct leaves mirror the top-level `id`, so any conjunction on
-//! them selects the same rows and the bench measures planning + read
-//! cost rather than selectivity differences.
+//! All struct leaves mirror the top-level `id`, so a sum of `n` leaves equals
+//! `n * id` and every predicate is satisfied by exactly one row (`id = 5`).
+//! Holding the match count fixed keeps the cases comparable, and each is
+//! asserted to return that single row.
 
 use arrow::array::{ArrayRef, Int32Array, StructArray};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use criterion::{Criterion, criterion_group, criterion_main};
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::instant::Instant;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{WriterProperties, WriterVersion};
@@ -62,6 +79,8 @@ const WRITE_RECORD_BATCH_SIZE: usize = 4096;
 const ROW_GROUP_ROW_COUNT: usize = 65536;
 /// The number of row groups expected
 const EXPECTED_ROW_GROUPS: usize = 8;
+/// Number of rows every predicate is expected to match.
+const EXPECTED_MATCHES: usize = 1;
 
 fn inner_struct_fields() -> Fields {
     Fields::from(vec![
@@ -176,9 +195,13 @@ fn generate_file() -> NamedTempFile {
     named_file
 }
 
-fn create_context(file_path: &str) -> SessionContext {
-    let ctx = SessionContext::new();
-    let rt = Runtime::new().unwrap();
+fn create_context(file_path: &str, rt: &Runtime) -> SessionContext {
+    let mut config = SessionConfig::new();
+    // Row-filter pushdown is off by default. Without it no row filter is built,
+    // and these benchmarks would time a plain scan for every predicate shape.
+    config.options_mut().execution.parquet.pushdown_filters = true;
+
+    let ctx = SessionContext::new_with_config(config);
     rt.block_on(ctx.register_parquet("t", file_path, Default::default()))
         .unwrap();
     ctx
@@ -189,6 +212,54 @@ fn query(ctx: &SessionContext, rt: &Runtime, sql: &str) {
     let sql = sql.to_string();
     let df = rt.block_on(ctx.sql(&sql)).unwrap();
     black_box(rt.block_on(df.collect()).unwrap());
+}
+
+/// Fails unless `sql` actually pushes a row filter into the Parquet decoder and
+/// matches [`EXPECTED_MATCHES`] rows.
+///
+/// Guards the two silent-failure modes: a disabled `pushdown_filters` and a
+/// predicate shape that turns out not to be pushdown-eligible. Either would
+/// leave the benchmark timing a plain scan instead of row-filter pushdown.
+///
+/// Metrics are read off the executed plan rather than scraped from
+/// `EXPLAIN ANALYZE` text, so the check does not depend on output formatting.
+fn assert_pushdown_active(ctx: &SessionContext, rt: &Runtime, name: &str, sql: &str) {
+    let (rows, pruned) = rt
+        .block_on(async {
+            let plan = ctx.sql(sql).await?.create_physical_plan().await?;
+            let batches =
+                datafusion::physical_plan::collect(Arc::clone(&plan), ctx.task_ctx())
+                    .await?;
+            let rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
+            Ok::<_, datafusion_common::DataFusionError>((rows, rows_pruned(&plan)))
+        })
+        .unwrap();
+
+    assert_eq!(
+        rows, EXPECTED_MATCHES,
+        "`{name}` matched {rows} rows, expected {EXPECTED_MATCHES}"
+    );
+    assert!(
+        pruned > 0,
+        "`{name}` pruned no rows via the Parquet row filter, so it does not \
+         exercise row-filter pushdown (is `pushdown_filters` enabled, and is \
+         the predicate a single pushdown-eligible conjunct?)"
+    );
+}
+
+/// Total `pushdown_rows_pruned` reported anywhere in the executed plan.
+fn rows_pruned(plan: &Arc<dyn datafusion::physical_plan::ExecutionPlan>) -> usize {
+    let mut total = plan
+        .metrics()
+        .and_then(|metrics| metrics.sum_by_name("pushdown_rows_pruned"))
+        .map(|value| value.as_usize())
+        .unwrap_or(0);
+
+    for child in plan.children() {
+        total += rows_pruned(child);
+    }
+
+    total
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -203,73 +274,51 @@ fn criterion_benchmark(c: &mut Criterion) {
     assert!(Path::new(&file_path).exists(), "path not found");
     println!("Using parquet file {file_path}");
 
-    let ctx = create_context(&file_path);
     let rt = Runtime::new().unwrap();
+    let ctx = create_context(&file_path, &rt);
 
-    // Baseline: one predicate on a single struct leaf.
-    c.bench_function("single_field", |b| {
-        b.iter(|| query(&ctx, &rt, "select id from t where s['a'] = 5"))
+    // Baseline: one access on a single struct leaf.
+    let sql = "select id from t where s['a'] = 5";
+    assert_pushdown_active(&ctx, &rt, "1_access", sql);
+    c.bench_function("1_access", |b| b.iter(|| query(&ctx, &rt, sql)));
+
+    // Two accesses inside one conjunct, sharing the struct root `s`.
+    let sql = "select id from t where (s['a'] + s['b']) = 10";
+    assert_pushdown_active(&ctx, &rt, "2_access_shared_root", sql);
+    c.bench_function("2_access_shared_root", |b| b.iter(|| query(&ctx, &rt, sql)));
+
+    // Three accesses sharing the struct root `s`.
+    let sql = "select id from t where (s['a'] + s['b'] + s['c']) = 15";
+    assert_pushdown_active(&ctx, &rt, "3_access_shared_root", sql);
+    c.bench_function("3_access_shared_root", |b| b.iter(|| query(&ctx, &rt, sql)));
+
+    // Five accesses sharing the struct root `s`, amplifying planning cost.
+    let sql = "select id from t \
+               where (s['a'] + s['b'] + s['c'] + s['d'] + s['e']) = 25";
+    assert_pushdown_active(&ctx, &rt, "5_access_shared_root", sql);
+    c.bench_function("5_access_shared_root", |b| b.iter(|| query(&ctx, &rt, sql)));
+
+    // Two accesses sharing the deeper prefix `s.inner`.
+    let sql = "select id from t where (s['inner']['x'] + s['inner']['y']) = 10";
+    assert_pushdown_active(&ctx, &rt, "2_access_shared_nested_prefix", sql);
+    c.bench_function("2_access_shared_nested_prefix", |b| {
+        b.iter(|| query(&ctx, &rt, sql))
     });
 
-    // Two predicates sharing the struct root `s`.
-    c.bench_function("two_conjunct_shared_root", |b| {
-        b.iter(|| {
-            query(
-                &ctx,
-                &rt,
-                "select id from t where s['a'] = 5 and s['b'] = 5",
-            )
-        })
+    // Three accesses sharing the deeper prefix `s.inner`.
+    let sql = "select id from t \
+               where (s['inner']['x'] + s['inner']['y'] + s['inner']['z']) = 15";
+    assert_pushdown_active(&ctx, &rt, "3_access_shared_nested_prefix", sql);
+    c.bench_function("3_access_shared_nested_prefix", |b| {
+        b.iter(|| query(&ctx, &rt, sql))
     });
 
-    // Three predicates sharing the struct root `s`.
-    c.bench_function("three_conjunct_shared_root", |b| {
-        b.iter(|| {
-            query(
-                &ctx,
-                &rt,
-                "select id from t \
-                 where s['a'] = 5 and s['b'] = 5 and s['c'] = 5",
-            )
-        })
-    });
-
-    // Five predicates sharing the struct root `s`, amplifying planning cost.
-    c.bench_function("five_conjunct_shared_root", |b| {
-        b.iter(|| {
-            query(
-                &ctx,
-                &rt,
-                "select id from t \
-                 where s['a'] = 5 and s['b'] = 5 and s['c'] = 5 \
-                   and s['d'] = 5 and s['e'] = 5",
-            )
-        })
-    });
-
-    // Predicates sharing the nested prefix `s.inner`.
-    c.bench_function("nested_shared_prefix", |b| {
-        b.iter(|| {
-            query(
-                &ctx,
-                &rt,
-                "select id from t \
-                 where s['inner']['x'] = 5 and s['inner']['y'] = 5",
-            )
-        })
-    });
-
-    // Mix: two predicates on `s` leaves and two on `s.inner` leaves.
+    // Mix: two accesses on `s` leaves and two on `s.inner` leaves.
+    let sql = "select id from t \
+               where (s['a'] + s['b'] + s['inner']['x'] + s['inner']['y']) = 20";
+    assert_pushdown_active(&ctx, &rt, "mixed_depth_shared_prefix", sql);
     c.bench_function("mixed_depth_shared_prefix", |b| {
-        b.iter(|| {
-            query(
-                &ctx,
-                &rt,
-                "select id from t \
-                 where s['a'] = 5 and s['b'] = 5 \
-                   and s['inner']['x'] = 5 and s['inner']['y'] = 5",
-            )
-        })
+        b.iter(|| query(&ctx, &rt, sql))
     });
 
     // Temporary file must outlive the benchmarks, it is deleted when dropped
