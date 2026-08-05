@@ -235,7 +235,7 @@ unsafe extern "C" fn optimize_fn_wrapper(
         logical_codec.as_ref(),
     ));
 
-    FFI_Result::Ok(optimized_plan.iter().copied().collect())
+    FFI_Result::Ok(SVec::from(optimized_plan.as_ref()))
 }
 
 unsafe extern "C" fn create_physical_plan_fn_wrapper(
@@ -724,7 +724,7 @@ impl Session for ForeignSession {
                 logical_plan_to_bytes_with_extension_codec(plan, codec.as_ref())?;
             let optimized_plan = df_result!((self.session.optimize)(
                 &self.session,
-                logical_plan.iter().copied().collect(),
+                SVec::from(logical_plan.as_ref()),
             ))?;
             logical_plan_from_bytes_with_extension_codec(
                 optimized_plan.as_slice(),

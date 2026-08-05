@@ -170,7 +170,7 @@ unsafe extern "C" fn create_physical_plan_fn_wrapper(
             physical_codec.as_ref(),
         ));
 
-        FFI_Result::Ok(physical_plan.iter().copied().collect())
+        FFI_Result::Ok(SVec::from(physical_plan.as_ref()))
     }
     .into_ffi()
 }
@@ -296,7 +296,7 @@ impl FFI_QueryPlanner {
         let codec: Arc<dyn LogicalExtensionCodec> = (&self.logical_codec).into();
         let logical_plan =
             logical_plan_to_bytes_with_extension_codec(logical_plan, codec.as_ref())?;
-        let logical_plan = logical_plan.iter().copied().collect();
+        let logical_plan = SVec::from(logical_plan.as_ref());
         let task_ctx = session.task_ctx();
         let session = FFI_SessionRef::new_with_ffi_codecs(
             session,
