@@ -282,7 +282,7 @@ fn decode_empty_and_placeholder_row_without_partitions() -> Result<()> {
             },
         ),
     ] {
-        let node = protobuf::PhysicalPlanNode {
+        let node = PhysicalPlanNode {
             physical_plan_type: Some(physical_plan_type),
         };
         let plan = node.try_into_physical_plan(ctx.task_ctx().as_ref(), &codec)?;
@@ -1401,7 +1401,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         }
 
         fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-            std::fmt::Display::fmt(self, f)
+            Display::fmt(self, f)
         }
     }
 
@@ -2374,6 +2374,89 @@ fn roundtrip_range_partitioning() -> Result<()> {
     roundtrip_test(Arc::new(repartition))
 }
 
+/// `parse_protobuf_hash_partitioning` has no in-tree callers left; it delegates
+/// to the shared `Partitioning::try_from_proto`, so pin that it still decodes
+/// the hash message it is handed.
+#[test]
+fn parse_hash_partitioning_delegates_to_shared_decoder() -> Result<()> {
+    use datafusion_proto::physical_plan::from_proto::parse_protobuf_hash_partitioning;
+
+    let schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
+    let ctx = SessionContext::new();
+    let task_ctx = ctx.task_ctx();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let decode_ctx = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+    let proto_converter = DefaultPhysicalProtoConverter {};
+
+    let hash_expr = serialize_physical_expr_with_converter(
+        &col("a", &schema)?,
+        &codec,
+        &proto_converter,
+    )?;
+    let hash = protobuf::PhysicalHashRepartition {
+        hash_expr: vec![hash_expr],
+        partition_count: 4,
+    };
+
+    let partitioning = parse_protobuf_hash_partitioning(
+        Some(&hash),
+        &decode_ctx,
+        &schema,
+        &proto_converter,
+    )?;
+    let Some(Partitioning::Hash(exprs, count)) = partitioning else {
+        panic!("expected hash partitioning, got {partitioning:?}");
+    };
+    assert_eq!(count, 4);
+    assert_eq!(exprs.len(), 1);
+    assert_eq!(exprs[0].to_string(), col("a", &schema)?.to_string());
+
+    // No message means no partitioning, as before.
+    assert!(
+        parse_protobuf_hash_partitioning(None, &decode_ctx, &schema, &proto_converter)?
+            .is_none()
+    );
+
+    // The count is a `u64` on the wire and a `usize` in memory, so decoding
+    // narrows it. A count that does not fit is the case that motivated routing
+    // this through the shared decoder: it used to `unwrap()` and panic, and now
+    // reports an error. Only a target narrower than 64 bits can reach that arm
+    // -- on a 64-bit target every `u64` fits, and the assertion there is that
+    // the largest possible count survives whole rather than being truncated.
+    let oversized = protobuf::PhysicalHashRepartition {
+        hash_expr: vec![serialize_physical_expr_with_converter(
+            &col("a", &schema)?,
+            &codec,
+            &proto_converter,
+        )?],
+        partition_count: u64::MAX,
+    };
+    let decoded = parse_protobuf_hash_partitioning(
+        Some(&oversized),
+        &decode_ctx,
+        &schema,
+        &proto_converter,
+    );
+
+    #[cfg(target_pointer_width = "64")]
+    {
+        let Some(Partitioning::Hash(_, count)) = decoded? else {
+            panic!("expected hash partitioning");
+        };
+        assert_eq!(count, usize::MAX);
+    }
+
+    #[cfg(not(target_pointer_width = "64"))]
+    assert!(
+        decoded
+            .unwrap_err()
+            .to_string()
+            .contains("Partition count 18446744073709551615 exceeds usize::MAX")
+    );
+
+    Ok(())
+}
+
 #[test]
 fn roundtrip_interleave() -> Result<()> {
     let field_a = Field::new("col", DataType::Int64, false);
@@ -2416,7 +2499,7 @@ fn roundtrip_unnest() -> Result<()> {
         Arc::new(Schema::new(vec![fa, fb0, fc1, fc2, fd0, fe1, fe2, fe3]));
     let input = Arc::new(EmptyExec::new(input_schema));
     let options = UnnestOptions {
-        preserve_nulls: false,
+        null_handling: datafusion_common::NullHandling::Drop,
         recursions: vec![datafusion_common::RecursionUnnestOption {
             input_column: datafusion_common::Column::new_unqualified("b"),
             output_column: datafusion_common::Column::new_unqualified("b"),
@@ -2678,7 +2761,7 @@ fn deprecated_projection_shim_decodes_argument_not_self() -> Result<()> {
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
     let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     let decoded = unrelated_node.try_into_projection_physical_plan(
         projection_exec_node,
         &decode_ctx,
@@ -3037,20 +3120,20 @@ fn roundtrip_sort_merge_join() -> Result<()> {
         Arc::new(Column::new("col_b", schema_right.index_of("col_b")?)) as _,
     )];
 
-    let filter = datafusion::physical_plan::joins::utils::JoinFilter::new(
+    let filter = JoinFilter::new(
         Arc::new(BinaryExpr::new(
             Arc::new(Column::new("col_a", 1)),
             Operator::Gt,
             Arc::new(Column::new("col_b", 0)),
         )),
         vec![
-            datafusion::physical_plan::joins::utils::ColumnIndex {
+            ColumnIndex {
                 index: 0,
-                side: datafusion_common::JoinSide::Left,
+                side: JoinSide::Left,
             },
-            datafusion::physical_plan::joins::utils::ColumnIndex {
+            ColumnIndex {
                 index: 0,
-                side: datafusion_common::JoinSide::Right,
+                side: JoinSide::Right,
             },
         ],
         Arc::new(Schema::new(vec![field_a, field_b])),
@@ -3256,7 +3339,7 @@ fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
 
     // Create a HashTableLookupExpr - it will be replaced with lit(true) during serialization
     let hash_map = Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(0))));
-    let on_columns = vec![datafusion::physical_plan::expressions::col("col", &schema)?];
+    let on_columns = vec![col("col", &schema)?];
     let lookup_expr: Arc<dyn PhysicalExpr> = Arc::new(HashTableLookupExpr::new(
         on_columns,
         datafusion::physical_plan::joins::SeededRandomState::with_seed(0),
@@ -3336,7 +3419,7 @@ fn custom_proto_converter_intercepts() -> Result<()> {
     impl PhysicalProtoConverterExtension for CustomConverterInterceptor {
         fn proto_to_execution_plan(
             &self,
-            proto: &protobuf::PhysicalPlanNode,
+            proto: &PhysicalPlanNode,
             ctx: &PhysicalPlanDecodeContext<'_>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             {
@@ -3353,7 +3436,7 @@ fn custom_proto_converter_intercepts() -> Result<()> {
             &self,
             plan: &Arc<dyn ExecutionPlan>,
             codec: &dyn PhysicalExtensionCodec,
-        ) -> Result<protobuf::PhysicalPlanNode>
+        ) -> Result<PhysicalPlanNode>
         where
             Self: Sized,
         {
@@ -3559,7 +3642,7 @@ fn roundtrip_dynamic_filter_expr_pair(
 /// - `dynamic_filter_2` before serialization
 /// - `dynamic_filter_1` after serialization
 /// - `dynamic_filter_2` after serialization
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity)]
 fn roundtrip_dynamic_filter_plan_pair() -> Result<(
     Arc<dyn PhysicalExpr>,
     Arc<dyn PhysicalExpr>,
@@ -4605,7 +4688,7 @@ impl ExecutionPlan for CustomExecWithExprs {
         self.child.schema()
     }
 
-    fn properties(&self) -> &Arc<datafusion::physical_plan::PlanProperties> {
+    fn properties(&self) -> &Arc<PlanProperties> {
         self.child.properties()
     }
 
@@ -4883,7 +4966,7 @@ impl PhysicalExpr for WrapperExpr {
         }))
     }
     fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(self, f)
+        Display::fmt(self, f)
     }
 }
 
@@ -4891,7 +4974,7 @@ impl PhysicalExpr for WrapperExpr {
 #[derive(Clone, PartialEq, prost::Message)]
 struct WrapperExprProto {
     #[prost(message, optional, boxed, tag = "1")]
-    inner: Option<Box<datafusion_proto::protobuf::PhysicalExprNode>>,
+    inner: Option<Box<PhysicalExprNode>>,
 }
 
 #[derive(Debug)]
@@ -4989,8 +5072,7 @@ fn extension_codec_expr_participates_in_deduplication() -> Result<()> {
     // Encode, then round-trip through prost bytes to mimic the wire.
     let proto = converter.physical_expr_to_proto(&composite, &codec)?;
     let bytes = proto.encode_to_vec();
-    let decoded_proto =
-        datafusion_proto::protobuf::PhysicalExprNode::decode(bytes.as_slice()).unwrap();
+    let decoded_proto = PhysicalExprNode::decode(bytes.as_slice()).unwrap();
 
     let ctx = SessionContext::new();
     let task_ctx = ctx.task_ctx();

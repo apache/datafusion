@@ -278,8 +278,8 @@ SELECT 'a' SIMILAR TO NULL;
 ----
 NULL
 
-# SIMILAR TO with a non-string pattern is rejected at plan time.
-statement error Invalid pattern in SIMILAR TO expression
+# SIMILAR TO with a non-string pattern is rejected by the analyzer.
+statement error There isn't a common type to coerce Utf8 and Int64 in SIMILAR TO expression
 SELECT 'a' SIMILAR TO 1;
 
 # The value and the pattern are coerced to a common string type, so mixing

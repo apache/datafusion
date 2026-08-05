@@ -1780,6 +1780,7 @@ name = "datafusion-benchmarks"
 version = "54.1.0"
 dependencies = [
  "arrow",
+ "arrow-buffer",
  "async-trait",
  "bytes",
  "clap",
@@ -1787,6 +1788,7 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-common-runtime",
+ "datafusion-execution",
  "datafusion-proto",
  "env_logger",
  "futures",
@@ -1942,6 +1944,7 @@ dependencies = [
  "datafusion-physical-expr-adapter",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
+ "datafusion-proto-models",
  "datafusion-session",
  "flate2",
  "futures",
@@ -2270,6 +2273,7 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "half",
+ "hashbrown 0.17.1",
  "log",
  "num-traits",
  "rand 0.9.4",
@@ -2357,7 +2361,7 @@ version = "54.1.0"
 dependencies = [
  "datafusion-doc",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.2",
 ]
 
 [[package]]
@@ -2459,6 +2463,7 @@ dependencies = [
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
  "datafusion-pruning",
+ "datafusion-session",
  "insta",
  "itertools 0.15.0",
  "recursive",
