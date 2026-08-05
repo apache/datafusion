@@ -85,9 +85,19 @@ mod tests {
         Ok(())
     }
 
-    /// Library A's logical codec stores library B's provider while the logical
-    /// plan crosses into library C. A real application would encode enough
-    /// metadata to reconstruct or locate the provider instead.
+    /// Test-only codec that preserves library B's table provider while the logical
+    /// plan crosses between library A and library C.
+    ///
+    /// Encoding writes a fixed identifier and stores a weak reference to the
+    /// provider. Decoding validates the identifier and upgrades that reference.
+    /// This works because all three test libraries run in one process and library
+    /// A's session continues to own the provider.
+    ///
+    /// This is not a general serialization format for table providers. A
+    /// cross-process deployment must provide its own codec that either resolves a
+    /// stable identifier through shared state or reconstructs the provider from a
+    /// portable, provider-specific description. DataFusion passes the table
+    /// reference, schema, and task context separately to the decoder.
     #[derive(Debug, Default)]
     struct LibraryALogicalCodec {
         library_b_provider: OnceLock<Weak<dyn TableProvider>>,
