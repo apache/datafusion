@@ -38,6 +38,9 @@ use datafusion_expr::{ColumnarValue, expr_vec_fmt};
 
 mod array_static_filter;
 mod branchless_filter;
+mod byte_view_filter;
+mod fixed_size_binary_filter;
+mod frozen_set;
 mod primitive_filter;
 mod result;
 mod static_filter;
@@ -215,15 +218,15 @@ impl InListExpr {
             expr,
             list,
             negated,
-            Some(instantiate_static_filter(array)?),
+            Some(instantiate_static_filter(array, &expr_data_type)?),
         ))
     }
 
     /// Create a new InList expression, using a static filter when possible.
     ///
     /// This validates data types and attempts to create a static filter for constant
-    /// list expressions. Uses specialized StaticFilter implementations for better
-    /// performance (e.g., Int32StaticFilter for Int32).
+    /// list expressions. Uses specialized `StaticFilter` implementations for better
+    /// performance (for example, primitive filters for fixed-width values).
     ///
     /// Returns an error if data types don't match. If the list contains non-constant
     /// expressions, falls back to dynamic evaluation at runtime.
@@ -242,7 +245,7 @@ impl InListExpr {
 
         // Try to create a static filter if all list expressions are constants
         let static_filter = match try_evaluate_constant_list(&list, schema)? {
-            Some(in_array) => Some(instantiate_static_filter(in_array)?),
+            Some(in_array) => Some(instantiate_static_filter(in_array, &expr_data_type)?),
             None => None, // Non-constant expressions, fall back to dynamic evaluation
         };
 
@@ -2592,7 +2595,7 @@ mod tests {
         // Create IN list with Int32 literals: (100, 200, 300)
         let list = vec![lit(100i32), lit(200i32), lit(300i32)];
 
-        // Create InListExpr via in_list() - this uses Int32StaticFilter for Int32 lists
+        // Create InListExpr via in_list() - this uses a specialized primitive filter
         let expr = in_list(col_a, list, &false, &schema)?;
 
         // Create dictionary-encoded batch with values [100, 200, 500]
@@ -3574,6 +3577,49 @@ mod tests {
                 wrap_in_dict(Arc::clone(&utf8_needle)),
                 wrap_in_dict(Arc::clone(&utf8_in)),
             )?
+        );
+
+        // Utf8View in_array, Utf8View and Dict(Utf8View) needles
+        let utf8view_in =
+            Arc::new(StringViewArray::from(vec!["a", "b", "c"])) as ArrayRef;
+        let utf8view_needle =
+            Arc::new(StringViewArray::from(vec!["a", "d", "b"])) as ArrayRef;
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(
+                Arc::clone(&utf8view_needle),
+                Arc::clone(&utf8view_in),
+            )?
+        );
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(wrap_in_dict(utf8view_needle), utf8view_in)?
+        );
+
+        // FixedSizeBinary in_array, FixedSizeBinary and Dictionary needles
+        let fsb_in = Arc::new(FixedSizeBinaryArray::try_from_iter(
+            [
+                [1, 2, 3, 4].as_slice(),
+                [5, 6, 7, 8].as_slice(),
+                [9, 10, 11, 12].as_slice(),
+            ]
+            .into_iter(),
+        )?) as ArrayRef;
+        let fsb_needle = Arc::new(FixedSizeBinaryArray::try_from_iter(
+            [
+                [1, 2, 3, 4].as_slice(),
+                [13, 14, 15, 16].as_slice(),
+                [5, 6, 7, 8].as_slice(),
+            ]
+            .into_iter(),
+        )?) as ArrayRef;
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(Arc::clone(&fsb_needle), Arc::clone(&fsb_in))?
+        );
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(wrap_in_dict(fsb_needle), fsb_in)?
         );
 
         // Struct in_array, Struct needle: multi-column join

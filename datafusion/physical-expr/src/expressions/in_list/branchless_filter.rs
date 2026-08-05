@@ -58,8 +58,9 @@
 //! would be useful. Wider types have too many possible values for such a
 //! bitmap, so their limits are tuned separately.
 //!
-//! Larger lists use the standard filter strategy, including bitmap filters for
-//! one- and two-byte types.
+//! Larger lists use another filter strategy: bitmap filters for one- and
+//! two-byte types, frozen sets for supported four- and eight-byte types, and
+//! the standard fallback for the remaining types.
 //!
 //! # What about nulls?
 //!
@@ -71,7 +72,7 @@
 use std::mem::size_of;
 
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, PrimitiveArray};
-use arrow::buffer::{BooleanBuffer, ScalarBuffer};
+use arrow::buffer::{BooleanBuffer, NullBuffer, ScalarBuffer};
 use arrow::datatypes::*;
 use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::{Result, exec_datafusion_err, internal_datafusion_err};
@@ -244,6 +245,17 @@ where
             check_values,
         })
     }
+
+    #[inline]
+    pub(super) fn contains_slice(
+        &self,
+        input_values: &[BranchlessNative<T>],
+        nulls: Option<&NullBuffer>,
+        negated: bool,
+    ) -> BooleanArray {
+        let matches = (self.check_values)(self.in_list_values.as_ref(), input_values);
+        build_result_from_contains(nulls, self.null_count > 0, negated, matches)
+    }
 }
 
 impl<T> StaticFilter for BranchlessFilter<T>
@@ -272,14 +284,7 @@ where
             exec_datafusion_err!("BranchlessFilter: expected {} array", T::DATA_TYPE)
         })?;
         let input_values = branchless_values::<T>(v);
-        let matches =
-            (self.check_values)(self.in_list_values.as_ref(), input_values.as_ref());
-        Ok(build_result_from_contains(
-            v.nulls(),
-            self.null_count > 0,
-            negated,
-            matches,
-        ))
+        Ok(self.contains_slice(input_values.as_ref(), v.nulls(), negated))
     }
 }
 
