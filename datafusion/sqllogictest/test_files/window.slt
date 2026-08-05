@@ -6843,16 +6843,17 @@ DROP TABLE issue_20194_t1;
 statement ok
 DROP TABLE issue_20194_t2;
 
-# Sliding-window MIN/MAX over a frame whose non-NULL values have all been
-# retracted should yield NULL.
-query IIII
+# Sliding-window over a frame whose non-NULL values have all been retracted should yield NULL.
+query IIIIRR
 SELECT id, x,
        MIN(x) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS min_x,
-       MAX(x) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS max_x
+       MAX(x) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS max_x,
+       percentile_cont(x, 0.5) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS percentile_x,
+       median(x) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS median_x,
 FROM (VALUES (1, 3), (2, NULL), (3, NULL), (4, 7)) t(id, x)
 ORDER BY id
 ----
-1 3 3 3
-2 NULL 3 3
-3 NULL NULL NULL
-4 7 7 7
+1 3 3 3 3 3
+2 NULL 3 3 3 3
+3 NULL NULL NULL NULL NULL
+4 7 7 7 7 7

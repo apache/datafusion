@@ -221,18 +221,7 @@ impl OrderedPartialAggregateStream {
             self.close_input();
             table.input_done();
 
-            let last_batch = self.handle_draining_final(&mut table, &mut emitter).await?;
-
-            // Clear memory before emitting last batch so we don't have to wait for next poll to clear
-            {
-                // Clear memory
-                drop(table);
-                let _ = self.reservation.try_resize(0);
-            }
-
-            if let Some(last_batch) = last_batch {
-                emitter.emit(last_batch).await;
-            }
+            self.handle_draining_final(table, &mut emitter).await?;
 
             Ok(())
         })
@@ -326,23 +315,28 @@ impl OrderedPartialAggregateStream {
     /// `table.input_done()` has already made every remaining group safe to emit,
     /// so this state keeps draining until the table is empty.
     ///
-    /// Returns the last batch to emit so we can free all the state and memory before emitting,
-    /// and we won't need to hold while waiting for the next poll.
-    ///
     /// See comments at [`Self::create_stream`] for details.
     ///
     async fn handle_draining_final(
         &mut self,
-        table: &mut OrderedAggregateTable<PartialMarker>,
+        mut table: OrderedAggregateTable<PartialMarker>,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
-    ) -> Result<Option<RecordBatch>> {
+    ) -> Result<()> {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let mut timer = elapsed_compute.timer();
+
         while let Some(batch) = table.next_output_batch()? {
             self.reduction_factor.add_part(batch.num_rows());
 
             if table.is_empty() {
-                return Ok(Some(batch));
+                // Clear memory before emitting last batch so we don't have to wait for next poll to clear
+                drop(table);
+                let _ = self.reservation.try_resize(0);
+                drop(timer);
+
+                emitter.emit(batch).await;
+
+                return Ok(());
             }
 
             self.reservation.try_resize(table.memory_size())?;
@@ -353,6 +347,6 @@ impl OrderedPartialAggregateStream {
         }
 
         // was empty
-        Ok(None)
+        Ok(())
     }
 }
