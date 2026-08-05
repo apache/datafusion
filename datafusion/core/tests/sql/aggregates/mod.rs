@@ -259,20 +259,20 @@ impl TestData {
 }
 
 /// Sets up test contexts for TestData with both single and multiple partitions
-pub async fn setup_test_contexts(
+pub fn setup_test_contexts(
     test_data: &TestData,
 ) -> Result<(SessionContext, SessionContext)> {
     // Single partition context
-    let ctx_single = create_context_with_partitions(test_data, 1).await?;
+    let ctx_single = create_context_with_partitions(test_data, 1)?;
 
     // Multiple partition context
-    let ctx_multi = create_context_with_partitions(test_data, 3).await?;
+    let ctx_multi = create_context_with_partitions(test_data, 3)?;
 
     Ok((ctx_single, ctx_multi))
 }
 
 /// Creates a session context with the specified number of partitions and registers test data
-pub async fn create_context_with_partitions(
+pub fn create_context_with_partitions(
     test_data: &TestData,
     num_partitions: usize,
 ) -> Result<SessionContext> {
@@ -348,7 +348,7 @@ pub async fn run_snapshot_test(
     test_data: &TestData,
     sql: &str,
 ) -> Result<Vec<RecordBatch>> {
-    let (ctx_single, ctx_multi) = setup_test_contexts(test_data).await?;
+    let (ctx_single, ctx_multi) = setup_test_contexts(test_data)?;
     let results = test_query_consistency(&ctx_single, &ctx_multi, sql).await?;
     Ok(results)
 }
@@ -430,20 +430,20 @@ impl FuzzTestData {
 }
 
 /// Sets up test contexts for fuzz table with both single and multiple partitions
-pub async fn setup_fuzz_test_contexts() -> Result<(SessionContext, SessionContext)> {
+pub fn setup_fuzz_test_contexts() -> Result<(SessionContext, SessionContext)> {
     let test_data = FuzzTestData::new();
 
     // Single partition context
-    let ctx_single = create_fuzz_context_with_partitions(&test_data, 1).await?;
+    let ctx_single = create_fuzz_context_with_partitions(&test_data, 1)?;
 
     // Multiple partition context
-    let ctx_multi = create_fuzz_context_with_partitions(&test_data, 3).await?;
+    let ctx_multi = create_fuzz_context_with_partitions(&test_data, 3)?;
 
     Ok((ctx_single, ctx_multi))
 }
 
 /// Creates a session context with fuzz table partitioned into specified number of partitions
-pub async fn create_fuzz_context_with_partitions(
+pub fn create_fuzz_context_with_partitions(
     test_data: &FuzzTestData,
     num_partitions: usize,
 ) -> Result<SessionContext> {
@@ -604,21 +604,20 @@ impl FuzzCountTestData {
 }
 
 /// Sets up test contexts for fuzz table with duration/binary columns and both single and multiple partitions
-pub async fn setup_fuzz_count_test_contexts() -> Result<(SessionContext, SessionContext)>
-{
+pub fn setup_fuzz_count_test_contexts() -> Result<(SessionContext, SessionContext)> {
     let test_data = FuzzCountTestData::new();
 
     // Single partition context
-    let ctx_single = create_fuzz_count_context_with_partitions(&test_data, 1).await?;
+    let ctx_single = create_fuzz_count_context_with_partitions(&test_data, 1)?;
 
     // Multiple partition context
-    let ctx_multi = create_fuzz_count_context_with_partitions(&test_data, 3).await?;
+    let ctx_multi = create_fuzz_count_context_with_partitions(&test_data, 3)?;
 
     Ok((ctx_single, ctx_multi))
 }
 
 /// Creates a session context with fuzz count table partitioned into specified number of partitions
-pub async fn create_fuzz_count_context_with_partitions(
+pub fn create_fuzz_count_context_with_partitions(
     test_data: &FuzzCountTestData,
     num_partitions: usize,
 ) -> Result<SessionContext> {
@@ -808,21 +807,20 @@ impl FuzzMedianTestData {
 }
 
 /// Sets up test contexts for fuzz table with numeric types for median testing and both single and multiple partitions
-pub async fn setup_fuzz_median_test_contexts() -> Result<(SessionContext, SessionContext)>
-{
+pub fn setup_fuzz_median_test_contexts() -> Result<(SessionContext, SessionContext)> {
     let test_data = FuzzMedianTestData::new();
 
     // Single partition context
-    let ctx_single = create_fuzz_median_context_with_partitions(&test_data, 1).await?;
+    let ctx_single = create_fuzz_median_context_with_partitions(&test_data, 1)?;
 
     // Multiple partition context
-    let ctx_multi = create_fuzz_median_context_with_partitions(&test_data, 3).await?;
+    let ctx_multi = create_fuzz_median_context_with_partitions(&test_data, 3)?;
 
     Ok((ctx_single, ctx_multi))
 }
 
 /// Creates a session context with fuzz median table partitioned into specified number of partitions
-pub async fn create_fuzz_median_context_with_partitions(
+pub fn create_fuzz_median_context_with_partitions(
     test_data: &FuzzMedianTestData,
     num_partitions: usize,
 ) -> Result<SessionContext> {
@@ -959,21 +957,20 @@ impl FuzzTimestampTestData {
 }
 
 /// Sets up test contexts for fuzz table with timestamps and both single and multiple partitions
-pub async fn setup_fuzz_timestamp_test_contexts()
--> Result<(SessionContext, SessionContext)> {
+pub fn setup_fuzz_timestamp_test_contexts() -> Result<(SessionContext, SessionContext)> {
     let test_data = FuzzTimestampTestData::new();
 
     // Single partition context
-    let ctx_single = create_fuzz_timestamp_context_with_partitions(&test_data, 1).await?;
+    let ctx_single = create_fuzz_timestamp_context_with_partitions(&test_data, 1)?;
 
     // Multiple partition context
-    let ctx_multi = create_fuzz_timestamp_context_with_partitions(&test_data, 3).await?;
+    let ctx_multi = create_fuzz_timestamp_context_with_partitions(&test_data, 3)?;
 
     Ok((ctx_single, ctx_multi))
 }
 
 /// Creates a session context with fuzz timestamp table partitioned into specified number of partitions
-pub async fn create_fuzz_timestamp_context_with_partitions(
+pub fn create_fuzz_timestamp_context_with_partitions(
     test_data: &FuzzTimestampTestData,
     num_partitions: usize,
 ) -> Result<SessionContext> {
