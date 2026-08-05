@@ -1098,13 +1098,43 @@ pub struct BoundedWindowAggStream {
     /// Output partition index this stream serves; passed as the first
     /// argument to `finalized_state_observer`.
     partition_idx: usize,
-    /// If set, invoked at partition close in [`Self::prune_state`] with the
+    /// If set, invoked from [`Self::publish_finalized_states`] with the
     /// finalized per-window-expression state for every partition key that is
     /// about to be dropped.
     finalized_state_observer: Option<FinalizedWindowStateObserver>,
 }
 
 impl BoundedWindowAggStream {
+    /// Fire `finalized_state_observer` for every partition key whose
+    /// `WindowAggState::is_end` is true.
+    fn publish_finalized_states(&mut self) -> Result<()> {
+        let Some(observer) = self.finalized_state_observer.clone() else {
+            return Ok(());
+        };
+        if self.window_agg_states.is_empty() {
+            return Ok(());
+        }
+        let closed_keys: Vec<PartitionKey> = self.window_agg_states[0]
+            .iter()
+            .filter(|(_, ws)| ws.state.is_end)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in closed_keys {
+            let mut states: Vec<Option<Vec<ScalarValue>>> =
+                Vec::with_capacity(self.window_agg_states.len());
+            for per_expr in self.window_agg_states.iter_mut() {
+                let entry = per_expr.get_mut(&key).ok_or_else(|| {
+                    exec_datafusion_err!(
+                        "finalized_state_observer: missing state for closed partition key"
+                    )
+                })?;
+                states.push(entry.aggregate_state()?);
+            }
+            observer(self.partition_idx, &key, &states)?;
+        }
+        Ok(())
+    }
+
     /// Prunes sections of the state that are no longer needed when calculating
     /// results (as determined by window frame boundaries and number of results generated).
     // For instance, if first `n` (not necessarily same with `n_out`) elements are no longer needed to
@@ -1113,33 +1143,6 @@ impl BoundedWindowAggStream {
     // For instance, if `n_out` number of rows are calculated, we can remove
     // first `n_out` rows from `self.input_buffer`.
     fn prune_state(&mut self, n_out: usize) -> Result<()> {
-        // `WindowAggState::is_end` is copied from `PartitionBatchState::is_end`
-        // during `evaluate_stateful`, so every window_expr's state map agrees
-        // on which partition keys have just closed. Publish those keys before
-        // the retains in `prune_out_columns` / `prune_partition_batches` drop
-        // them.
-        if let Some(observer) = self.finalized_state_observer.clone()
-            && !self.window_agg_states.is_empty()
-        {
-            let closed_keys: Vec<PartitionKey> = self.window_agg_states[0]
-                .iter()
-                .filter(|(_, ws)| ws.state.is_end)
-                .map(|(k, _)| k.clone())
-                .collect();
-            for key in closed_keys {
-                let mut states: Vec<Option<Vec<ScalarValue>>> =
-                    Vec::with_capacity(self.window_agg_states.len());
-                for per_expr in self.window_agg_states.iter_mut() {
-                    let entry = per_expr.get_mut(&key).ok_or_else(|| {
-                        exec_datafusion_err!(
-                            "finalized_state_observer: missing state for closed partition key"
-                        )
-                    })?;
-                    states.push(entry.aggregate_state()?);
-                }
-                observer(self.partition_idx, &key, &states)?;
-            }
-        }
         // Prune `self.window_agg_states`:
         self.prune_out_columns();
         // Prune `self.partition_batches`:
@@ -1206,6 +1209,12 @@ impl BoundedWindowAggStream {
                 &eval_ctx,
             )?;
         }
+
+        // Fire before `calculate_out_columns`: on causal frames every row
+        // already streamed out, so at EOS that call returns `None` and the
+        // prune path is skipped — the final partition would otherwise be
+        // dropped unobserved.
+        self.publish_finalized_states()?;
 
         let schema = Arc::clone(&self.schema);
         let window_expr_out = self.search_mode.calculate_out_columns(
@@ -2150,6 +2159,279 @@ mod tests {
             assert_eq!(states.len(), 1, "one window expression");
             assert!(states[0].is_some(), "count() is an aggregate → Some(state)");
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_finalized_state_observer_fires_on_causal_frame() -> Result<()> {
+        // Same setup as the non-causal test above, but with the causal frame
+        // `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` — the running-sum
+        // shape. Output can stream row-by-row without waiting for partition
+        // close, so this is the frame most likely to bypass the observer path
+        // if `is_end` were tied to buffered-output flushing. It isn't:
+        // `is_end` comes from PARTITION BY transition detection in
+        // `mark_partition_end` (mid-stream) and EOS (tail), independent of
+        // frame causality. This test locks that in.
+        use crate::windows::bounded_window_agg_exec::FinalizedWindowStateObserver;
+        use datafusion_physical_expr::window::PartitionKey;
+        use std::sync::Mutex;
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema = test_schema();
+
+        let mut sn_b = UInt64Builder::with_capacity(6);
+        let mut hash_b = Int64Builder::with_capacity(6);
+        for (sn, hash) in [(1u64, 1i64), (2, 1), (3, 1), (4, 2), (5, 2), (6, 2)] {
+            sn_b.append_value(sn);
+            hash_b.append_value(hash);
+        }
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(sn_b.finish()), Arc::new(hash_b.finish())],
+        )?;
+        let ordering: LexOrdering = [
+            PhysicalSortExpr {
+                expr: col("hash", &schema)?,
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: col("sn", &schema)?,
+                options: SortOptions::default(),
+            },
+        ]
+        .into();
+        let source_raw =
+            TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None)?
+                .try_with_sort_information(vec![ordering])?;
+        let source: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(source_raw)));
+
+        let window_fn = WindowFunctionDefinition::AggregateUDF(count_udaf());
+        let args = vec![col("sn", &schema)?];
+        let partition_by = vec![col("hash", &schema)?];
+        let order_by = vec![PhysicalSortExpr {
+            expr: col("sn", &schema)?,
+            options: SortOptions::default(),
+        }];
+        let frame = WindowFrame::new_bounds(
+            WindowFrameUnits::Rows,
+            WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+            WindowFrameBound::CurrentRow,
+        );
+        let expr = create_window_expr(
+            &window_fn,
+            "cnt".to_string(),
+            &args,
+            &partition_by,
+            &order_by,
+            Arc::new(frame),
+            source.schema(),
+            false,
+            false,
+            None,
+        )?;
+
+        type Observation = (usize, PartitionKey, Vec<Option<Vec<ScalarValue>>>);
+        let observations: Arc<Mutex<Vec<Observation>>> = Arc::new(Mutex::new(vec![]));
+        let sink = Arc::clone(&observations);
+        let observer: FinalizedWindowStateObserver = Arc::new(move |idx, key, states| {
+            sink.lock()
+                .unwrap()
+                .push((idx, key.clone(), states.to_vec()));
+            Ok(())
+        });
+
+        let plan = BoundedWindowAggExec::try_new(
+            vec![expr],
+            source,
+            InputOrderMode::Sorted,
+            false,
+        )?
+        .with_finalized_state_observer(observer);
+
+        let _ = collect(Arc::new(plan).execute(0, task_ctx)?).await?;
+
+        let obs = observations.lock().unwrap();
+        assert_eq!(obs.len(), 2, "one observation per PARTITION BY group");
+        let keys: Vec<i64> = obs
+            .iter()
+            .map(|(_, k, _)| match &k[0] {
+                ScalarValue::Int64(Some(v)) => *v,
+                other => panic!("unexpected partition-key element: {other:?}"),
+            })
+            .collect();
+        assert_eq!(keys, vec![1, 2]);
+        for (idx, _, states) in obs.iter() {
+            assert_eq!(*idx, 0, "single output partition");
+            assert_eq!(states.len(), 1, "one window expression");
+            assert!(states[0].is_some(), "count() is an aggregate → Some(state)");
+        }
+        Ok(())
+    }
+
+    /// Run one task's local BWAG for `SUM(sn) OVER (ORDER BY sn ROWS
+    /// UNBOUNDED PRECEDING TO CURRENT ROW)` with no PARTITION BY, over
+    /// `input` sorted ascending. Returns the per-row output values and the
+    /// observed finalized state total (which the caller uses as a carry-in
+    /// for the next task).
+    async fn run_running_sum_task(
+        input: &[u64],
+        task_ctx: Arc<TaskContext>,
+    ) -> Result<(Vec<u64>, u64)> {
+        use crate::windows::bounded_window_agg_exec::FinalizedWindowStateObserver;
+        use arrow::array::UInt64Array;
+        use datafusion_functions_aggregate::sum::sum_udaf;
+        use std::sync::Mutex;
+
+        let schema = test_schema();
+        let mut sn_b = UInt64Builder::with_capacity(input.len());
+        let mut hash_b = Int64Builder::with_capacity(input.len());
+        for &sn in input {
+            sn_b.append_value(sn);
+            hash_b.append_value(0);
+        }
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(sn_b.finish()), Arc::new(hash_b.finish())],
+        )?;
+        let ordering: LexOrdering = [PhysicalSortExpr {
+            expr: col("sn", &schema)?,
+            options: SortOptions::default(),
+        }]
+        .into();
+        let source_raw =
+            TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None)?
+                .try_with_sort_information(vec![ordering])?;
+        let source: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(source_raw)));
+
+        let window_fn = WindowFunctionDefinition::AggregateUDF(sum_udaf());
+        let args = vec![col("sn", &schema)?];
+        let partition_by: Vec<Arc<dyn PhysicalExpr>> = vec![];
+        let order_by = vec![PhysicalSortExpr {
+            expr: col("sn", &schema)?,
+            options: SortOptions::default(),
+        }];
+        let frame = WindowFrame::new_bounds(
+            WindowFrameUnits::Rows,
+            WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+            WindowFrameBound::CurrentRow,
+        );
+        let expr = create_window_expr(
+            &window_fn,
+            "running_sum".to_string(),
+            &args,
+            &partition_by,
+            &order_by,
+            Arc::new(frame),
+            source.schema(),
+            false,
+            false,
+            None,
+        )?;
+
+        let total_sink: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
+        let sink = Arc::clone(&total_sink);
+        let observer: FinalizedWindowStateObserver =
+            Arc::new(move |_idx, key, states| {
+                assert!(
+                    key.is_empty(),
+                    "empty PartitionKey for no-PARTITION-BY plan"
+                );
+                assert_eq!(states.len(), 1, "one window expression");
+                let state = states[0].as_ref().expect("sum() → Some(state)");
+                let total = match &state[0] {
+                    ScalarValue::UInt64(Some(v)) => *v,
+                    ScalarValue::Int64(Some(v)) => *v as u64,
+                    other => panic!("unexpected sum state element: {other:?}"),
+                };
+                let prev = sink.lock().unwrap().replace(total);
+                assert!(prev.is_none(), "observer must fire exactly once per task");
+                Ok(())
+            });
+
+        let plan = BoundedWindowAggExec::try_new(
+            vec![expr],
+            source,
+            InputOrderMode::Sorted,
+            false,
+        )?
+        .with_finalized_state_observer(observer);
+        let batches = collect(Arc::new(plan).execute(0, task_ctx)?).await?;
+
+        let mut out = Vec::with_capacity(input.len());
+        for batch in &batches {
+            let col = batch
+                .column_by_name("running_sum")
+                .expect("running_sum column present");
+            let arr = col
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .expect("SUM(UInt64) → UInt64Array");
+            for i in 0..arr.len() {
+                out.push(arr.value(i));
+            }
+        }
+        let total = total_sink
+            .lock()
+            .unwrap()
+            .expect("observer must have fired at EOS");
+        Ok((out, total))
+    }
+
+    #[tokio::test]
+    async fn test_prefix_scan_across_tasks_matches_single_bwag() -> Result<()> {
+        // Demonstrates the parallel-window shape reviewers asked about:
+        // range-shuffle `SUM(sn) OVER (ORDER BY sn UNBOUNDED PRECEDING TO
+        // CURRENT ROW)` across two tasks, then prefix-scan each task's
+        // finalized state (from the observer) to carry-in the next task's
+        // rows. Result must match a single BWAG over the concatenated input.
+        let task_ctx = Arc::new(TaskContext::default());
+
+        // Two tasks under range partition on sn:
+        let (task1_out, task1_total) =
+            run_running_sum_task(&[1, 1, 2, 2, 3, 3, 4, 4], Arc::clone(&task_ctx))
+                .await?;
+        let (task2_out, task2_total) =
+            run_running_sum_task(&[5, 5, 6, 6, 7, 7, 8, 8], Arc::clone(&task_ctx))
+                .await?;
+
+        // Local (uncorrected) outputs and totals — first pass.
+        assert_eq!(task1_out, vec![1, 2, 4, 6, 9, 12, 16, 20]);
+        assert_eq!(task1_total, 20);
+        assert_eq!(task2_out, vec![5, 10, 16, 22, 29, 36, 44, 52]);
+        assert_eq!(task2_total, 52);
+
+        // Prefix scan over per-task totals → carry-in for each task. Task 0's
+        // carry-in is 0; task N's carry-in is the sum of tasks [0, N).
+        let carry_ins = [0u64, task1_total];
+
+        // Second pass: shift each task's local values by its carry-in.
+        let task1_final: Vec<u64> = task1_out.iter().map(|v| v + carry_ins[0]).collect();
+        let task2_final: Vec<u64> = task2_out.iter().map(|v| v + carry_ins[1]).collect();
+        let parallel_result: Vec<u64> = task1_final
+            .iter()
+            .chain(task2_final.iter())
+            .copied()
+            .collect();
+
+        // Oracle: single BWAG over the full concatenated input.
+        let (single_result, single_total) = run_running_sum_task(
+            &[1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8],
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(
+            parallel_result, single_result,
+            "two-task prefix-scan must match single-BWAG oracle"
+        );
+        // And matches the sequence in the design discussion.
+        assert_eq!(
+            single_result,
+            vec![1, 2, 4, 6, 9, 12, 16, 20, 25, 30, 36, 42, 49, 56, 64, 72]
+        );
+        assert_eq!(single_total, 72);
         Ok(())
     }
 
