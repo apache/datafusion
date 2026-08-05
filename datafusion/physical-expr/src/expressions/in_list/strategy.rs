@@ -34,6 +34,7 @@ use super::array_static_filter::ArrayStaticFilter;
 use super::branchless_filter::{
     BranchlessFilter, BranchlessFilterType, BranchlessNative,
 };
+use super::fixed_size_binary_filter::instantiate_fixed_size_binary_filter;
 use super::primitive_filter::*;
 use super::static_filter::StaticFilter;
 
@@ -41,6 +42,10 @@ type StaticFilterRef = Arc<dyn StaticFilter + Send + Sync>;
 
 pub(super) fn instantiate_static_filter(in_array: ArrayRef) -> Result<StaticFilterRef> {
     let in_array = flatten_dictionary_haystack(in_array)?;
+
+    if let Some(filter) = instantiate_fixed_size_binary_filter(&in_array)? {
+        return Ok(filter);
+    }
 
     if let Some(filter) = instantiate_branchless_filter(&in_array)? {
         return Ok(filter);
