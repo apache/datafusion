@@ -620,6 +620,10 @@ impl Accumulator for CountAccumulator {
     }
 }
 
+fn vec_capacity_bytes<T>(values: &Vec<T>) -> usize {
+    values.capacity() * size_of::<T>()
+}
+
 /// An accumulator to compute the counts of [`PrimitiveArray<T>`].
 /// Stores values as native types, and does overflow checking
 ///
@@ -774,7 +778,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         Ok(vec![state_array])
     }
     fn size(&self) -> usize {
-        self.counts.capacity() * size_of::<i64>()
+        vec_capacity_bytes(&self.counts)
     }
 }
 
@@ -940,10 +944,19 @@ mod tests {
         acc.update_batch(&[values], &[0, 1, 2], None, 3)?;
 
         assert!(acc.counts.capacity() > 0);
-        assert_eq!(acc.size(), acc.counts.capacity() * size_of::<i64>());
+        assert_eq!(acc.size(), vec_capacity_bytes(&acc.counts));
         assert!(acc.size() > empty_size);
 
         Ok(())
+    }
+
+    #[test]
+    fn vec_capacity_bytes_uses_element_type() {
+        let values = Vec::<u32>::with_capacity(3);
+        assert_eq!(
+            vec_capacity_bytes(&values),
+            values.capacity() * size_of::<u32>()
+        );
     }
 
     #[test]

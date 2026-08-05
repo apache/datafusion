@@ -617,6 +617,7 @@ impl Accumulator for SlidingDistinctSumAccumulator {
     }
 
     fn size(&self) -> usize {
+        // Estimate the owned map buckets; implementation-specific control bytes are excluded.
         size_of_val(self) + self.counts.capacity() * size_of::<(i64, usize)>()
     }
 
