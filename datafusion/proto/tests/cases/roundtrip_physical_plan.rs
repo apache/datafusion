@@ -282,7 +282,7 @@ fn decode_empty_and_placeholder_row_without_partitions() -> Result<()> {
             },
         ),
     ] {
-        let node = protobuf::PhysicalPlanNode {
+        let node = PhysicalPlanNode {
             physical_plan_type: Some(physical_plan_type),
         };
         let plan = node.try_into_physical_plan(ctx.task_ctx().as_ref(), &codec)?;
@@ -1401,7 +1401,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         }
 
         fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-            std::fmt::Display::fmt(self, f)
+            Display::fmt(self, f)
         }
     }
 
@@ -2679,6 +2679,25 @@ async fn roundtrip_empty_projection() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_memory_source_empty_projection() -> Result<()> {
+    // Memory scan: `Some(vec![])` must not decode back as `None`
+    let ctx = SessionContext::new();
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Int64, false),
+        ])),
+        vec![
+            Arc::new(arrow::array::StringArray::from(vec!["Tom"])),
+            Arc::new(arrow::array::Int64Array::from(vec![18i64])),
+        ],
+    )?;
+    ctx.register_batch("tmem", batch)?;
+    let sql = "select 1 from tmem";
+    roundtrip_test_sql_with_context(sql, &ctx).await
+}
+
+#[tokio::test]
 async fn roundtrip_physical_plan_node() {
     use datafusion::prelude::*;
     use datafusion_proto::physical_plan::{
@@ -2761,7 +2780,7 @@ fn deprecated_projection_shim_decodes_argument_not_self() -> Result<()> {
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
     let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     let decoded = unrelated_node.try_into_projection_physical_plan(
         projection_exec_node,
         &decode_ctx,
@@ -3120,20 +3139,20 @@ fn roundtrip_sort_merge_join() -> Result<()> {
         Arc::new(Column::new("col_b", schema_right.index_of("col_b")?)) as _,
     )];
 
-    let filter = datafusion::physical_plan::joins::utils::JoinFilter::new(
+    let filter = JoinFilter::new(
         Arc::new(BinaryExpr::new(
             Arc::new(Column::new("col_a", 1)),
             Operator::Gt,
             Arc::new(Column::new("col_b", 0)),
         )),
         vec![
-            datafusion::physical_plan::joins::utils::ColumnIndex {
+            ColumnIndex {
                 index: 0,
-                side: datafusion_common::JoinSide::Left,
+                side: JoinSide::Left,
             },
-            datafusion::physical_plan::joins::utils::ColumnIndex {
+            ColumnIndex {
                 index: 0,
-                side: datafusion_common::JoinSide::Right,
+                side: JoinSide::Right,
             },
         ],
         Arc::new(Schema::new(vec![field_a, field_b])),
@@ -3339,7 +3358,7 @@ fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
 
     // Create a HashTableLookupExpr - it will be replaced with lit(true) during serialization
     let hash_map = Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(0))));
-    let on_columns = vec![datafusion::physical_plan::expressions::col("col", &schema)?];
+    let on_columns = vec![col("col", &schema)?];
     let lookup_expr: Arc<dyn PhysicalExpr> = Arc::new(HashTableLookupExpr::new(
         on_columns,
         datafusion::physical_plan::joins::SeededRandomState::with_seed(0),
@@ -3419,7 +3438,7 @@ fn custom_proto_converter_intercepts() -> Result<()> {
     impl PhysicalProtoConverterExtension for CustomConverterInterceptor {
         fn proto_to_execution_plan(
             &self,
-            proto: &protobuf::PhysicalPlanNode,
+            proto: &PhysicalPlanNode,
             ctx: &PhysicalPlanDecodeContext<'_>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             {
@@ -3436,7 +3455,7 @@ fn custom_proto_converter_intercepts() -> Result<()> {
             &self,
             plan: &Arc<dyn ExecutionPlan>,
             codec: &dyn PhysicalExtensionCodec,
-        ) -> Result<protobuf::PhysicalPlanNode>
+        ) -> Result<PhysicalPlanNode>
         where
             Self: Sized,
         {
@@ -3624,7 +3643,7 @@ fn roundtrip_dynamic_filter_expr_pair(
 /// - `dynamic_filter_2` before serialization
 /// - `dynamic_filter_1` after serialization
 /// - `dynamic_filter_2` after serialization
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity)]
 fn roundtrip_dynamic_filter_plan_pair() -> Result<(
     Arc<dyn PhysicalExpr>,
     Arc<dyn PhysicalExpr>,
@@ -4670,7 +4689,7 @@ impl ExecutionPlan for CustomExecWithExprs {
         self.child.schema()
     }
 
-    fn properties(&self) -> &Arc<datafusion::physical_plan::PlanProperties> {
+    fn properties(&self) -> &Arc<PlanProperties> {
         self.child.properties()
     }
 
@@ -4948,7 +4967,7 @@ impl PhysicalExpr for WrapperExpr {
         }))
     }
     fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(self, f)
+        Display::fmt(self, f)
     }
 }
 
@@ -4956,7 +4975,7 @@ impl PhysicalExpr for WrapperExpr {
 #[derive(Clone, PartialEq, prost::Message)]
 struct WrapperExprProto {
     #[prost(message, optional, boxed, tag = "1")]
-    inner: Option<Box<datafusion_proto::protobuf::PhysicalExprNode>>,
+    inner: Option<Box<PhysicalExprNode>>,
 }
 
 #[derive(Debug)]
@@ -5054,8 +5073,7 @@ fn extension_codec_expr_participates_in_deduplication() -> Result<()> {
     // Encode, then round-trip through prost bytes to mimic the wire.
     let proto = converter.physical_expr_to_proto(&composite, &codec)?;
     let bytes = proto.encode_to_vec();
-    let decoded_proto =
-        datafusion_proto::protobuf::PhysicalExprNode::decode(bytes.as_slice()).unwrap();
+    let decoded_proto = PhysicalExprNode::decode(bytes.as_slice()).unwrap();
 
     let ctx = SessionContext::new();
     let task_ctx = ctx.task_ctx();

@@ -19,8 +19,6 @@
 //! DataFusion logical plans to be serialized and transmitted between
 //! processes.
 
-use std::collections::HashMap;
-
 use datafusion_common::{NullEquality, SplitPoint, TableReference, UnnestOptions};
 use datafusion_expr::dml::{
     MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
@@ -230,7 +228,7 @@ pub fn serialize_expr(
                 metadata: metadata
                     .as_ref()
                     .map(|m| m.to_hashmap())
-                    .unwrap_or(HashMap::new()),
+                    .unwrap_or_default(),
             });
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Alias(alias)),
@@ -661,7 +659,7 @@ pub fn serialize_expr(
                 metadata: field
                     .as_ref()
                     .map(|f| f.metadata().clone())
-                    .unwrap_or(HashMap::new()),
+                    .unwrap_or_default(),
             })),
         },
         Expr::Lambda(Lambda { params, body }) => protobuf::LogicalExprNode {

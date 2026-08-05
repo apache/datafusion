@@ -31,8 +31,9 @@ use datafusion_expr::{Expr, TableType};
 use datafusion_physical_plan::ExecutionPlan;
 use sync_provider::create_sync_table_provider;
 use udf_udaf_udwf::{
-    create_ffi_abs_func, create_ffi_random_func, create_ffi_rank_func,
-    create_ffi_stddev_func, create_ffi_sum_func, create_ffi_table_func,
+    create_ffi_abs_func, create_ffi_first_value_func, create_ffi_random_func,
+    create_ffi_rank_func, create_ffi_stddev_func, create_ffi_sum_func,
+    create_ffi_table_func,
 };
 
 use crate::catalog_provider::FFI_CatalogProvider;
@@ -117,6 +118,9 @@ pub struct ForeignLibraryModule {
     pub create_context_aware_optimizer_rule: extern "C" fn() -> FFI_PhysicalOptimizerRule,
 
     pub version: extern "C" fn() -> u64,
+
+    /// Create an aggregate UDAF using first_value
+    pub create_first_value_udaf: extern "C" fn() -> FFI_AggregateUDF,
 }
 
 pub fn create_test_schema() -> Arc<Schema> {
@@ -266,5 +270,6 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_context_aware_optimizer_rule:
             physical_optimizer::create_context_aware_optimizer_rule,
         version: super::version,
+        create_first_value_udaf: create_ffi_first_value_func,
     }
 }
