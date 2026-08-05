@@ -48,6 +48,7 @@ use datafusion_physical_expr_adapter::rewrite::{
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{self, Display};
 use std::future::Future;
+use std::hash::{Hash, Hasher};
 use std::mem;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -315,29 +316,42 @@ impl fmt::Debug for ParquetMorselizer {
     }
 }
 
-/// Scan-local cache for CPU-only pruning setup that can be reused across files
+/// Scan-wide cache for CPU-only pruning setup that can be reused across files
 /// with the same adapted expression inputs and physical schema.
+///
+/// The cache lives on `ParquetSource` and is shared by the per-partition
+/// morselizers (and by repeated executions of the same source), so each
+/// unique physical schema pays the rewrite/simplify/pruning-predicate cost
+/// once per scan rather than once per partition.
 #[derive(Debug, Default)]
-pub(super) struct ParquetPruningSetupCache {
+pub(crate) struct ParquetPruningSetupCache {
     entries: Mutex<ParquetPruningSetupEntries>,
 }
 
 type ParquetPruningSetupEntries =
     HashMap<ParquetPruningSetupCacheKey, ParquetPruningSetup>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Cache key for [`ParquetPruningSetupCache`].
+///
+/// Schemas are compared structurally: physical file schemas are rebuilt per
+/// file from parquet metadata, so files with equal schemas must share an
+/// entry. The projection and predicate are compared by `Arc` identity: they
+/// are scan-level inputs once literal column replacement has been ruled out.
+/// The key holds the `Arc`s themselves rather than raw addresses so that an
+/// entry keeps its expressions alive; an address can therefore never be
+/// reused by a different expression while the cache holds it, even though the
+/// cache outlives any single morselizer.
+#[derive(Debug, Clone)]
 struct ParquetPruningSetupCacheKey {
     // Schema coercions such as INT96 resolution and file-schema type coercions
     // are included through the final physical schema used for adaptation.
     logical_file_schema: SchemaRef,
     physical_file_schema: SchemaRef,
-    // Page-index options are intentionally not part of this key because page
-    // pruning predicates are built after this cache entry is applied.
-    predicate_ptr: Option<usize>,
-    // The projection and predicate are scan-level inputs once literal column
-    // replacement has been ruled out, so pointer identity is stable within the
-    // scan and avoids structural expression hashing.
-    projection_expr_ptrs: Vec<usize>,
+    predicate: Option<Arc<dyn PhysicalExpr>>,
+    projection_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    // Cached setups include the page pruning predicate, which is only built
+    // when the page index is enabled, so the flag is part of the key.
+    enable_page_index: bool,
 }
 
 impl ParquetPruningSetupCacheKey {
@@ -346,16 +360,51 @@ impl ParquetPruningSetupCacheKey {
         physical_file_schema: &SchemaRef,
         projection: &ProjectionExprs,
         predicate: Option<&Arc<dyn PhysicalExpr>>,
+        enable_page_index: bool,
     ) -> Self {
         Self {
             logical_file_schema: Arc::clone(logical_file_schema),
             physical_file_schema: Arc::clone(physical_file_schema),
-            predicate_ptr: predicate.map(physical_expr_ptr),
-            projection_expr_ptrs: projection
+            predicate: predicate.map(Arc::clone),
+            projection_exprs: projection
                 .iter()
-                .map(|expr| physical_expr_ptr(&expr.expr))
+                .map(|expr| Arc::clone(&expr.expr))
                 .collect(),
+            enable_page_index,
         }
+    }
+}
+
+impl PartialEq for ParquetPruningSetupCacheKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.enable_page_index == other.enable_page_index
+            && match (&self.predicate, &other.predicate) {
+                (None, None) => true,
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                _ => false,
+            }
+            && self.projection_exprs.len() == other.projection_exprs.len()
+            && self
+                .projection_exprs
+                .iter()
+                .zip(&other.projection_exprs)
+                .all(|(a, b)| Arc::ptr_eq(a, b))
+            && self.logical_file_schema == other.logical_file_schema
+            && self.physical_file_schema == other.physical_file_schema
+    }
+}
+
+impl Eq for ParquetPruningSetupCacheKey {}
+
+impl Hash for ParquetPruningSetupCacheKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.logical_file_schema.hash(state);
+        self.physical_file_schema.hash(state);
+        self.predicate.as_ref().map(physical_expr_ptr).hash(state);
+        for expr in &self.projection_exprs {
+            physical_expr_ptr(expr).hash(state);
+        }
+        self.enable_page_index.hash(state);
     }
 }
 
@@ -364,6 +413,7 @@ struct ParquetPruningSetup {
     projection: ProjectionExprs,
     predicate: Option<Arc<dyn PhysicalExpr>>,
     pruning_predicate: Option<Arc<PruningPredicate>>,
+    page_pruning_predicate: Option<Arc<PagePruningAccessPlanFilter>>,
 }
 
 fn cache_lock_poisoned(context: &str, err: impl Display) -> DataFusionError {
@@ -1119,21 +1169,12 @@ impl MetadataLoadedParquetOpen {
             projection,
             predicate,
             pruning_predicate,
+            page_pruning_predicate,
         } = pruning_setup;
 
         prepared.projection = projection;
         prepared.predicate = predicate;
         prepared.physical_file_schema = Arc::clone(&physical_file_schema);
-
-        // Only build page pruning predicate if page index is enabled
-        let page_pruning_predicate = if prepared.enable_page_index {
-            prepared.predicate.as_ref().and_then(|predicate| {
-                let p = build_page_pruning_predicate(predicate, &physical_file_schema);
-                (p.filter_number() > 0).then_some(p)
-            })
-        } else {
-            None
-        };
 
         Ok(FiltersPreparedParquetOpen {
             loaded: MetadataLoadedParquetOpen {
@@ -1740,6 +1781,7 @@ fn build_or_get_pruning_setup(
             physical_file_schema,
             &prepared.projection,
             prepared.predicate.as_ref(),
+            prepared.enable_page_index,
         );
         prepared.pruning_setup_cache.get_or_insert_with(&key, || {
             build_pruning_setup(prepared, physical_file_schema)
@@ -1807,10 +1849,24 @@ fn build_pruning_setup(
         &prepared.predicate_creation_errors,
     );
 
+    // The page pruning predicate is CPU-only and depends only on the adapted
+    // predicate and physical schema, so it is built (and cached) alongside the
+    // row-group pruning predicate. Only built when the page index is enabled;
+    // `enable_page_index` is part of the cache key.
+    let page_pruning_predicate = if prepared.enable_page_index {
+        predicate.as_ref().and_then(|predicate| {
+            let p = build_page_pruning_predicate(predicate, physical_file_schema);
+            (p.filter_number() > 0).then_some(p)
+        })
+    } else {
+        None
+    };
+
     Ok(ParquetPruningSetup {
         projection,
         predicate,
         pruning_predicate,
+        page_pruning_predicate,
     })
 }
 
@@ -2692,6 +2748,58 @@ mod test {
             create_count.load(Ordering::SeqCst),
             2,
             "files with different physical schemas should not share pruning setup"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pruning_setup_cache_includes_page_pruning_predicate() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let table_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+
+        let batch1 =
+            record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let batch2 =
+            record_batch!(("a", Int32, vec![Some(4), Some(5), Some(6)])).unwrap();
+        let data_size1 = write_parquet(Arc::clone(&store), "file1.parquet", batch1).await;
+        let data_size2 = write_parquet(Arc::clone(&store), "file2.parquet", batch2).await;
+
+        let create_count = Arc::new(AtomicUsize::new(0));
+        let factory: Arc<dyn PhysicalExprAdapterFactory> = Arc::new(
+            CountingPhysicalExprAdapterFactory::new(Arc::clone(&create_count), true),
+        );
+        let predicate = logical2physical(&col("a").gt(lit(0i64)), &table_schema);
+
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(table_schema)
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_enable_page_index(true)
+            .with_expr_adapter_factory(factory)
+            .build();
+
+        open_files_and_assert_row_count(
+            &morselizer,
+            [
+                PartitionedFile::new("file1.parquet", u64::try_from(data_size1).unwrap()),
+                PartitionedFile::new("file2.parquet", u64::try_from(data_size2).unwrap()),
+            ],
+            3,
+        )
+        .await;
+
+        assert_eq!(
+            create_count.load(Ordering::SeqCst),
+            1,
+            "same-schema files should reuse the cached pruning setup"
+        );
+        let entries = morselizer.pruning_setup_cache.entries().unwrap();
+        assert_eq!(entries.len(), 1);
+        let setup = entries.values().next().unwrap();
+        assert!(
+            setup.page_pruning_predicate.is_some(),
+            "page pruning predicate should be cached alongside the row-group pruning predicate"
         );
     }
 
