@@ -15,6 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! FFI support for [`Session`].
+//!
+//! # Delegating physical planning
+//!
+//! Consider a session owned by library A that uses a query planner owned by
+//! library C. After A installs C's planner, [`ForeignSession::query_planner`]
+//! returns C's planner and [`ForeignSession::create_physical_plan`] dispatches
+//! to C's planner. C must not call `create_physical_plan`, or invoke the planner
+//! returned by `query_planner`, to delegate planning back to A. Repeating either
+//! self-call recurses until the stack is exhausted.
+//!
+//! To delegate safely, A must export its original planner before installing C's
+//! planner, and C must retain and invoke that planner directly. See the
+//! [`crate::query_planner`] module for details.
+
 use std::any::Any;
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -472,8 +487,17 @@ impl FFI_SessionRef {
 
 /// This wrapper struct exists on the receiver side of the FFI interface, so it has
 /// no guarantees about being able to access the data in `private_data`. Any functions
-/// defined on this struct must only use the stable functions provided in
-/// FFI_Session to interact with the foreign table provider.
+/// defined on this struct must use only the stable function pointers in
+/// `FFI_SessionRef` to interact with the foreign session.
+///
+/// # Query planner delegation
+///
+/// If the session owner installed the current foreign query planner,
+/// [`Session::create_physical_plan`] dispatches back to that planner and
+/// [`Session::query_planner`] returns that planner. The planner must retain and
+/// invoke the session owner's previous planner instead of using either method to
+/// delegate back to the session. Otherwise, repeated delegation exhausts the
+/// stack. See [`crate::query_planner`] for details.
 #[derive(Debug)]
 pub struct ForeignSession {
     session: FFI_SessionRef,
