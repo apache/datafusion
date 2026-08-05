@@ -23,6 +23,7 @@ use std::sync::Arc;
 use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
 use crate::opener::ParquetMorselizer;
+use crate::opener::ParquetPruningSetupCache;
 use crate::opener::build_pruning_predicates;
 use crate::opener::build_virtual_columns_state;
 use crate::row_filter::can_expr_be_pushed_down_with_schemas;
@@ -313,6 +314,12 @@ pub struct ParquetSource {
     /// Sort order driving `PreparedAccessPlan::reorder_by_statistics`
     /// in the opener.
     sort_order_for_reorder: Option<LexOrdering>,
+    /// Scan-wide cache of reusable CPU-only pruning setup, shared by every
+    /// partition's morselizer (see [`ParquetPruningSetupCache`]). Builder-style
+    /// `with_*` clones share the same cache; this is safe because cache keys
+    /// hold their expression `Arc`s and compare them by identity, so entries
+    /// from different plan variants can never collide.
+    pruning_setup_cache: Arc<ParquetPruningSetupCache>,
 }
 
 impl ParquetSource {
@@ -339,6 +346,7 @@ impl ParquetSource {
             encryption_factory: None,
             reverse_row_groups: false,
             sort_order_for_reorder: None,
+            pruning_setup_cache: Arc::default(),
         }
     }
 
@@ -650,6 +658,7 @@ impl FileSource for ParquetSource {
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             virtual_state,
+            pruning_setup_cache: Arc::clone(&self.pruning_setup_cache),
         }))
     }
 
@@ -1127,6 +1136,26 @@ mod tests {
             ParquetSource::new(Arc::new(Schema::empty())).with_predicate(predicate);
         // same value. but filter() call Arc::clone internally
         assert_eq!(parquet_source.predicate(), parquet_source.filter().as_ref());
+    }
+
+    #[test]
+    fn test_pruning_setup_cache_shared_across_partition_clones() {
+        let source = ParquetSource::new(Arc::new(Schema::empty()));
+
+        // `FileScanConfig::open_with_args` clones the source via
+        // `with_batch_size` once per partition; every per-partition clone must
+        // share the scan-wide pruning setup cache.
+        let per_partition = source.with_batch_size(1024);
+        let per_partition = per_partition
+            .downcast_ref::<ParquetSource>()
+            .expect("clone is ParquetSource");
+        assert!(
+            Arc::ptr_eq(
+                &source.pruning_setup_cache,
+                &per_partition.pruning_setup_cache
+            ),
+            "per-partition source clones must share the scan-wide pruning setup cache"
+        );
     }
 
     #[test]
