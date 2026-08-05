@@ -40,10 +40,10 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
 use datafusion_functions_aggregate::count::count_udaf;
-use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::{self, col};
 use datafusion_physical_expr::projection::ProjectionExprs;
+use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, OrderingRequirements, PhysicalSortExpr,
@@ -68,8 +68,9 @@ use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, create_window_expr};
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, InputOrderMode, Partitioning,
-    PlanProperties, SortOrderPushdownResult, StatisticsArgs, displayable,
+    DisplayAs, DisplayFormatType, ExecutionPlan, InputDistributionRequirements,
+    InputOrderMode, Partitioning, PlanProperties, SortOrderPushdownResult,
+    StatisticsArgs, displayable,
 };
 
 /// Create a non sorted parquet exec
@@ -435,6 +436,7 @@ pub fn projection_exec(
 #[derive(Debug)]
 pub struct RequirementsTestExec {
     required_input_ordering: Option<LexOrdering>,
+    required_input_distribution: Distribution,
     maintains_input_order: bool,
     input: Arc<dyn ExecutionPlan>,
 }
@@ -443,6 +445,7 @@ impl RequirementsTestExec {
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
         Self {
             required_input_ordering: None,
+            required_input_distribution: Distribution::UnspecifiedDistribution,
             maintains_input_order: true,
             input,
         }
@@ -454,6 +457,15 @@ impl RequirementsTestExec {
         required_input_ordering: Option<LexOrdering>,
     ) -> Self {
         self.required_input_ordering = required_input_ordering;
+        self
+    }
+
+    /// sets the required input distribution
+    pub fn with_required_input_distribution(
+        mut self,
+        required_input_distribution: Distribution,
+    ) -> Self {
+        self.required_input_distribution = required_input_distribution;
         self
     }
 
@@ -500,6 +512,10 @@ impl ExecutionPlan for RequirementsTestExec {
         ]
     }
 
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        InputDistributionRequirements::new(vec![self.required_input_distribution.clone()])
+    }
+
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![self.maintains_input_order]
     }
@@ -515,6 +531,7 @@ impl ExecutionPlan for RequirementsTestExec {
         assert_eq!(children.len(), 1);
         Ok(RequirementsTestExec::new(Arc::clone(&children[0]))
             .with_required_input_ordering(self.required_input_ordering.clone())
+            .with_required_input_distribution(self.required_input_distribution.clone())
             .with_maintains_input_order(self.maintains_input_order)
             .into_arc())
     }

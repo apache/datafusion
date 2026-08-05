@@ -680,7 +680,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )?
                 .build()
             }
-            LogicalPlanType::CustomScan(scan) => {
+            CustomScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
                 let schema = Arc::new(schema);
                 let mut projection = None;
@@ -1272,7 +1272,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Dml(dml_node) => {
                 let write_op =
                     from_proto::parse_write_op(dml_node, ctx, extension_codec)?;
-                Ok(LogicalPlan::Dml(datafusion_expr::DmlStatement::new(
+                Ok(LogicalPlan::Dml(DmlStatement::new(
                     from_table_reference(dml_node.table_name.as_ref(), "DML ")?,
                     to_table_source(&dml_node.target, ctx, extension_codec)?,
                     write_op,
@@ -1479,7 +1479,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                     Ok(LogicalPlanNode {
                         logical_plan_type: Some(LogicalPlanType::CteWorkTableScan(
-                            protobuf::CteWorkTableScanNode {
+                            CteWorkTableScanNode {
                                 name,
                                 schema: Some(schema),
                             },
