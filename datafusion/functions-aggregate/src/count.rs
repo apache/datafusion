@@ -620,6 +620,7 @@ impl Accumulator for CountAccumulator {
     }
 }
 
+/// Returns bytes reserved by a vector's backing allocation, excluding the `Vec` itself.
 fn vec_capacity_bytes<T>(values: &Vec<T>) -> usize {
     values.capacity() * size_of::<T>()
 }
