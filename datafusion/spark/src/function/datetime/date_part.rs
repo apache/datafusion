@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::types::logical_date;
 use datafusion_common::{
     Result, ScalarValue, internal_err, types::logical_string, utils::take_function_args,
@@ -26,7 +26,6 @@ use datafusion_expr::{
     Coercion, ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
     Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
-use std::sync::Arc;
 
 /// Wrapper around datafusion date_part function to handle
 /// Spark behavior returning day of the week 1-indexed instead of 0-indexed and different part aliases.
@@ -82,9 +81,45 @@ impl ScalarUDFImpl for SparkDatePart {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        // Spark's translation layer stores literals in the `arg_fields` instead of
+        // `scalar_arguments`. We extract the literal string and patch `scalar_arguments`
+        // so we can safely delegate to DataFusion's native `date_part` implementation.
 
-        Ok(Arc::new(Field::new(self.name(), DataType::Int32, nullable)))
+        let extracted_scalar = match args.scalar_arguments.first() {
+            Some(None) => {
+                let field_name = args.arg_fields[0].name().as_str();
+
+                let extracted_part = if field_name.contains('"') {
+                    field_name.split('"').nth(1).unwrap_or(field_name)
+                } else {
+                    field_name
+                };
+
+                Some(ScalarValue::Utf8(Some(extracted_part.to_string())))
+            }
+            _ => None,
+        };
+
+        // Inject the extracted literal into the 0th position if it was missing
+        let patched_scalars: Vec<Option<&ScalarValue>> = args
+            .scalar_arguments
+            .iter()
+            .enumerate()
+            .map(|(i, &scalar)| {
+                if i == 0 && scalar.is_none() {
+                    extracted_scalar.as_ref()
+                } else {
+                    scalar
+                }
+            })
+            .collect();
+
+        let patched_args = ReturnFieldArgs {
+            arg_fields: args.arg_fields,
+            scalar_arguments: &patched_scalars,
+        };
+
+        datafusion_functions::datetime::date_part().return_field_from_args(patched_args)
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
