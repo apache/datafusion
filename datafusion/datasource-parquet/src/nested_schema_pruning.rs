@@ -325,6 +325,60 @@ mod tests {
         let dict =
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
         assert_eq!(count_leaves(&dict), 1);
+        // Wrapper kinds must be descended through, not counted as one leaf.
+        // A dictionary or run-end-encoded *value* that is itself a struct has
+        // as many leaves as the struct: counting it as 1 would misalign every
+        // later leaf index in the mask.
+        assert_eq!(
+            count_leaves(&DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(struct_of(vec![utf8("a"), int64("b")]))
+            )),
+            2
+        );
+        assert_eq!(
+            count_leaves(&DataType::RunEndEncoded(
+                Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                Arc::new(Field::new(
+                    "values",
+                    struct_of(vec![utf8("a"), int64("b")]),
+                    true
+                ))
+            )),
+            2
+        );
+    }
+
+    /// [`contains_struct`] gates the projection fast path, so it has to agree
+    /// with [`count_leaves`] about which wrappers are descended through.
+    #[test]
+    fn contains_struct_shapes() {
+        assert!(!contains_struct(&DataType::Int32));
+        assert!(!contains_struct(&list_of(DataType::Int32)));
+        assert!(contains_struct(&struct_of(vec![int64("a")])));
+        assert!(contains_struct(&list_of(struct_of(vec![int64("a")]))));
+        assert!(contains_struct(&DataType::LargeList(Arc::new(Field::new(
+            "item",
+            struct_of(vec![int64("a")]),
+            true
+        )))));
+        assert!(contains_struct(&DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(struct_of(vec![int64("a")]))
+        )));
+        assert!(!contains_struct(&DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Utf8)
+        )));
+        // A map's entries are a struct, so a map always contains one.
+        assert!(contains_struct(&DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                struct_of(vec![utf8("key"), int64("value")]),
+                false
+            )),
+            false
+        )));
     }
 
     /// `{a, b, c} CAST TO {b}` keeps only b's leaf.
@@ -489,34 +543,6 @@ mod tests {
         assert!(clip_for_cast(&physical, &target).is_none());
     }
 
-    /// Wide structs take the name-map matching path rather than the linear
-    /// scan; both must produce the same clip.
-    #[test]
-    fn clip_wide_struct_matches_by_name() {
-        let width = LINEAR_FIELD_SCAN_MAX * 4;
-        let physical = struct_of((0..width).map(|i| int64(&format!("f{i}"))).collect());
-        // Even fields only, declared in reverse order: the emitted type is
-        // still in physical order.
-        let target = struct_of(
-            (0..width)
-                .rev()
-                .filter(|i| i % 2 == 0)
-                .map(|i| int64(&format!("f{i}")))
-                .collect(),
-        );
-        let (kept, emitted) = clip_for_cast(&physical, &target).unwrap();
-        assert_eq!(kept, (0..width).filter(|i| i % 2 == 0).collect::<Vec<_>>());
-        assert_eq!(
-            emitted,
-            struct_of(
-                (0..width)
-                    .filter(|i| i % 2 == 0)
-                    .map(|i| int64(&format!("f{i}")))
-                    .collect()
-            )
-        );
-    }
-
     /// A *nested* struct level with zero field-name overlap must not be
     /// clipped, even when a sibling keeps leaves. The reader drops a field
     /// whose leaves are all masked out (pinned by
@@ -548,6 +574,45 @@ mod tests {
             int64("c"),
         ]);
         assert!(clip_for_cast(&physical, &target).is_none());
+    }
+
+    /// Wide structs take the name-map matching path rather than the linear
+    /// scan; both must produce the same clip.
+    #[test]
+    fn clip_wide_struct_matches_by_name() {
+        let width = LINEAR_FIELD_SCAN_MAX * 4;
+        let physical = struct_of((0..width).map(|i| int64(&format!("f{i}"))).collect());
+        // Even fields only, declared in reverse order: the emitted type is
+        // still in physical order.
+        let target = struct_of(
+            (0..width)
+                .rev()
+                .filter(|i| i % 2 == 0)
+                .map(|i| int64(&format!("f{i}")))
+                .collect(),
+        );
+        let (kept, emitted) = clip_for_cast(&physical, &target).unwrap();
+        assert_eq!(kept, (0..width).filter(|i| i % 2 == 0).collect::<Vec<_>>());
+        assert_eq!(
+            emitted,
+            struct_of(
+                (0..width)
+                    .filter(|i| i % 2 == 0)
+                    .map(|i| int64(&format!("f{i}")))
+                    .collect()
+            )
+        );
+    }
+
+    /// Duplicate physical field names both match the single target field and
+    /// are both kept, which is what the reader emits for that mask.
+    #[test]
+    fn clip_keeps_duplicate_physical_field_names() {
+        let physical = struct_of(vec![int64("a"), utf8("pad"), int64("a")]);
+        let target = struct_of(vec![int64("a")]);
+        let (kept, emitted) = clip_for_cast(&physical, &target).unwrap();
+        assert_eq!(kept, vec![0, 2]);
+        assert_eq!(emitted, struct_of(vec![int64("a"), int64("a")]));
     }
 
     /// Pins the arrow-rs behavior the empty-level guard above depends on: a
