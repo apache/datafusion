@@ -41,12 +41,13 @@
 //! children exclusively by looking up the *target* field names, recursively
 //! through list wrappers. Physical subtrees not named by the target are
 //! provably dead: removing them from the read cannot change the cast's
-//! output. That holds for *any* [`CastExpr`] over a nested type, not just the
-//! ones the schema adapter inserts:
-//! [`datafusion_expr_common::columnar_value::ColumnarValue::cast_to`] routes
-//! every cast for which
+//! output. That holds for *any*
+//! [`CastExpr`](datafusion_physical_expr::expressions::CastExpr) over a
+//! nested type, not just the ones the schema adapter inserts:
+//! `ColumnarValue::cast_to` routes every
+//! cast for which
 //! [`requires_nested_struct_cast`](datafusion_common::nested_struct::requires_nested_struct_cast)
-//! holds — the same predicate the projection analysis gates on — through
+//! holds, the same predicate the projection analysis gates on, through
 //! `cast_column`.
 //!
 //! Struct-level nullability is preserved because the Parquet reader
