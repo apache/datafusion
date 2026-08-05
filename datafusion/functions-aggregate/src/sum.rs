@@ -700,6 +700,10 @@ mod tests {
         Ok(())
     }
 
+    fn expected_sliding_distinct_sum_size(acc: &SlidingDistinctSumAccumulator) -> usize {
+        size_of_val(acc) + acc.counts.capacity() * size_of::<(i64, usize)>()
+    }
+
     #[test]
     fn sliding_distinct_sum_size_includes_hash_map_capacity() -> Result<()> {
         let mut acc = SlidingDistinctSumAccumulator::try_new(&DataType::Int64)?;
@@ -707,8 +711,7 @@ mod tests {
         let values: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
         acc.update_batch(&[Arc::clone(&values)])?;
 
-        let expected =
-            size_of_val(&acc) + acc.counts.capacity() * size_of::<(i64, usize)>();
+        let expected = expected_sliding_distinct_sum_size(&acc);
         assert!(acc.counts.capacity() > 0);
         assert_eq!(acc.size(), expected);
         assert!(acc.size() > empty_size);
@@ -718,8 +721,7 @@ mod tests {
             Arc::new(Int64Array::from_iter(4..4 + initial_capacity as i64 + 1));
         acc.update_batch(&[Arc::clone(&additional_values)])?;
 
-        let grown_size =
-            size_of_val(&acc) + acc.counts.capacity() * size_of::<(i64, usize)>();
+        let grown_size = expected_sliding_distinct_sum_size(&acc);
         assert!(acc.counts.capacity() > initial_capacity);
         assert_eq!(acc.size(), grown_size);
         assert!(acc.size() > expected);
