@@ -115,6 +115,29 @@ pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
         Self: Sized;
 }
 
+// In debug builds, keep each serializer arm's local temporaries out of the
+// recursive dispatcher frame. Without this call boundary, they inflate the
+// frame of every recursive invocation.
+#[cfg_attr(debug_assertions, inline(never))]
+fn serialize_logical_plan_arm<F>(serializer: F) -> Result<LogicalPlanNode>
+where
+    F: FnOnce() -> Result<LogicalPlanNode>,
+{
+    serializer()
+}
+
+macro_rules! dispatch_logical_plan {
+    ($plan:expr, { $($pattern:pat => $body:expr $(,)?)+ }) => {
+        match $plan {
+            $(
+                $pattern => serialize_logical_plan_arm(|| -> Result<LogicalPlanNode> {
+                    $body
+                }),
+            )+
+        }
+    };
+}
+
 pub trait LogicalExtensionCodec: Debug + Send + Sync + std::any::Any {
     fn try_decode(
         &self,
@@ -1282,6 +1305,7 @@ impl AsLogicalPlan for LogicalPlanNode {
         }
     }
 
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn try_from_logical_plan(
         plan: &LogicalPlan,
         extension_codec: &dyn LogicalExtensionCodec,
@@ -1289,7 +1313,7 @@ impl AsLogicalPlan for LogicalPlanNode {
     where
         Self: Sized,
     {
-        match plan {
+        dispatch_logical_plan!(plan, {
             LogicalPlan::Values(Values { values, .. }) => {
                 let n_cols = if values.is_empty() {
                     0
@@ -2211,6 +2235,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-        }
+        })
     }
 }

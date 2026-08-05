@@ -2544,6 +2544,7 @@ dependencies = [
  "object_store",
  "pretty_assertions",
  "prost",
+ "recursive",
  "serde_json",
  "tokio",
 ]
