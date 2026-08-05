@@ -930,6 +930,28 @@ SELECT id, s['x'] FROM t_struct_schema_cast WHERE s['x'] > 100 AND id > 2;
 ----
 3 300
 
+# Control: the same file read through a schema that matches it exactly, so no
+# cast is inserted. This path has always worked.
+statement ok
+CREATE EXTERNAL TABLE t_struct_no_schema_cast (id BIGINT, s STRUCT<x INT>)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/struct_schema_cast.parquet';
+
+query II
+SELECT id, s['x'] FROM t_struct_no_schema_cast WHERE s['x'] = 200;
+----
+2 200
+
+# A field that the file does not have reads as null, so it filters nothing in.
+statement ok
+CREATE EXTERNAL TABLE t_struct_missing_field (id BIGINT, s STRUCT<x BIGINT, missing BIGINT>)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/struct_schema_cast.parquet';
+
+query II
+SELECT id, s['x'] FROM t_struct_missing_field WHERE s['missing'] = 200;
+----
+
 # Same, for a nested field path. `s['inner']['x']` is simplified to the
 # flattened `get_field(s, 'inner', 'x')`, which takes a different code path.
 statement ok
@@ -957,6 +979,12 @@ set datafusion.execution.parquet.pushdown_filters = false;
 
 statement ok
 DROP TABLE t_struct_schema_cast;
+
+statement ok
+DROP TABLE t_struct_no_schema_cast;
+
+statement ok
+DROP TABLE t_struct_missing_field;
 
 statement ok
 DROP TABLE t_struct_nested_schema_cast;
