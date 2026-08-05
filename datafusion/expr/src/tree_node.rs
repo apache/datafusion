@@ -253,13 +253,11 @@ impl TreeNode for Expr {
             Expr::TryCast(TryCast { expr, field }) => expr
                 .map_elements(f)?
                 .update_data(|be| Expr::TryCast(TryCast::new_from_field(be, field))),
-            Expr::ScalarFunction(ScalarFunction { func, args, spans }) => {
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 args.map_elements(f)?.map_data(|new_args| {
-                    Ok(Expr::ScalarFunction(ScalarFunction {
-                        func,
-                        args: new_args,
-                        spans,
-                    }))
+                    Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                        func, new_args,
+                    )))
                 })?
             }
             Expr::WindowFunction(window_fun) => {
@@ -275,7 +273,6 @@ impl TreeNode for Expr {
                             null_treatment,
                             distinct,
                         },
-                    spans,
                 } = *window_fun;
 
                 (args, partition_by, order_by, filter)
@@ -293,7 +290,6 @@ impl TreeNode for Expr {
                                     null_treatment,
                                     distinct,
                                 },
-                                spans,
                             }))
                         },
                     )?
@@ -308,20 +304,16 @@ impl TreeNode for Expr {
                         order_by,
                         null_treatment,
                     },
-                spans,
             }) => (args, filter, order_by).map_elements(f)?.map_data(
                 |(new_args, new_filter, new_order_by)| {
-                    Ok(Expr::AggregateFunction(AggregateFunction {
+                    Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
                         func,
-                        params: AggregateFunctionParams {
-                            args: new_args,
-                            distinct,
-                            filter: new_filter,
-                            order_by: new_order_by,
-                            null_treatment,
-                        },
-                        spans,
-                    }))
+                        new_args,
+                        distinct,
+                        new_filter,
+                        new_order_by,
+                        null_treatment,
+                    )))
                 },
             )?,
             Expr::GroupingSet(grouping_set) => match grouping_set {

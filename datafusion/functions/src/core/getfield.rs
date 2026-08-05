@@ -307,7 +307,6 @@ fn simplify_get_field_over_struct_constructor(args: &[Expr]) -> Option<Expr> {
     let Expr::ScalarFunction(ScalarFunction {
         func,
         args: ctor_args,
-        ..
     }) = base
     else {
         return None;
@@ -608,7 +607,6 @@ impl ScalarUDFImpl for GetFieldFunc {
             if let Expr::ScalarFunction(ScalarFunction {
                 func,
                 args: inner_args,
-                ..
             }) = current_expr
                 && func.inner().is::<GetFieldFunc>()
             {

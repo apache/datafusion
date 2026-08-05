@@ -1162,7 +1162,6 @@ mod tests {
                 Expr::Column(Column::new_unqualified("my_array")),
                 Expr::Column(Column::new_unqualified("my_index")),
             ],
-            spans: datafusion_common::Spans::new(),
         });
         assert_eq!(
             ExprSchemable::get_type(&udf_expr, &schema).unwrap(),

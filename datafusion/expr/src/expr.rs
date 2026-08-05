@@ -930,19 +930,12 @@ pub struct ScalarFunction {
     pub func: Arc<crate::ScalarUDF>,
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
-    /// Original source code location, if known
-    pub spans: Spans,
 }
 
 impl ScalarFunction {
     // return the Function's name
     pub fn name(&self) -> &str {
         self.func.name()
-    }
-
-    /// Returns a mutable reference to the spans
-    pub fn spans_mut(&mut self) -> &mut Spans {
-        &mut self.spans
     }
 }
 
@@ -951,11 +944,7 @@ impl ScalarFunction {
     ///
     /// [`ScalarUDF`]: crate::ScalarUDF
     pub fn new_udf(udf: Arc<crate::ScalarUDF>, args: Vec<Expr>) -> Self {
-        Self {
-            func: udf,
-            args,
-            spans: Spans::new(),
-        }
+        Self { func: udf, args }
     }
 }
 
@@ -1105,8 +1094,6 @@ pub struct AggregateFunction {
     /// Name of the function
     pub func: Arc<AggregateUDF>,
     pub params: AggregateFunctionParams,
-    /// Original source code location, if known
-    pub spans: Spans,
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
@@ -1140,13 +1127,7 @@ impl AggregateFunction {
                 order_by,
                 null_treatment,
             },
-            spans: Spans::new(),
         }
-    }
-
-    /// Returns a mutable reference to the spans
-    pub fn spans_mut(&mut self) -> &mut Spans {
-        &mut self.spans
     }
 }
 
@@ -1245,8 +1226,6 @@ pub struct WindowFunction {
     /// Name of the function
     pub fun: WindowFunctionDefinition,
     pub params: WindowFunctionParams,
-    /// Original source code location, if known
-    pub spans: Spans,
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
@@ -1282,13 +1261,7 @@ impl WindowFunction {
                 null_treatment: None,
                 distinct: false,
             },
-            spans: Spans::new(),
         }
-    }
-
-    /// Returns a mutable reference to the spans
-    pub fn spans_mut(&mut self) -> &mut Spans {
-        &mut self.spans
     }
 
     /// Returns this window function's simplification hook, if any.
@@ -2314,9 +2287,6 @@ impl Expr {
         match self {
             Expr::Column(col) => Some(&col.spans),
             Expr::Not(inner) | Expr::Negative(inner) => inner.spans(),
-            Expr::ScalarFunction(func) => Some(&func.spans),
-            Expr::AggregateFunction(func) => Some(&func.spans),
-            Expr::WindowFunction(func) => Some(&func.spans),
             _ => None,
         }
     }
@@ -2512,12 +2482,10 @@ impl NormalizeEq for Expr {
                 Expr::ScalarFunction(ScalarFunction {
                     func: self_func,
                     args: self_args,
-                    ..
                 }),
                 Expr::ScalarFunction(ScalarFunction {
                     func: other_func,
                     args: other_args,
-                    ..
                 }),
             ) => {
                 self_func.name() == other_func.name()
@@ -2538,7 +2506,6 @@ impl NormalizeEq for Expr {
                             order_by: self_order_by,
                             null_treatment: self_null_treatment,
                         },
-                    ..
                 }),
                 Expr::AggregateFunction(AggregateFunction {
                     func: other_func,
@@ -2550,7 +2517,6 @@ impl NormalizeEq for Expr {
                             order_by: other_order_by,
                             null_treatment: other_null_treatment,
                         },
-                    ..
                 }),
             ) => {
                 self_func.name() == other_func.name()
@@ -2591,7 +2557,6 @@ impl NormalizeEq for Expr {
                             null_treatment: self_null_treatment,
                             distinct: self_distinct,
                         },
-                    ..
                 } = left.as_ref();
                 let WindowFunction {
                     fun: other_fun,
@@ -2605,7 +2570,6 @@ impl NormalizeEq for Expr {
                             null_treatment: other_null_treatment,
                             distinct: other_distinct,
                         },
-                    ..
                 } = other.as_ref();
 
                 self_fun.name() == other_fun.name()
@@ -2833,9 +2797,7 @@ impl HashNode for Expr {
             | Expr::TryCast(TryCast { expr: _expr, field }) => {
                 field.hash(state);
             }
-            Expr::ScalarFunction(ScalarFunction {
-                func, args: _args, ..
-            }) => {
+            Expr::ScalarFunction(ScalarFunction { func, args: _args }) => {
                 func.hash(state);
             }
             Expr::AggregateFunction(AggregateFunction {
@@ -2848,7 +2810,6 @@ impl HashNode for Expr {
                         order_by: _,
                         null_treatment,
                     },
-                ..
             }) => {
                 func.hash(state);
                 distinct.hash(state);
@@ -2867,7 +2828,6 @@ impl HashNode for Expr {
                             null_treatment,
                             distinct,
                         },
-                    ..
                 } = window_fun.as_ref();
                 fun.hash(state);
                 window_frame.hash(state);
@@ -2992,7 +2952,7 @@ impl Display for SchemaDisplay<'_> {
             | Expr::OuterReferenceColumn(..)
             | Expr::Placeholder(_)
             | Expr::Wildcard { .. } => write!(f, "{}", self.0),
-            Expr::AggregateFunction(AggregateFunction { func, params, .. }) => {
+            Expr::AggregateFunction(AggregateFunction { func, params }) => {
                 match func.schema_name(params) {
                     Ok(name) => {
                         write!(f, "{name}")
@@ -3149,7 +3109,7 @@ impl Display for SchemaDisplay<'_> {
             Expr::Unnest(Unnest { expr }) => {
                 write!(f, "UNNEST({})", SchemaDisplay(expr))
             }
-            Expr::ScalarFunction(ScalarFunction { func, args, .. }) => {
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 match func.schema_name(args) {
                     Ok(name) => {
                         write!(f, "{name}")
@@ -3187,7 +3147,7 @@ impl Display for SchemaDisplay<'_> {
                 Ok(())
             }
             Expr::WindowFunction(window_fun) => {
-                let WindowFunction { fun, params, .. } = window_fun.as_ref();
+                let WindowFunction { fun, params } = window_fun.as_ref();
                 match fun {
                     WindowFunctionDefinition::AggregateUDF(fun) => {
                         match fun.window_function_schema_name(params) {
@@ -3448,7 +3408,7 @@ impl Display for SqlDisplay<'_> {
 
                 Ok(())
             }
-            Expr::AggregateFunction(AggregateFunction { func, params, .. }) => {
+            Expr::AggregateFunction(AggregateFunction { func, params }) => {
                 match func.human_display(params) {
                     Ok(name) => {
                         write!(f, "{name}")
@@ -3627,7 +3587,7 @@ impl Display for Expr {
                 fmt_function(f, fun.name(), false, &fun.args, true)
             }
             Expr::WindowFunction(window_fun) => {
-                let WindowFunction { fun, params, .. } = window_fun.as_ref();
+                let WindowFunction { fun, params } = window_fun.as_ref();
                 match fun {
                     WindowFunctionDefinition::AggregateUDF(fun) => {
                         match fun.window_function_display_name(params) {
@@ -3679,7 +3639,7 @@ impl Display for Expr {
                     }
                 }
             }
-            Expr::AggregateFunction(AggregateFunction { func, params, .. }) => {
+            Expr::AggregateFunction(AggregateFunction { func, params }) => {
                 match func.display_name(params) {
                     Ok(name) => {
                         write!(f, "{name}")
@@ -4439,7 +4399,6 @@ mod test {
         let udf = Expr::ScalarFunction(ScalarFunction {
             func: Arc::new(ScalarUDF::new_from_impl(TestUDF {})),
             args: vec![expr(), expr()],
-            spans: Spans::new(),
         });
         let Expr::ScalarFunction(scalar) = &udf else {
             unreachable!()

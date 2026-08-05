@@ -17,7 +17,7 @@
 
 //! SQL planning extensions like [`WindowFunctionPlanner`]
 
-use datafusion_common::{Result, Spans};
+use datafusion_common::Result;
 use datafusion_expr::{
     Expr,
     expr::{WindowFunction, WindowFunctionParams},
@@ -56,7 +56,6 @@ impl ExprPlanner for WindowFunctionPlanner {
                 null_treatment,
                 distinct,
             },
-            spans: Spans::new(),
         });
 
         let saved_name = NamePreserver::new_for_projection().save(&origin_expr);
@@ -76,7 +75,6 @@ impl ExprPlanner for WindowFunctionPlanner {
                     distinct,
                     filter,
                 },
-            ..
         } = *window_fun;
         let raw_expr = RawWindowExpr {
             func_def: fun,
@@ -118,7 +116,6 @@ impl ExprPlanner for WindowFunctionPlanner {
                     null_treatment,
                     distinct,
                 },
-                spans: Spans::new(),
             });
             let new_expr = saved_name.restore(new_expr);
 

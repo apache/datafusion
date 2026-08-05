@@ -45,7 +45,6 @@ pub fn from_window_function(
                 distinct: _,
                 filter: _,
             },
-        spans: _,
     } = window_fn;
     // function reference
     let function_anchor = producer.register_function(fun.to_string());

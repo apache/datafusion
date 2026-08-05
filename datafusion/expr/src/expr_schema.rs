@@ -33,7 +33,7 @@ use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::{
-    Column, DataFusionError, Diagnostic, ExprSchema, Result, ScalarValue, Span, Spans,
+    Column, DataFusionError, Diagnostic, ExprSchema, Result, ScalarValue, Spans,
     TableReference, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
@@ -539,7 +539,7 @@ impl ExprSchemable for Expr {
                 let WindowFunction {
                     fun,
                     params: WindowFunctionParams { args, .. },
-                    spans,
+                    ..
                 } = window_function.as_ref();
 
                 let fields = args
@@ -548,20 +548,14 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 match fun {
                     WindowFunctionDefinition::AggregateUDF(udaf) => {
-                        let new_fields = verify_function_arguments(
-                            udaf.as_ref(),
-                            &fields,
-                            spans.first(),
-                        )?;
+                        let new_fields =
+                            verify_function_arguments(udaf.as_ref(), &fields)?;
                         let return_field = udaf.return_field(&new_fields)?;
                         Ok(return_field)
                     }
                     WindowFunctionDefinition::WindowUDF(udwf) => {
-                        let new_fields = verify_function_arguments(
-                            udwf.as_ref(),
-                            &fields,
-                            spans.first(),
-                        )?;
+                        let new_fields =
+                            verify_function_arguments(udwf.as_ref(), &fields)?;
                         let return_field = udwf
                             .field(WindowUDFFieldArgs::new(&new_fields, &schema_name))?;
                         Ok(return_field)
@@ -571,23 +565,20 @@ impl ExprSchemable for Expr {
             Expr::AggregateFunction(AggregateFunction {
                 func,
                 params: AggregateFunctionParams { args, .. },
-                spans,
             }) => {
                 let fields = args
                     .iter()
                     .map(|e| e.to_field(schema).map(|(_, f)| f))
                     .collect::<Result<Vec<_>>>()?;
-                let new_fields =
-                    verify_function_arguments(func.as_ref(), &fields, spans.first())?;
+                let new_fields = verify_function_arguments(func.as_ref(), &fields)?;
                 func.return_field(&new_fields)
             }
-            Expr::ScalarFunction(ScalarFunction { func, args, spans }) => {
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 let fields = args
                     .iter()
                     .map(|e| e.to_field(schema).map(|(_, f)| f))
                     .collect::<Result<Vec<_>>>()?;
-                let new_fields =
-                    verify_function_arguments(func.as_ref(), &fields, spans.first())?;
+                let new_fields = verify_function_arguments(func.as_ref(), &fields)?;
 
                 let arguments = args
                     .iter()
@@ -729,7 +720,6 @@ impl ExprSchemable for Expr {
 fn verify_function_arguments<F: UDFCoercionExt>(
     function: &F,
     input_fields: &[FieldRef],
-    func_span: Option<Span>,
 ) -> Result<Vec<FieldRef>> {
     fields_with_udf(input_fields, function).map_err(|err| {
         let data_types = input_fields
@@ -761,12 +751,10 @@ fn verify_function_arguments<F: UDFCoercionExt>(
             .map(|args_str| format!("{name}({args_str})"))
             .collect::<Vec<_>>()
             .join(", ");
-        let diagnostic = Diagnostic::new_error(
-            format!("invalid argument type(s) for '{name}'"),
-            func_span,
-        )
-        .with_note(format!("called with argument type(s): {types_str}"), None)
-        .with_help(format!("candidate function(s): {candidates}"), None);
+        let diagnostic =
+            Diagnostic::new_error(format!("invalid argument type(s) for '{name}'"), None)
+                .with_note(format!("called with argument type(s): {types_str}"), None)
+                .with_help(format!("candidate function(s): {candidates}"), None);
 
         plan_datafusion_err!("{err_msg}. {signature_msg}").with_diagnostic(diagnostic)
     })

@@ -19,7 +19,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::{
-    DFSchema, Dependency, Diagnostic, HashSet, Result, Span, Spans, datatype::FieldExt,
+    DFSchema, Dependency, Diagnostic, HashSet, Result, Span, datatype::FieldExt,
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::{
@@ -78,6 +78,27 @@ fn find_closest_match(candidates: Vec<String>, target: &str) -> Option<String> {
             &candidate.to_lowercase(),
             &target,
         )
+    })
+}
+
+fn validate_function_expr(
+    expr: &Expr,
+    schema: &DFSchema,
+    function_name: &str,
+    function_span: Option<Span>,
+) -> Result<()> {
+    expr.to_field(schema).map(|_| ()).map_err(|err| {
+        let expected_message = format!("invalid argument type(s) for '{function_name}'");
+        let Some(diagnostic) = err
+            .diagnostic()
+            .filter(|diagnostic| diagnostic.message == expected_message)
+        else {
+            return err;
+        };
+
+        let mut diagnostic = diagnostic.clone();
+        diagnostic.span = function_span;
+        err.with_diagnostic(diagnostic)
     })
 }
 
@@ -348,15 +369,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             };
 
             // After resolution, all arguments are positional
-            let mut inner = ScalarFunction::new_udf(fm, resolved_args);
-            if self.options.collect_spans
-                && let Some(span) = Span::try_from_sqlparser_span(sql_parser_span)
-            {
-                inner.spans_mut().add_span(span);
-            }
-
-            if name.eq_ignore_ascii_case(inner.name()) {
-                return Ok(Expr::ScalarFunction(inner));
+            let inner = ScalarFunction::new_udf(fm, resolved_args);
+            let alias = if name.eq_ignore_ascii_case(inner.name()) {
+                None
             } else {
                 // If the function is called by an alias, a verbose string representation is created
                 // (e.g., "my_alias(arg1, arg2)") and the expression is wrapped in an `Alias`
@@ -367,10 +382,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .map(|arg| arg.to_string())
                     .collect::<Vec<_>>()
                     .join(",");
-                let verbose_alias = format!("{name}({arg_names})");
-
-                return Ok(Expr::ScalarFunction(inner).alias(verbose_alias));
-            }
+                Some(format!("{name}({arg_names})"))
+            };
+            let expr = Expr::ScalarFunction(inner);
+            let span = if self.options.collect_spans {
+                Span::try_from_sqlparser_span(sql_parser_span)
+            } else {
+                None
+            };
+            validate_function_expr(&expr, schema, &name, span)?;
+            return Ok(match alias {
+                Some(alias) => expr.alias(alias),
+                None => expr,
+            });
         }
 
         if let Some(fm) = self.context_provider.get_higher_order_meta(&name) {
@@ -682,7 +706,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     distinct,
                 } = window_expr;
 
-                let mut inner = WindowFunction {
+                let inner = WindowFunction {
                     fun: func_def,
                     params: expr::WindowFunctionParams {
                         args,
@@ -693,16 +717,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         null_treatment,
                         distinct,
                     },
-                    spans: Spans::new(),
                 };
-                if self.options.collect_spans
-                    && let Some(span) = Span::try_from_sqlparser_span(sql_parser_span)
-                {
-                    inner.spans_mut().add_span(span);
-                }
-
-                if name.eq_ignore_ascii_case(inner.fun.name()) {
-                    return Ok(Expr::WindowFunction(Box::new(inner)));
+                let alias = if name.eq_ignore_ascii_case(inner.fun.name()) {
+                    None
                 } else {
                     // If the function is called by an alias, a verbose string representation is created
                     // (e.g., "my_alias(arg1, arg2)") and the expression is wrapped in an `Alias`
@@ -714,10 +731,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         .map(|arg| arg.to_string())
                         .collect::<Vec<_>>()
                         .join(",");
-                    let verbose_alias = format!("{name}({arg_names})");
-
-                    return Ok(Expr::WindowFunction(Box::new(inner)).alias(verbose_alias));
-                }
+                    Some(format!("{name}({arg_names})"))
+                };
+                let expr = Expr::WindowFunction(Box::new(inner));
+                let span = if self.options.collect_spans {
+                    Span::try_from_sqlparser_span(sql_parser_span)
+                } else {
+                    None
+                };
+                validate_function_expr(&expr, schema, &name, span)?;
+                return Ok(match alias {
+                    Some(alias) => expr.alias(alias),
+                    None => expr,
+                });
             }
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
@@ -855,7 +881,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     null_treatment,
                 } = aggregate_expr;
 
-                let mut inner = expr::AggregateFunction::new_udf(
+                let inner = expr::AggregateFunction::new_udf(
                     func,
                     args,
                     distinct,
@@ -863,14 +889,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     order_by,
                     null_treatment,
                 );
-                if self.options.collect_spans
-                    && let Some(span) = Span::try_from_sqlparser_span(sql_parser_span)
-                {
-                    inner.spans_mut().add_span(span);
-                }
-
-                if name.eq_ignore_ascii_case(inner.func.name()) {
-                    return Ok(Expr::AggregateFunction(inner));
+                let alias = if name.eq_ignore_ascii_case(inner.func.name()) {
+                    None
                 } else {
                     // If the function is called by an alias, a verbose string representation is created
                     // (e.g., "my_alias(arg1, arg2)") and the expression is wrapped in an `Alias`
@@ -882,10 +902,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         .map(|arg| arg.to_string())
                         .collect::<Vec<_>>()
                         .join(",");
-                    let verbose_alias = format!("{name}({arg_names})");
-
-                    return Ok(Expr::AggregateFunction(inner).alias(verbose_alias));
-                }
+                    Some(format!("{name}({arg_names})"))
+                };
+                let expr = Expr::AggregateFunction(inner);
+                let span = if self.options.collect_spans {
+                    Span::try_from_sqlparser_span(sql_parser_span)
+                } else {
+                    None
+                };
+                validate_function_expr(&expr, schema, &name, span)?;
+                return Ok(match alias {
+                    Some(alias) => expr.alias(alias),
+                    None => expr,
+                });
             }
         }
 

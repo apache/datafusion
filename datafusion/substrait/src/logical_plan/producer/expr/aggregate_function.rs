@@ -42,7 +42,6 @@ pub fn from_aggregate_function(
                 order_by,
                 null_treatment: _null_treatment,
             },
-        spans: _,
     } = agg_fn;
     let sorts = order_by
         .iter()

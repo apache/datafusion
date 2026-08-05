@@ -201,7 +201,6 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
                     distinct: window_function.params.distinct,
                     filter: window_function.params.filter,
                 },
-                spans: Default::default(),
             }))
         };
 
