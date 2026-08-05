@@ -1189,19 +1189,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .collect();
 
         // Find target indices of UNIQUE deps whose sources are in GROUP BY.
-        let Some(target_indices) =
-            get_nullable_unique_target_functional_dependencies(
-                schema,
-                &group_by_expr_names,
-            )
-        else {
+        let Some(target_indices) = get_nullable_unique_target_functional_dependencies(
+            schema,
+            &group_by_expr_names,
+        ) else {
             return Ok(select_exprs.to_vec());
         };
 
         // Look up ANY_VALUE aggregate. If not available, fall back to the
         // normal validation path (which will produce an error).
-        let Some(any_value_udf) =
-            self.context_provider.get_aggregate_meta("any_value")
+        let Some(any_value_udf) = self.context_provider.get_aggregate_meta("any_value")
         else {
             return Ok(select_exprs.to_vec());
         };
@@ -1239,8 +1236,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         aggr_exprs.push(any_value_expr.clone());
                     }
                     // Alias to preserve the original column name in output.
-                    new_select_exprs
-                        .push(any_value_expr.alias(col.name()));
+                    new_select_exprs.push(any_value_expr.alias(col.name()));
                     continue;
                 }
             }
