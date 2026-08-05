@@ -28,5 +28,6 @@ pub use standard_window_function_expr::StandardWindowFunctionExpr;
 pub use window_expr::PartitionBatches;
 pub use window_expr::PartitionKey;
 pub use window_expr::PartitionWindowAggStates;
+pub use window_expr::WindowEvalContext;
 pub use window_expr::WindowExpr;
 pub use window_expr::WindowState;
