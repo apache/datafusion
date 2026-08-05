@@ -713,9 +713,21 @@ mod tests {
         assert_eq!(acc.size(), expected);
         assert!(acc.size() > empty_size);
 
+        let initial_capacity = acc.counts.capacity();
+        let additional_values: ArrayRef =
+            Arc::new(Int64Array::from_iter(4..4 + initial_capacity as i64 + 1));
+        acc.update_batch(&[Arc::clone(&additional_values)])?;
+
+        let grown_size =
+            size_of_val(&acc) + acc.counts.capacity() * size_of::<(i64, usize)>();
+        assert!(acc.counts.capacity() > initial_capacity);
+        assert_eq!(acc.size(), grown_size);
+        assert!(acc.size() > expected);
+
         acc.retract_batch(&[values])?;
+        acc.retract_batch(&[additional_values])?;
         assert!(acc.counts.is_empty());
-        assert_eq!(acc.size(), expected);
+        assert_eq!(acc.size(), grown_size);
 
         Ok(())
     }
