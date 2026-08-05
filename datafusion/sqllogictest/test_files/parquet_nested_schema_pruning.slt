@@ -108,3 +108,84 @@ explain analyze select events from full_schema;
 ----
 Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=312<slt:ignore>]
 
+##########
+# Query-level casts. `ProjectionExec` is merged into the scan, so a `CAST`
+# written in the query reaches the same read-plan analysis as an
+# adapter-inserted one — including one column consumed through two *different*
+# cast targets, which no single clipped read can serve. Clipping to one
+# target's leaves would leave the other cast reading a struct that is missing
+# the fields it names, which `cast_column` either null-fills (wrong results)
+# or, for disjoint targets, rejects outright.
+#
+# `exact` infers its schema from the file, so no adapter cast is interposed
+# and the casts below are the only ones the scan sees.
+##########
+
+statement ok
+CREATE EXTERNAL TABLE exact
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_nested_schema_pruning/wide.parquet';
+
+# A single query-level cast is clipped like an adapter-inserted one.
+query ?
+SELECT CAST(s AS STRUCT<y VARCHAR>) FROM exact ORDER BY id;
+----
+{y: s1}
+{y: s2}
+NULL
+
+# Disjoint targets.
+query ??
+SELECT CAST(s AS STRUCT<x BIGINT>) AS q0,
+       CAST(s AS STRUCT<pad VARCHAR>) AS q1
+FROM exact ORDER BY id;
+----
+{x: 100} {pad: sp1}
+{x: 200} {pad: sp2}
+NULL NULL
+
+# Overlapping targets: q1 needs a leaf q0's clip would have dropped.
+query ??
+SELECT CAST(s AS STRUCT<x BIGINT>) AS q0,
+       CAST(s AS STRUCT<x BIGINT, y VARCHAR>) AS q1
+FROM exact ORDER BY id;
+----
+{x: 100} {x: 100, y: s1}
+{x: 200} {x: 200, y: s2}
+NULL NULL
+
+# Repeated identical targets still clip.
+query ??
+SELECT CAST(s AS STRUCT<x BIGINT>) AS q0,
+       CAST(s AS STRUCT<x BIGINT>) AS q1
+FROM exact ORDER BY id;
+----
+{x: 100} {x: 100}
+{x: 200} {x: 200}
+NULL NULL
+
+# A cast alongside a whole-column reference: the whole-column read wins.
+query ??
+SELECT CAST(s AS STRUCT<x BIGINT>) AS q0, s
+FROM exact ORDER BY id;
+----
+{x: 100} {x: 100, y: s1, pad: sp1}
+{x: 200} {x: 200, y: s2, pad: sp2}
+NULL NULL
+
+statement ok
+DROP TABLE exact;
+
+# A query cast stacked on top of the adapter's cast for a narrowed table.
+query ?
+SELECT CAST(s AS STRUCT<y VARCHAR>) FROM narrow ORDER BY id;
+----
+{y: s1}
+{y: s2}
+NULL
+
+statement ok
+DROP TABLE narrow;
+
+statement ok
+DROP TABLE full_schema;

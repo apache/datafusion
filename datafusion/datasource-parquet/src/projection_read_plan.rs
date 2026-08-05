@@ -497,7 +497,11 @@ pub(crate) fn build_projection_read_plan(
 /// - roots consumed only through `get_field` accesses keep the union of the
 ///   leaves those accesses reach, as before;
 /// - any other referenced root, a cast that can't be safely clipped (see
-///   `nested_schema_pruning::clip_for_cast`), or a root reached by both a
+///   `nested_schema_pruning::clip_for_cast`), a root reached by two casts
+///   with *different* targets (a projection can consume the same column
+///   through more than one narrowing cast, e.g.
+///   `SELECT CAST(s AS STRUCT(a)), CAST(s AS STRUCT(b)) FROM t`; clipping to
+///   either target alone would starve the other), or a root reached by both a
 ///   cast and a `get_field` access (not produced by
 ///   `DefaultPhysicalExprAdapter`, which always routes a `get_field` over a
 ///   narrowed column through the same cast rather than a separate access,
@@ -523,13 +527,27 @@ fn build_read_plan_with_cast_clipping(
     let mut clipped_by_root: BTreeMap<usize, (Vec<usize>, DataType)> = BTreeMap::new();
     // Roots with a cast access that must fall back to a full read.
     let mut fallback_roots: BTreeSet<usize> = BTreeSet::new();
+    // The cast target already clipped for a root, so a second cast on the
+    // same root can be recognised as either a repeat (same target: nothing to
+    // do) or a conflict (different target: neither clip is valid on its own).
+    let mut clipped_target_by_root: BTreeMap<usize, &DataType> = BTreeMap::new();
 
     for access in cast_accesses {
         let root = access.root_index;
-        if whole_roots.contains(&root)
-            || fallback_roots.contains(&root)
-            || clipped_by_root.contains_key(&root)
-        {
+        if whole_roots.contains(&root) || fallback_roots.contains(&root) {
+            continue;
+        }
+        if let Some(previous) = clipped_target_by_root.get(&root) {
+            if **previous != access.target_type {
+                // The projection consumes this root through two different
+                // narrowing casts. Each cast only needs its own leaves, but
+                // the mask is per column: clipping to the first target would
+                // silently null-fill whatever the second one needs. Read the
+                // whole root instead.
+                clipped_by_root.remove(&root);
+                clipped_target_by_root.remove(&root);
+                fallback_roots.insert(root);
+            }
             continue;
         }
         if struct_access_roots.contains(&root) {
@@ -554,6 +572,7 @@ fn build_read_plan_with_cast_clipping(
                 let start = root_leaves[0];
                 let absolute = kept_offsets.into_iter().map(|o| start + o).collect();
                 clipped_by_root.insert(root, (absolute, pruned_type));
+                clipped_target_by_root.insert(root, &access.target_type);
             }
             // Nothing prunable for this cast: every leaf is consumed.
             None => {
@@ -562,15 +581,20 @@ fn build_read_plan_with_cast_clipping(
         }
     }
 
-    // `get_field` accesses on roots not already handled by a cast clip (or
-    // by a whole-column/fallback full read) keep the existing (non-cast)
-    // leaf resolution.
+    // `get_field` accesses on roots not already read in full (as a whole
+    // column, or as a cast that fell back) keep the existing (non-cast) leaf
+    // resolution.
     let get_field_accesses: Vec<StructFieldAccess> = struct_accesses
         .iter()
         .filter(|a| {
+            // A root carrying a `get_field` access is put into
+            // `fallback_roots` before any clip is attempted (see the loop
+            // above), so it can never also be clipped. Assert that rather
+            // than re-testing it here, so a future reordering trips the
+            // assert instead of silently changing which leaves are read.
+            debug_assert!(!clipped_by_root.contains_key(&a.root_index));
             !whole_roots.contains(&a.root_index)
                 && !fallback_roots.contains(&a.root_index)
-                && !clipped_by_root.contains_key(&a.root_index)
         })
         .cloned()
         .collect();
@@ -1027,6 +1051,26 @@ mod test {
         (builder.schema().clone(), builder.metadata().clone())
     }
 
+    /// Builds `CAST(Column(name, index) AS Struct{fields})`.
+    fn cast_to_struct(
+        name: &str,
+        index: usize,
+        fields: Vec<(&str, DataType)>,
+    ) -> Arc<dyn PhysicalExpr> {
+        let target = DataType::Struct(
+            fields
+                .into_iter()
+                .map(|(n, dt)| Arc::new(Field::new(n, dt, true)))
+                .collect::<Vec<_>>()
+                .into(),
+        );
+        Arc::new(CastExpr::new(
+            Arc::new(PhysicalColumn::new(name, index)),
+            target,
+            None,
+        ))
+    }
+
     /// A projection consisting solely of a narrowing cast over a struct root
     /// clips the read to the cast target's leaves.
     #[test]
@@ -1060,6 +1104,88 @@ mod test {
                 vec![Arc::new(Field::new("value", DataType::Int32, false))].into()
             ),
         );
+    }
+
+    /// Two casts on the same root with the *same* target still clip: this is
+    /// the shape the expression adapter produces when one column is
+    /// referenced several times (`SELECT s, s FROM narrowed`).
+    #[test]
+    fn build_projection_read_plan_clips_repeated_identical_casts() {
+        let (file_schema, metadata) = write_id_struct_file();
+        let schema_descr = metadata.file_metadata().schema_descr();
+
+        let narrow = DataType::Struct(
+            vec![Arc::new(Field::new("value", DataType::Int32, true))].into(),
+        );
+        let cast = || -> Arc<dyn PhysicalExpr> {
+            Arc::new(CastExpr::new(
+                Arc::new(PhysicalColumn::new("s", 1)),
+                narrow.clone(),
+                None,
+            ))
+        };
+
+        let read_plan =
+            build_projection_read_plan(vec![cast(), cast()], &file_schema, schema_descr);
+
+        assert_eq!(
+            read_plan.projection_mask,
+            ProjectionMask::leaves(schema_descr, [1])
+        );
+    }
+
+    /// Two casts on the same root with *different* targets cannot both be
+    /// served by one mask: clipping to either target alone would null-fill
+    /// whatever the other one needs (or fail its runtime struct-compatibility
+    /// check outright). Read the whole root instead.
+    #[test]
+    fn build_projection_read_plan_falls_back_on_conflicting_cast_targets() {
+        let (file_schema, metadata) = write_id_struct_file();
+        let schema_descr = metadata.file_metadata().schema_descr();
+
+        let narrow = |name: &str, dt: DataType| -> Arc<dyn PhysicalExpr> {
+            Arc::new(CastExpr::new(
+                Arc::new(PhysicalColumn::new("s", 1)),
+                DataType::Struct(vec![Arc::new(Field::new(name, dt, true))].into()),
+                None,
+            ))
+        };
+        let exprs = vec![
+            narrow("value", DataType::Int32),
+            narrow("label", DataType::Utf8),
+        ];
+
+        let read_plan = build_projection_read_plan(exprs, &file_schema, schema_descr);
+
+        assert_eq!(
+            read_plan.projection_mask,
+            ProjectionMask::leaves(schema_descr, [1, 2, 3]),
+            "every leaf of `s` must be read so both casts see their fields"
+        );
+        let s_field = read_plan.projected_schema.field_with_name("s").unwrap();
+        assert_eq!(s_field.data_type(), file_schema.field(1).data_type());
+    }
+
+    /// Once conflicting cast targets have demoted a root to a full read, a
+    /// *third* cast on it must not resurrect the clip.
+    #[test]
+    fn build_projection_read_plan_keeps_full_read_after_a_third_cast() {
+        let (file_schema, metadata) = write_id_struct_file();
+        let schema_descr = metadata.file_metadata().schema_descr();
+
+        let exprs = vec![
+            cast_to_struct("s", 1, vec![("value", DataType::Int32)]),
+            cast_to_struct("s", 1, vec![("label", DataType::Utf8)]),
+            cast_to_struct("s", 1, vec![("value", DataType::Int32)]),
+        ];
+        let read_plan = build_projection_read_plan(exprs, &file_schema, schema_descr);
+
+        assert_eq!(
+            read_plan.projection_mask,
+            ProjectionMask::leaves(schema_descr, [1, 2, 3])
+        );
+        let s_field = read_plan.projected_schema.field_with_name("s").unwrap();
+        assert_eq!(s_field.data_type(), file_schema.field(1).data_type());
     }
 
     /// A root reached by both a narrowing cast and a `get_field` access (not
