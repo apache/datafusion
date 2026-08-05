@@ -774,7 +774,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         Ok(vec![state_array])
     }
     fn size(&self) -> usize {
-        self.counts.capacity() * size_of::<usize>()
+        self.counts.capacity() * size_of::<i64>()
     }
 }
 
@@ -930,6 +930,20 @@ mod tests {
             keys,
             Arc::new(values),
         )?)
+    }
+
+    #[test]
+    fn count_groups_size_includes_vec_capacity() -> Result<()> {
+        let mut acc = CountGroupsAccumulator::new();
+        let empty_size = acc.size();
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
+        acc.update_batch(&[values], &[0, 1, 2], None, 3)?;
+
+        assert!(acc.counts.capacity() > 0);
+        assert_eq!(acc.size(), acc.counts.capacity() * size_of::<i64>());
+        assert!(acc.size() > empty_size);
+
+        Ok(())
     }
 
     #[test]

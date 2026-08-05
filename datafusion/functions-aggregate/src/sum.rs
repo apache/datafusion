@@ -46,7 +46,7 @@ use datafusion_expr::{
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::sum_distinct::DistinctSumAccumulator;
 use datafusion_macros::user_doc;
-use std::mem::size_of_val;
+use std::mem::{size_of, size_of_val};
 
 make_udaf_expr_and_func!(
     Sum,
@@ -617,7 +617,7 @@ impl Accumulator for SlidingDistinctSumAccumulator {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self)
+        size_of_val(self) + self.counts.capacity() * size_of::<(i64, usize)>()
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -668,7 +668,10 @@ mod tests {
         array::Int64Array,
         buffer::{NullBuffer, ScalarBuffer},
     };
-    use std::sync::Arc;
+    use std::{
+        mem::{size_of, size_of_val},
+        sync::Arc,
+    };
 
     #[test]
     fn sliding_distinct_sum_ignores_null_slots() -> Result<()> {
@@ -692,6 +695,26 @@ mod tests {
             Arc::new(Int64Array::new(ScalarBuffer::from(vec![5]), None));
         acc.retract_batch(&[retract_last])?;
         assert_eq!(acc.evaluate()?, ScalarValue::Int64(None));
+
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_distinct_sum_size_includes_hash_map_capacity() -> Result<()> {
+        let mut acc = SlidingDistinctSumAccumulator::try_new(&DataType::Int64)?;
+        let empty_size = acc.size();
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
+        acc.update_batch(&[Arc::clone(&values)])?;
+
+        let expected =
+            size_of_val(&acc) + acc.counts.capacity() * size_of::<(i64, usize)>();
+        assert!(acc.counts.capacity() > 0);
+        assert_eq!(acc.size(), expected);
+        assert!(acc.size() > empty_size);
+
+        acc.retract_batch(&[values])?;
+        assert!(acc.counts.is_empty());
+        assert_eq!(acc.size(), expected);
 
         Ok(())
     }
