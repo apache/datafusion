@@ -362,6 +362,7 @@ impl<ID: PartialEq> TopKHashTable<ID> {
         }
     }
 
+    /// Used to avoid pushing pointless copies of primitives to the `free_slots` pool.
     const fn use_free_slots() -> bool {
         std::mem::needs_drop::<ID>()
     }
