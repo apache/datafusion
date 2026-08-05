@@ -263,6 +263,11 @@ impl AggregateUDFImpl for ArrayAgg {
 #[derive(Debug)]
 pub struct ArrayAggAccumulator {
     values: VecDeque<ArrayRef>,
+    /// Estimated memory used by the arrays in `values`.
+    ///
+    /// This is maintained incrementally so [`Accumulator::size`] does not
+    /// have to scan every batch accumulated so far.
+    values_memory_size: usize,
     datatype: DataType,
     ignore_nulls: bool,
     /// Number of elements already consumed (retracted) from the front array.
@@ -270,15 +275,36 @@ pub struct ArrayAggAccumulator {
     front_offset: usize,
 }
 
+/// Estimate the memory an array slice would use if its data were fully owned.
+///
+/// Accumulators may hold multiple slices backed by the same allocation. Using
+/// `get_array_memory_size` would charge each slice for the entire shared
+/// allocation, so retain the existing slice-based accounting semantics.
+fn estimated_array_memory_size(array: &ArrayRef) -> usize {
+    array.to_data().get_slice_memory_size().unwrap_or_default()
+}
+
 impl ArrayAggAccumulator {
     /// new array_agg accumulator based on given item data type
     pub fn try_new(datatype: &DataType, ignore_nulls: bool) -> Result<Self> {
         Ok(Self {
             values: VecDeque::new(),
+            values_memory_size: 0,
             datatype: datatype.clone(),
             ignore_nulls,
             front_offset: 0,
         })
+    }
+
+    fn push_back(&mut self, value: ArrayRef) {
+        self.values_memory_size += estimated_array_memory_size(&value);
+        self.values.push_back(value);
+    }
+
+    fn pop_front(&mut self) {
+        if let Some(value) = self.values.pop_front() {
+            self.values_memory_size -= estimated_array_memory_size(&value);
+        }
     }
 
     /// This function will return the underlying list array values if all valid values are consecutive without gaps (i.e. no null value point to a non-empty list)
@@ -366,7 +392,7 @@ impl Accumulator for ArrayAggAccumulator {
         };
 
         if !val.is_empty() {
-            self.values.push_back(val)
+            self.push_back(val)
         }
 
         Ok(())
@@ -386,12 +412,12 @@ impl Accumulator for ArrayAggAccumulator {
             Some(values) => {
                 // Make sure we don't insert empty lists
                 if !values.is_empty() {
-                    self.values.push_back(values);
+                    self.push_back(values);
                 }
             }
             None => {
                 for arr in list_arr.iter().flatten() {
-                    self.values.push_back(arr);
+                    self.push_back(arr);
                 }
             }
         }
@@ -453,7 +479,7 @@ impl Accumulator for ArrayAggAccumulator {
             };
             let available = front.len() - self.front_offset;
             if to_retract >= available {
-                self.values.pop_front();
+                self.pop_front();
                 to_retract -= available;
                 self.front_offset = 0;
             } else {
@@ -472,22 +498,7 @@ impl Accumulator for ArrayAggAccumulator {
     fn size(&self) -> usize {
         size_of_val(self)
             + (size_of::<ArrayRef>() * self.values.capacity())
-            + self
-                .values
-                .iter()
-                // Each ArrayRef might be just a reference to a bigger array, and many
-                // ArrayRefs here might be referencing exactly the same array, so if we
-                // were to call `arr.get_array_memory_size()`, we would be double-counting
-                // the same underlying data many times.
-                //
-                // Instead, we do an approximation by estimating how much memory each
-                // ArrayRef would occupy if its underlying data was fully owned by this
-                // accumulator.
-                //
-                // Note that this is just an estimation, but the reality is that this
-                // accumulator might not own any data.
-                .map(|arr| arr.to_data().get_slice_memory_size().unwrap_or_default())
-                .sum::<usize>()
+            + self.values_memory_size
             + self.datatype.size()
             - size_of_val(&self.datatype)
     }
@@ -502,6 +513,8 @@ struct ArrayAggGroupsAccumulator {
     batches: Vec<ArrayRef>,
     /// Per-batch list of (group_idx, row_idx) pairs.
     batch_entries: Vec<Vec<(u32, u32)>>,
+    /// Estimated memory used by `batches` and the vectors in `batch_entries`.
+    state_memory_size: usize,
     /// Total number of groups tracked.
     num_groups: usize,
 }
@@ -513,8 +526,16 @@ impl ArrayAggGroupsAccumulator {
             ignore_nulls,
             batches: Vec::new(),
             batch_entries: Vec::new(),
+            state_memory_size: 0,
             num_groups: 0,
         }
+    }
+
+    fn push_batch(&mut self, batch: ArrayRef, entries: Vec<(u32, u32)>) {
+        self.state_memory_size += estimated_array_memory_size(&batch)
+            + entries.capacity() * size_of::<(u32, u32)>();
+        self.batches.push(batch);
+        self.batch_entries.push(entries);
     }
 
     fn clear_state(&mut self) {
@@ -522,6 +543,7 @@ impl ArrayAggGroupsAccumulator {
         // buffers instead of using `clear()`.
         self.batches = Vec::new();
         self.batch_entries = Vec::new();
+        self.state_memory_size = 0;
         self.num_groups = 0;
     }
 
@@ -538,8 +560,7 @@ impl ArrayAggGroupsAccumulator {
         let old_batches = take(&mut self.batches);
         let old_batch_entries = take(&mut self.batch_entries);
 
-        let mut batches = Vec::new();
-        let mut batch_entries = Vec::new();
+        self.state_memory_size = 0;
 
         for (batch, entries) in old_batches.into_iter().zip(old_batch_entries) {
             let retained_len = entries.iter().filter(|(g, _)| *g >= emit_groups).count();
@@ -557,8 +578,7 @@ impl ArrayAggGroupsAccumulator {
                     *g -= emit_groups;
                 }
                 retained_entries.shrink_to_fit();
-                batches.push(batch);
-                batch_entries.push(retained_entries);
+                self.push_batch(batch, retained_entries);
                 continue;
             }
 
@@ -579,21 +599,13 @@ impl ArrayAggGroupsAccumulator {
             debug_assert_eq!(retained_entries.len(), retained_len);
             debug_assert_eq!(retained_rows.len(), retained_len);
 
-            let batch = if retained_len == batch.len() {
-                batch
-            } else {
-                // Compact mixed batches so retained rows no longer pin the
-                // original array.
-                let retained_rows = UInt32Array::from(retained_rows);
-                arrow::compute::take(batch.as_ref(), &retained_rows, None)?
-            };
+            // Compact mixed batches so retained rows no longer pin the
+            // original array.
+            let retained_rows = UInt32Array::from(retained_rows);
+            let batch = arrow::compute::take(batch.as_ref(), &retained_rows, None)?;
 
-            batches.push(batch);
-            batch_entries.push(retained_entries);
+            self.push_batch(batch, retained_entries);
         }
-
-        self.batches = batches;
-        self.batch_entries = batch_entries;
         self.num_groups -= emit_groups as usize;
 
         Ok(())
@@ -643,8 +655,7 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
 
         // We only need to record the batch if it was non-empty.
         if !entries.is_empty() {
-            self.batches.push(Arc::clone(input));
-            self.batch_entries.push(entries);
+            self.push_batch(Arc::clone(input), entries);
         }
 
         Ok(())
@@ -761,8 +772,7 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         }
 
         if !entries.is_empty() {
-            self.batches.push(Arc::clone(list_values));
-            self.batch_entries.push(entries);
+            self.push_batch(Arc::clone(list_values), entries);
         }
 
         Ok(())
@@ -798,16 +808,8 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         Ok(vec![Arc::new(list_array)])
     }
     fn size(&self) -> usize {
-        self.batches
-            .iter()
-            .map(|arr| arr.to_data().get_slice_memory_size().unwrap_or_default())
-            .sum::<usize>()
+        self.state_memory_size
             + self.batches.capacity() * size_of::<ArrayRef>()
-            + self
-                .batch_entries
-                .iter()
-                .map(|e| e.capacity() * size_of::<(u32, u32)>())
-                .sum::<usize>()
             + self.batch_entries.capacity() * size_of::<Vec<(u32, u32)>>()
     }
 }
@@ -1741,10 +1743,37 @@ mod tests {
         acc2.update_batch(&[data(["b", "c", "a"])])?;
         acc1 = merge(acc1, acc2)?;
 
-        assert_eq!(acc1.size(), 282);
+        assert_eq!(acc1.size(), 290);
 
         Ok(())
     }
+
+    #[test]
+    fn array_agg_tracks_array_memory_incrementally() -> Result<()> {
+        let mut acc = ArrayAggAccumulator::try_new(&DataType::Utf8, false)?;
+        let first = data(["a", "b", "c"]);
+        let second = data(["d", "e"]);
+        let first_size = estimated_array_memory_size(&first);
+        let second_size = estimated_array_memory_size(&second);
+
+        acc.update_batch(std::slice::from_ref(&first))?;
+        acc.update_batch(std::slice::from_ref(&second))?;
+        assert_eq!(acc.values_memory_size, first_size + second_size);
+
+        // A partial retract retains the first array and therefore its memory.
+        acc.retract_batch(&[data(["a"])])?;
+        assert_eq!(acc.values_memory_size, first_size + second_size);
+
+        // Retracting the remainder drops the first array from the accumulator.
+        acc.retract_batch(&[data(["b", "c"])])?;
+        assert_eq!(acc.values_memory_size, second_size);
+
+        acc.retract_batch(&[data(["d", "e"])])?;
+        assert_eq!(acc.values_memory_size, 0);
+
+        Ok(())
+    }
+
     #[test]
     fn does_not_over_account_memory_distinct() -> Result<()> {
         let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string()
@@ -2033,6 +2062,23 @@ mod tests {
         Ok(list_array_to_i32_vecs(result.as_list::<i32>()))
     }
 
+    fn assert_group_size_matches_state(acc: &ArrayAggGroupsAccumulator) {
+        let expected_size = acc
+            .batches
+            .iter()
+            .map(estimated_array_memory_size)
+            .sum::<usize>()
+            + acc.batches.capacity() * size_of::<ArrayRef>()
+            + acc
+                .batch_entries
+                .iter()
+                .map(|entries| entries.capacity() * size_of::<(u32, u32)>())
+                .sum::<usize>()
+            + acc.batch_entries.capacity() * size_of::<Vec<(u32, u32)>>();
+
+        assert_eq!(acc.size(), expected_size);
+    }
+
     #[test]
     fn groups_accumulator_multiple_batches() -> Result<()> {
         let mut acc = ArrayAggGroupsAccumulator::new(DataType::Int32, false);
@@ -2044,6 +2090,7 @@ mod tests {
         // Second batch
         let values: ArrayRef = Arc::new(Int32Array::from(vec![4, 5]));
         acc.update_batch(&[values], &[1, 0], None, 2)?;
+        assert_group_size_matches_state(&acc);
 
         let vals = eval_i32_lists(&mut acc, EmitTo::All)?;
         assert_eq!(vals[0], Some(vec![Some(1), Some(3), Some(5)]));
@@ -2104,6 +2151,7 @@ mod tests {
             .unwrap();
         assert_eq!(retained.values(), &[40]);
         assert_eq!(acc.batch_entries, vec![vec![(0, 0)]]);
+        assert_group_size_matches_state(&acc);
 
         // Emit remaining group 1
         let vals = eval_i32_lists(&mut acc, EmitTo::All)?;
@@ -2134,6 +2182,7 @@ mod tests {
             .unwrap();
         assert_eq!(retained.values(), &[20, 40]);
         assert_eq!(acc.batch_entries, vec![vec![(0, 0), (0, 1)]]);
+        assert_group_size_matches_state(&acc);
         assert!(acc.size() < size_before);
 
         let vals = eval_i32_lists(&mut acc, EmitTo::All)?;
