@@ -2226,13 +2226,13 @@ impl ConversionSpecifier {
         // Handle padding
         let NumericParam::Literal(width) = self.width else {
             writer.push_str(&prefix);
-            writer.push_str(&number);
-            writer.push_str(&suffix);
+            writer.push_str(number);
+            writer.push_str(suffix);
             return;
         };
 
         if self.left_adj {
-            let mut full_num = prefix + &number + &suffix;
+            let mut full_num = prefix + number + suffix;
             while full_num.len() < width as usize {
                 full_num.push(' ');
             }
@@ -2242,10 +2242,10 @@ impl ConversionSpecifier {
                 prefix.push('0');
             }
             writer.push_str(&prefix);
-            writer.push_str(&number);
-            writer.push_str(&suffix);
+            writer.push_str(number);
+            writer.push_str(suffix);
         } else {
-            let mut full_num = prefix + &number + &suffix;
+            let mut full_num = prefix + number + suffix;
             while full_num.len() < width as usize {
                 full_num = " ".to_owned() + &full_num;
             }
