@@ -1789,34 +1789,8 @@ impl ConversionSpecifier {
                 }
             }
         }
-        // Take care of padding
-        let NumericParam::Literal(width) = self.width else {
-            writer.push_str(&prefix);
-            writer.push_str(&number);
-            writer.push_str(&suffix);
-            return Ok(());
-        };
-        if self.left_adj {
-            let mut full_num = prefix + &number + &suffix;
-            while full_num.len() < width as usize {
-                full_num.push(' ');
-            }
-            writer.push_str(&full_num);
-        } else if self.zero_pad && value.is_finite() {
-            while prefix.len() + number.len() + suffix.len() < width as usize {
-                prefix.push('0');
-            }
-            writer.push_str(&prefix);
-            writer.push_str(&number);
-            writer.push_str(&suffix);
-        } else {
-            let mut full_num = prefix + &number + &suffix;
-            while full_num.len() < width as usize {
-                full_num = " ".to_owned() + &full_num;
-            }
-            writer.push_str(&full_num);
-        };
 
+        self.write_numeric_parts(writer, prefix, &number, &suffix, value.is_finite());
         Ok(())
     }
 
@@ -2076,35 +2050,7 @@ impl ConversionSpecifier {
             }
         };
 
-        // Handle padding
-        let NumericParam::Literal(width) = self.width else {
-            writer.push_str(&prefix);
-            writer.push_str(&number);
-            writer.push_str(&suffix);
-            return Ok(());
-        };
-
-        if self.left_adj {
-            let mut full_num = prefix + &number + &suffix;
-            while full_num.len() < width as usize {
-                full_num.push(' ');
-            }
-            writer.push_str(&full_num);
-        } else if self.zero_pad {
-            while prefix.len() + number.len() + suffix.len() < width as usize {
-                prefix.push('0');
-            }
-            writer.push_str(&prefix);
-            writer.push_str(&number);
-            writer.push_str(&suffix);
-        } else {
-            let mut full_num = prefix + &number + &suffix;
-            while full_num.len() < width as usize {
-                full_num = " ".to_owned() + &full_num;
-            }
-            writer.push_str(&full_num);
-        }
-
+        self.write_numeric_parts(writer, prefix, &number, &suffix, true);
         Ok(())
     }
 
@@ -2266,6 +2212,44 @@ impl ConversionSpecifier {
             TimeFormat::DUpper => Ok(dt.format("%m/%d/%y").to_string()),
             TimeFormat::FUpper => Ok(dt.format("%Y-%m-%d").to_string()),
             TimeFormat::CLower => Ok(dt.format("%a %b %d %H:%M:%S UTC %Y").to_string()),
+        }
+    }
+
+    fn write_numeric_parts(
+        &self,
+        writer: &mut String,
+        mut prefix: String,
+        number: &str,
+        suffix: &str,
+        zero_pad_allowed: bool,
+    ) {
+        // Handle padding
+        let NumericParam::Literal(width) = self.width else {
+            writer.push_str(&prefix);
+            writer.push_str(&number);
+            writer.push_str(&suffix);
+            return;
+        };
+
+        if self.left_adj {
+            let mut full_num = prefix + &number + &suffix;
+            while full_num.len() < width as usize {
+                full_num.push(' ');
+            }
+            writer.push_str(&full_num);
+        } else if self.zero_pad && zero_pad_allowed {
+            while prefix.len() + number.len() + suffix.len() < width as usize {
+                prefix.push('0');
+            }
+            writer.push_str(&prefix);
+            writer.push_str(&number);
+            writer.push_str(&suffix);
+        } else {
+            let mut full_num = prefix + &number + &suffix;
+            while full_num.len() < width as usize {
+                full_num = " ".to_owned() + &full_num;
+            }
+            writer.push_str(&full_num);
         }
     }
 }
