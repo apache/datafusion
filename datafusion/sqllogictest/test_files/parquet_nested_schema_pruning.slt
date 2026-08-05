@@ -108,6 +108,23 @@ explain analyze select events from full_schema;
 ----
 Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=312<slt:ignore>]
 
+# A declared struct sharing no field name with the file's is rejected rather
+# than silently null-filled: `clip_for_cast` never sees a zero-overlap cast.
+statement ok
+CREATE EXTERNAL TABLE no_overlap (
+  id INT,
+  s STRUCT<not_in_file BIGINT>
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_nested_schema_pruning/wide.parquet';
+
+statement error DataFusion error: Execution error: Cannot cast column 's'
+SELECT s FROM no_overlap;
+
+statement ok
+DROP TABLE no_overlap;
+
+
 ##########
 # Query-level casts. `ProjectionExec` is merged into the scan, so a `CAST`
 # written in the query reaches the same read-plan analysis as an

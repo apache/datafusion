@@ -41,15 +41,26 @@
 //! children exclusively by looking up the *target* field names, recursively
 //! through list wrappers. Physical subtrees not named by the target are
 //! provably dead: removing them from the read cannot change the cast's
-//! output. Struct-level nullability is preserved because the Parquet reader
+//! output. That holds for *any* [`CastExpr`] over a nested type, not just the
+//! ones the schema adapter inserts:
+//! [`datafusion_expr_common::columnar_value::ColumnarValue::cast_to`] routes
+//! every cast for which
+//! [`requires_nested_struct_cast`](datafusion_common::nested_struct::requires_nested_struct_cast)
+//! holds — the same predicate the projection analysis gates on — through
+//! `cast_column`.
+//!
+//! Struct-level nullability is preserved because the Parquet reader
 //! reconstructs ancestor validity from the definition levels of any surviving
-//! leaf, and every struct level clipped here keeps at least one leaf: a
-//! struct cast with zero field-name overlap at *any* nesting depth is
+//! leaf, so every struct level that is clipped must keep at least one leaf.
+//! A struct cast with zero field-name overlap at *any* nesting depth would
+//! break that: the reader drops a field whose leaves are all masked out, so
+//! the emitted type would not match the one predicted here. Such a cast is
 //! rejected during physical planning
 //! (`datafusion_common::nested_struct::validate_struct_compatibility`, called
-//! recursively from `DefaultPhysicalExprAdapter::rewrite`), so a
-//! [`CastColumnAccess`] observed here always has overlap at every struct
-//! level it contains.
+//! recursively from `DefaultPhysicalExprAdapter::rewrite`) and by the logical
+//! planner's own castability check, so it should never reach this module; if
+//! one does anyway (a custom `PhysicalExprAdapter` could build one),
+//! [`clip_for_cast`] detects the empty level and declines to clip.
 //!
 //! The clip is *total*: any type shape it does not understand (maps,
 //! dictionaries, wrapper-kind mismatches, ...) keeps all of its leaves, so
@@ -100,9 +111,16 @@ pub(crate) fn clip_for_cast(
     let total = count_leaves(physical);
     let mut kept = Vec::new();
     let mut next_leaf = 0;
-    let pruned_type = clip_type(physical, cast_target, &mut next_leaf, &mut kept);
+    let mut unclippable = false;
+    let pruned_type = clip_type(
+        physical,
+        cast_target,
+        &mut next_leaf,
+        &mut kept,
+        &mut unclippable,
+    );
     debug_assert_eq!(next_leaf, total, "leaf accounting must cover the type");
-    if kept.is_empty() || kept.len() >= total {
+    if unclippable || kept.is_empty() || kept.len() >= total {
         return None;
     }
     Some((kept, pruned_type))
@@ -128,11 +146,16 @@ pub(crate) fn contains_struct(dt: &DataType) -> bool {
 /// Recursive walker: advances `next_leaf` across every leaf of `physical`,
 /// pushing the offsets the cast target consumes into `kept`, and returns the
 /// Arrow type the reader emits for those kept leaves.
+///
+/// `unclippable` is set when a shape is encountered whose emitted type this
+/// module cannot predict; the caller must then read the whole column. The walk
+/// still runs to completion so `next_leaf` stays a valid leaf count.
 fn clip_type(
     physical: &DataType,
     target: &DataType,
     next_leaf: &mut usize,
     kept: &mut Vec<usize>,
+    unclippable: &mut bool,
 ) -> DataType {
     match (physical, target) {
         (DataType::Struct(p_children), DataType::Struct(t_children)) => {
@@ -144,21 +167,51 @@ fn clip_type(
                         skip_leaves(pc.data_type(), next_leaf);
                         return None;
                     };
-                    let pruned =
-                        clip_type(pc.data_type(), tc.data_type(), next_leaf, kept);
+                    let before = kept.len();
+                    let pruned = clip_type(
+                        pc.data_type(),
+                        tc.data_type(),
+                        next_leaf,
+                        kept,
+                        unclippable,
+                    );
+                    if kept.len() == before {
+                        // This child matched by name but kept no leaves at
+                        // all, which only happens when a nested struct level
+                        // below it shares no field name with its target. The
+                        // reader drops a field whose leaves are all masked
+                        // out, so the emitted type could not be predicted;
+                        // give up on clipping this column entirely rather
+                        // than promise a type the decoder will not produce.
+                        // (`DefaultPhysicalExprAdapter` never builds such a
+                        // cast — `validate_struct_compatibility` rejects a
+                        // zero-overlap struct level at planning time — but a
+                        // custom `PhysicalExprAdapter` could.)
+                        *unclippable = true;
+                    }
                     Some(field_with_type(pc, pruned))
                 })
                 .collect();
             DataType::Struct(kept_children)
         }
         (DataType::List(p_item), DataType::List(t_item)) => {
-            let pruned =
-                clip_type(p_item.data_type(), t_item.data_type(), next_leaf, kept);
+            let pruned = clip_type(
+                p_item.data_type(),
+                t_item.data_type(),
+                next_leaf,
+                kept,
+                unclippable,
+            );
             DataType::List(field_with_type(p_item, pruned))
         }
         (DataType::LargeList(p_item), DataType::LargeList(t_item)) => {
-            let pruned =
-                clip_type(p_item.data_type(), t_item.data_type(), next_leaf, kept);
+            let pruned = clip_type(
+                p_item.data_type(),
+                t_item.data_type(),
+                next_leaf,
+                kept,
+                unclippable,
+            );
             DataType::LargeList(field_with_type(p_item, pruned))
         }
         // Anything else, leaf pairs, wrapper-kind mismatches, maps,
@@ -406,6 +459,95 @@ mod tests {
         let physical = struct_of(vec![utf8("a"), int64("b")]);
         let target = struct_of(vec![utf8("z")]);
         assert!(clip_for_cast(&physical, &target).is_none());
+    }
+
+    /// A *nested* struct level with zero field-name overlap must not be
+    /// clipped, even when a sibling keeps leaves. The reader drops a field
+    /// whose leaves are all masked out (pinned by
+    /// [`reader_drops_struct_child_with_no_selected_leaves`]), so predicting
+    /// `{inner: Struct[], c}` here would be a schema the decoder never
+    /// produces. Read the whole column instead.
+    #[test]
+    fn no_clip_when_nested_struct_level_has_no_overlap() {
+        let physical = struct_of(vec![
+            struct_of(vec![int64("a"), int64("b")]).into_field("inner"),
+            int64("c"),
+        ]);
+        let target = struct_of(vec![
+            struct_of(vec![int64("z")]).into_field("inner"),
+            int64("c"),
+        ]);
+        assert!(clip_for_cast(&physical, &target).is_none());
+    }
+
+    /// Same, one level deeper and behind a list wrapper.
+    #[test]
+    fn no_clip_when_nested_list_struct_level_has_no_overlap() {
+        let physical = struct_of(vec![
+            list_of(struct_of(vec![int64("a"), int64("b")])).into_field("items"),
+            int64("c"),
+        ]);
+        let target = struct_of(vec![
+            list_of(struct_of(vec![int64("z")])).into_field("items"),
+            int64("c"),
+        ]);
+        assert!(clip_for_cast(&physical, &target).is_none());
+    }
+
+    /// Pins the arrow-rs behavior the empty-level guard above depends on: a
+    /// struct child none of whose leaves are selected disappears from the
+    /// type the reader emits, rather than surviving as an empty struct.
+    #[test]
+    fn reader_drops_struct_child_with_no_selected_leaves() {
+        use arrow::array::{ArrayRef, Int64Array, StructArray};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+        use parquet::arrow::{ArrowWriter, ProjectionMask};
+
+        let inner_fields = Fields::from(vec![int64("a"), int64("b")]);
+        let outer_fields = Fields::from(vec![
+            Field::new("inner", DataType::Struct(inner_fields.clone()), true),
+            int64("c"),
+        ]);
+        let inner: ArrayRef = Arc::new(StructArray::new(
+            inner_fields,
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![3, 4])) as ArrayRef,
+            ],
+            None,
+        ));
+        let outer = StructArray::new(
+            outer_fields.clone(),
+            vec![inner, Arc::new(Int64Array::from(vec![5, 6])) as ArrayRef],
+            None,
+        );
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(outer_fields),
+            true,
+        )]));
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(outer)]).unwrap();
+
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let mut writer =
+            ArrowWriter::try_new(file.reopen().unwrap(), schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new(file.reopen().unwrap()).unwrap();
+        assert_eq!(builder.parquet_schema().num_columns(), 3);
+        // Keep only s.c (leaf 2): every leaf of s.inner is masked out.
+        let mask = ProjectionMask::leaves(builder.parquet_schema(), [2usize]);
+        let reader = builder.with_projection(mask).build().unwrap();
+        let out: Vec<RecordBatch> = reader.map(|b| b.unwrap()).collect();
+        assert_eq!(
+            out[0].schema().field(0).data_type(),
+            &struct_of(vec![int64("c")]),
+            "the fully masked `inner` child is dropped, not emitted as an empty struct"
+        );
     }
 
     /// Pins the arrow-rs behavior this module relies on: selecting a subset

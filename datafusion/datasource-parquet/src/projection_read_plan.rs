@@ -603,7 +603,12 @@ fn build_read_plan_with_cast_clipping(
     let mut fields: BTreeMap<usize, Arc<Field>> = BTreeMap::new();
 
     for root in whole_roots.iter().chain(fallback_roots.iter()) {
-        leaf_indices.extend(leaves_by_root[root].iter().copied());
+        // A root with no parquet leaves contributes nothing to the mask;
+        // `ProjectionMask::roots` handles that case the same way, so match it
+        // rather than indexing and panicking.
+        if let Some(leaves) = leaves_by_root.get(root) {
+            leaf_indices.extend(leaves.iter().copied());
+        }
         fields.insert(*root, Arc::new(file_schema.field(*root).clone()));
     }
 
