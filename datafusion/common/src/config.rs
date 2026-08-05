@@ -1191,14 +1191,14 @@ config_namespace! {
 
         /// Maximum number of values in an `IN (...)` list for which pruning will
         /// occur. Longer lists will not be used to prune files, row groups, or
-        /// data pages. 
+        /// data pages.
         ///
-        /// Higher values help in cases such as a list of 
-        /// of ~25-100 identifiers, but also makes the predicate
-        /// more expensive to evaluate. Set to 0 to disable the IN (..) list pruning entirely
+        /// Higher values help in cases such as filtering on a list of
+        /// ~25-100 identifiers, but also make the predicate more expensive to
+        /// evaluate. Set to 0 to disable `IN (...)` list pruning entirely.
         ///
         /// Defaults to 20.
-        pub pruning_max_in_list_size: usize, default = 20
+        pub max_in_list_size: usize, default = 20
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties

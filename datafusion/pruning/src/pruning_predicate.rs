@@ -36,7 +36,9 @@ use log::{debug, trace};
 
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{TransformedResult, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, assert_eq_or_internal_err};
+use datafusion_common::{
+    _internal_datafusion_err, Column, DFSchema, assert_eq_or_internal_err,
+};
 use datafusion_common::{
     ScalarValue, internal_datafusion_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
@@ -388,40 +390,107 @@ pub fn build_pruning_predicate(
     file_schema: &SchemaRef,
     predicate_creation_errors: &Count,
 ) -> Option<Arc<PruningPredicate>> {
-    build_pruning_predicate_with_max_in_list_size(
-        predicate,
-        file_schema,
-        predicate_creation_errors,
-        MAX_LIST_VALUE_SIZE_REWRITE,
-    )
+    PruningPredicateBuilder::new()
+        .with_file_schema(Arc::clone(file_schema))
+        .with_error_counter(predicate_creation_errors)
+        .build(predicate)
 }
 
-/// Same as [`build_pruning_predicate`] but with an explicit cap on the size
-/// of `IN (...)` lists rewritten into per-value statistics checks. Query
-/// engines typically pass `datafusion.execution.pruning_max_in_list_size`
-/// here.
-pub fn build_pruning_predicate_with_max_in_list_size(
-    predicate: Arc<dyn PhysicalExpr>,
-    file_schema: &SchemaRef,
-    predicate_creation_errors: &Count,
+/// Builder for a [`PruningPredicate`]. Groups optional configuration —
+/// `IN (...)` rewrite cap, error counter — so future additions do not
+/// churn the top-level API.
+///
+/// The two entry points are:
+///  - [`Self::build`]: convenience for scan sites that already track a
+///    `predicate_creation_errors` counter. Returns `Some(Arc<..>)` when the
+///    resulting predicate can actually prune, `None` when it is trivially
+///    true or when construction failed (in which case the error counter is
+///    incremented if one was supplied).
+///  - [`Self::try_build`]: returns a raw `Result<PruningPredicate>` for
+///    callers that want to surface errors themselves.
+///
+/// Callers that only need the historical `expr` / `schema` API can still
+/// use [`PruningPredicate::try_new`] directly.
+#[derive(Default)]
+pub struct PruningPredicateBuilder<'a> {
+    file_schema: Option<SchemaRef>,
+    error_counter: Option<&'a Count>,
     max_in_list_size: usize,
-) -> Option<Arc<PruningPredicate>> {
-    match PruningPredicate::try_new_with_max_in_list_size(
-        predicate,
-        Arc::clone(file_schema),
-        max_in_list_size,
-    ) {
-        Ok(pruning_predicate) => {
-            if !pruning_predicate.always_true() {
-                return Some(Arc::new(pruning_predicate));
-            }
-        }
-        Err(e) => {
-            debug!("Could not create pruning predicate for: {e}");
-            predicate_creation_errors.add(1);
+}
+
+impl<'a> PruningPredicateBuilder<'a> {
+    /// Create a new builder with defaults matching the historical
+    /// [`PruningPredicate::try_new`] behaviour.
+    pub fn new() -> Self {
+        Self {
+            file_schema: None,
+            error_counter: None,
+            max_in_list_size: MAX_IN_LIST_SIZE,
         }
     }
-    None
+
+    /// Set the schema of the container that will be pruned (typically the
+    /// parquet file schema).
+    pub fn with_file_schema(mut self, file_schema: SchemaRef) -> Self {
+        self.file_schema = Some(file_schema);
+        self
+    }
+
+    /// Metric counter incremented once per predicate that fails to build.
+    /// Only consulted by [`Self::build`]; [`Self::try_build`] surfaces the
+    /// error directly.
+    pub fn with_error_counter(mut self, error_counter: &'a Count) -> Self {
+        self.error_counter = Some(error_counter);
+        self
+    }
+
+    /// Cap on the size of `IN (...)` lists that will be rewritten into per-
+    /// value min/max statistics checks. Lists longer than this fall back to
+    /// the unhandled-predicate hook (typically "keep the container").
+    ///
+    /// Query engines typically pass
+    /// `datafusion.execution.parquet.max_in_list_size` here.
+    pub fn with_max_in_list_size(mut self, max_in_list_size: usize) -> Self {
+        self.max_in_list_size = max_in_list_size;
+        self
+    }
+
+    /// Build a [`PruningPredicate`] wrapped in `Some(Arc<..>)` when it can
+    /// prune, `None` when it is trivially true or when construction fails.
+    /// If [`Self::with_error_counter`] was set, construction failures are
+    /// recorded there.
+    pub fn build(
+        self,
+        predicate: Arc<dyn PhysicalExpr>,
+    ) -> Option<Arc<PruningPredicate>> {
+        let error_counter = self.error_counter;
+        match self.try_build(predicate) {
+            Ok(pruning_predicate) => {
+                if !pruning_predicate.always_true() {
+                    return Some(Arc::new(pruning_predicate));
+                }
+            }
+            Err(e) => {
+                debug!("Could not create pruning predicate for: {e}");
+                if let Some(counter) = error_counter {
+                    counter.add(1);
+                }
+            }
+        }
+        None
+    }
+
+    /// Build a [`PruningPredicate`], returning the construction error
+    /// directly. Callers that want the always-true predicate elided or
+    /// errors folded into a counter should use [`Self::build`] instead.
+    pub fn try_build(self, predicate: Arc<dyn PhysicalExpr>) -> Result<PruningPredicate> {
+        let file_schema = self.file_schema.ok_or_else(|| {
+            _internal_datafusion_err!(
+                "PruningPredicateBuilder requires a file schema (call `with_file_schema`)"
+            )
+        })?;
+        PruningPredicate::try_new_inner(predicate, file_schema, self.max_in_list_size)
+    }
 }
 
 /// Rewrites predicates that [`PredicateRewriter`] can not handle, e.g. certain
@@ -484,14 +553,14 @@ impl PruningPredicate {
     /// It is recommended that you pass the expressions through [`PhysicalExprSimplifier`]
     /// before calling this method to make sure the expressions can be used for pruning.
     pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
-        Self::try_new_with_max_in_list_size(expr, schema, MAX_LIST_VALUE_SIZE_REWRITE)
+        Self::try_new_inner(expr, schema, MAX_IN_LIST_SIZE)
     }
 
-    /// Same as [`PruningPredicate::try_new`] but with an explicit cap on the
-    /// size of `IN (...)` lists rewritten into per-value statistics checks.
-    /// Query engines typically pass
-    /// `datafusion.execution.pruning_max_in_list_size` here.
-    pub fn try_new_with_max_in_list_size(
+    /// Internal constructor with an explicit cap on the `IN (...)` rewrite
+    /// size. External callers should reach this through
+    /// [`PruningPredicateBuilder::with_max_in_list_size`] instead of
+    /// depending on this signature directly.
+    pub(crate) fn try_new_inner(
         mut expr: Arc<dyn PhysicalExpr>,
         schema: SchemaRef,
         max_in_list_size: usize,
@@ -1400,8 +1469,8 @@ fn build_is_null_column_expr(
 /// `build_predicate_expression`. Callers threading a [`PredicateRewriter`]
 /// can override this via [`PredicateRewriter::with_max_in_list_size`], and
 /// query engines can wire it from the
-/// `datafusion.execution.parquet.pruning_max_in_list_size` config option.
-pub const MAX_LIST_VALUE_SIZE_REWRITE: usize = 20;
+/// `datafusion.execution.parquet.max_in_list_size` config option.
+pub const MAX_IN_LIST_SIZE: usize = 20;
 
 /// Rewrite a predicate expression in terms of statistics (min/max/null_counts)
 /// for use as a [`PruningPredicate`].
@@ -1414,7 +1483,7 @@ impl Default for PredicateRewriter {
     fn default() -> Self {
         Self {
             unhandled_hook: Arc::new(ConstantUnhandledPredicateHook::default()),
-            max_in_list_size: MAX_LIST_VALUE_SIZE_REWRITE,
+            max_in_list_size: MAX_IN_LIST_SIZE,
         }
     }
 }
@@ -1439,9 +1508,9 @@ impl PredicateRewriter {
     /// to the unhandled-predicate hook (typically "keep the container"),
     /// effectively skipping container-level pruning for large IN lists.
     ///
-    /// The default (see [`MAX_LIST_VALUE_SIZE_REWRITE`]) preserves the
+    /// The default (see [`MAX_IN_LIST_SIZE`]) preserves the
     /// historical behaviour. Callers wiring config through can override via
-    /// `datafusion.execution.pruning_max_in_list_size`.
+    /// `datafusion.execution.max_in_list_size`.
     pub fn with_max_in_list_size(mut self, max_in_list_size: usize) -> Self {
         self.max_in_list_size = max_in_list_size;
         self
@@ -1456,7 +1525,7 @@ impl PredicateRewriter {
     /// Returns the pruning predicate as an [`PhysicalExpr`]
     ///
     /// Notice: `IN (...)` lists longer than `max_in_list_size` (default
-    /// [`MAX_LIST_VALUE_SIZE_REWRITE`]) fall back to calling `unhandled_hook`.
+    /// [`MAX_IN_LIST_SIZE`]) fall back to calling `unhandled_hook`.
     pub fn rewrite_predicate_to_statistics_predicate(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
@@ -3383,7 +3452,7 @@ mod tests {
     fn row_group_predicate_in_list_to_many_values() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
         // test c1 in(1..21)
-        // in pruning.rs has MAX_LIST_VALUE_SIZE_REWRITE = 20, more than this value will be rewrite
+        // in pruning.rs has MAX_IN_LIST_SIZE = 20, more than this value will be rewrite
         // always true
         let expr = col("c1").in_list((1..=21).map(lit).collect(), false);
 
@@ -3443,6 +3512,47 @@ mod tests {
             predicate_expr.to_string(),
             "true",
             "cap=0 must skip IN rewrite even for small lists"
+        );
+        Ok(())
+    }
+
+    // The high-level [`PruningPredicateBuilder`] should thread
+    // `max_in_list_size` all the way through: a 25-item IN with the default
+    // cap must fall through to the unhandled hook (`predicate_expr = true`),
+    // while a raised cap produces a real per-value statistics predicate.
+    #[test]
+    fn pruning_predicate_builder_threads_max_in_list_size() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let expr = col("c1").in_list((1..=25).map(lit).collect(), false);
+        let physical = logical2physical(&expr, &schema);
+
+        // With the default cap the IN branch bails out and the pruning
+        // predicate expression collapses to `true` (i.e., no container
+        // pruning based on stats).
+        let default_pp = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .try_build(Arc::clone(&physical))?;
+        assert_eq!(
+            default_pp.predicate_expr().to_string(),
+            "true",
+            "default cap must fall through to `true` for 25-item IN"
+        );
+
+        // Raising the cap produces a real statistics predicate with per-
+        // value bounds.
+        let raised_pp = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .with_max_in_list_size(32)
+            .try_build(physical)?;
+        let raised_expr = raised_pp.predicate_expr().to_string();
+        assert_ne!(
+            raised_expr, "true",
+            "raised cap must produce a real statistics predicate for 25-item IN"
+        );
+        assert!(
+            raised_expr.contains(" <= 1 ") && raised_expr.contains(" <= 25 "),
+            "raised-cap predicate should include per-value bounds, got: {raised_expr}"
         );
         Ok(())
     }
@@ -5881,7 +5991,7 @@ mod tests {
             &Arc::new(schema.clone()),
             required_columns,
             &unhandled_hook,
-            MAX_LIST_VALUE_SIZE_REWRITE,
+            MAX_IN_LIST_SIZE,
         )
     }
 

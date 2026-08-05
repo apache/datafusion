@@ -22,7 +22,6 @@ mod pruning_predicate;
 
 pub use file_pruner::FilePruner;
 pub use pruning_predicate::{
-    MAX_LIST_VALUE_SIZE_REWRITE, PredicateRewriter, PruningPredicate, PruningStatistics,
-    RequiredColumns, UnhandledPredicateHook, build_pruning_predicate,
-    build_pruning_predicate_with_max_in_list_size,
+    MAX_IN_LIST_SIZE, PredicateRewriter, PruningPredicate, PruningPredicateBuilder,
+    PruningStatistics, RequiredColumns, UnhandledPredicateHook, build_pruning_predicate,
 };

@@ -1081,7 +1081,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 })
                 .unwrap_or(None),
             max_row_group_size: value.max_row_group_size as usize,
-            pruning_max_in_list_size: value.pruning_max_in_list_size as usize,
+            max_in_list_size: value.max_in_list_size as usize,
             created_by: value.created_by.clone(),
             column_index_truncate_length: value
                 .column_index_truncate_length_opt.as_ref()
