@@ -668,7 +668,8 @@ data_tpch() {
     else
         echo " Copying answers to ${TPCH_DIR}/answers"
         mkdir -p "${TPCH_DIR}/answers"
-        docker run -v "${TPCH_DIR}":/data -it --entrypoint /bin/bash --rm ghcr.io/scalytics/tpch-docker:main  -c "cp -f /opt/tpch/2.18.0_rc2/dbgen/answers/* /data/answers/"
+        # no -t: keeps the copy working in non-interactive environments (CI)
+        docker run -v "${TPCH_DIR}":/data --entrypoint /bin/bash --rm ghcr.io/scalytics/tpch-docker:main  -c "cp -f /opt/tpch/2.18.0_rc2/dbgen/answers/* /data/answers/"
     fi
 
     if [ "$FORMAT" = "parquet" ]; then
