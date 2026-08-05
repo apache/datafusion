@@ -282,6 +282,11 @@ impl FFI_QueryPlanner {
     /// `FFI_SessionRef`, invokes the planner's owning library, and
     /// deserializes its physical-plan response. `session_runtime` is attached
     /// to the exported session for callbacks that need its Tokio runtime.
+    ///
+    /// The [`QueryPlanner`] implementation for [`ForeignQueryPlanner`] cannot
+    /// obtain the session owner's runtime from the trait API, so it calls this
+    /// method with `None`. Embedders that own the runtime and need session
+    /// callbacks to enter it must call this method directly with `Some(handle)`.
     pub async fn create_physical_plan_with_session_runtime(
         &self,
         logical_plan: &LogicalPlan,
@@ -411,6 +416,27 @@ mod tests {
         let logical_plan = LogicalPlanBuilder::empty(false).build()?;
         let state = ctx.state();
         let physical_plan = planner.create_physical_plan(&logical_plan, &state).await?;
+        assert_eq!(physical_plan.name(), "EmptyExec");
+        assert!(physical_plan.is::<EmptyExec>());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_physical_plan_with_session_runtime() -> Result<()> {
+        let ctx = Arc::new(SessionContext::new());
+        let ffi_planner = create_ffi_query_planner(Arc::clone(&ctx));
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        let state = ctx.state();
+
+        let physical_plan = ffi_planner
+            .create_physical_plan_with_session_runtime(
+                &logical_plan,
+                &state,
+                Some(Handle::current()),
+            )
+            .await?;
+
         assert_eq!(physical_plan.name(), "EmptyExec");
         assert!(physical_plan.is::<EmptyExec>());
 
