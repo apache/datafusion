@@ -1690,6 +1690,77 @@ mod tests {
         );
     }
 
+    /// A struct column that needs no adaptation at all is left completely
+    /// alone — the narrowing must not disturb the common case.
+    #[test]
+    fn test_narrow_struct_cast_leaves_matching_schema_alone() {
+        let (logical_schema, physical_schema) = struct_schemas(
+            vec![Field::new("x", DataType::Int32, true)],
+            vec![Field::new("x", DataType::Int32, true)],
+        );
+
+        let adapter = DefaultPhysicalExprAdapterFactory
+            .create(Arc::clone(&logical_schema), physical_schema)
+            .unwrap();
+        let expr = get_field_expr(&logical_schema, "s", "x");
+
+        let rewritten = adapter.rewrite(Arc::clone(&expr)).unwrap();
+
+        assert_eq!(
+            rewritten.to_string(),
+            expr.to_string(),
+            "an unadapted struct column must pass through untouched"
+        );
+    }
+
+    /// When the accessed field has the same type in both schemas, the struct
+    /// cast disappears entirely rather than being replaced by a field cast:
+    /// only a sibling field forced the column-level cast in the first place.
+    #[test]
+    fn test_narrow_struct_cast_drops_cast_when_field_types_match() {
+        let (logical_schema, physical_schema) = struct_schemas(
+            vec![
+                Field::new("x", DataType::Int32, true),
+                Field::new("y", DataType::Int32, true),
+            ],
+            vec![
+                Field::new("x", DataType::Int32, true),
+                Field::new("y", DataType::Int64, true),
+            ],
+        );
+
+        let adapter = DefaultPhysicalExprAdapterFactory
+            .create(Arc::clone(&logical_schema), physical_schema)
+            .unwrap();
+        let expr = Arc::new(
+            ScalarFunctionExpr::try_new(
+                Arc::new(datafusion_expr::ScalarUDF::from(GetFieldFunc::new())),
+                vec![
+                    Arc::new(Column::new("s", 0)),
+                    Arc::new(Literal::new(ScalarValue::from("x"))),
+                ],
+                &logical_schema,
+                Arc::new(datafusion_common::config::ConfigOptions::default()),
+            )
+            .unwrap(),
+        ) as Arc<dyn PhysicalExpr>;
+
+        let rewritten = adapter.rewrite(expr).unwrap();
+
+        assert!(
+            rewritten.downcast_ref::<CastExpr>().is_none(),
+            "`x` has the same type in both schemas, so no cast is needed, got: {rewritten}"
+        );
+        let get_field = rewritten
+            .downcast_ref::<ScalarFunctionExpr>()
+            .expect("Expected a bare get_field");
+        assert_eq!(get_field.return_type(), &DataType::Int32);
+        assert!(
+            get_field.args()[0].downcast_ref::<Column>().is_some(),
+            "the struct column must not be hidden behind a cast, got: {rewritten}"
+        );
+    }
+
     /// `s['inner']['x']` is simplified to the flattened `get_field(s, 'inner',
     /// 'x')`, so the whole key path has to be resolved.
     #[test]
