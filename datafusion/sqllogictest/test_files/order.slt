@@ -674,8 +674,8 @@ SELECT DISTINCT time as "first_seen" FROM t ORDER BY 1;
 statement ok
 drop table t;
 
-# Create a table having 3 columns which are ordering equivalent by the source. In the next step,
-# we will expect to observe the removed SortExec by propagating the orders across projection.
+# Create a table with three independently ordered columns. Their sum is not
+# necessarily ordered because integer addition can wrap.
 statement ok
 CREATE EXTERNAL TABLE multiple_ordered_table (
   a0 INTEGER,
@@ -702,9 +702,10 @@ logical_plan
 03)----TableScan: multiple_ordered_table projection=[a, b, c]
 physical_plan
 01)SortPreservingMergeExec: [result@0 ASC NULLS LAST]
-02)--ProjectionExec: expr=[b@1 + a@0 + c@2 as result]
-03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_orderings=[[a@0 ASC NULLS LAST], [b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], file_type=csv, has_header=true
+02)--SortExec: expr=[result@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[b@1 + a@0 + c@2 as result]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_orderings=[[a@0 ASC NULLS LAST], [b@1 ASC NULLS LAST], [c@2 ASC NULLS LAST]], file_type=csv, has_header=true
 
 statement ok
 drop table multiple_ordered_table;
@@ -1844,6 +1845,38 @@ query TT
 EXPLAIN SELECT a, named_struct('a', a, 'b', b) AS s FROM ordered_by_a ORDER BY s['a'];
 ----
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[a, named_struct(a, a@0, b, b@1) as s], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true
+
+query I
+COPY (
+  SELECT * FROM (VALUES (1, 1), (2, 3), (200, 10), (255, 10)) AS t(a, b)
+  ORDER BY a
+)
+TO 'test_files/scratch/order/uint8_overflow.csv'
+OPTIONS ('format.has_header' 'false');
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE ordered_u8 (
+  a TINYINT UNSIGNED NOT NULL,
+  b TINYINT UNSIGNED NOT NULL
+)
+STORED AS CSV
+LOCATION 'test_files/scratch/order/uint8_overflow.csv'
+OPTIONS ('format.has_header' 'false')
+WITH ORDER (a ASC)
+WITH ORDER (b ASC);
+
+query I
+SELECT (a + b) AS result FROM ordered_u8 ORDER BY result ASC;
+----
+2
+5
+9
+210
+
+statement ok
+DROP TABLE ordered_u8;
 
 # Config reset
 statement ok
