@@ -277,6 +277,22 @@ impl ClassicPWMJStream {
             return Ok(StatefulStreamResult::Ready(Some(batch)));
         }
 
+        if !self.batch_process_state.continue_process {
+            self.batch_process_state
+                .output_batches
+                .finish_buffered_batch()?;
+            if let Some(batch) = self
+                .batch_process_state
+                .output_batches
+                .next_completed_batch()
+            {
+                return Ok(StatefulStreamResult::Ready(Some(batch)));
+            }
+
+            self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
+            return Ok(StatefulStreamResult::Continue);
+        }
+
         // Produce more work
         let batch = resolve_classic_join(
             buffered_side,
@@ -289,25 +305,20 @@ impl ClassicPWMJStream {
         )?;
 
         if !self.batch_process_state.continue_process {
-            // We finished scanning this stream batch.
+            // A flush can queue multiple batches, so transition only after draining.
             self.batch_process_state
                 .output_batches
                 .finish_buffered_batch()?;
-            if let Some(b) = self
+            if let Some(batch) = self
                 .batch_process_state
                 .output_batches
                 .next_completed_batch()
             {
-                self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
-                return Ok(StatefulStreamResult::Ready(Some(b)));
-            }
-
-            // Nothing pending; hand back whatever `resolve` returned (often empty) and move on.
-            if self.batch_process_state.output_batches.is_empty() {
-                self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
-
                 return Ok(StatefulStreamResult::Ready(Some(batch)));
             }
+
+            self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
+            return Ok(StatefulStreamResult::Ready(Some(batch)));
         }
 
         Ok(StatefulStreamResult::Ready(Some(batch)))
@@ -340,9 +351,12 @@ impl ClassicPWMJStream {
                 .output_batches
                 .next_completed_batch()
             {
-                self.state = PiecewiseMergeJoinStreamState::Completed;
                 return Ok(StatefulStreamResult::Ready(Some(batch)));
             }
+
+            // Avoid restarting the unmatched pass when there is no remainder.
+            self.state = PiecewiseMergeJoinStreamState::Completed;
+            return Ok(StatefulStreamResult::Continue);
         }
 
         let buffered_data =
@@ -388,13 +402,12 @@ impl ClassicPWMJStream {
             .output_batches
             .next_completed_batch()
         {
-            self.state = PiecewiseMergeJoinStreamState::Completed;
             return Ok(StatefulStreamResult::Ready(Some(batch)));
         }
 
         self.state = PiecewiseMergeJoinStreamState::Completed;
         self.batch_process_state.reset();
-        Ok(StatefulStreamResult::Ready(None))
+        Ok(StatefulStreamResult::Continue)
     }
 }
 
@@ -660,10 +673,12 @@ mod tests {
         joins::PiecewiseMergeJoinExec,
         test::{TestMemoryExec, build_table_i32},
     };
-    use arrow::array::{Date32Array, Date64Array};
+    use arrow::array::{Date32Array, Date64Array, Int32Array};
+    use arrow::compute::concat_batches;
     use arrow_schema::{DataType, Field};
     use datafusion_common::test_util::batches_to_string;
     use datafusion_execution::TaskContext;
+    use datafusion_execution::config::SessionConfig;
     use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
     use insta::assert_snapshot;
     use std::sync::Arc;
@@ -816,6 +831,93 @@ mod tests {
         | 3  | 1  | 9  | 10 | 2  | 70 |
         +----+----+----+----+----+----+
         ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_right_unmatched_rows_exceeding_batch_size() -> Result<()> {
+        // 100 < {1, 2, 3} is false, making every streamed row unmatched.
+        let left = build_table(("a1", &vec![0]), ("b1", &vec![100]), ("c1", &vec![0]));
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![1, 2, 3]),
+            ("c2", &vec![70, 80, 90]),
+        );
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let session_config = SessionConfig::new().with_batch_size(2);
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(session_config));
+        let join = join(left, right, on, Operator::Lt, JoinType::Right)?;
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        let total_rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+        assert_eq!(
+            total_rows, 3,
+            "every unmatched streamed row must be emitted"
+        );
+
+        let combined = concat_batches(&join.schema(), &batches)?;
+        for buffered_column in 0..3 {
+            assert_eq!(combined.column(buffered_column).null_count(), 3);
+        }
+        let a2 = combined
+            .column(3)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let mut streamed_values: Vec<i32> = a2.iter().flatten().collect();
+        streamed_values.sort_unstable();
+        assert_eq!(streamed_values, vec![10, 20, 30]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_left_unmatched_rows_exact_batch_multiple() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![10, 20, 30, 40]),
+            ("b1", &vec![100, 101, 102, 103]),
+            ("c1", &vec![70, 80, 90, 100]),
+        );
+        let right = build_table(("a2", &vec![0]), ("b1", &vec![1]), ("c2", &vec![0]));
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let session_config = SessionConfig::new().with_batch_size(2);
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(session_config));
+        let join = join(left, right, on, Operator::Lt, JoinType::Left)?;
+        let mut stream = join.execute(0, task_ctx)?;
+
+        let mut batches = Vec::with_capacity(2);
+        for _ in 0..3 {
+            match stream.next().await.transpose()? {
+                Some(batch) if batch.num_rows() > 0 => batches.push(batch),
+                Some(_) => {}
+                None => break,
+            }
+        }
+        assert_eq!(batches.len(), 2);
+        assert!(stream.next().await.is_none());
+
+        let combined = concat_batches(&join.schema(), &batches)?;
+        for streamed_column in 3..6 {
+            assert_eq!(combined.column(streamed_column).null_count(), 4);
+        }
+        let a1 = combined
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let mut buffered_values: Vec<i32> = a1.iter().flatten().collect();
+        buffered_values.sort_unstable();
+        assert_eq!(buffered_values, vec![10, 20, 30, 40]);
         Ok(())
     }
 
