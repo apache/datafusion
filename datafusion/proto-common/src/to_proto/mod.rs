@@ -115,7 +115,7 @@ impl TryFrom<&DataType> for protobuf::ArrowType {
     }
 }
 
-impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
+impl TryFrom<&DataType> for ArrowTypeEnum {
     type Error = Error;
 
     fn try_from(val: &DataType) -> Result<Self, Self::Error> {
@@ -439,9 +439,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     })
                 }
                 None => Ok(protobuf::ScalarValue {
-                    value: Some(protobuf::scalar_value::Value::NullValue(
-                        (&data_type).try_into()?,
-                    )),
+                    value: Some(Value::NullValue((&data_type).try_into()?)),
                 }),
             },
             ScalarValue::Decimal64(val, p, s) => match *val {
@@ -457,9 +455,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     })
                 }
                 None => Ok(protobuf::ScalarValue {
-                    value: Some(protobuf::scalar_value::Value::NullValue(
-                        (&data_type).try_into()?,
-                    )),
+                    value: Some(Value::NullValue((&data_type).try_into()?)),
                 }),
             },
             ScalarValue::Decimal128(val, p, s) => match *val {
@@ -475,9 +471,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     })
                 }
                 None => Ok(protobuf::ScalarValue {
-                    value: Some(protobuf::scalar_value::Value::NullValue(
-                        (&data_type).try_into()?,
-                    )),
+                    value: Some(Value::NullValue((&data_type).try_into()?)),
                 }),
             },
             ScalarValue::Decimal256(val, p, s) => match *val {
@@ -493,9 +487,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     })
                 }
                 None => Ok(protobuf::ScalarValue {
-                    value: Some(protobuf::scalar_value::Value::NullValue(
-                        (&data_type).try_into()?,
-                    )),
+                    value: Some(Value::NullValue((&data_type).try_into()?)),
                 }),
             },
             ScalarValue::Date64(val) => {
@@ -788,8 +780,8 @@ impl From<&Precision<usize>> for protobuf::Precision {
     }
 }
 
-impl From<&Precision<datafusion_common::ScalarValue>> for protobuf::Precision {
-    fn from(s: &Precision<datafusion_common::ScalarValue>) -> protobuf::Precision {
+impl From<&Precision<ScalarValue>> for protobuf::Precision {
+    fn from(s: &Precision<ScalarValue>) -> protobuf::Precision {
         match s {
             Precision::Exact(val) => protobuf::Precision {
                 precision_info: protobuf::PrecisionInfo::Exact.into(),
@@ -1076,16 +1068,14 @@ impl TryFrom<&JsonOptions> for protobuf::JsonOptions {
 
 /// Creates a scalar protobuf value from an optional value (T), and
 /// encoding None as the appropriate datatype
-fn create_proto_scalar<I, T: FnOnce(&I) -> protobuf::scalar_value::Value>(
+fn create_proto_scalar<I, T: FnOnce(&I) -> Value>(
     v: Option<&I>,
     null_arrow_type: &DataType,
     constructor: T,
 ) -> Result<protobuf::ScalarValue, Error> {
     let value = v
         .map(constructor)
-        .unwrap_or(protobuf::scalar_value::Value::NullValue(
-            null_arrow_type.try_into()?,
-        ));
+        .unwrap_or(Value::NullValue(null_arrow_type.try_into()?));
 
     Ok(protobuf::ScalarValue { value: Some(value) })
 }
@@ -1141,35 +1131,25 @@ fn encode_scalar_nested_value(
 
     match val {
         ScalarValue::List(_) => Ok(protobuf::ScalarValue {
-            value: Some(protobuf::scalar_value::Value::ListValue(scalar_list_value)),
+            value: Some(Value::ListValue(scalar_list_value)),
         }),
         ScalarValue::LargeList(_) => Ok(protobuf::ScalarValue {
-            value: Some(protobuf::scalar_value::Value::LargeListValue(
-                scalar_list_value,
-            )),
+            value: Some(Value::LargeListValue(scalar_list_value)),
         }),
         ScalarValue::FixedSizeList(_) => Ok(protobuf::ScalarValue {
-            value: Some(protobuf::scalar_value::Value::FixedSizeListValue(
-                scalar_list_value,
-            )),
+            value: Some(Value::FixedSizeListValue(scalar_list_value)),
         }),
         ScalarValue::ListView(_) => Ok(protobuf::ScalarValue {
-            value: Some(protobuf::scalar_value::Value::ListViewValue(
-                scalar_list_value,
-            )),
+            value: Some(Value::ListViewValue(scalar_list_value)),
         }),
         ScalarValue::LargeListView(_) => Ok(protobuf::ScalarValue {
-            value: Some(protobuf::scalar_value::Value::LargeListViewValue(
-                scalar_list_value,
-            )),
+            value: Some(Value::LargeListViewValue(scalar_list_value)),
         }),
         ScalarValue::Struct(_) => Ok(protobuf::ScalarValue {
-            value: Some(protobuf::scalar_value::Value::StructValue(
-                scalar_list_value,
-            )),
+            value: Some(Value::StructValue(scalar_list_value)),
         }),
         ScalarValue::Map(_) => Ok(protobuf::ScalarValue {
-            value: Some(protobuf::scalar_value::Value::MapValue(scalar_list_value)),
+            value: Some(Value::MapValue(scalar_list_value)),
         }),
         _ => unreachable!(),
     }

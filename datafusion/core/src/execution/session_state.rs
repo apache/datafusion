@@ -55,6 +55,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::TableSource;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::planner::ExprPlanner;
 #[cfg(feature = "sql")]
 use datafusion_expr::planner::{RelationPlanner, TypePlanner};
@@ -72,12 +73,10 @@ use datafusion_optimizer::{
 };
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_optimizer::PhysicalOptimizerContext;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
-use datafusion_session::Session;
+use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule, Session};
 #[cfg(feature = "sql")]
 use datafusion_sql::{
     parser::{DFParserBuilder, Statement},
@@ -267,6 +266,29 @@ impl Session for SessionState {
 
     fn config(&self) -> &SessionConfig {
         self.config()
+    }
+
+    fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
+        Arc::clone(self.catalog_list())
+    }
+
+    fn query_planner(&self) -> Arc<dyn QueryPlanner + Send + Sync> {
+        // Disambiguate: `SessionState` has an inherent `query_planner` (returning
+        // `&Arc<...>`) with the same name as this trait method. The qualified path
+        // calls the inherent one; a bare `self.query_planner()` would recurse.
+        Arc::clone(SessionState::query_planner(self))
+    }
+
+    fn optimize(&self, plan: &LogicalPlan) -> datafusion_common::Result<LogicalPlan> {
+        SessionState::optimize(self, plan)
+    }
+
+    fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
+        SessionState::physical_optimizers(self)
+    }
+
+    fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+        SessionState::statistics_registry(self)
     }
 
     async fn create_physical_plan(
@@ -799,7 +821,12 @@ impl SessionState {
                 .transform_up(|expr| rewrite.rewrite(expr, df_schema, config_options))?
                 .data;
         }
-        create_physical_expr(&expr, df_schema, self.execution_props())
+        create_physical_expr(
+            &expr,
+            df_schema,
+            self.execution_props(),
+            &PhysicalPlanningContext::default(),
+        )
     }
 
     /// Return the session ID
@@ -2312,7 +2339,7 @@ impl QueryPlanner for DefaultQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session_state: &dyn Session,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         let planner = DefaultPhysicalPlanner::default();
         planner
@@ -2366,6 +2393,7 @@ mod tests {
     use datafusion_optimizer::Optimizer;
     use datafusion_optimizer::optimizer::OptimizerRule;
     use datafusion_physical_plan::display::DisplayableExecutionPlan;
+    use datafusion_session::Session;
     use datafusion_sql::planner::{PlannerContext, SqlToRel};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -2457,6 +2485,9 @@ mod tests {
         let session_state = SessionStateBuilder::new()
             .with_catalog_list(Arc::new(MemoryCatalogProviderList::new()))
             .build();
+        let session_catalogs = Session::catalog_list(&session_state);
+        assert!(Arc::ptr_eq(&session_catalogs, session_state.catalog_list()));
+
         let table_ref = session_state.resolve_table_ref("employee").to_string();
         session_state
             .schema_for_ref(&table_ref)?

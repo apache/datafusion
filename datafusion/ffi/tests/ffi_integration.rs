@@ -58,6 +58,15 @@ mod tests {
         assert!(results.contains(&create_record_batch(6, 1)));
         assert!(results.contains(&create_record_batch(7, 5)));
 
+        if !synchronous {
+            assert!(
+                ctx.state()
+                    .catalog_list()
+                    .catalog("ffi_registered")
+                    .is_some()
+            );
+        }
+
         Ok(())
     }
 
@@ -100,7 +109,7 @@ mod tests {
         let cmd = CreateExternalTable {
             schema: Schema::empty().to_dfschema_ref()?,
             name: TableReference::bare("cloned_test"),
-            location: "test".to_string(),
+            locations: vec!["test".to_string()],
             file_type: "test".to_string(),
             table_partition_cols: vec![],
             if_not_exists: false,

@@ -369,6 +369,50 @@ impl ExecutionPlan for CooperativeExec {
             }
         }
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Cooperative(Box::new(
+                    protobuf::CooperativeExecNode {
+                        input: Some(Box::new(input)),
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl CooperativeExec {
+    /// Reconstruct a [`CooperativeExec`] from its protobuf representation.
+    ///
+    /// The exact inverse of [`ExecutionPlan::try_to_proto`].
+    ///
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let cooperative = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Cooperative,
+            "CooperativeExec",
+        );
+        let input = ctx.decode_required_child(
+            cooperative.input.as_deref(),
+            "CooperativeExec",
+            "input",
+        )?;
+        Ok(Arc::new(CooperativeExec::new(input)))
+    }
 }
 
 /// Creates a [`CooperativeStream`] wrapper around the given [`RecordBatchStream`].

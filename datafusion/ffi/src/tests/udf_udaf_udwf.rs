@@ -20,12 +20,14 @@ use std::sync::Arc;
 use arrow_schema::DataType;
 use datafusion_catalog::TableFunctionImpl;
 use datafusion_common::ScalarValue;
+use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::{
     AggregateUDF, ColumnarValue, ExpressionPlacement, ScalarFunctionArgs, ScalarUDF,
     ScalarUDFImpl, Signature, Volatility, WindowUDF,
 };
 use datafusion_functions::math::abs::AbsFunc;
 use datafusion_functions::math::random::RandomFunc;
+use datafusion_functions_aggregate::first_last::FirstValue;
 use datafusion_functions_aggregate::stddev::Stddev;
 use datafusion_functions_aggregate::sum::Sum;
 use datafusion_functions_table::generate_series::RangeFunc;
@@ -152,6 +154,13 @@ impl ScalarUDFImpl for PlacementUDF {
             ExpressionPlacement::KeepInPlace
         }
     }
+
+    fn preserves_lex_ordering(
+        &self,
+        inputs: &[ExprProperties],
+    ) -> datafusion_common::Result<bool> {
+        Ok(inputs.iter().all(|input| input.preserves_lex_ordering))
+    }
 }
 
 pub(crate) extern "C" fn create_placement_func() -> FFI_ScalarUDF {
@@ -172,6 +181,12 @@ pub(crate) extern "C" fn create_ffi_table_func(
 
 pub(crate) extern "C" fn create_ffi_sum_func() -> FFI_AggregateUDF {
     let udaf: Arc<AggregateUDF> = Arc::new(Sum::new().into());
+
+    udaf.into()
+}
+
+pub(crate) extern "C" fn create_ffi_first_value_func() -> FFI_AggregateUDF {
+    let udaf: Arc<AggregateUDF> = Arc::new(FirstValue::new().into());
 
     udaf.into()
 }

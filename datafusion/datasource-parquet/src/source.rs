@@ -1757,6 +1757,69 @@ mod tests {
         assert_eq!(names(&reordered), vec!["has_min", "no_stats"]);
     }
 
+    /// Multi-column TopK: when the leading column's `min` ties across
+    /// files, the secondary sort key breaks the tie (lexicographic,
+    /// mirroring the row-group level reorder).
+    #[test]
+    fn reorder_files_breaks_leading_ties_with_secondary_column() {
+        use datafusion_common::stats::Precision;
+        use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
+        use datafusion_datasource::PartitionedFile;
+        use pushdown_sort_helpers::*;
+        use reorder_files_helpers::*;
+
+        fn file_with_two_mins(
+            name: &str,
+            min_a: i32,
+            min_b: Option<i32>,
+        ) -> PartitionedFile {
+            let mut pf = PartitionedFile::new(name.to_string(), 0);
+            let col = |min: Option<i32>| ColumnStatistics {
+                null_count: Precision::Absent,
+                max_value: Precision::Absent,
+                min_value: min
+                    .map(|v| Precision::Exact(ScalarValue::Int32(Some(v))))
+                    .unwrap_or(Precision::Absent),
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Absent,
+            };
+            pf.statistics = Some(Arc::new(Statistics {
+                num_rows: Precision::Absent,
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![col(Some(min_a)), col(min_b)],
+            }));
+            pf
+        }
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let mut source = ParquetSource::new(Arc::clone(&schema));
+        source.sort_order_for_reorder = Some(
+            LexOrdering::new(vec![
+                sort_expr_on(&schema, "a", false),
+                sort_expr_on(&schema, "b", false),
+            ])
+            .unwrap(),
+        );
+
+        let reordered = source.reorder_files(vec![
+            file_with_two_mins("tie_late", 1, Some(300)),
+            file_with_two_mins("first", 0, Some(999)),
+            file_with_two_mins("tie_early", 1, Some(100)),
+            file_with_two_mins("tie_no_b_stats", 1, None),
+        ]);
+
+        // `first` wins on the leading key; the `a = 1` ties order by
+        // `min(b)` ASC with missing-`b`-stats last.
+        assert_eq!(
+            names(&reordered),
+            vec!["first", "tie_early", "tie_late", "tie_no_b_stats"]
+        );
+    }
+
     /// When no sort pushdown has fired (`sort_order_for_reorder` is
     /// `None`), `reorder_files` is a no-op and preserves input order.
     #[test]

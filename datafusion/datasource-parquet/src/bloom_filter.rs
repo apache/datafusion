@@ -250,7 +250,7 @@ mod tests {
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use datafusion_pruning::PruningPredicate;
-    use object_store::ObjectStoreExt;
+    use object_store::{ObjectStore, ObjectStoreExt};
     use parquet::arrow::ArrowWriter;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
     use parquet::arrow::async_reader::ParquetObjectReader;
@@ -644,17 +644,15 @@ mod tests {
         let metrics = ExecutionPlanMetricsSet::new();
         let file_metrics =
             ParquetFileMetrics::new(0, object_meta.location.as_ref(), &metrics);
+        let store: Arc<dyn ObjectStore> = Arc::new(in_memory);
         let inner =
-            ParquetObjectReader::new(Arc::new(in_memory), object_meta.location.clone())
+            ParquetObjectReader::new(Arc::clone(&store), object_meta.location.clone())
                 .with_file_size(object_meta.size);
 
         let partitioned_file = PartitionedFile::new_from_meta(object_meta);
 
-        let reader = ParquetFileReader {
-            inner,
-            file_metrics: file_metrics.clone(),
-            partitioned_file,
-        };
+        let reader =
+            ParquetFileReader::new(file_metrics.clone(), store, inner, partitioned_file);
         let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
 
         let access_plan = ParquetAccessPlan::new_all(builder.metadata().num_row_groups());
