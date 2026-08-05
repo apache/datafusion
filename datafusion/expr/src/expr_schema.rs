@@ -34,7 +34,7 @@ use arrow::datatypes::{DataType, Field};
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::{
     Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
-    not_impl_err, plan_datafusion_err, plan_err,
+    exec_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -368,7 +368,9 @@ impl ExprSchemable for Expr {
             Expr::SetComparison(_) => Ok(true),
             Expr::InSubquery(InSubquery { expr, subquery, .. }) => {
                 let expr_nullable = expr.nullable(input_schema)?;
-                let subquery_nullable = subquery.subquery.schema().field(0).is_nullable();
+                let subquery_nullable = subquery.subquery.schema().fields().first().ok_or_else(|| {
+                    exec_datafusion_err!("subquery must return exactly one column of data to compare against")
+                })?.is_nullable();
 
                 Ok(expr_nullable | subquery_nullable)
             }
