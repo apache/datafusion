@@ -2679,6 +2679,25 @@ async fn roundtrip_empty_projection() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_memory_source_empty_projection() -> Result<()> {
+    // Memory scan: `Some(vec![])` must not decode back as `None`
+    let ctx = SessionContext::new();
+    let batch = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Int64, false),
+        ])),
+        vec![
+            Arc::new(arrow::array::StringArray::from(vec!["Tom"])),
+            Arc::new(arrow::array::Int64Array::from(vec![18i64])),
+        ],
+    )?;
+    ctx.register_batch("tmem", batch)?;
+    let sql = "select 1 from tmem";
+    roundtrip_test_sql_with_context(sql, &ctx).await
+}
+
+#[tokio::test]
 async fn roundtrip_physical_plan_node() {
     use datafusion::prelude::*;
     use datafusion_proto::physical_plan::{
