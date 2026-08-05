@@ -415,20 +415,29 @@ pub(crate) fn build_projection_read_plan(
         return root_level_plan(&root_indices, file_schema, schema_descr);
     }
 
-    // secondary fast path: if no column contains a struct at any nesting
-    // level, there are no leaves to prune and we can skip PushdownChecker
-    // traversal and use root-level projection
-    let has_struct_columns = file_schema
-        .fields()
-        .iter()
-        .any(|f| contains_struct(f.data_type()));
+    // secondary fast path: if none of the *projected* columns contains a
+    // struct at any nesting level, there are no leaves to prune and we can
+    // skip the PushdownChecker traversal and use root-level projection.
+    //
+    // Gating on the projected roots rather than on every field of the file
+    // schema keeps this step O(projected columns): a wide file with a nested
+    // column the projection never touches should not push the whole
+    // projection through the slower, name-resolving path. Any column whose
+    // `index` does not line up with the file schema (a stale `Column` from an
+    // earlier rewrite) falls through to that path, which resolves by name.
+    let projected_columns = exprs.iter().flat_map(collect_columns).collect::<Vec<_>>();
+    let all_resolvable_and_struct_free = projected_columns.iter().all(|col| {
+        file_schema
+            .fields()
+            .get(col.index())
+            .is_some_and(|f| f.name() == col.name() && !contains_struct(f.data_type()))
+    });
 
-    if !has_struct_columns {
-        let mut root_indices = exprs
-            .into_iter()
-            .flat_map(|e| collect_columns(&e).into_iter().map(|col| col.index()))
+    if all_resolvable_and_struct_free {
+        let mut root_indices = projected_columns
+            .iter()
+            .map(|c| c.index())
             .collect::<Vec<_>>();
-
         root_indices.sort_unstable();
         root_indices.dedup();
 
@@ -629,11 +638,14 @@ fn build_read_plan_with_cast_clipping(
         let get_field_schema = build_filter_schema(file_schema, &[], &get_field_accesses);
         let get_field_roots: BTreeSet<usize> =
             get_field_accesses.iter().map(|a| a.root_index).collect();
-        for root in get_field_roots {
-            let field = get_field_schema
-                .field_with_name(file_schema.field(root).name())
-                .expect("root name preserved by build_filter_schema");
-            fields.insert(root, Arc::new(field.clone()));
+        // `build_filter_schema` emits one field per accessed root in
+        // ascending root order, which is the order `get_field_roots` iterates
+        // in, so the two line up positionally. Pairing them beats looking each
+        // one up by name: no repeated linear scans, and no ambiguity if two
+        // roots happen to share a name.
+        debug_assert_eq!(get_field_roots.len(), get_field_schema.fields().len());
+        for (root, field) in get_field_roots.iter().zip(get_field_schema.fields()) {
+            fields.insert(*root, Arc::clone(field));
         }
     }
 
@@ -1074,6 +1086,49 @@ mod test {
             target,
             None,
         ))
+    }
+
+    /// Columns are resolved by *name*: a `Column` whose index points at a
+    /// different field (a stale index left by an earlier rewrite) must not be
+    /// taken at face value by the struct fast-path gate.
+    #[test]
+    fn build_projection_read_plan_resolves_stale_column_indices_by_name() {
+        let (file_schema, metadata) = write_id_struct_file();
+        let schema_descr = metadata.file_metadata().schema_descr();
+
+        // `s` is at index 1; this claims index 0, which is `id`.
+        let exprs = vec![cast_to_struct("s", 0, vec![("value", DataType::Int32)])];
+        let read_plan = build_projection_read_plan(exprs, &file_schema, schema_descr);
+
+        assert_eq!(
+            read_plan.projection_mask,
+            ProjectionMask::leaves(schema_descr, [1]),
+            "the cast must resolve to `s`, not to whatever sits at index 0"
+        );
+    }
+
+    /// The struct fast-path gate looks at the *projected* columns, not at
+    /// every field of the file schema: projecting only `id` produces the same
+    /// root-level plan it would for a schema with no struct in it at all.
+    #[test]
+    fn build_projection_read_plan_ignores_unprojected_struct_columns() {
+        let (file_schema, metadata) = write_id_struct_file();
+        let schema_descr = metadata.file_metadata().schema_descr();
+
+        // Not a bare column, so the all-plain-columns fast path does not apply.
+        let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(CastExpr::new(
+            Arc::new(PhysicalColumn::new("id", 0)),
+            DataType::Int64,
+            None,
+        ))];
+
+        let read_plan = build_projection_read_plan(exprs, &file_schema, schema_descr);
+
+        assert_eq!(
+            read_plan.projection_mask,
+            ProjectionMask::roots(schema_descr, [0])
+        );
+        assert_eq!(read_plan.projected_schema.fields().len(), 1);
     }
 
     /// A projection consisting solely of a narrowing cast over a struct root

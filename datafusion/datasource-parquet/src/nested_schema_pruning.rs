@@ -72,6 +72,7 @@
 //! choice (safe, since the worst case is still just a full read) left as a
 //! candidate follow-up rather than something this module currently handles.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
@@ -143,6 +144,27 @@ pub(crate) fn contains_struct(dt: &DataType) -> bool {
     matches!(dt, DataType::Struct(_)) || nested_child(dt).is_some_and(contains_struct)
 }
 
+/// Above this many target fields, matching physical children against them one
+/// by one turns into a quadratic string comparison; build a name lookup
+/// instead. Below it the map's allocation costs more than the linear scan it
+/// saves (Spark's `ParquetReadSupport.clipParquetGroupFields` builds the map
+/// unconditionally; struct widths in practice are small enough that the
+/// threshold is worth the branch).
+const LINEAR_FIELD_SCAN_MAX: usize = 8;
+
+/// Find `name` among `fields`, using `by_name` when it was worth building.
+/// Duplicate names resolve to the first occurrence either way.
+fn lookup_field<'a>(
+    fields: &'a Fields,
+    by_name: &Option<HashMap<&'a str, &'a FieldRef>>,
+    name: &str,
+) -> Option<&'a FieldRef> {
+    match by_name {
+        Some(map) => map.get(name).copied(),
+        None => fields.iter().find(|f| f.name() == name),
+    }
+}
+
 /// Recursive walker: advances `next_leaf` across every leaf of `physical`,
 /// pushing the offsets the cast target consumes into `kept`, and returns the
 /// Arrow type the reader emits for those kept leaves.
@@ -159,11 +181,17 @@ fn clip_type(
 ) -> DataType {
     match (physical, target) {
         (DataType::Struct(p_children), DataType::Struct(t_children)) => {
+            let t_by_name = (t_children.len() > LINEAR_FIELD_SCAN_MAX).then(|| {
+                let mut map = HashMap::with_capacity(t_children.len());
+                for tc in t_children.iter() {
+                    map.entry(tc.name().as_str()).or_insert(tc);
+                }
+                map
+            });
             let kept_children: Fields = p_children
                 .iter()
                 .filter_map(|pc| {
-                    let Some(tc) = t_children.iter().find(|tc| tc.name() == pc.name())
-                    else {
+                    let Some(tc) = lookup_field(t_children, &t_by_name, pc.name()) else {
                         skip_leaves(pc.data_type(), next_leaf);
                         return None;
                     };
@@ -459,6 +487,34 @@ mod tests {
         let physical = struct_of(vec![utf8("a"), int64("b")]);
         let target = struct_of(vec![utf8("z")]);
         assert!(clip_for_cast(&physical, &target).is_none());
+    }
+
+    /// Wide structs take the name-map matching path rather than the linear
+    /// scan; both must produce the same clip.
+    #[test]
+    fn clip_wide_struct_matches_by_name() {
+        let width = LINEAR_FIELD_SCAN_MAX * 4;
+        let physical = struct_of((0..width).map(|i| int64(&format!("f{i}"))).collect());
+        // Even fields only, declared in reverse order: the emitted type is
+        // still in physical order.
+        let target = struct_of(
+            (0..width)
+                .rev()
+                .filter(|i| i % 2 == 0)
+                .map(|i| int64(&format!("f{i}")))
+                .collect(),
+        );
+        let (kept, emitted) = clip_for_cast(&physical, &target).unwrap();
+        assert_eq!(kept, (0..width).filter(|i| i % 2 == 0).collect::<Vec<_>>());
+        assert_eq!(
+            emitted,
+            struct_of(
+                (0..width)
+                    .filter(|i| i % 2 == 0)
+                    .map(|i| int64(&format!("f{i}")))
+                    .collect()
+            )
+        );
     }
 
     /// A *nested* struct level with zero field-name overlap must not be
