@@ -1192,17 +1192,13 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     );
 }
 
-// Not portable to sqllogictest: this test pins `PartitionMode::Partitioned`
-// by hand-wiring matching Range repartitioning on both join sides, which the
-// SQL planner does not currently produce.
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_range_partitioned() {
     use datafusion_common::JoinType;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
     // Rough sketch of the Range-partitioned MRE we're trying to recreate. The
-    // test hand-wires identical Range repartitioning because SQL planning does
-    // not currently derive the split points:
+    // test hand-wires identical Range repartitioning:
     //
     // EXPLAIN
     // SELECT *

@@ -7047,7 +7047,7 @@ mod tests {
     }
 
     #[test]
-    fn test_partitioned_dynamic_filter_pushdown_range_partitioning() -> Result<()> {
+    fn test_partitioned_dynamic_filter_pushdown_eligibility() -> Result<()> {
         let (left_schema, right_schema, on) = build_schema_and_on()?;
         let left_partitioning = Partitioning::Range(RangePartitioning::try_new(
             [PhysicalSortExpr {
