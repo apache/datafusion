@@ -40,5 +40,5 @@ pub trait FromProto<T>: Sized {
 /// versa). Mirrors [`TryFrom`].
 pub trait TryFromProto<T>: Sized {
     type Error;
-    fn try_from_proto(value: T) -> std::result::Result<Self, Self::Error>;
+    fn try_from_proto(value: T) -> Result<Self, Self::Error>;
 }
