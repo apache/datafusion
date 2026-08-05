@@ -95,10 +95,10 @@ pub struct FFI_QueryPlanner {
     ) -> FfiFuture<FFI_Result<SVec<u8>>>,
 
     /// Codec used to encode and decode logical plans and extension nodes.
-    pub logical_codec: FFI_LogicalExtensionCodec,
+    logical_codec: FFI_LogicalExtensionCodec,
 
     /// Codec used to encode and decode physical plans and extension nodes.
-    pub physical_codec: FFI_PhysicalExtensionCodec,
+    physical_codec: FFI_PhysicalExtensionCodec,
 
     /// Used to create a clone of the query planner.
     clone: unsafe extern "C" fn(planner: &Self) -> Self,
