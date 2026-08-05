@@ -24,17 +24,16 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::to_local_time;
-use rand::Rng;
-use rand::rngs::ThreadRng;
+use rand::prelude::*;
 
-fn timestamps(rng: &mut ThreadRng) -> TimestampNanosecondArray {
+fn timestamps(rng: &mut StdRng) -> TimestampNanosecondArray {
     let nanos: Vec<i64> = (0..100_000)
         .map(|_| rng.random_range(0..1_000_000_000_000_000_000i64))
         .collect();
     TimestampNanosecondArray::from(nanos).with_timezone("America/New_York")
 }
 
-fn timestamps_with_nulls(rng: &mut ThreadRng) -> TimestampNanosecondArray {
+fn timestamps_with_nulls(rng: &mut StdRng) -> TimestampNanosecondArray {
     let values: Vec<Option<i64>> = (0..100_000)
         .map(|_| {
             if rng.random_range(0..10u32) == 0 {
@@ -73,7 +72,7 @@ fn bench_to_local_time(c: &mut Criterion, name: &str, array: ArrayRef) {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let mut rng = rand::rng();
+    let mut rng = StdRng::seed_from_u64(0);
     bench_to_local_time(
         c,
         "to_local_time_no_nulls_100k",

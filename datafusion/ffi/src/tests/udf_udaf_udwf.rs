@@ -27,6 +27,7 @@ use datafusion_expr::{
 };
 use datafusion_functions::math::abs::AbsFunc;
 use datafusion_functions::math::random::RandomFunc;
+use datafusion_functions_aggregate::first_last::FirstValue;
 use datafusion_functions_aggregate::stddev::Stddev;
 use datafusion_functions_aggregate::sum::Sum;
 use datafusion_functions_table::generate_series::RangeFunc;
@@ -180,6 +181,12 @@ pub(crate) extern "C" fn create_ffi_table_func(
 
 pub(crate) extern "C" fn create_ffi_sum_func() -> FFI_AggregateUDF {
     let udaf: Arc<AggregateUDF> = Arc::new(Sum::new().into());
+
+    udaf.into()
+}
+
+pub(crate) extern "C" fn create_ffi_first_value_func() -> FFI_AggregateUDF {
+    let udaf: Arc<AggregateUDF> = Arc::new(FirstValue::new().into());
 
     udaf.into()
 }

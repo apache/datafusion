@@ -209,20 +209,21 @@ url = "2.5.7"
 uuid = "1.23"
 zstd = { version = "0.13", default-features = false }
 
+# Keep this list sorted alphabetically.
 [workspace.lints.clippy]
-# Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
-large_futures = "warn"
-used_underscore_binding = "warn"
-or_fun_call = "warn"
-unnecessary_lazy_evaluations = "warn"
-uninlined_format_args = "warn"
-inefficient_to_string = "warn"
-# https://github.com/apache/datafusion/issues/18503
-needless_pass_by_value = "warn"
 # https://github.com/apache/datafusion/issues/18881
 allow_attributes = "warn"
 assigning_clones = "warn"
+inefficient_to_string = "warn"
+# Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
+large_futures = "warn"
+# https://github.com/apache/datafusion/issues/18503
+needless_pass_by_value = "warn"
+or_fun_call = "warn"
+uninlined_format_args = "warn"
+unnecessary_lazy_evaluations = "warn"
 unused_async = "warn"
+used_underscore_binding = "warn"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [

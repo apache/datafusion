@@ -1577,8 +1577,6 @@ pub(crate) mod tests {
                     vec![("a_new", option_asc), ("b_new", option_asc)],
                     // [a_new ASC, d_new ASC]
                     vec![("a_new", option_asc), ("d_new", option_asc)],
-                    // [a_new ASC, b+d ASC]
-                    vec![("a_new", option_asc), ("b+d", option_asc)],
                 ],
             ),
             // ------- TEST CASE 8 ----------
@@ -1660,12 +1658,6 @@ pub(crate) mod tests {
                         ("b_new", option_asc),
                         ("c_new", option_asc),
                     ],
-                    // [a_new ASC, b_new ASC, c+d ASC]
-                    vec![
-                        ("a_new", option_asc),
-                        ("b_new", option_asc),
-                        ("c+d", option_asc),
-                    ],
                 ],
             ),
             // ------- TEST CASE 11 ----------
@@ -1687,8 +1679,6 @@ pub(crate) mod tests {
                 vec![
                     // [a_new ASC, b_new ASC]
                     vec![("a_new", option_asc), ("b_new", option_asc)],
-                    // [a_new ASC, b + d ASC]
-                    vec![("a_new", option_asc), ("b+d", option_asc)],
                 ],
             ),
             // ------- TEST CASE 12 ----------
@@ -1770,30 +1760,12 @@ pub(crate) mod tests {
                 ],
                 // expected
                 vec![
-                    // [a_new ASC, d_new ASC, b+e ASC]
-                    vec![
-                        ("a_new", option_asc),
-                        ("d_new", option_asc),
-                        ("b+e", option_asc),
-                    ],
-                    // [d_new ASC, a_new ASC, b+e ASC]
-                    vec![
-                        ("d_new", option_asc),
-                        ("a_new", option_asc),
-                        ("b+e", option_asc),
-                    ],
-                    // [c_new ASC, d_new ASC, b+e ASC]
-                    vec![
-                        ("c_new", option_asc),
-                        ("d_new", option_asc),
-                        ("b+e", option_asc),
-                    ],
-                    // [d_new ASC, c_new ASC, b+e ASC]
-                    vec![
-                        ("d_new", option_asc),
-                        ("c_new", option_asc),
-                        ("b+e", option_asc),
-                    ],
+                    // [a_new ASC]
+                    vec![("a_new", option_asc)],
+                    // [c_new ASC]
+                    vec![("c_new", option_asc)],
+                    // [d_new ASC]
+                    vec![("d_new", option_asc)],
                 ],
             ),
             // ------- TEST CASE 15 ----------
@@ -1815,12 +1787,8 @@ pub(crate) mod tests {
                 ],
                 // expected
                 vec![
-                    // [a_new ASC, d_new ASC, b+e ASC]
-                    vec![
-                        ("a_new", option_asc),
-                        ("c_new", option_asc),
-                        ("a+b", option_asc),
-                    ],
+                    // [a_new ASC, c_new ASC]
+                    vec![("a_new", option_asc), ("c_new", option_asc)],
                 ],
             ),
             // ------- TEST CASE 16 ----------
@@ -1845,8 +1813,6 @@ pub(crate) mod tests {
                 vec![
                     // [a_new ASC, b_new ASC]
                     vec![("a_new", option_asc), ("b_new", option_asc)],
-                    // [a_new ASC, b_new ASC]
-                    vec![("a_new", option_asc), ("b+e", option_asc)],
                     // [c_new ASC, b_new DESC]
                     vec![("c_new", option_asc), ("b_new", option_desc)],
                 ],
@@ -2119,7 +2085,6 @@ pub(crate) mod tests {
         let projection_mapping = ProjectionMapping::try_new(proj_exprs, &schema)?;
         let output_schema = output_schema(&projection_mapping, &schema)?;
 
-        let col_a_plus_b_new = &col("a+b", &output_schema)?;
         let col_c_new = &col("c_new", &output_schema)?;
         let col_d_new = &col("d_new", &output_schema)?;
 
@@ -2137,18 +2102,10 @@ pub(crate) mod tests {
                 vec![],
                 // expected
                 vec![
-                    // [d_new ASC, c_new ASC, a+b ASC]
-                    vec![
-                        (col_d_new, option_asc),
-                        (col_c_new, option_asc),
-                        (col_a_plus_b_new, option_asc),
-                    ],
-                    // [c_new ASC, d_new ASC, a+b ASC]
-                    vec![
-                        (col_c_new, option_asc),
-                        (col_d_new, option_asc),
-                        (col_a_plus_b_new, option_asc),
-                    ],
+                    // [c_new ASC]
+                    vec![(col_c_new, option_asc)],
+                    // [d_new ASC]
+                    vec![(col_d_new, option_asc)],
                 ],
             ),
             // ---------- TEST CASE 2 ------------
@@ -2164,18 +2121,10 @@ pub(crate) mod tests {
                 vec![(col_e, col_a)],
                 // expected
                 vec![
-                    // [d_new ASC, c_new ASC, a+b ASC]
-                    vec![
-                        (col_d_new, option_asc),
-                        (col_c_new, option_asc),
-                        (col_a_plus_b_new, option_asc),
-                    ],
-                    // [c_new ASC, d_new ASC, a+b ASC]
-                    vec![
-                        (col_c_new, option_asc),
-                        (col_d_new, option_asc),
-                        (col_a_plus_b_new, option_asc),
-                    ],
+                    // [c_new ASC]
+                    vec![(col_c_new, option_asc)],
+                    // [d_new ASC]
+                    vec![(col_d_new, option_asc)],
                 ],
             ),
             // ---------- TEST CASE 3 ------------
