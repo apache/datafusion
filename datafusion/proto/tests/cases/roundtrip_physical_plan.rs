@@ -2330,10 +2330,13 @@ fn roundtrip_union() -> Result<()> {
     roundtrip_test(union)
 }
 
-/// `CoerceSchemaExec::try_to_proto` intentionally leaves the wrapper out of
-/// the serialized plan, relying on `UnionExec::try_from_proto` to rebuild it
-/// via `try_new`. Verify the decoded plan still contains the coercion and
-/// that its emitted batches expose the union's nullable schema.
+/// `UnionExec::try_new` coerces a nullability-mismatched leg by wrapping it
+/// in a `ProjectionExec` with a same-type `CastExpr` (see `coerce_schema` in
+/// `datafusion-physical-plan`'s `union` module) -- a zero-copy relabeling,
+/// not a real cast. `ProjectionExec` has an ordinary protobuf message, so
+/// unlike the node this replaced, there's no wrapper-erasure trick to verify;
+/// just that the decoded plan still contains the coercion and that its
+/// emitted batches expose the union's nullable schema.
 #[tokio::test]
 async fn roundtrip_union_with_mismatched_nullability_executes() -> Result<()> {
     let literal_leg = |value: ScalarValue| -> Result<Arc<dyn ExecutionPlan>> {
@@ -2352,8 +2355,8 @@ async fn roundtrip_union_with_mismatched_nullability_executes() -> Result<()> {
         UnionExec::try_new(vec![non_nullable_leg, nullable_leg])?;
     assert!(union.schema().field(0).is_nullable());
     assert!(
-        format!("{union:?}").contains("CoerceSchemaExec"),
-        "expected CoerceSchemaExec in plan:\n{union:?}"
+        format!("{union:?}").contains("CastExpr"),
+        "expected a coercing CastExpr in plan:\n{union:?}"
     );
 
     let ctx = SessionContext::new();
@@ -2364,8 +2367,8 @@ async fn roundtrip_union_with_mismatched_nullability_executes() -> Result<()> {
     )?;
     assert!(roundtripped.schema().field(0).is_nullable());
     assert!(
-        format!("{roundtripped:?}").contains("CoerceSchemaExec"),
-        "expected CoerceSchemaExec after roundtrip:\n{roundtripped:?}"
+        format!("{roundtripped:?}").contains("CastExpr"),
+        "expected a coercing CastExpr after roundtrip:\n{roundtripped:?}"
     );
 
     let batches =
@@ -2551,8 +2554,8 @@ async fn roundtrip_interleave_with_mismatched_nullability_executes() -> Result<(
     ])?);
     assert!(interleave.schema().field(0).is_nullable());
     assert!(
-        format!("{interleave:?}").contains("CoerceSchemaExec"),
-        "expected CoerceSchemaExec in plan:\n{interleave:?}"
+        format!("{interleave:?}").contains("CastExpr"),
+        "expected a coercing CastExpr in plan:\n{interleave:?}"
     );
 
     let ctx = SessionContext::new();
@@ -2563,8 +2566,8 @@ async fn roundtrip_interleave_with_mismatched_nullability_executes() -> Result<(
     )?;
     assert!(roundtripped.schema().field(0).is_nullable());
     assert!(
-        format!("{roundtripped:?}").contains("CoerceSchemaExec"),
-        "expected CoerceSchemaExec after roundtrip:\n{roundtripped:?}"
+        format!("{roundtripped:?}").contains("CastExpr"),
+        "expected a coercing CastExpr after roundtrip:\n{roundtripped:?}"
     );
 
     let batches =
