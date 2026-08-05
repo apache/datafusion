@@ -18,11 +18,12 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
+use datafusion_catalog::TableProvider;
 use datafusion_catalog::default_table_source::source_as_provider;
 use datafusion_common::{Result, exec_err};
-use datafusion_expr::LogicalPlan;
+use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, TableType};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
@@ -30,11 +31,11 @@ use datafusion_physical_plan::union::UnionExec;
 use datafusion_session::{QueryPlanner, Session};
 
 use crate::execution_plan::ForeignExecutionPlan;
-use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
-use crate::proto::physical_extension_codec::FFI_PhysicalExtensionCodec;
+use crate::execution_plan::tests::EmptyExec as TestExtensionExec;
+use crate::proto::extension_codec_bundle::FFI_ExtensionCodecBundle;
 use crate::query_planner::{FFI_QueryPlanner, ForeignQueryPlanner};
 use crate::session::ForeignSession;
-use crate::table_provider::ForeignTableProvider;
+use crate::table_provider::{FFI_TableProvider, ForeignTableProvider};
 use crate::util::FFI_Option;
 
 #[derive(Debug)]
@@ -151,14 +152,86 @@ impl QueryPlanner for SwappedQueryPlanner {
     }
 }
 
+/// Library C's planner for the extension-node deployment.
+///
+/// It returns a node that has no built-in protobuf representation, so the node can
+/// only reach another library through a physical extension codec.
+#[derive(Debug)]
+struct ExtensionNodeQueryPlanner;
+
+#[async_trait]
+impl QueryPlanner for ExtensionNodeQueryPlanner {
+    async fn create_physical_plan(
+        &self,
+        _logical_plan: &LogicalPlan,
+        _session: &dyn Session,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(
+            TestExtensionExec::new(super::create_test_schema()),
+        ))
+    }
+}
+
+/// Library B's table provider for the extension-node deployment.
+///
+/// Instead of planning its own scan, it plans through the query planner reachable
+/// on the session library A handed it. That planner is library C's, and the node it
+/// returns must travel back through library A's physical codec.
+#[derive(Debug)]
+struct SessionPlanningTableProvider;
+
+#[async_trait]
+impl TableProvider for SessionPlanningTableProvider {
+    fn schema(&self) -> SchemaRef {
+        super::create_test_schema()
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
+    }
+
+    async fn scan(
+        &self,
+        session: &dyn Session,
+        _projection: Option<&Vec<usize>>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if session.as_any().downcast_ref::<ForeignSession>().is_none() {
+            return exec_err!("library A's session was not foreign to library B");
+        }
+
+        let planner = session.query_planner();
+        let planner_any: &dyn Any = planner.as_ref();
+        if planner_any.downcast_ref::<ForeignQueryPlanner>().is_none() {
+            return exec_err!("library C's planner did not cross the FFI boundary");
+        }
+
+        // The planner ignores the plan; it exists so the call has an argument that
+        // library A's logical codec can serialize.
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        let plan = planner.create_physical_plan(&logical_plan, session).await?;
+
+        // The node was reconstructed by library A's physical codec, so it is
+        // A-local and therefore foreign here.
+        if !plan.is::<ForeignExecutionPlan>() {
+            return exec_err!(
+                "expected library A to reconstruct the extension node; got {}",
+                plan.name()
+            );
+        }
+
+        Ok(plan)
+    }
+}
+
 /// Creates library C's query planner.
 ///
 /// `library_a_planner` is the planner library A exported before swapping this one
 /// onto its session. When it is absent the planner does its own planning instead
 /// of delegating.
 pub extern "C" fn create_query_planner(
-    logical_codec: FFI_LogicalExtensionCodec,
-    physical_codec: FFI_PhysicalExtensionCodec,
+    codecs: FFI_ExtensionCodecBundle,
     library_a_planner: FFI_Option<FFI_QueryPlanner>,
 ) -> FFI_QueryPlanner {
     let planner: Arc<dyn QueryPlanner + Send + Sync> = match library_a_planner.as_ref() {
@@ -168,5 +241,19 @@ pub extern "C" fn create_query_planner(
         None => Arc::new(TestQueryPlanner),
     };
 
-    FFI_QueryPlanner::new_with_ffi_codecs(planner, logical_codec, physical_codec)
+    FFI_QueryPlanner::new(planner, codecs)
+}
+
+/// Creates library C's planner for the extension-node deployment.
+pub extern "C" fn create_extension_node_query_planner(
+    codecs: FFI_ExtensionCodecBundle,
+) -> FFI_QueryPlanner {
+    FFI_QueryPlanner::new(Arc::new(ExtensionNodeQueryPlanner), codecs)
+}
+
+/// Creates library B's table provider for the extension-node deployment.
+pub extern "C" fn create_session_planning_table(
+    codecs: FFI_ExtensionCodecBundle,
+) -> FFI_TableProvider {
+    FFI_TableProvider::new(Arc::new(SessionPlanningTableProvider), false, None, codecs)
 }

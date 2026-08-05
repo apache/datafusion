@@ -17,6 +17,18 @@
 
 //! FFI support for [`Session`].
 //!
+//! # Serialization environment
+//!
+//! An exported session carries one
+//! [`crate::proto::extension_codec_bundle::FFI_ExtensionCodecBundle`].
+//! Every callback that moves a plan or expression across the boundary uses it:
+//! the logical codec for [`Session::optimize`], [`Session::create_physical_expr`],
+//! and [`Session::create_physical_plan`], and the physical codec for the planner
+//! returned by [`Session::query_planner`]. Because the bundle pairs both codecs
+//! with the task context provider that exported them, a planner reached through a
+//! session can round-trip the same custom extension nodes as the wrapper that
+//! exported the session.
+//!
 //! # Delegating physical planning
 //!
 //! Consider a session owned by library A that uses a query planner owned by
@@ -53,13 +65,11 @@ use datafusion_expr::{
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_proto::bytes::{
-    logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
-    logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
+    logical_plan_from_bytes_with_extension_codec,
+    logical_plan_to_bytes_with_extension_codec,
 };
-use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::logical_plan::from_proto::parse_expr;
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
-use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
 use datafusion_proto::protobuf::LogicalExprNode;
 use datafusion_session::{
     CatalogProviderList, PhysicalOptimizerRule, QueryPlanner, Session,
@@ -77,8 +87,7 @@ use crate::execution::FFI_TaskContext;
 use crate::execution_plan::FFI_ExecutionPlan;
 use crate::physical_expr::FFI_PhysicalExpr;
 use crate::physical_optimizer::FFI_PhysicalOptimizerRule;
-use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
-use crate::proto::physical_extension_codec::FFI_PhysicalExtensionCodec;
+use crate::proto::extension_codec_bundle::FFI_ExtensionCodecBundle;
 use crate::query_planner::FFI_QueryPlanner;
 use crate::session::config::FFI_SessionConfig;
 use crate::udaf::FFI_AggregateUDF;
@@ -143,9 +152,8 @@ pub(crate) struct FFI_SessionRef {
 
     physical_optimizers: unsafe extern "C" fn(&Self) -> SVec<FFI_PhysicalOptimizerRule>,
 
-    logical_codec: FFI_LogicalExtensionCodec,
-
-    physical_codec: FFI_PhysicalExtensionCodec,
+    /// The serialization environment used by every callback on this session.
+    codecs: FFI_ExtensionCodecBundle,
 
     /// Used to create a clone on the provider of the registry. This should
     /// only need to be called by the receiver of the plan.
@@ -201,28 +209,24 @@ unsafe extern "C" fn config_fn_wrapper(session: &FFI_SessionRef) -> FFI_SessionC
 unsafe extern "C" fn catalog_list_fn_wrapper(
     session: &FFI_SessionRef,
 ) -> FFI_CatalogProviderList {
-    FFI_CatalogProviderList::new_with_ffi_codec(
+    FFI_CatalogProviderList::new(
         session.inner().catalog_list(),
         unsafe { session.runtime() }.clone(),
-        session.logical_codec.clone(),
+        session.codecs.clone(),
     )
 }
 
 unsafe extern "C" fn query_planner_fn_wrapper(
     session: &FFI_SessionRef,
 ) -> FFI_QueryPlanner {
-    FFI_QueryPlanner::new_with_ffi_codecs(
-        session.inner().query_planner(),
-        session.logical_codec.clone(),
-        session.physical_codec.clone(),
-    )
+    FFI_QueryPlanner::new(session.inner().query_planner(), session.codecs.clone())
 }
 
 unsafe extern "C" fn optimize_fn_wrapper(
     session: &FFI_SessionRef,
     logical_plan_serialized: SVec<u8>,
 ) -> FFI_Result<SVec<u8>> {
-    let logical_codec: Arc<dyn LogicalExtensionCodec> = (&session.logical_codec).into();
+    let logical_codec = session.codecs.to_logical_codec();
     let inner = session.inner();
     let logical_plan = sresult_return!(logical_plan_from_bytes_with_extension_codec(
         logical_plan_serialized.as_slice(),
@@ -246,13 +250,16 @@ unsafe extern "C" fn create_physical_plan_fn_wrapper(
         let runtime = session.runtime().clone();
         let session = session.clone();
         async move {
+            let logical_codec = session.codecs.to_logical_codec();
             let session = session.inner();
             let task_ctx = session.task_ctx();
 
-            let logical_plan = sresult_return!(logical_plan_from_bytes(
-                logical_plan_serialized.as_slice(),
-                task_ctx.as_ref(),
-            ));
+            let logical_plan =
+                sresult_return!(logical_plan_from_bytes_with_extension_codec(
+                    logical_plan_serialized.as_slice(),
+                    task_ctx.as_ref(),
+                    logical_codec.as_ref(),
+                ));
 
             let physical_plan = session.create_physical_plan(&logical_plan).await;
 
@@ -267,7 +274,7 @@ unsafe extern "C" fn create_physical_expr_fn_wrapper(
     expr_serialized: SVec<u8>,
     schema: WrappedSchema,
 ) -> FFI_Result<FFI_PhysicalExpr> {
-    let codec: Arc<dyn LogicalExtensionCodec> = (&session.logical_codec).into();
+    let codec = session.codecs.to_logical_codec();
     let session = session.inner();
 
     let logical_expr = LogicalExprNode::decode(expr_serialized.as_slice()).unwrap();
@@ -412,8 +419,7 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_SessionRef) -> FFI_SessionR
             default_table_options: default_table_options_fn_wrapper,
             task_ctx: task_ctx_fn_wrapper,
             physical_optimizers: physical_optimizers_fn_wrapper,
-            logical_codec: provider.logical_codec.clone(),
-            physical_codec: provider.physical_codec.clone(),
+            codecs: provider.codecs.clone(),
 
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
@@ -431,50 +437,24 @@ impl Drop for FFI_SessionRef {
 }
 
 impl FFI_SessionRef {
-    /// Creates a new [`FFI_SessionRef`] with a default physical extension codec.
+    /// Creates a new [`FFI_SessionRef`].
     ///
-    /// The synthesized [`DefaultPhysicalExtensionCodec`] supports built-in physical
-    /// nodes only. A query planner obtained through this session reference therefore
-    /// cannot encode or decode custom physical extension nodes. Use
-    /// [`Self::new_with_ffi_codecs`] with matching logical and physical codecs when
-    /// custom physical nodes must cross the FFI boundary.
+    /// Both codecs in `codecs` are used by this session's callbacks: the logical
+    /// codec for [`Session::optimize`] and [`Session::create_physical_expr`], and
+    /// the physical codec for the query planner returned by
+    /// [`Session::query_planner`]. Pass a bundle whose codecs can round-trip every
+    /// extension node exposed through the session; the bundle's task context
+    /// provider must also remain live for the lifetime of the exported session.
     ///
-    /// The physical codec wrapper requires a
-    /// [`FFI_TaskContextProvider`](crate::execution::FFI_TaskContextProvider), but this
-    /// constructor has only a session reference and a logical codec. It therefore
-    /// reuses the logical codec's provider. The provider may be owned by another
-    /// library; this is safe, but it must remain live and return the task context
-    /// intended for codec callbacks. The default physical codec does not successfully
-    /// decode extension nodes, so callers that need such callbacks must instead use
-    /// [`Self::new_with_ffi_codecs`] with an explicitly configured physical codec and
-    /// task context provider.
+    /// When `session` is already a [`ForeignSession`], this re-exports its original
+    /// handle and discards `codecs`: the codecs a session was exported with are the
+    /// ones its callbacks need. Note that
+    /// [`FFI_QueryPlanner::new`](crate::query_planner::FFI_QueryPlanner::new) does
+    /// the reverse and adopts the supplied bundle.
     pub fn new(
         session: &dyn Session,
         runtime: Option<Handle>,
-        logical_codec: FFI_LogicalExtensionCodec,
-    ) -> Self {
-        // `Session` provides a TaskContext but not the reference-counted
-        // TaskContextProvider needed by the FFI codec. Reuse the provider associated
-        // with the logical codec under the assumptions documented above.
-        let physical_codec = FFI_PhysicalExtensionCodec::new(
-            Arc::new(DefaultPhysicalExtensionCodec {}),
-            runtime.clone(),
-            logical_codec.task_ctx_provider.clone(),
-        );
-        Self::new_with_ffi_codecs(session, runtime, logical_codec, physical_codec)
-    }
-
-    /// Creates a new [`FFI_SessionRef`] using existing FFI codecs.
-    ///
-    /// The codecs must form a matching pair that can round-trip every logical and
-    /// physical extension node exposed through the session. Their task context
-    /// providers must remain live and return contexts appropriate for their decode
-    /// callbacks.
-    pub fn new_with_ffi_codecs(
-        session: &dyn Session,
-        runtime: Option<Handle>,
-        logical_codec: FFI_LogicalExtensionCodec,
-        physical_codec: FFI_PhysicalExtensionCodec,
+        codecs: FFI_ExtensionCodecBundle,
     ) -> Self {
         if let Some(session) = session.as_any().downcast_ref::<ForeignSession>() {
             return session.session.clone();
@@ -497,8 +477,7 @@ impl FFI_SessionRef {
             default_table_options: default_table_options_fn_wrapper,
             task_ctx: task_ctx_fn_wrapper,
             physical_optimizers: physical_optimizers_fn_wrapper,
-            logical_codec,
-            physical_codec,
+            codecs,
 
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
@@ -718,8 +697,7 @@ impl Session for ForeignSession {
 
     fn optimize(&self, plan: &LogicalPlan) -> datafusion_common::Result<LogicalPlan> {
         unsafe {
-            let codec: Arc<dyn LogicalExtensionCodec> =
-                (&self.session.logical_codec).into();
+            let codec = self.session.codecs.to_logical_codec();
             let logical_plan =
                 logical_plan_to_bytes_with_extension_codec(plan, codec.as_ref())?;
             let optimized_plan = df_result!((self.session.optimize)(
@@ -739,7 +717,9 @@ impl Session for ForeignSession {
         logical_plan: &LogicalPlan,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         unsafe {
-            let logical_plan = logical_plan_to_bytes(logical_plan)?;
+            let codec = self.session.codecs.to_logical_codec();
+            let logical_plan =
+                logical_plan_to_bytes_with_extension_codec(logical_plan, codec.as_ref())?;
             let physical_plan = df_result!(
                 (self.session.create_physical_plan)(
                     &self.session,
@@ -759,8 +739,7 @@ impl Session for ForeignSession {
         df_schema: &DFSchema,
     ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
         unsafe {
-            let codec: Arc<dyn LogicalExtensionCodec> =
-                (&self.session.logical_codec).into();
+            let codec = self.session.codecs.to_logical_codec();
             let logical_expr = serialize_expr(&expr, codec.as_ref())?.encode_to_vec();
             let schema = WrappedSchema(FFI_ArrowSchema::try_from(df_schema.as_arrow())?);
 
@@ -849,10 +828,13 @@ mod tests {
     use datafusion::execution::SessionStateBuilder;
     use datafusion_common::DataFusionError;
     use datafusion_expr::col;
+    use datafusion_expr::ptr_eq::arc_ptr_eq;
     use datafusion_expr::registry::FunctionRegistry;
     use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
+    use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 
     use super::*;
+    use crate::proto::physical_extension_codec::tests::TestExtensionCodec;
 
     static QUERY_PLANNER_CALLS: AtomicUsize = AtomicUsize::new(0);
     static PHYSICAL_OPTIMIZER_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -877,13 +859,9 @@ mod tests {
         PHYSICAL_OPTIMIZER_CALLS.store(0, Ordering::Relaxed);
 
         let (ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
-        let logical_codec = FFI_LogicalExtensionCodec::new(
-            Arc::new(DefaultLogicalExtensionCodec {}),
-            None,
-            task_ctx_provider,
-        );
+        let codecs = FFI_ExtensionCodecBundle::new_default(task_ctx_provider, None);
         let state = ctx.state();
-        let mut local_session = FFI_SessionRef::new(&state, None, logical_codec);
+        let mut local_session = FFI_SessionRef::new(&state, None, codecs);
         local_session.query_planner = counting_query_planner;
         local_session.physical_optimizers = counting_physical_optimizers;
 
@@ -907,6 +885,31 @@ mod tests {
         Ok(())
     }
 
+    /// An exported session must hand its own physical codec to the query planner
+    /// it exports. A default codec there stops custom physical extension nodes
+    /// from crossing a session callback.
+    #[test]
+    fn test_exported_query_planner_keeps_session_physical_codec() {
+        let (ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+        let physical_codec =
+            Arc::new(TestExtensionCodec {}) as Arc<dyn PhysicalExtensionCodec>;
+        let codecs = FFI_ExtensionCodecBundle::new(
+            task_ctx_provider,
+            None,
+            Arc::new(DefaultLogicalExtensionCodec {}),
+            Arc::clone(&physical_codec),
+        );
+
+        let state = ctx.state();
+        let local_session = FFI_SessionRef::new(&state, None, codecs);
+        let planner = unsafe { (local_session.query_planner)(&local_session) };
+
+        assert!(arc_ptr_eq(
+            &planner.codecs().to_physical_codec(),
+            &physical_codec
+        ));
+    }
+
     #[tokio::test]
     async fn test_ffi_session() -> Result<(), DataFusionError> {
         let (ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
@@ -923,13 +926,9 @@ mod tests {
             .with_table_options(table_options)
             .build();
 
-        let logical_codec = FFI_LogicalExtensionCodec::new(
-            Arc::new(DefaultLogicalExtensionCodec {}),
-            None,
-            task_ctx_provider,
-        );
+        let codecs = FFI_ExtensionCodecBundle::new_default(task_ctx_provider, None);
 
-        let local_session = FFI_SessionRef::new(&state, None, logical_codec);
+        let local_session = FFI_SessionRef::new(&state, None, codecs);
         let foreign_session = ForeignSession::try_from(&local_session)?;
 
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));

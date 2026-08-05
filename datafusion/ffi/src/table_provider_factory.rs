@@ -21,19 +21,15 @@ use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
 use datafusion_catalog::{Session, TableProvider, TableProviderFactory};
 use datafusion_common::error::{DataFusionError, Result};
-use datafusion_execution::TaskContext;
 use datafusion_expr::{CreateExternalTable, DdlStatement, LogicalPlan};
-use datafusion_proto::logical_plan::{
-    AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
-};
+use datafusion_proto::logical_plan::AsLogicalPlan;
 use datafusion_proto::protobuf::LogicalPlanNode;
 use prost::Message;
 
 use stabby::vec::Vec as SVec;
 use tokio::runtime::Handle;
 
-use crate::execution::FFI_TaskContextProvider;
-use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::proto::extension_codec_bundle::FFI_ExtensionCodecBundle;
 use crate::session::{FFI_SessionRef, ForeignSession};
 use crate::table_provider::{FFI_TableProvider, ForeignTableProvider};
 use crate::util::FFI_Result;
@@ -64,7 +60,9 @@ pub struct FFI_TableProviderFactory {
         cmd_serialized: SVec<u8>,
     ) -> FfiFuture<FFI_Result<FFI_TableProvider>>,
 
-    logical_codec: FFI_LogicalExtensionCodec,
+    /// The serialization environment used to decode the `CreateExternalTable`
+    /// command and propagated to the table providers this factory creates.
+    codecs: FFI_ExtensionCodecBundle,
 
     /// Used to create a clone of the factory. This should only need to be called
     /// by the receiver of the factory.
@@ -95,34 +93,21 @@ struct FactoryPrivateData {
 }
 
 impl FFI_TableProviderFactory {
-    /// Creates a new [`FFI_TableProvider`].
+    /// Creates a new [`FFI_TableProviderFactory`].
+    ///
+    /// `codecs`'s logical codec encodes and decodes the `CreateExternalTable`
+    /// command, and the whole bundle is handed to every
+    /// [`FFI_TableProvider`] this factory creates.
     pub fn new(
         factory: Arc<dyn TableProviderFactory + Send>,
         runtime: Option<Handle>,
-        task_ctx_provider: impl Into<FFI_TaskContextProvider>,
-        logical_codec: Option<Arc<dyn LogicalExtensionCodec>>,
-    ) -> Self {
-        let task_ctx_provider = task_ctx_provider.into();
-        let logical_codec =
-            logical_codec.unwrap_or_else(|| Arc::new(DefaultLogicalExtensionCodec {}));
-        let logical_codec = FFI_LogicalExtensionCodec::new(
-            logical_codec,
-            runtime.clone(),
-            task_ctx_provider.clone(),
-        );
-        Self::new_with_ffi_codec(factory, runtime, logical_codec)
-    }
-
-    pub fn new_with_ffi_codec(
-        factory: Arc<dyn TableProviderFactory + Send>,
-        runtime: Option<Handle>,
-        logical_codec: FFI_LogicalExtensionCodec,
+        codecs: FFI_ExtensionCodecBundle,
     ) -> Self {
         let private_data = Box::new(FactoryPrivateData { factory, runtime });
 
         Self {
             create: create_fn_wrapper,
-            logical_codec,
+            codecs,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
@@ -145,9 +130,8 @@ impl FFI_TableProviderFactory {
         &self,
         cmd_serialized: &SVec<u8>,
     ) -> Result<CreateExternalTable, DataFusionError> {
-        let task_ctx: Arc<TaskContext> =
-            (&self.logical_codec.task_ctx_provider).try_into()?;
-        let logical_codec: Arc<dyn LogicalExtensionCodec> = (&self.logical_codec).into();
+        let task_ctx = self.codecs.task_ctx()?;
+        let logical_codec = self.codecs.to_logical_codec();
 
         let plan = LogicalPlanNode::decode(cmd_serialized.as_ref())
             .map_err(|e| DataFusionError::Internal(format!("{e:?}")))?;
@@ -204,7 +188,7 @@ async fn create_fn_wrapper_impl(
     cmd_serialized: SVec<u8>,
 ) -> Result<FFI_TableProvider, DataFusionError> {
     let runtime = factory.runtime().clone();
-    let ffi_logical_codec = factory.logical_codec.clone();
+    let ffi_codecs = factory.codecs.clone();
     let internal_factory = Arc::clone(factory.inner());
     let cmd = factory.deserialize_cmd(&cmd_serialized)?;
 
@@ -218,11 +202,11 @@ async fn create_fn_wrapper_impl(
         })?;
 
     let provider = internal_factory.create(session, &cmd).await?;
-    Ok(FFI_TableProvider::new_with_ffi_codec(
+    Ok(FFI_TableProvider::new(
         provider,
         true,
         runtime.clone(),
-        ffi_logical_codec,
+        ffi_codecs,
     ))
 }
 
@@ -239,7 +223,7 @@ unsafe extern "C" fn clone_fn_wrapper(
 
     FFI_TableProviderFactory {
         create: create_fn_wrapper,
-        logical_codec: factory.logical_codec.clone(),
+        codecs: factory.codecs.clone(),
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
         version: super::version,
@@ -269,8 +253,7 @@ impl ForeignTableProviderFactory {
         &self,
         cmd: CreateExternalTable,
     ) -> Result<SVec<u8>, DataFusionError> {
-        let logical_codec: Arc<dyn LogicalExtensionCodec> =
-            (&self.0.logical_codec).into();
+        let logical_codec = self.0.codecs.to_logical_codec();
 
         let plan = LogicalPlan::Ddl(DdlStatement::CreateExternalTable(Box::new(cmd)));
         let plan: LogicalPlanNode =
@@ -293,7 +276,7 @@ impl TableProviderFactory for ForeignTableProviderFactory {
         session: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> Result<Arc<dyn TableProvider>> {
-        let session = FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
+        let session = FFI_SessionRef::new(session, None, self.0.codecs.clone());
         let cmd = self.serialize_cmd(cmd.clone())?;
 
         let provider = unsafe {
@@ -356,11 +339,10 @@ mod tests {
     async fn test_round_trip_ffi_table_provider_factory() -> Result<()> {
         let ctx = Arc::new(SessionContext::new());
         let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
-        let task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
+        let codecs = FFI_ExtensionCodecBundle::new_default(&task_ctx_provider, None);
 
         let factory = Arc::new(TestTableProviderFactory {});
-        let mut ffi_factory =
-            FFI_TableProviderFactory::new(factory, None, task_ctx_provider, None);
+        let mut ffi_factory = FFI_TableProviderFactory::new(factory, None, codecs);
         ffi_factory.library_marker_id = crate::mock_foreign_marker_id;
 
         let factory: Arc<dyn TableProviderFactory> = (&ffi_factory).into();
@@ -393,11 +375,10 @@ mod tests {
     async fn test_ffi_table_provider_factory_clone() -> Result<()> {
         let ctx = Arc::new(SessionContext::new());
         let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
-        let task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
+        let codecs = FFI_ExtensionCodecBundle::new_default(&task_ctx_provider, None);
 
         let factory = Arc::new(TestTableProviderFactory {});
-        let ffi_factory =
-            FFI_TableProviderFactory::new(factory, None, task_ctx_provider, None);
+        let ffi_factory = FFI_TableProviderFactory::new(factory, None, codecs);
 
         // Test that we can clone the factory
         let cloned_factory = ffi_factory.clone();

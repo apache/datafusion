@@ -40,6 +40,7 @@ use tokio::runtime::Handle;
 
 use crate::arrow_wrappers::WrappedSchema;
 use crate::execution::FFI_TaskContextProvider;
+use crate::proto::extension_codec_bundle::FFI_ExtensionCodecBundle;
 use crate::table_provider::FFI_TableProvider;
 use crate::udaf::FFI_AggregateUDF;
 use crate::udf::FFI_ScalarUDF;
@@ -163,11 +164,20 @@ unsafe extern "C" fn try_decode_table_provider_fn_wrapper(
         ctx.as_ref()
     ));
 
-    FFI_Result::Ok(FFI_TableProvider::new_with_ffi_codec(
+    // The function pointer receives only the codec, so there is no bundle to
+    // forward here. Pair this codec with an explicit default physical codec; see
+    // `FFI_ExtensionCodecBundle::new_logical_with_default_physical` for what that
+    // costs a consumer of the returned provider.
+    let codecs = FFI_ExtensionCodecBundle::new_logical_with_default_physical(
+        codec.clone(),
+        runtime.clone(),
+    );
+
+    FFI_Result::Ok(FFI_TableProvider::new(
         table_provider,
         true,
         runtime,
-        codec.clone(),
+        codecs,
     ))
 }
 
@@ -404,8 +414,14 @@ impl LogicalExtensionCodec for ForeignLogicalExtensionCodec {
         buf: &mut Vec<u8>,
     ) -> Result<()> {
         let table_ref = table_ref.to_string();
-        let node =
-            FFI_TableProvider::new_with_ffi_codec(node, true, None, self.0.clone());
+        // As in `try_decode_table_provider_fn_wrapper`, only the codec is in scope.
+        // This handle exists solely so the owning library can encode `node`, so the
+        // default physical codec is never exercised.
+        let codecs = FFI_ExtensionCodecBundle::new_logical_with_default_physical(
+            self.0.clone(),
+            None,
+        );
+        let node = FFI_TableProvider::new(node, true, None, codecs);
 
         let bytes = df_result!(unsafe {
             (self.0.try_encode_table_provider)(&self.0, table_ref.as_str().into(), node)

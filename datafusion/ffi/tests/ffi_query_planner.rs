@@ -31,10 +31,9 @@ mod tests {
     use datafusion_execution::{TaskContext, TaskContextProvider};
     use datafusion_expr::logical_plan::Extension;
     use datafusion_expr::{LogicalPlan, col};
-    use datafusion_ffi::execution::FFI_TaskContextProvider;
     use datafusion_ffi::execution_plan::ForeignExecutionPlan;
-    use datafusion_ffi::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
-    use datafusion_ffi::proto::physical_extension_codec::FFI_PhysicalExtensionCodec;
+    use datafusion_ffi::execution_plan::tests::EmptyExec as TestExtensionExec;
+    use datafusion_ffi::proto::extension_codec_bundle::FFI_ExtensionCodecBundle;
     use datafusion_ffi::query_planner::{FFI_QueryPlanner, ForeignQueryPlanner};
     use datafusion_ffi::table_provider::ForeignTableProvider;
     use datafusion_ffi::tests::{
@@ -46,30 +45,20 @@ mod tests {
     use datafusion_physical_plan::empty::EmptyExec;
     use datafusion_physical_plan::sorts::sort::SortExec;
     use datafusion_physical_plan::union::UnionExec;
-    use datafusion_proto::logical_plan::LogicalExtensionCodec;
+    use datafusion_proto::logical_plan::{
+        DefaultLogicalExtensionCodec, LogicalExtensionCodec,
+    };
     use datafusion_proto::physical_plan::{
-        DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
-        PhysicalProtoConverterExtension,
+        PhysicalExtensionCodec, PhysicalProtoConverterExtension,
     };
     use datafusion_session::QueryPlanner;
 
     #[tokio::test]
     async fn test_ffi_query_planner() -> Result<(), DataFusionError> {
         let module = get_module()?;
-        let (ctx, logical_codec) = crate::utils::ctx_and_codec();
-        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
-        let task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
-        let physical_codec = FFI_PhysicalExtensionCodec::new(
-            Arc::new(DefaultPhysicalExtensionCodec {}),
-            None,
-            task_ctx_provider,
-        );
+        let (ctx, codecs) = crate::utils::ctx_and_codecs();
 
-        let ffi_planner = (module.create_query_planner)(
-            logical_codec,
-            physical_codec,
-            FFI_Option::None,
-        );
+        let ffi_planner = (module.create_query_planner)(codecs, FFI_Option::None);
         let planner: Arc<dyn QueryPlanner + Send + Sync> = (&ffi_planner).into();
 
         let any_ref: &dyn std::any::Any = planner.as_ref();
@@ -196,16 +185,11 @@ mod tests {
             .build();
         let ctx = Arc::new(SessionContext::new_with_state(state));
         let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
-        let ffi_task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
-        let logical_codec = FFI_LogicalExtensionCodec::new(
+        let codecs = FFI_ExtensionCodecBundle::new(
+            &task_ctx_provider,
+            None,
             Arc::new(LibraryALogicalCodec::default()),
-            None,
-            ffi_task_ctx_provider.clone(),
-        );
-        let physical_codec = FFI_PhysicalExtensionCodec::new(
             Arc::new(LibraryAPhysicalCodec),
-            None,
-            ffi_task_ctx_provider,
         );
 
         let library_b = get_module_copy("query_planner_library_b")?;
@@ -213,7 +197,7 @@ mod tests {
 
         // Library B: reuse the synchronous table provider from the existing
         // FFI integration-test module.
-        let ffi_provider = (library_b.create_table)(true, logical_codec.clone());
+        let ffi_provider = (library_b.create_table)(true, codecs.clone());
         let provider: Arc<dyn TableProvider> = (&ffi_provider).into();
         assert!(provider.downcast_ref::<ForeignTableProvider>().is_some());
         ctx.register_table("library_b", provider)?;
@@ -222,11 +206,7 @@ mod tests {
         // Library C: a foreign query planner sees B's scan result as opaque,
         // but can downcast its own UnionExec. Its result is serialized rather
         // than returned as FFI_ExecutionPlan.
-        let ffi_planner = (library_c.create_query_planner)(
-            logical_codec,
-            physical_codec,
-            FFI_Option::None,
-        );
+        let ffi_planner = (library_c.create_query_planner)(codecs, FFI_Option::None);
         let planner: Arc<dyn QueryPlanner + Send + Sync> = (&ffi_planner).into();
         let planner_any: &dyn std::any::Any = planner.as_ref();
         assert!(planner_any.downcast_ref::<ForeignQueryPlanner>().is_some());
@@ -267,23 +247,18 @@ mod tests {
             .build();
         let ctx = Arc::new(SessionContext::new_with_state(state));
         let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
-        let ffi_task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
-        let logical_codec = FFI_LogicalExtensionCodec::new(
+        let codecs = FFI_ExtensionCodecBundle::new(
+            &task_ctx_provider,
+            None,
             Arc::new(LibraryALogicalCodec::default()),
-            None,
-            ffi_task_ctx_provider.clone(),
-        );
-        let physical_codec = FFI_PhysicalExtensionCodec::new(
             Arc::new(LibraryAPhysicalCodec),
-            None,
-            ffi_task_ctx_provider,
         );
 
         let library_b = get_module_copy("planner_swap_library_b")?;
         let library_c = get_module_copy("planner_swap_library_c")?;
 
         // Library B: a table provider that is foreign to both A and C.
-        let ffi_provider = (library_b.create_table)(true, logical_codec.clone());
+        let ffi_provider = (library_b.create_table)(true, codecs.clone());
         let provider: Arc<dyn TableProvider> = (&ffi_provider).into();
         ctx.register_table("library_b", provider)?;
 
@@ -291,16 +266,12 @@ mod tests {
         // afterwards through `FFI_SessionRef::query_planner` would hand library C
         // its own planner back.
         let library_a_planner = Arc::clone(ctx.state().query_planner());
-        let ffi_library_a_planner = FFI_QueryPlanner::new_with_ffi_codecs(
-            library_a_planner,
-            logical_codec.clone(),
-            physical_codec.clone(),
-        );
+        let ffi_library_a_planner =
+            FFI_QueryPlanner::new(library_a_planner, codecs.clone());
 
         // Library C: builds its planner around A's planner.
         let ffi_planner = (library_c.create_query_planner)(
-            logical_codec,
-            physical_codec,
+            codecs,
             FFI_Option::Some(ffi_library_a_planner),
         );
         let library_c_planner: Arc<dyn QueryPlanner + Send + Sync> =
@@ -344,5 +315,126 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    /// Library A's physical codec for the extension-node deployment.
+    ///
+    /// The node it decodes has no built-in protobuf representation, so it can only
+    /// cross a boundary through this codec. Encoding accepts the foreign handle
+    /// library C hands over; decoding rebuilds the node with library A's own type
+    /// identity.
+    #[derive(Debug)]
+    struct LibraryAExtensionNodeCodec;
+
+    impl PhysicalExtensionCodec for LibraryAExtensionNodeCodec {
+        fn try_decode(
+            &self,
+            buf: &[u8],
+            inputs: &[Arc<dyn ExecutionPlan>],
+            _ctx: &TaskContext,
+            _proto_converter: &dyn PhysicalProtoConverterExtension,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            if buf != b"library-c-extension-node" || !inputs.is_empty() {
+                return exec_err!("unexpected library C extension node payload");
+            }
+            Ok(Arc::new(TestExtensionExec::new(create_test_schema())))
+        }
+
+        fn try_encode(
+            &self,
+            node: Arc<dyn ExecutionPlan>,
+            buf: &mut Vec<u8>,
+            _proto_converter: &dyn PhysicalProtoConverterExtension,
+        ) -> Result<()> {
+            // Library C's node arrives as a foreign handle. If library A ever
+            // re-encodes a node its own `try_decode` produced, it sees the local
+            // type instead.
+            if !node.is::<ForeignExecutionPlan>() && !node.is::<TestExtensionExec>() {
+                return exec_err!(
+                    "expected library C's node to be foreign or A-local; got {}",
+                    node.name()
+                );
+            }
+            buf.extend_from_slice(b"library-c-extension-node");
+            Ok(())
+        }
+    }
+
+    /// The scenario the extension codec bundle exists for.
+    ///
+    /// Library A owns the session, the task context provider, and a custom physical
+    /// codec. It installs library C's query planner and queries library B's table
+    /// provider. B reaches C's planner *through the session A handed it*, and the
+    /// node C returns is a custom physical extension node. Only A's physical codec
+    /// can move that node, so the session A exported must be carrying it.
+    ///
+    /// Before the bundle, exporting a session synthesized a
+    /// `DefaultPhysicalExtensionCodec`, and this path failed with
+    /// `PhysicalExtensionCodec is not provided`.
+    #[tokio::test]
+    async fn test_session_planner_round_trips_custom_physical_node() -> Result<()> {
+        // Library A: owns the session and the codec registry.
+        let state = SessionStateBuilder::new_with_default_features()
+            .with_physical_optimizer_rules(vec![])
+            .build();
+        let ctx = Arc::new(SessionContext::new_with_state(state));
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
+        let codecs = FFI_ExtensionCodecBundle::new(
+            &task_ctx_provider,
+            None,
+            Arc::new(DefaultLogicalExtensionCodec {}),
+            Arc::new(LibraryAExtensionNodeCodec),
+        );
+
+        let library_b = get_module_copy("session_planner_library_b")?;
+        let library_c = get_module_copy("session_planner_library_c")?;
+
+        // Library C: a planner that returns a custom physical extension node.
+        let ffi_planner = (library_c.create_extension_node_query_planner)(codecs.clone());
+        let library_c_planner: Arc<dyn QueryPlanner + Send + Sync> =
+            (&ffi_planner).into();
+        let planner_any: &dyn std::any::Any = library_c_planner.as_ref();
+        assert!(planner_any.downcast_ref::<ForeignQueryPlanner>().is_some());
+
+        // Library A installs C's planner on the session it already owns. Mutating
+        // the existing state keeps the `Arc<SessionContext>` identity stable, so the
+        // task context provider captured by the bundle above stays current.
+        let state_ref = ctx.state_ref();
+        let swapped = SessionStateBuilder::new_from_existing(state_ref.read().clone())
+            .with_query_planner(library_c_planner)
+            .build();
+        *state_ref.write() = swapped;
+
+        // Library B: a table provider that plans through the planner it finds on the
+        // session, rather than planning locally.
+        let ffi_provider = (library_b.create_session_planning_table)(codecs);
+        let provider: Arc<dyn TableProvider> = (&ffi_provider).into();
+        assert!(provider.downcast_ref::<ForeignTableProvider>().is_some());
+        ctx.register_table("library_b", provider)?;
+
+        // Scanning runs A -> B -> A -> C -> A -> B -> A. The extension node is built
+        // in C, encoded and decoded by A's physical codec, and handed back to A.
+        let plan = provider_scan(&ctx).await?;
+
+        // The node was reconstructed inside library A, so A can downcast it.
+        assert!(!plan.is::<ForeignExecutionPlan>());
+        assert!(
+            plan.is::<TestExtensionExec>(),
+            "library A could not downcast the node its codec rebuilt; got {}",
+            plan.name()
+        );
+
+        Ok(())
+    }
+
+    /// Scans the registered `library_b` table directly, so the assertions above see
+    /// the plan library B returned rather than a wrapper library A added.
+    async fn provider_scan(ctx: &SessionContext) -> Result<Arc<dyn ExecutionPlan>> {
+        let provider = ctx
+            .table_provider("library_b")
+            .await
+            .map_err(|e| DataFusionError::Plan(e.to_string()))?;
+        let state = ctx.state();
+        provider.scan(&state, None, &[], None).await
     }
 }

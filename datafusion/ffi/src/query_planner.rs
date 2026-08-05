@@ -67,15 +67,11 @@ use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_extension_codec,
     physical_plan_to_bytes_with_extension_codec,
 };
-use datafusion_proto::logical_plan::LogicalExtensionCodec;
-use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use datafusion_session::{QueryPlanner, Session};
 use stabby::vec::Vec as SVec;
 use tokio::runtime::Handle;
 
-use crate::execution::FFI_TaskContextProvider;
-use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
-use crate::proto::physical_extension_codec::FFI_PhysicalExtensionCodec;
+use crate::proto::extension_codec_bundle::FFI_ExtensionCodecBundle;
 use crate::session::{FFI_SessionRef, ForeignSession};
 use crate::util::FFI_Result;
 use crate::{df_result, sresult_return};
@@ -94,11 +90,9 @@ pub struct FFI_QueryPlanner {
         session: FFI_SessionRef,
     ) -> FfiFuture<FFI_Result<SVec<u8>>>,
 
-    /// Codec used to encode and decode logical plans and extension nodes.
-    logical_codec: FFI_LogicalExtensionCodec,
-
-    /// Codec used to encode and decode physical plans and extension nodes.
-    physical_codec: FFI_PhysicalExtensionCodec,
+    /// The serialization environment used for the logical plan travelling in and
+    /// the physical plan travelling out, including their extension nodes.
+    codecs: FFI_ExtensionCodecBundle,
 
     /// Used to create a clone of the query planner.
     clone: unsafe extern "C" fn(planner: &Self) -> Self,
@@ -130,6 +124,11 @@ impl FFI_QueryPlanner {
         let private_data = self.private_data as *const QueryPlannerPrivateData;
         unsafe { &(*private_data).planner }
     }
+
+    /// The serialization environment this planner encodes plans with.
+    pub fn codecs(&self) -> &FFI_ExtensionCodecBundle {
+        &self.codecs
+    }
 }
 
 unsafe extern "C" fn create_physical_plan_fn_wrapper(
@@ -138,9 +137,8 @@ unsafe extern "C" fn create_physical_plan_fn_wrapper(
     session: FFI_SessionRef,
 ) -> FfiFuture<FFI_Result<SVec<u8>>> {
     let internal_planner = Arc::clone(planner.inner());
-    let logical_codec: Arc<dyn LogicalExtensionCodec> = (&planner.logical_codec).into();
-    let physical_codec: Arc<dyn PhysicalExtensionCodec> =
-        (&planner.physical_codec).into();
+    let logical_codec = planner.codecs.to_logical_codec();
+    let physical_codec = planner.codecs.to_physical_codec();
 
     async move {
         let mut foreign_session = None;
@@ -194,8 +192,7 @@ unsafe extern "C" fn clone_fn_wrapper(planner: &FFI_QueryPlanner) -> FFI_QueryPl
 
     FFI_QueryPlanner {
         create_physical_plan: create_physical_plan_fn_wrapper,
-        logical_codec: planner.logical_codec.clone(),
-        physical_codec: planner.physical_codec.clone(),
+        codecs: planner.codecs.clone(),
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
         version: super::version,
@@ -217,48 +214,26 @@ impl Clone for FFI_QueryPlanner {
 }
 
 impl FFI_QueryPlanner {
-    /// Creates an [`FFI_QueryPlanner`] with native extension codecs.
+    /// Creates an [`FFI_QueryPlanner`].
     ///
-    /// Both codecs are required so that the caller states which extension nodes
-    /// survive the boundary. Pass
-    /// [`DefaultLogicalExtensionCodec`](datafusion_proto::logical_plan::DefaultLogicalExtensionCodec)
-    /// and
-    /// [`DefaultPhysicalExtensionCodec`](datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec)
-    /// when no custom nodes are involved. `runtime` and `task_ctx_provider`
-    /// support codec callbacks across the FFI boundary.
+    /// `codecs` decides which extension nodes survive the boundary: its logical
+    /// codec decodes the incoming plan and its physical codec encodes the planner's
+    /// result. Use
+    /// [`FFI_ExtensionCodecBundle::new_default`](crate::proto::extension_codec_bundle::FFI_ExtensionCodecBundle::new_default)
+    /// when no custom nodes are involved.
+    ///
+    /// If `planner` is already foreign, its original FFI handle is re-exported
+    /// instead of being wrapped again, and that handle adopts `codecs`: a planner
+    /// serializes in the environment of the session that invokes it, not the one it
+    /// came from.
     pub fn new(
         planner: Arc<dyn QueryPlanner + Send + Sync>,
-        runtime: Option<Handle>,
-        task_ctx_provider: impl Into<FFI_TaskContextProvider>,
-        logical_codec: Arc<dyn LogicalExtensionCodec>,
-        physical_codec: Arc<dyn PhysicalExtensionCodec>,
-    ) -> Self {
-        let task_ctx_provider = task_ctx_provider.into();
-        let logical_codec = FFI_LogicalExtensionCodec::new(
-            logical_codec,
-            runtime.clone(),
-            task_ctx_provider.clone(),
-        );
-        let physical_codec =
-            FFI_PhysicalExtensionCodec::new(physical_codec, runtime, task_ctx_provider);
-        Self::new_with_ffi_codecs(planner, logical_codec, physical_codec)
-    }
-
-    /// Creates an [`FFI_QueryPlanner`] using prebuilt FFI extension codecs.
-    ///
-    /// If `planner` is already foreign, this re-exports its original FFI handle
-    /// rather than adding another wrapper layer. The handle still adopts the
-    /// codecs supplied here, so they are never silently discarded.
-    pub fn new_with_ffi_codecs(
-        planner: Arc<dyn QueryPlanner + Send + Sync>,
-        logical_codec: FFI_LogicalExtensionCodec,
-        physical_codec: FFI_PhysicalExtensionCodec,
+        codecs: FFI_ExtensionCodecBundle,
     ) -> Self {
         let any_ref: &dyn std::any::Any = planner.as_ref();
         if let Some(planner) = any_ref.downcast_ref::<ForeignQueryPlanner>() {
             let mut planner = planner.0.clone();
-            planner.logical_codec = logical_codec;
-            planner.physical_codec = physical_codec;
+            planner.codecs = codecs;
             return planner;
         }
 
@@ -266,8 +241,7 @@ impl FFI_QueryPlanner {
 
         Self {
             create_physical_plan: create_physical_plan_fn_wrapper,
-            logical_codec,
-            physical_codec,
+            codecs,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
@@ -293,23 +267,17 @@ impl FFI_QueryPlanner {
         session: &dyn Session,
         session_runtime: Option<Handle>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let codec: Arc<dyn LogicalExtensionCodec> = (&self.logical_codec).into();
+        let codec = self.codecs.to_logical_codec();
         let logical_plan =
             logical_plan_to_bytes_with_extension_codec(logical_plan, codec.as_ref())?;
         let logical_plan = SVec::from(logical_plan.as_ref());
         let task_ctx = session.task_ctx();
-        let session = FFI_SessionRef::new_with_ffi_codecs(
-            session,
-            session_runtime,
-            self.logical_codec.clone(),
-            self.physical_codec.clone(),
-        );
+        let session = FFI_SessionRef::new(session, session_runtime, self.codecs.clone());
 
         let physical_plan = unsafe {
             df_result!((self.create_physical_plan)(self, logical_plan, session).await)?
         };
-        let physical_codec: Arc<dyn PhysicalExtensionCodec> =
-            (&self.physical_codec).into();
+        let physical_codec = self.codecs.to_physical_codec();
 
         physical_plan_from_bytes_with_extension_codec(
             physical_plan.as_slice(),
@@ -385,13 +353,13 @@ mod tests {
 
     fn create_ffi_query_planner(ctx: Arc<SessionContext>) -> FFI_QueryPlanner {
         let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
-        FFI_QueryPlanner::new(
-            Arc::new(EmptyQueryPlanner),
-            None,
+        let codecs = FFI_ExtensionCodecBundle::new(
             &task_ctx_provider,
+            None,
             Arc::new(DefaultLogicalExtensionCodec {}),
             Arc::new(DefaultPhysicalExtensionCodec {}),
-        )
+        );
+        FFI_QueryPlanner::new(Arc::new(EmptyQueryPlanner), codecs)
     }
 
     #[test]

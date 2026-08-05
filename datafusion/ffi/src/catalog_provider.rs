@@ -20,15 +20,11 @@ use std::sync::Arc;
 
 use datafusion_catalog::{CatalogProvider, SchemaProvider};
 use datafusion_common::error::Result;
-use datafusion_proto::logical_plan::{
-    DefaultLogicalExtensionCodec, LogicalExtensionCodec,
-};
 use stabby::string::String as SString;
 use stabby::vec::Vec as SVec;
 use tokio::runtime::Handle;
 
-use crate::execution::FFI_TaskContextProvider;
-use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::proto::extension_codec_bundle::FFI_ExtensionCodecBundle;
 use crate::schema_provider::{FFI_SchemaProvider, ForeignSchemaProvider};
 use crate::util::{FFI_Option, FFI_Result};
 use crate::{df_result, sresult_return};
@@ -58,7 +54,9 @@ pub struct FFI_CatalogProvider {
             cascade: bool,
         ) -> FFI_Result<FFI_Option<FFI_SchemaProvider>>,
 
-    pub logical_codec: FFI_LogicalExtensionCodec,
+    /// The serialization environment propagated to every schema reached through
+    /// this catalog.
+    pub codecs: FFI_ExtensionCodecBundle,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -121,10 +119,10 @@ unsafe extern "C" fn schema_fn_wrapper(
         let maybe_schema = provider.inner().schema(name.as_str());
         maybe_schema
             .map(|schema| {
-                FFI_SchemaProvider::new_with_ffi_codec(
+                FFI_SchemaProvider::new(
                     schema,
                     provider.runtime(),
-                    provider.logical_codec.clone(),
+                    provider.codecs.clone(),
                 )
             })
             .into()
@@ -144,11 +142,7 @@ unsafe extern "C" fn register_schema_fn_wrapper(
         let returned_schema =
             sresult_return!(inner_provider.register_schema(name.as_str(), schema))
                 .map(|schema| {
-                    FFI_SchemaProvider::new_with_ffi_codec(
-                        schema,
-                        runtime,
-                        provider.logical_codec.clone(),
-                    )
+                    FFI_SchemaProvider::new(schema, runtime, provider.codecs.clone())
                 })
                 .into();
 
@@ -171,11 +165,7 @@ unsafe extern "C" fn deregister_schema_fn_wrapper(
         FFI_Result::Ok(
             maybe_schema
                 .map(|schema| {
-                    FFI_SchemaProvider::new_with_ffi_codec(
-                        schema,
-                        runtime,
-                        provider.logical_codec.clone(),
-                    )
+                    FFI_SchemaProvider::new(schema, runtime, provider.codecs.clone())
                 })
                 .into(),
         )
@@ -209,7 +199,7 @@ unsafe extern "C" fn clone_fn_wrapper(
             schema: schema_fn_wrapper,
             register_schema: register_schema_fn_wrapper,
             deregister_schema: deregister_schema_fn_wrapper,
-            logical_codec: provider.logical_codec.clone(),
+            codecs: provider.codecs.clone(),
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
@@ -227,27 +217,13 @@ impl Drop for FFI_CatalogProvider {
 
 impl FFI_CatalogProvider {
     /// Creates a new [`FFI_CatalogProvider`].
+    ///
+    /// `codecs` must describe the extension nodes used by every table below this
+    /// catalog, since schemas and tables reached through it inherit it.
     pub fn new(
         provider: Arc<dyn CatalogProvider>,
         runtime: Option<Handle>,
-        task_ctx_provider: impl Into<FFI_TaskContextProvider>,
-        logical_codec: Option<Arc<dyn LogicalExtensionCodec>>,
-    ) -> Self {
-        let task_ctx_provider = task_ctx_provider.into();
-        let logical_codec =
-            logical_codec.unwrap_or_else(|| Arc::new(DefaultLogicalExtensionCodec {}));
-        let logical_codec = FFI_LogicalExtensionCodec::new(
-            logical_codec,
-            runtime.clone(),
-            task_ctx_provider.clone(),
-        );
-        Self::new_with_ffi_codec(provider, runtime, logical_codec)
-    }
-
-    pub fn new_with_ffi_codec(
-        provider: Arc<dyn CatalogProvider>,
-        runtime: Option<Handle>,
-        logical_codec: FFI_LogicalExtensionCodec,
+        codecs: FFI_ExtensionCodecBundle,
     ) -> Self {
         if let Some(provider) = provider.downcast_ref::<ForeignCatalogProvider>() {
             return provider.0.clone();
@@ -260,7 +236,7 @@ impl FFI_CatalogProvider {
             schema: schema_fn_wrapper,
             register_schema: register_schema_fn_wrapper,
             deregister_schema: deregister_schema_fn_wrapper,
-            logical_codec,
+            codecs,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
@@ -325,11 +301,7 @@ impl CatalogProvider for ForeignCatalogProvider {
         unsafe {
             let schema = match schema.downcast_ref::<ForeignSchemaProvider>() {
                 Some(s) => &s.0,
-                None => &FFI_SchemaProvider::new_with_ffi_codec(
-                    schema,
-                    None,
-                    self.0.logical_codec.clone(),
-                ),
+                None => &FFI_SchemaProvider::new(schema, None, self.0.codecs.clone()),
             };
             let returned_schema: Option<FFI_SchemaProvider> =
                 df_result!((self.0.register_schema)(&self.0, name.into(), schema))?
@@ -375,9 +347,9 @@ mod tests {
                 .is_none()
         );
         let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+        let codecs = FFI_ExtensionCodecBundle::new_default(task_ctx_provider, None);
 
-        let mut ffi_catalog =
-            FFI_CatalogProvider::new(catalog, None, task_ctx_provider, None);
+        let mut ffi_catalog = FFI_CatalogProvider::new(catalog, None, codecs);
         ffi_catalog.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_catalog: Arc<dyn CatalogProvider> = (&ffi_catalog).into();
@@ -421,8 +393,8 @@ mod tests {
         let catalog = Arc::new(MemoryCatalogProvider::new());
 
         let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
-        let mut ffi_catalog =
-            FFI_CatalogProvider::new(catalog, None, task_ctx_provider, None);
+        let codecs = FFI_ExtensionCodecBundle::new_default(task_ctx_provider, None);
+        let mut ffi_catalog = FFI_CatalogProvider::new(catalog, None, codecs);
 
         // Verify local libraries can be downcast to their original
         let foreign_catalog: Arc<dyn CatalogProvider> = (&ffi_catalog).into();

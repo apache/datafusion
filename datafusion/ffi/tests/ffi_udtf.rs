@@ -35,9 +35,9 @@ mod tests {
     #[tokio::test]
     async fn test_user_defined_table_function() -> Result<()> {
         let module = get_module()?;
-        let (ctx, codec) = super::utils::ctx_and_codec();
+        let (ctx, codecs) = super::utils::ctx_and_codecs();
 
-        let ffi_table_func = (module.create_table_function)(codec);
+        let ffi_table_func = (module.create_table_function)(codecs);
         let foreign_table_func: Arc<dyn TableFunctionImpl> = ffi_table_func.into();
 
         ctx.register_udtf("my_range", foreign_table_func);

@@ -218,6 +218,48 @@ these methods that your provider remains valid for the lifetime of the
 calls. The `FFI_TaskContextProvider` is implemented on `SessionContext`
 and it is easy to implement on any struct that implements `Session`.
 
+## Extension Codec Bundle
+
+Serializing plans across the boundary needs three values that have to agree
+with one another: the `FFI_TaskContextProvider` above, a logical extension
+codec, and a physical extension codec. `FFI_ExtensionCodecBundle` carries
+them as a single unit, and every wrapper that serializes a plan or expression
+takes one:
+
+```rust,ignore
+let codecs = FFI_ExtensionCodecBundle::new(
+    &task_ctx_provider,
+    None, // Option<tokio::runtime::Handle>
+    Arc::new(MyLogicalCodec),
+    Arc::new(MyPhysicalCodec),
+);
+
+let ffi_provider = FFI_TableProvider::new(provider, true, None, codecs.clone());
+let ffi_catalog = FFI_CatalogProvider::new(catalog, None, codecs);
+```
+
+Use `FFI_ExtensionCodecBundle::new_default` when no custom extension nodes
+cross the boundary; it selects the default logical and physical codecs
+explicitly.
+
+Both codecs are needed even by a wrapper that only serializes logical data,
+because such a wrapper still exports a `Session` and a consumer can reach
+`Session::query_planner` through it. That planner serializes physical plans,
+so it needs the physical codec belonging to the same environment.
+
+The bundle is propagated unchanged through nested construction — a catalog
+provider list hands it to each catalog, which hands it to each schema, which
+hands it to each table provider — so a table found by walking the hierarchy
+serializes exactly like the list it came from.
+
+One case does not get a full bundle: a table provider decoded out of a
+serialized logical plan is reconstructed by `FFI_LogicalExtensionCodec`, which
+holds no physical codec, so it is paired with the default one. Such a provider
+cannot carry custom physical extension nodes if the decoding library scans it
+with a session local to that library. Scanning it with the exporting library's
+own session handle is unaffected, because exporting an already-foreign session
+returns the original handle and its complete bundle.
+
 [apache datafusion]: https://datafusion.apache.org/
 [api docs]: http://docs.rs/datafusion-ffi/latest
 [rust abi]: https://doc.rust-lang.org/reference/abi.html

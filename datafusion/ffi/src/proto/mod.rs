@@ -15,5 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod extension_codec_bundle;
 pub mod logical_extension_codec;
 pub mod physical_extension_codec;

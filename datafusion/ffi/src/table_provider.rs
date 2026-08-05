@@ -28,11 +28,9 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::logical_plan::from_proto::parse_exprs;
 use datafusion_proto::logical_plan::to_proto::serialize_exprs;
-use datafusion_proto::logical_plan::{
-    DefaultLogicalExtensionCodec, LogicalExtensionCodec,
-};
 use datafusion_proto::protobuf::LogicalExprList;
 use prost::Message;
 
@@ -42,8 +40,7 @@ use tokio::runtime::Handle;
 use super::execution_plan::FFI_ExecutionPlan;
 use super::insert_op::FFI_InsertOp;
 use crate::arrow_wrappers::WrappedSchema;
-use crate::execution::FFI_TaskContextProvider;
-use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::proto::extension_codec_bundle::FFI_ExtensionCodecBundle;
 use crate::session::{FFI_SessionRef, ForeignSession};
 use crate::statistics::{deserialize_statistics, serialize_statistics};
 use crate::table_source::{FFI_TableProviderFilterPushDown, FFI_TableType};
@@ -140,7 +137,9 @@ pub struct FFI_TableProvider {
     /// `Some(bytes)` is a prost-encoded `datafusion_proto_common::Statistics`.
     pub statistics: unsafe extern "C" fn(provider: &Self) -> FFI_Option<SVec<u8>>,
 
-    pub logical_codec: FFI_LogicalExtensionCodec,
+    /// The serialization environment used by this provider's callbacks and by the
+    /// sessions it exports for `scan` and `insert_into`.
+    pub codecs: FFI_ExtensionCodecBundle,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -232,10 +231,8 @@ unsafe extern "C" fn supports_filters_pushdown_fn_wrapper(
     provider: &FFI_TableProvider,
     filters_serialized: SVec<u8>,
 ) -> FFI_Result<SVec<FFI_TableProviderFilterPushDown>> {
-    let logical_codec: Arc<dyn LogicalExtensionCodec> = (&provider.logical_codec).into();
-    let task_ctx = sresult_return!(<Arc<TaskContext>>::try_from(
-        &provider.logical_codec.task_ctx_provider
-    ));
+    let logical_codec = provider.codecs.to_logical_codec();
+    let task_ctx = sresult_return!(provider.codecs.task_ctx());
     supports_filters_pushdown_internal(
         provider.inner(),
         &filters_serialized,
@@ -252,10 +249,9 @@ unsafe extern "C" fn scan_fn_wrapper(
     filters_serialized: SVec<u8>,
     limit: FFI_Option<usize>,
 ) -> FfiFuture<FFI_Result<FFI_ExecutionPlan>> {
-    let task_ctx: Result<Arc<TaskContext>, DataFusionError> =
-        (&provider.logical_codec.task_ctx_provider).try_into();
+    let task_ctx = provider.codecs.task_ctx();
     let runtime = provider.runtime().clone();
-    let logical_codec: Arc<dyn LogicalExtensionCodec> = (&provider.logical_codec).into();
+    let logical_codec = provider.codecs.to_logical_codec();
     let internal_provider = Arc::clone(provider.inner());
 
     async move {
@@ -362,7 +358,7 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_TableProvider) -> FFI_Table
         supports_filters_pushdown: provider.supports_filters_pushdown,
         insert_into: provider.insert_into,
         statistics: statistics_fn_wrapper,
-        logical_codec: provider.logical_codec.clone(),
+        codecs: provider.codecs.clone(),
         clone: clone_fn_wrapper,
         release: release_fn_wrapper,
         version: super::version,
@@ -379,34 +375,19 @@ impl Drop for FFI_TableProvider {
 
 impl FFI_TableProvider {
     /// Creates a new [`FFI_TableProvider`].
+    ///
+    /// `codecs`'s logical codec serializes the filter expressions handed to
+    /// `scan` and `supports_filters_pushdown`, and the whole bundle is attached to
+    /// the session this provider exports, so a consumer that reaches
+    /// [`Session::query_planner`] through that session gets a planner configured
+    /// with the same codecs. Use
+    /// [`FFI_ExtensionCodecBundle::new_default`] when no custom extension nodes are
+    /// involved.
     pub fn new(
         provider: Arc<dyn TableProvider>,
         can_support_pushdown_filters: bool,
         runtime: Option<Handle>,
-        task_ctx_provider: impl Into<FFI_TaskContextProvider>,
-        logical_codec: Option<Arc<dyn LogicalExtensionCodec>>,
-    ) -> Self {
-        let task_ctx_provider = task_ctx_provider.into();
-        let logical_codec =
-            logical_codec.unwrap_or_else(|| Arc::new(DefaultLogicalExtensionCodec {}));
-        let logical_codec = FFI_LogicalExtensionCodec::new(
-            logical_codec,
-            runtime.clone(),
-            task_ctx_provider.clone(),
-        );
-        Self::new_with_ffi_codec(
-            provider,
-            can_support_pushdown_filters,
-            runtime,
-            logical_codec,
-        )
-    }
-
-    pub fn new_with_ffi_codec(
-        provider: Arc<dyn TableProvider>,
-        can_support_pushdown_filters: bool,
-        runtime: Option<Handle>,
-        logical_codec: FFI_LogicalExtensionCodec,
+        codecs: FFI_ExtensionCodecBundle,
     ) -> Self {
         if let Some(provider) = provider.downcast_ref::<ForeignTableProvider>() {
             return provider.0.clone();
@@ -423,7 +404,7 @@ impl FFI_TableProvider {
             },
             insert_into: insert_into_fn_wrapper,
             statistics: statistics_fn_wrapper,
-            logical_codec,
+            codecs,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
@@ -492,13 +473,13 @@ impl TableProvider for ForeignTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let session = FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
+        let session = FFI_SessionRef::new(session, None, self.0.codecs.clone());
 
         let projections: FFI_Option<SVec<usize>> = projection
             .map(|p| p.iter().map(|v| v.to_owned()).collect())
             .into();
 
-        let codec: Arc<dyn LogicalExtensionCodec> = (&self.0.logical_codec).into();
+        let codec = self.0.codecs.to_logical_codec();
         let filter_list = LogicalExprList {
             expr: serialize_exprs(filters, codec.as_ref())?,
         };
@@ -537,7 +518,7 @@ impl TableProvider for ForeignTableProvider {
                 }
             };
 
-            let codec: Arc<dyn LogicalExtensionCodec> = (&self.0.logical_codec).into();
+            let codec = self.0.codecs.to_logical_codec();
 
             let expr_list = LogicalExprList {
                 expr: serialize_exprs(
@@ -562,7 +543,7 @@ impl TableProvider for ForeignTableProvider {
         input: Arc<dyn ExecutionPlan>,
         insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let session = FFI_SessionRef::new(session, None, self.0.logical_codec.clone());
+        let session = FFI_SessionRef::new(session, None, self.0.codecs.clone());
 
         let rc = Handle::try_current().ok();
         let input = FFI_ExecutionPlan::new(input, rc);
@@ -613,15 +594,46 @@ mod tests {
         )?))
     }
 
+    /// A bundle holds its task context provider weakly. When the provider is gone,
+    /// a wrapper carrying that bundle must report it rather than panic or resolve a
+    /// stale context.
+    #[test]
+    fn test_expired_task_context_provider_reports_clear_error() -> Result<()> {
+        fn codecs_with_dropped_provider() -> FFI_ExtensionCodecBundle {
+            let ctx = Arc::new(SessionContext::new());
+            let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
+            FFI_ExtensionCodecBundle::new_default(&task_ctx_provider, None)
+        }
+
+        let mut ffi_provider = FFI_TableProvider::new(
+            create_test_table_provider()?,
+            true,
+            None,
+            codecs_with_dropped_provider(),
+        );
+        ffi_provider.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign: Arc<dyn TableProvider> = (&ffi_provider).into();
+
+        let filter = col("a").gt(lit(3.0));
+        let error = foreign
+            .supports_filters_pushdown(&[&filter])
+            .expect_err("an expired task context provider should surface an error");
+        assert!(
+            error.to_string().contains("went out of scope"),
+            "unexpected error: {error}"
+        );
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_round_trip_ffi_table_provider_scan() -> Result<()> {
         let provider = create_test_table_provider()?;
         let ctx = Arc::new(SessionContext::new());
         let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
-        let task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
+        let codecs = FFI_ExtensionCodecBundle::new_default(&task_ctx_provider, None);
 
-        let mut ffi_provider =
-            FFI_TableProvider::new(provider, true, None, task_ctx_provider, None);
+        let mut ffi_provider = FFI_TableProvider::new(provider, true, None, codecs);
         ffi_provider.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_provider).into();
@@ -643,10 +655,9 @@ mod tests {
         let provider = create_test_table_provider()?;
         let ctx = Arc::new(SessionContext::new());
         let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
-        let task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
+        let codecs = FFI_ExtensionCodecBundle::new_default(&task_ctx_provider, None);
 
-        let mut ffi_provider =
-            FFI_TableProvider::new(provider, true, None, task_ctx_provider, None);
+        let mut ffi_provider = FFI_TableProvider::new(provider, true, None, codecs);
         ffi_provider.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_provider).into();
@@ -691,12 +702,11 @@ mod tests {
 
         let ctx = Arc::new(SessionContext::new());
         let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
-        let task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
+        let codecs = FFI_ExtensionCodecBundle::new_default(&task_ctx_provider, None);
 
         let provider = Arc::new(MemTable::try_new(schema, vec![vec![batch1]])?);
 
-        let mut ffi_provider =
-            FFI_TableProvider::new(provider, true, None, task_ctx_provider, None);
+        let mut ffi_provider = FFI_TableProvider::new(provider, true, None, codecs);
         ffi_provider.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_provider).into();
@@ -725,9 +735,8 @@ mod tests {
         let table_provider = create_test_table_provider()?;
 
         let ctx = Arc::new(SessionContext::new()) as Arc<dyn TaskContextProvider>;
-        let task_ctx_provider = FFI_TaskContextProvider::from(&ctx);
-        let mut ffi_table =
-            FFI_TableProvider::new(table_provider, false, None, task_ctx_provider, None);
+        let codecs = FFI_ExtensionCodecBundle::new_default(&ctx, None);
+        let mut ffi_table = FFI_TableProvider::new(table_provider, false, None, codecs);
 
         // Verify local libraries can be downcast to their original
         let foreign_table: Arc<dyn TableProvider> = (&ffi_table).into();
@@ -778,11 +787,10 @@ mod tests {
 
         let ctx = Arc::new(SessionContext::new());
         let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
-        let task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
+        let codecs = FFI_ExtensionCodecBundle::new_default(&task_ctx_provider, None);
 
         // Wrap in FFI and force the foreign path (not local bypass)
-        let mut ffi_provider =
-            FFI_TableProvider::new(provider, true, None, task_ctx_provider, None);
+        let mut ffi_provider = FFI_TableProvider::new(provider, true, None, codecs);
         ffi_provider.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_provider).into();
@@ -854,7 +862,7 @@ mod tests {
 
         let ctx = Arc::new(SessionContext::new());
         let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
-        let task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
+        let codecs = FFI_ExtensionCodecBundle::new_default(&task_ctx_provider, None);
 
         // Provider without statistics should cross the boundary as None.
         let no_stats_inner = Arc::new(MemTable::try_new(
@@ -865,13 +873,8 @@ mod tests {
             inner: no_stats_inner,
             stats: None,
         });
-        let mut ffi_provider = FFI_TableProvider::new(
-            no_stats_provider,
-            true,
-            None,
-            task_ctx_provider.clone(),
-            None,
-        );
+        let mut ffi_provider =
+            FFI_TableProvider::new(no_stats_provider, true, None, codecs.clone());
         ffi_provider.library_marker_id = crate::mock_foreign_marker_id;
         let foreign: Arc<dyn TableProvider> = (&ffi_provider).into();
         assert!(foreign.statistics().is_none());
@@ -895,8 +898,7 @@ mod tests {
             inner: stats_inner,
             stats: Some(original_stats.clone()),
         });
-        let mut ffi_provider =
-            FFI_TableProvider::new(stats_provider, true, None, task_ctx_provider, None);
+        let mut ffi_provider = FFI_TableProvider::new(stats_provider, true, None, codecs);
         ffi_provider.library_marker_id = crate::mock_foreign_marker_id;
         let foreign: Arc<dyn TableProvider> = (&ffi_provider).into();
         assert_eq!(foreign.statistics().as_ref(), Some(&original_stats));
