@@ -67,20 +67,14 @@ use tokio::macros::support::thread_rng_n;
 /// Wraps a child stream so that every batch it yields is re-stamped with
 /// `schema` instead of the child's own schema.
 ///
-/// This is used by both [`UnionExec`] and [`InterleaveExec`] when a child's
-/// output schema disagrees with the operator's declared output schema --
-/// in practice this only happens for nullability (the declared schema is
-/// nullable wherever *any* input's field is, but casts are only inserted
-/// between inputs when the *type* differs, not when only nullability
-/// does). For [`UnionExec`], [`UnionExec::try_new`] guarantees this: it
-/// calls `calculate_union`, which rejects any input whose field data types
-/// don't match the computed union schema. [`InterleaveExec::try_new`] does
-/// not repeat that check -- its inputs are only ever produced by the
-/// optimizer rewriting an already-validated `UnionExec`, whose children's
-/// types are therefore already known to agree -- but if this wrapper ever
-/// did see a genuine data type mismatch (e.g. from a hand-built
-/// `InterleaveExec`), `RecordBatch::try_new_with_options` below reports it
-/// as an error rather than silently yielding a corrupt batch.
+/// Used by [`CoerceSchemaExec`], which [`UnionExec::try_new`] and
+/// [`InterleaveExec::try_new`] insert above any child whose output schema
+/// disagrees with the operator's declared output schema -- in practice this
+/// only happens for nullability (the declared schema is nullable wherever
+/// *any* input's field is, but casts are only inserted between inputs when
+/// the *type* differs, not when only nullability does). If this wrapper
+/// ever did see a genuine data type mismatch, `RecordBatch::try_new_with_options`
+/// below reports it as an error rather than silently yielding a corrupt batch.
 struct SchemaConformingStream {
     schema: SchemaRef,
     inner: SendableRecordBatchStream,
@@ -138,6 +132,179 @@ fn conform_stream_schema(
         stream
     } else {
         Box::pin(SchemaConformingStream::new(schema, stream))
+    }
+}
+
+/// Coerces a single child's declared output schema to `schema`, re-stamping
+/// every batch it produces to match. [`UnionExec::try_new`] and
+/// [`InterleaveExec::try_new`] insert this above any child whose own schema
+/// disagrees with the computed union schema, so that the coercion is visible
+/// in the plan tree (e.g. in `EXPLAIN`) instead of happening invisibly inside
+/// the union operator's own `execute()`.
+///
+/// A genuine data type mismatch (as opposed to a nullability-only one) is
+/// rejected eagerly, at construction time, by `EquivalenceProperties::
+/// with_new_schema` below -- unlike the old purely-runtime approach, a
+/// hand-built union/interleave with mismatched child types now fails in
+/// `try_new` rather than in `execute()`.
+///
+/// This node is a strict 1:1, order-preserving passthrough of `input` (it
+/// only ever changes a batch's declared schema, never its rows), so every
+/// `ExecutionPlan` method below that isn't about the schema itself just
+/// delegates straight to `input`.
+///
+/// See <https://github.com/apache/datafusion/issues/15394>.
+#[derive(Debug)]
+struct CoerceSchemaExec {
+    input: Arc<dyn ExecutionPlan>,
+    cache: Arc<PlanProperties>,
+    metrics: ExecutionPlanMetricsSet,
+}
+
+impl CoerceSchemaExec {
+    /// Wraps `input` in a [`CoerceSchemaExec`] targeting `schema` if its own
+    /// schema disagrees with `schema`, otherwise returns it unchanged.
+    fn wrap_if_needed(
+        input: Arc<dyn ExecutionPlan>,
+        schema: &SchemaRef,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if &input.schema() == schema {
+            Ok(input)
+        } else {
+            Ok(Arc::new(Self::new(input, schema)?))
+        }
+    }
+
+    fn new(input: Arc<dyn ExecutionPlan>, schema: &SchemaRef) -> Result<Self> {
+        let eq_properties = input
+            .equivalence_properties()
+            .clone()
+            .with_new_schema(Arc::clone(schema))?;
+        let output_partitioning = input.output_partitioning().clone();
+        let cache = PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            emission_type_from_children(std::iter::once(&input)),
+            boundedness_from_children(std::iter::once(&input)),
+        );
+        Ok(Self {
+            input,
+            cache: Arc::new(cache),
+            metrics: ExecutionPlanMetricsSet::new(),
+        })
+    }
+}
+
+impl DisplayAs for CoerceSchemaExec {
+    fn fmt_as(
+        &self,
+        t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "CoerceSchemaExec")
+            }
+            DisplayFormatType::TreeRender => Ok(()),
+        }
+    }
+}
+
+impl ExecutionPlan for CoerceSchemaExec {
+    fn name(&self) -> &'static str {
+        "CoerceSchemaExec"
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.cache
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![true]
+    }
+
+    // A 1:1 passthrough never combines partitions, so re-deriving the cache
+    // (rather than collapsing back to the raw child via `wrap_if_needed`) is
+    // always safe here -- it just keeps this node from vanishing and
+    // changing arity out from under a caller mid-rewrite.
+    fn with_new_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert_or_internal_err!(
+            children.len() == 1,
+            "CoerceSchemaExec expects exactly one child"
+        );
+        Ok(Arc::new(Self::new(children.remove(0), &self.schema())?))
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+        let stream = self.input.execute(partition, context)?;
+        let stream = conform_stream_schema(self.schema(), stream);
+        Ok(Box::pin(ObservedStream::new(
+            stream,
+            baseline_metrics,
+            None,
+        )))
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        true
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::Equal
+    }
+
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        Ok(Arc::clone(&input_stats[0]))
+    }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        _phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        FilterDescription::from_children(parent_filters, &self.children())
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        // No dedicated protobuf variant: this node is fully determined by its
+        // child and the parent union/interleave's declared schema, so it's
+        // serialized as if it weren't there. `UnionExec`/`InterleaveExec::
+        // try_from_proto` both go through `try_new`, which re-inserts the
+        // wrapper via `wrap_if_needed` on decode.
+        Ok(Some(ctx.encode_child(&self.input)?))
     }
 }
 
@@ -208,6 +375,10 @@ impl UnionExec {
                 // The schema of the inputs and the union schema is consistent when:
                 // - They have the same number of fields, and
                 // - Their fields have same types at the same indices.
+                let inputs = inputs
+                    .into_iter()
+                    .map(|input| CoerceSchemaExec::wrap_if_needed(input, &schema))
+                    .collect::<Result<Vec<_>>>()?;
                 let cache = Self::compute_properties(&inputs, schema)?;
                 Ok(Arc::new(UnionExec {
                     inputs,
@@ -372,7 +543,6 @@ impl ExecutionPlan for UnionExec {
             if partition < input.output_partitioning().partition_count() {
                 let stream = input.execute(partition, context)?;
                 debug!("Found a Union partition to execute");
-                let stream = conform_stream_schema(self.schema(), stream);
                 return Ok(Box::pin(ObservedStream::new(
                     stream,
                     baseline_metrics,
@@ -642,7 +812,12 @@ impl InterleaveExec {
             can_interleave(inputs.iter()),
             "Not all InterleaveExec children have a consistent hash or range partitioning"
         );
-        let cache = Self::compute_properties(&inputs)?;
+        let schema = union_schema(&inputs)?;
+        let inputs = inputs
+            .into_iter()
+            .map(|input| CoerceSchemaExec::wrap_if_needed(input, &schema))
+            .collect::<Result<Vec<_>>>()?;
+        let cache = Self::compute_properties(&inputs, schema)?;
         Ok(InterleaveExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -656,8 +831,10 @@ impl InterleaveExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<PlanProperties> {
-        let schema = union_schema(inputs)?;
+    fn compute_properties(
+        inputs: &[Arc<dyn ExecutionPlan>],
+        schema: SchemaRef,
+    ) -> Result<PlanProperties> {
         let eq_properties = EquivalenceProperties::new(schema);
         // Get output partitioning:
         let output_partitioning = inputs[0].output_partitioning().clone();
@@ -748,7 +925,7 @@ impl ExecutionPlan for InterleaveExec {
         for input in self.inputs.iter() {
             if partition < input.output_partitioning().partition_count() {
                 let stream = input.execute(partition, Arc::clone(&context))?;
-                input_stream_vec.push(conform_stream_schema(self.schema(), stream));
+                input_stream_vec.push(stream);
             } else {
                 // Do not find a partition to execute
                 break;
@@ -1259,6 +1436,89 @@ mod tests {
             StatisticsContext::new().compute(union.as_ref(), &StatisticsArgs::new())?;
 
         assert_eq!(stats.as_ref(), &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_union_partition_statistics_with_mismatched_nullability() -> Result<()> {
+        // Regression test for the `CoerceSchemaExec` wrapper `UnionExec::try_new`
+        // inserts above the non-nullable leg here: before it forwarded
+        // `child_stats_requests`/`statistics_from_inputs` to its child, it
+        // reported `Statistics::new_unknown`, poisoning the merge into all-`Absent`
+        // even though both legs have exact statistics.
+        let (_, left, right, expected) = stats_merge_inputs();
+
+        let non_nullable_schema =
+            Schema::new(vec![Field::new("a", DataType::UInt32, false)]);
+        let nullable_schema = Schema::new(vec![Field::new("a", DataType::UInt32, true)]);
+
+        let left: Arc<dyn ExecutionPlan> =
+            Arc::new(StatisticsExec::new(left, non_nullable_schema));
+        let right: Arc<dyn ExecutionPlan> =
+            Arc::new(StatisticsExec::new(right, nullable_schema));
+
+        let union = UnionExec::try_new(vec![left, right])?;
+        let stats =
+            StatisticsContext::new().compute(union.as_ref(), &StatisticsArgs::new())?;
+
+        assert_eq!(stats.as_ref(), &expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_coerce_schema_exec_execution_plan_methods() -> Result<()> {
+        // Most sqllogictest coverage only observes `CoerceSchemaExec` through
+        // `EXPLAIN`; exercise its `ExecutionPlan` methods directly here.
+        let schema_not_null =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch_not_null = RecordBatch::try_new(
+            Arc::clone(&schema_not_null),
+            vec![Arc::new(arrow::array::Int32Array::from(vec![1, 2]))],
+        )?;
+        let input: Arc<dyn ExecutionPlan> = TestMemoryExec::try_new_exec(
+            &[vec![batch_not_null]],
+            Arc::clone(&schema_not_null),
+            None,
+        )?;
+
+        // Matching schema: `wrap_if_needed` is a no-op.
+        let unwrapped =
+            CoerceSchemaExec::wrap_if_needed(Arc::clone(&input), &schema_not_null)?;
+        assert!(Arc::ptr_eq(&unwrapped, &input));
+
+        // Mismatched nullability: the input gets wrapped.
+        let nullable_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let wrapped =
+            CoerceSchemaExec::wrap_if_needed(Arc::clone(&input), &nullable_schema)?;
+        assert_eq!(wrapped.name(), "CoerceSchemaExec");
+        assert_eq!(&wrapped.schema(), &nullable_schema);
+        assert_eq!(wrapped.maintains_input_order(), vec![true]);
+        assert_eq!(wrapped.benefits_from_input_partitioning(), vec![false]);
+        assert!(wrapped.supports_limit_pushdown());
+        assert!(matches!(
+            wrapped.cardinality_effect(),
+            CardinalityEffect::Equal
+        ));
+        assert!(wrapped.metrics().is_some());
+
+        wrapped.gather_filters_for_pushdown(
+            FilterPushdownPhase::Pre,
+            vec![],
+            &ConfigOptions::new(),
+        )?;
+
+        // Re-deriving via `with_new_children` keeps targeting the same schema.
+        let new_child: Arc<dyn ExecutionPlan> =
+            TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema_not_null), None)?;
+        let rewrapped = Arc::clone(&wrapped).with_new_children(vec![new_child])?;
+        assert_eq!(&rewrapped.schema(), &nullable_schema);
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let batches = collect(wrapped, task_ctx).await?;
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].schema(), nullable_schema);
+
         Ok(())
     }
 

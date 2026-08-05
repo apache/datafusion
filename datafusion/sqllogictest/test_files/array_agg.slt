@@ -534,16 +534,19 @@ physical_plan
 03)----RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
 04)------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))], ordering_mode=Sorted
 05)--------UnionExec
-06)----------ProjectionExec: expr=[1 as id, 2 as foo]
-07)------------PlaceholderRowExec
-08)----------ProjectionExec: expr=[1 as id, NULL as foo]
-09)------------PlaceholderRowExec
-10)----------ProjectionExec: expr=[1 as id, NULL as foo]
-11)------------PlaceholderRowExec
-12)----------ProjectionExec: expr=[1 as id, 3 as foo]
-13)------------PlaceholderRowExec
-14)----------ProjectionExec: expr=[1 as id, 2 as foo]
-15)------------PlaceholderRowExec
+06)----------CoerceSchemaExec
+07)------------ProjectionExec: expr=[1 as id, 2 as foo]
+08)--------------PlaceholderRowExec
+09)----------ProjectionExec: expr=[1 as id, NULL as foo]
+10)------------PlaceholderRowExec
+11)----------ProjectionExec: expr=[1 as id, NULL as foo]
+12)------------PlaceholderRowExec
+13)----------CoerceSchemaExec
+14)------------ProjectionExec: expr=[1 as id, 3 as foo]
+15)--------------PlaceholderRowExec
+16)----------CoerceSchemaExec
+17)------------ProjectionExec: expr=[1 as id, 2 as foo]
+18)--------------PlaceholderRowExec
 
 #######
 # Unsupported syntax

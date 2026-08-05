@@ -7075,7 +7075,8 @@ async fn test_copy_to_preserves_order() -> Result<()> {
       DataSinkExec: sink=CsvSink(file_groups=[])
         SortExec: expr=[column1@0 DESC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[1]
-      DataSourceExec: partitions=1, partition_sizes=[1]
+      CoerceSchemaExec
+        DataSourceExec: partitions=1, partition_sizes=[1]
     "
     );
     Ok(())
