@@ -282,11 +282,107 @@ impl DefaultPhysicalExprAdapterRewriter {
             return Ok(Transformed::yes(transformed));
         }
 
+        if let Some(transformed) = self.try_narrow_struct_cast(&expr)? {
+            return Ok(Transformed::yes(transformed));
+        }
+
         if let Some(column) = expr.downcast_ref::<Column>() {
             return self.rewrite_column(Arc::clone(&expr), column);
         }
 
         Ok(Transformed::no(expr))
+    }
+
+    /// Rewrite `get_field(cast(s AS Struct<..>), 'f')` into
+    /// `cast(get_field(s, 'f') AS <type of f>)`.
+    ///
+    /// Expressions are rewritten bottom-up, so by the time we reach a
+    /// `get_field` node its struct argument has already been wrapped in a cast
+    /// by [`Self::rewrite_column`] whenever the logical and physical struct
+    /// types differ. Casting the whole struct just to read one field is
+    /// wasteful, and — more importantly — it hides the underlying column from
+    /// consumers that pattern match on `get_field(column, 'f')`. The Parquet
+    /// scan is one such consumer: it decides at planning time (against the
+    /// table schema) that a struct-field predicate can be evaluated as a row
+    /// filter, then fails to build that row filter at runtime because the
+    /// adapted expression no longer has a bare column under the `get_field`,
+    /// silently dropping the predicate and returning unfiltered rows.
+    ///
+    /// See <https://github.com/apache/datafusion/issues/24109>.
+    ///
+    /// Only struct casts are narrowed. `get_field` on a Map column performs a
+    /// runtime key lookup rather than a schema-level field access, so the map
+    /// value must keep its cast.
+    fn try_narrow_struct_cast(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        let Some(get_field_expr) =
+            ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref())
+        else {
+            return Ok(None);
+        };
+        let [source_expr, field_name_expr] = get_field_expr.args() else {
+            return Ok(None);
+        };
+        let Some(cast) = source_expr.downcast_ref::<CastExpr>() else {
+            return Ok(None);
+        };
+        let Some(field_name) = field_name_expr
+            .downcast_ref::<Literal>()
+            .and_then(|lit| lit.value().try_as_str().flatten())
+        else {
+            return Ok(None);
+        };
+        let DataType::Struct(logical_struct_fields) = cast.target_field().data_type()
+        else {
+            return Ok(None);
+        };
+        let Some(logical_struct_field) = logical_struct_fields
+            .iter()
+            .find(|f| f.name() == field_name)
+        else {
+            return Ok(None);
+        };
+
+        let inner = cast.expr();
+        let DataType::Struct(physical_struct_fields) =
+            inner.data_type(&self.physical_file_schema)?
+        else {
+            return Ok(None);
+        };
+        let Some(physical_struct_field) = physical_struct_fields
+            .iter()
+            .find(|f| f.name() == field_name)
+        else {
+            // The file does not have this field at all, so reading it yields
+            // null. Note that the cast would have produced the same value:
+            // struct casts fill missing target fields with nulls.
+            let null_value =
+                ScalarValue::Null.cast_to(logical_struct_field.data_type())?;
+            return Ok(Some(Arc::new(Literal::new_with_metadata(
+                null_value,
+                Some(FieldMetadata::from(logical_struct_field.as_ref())),
+            ))));
+        };
+
+        // Rebuild `get_field` over the uncast struct so its return field is
+        // recomputed from the physical field type.
+        let extracted = Arc::new(ScalarFunctionExpr::try_new(
+            Arc::new(get_field_expr.fun().clone()),
+            vec![Arc::clone(inner), Arc::clone(field_name_expr)],
+            &self.physical_file_schema,
+            Arc::new(get_field_expr.config_options().clone()),
+        )?) as Arc<dyn PhysicalExpr>;
+
+        if physical_struct_field == logical_struct_field {
+            return Ok(Some(extracted));
+        }
+        Ok(Some(Arc::new(CastExpr::new_with_target_field(
+            extracted,
+            Arc::clone(logical_struct_field),
+            Some(cast.cast_options().clone()),
+        ))))
     }
 
     /// Attempt to rewrite struct field access expressions to return null if the field does not exist in the physical schema.
@@ -1424,6 +1520,195 @@ mod tests {
         // The actual test for the get_field expression would require creating a proper ScalarFunctionExpr
         // with ScalarUDF, which is complex to set up in a unit test. The integration tests in
         // datafusion/core/tests/parquet/schema_adapter.rs provide better coverage for this functionality.
+    }
+
+    /// Build `get_field(column, 'field')` against `schema`.
+    fn get_field_expr(
+        schema: &Schema,
+        column: &str,
+        field: &str,
+    ) -> Arc<dyn PhysicalExpr> {
+        let index = schema.index_of(column).unwrap();
+        Arc::new(
+            ScalarFunctionExpr::try_new(
+                Arc::new(datafusion_expr::ScalarUDF::from(GetFieldFunc::new())),
+                vec![
+                    Arc::new(Column::new(column, index)),
+                    Arc::new(Literal::new(ScalarValue::from(field))),
+                ],
+                schema,
+                Arc::new(datafusion_common::config::ConfigOptions::default()),
+            )
+            .unwrap(),
+        )
+    }
+
+    fn struct_schemas(
+        physical_fields: Vec<Field>,
+        logical_fields: Vec<Field>,
+    ) -> (SchemaRef, SchemaRef) {
+        let physical = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(physical_fields.into()),
+            true,
+        )]));
+        let logical = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(logical_fields.into()),
+            true,
+        )]));
+        (logical, physical)
+    }
+
+    /// `s['x']` where the file stores `x` as `Int32` and the table declares
+    /// `Int64` must cast the extracted field, not the whole struct, so that
+    /// the column stays visible under the `get_field`.
+    ///
+    /// See <https://github.com/apache/datafusion/issues/24109>.
+    #[test]
+    fn test_narrow_struct_cast_to_field_access() {
+        let (logical_schema, physical_schema) = struct_schemas(
+            vec![Field::new("x", DataType::Int32, true)],
+            vec![Field::new("x", DataType::Int64, true)],
+        );
+
+        let adapter = DefaultPhysicalExprAdapterFactory
+            .create(Arc::clone(&logical_schema), physical_schema)
+            .unwrap();
+        let rewritten = adapter
+            .rewrite(get_field_expr(&logical_schema, "s", "x"))
+            .unwrap();
+
+        let cast = assert_cast_expr(&rewritten);
+        assert_eq!(cast.cast_type(), &DataType::Int64);
+        let get_field = cast
+            .expr()
+            .downcast_ref::<ScalarFunctionExpr>()
+            .expect("Expected get_field under the cast");
+        assert_eq!(get_field.return_type(), &DataType::Int32);
+        assert!(
+            get_field.args()[0].downcast_ref::<Column>().is_some(),
+            "the struct column must not be hidden behind a cast, got: {rewritten}"
+        );
+    }
+
+    /// A struct field that only differs in a nested leaf type still ends up
+    /// with a single cast on the extracted field.
+    #[test]
+    fn test_narrow_struct_cast_nested_field_access() {
+        let (logical_schema, physical_schema) = struct_schemas(
+            vec![Field::new(
+                "inner",
+                DataType::Struct(vec![Field::new("x", DataType::Utf8, true)].into()),
+                true,
+            )],
+            vec![Field::new(
+                "inner",
+                DataType::Struct(vec![Field::new("x", DataType::Utf8View, true)].into()),
+                true,
+            )],
+        );
+
+        let adapter = DefaultPhysicalExprAdapterFactory
+            .create(Arc::clone(&logical_schema), physical_schema)
+            .unwrap();
+        let outer = get_field_expr(&logical_schema, "s", "inner");
+        let expr = Arc::new(
+            ScalarFunctionExpr::try_new(
+                Arc::new(datafusion_expr::ScalarUDF::from(GetFieldFunc::new())),
+                vec![outer, Arc::new(Literal::new(ScalarValue::from("x")))],
+                &logical_schema,
+                Arc::new(datafusion_common::config::ConfigOptions::default()),
+            )
+            .unwrap(),
+        ) as Arc<dyn PhysicalExpr>;
+
+        let rewritten = adapter.rewrite(expr).unwrap();
+
+        let cast = assert_cast_expr(&rewritten);
+        assert_eq!(cast.cast_type(), &DataType::Utf8View);
+        let outer_get_field = cast
+            .expr()
+            .downcast_ref::<ScalarFunctionExpr>()
+            .expect("Expected get_field under the cast");
+        let inner_get_field = outer_get_field.args()[0]
+            .downcast_ref::<ScalarFunctionExpr>()
+            .expect("Expected a nested get_field");
+        assert!(
+            inner_get_field.args()[0].downcast_ref::<Column>().is_some(),
+            "the struct column must not be hidden behind a cast, got: {rewritten}"
+        );
+    }
+
+    /// Accessing a field the file does not have yields a typed null literal.
+    #[test]
+    fn test_narrow_struct_cast_missing_field() {
+        let (logical_schema, physical_schema) = struct_schemas(
+            vec![Field::new("x", DataType::Int32, true)],
+            vec![
+                Field::new("x", DataType::Int32, true),
+                Field::new("y", DataType::Utf8, true),
+            ],
+        );
+
+        let adapter = DefaultPhysicalExprAdapterFactory
+            .create(Arc::clone(&logical_schema), physical_schema)
+            .unwrap();
+        let rewritten = adapter
+            .rewrite(get_field_expr(&logical_schema, "s", "y"))
+            .unwrap();
+
+        let literal = rewritten
+            .downcast_ref::<Literal>()
+            .expect("Expected a null literal");
+        assert_eq!(*literal.value(), ScalarValue::Utf8(None));
+    }
+
+    /// `get_field` on a Map column is a runtime key lookup, not a schema-level
+    /// field access, so the map value must keep its cast.
+    #[test]
+    fn test_map_field_access_keeps_cast() {
+        let map_type = |value_type: DataType| {
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(
+                        vec![
+                            Field::new("keys", DataType::Utf8, false),
+                            Field::new("values", value_type, true),
+                        ]
+                        .into(),
+                    ),
+                    false,
+                )),
+                false,
+            )
+        };
+        let physical_schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            map_type(DataType::Int32),
+            true,
+        )]));
+        let logical_schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            map_type(DataType::Int64),
+            true,
+        )]));
+
+        let adapter = DefaultPhysicalExprAdapterFactory
+            .create(Arc::clone(&logical_schema), physical_schema)
+            .unwrap();
+        let rewritten = adapter
+            .rewrite(get_field_expr(&logical_schema, "s", "k"))
+            .unwrap();
+
+        let get_field = rewritten
+            .downcast_ref::<ScalarFunctionExpr>()
+            .expect("Expected the get_field to be preserved");
+        assert!(
+            get_field.args()[0].downcast_ref::<CastExpr>().is_some(),
+            "map columns must keep the whole-column cast, got: {rewritten}"
+        );
     }
 
     // ============================================================================

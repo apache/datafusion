@@ -891,6 +891,53 @@ statement ok
 DROP TABLE t_struct_filter;
 
 ##########
+# Regression test for https://github.com/apache/datafusion/issues/24109
+#
+# When the declared table schema differs from the physical file schema, the
+# expression adapter inserts a cast. Casting the whole struct column hid the
+# column from the row filter builder: the scan reported `s['x'] = 200` as
+# fully handled (so `FilterExec` was removed from the plan) but then could not
+# build the row filter, silently dropping the predicate and returning all rows.
+##########
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+COPY (
+  SELECT
+    column1 as id,
+    named_struct('x', arrow_cast(column2, 'Int32')) as s
+  FROM VALUES (1, 100), (2, 200), (3, 300)
+) TO 'test_files/scratch/parquet_filter_pushdown/struct_schema_cast.parquet'
+STORED AS PARQUET;
+
+# `x` is stored as Int32 in the file but declared as BIGINT here, which forces
+# the scan to adapt the struct column.
+statement ok
+CREATE EXTERNAL TABLE t_struct_schema_cast (id BIGINT, s STRUCT<x BIGINT>)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/struct_schema_cast.parquet';
+
+query II
+SELECT id, s['x'] FROM t_struct_schema_cast WHERE s['x'] = 200;
+----
+2 200
+
+# Conjunction of a struct-field filter and a primitive filter.
+query II
+SELECT id, s['x'] FROM t_struct_schema_cast WHERE s['x'] > 100 AND id > 2;
+----
+3 300
+
+# Clean up
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+statement ok
+DROP TABLE t_struct_schema_cast;
+
+##########
 # Regression test for https://github.com/apache/datafusion/issues/20937
 #
 # Dynamic filter pushdown fails when joining VALUES against
