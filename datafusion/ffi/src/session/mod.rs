@@ -431,12 +431,31 @@ impl Drop for FFI_SessionRef {
 }
 
 impl FFI_SessionRef {
-    /// Creates a new [`FFI_SessionRef`].
+    /// Creates a new [`FFI_SessionRef`] with a default physical extension codec.
+    ///
+    /// The synthesized [`DefaultPhysicalExtensionCodec`] supports built-in physical
+    /// nodes only. A query planner obtained through this session reference therefore
+    /// cannot encode or decode custom physical extension nodes. Use
+    /// [`Self::new_with_ffi_codecs`] with matching logical and physical codecs when
+    /// custom physical nodes must cross the FFI boundary.
+    ///
+    /// The physical codec wrapper requires a
+    /// [`FFI_TaskContextProvider`](crate::execution::FFI_TaskContextProvider), but this
+    /// constructor has only a session reference and a logical codec. It therefore
+    /// reuses the logical codec's provider. The provider may be owned by another
+    /// library; this is safe, but it must remain live and return the task context
+    /// intended for codec callbacks. The default physical codec does not successfully
+    /// decode extension nodes, so callers that need such callbacks must instead use
+    /// [`Self::new_with_ffi_codecs`] with an explicitly configured physical codec and
+    /// task context provider.
     pub fn new(
         session: &dyn Session,
         runtime: Option<Handle>,
         logical_codec: FFI_LogicalExtensionCodec,
     ) -> Self {
+        // `Session` provides a TaskContext but not the reference-counted
+        // TaskContextProvider needed by the FFI codec. Reuse the provider associated
+        // with the logical codec under the assumptions documented above.
         let physical_codec = FFI_PhysicalExtensionCodec::new(
             Arc::new(DefaultPhysicalExtensionCodec {}),
             runtime.clone(),
@@ -446,6 +465,11 @@ impl FFI_SessionRef {
     }
 
     /// Creates a new [`FFI_SessionRef`] using existing FFI codecs.
+    ///
+    /// The codecs must form a matching pair that can round-trip every logical and
+    /// physical extension node exposed through the session. Their task context
+    /// providers must remain live and return contexts appropriate for their decode
+    /// callbacks.
     pub fn new_with_ffi_codecs(
         session: &dyn Session,
         runtime: Option<Handle>,
