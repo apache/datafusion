@@ -157,7 +157,7 @@ query error DataFusion error: Error during planning: Substring without for/from 
 select 1 group by substr('');
 
 # Error in filter should be reported
-query error Divide by zero
+query error DataFusion error: Arrow error: Divide by zero error
 SELECT c2 from aggregate_test_100 where CASE WHEN true THEN 1 / 0 ELSE 0 END = 1;
 
 

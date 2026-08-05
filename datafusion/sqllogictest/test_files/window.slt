@@ -6600,9 +6600,9 @@ FROM (
 )
 ORDER BY a;
 ----
-1.5 1.5 2.5
-2.5 1.5 3.5
-3.5 2.5 3.5
+1.50 1.50 2.50
+2.50 1.50 3.50
+3.50 2.50 3.50
 
 ############################################################################
 # ROWS frame regression guard: huge offsets already saturate via
@@ -6808,8 +6808,8 @@ FROM (VALUES(1,CAST(1.5 AS DECIMAL(10,2))),
             (4,CAST(NULL AS DECIMAL(10,2)))) t(i,v)
 ORDER BY i;
 ----
-1 2
-2 2.5
+1 2.000000
+2 2.500000
 3 NULL
 4 NULL
 
