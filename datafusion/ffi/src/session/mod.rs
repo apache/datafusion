@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow_schema::SchemaRef;
 use arrow_schema::ffi::FFI_ArrowSchema;
@@ -487,8 +487,8 @@ pub struct ForeignSession {
     table_options: TableOptions,
     runtime_env: Arc<RuntimeEnv>,
     props: ExecutionProps,
-    query_planner: Arc<dyn QueryPlanner + Send + Sync>,
-    physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
+    query_planner: OnceLock<Arc<dyn QueryPlanner + Send + Sync>>,
+    physical_optimizers: OnceLock<Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>>,
 }
 
 unsafe impl Send for ForeignSession {}
@@ -549,12 +549,6 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
                     )
                 })
                 .collect();
-            let query_planner = (&(session.query_planner)(session)).into();
-            let physical_optimizers = (session.physical_optimizers)(session)
-                .into_iter()
-                .map(|rule| (&rule).into())
-                .collect();
-
             Ok(Self {
                 session: session.clone(),
                 config,
@@ -567,8 +561,8 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
                 extension_types: Arc::new(MemoryExtensionTypeRegistry::default()),
                 runtime_env: Default::default(),
                 props: Default::default(),
-                query_planner,
-                physical_optimizers,
+                query_planner: OnceLock::new(),
+                physical_optimizers: OnceLock::new(),
             })
         }
     }
@@ -668,7 +662,10 @@ impl Session for ForeignSession {
     }
 
     fn query_planner(&self) -> Arc<dyn QueryPlanner + Send + Sync> {
-        Arc::clone(&self.query_planner)
+        Arc::clone(self.query_planner.get_or_init(|| unsafe {
+            let planner = (self.session.query_planner)(&self.session);
+            (&planner).into()
+        }))
     }
 
     fn optimize(&self, plan: &LogicalPlan) -> datafusion_common::Result<LogicalPlan> {
@@ -730,7 +727,12 @@ impl Session for ForeignSession {
     }
 
     fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
-        &self.physical_optimizers
+        self.physical_optimizers.get_or_init(|| unsafe {
+            (self.session.physical_optimizers)(&self.session)
+                .into_iter()
+                .map(|rule| (&rule).into())
+                .collect()
+        })
     }
 
     fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
@@ -792,6 +794,7 @@ impl Session for ForeignSession {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use arrow_schema::{DataType, Field, Schema};
     use datafusion::catalog::MemoryCatalogProvider;
@@ -802,6 +805,59 @@ mod tests {
     use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
 
     use super::*;
+
+    static QUERY_PLANNER_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static PHYSICAL_OPTIMIZER_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C" fn counting_query_planner(
+        session: &FFI_SessionRef,
+    ) -> FFI_QueryPlanner {
+        QUERY_PLANNER_CALLS.fetch_add(1, Ordering::Relaxed);
+        unsafe { query_planner_fn_wrapper(session) }
+    }
+
+    unsafe extern "C" fn counting_physical_optimizers(
+        session: &FFI_SessionRef,
+    ) -> SVec<FFI_PhysicalOptimizerRule> {
+        PHYSICAL_OPTIMIZER_CALLS.fetch_add(1, Ordering::Relaxed);
+        unsafe { physical_optimizers_fn_wrapper(session) }
+    }
+
+    #[test]
+    fn test_foreign_session_lazily_loads_planning_state() -> Result<(), DataFusionError> {
+        QUERY_PLANNER_CALLS.store(0, Ordering::Relaxed);
+        PHYSICAL_OPTIMIZER_CALLS.store(0, Ordering::Relaxed);
+
+        let (ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+        let logical_codec = FFI_LogicalExtensionCodec::new(
+            Arc::new(DefaultLogicalExtensionCodec {}),
+            None,
+            task_ctx_provider,
+        );
+        let state = ctx.state();
+        let mut local_session = FFI_SessionRef::new(&state, None, logical_codec);
+        local_session.query_planner = counting_query_planner;
+        local_session.physical_optimizers = counting_physical_optimizers;
+
+        let mut foreign_session = ForeignSession::try_from(&local_session)?;
+        assert_eq!(QUERY_PLANNER_CALLS.load(Ordering::Relaxed), 0);
+        assert_eq!(PHYSICAL_OPTIMIZER_CALLS.load(Ordering::Relaxed), 0);
+
+        // `FFI_SessionRef::clone` restores the standard function pointers, so
+        // instrument the clone retained by `ForeignSession` as well.
+        foreign_session.session.query_planner = counting_query_planner;
+        foreign_session.session.physical_optimizers = counting_physical_optimizers;
+
+        foreign_session.query_planner();
+        foreign_session.query_planner();
+        assert_eq!(QUERY_PLANNER_CALLS.load(Ordering::Relaxed), 1);
+
+        foreign_session.physical_optimizers();
+        foreign_session.physical_optimizers();
+        assert_eq!(PHYSICAL_OPTIMIZER_CALLS.load(Ordering::Relaxed), 1);
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_ffi_session() -> Result<(), DataFusionError> {
