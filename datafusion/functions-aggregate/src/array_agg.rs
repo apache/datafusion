@@ -827,6 +827,8 @@ struct DistinctState {
     /// One owned encoded row per live distinct value, indexed by group index.
     /// Compacted via swap-remove on eviction so there are never dead slots.
     group_rows: Vec<OwnedRow>,
+    /// Total encoded bytes stored in `group_rows`.
+    group_rows_memory_size: usize,
     /// Live refcount per group index. `counts[i]` is how many times the value
     /// at `group_rows[i]` is currently present in the window frame.
     counts: Vec<u64>,
@@ -906,6 +908,7 @@ impl DistinctArrayAggAccumulator {
             self.state = Some(DistinctState {
                 converter,
                 group_rows: Vec::new(),
+                group_rows_memory_size: 0,
                 counts: Vec::new(),
                 row_hashes: Vec::new(),
                 rows_buffer,
@@ -956,6 +959,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
         let DistinctState {
             converter,
             group_rows,
+            group_rows_memory_size,
             counts,
             row_hashes,
             rows_buffer,
@@ -985,7 +989,9 @@ impl Accumulator for DistinctArrayAggAccumulator {
                 None => {
                     // New distinct value: own the encoded row, record it.
                     let new_group_idx = group_rows.len();
-                    group_rows.push(row.owned());
+                    let row = row.owned();
+                    *group_rows_memory_size += row.row().data().len();
+                    group_rows.push(row);
                     counts.push(1);
                     row_hashes.push(hash);
                     self.map.insert_accounted(
@@ -1100,6 +1106,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
         let DistinctState {
             converter,
             group_rows,
+            group_rows_memory_size,
             counts,
             row_hashes,
             rows_buffer,
@@ -1135,6 +1142,8 @@ impl Accumulator for DistinctArrayAggAccumulator {
                     counts[dead_idx] -= 1;
                     if counts[dead_idx] == 0 {
                         occupied.remove();
+                        *group_rows_memory_size -=
+                            group_rows[dead_idx].row().data().len();
                         // Compact via swap-remove: move the last slot into the
                         // dead slot so group_rows / counts / row_hashes stay
                         // dense with no dead entries.
@@ -1174,10 +1183,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
                 .state
                 .as_ref()
                 .map(|s| {
-                    s.group_rows
-                        .iter()
-                        .map(|r| r.row().data().len())
-                        .sum::<usize>()
+                    s.group_rows_memory_size
                         + s.group_rows.capacity() * size_of::<OwnedRow>()
                         + s.counts.capacity() * size_of::<u64>()
                         + s.row_hashes.capacity() * size_of::<u64>()
@@ -1204,6 +1210,9 @@ pub(crate) struct OrderSensitiveArrayAggAccumulator {
     /// different partitions. For detailed information how merging is done, see
     /// [`merge_ordered_arrays`].
     ordering_values: Vec<Vec<ScalarValue>>,
+    /// Heap memory owned by entries in `values` and `ordering_values`, including
+    /// each inner ordering vector's allocation.
+    state_memory_size: usize,
     /// Stores datatypes of expressions inside values and ordering requirement
     /// expressions.
     datatypes: Vec<DataType>,
@@ -1233,12 +1242,21 @@ impl OrderSensitiveArrayAggAccumulator {
         Ok(Self {
             values: vec![],
             ordering_values: vec![],
+            state_memory_size: 0,
             datatypes,
             ordering_req,
             is_input_pre_ordered,
             reverse,
             ignore_nulls,
         })
+    }
+
+    fn push(&mut self, value: ScalarValue, ordering_values: Vec<ScalarValue>) {
+        self.state_memory_size += value.size() - size_of_val(&value)
+            + ScalarValue::size_of_vec(&ordering_values)
+            - size_of_val(&ordering_values);
+        self.values.push(value);
+        self.ordering_values.push(ordering_values);
     }
 
     fn sort(&mut self) {
@@ -1313,14 +1331,12 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         if nulls.is_none_or(|nulls| nulls.null_count() < val.len()) {
             for i in 0..val.len() {
                 if nulls.is_none_or(|nulls| nulls.is_valid(i)) {
-                    self.values
-                        .push(ScalarValue::try_from_array(val, i)?.compacted());
-                    self.ordering_values.push(
-                        get_row_at_idx(ord, i)?
-                            .into_iter()
-                            .map(|v| v.compacted())
-                            .collect(),
-                    )
+                    let value = ScalarValue::try_from_array(val, i)?.compacted();
+                    let ordering_values = get_row_at_idx(ord, i)?
+                        .into_iter()
+                        .map(|v| v.compacted())
+                        .collect();
+                    self.push(value, ordering_values);
                 }
             }
         }
@@ -1354,6 +1370,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         if !self.is_input_pre_ordered {
             self.sort();
         }
+        let mut state_memory_size = take(&mut self.state_memory_size);
         partition_values.push(take(&mut self.values).into());
         partition_ordering_values.push(take(&mut self.ordering_values).into());
 
@@ -1361,6 +1378,10 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         let array_agg_res = ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
         for maybe_v in array_agg_res.into_iter() {
             if let Some(v) = maybe_v {
+                state_memory_size += v
+                    .iter()
+                    .map(|value| value.size() - size_of_val(value))
+                    .sum::<usize>();
                 partition_values.push(v.into());
             } else {
                 partition_values.push(vec![].into());
@@ -1379,6 +1400,9 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
                             ordering_columns_per_row.push(sv);
                         }
 
+                        state_memory_size +=
+                            ScalarValue::size_of_vec(&ordering_columns_per_row)
+                                - size_of_val(&ordering_columns_per_row);
                         Ok(ordering_columns_per_row)
                     } else {
                         exec_err!(
@@ -1402,6 +1426,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
             &mut partition_ordering_values,
             &sort_options,
         )?;
+        self.state_memory_size = state_memory_size;
 
         Ok(())
     }
@@ -1444,14 +1469,12 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
     }
 
     fn size(&self) -> usize {
-        let mut total = size_of_val(self) + ScalarValue::size_of_vec(&self.values)
-            - size_of_val(&self.values);
+        let mut total = size_of_val(self)
+            + size_of::<ScalarValue>() * self.values.capacity()
+            + self.state_memory_size;
 
         // Add size of the `self.ordering_values`
         total += size_of::<Vec<ScalarValue>>() * self.ordering_values.capacity();
-        for row in &self.ordering_values {
-            total += ScalarValue::size_of_vec(row) - size_of_val(row);
-        }
 
         // Add size of the `self.datatypes`
         total += size_of::<DataType>() * self.datatypes.capacity();
@@ -1787,7 +1810,7 @@ mod tests {
         acc2.update_batch(&[string_list_data([vec!["e", "f", "g"]])])?;
         acc1 = merge(acc1, acc2)?;
 
-        assert_eq!(acc1.size(), 2274);
+        assert_eq!(acc1.size(), 2282);
 
         Ok(())
     }
@@ -1805,7 +1828,103 @@ mod tests {
         ])])?;
 
         // without compaction, the size is 17112
-        assert_eq!(acc.size(), 2224);
+        assert_eq!(acc.size(), 2232);
+
+        Ok(())
+    }
+
+    fn assert_distinct_size_matches_state(acc: &DistinctArrayAggAccumulator) {
+        let state = acc.state.as_ref().expect("state is initialized");
+        let expected = state
+            .group_rows
+            .iter()
+            .map(|row| row.row().data().len())
+            .sum::<usize>();
+        assert_eq!(state.group_rows_memory_size, expected);
+    }
+
+    #[test]
+    fn distinct_array_agg_tracks_memory_incrementally() -> Result<()> {
+        let mut acc = DistinctArrayAggAccumulator::try_new(&DataType::Utf8, None, false)?;
+
+        acc.update_batch(&[data(["A", "A", "B"])])?;
+        assert_distinct_size_matches_state(&acc);
+
+        acc.update_batch(&[data(["C"])])?;
+        assert_distinct_size_matches_state(&acc);
+
+        // The first retract only changes A's refcount; the second removes its row.
+        acc.retract_batch(&[data(["A"])])?;
+        assert_distinct_size_matches_state(&acc);
+        acc.retract_batch(&[data(["A"])])?;
+        assert_distinct_size_matches_state(&acc);
+
+        let mut partial =
+            DistinctArrayAggAccumulator::try_new(&DataType::Utf8, None, false)?;
+        partial.update_batch(&[data(["D", "E"])])?;
+        let state = partial
+            .state()?
+            .into_iter()
+            .map(|value| value.to_array_of_size(1))
+            .collect::<Result<Vec<_>>>()?;
+        acc.merge_batch(&state)?;
+        assert_distinct_size_matches_state(&acc);
+
+        Ok(())
+    }
+
+    fn ordered_string_accumulator() -> Result<OrderSensitiveArrayAggAccumulator> {
+        let schema = Schema::new(vec![Field::new("ord", DataType::Utf8, false)]);
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::new(Column::new_with_schema("ord", &schema)?),
+            SortOptions::default(),
+        )])
+        .expect("ordering is non-empty");
+
+        OrderSensitiveArrayAggAccumulator::try_new(
+            &DataType::Utf8,
+            &[DataType::Utf8],
+            ordering,
+            false,
+            false,
+            false,
+        )
+    }
+
+    fn assert_ordered_size_matches_state(acc: &OrderSensitiveArrayAggAccumulator) {
+        let values_size = acc
+            .values
+            .iter()
+            .map(|value| value.size() - size_of_val(value))
+            .sum::<usize>();
+        let ordering_values_size = acc
+            .ordering_values
+            .iter()
+            .map(|row| ScalarValue::size_of_vec(row) - size_of_val(row))
+            .sum::<usize>();
+        assert_eq!(acc.state_memory_size, values_size + ordering_values_size);
+    }
+
+    #[test]
+    fn ordered_array_agg_tracks_memory_incrementally() -> Result<()> {
+        let mut acc = ordered_string_accumulator()?;
+        acc.update_batch(&[data(["B", "A"]), data(["2", "1"])])?;
+        assert_ordered_size_matches_state(&acc);
+
+        acc.update_batch(&[data(["D", "C"]), data(["4", "3"])])?;
+        assert_ordered_size_matches_state(&acc);
+
+        let mut partial = ordered_string_accumulator()?;
+        partial.update_batch(&[data(["F", "E"]), data(["6", "5"])])?;
+        let state = partial
+            .state()?
+            .into_iter()
+            .map(|value| value.to_array_of_size(1))
+            .collect::<Result<Vec<_>>>()?;
+        assert_ordered_size_matches_state(&partial);
+
+        acc.merge_batch(&state)?;
+        assert_ordered_size_matches_state(&acc);
 
         Ok(())
     }
