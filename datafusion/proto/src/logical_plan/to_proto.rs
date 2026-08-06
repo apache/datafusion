@@ -19,15 +19,14 @@
 //! DataFusion logical plans to be serialized and transmitted between
 //! processes.
 
-use std::collections::HashMap;
-
 use datafusion_common::{NullEquality, SplitPoint, TableReference, UnnestOptions};
 use datafusion_expr::dml::{
     MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
 };
 use datafusion_expr::expr::{
-    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Cast, GroupingSet, InList,
-    Like, NullTreatment, Placeholder, ScalarFunction, Unnest,
+    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Cast, GroupingSet,
+    HigherOrderFunction, InList, Lambda, LambdaVariable, Like, NullTreatment,
+    Placeholder, ScalarFunction, Unnest,
 };
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::{
@@ -56,8 +55,17 @@ use crate::protobuf::LogicalPlanNode;
 
 impl FromProto<&UnnestOptions> for protobuf::UnnestOptions {
     fn from_proto(opts: &UnnestOptions) -> Self {
+        use datafusion_common::NullHandling;
+        use protobuf::unnest_options::NullHandling as ProtoNullHandling;
+        let null_handling = match opts.null_handling {
+            NullHandling::Preserve => ProtoNullHandling::Preserve,
+            NullHandling::Drop => ProtoNullHandling::Drop,
+            NullHandling::PreserveAndExpandEmpty => {
+                ProtoNullHandling::PreserveAndExpandEmpty
+            }
+        } as i32;
         Self {
-            preserve_nulls: opts.preserve_nulls,
+            null_handling,
             recursions: opts
                 .recursions
                 .iter()
@@ -220,7 +228,7 @@ pub fn serialize_expr(
                 metadata: metadata
                     .as_ref()
                     .map(|m| m.to_hashmap())
-                    .unwrap_or(HashMap::new()),
+                    .unwrap_or_default(),
             });
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Alias(alias)),
@@ -413,6 +421,19 @@ pub fn serialize_expr(
                 })),
             }
         }
+        Expr::HigherOrderFunction(HigherOrderFunction { func, args }) => {
+            let mut buf = Vec::new();
+            let _ = codec.try_encode_higher_order_function(func.as_ref(), &mut buf);
+            protobuf::LogicalExprNode {
+                expr_type: Some(ExprType::HigherOrderUdfExpr(
+                    protobuf::HigherOrderUdfExprNode {
+                        fun_name: func.name().to_string(),
+                        fun_definition: (!buf.is_empty()).then_some(buf),
+                        args: serialize_exprs(args, codec)?,
+                    },
+                )),
+            }
+        }
         Expr::Not(expr) => {
             let expr = Box::new(protobuf::Not {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
@@ -557,9 +578,10 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::Negative(expr)),
             }
         }
-        Expr::Unnest(Unnest { expr }) => {
+        Expr::Unnest(Unnest { expr, outer }) => {
             let expr = protobuf::Unnest {
                 exprs: vec![serialize_expr(expr.as_ref(), codec)?],
+                outer: *outer,
             };
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Unnest(expr)),
@@ -637,14 +659,25 @@ pub fn serialize_expr(
                 metadata: field
                     .as_ref()
                     .map(|f| f.metadata().clone())
-                    .unwrap_or(HashMap::new()),
+                    .unwrap_or_default(),
             })),
         },
-        Expr::HigherOrderFunction(_) | Expr::Lambda(_) | Expr::LambdaVariable(_) => {
-            return Err(Error::General(
-                "Proto serialization error: Lambda not implemented".to_string(),
-            ));
-        }
+        Expr::Lambda(Lambda { params, body }) => protobuf::LogicalExprNode {
+            expr_type: Some(ExprType::Lambda(Box::new(protobuf::Lambda {
+                params: params.clone(),
+                body: Some(Box::new(serialize_expr(body, codec)?)),
+            }))),
+        },
+        Expr::LambdaVariable(LambdaVariable {
+            name,
+            field,
+            spans: _,
+        }) => protobuf::LogicalExprNode {
+            expr_type: Some(ExprType::LambdaVariable(protobuf::LambdaVariable {
+                name: name.clone(),
+                field: field.as_deref().map(|v| v.try_into()).transpose()?,
+            })),
+        },
     };
 
     Ok(expr_node)

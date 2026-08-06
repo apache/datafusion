@@ -649,6 +649,7 @@ impl TableFunctionImpl for StatisticsCacheFunc {
             Field::new("num_columns", DataType::UInt64, false),
             Field::new("table_size_bytes", DataType::Utf8, false),
             Field::new("statistics_size_bytes", DataType::UInt64, false),
+            Field::new("hits", DataType::UInt64, false),
         ]));
 
         // construct record batch from metadata
@@ -662,6 +663,7 @@ impl TableFunctionImpl for StatisticsCacheFunc {
         let mut num_columns_arr = vec![];
         let mut table_size_bytes_arr = vec![];
         let mut statistics_size_bytes_arr = vec![];
+        let mut hits_arr = vec![];
 
         if let Some(file_statistics_cache) = self.cache_manager.get_file_statistic_cache()
         {
@@ -686,6 +688,7 @@ impl TableFunctionImpl for StatisticsCacheFunc {
                         .heap_size(&mut DFHeapSizeCtx::default())
                         as u64,
                 );
+                hits_arr.push(entry.hits as u64);
             }
         }
 
@@ -702,6 +705,7 @@ impl TableFunctionImpl for StatisticsCacheFunc {
                 Arc::new(UInt64Array::from(num_columns_arr)),
                 Arc::new(StringArray::from(table_size_bytes_arr)),
                 Arc::new(UInt64Array::from(statistics_size_bytes_arr)),
+                Arc::new(UInt64Array::from(hits_arr)),
             ],
         )?;
 
@@ -809,6 +813,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
                 DataType::List(Arc::new(metadata_field.clone())),
                 true,
             ),
+            Field::new("hits", DataType::UInt64, false),
         ]));
 
         let mut table_arr = vec![];
@@ -822,6 +827,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
         let mut etag_arr = vec![];
         let mut version_arr = vec![];
         let mut offsets: Vec<i32> = vec![0];
+        let mut hits_arr = vec![];
 
         if let Some(list_files_cache) = self.cache_manager.get_list_files_cache() {
             let now = Instant::now();
@@ -847,6 +853,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
                 }
                 current_offset += entry.value.files.len() as i32;
                 offsets.push(current_offset);
+                hits_arr.push(entry.hits as u64);
             }
         }
 
@@ -878,6 +885,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
                     Arc::new(struct_arr),
                     None,
                 )),
+                Arc::new(UInt64Array::from(hits_arr)),
             ],
         )?;
 

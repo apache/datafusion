@@ -432,7 +432,7 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let start = list_array.offsets()[row_idx].to_usize().unwrap();
             let end = list_array.offsets()[row_idx + 1].to_usize().unwrap();
             if start < end {
-                mutable.extend(arr_idx, start, end);
+                mutable.try_extend(arr_idx, start, end)?;
             }
         }
         offsets.push(O::usize_as(mutable.len()));
@@ -553,11 +553,11 @@ where
         let start = offset_window[0].to_usize().unwrap();
         let end = offset_window[1].to_usize().unwrap();
         if is_append {
-            mutable.extend(values_index, start, end);
-            mutable.extend(element_index, row_index, row_index + 1);
+            mutable.try_extend(values_index, start, end)?;
+            mutable.try_extend(element_index, row_index, row_index + 1)?;
         } else {
-            mutable.extend(element_index, row_index, row_index + 1);
-            mutable.extend(values_index, start, end);
+            mutable.try_extend(element_index, row_index, row_index + 1)?;
+            mutable.try_extend(values_index, start, end)?;
         }
         offsets.push(offsets[row_index] + O::usize_as(end - start + 1));
     }

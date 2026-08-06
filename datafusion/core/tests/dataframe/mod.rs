@@ -39,6 +39,7 @@ use datafusion_functions_aggregate::expr_fn::{
     array_agg, avg, avg_distinct, count, count_distinct, max, median, min, sum,
     sum_distinct,
 };
+use datafusion_functions_nested::expr_fn::{array_filter, array_transform, make_array};
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::expr_fn::{first_value, lead, row_number};
 use insta::assert_snapshot;
@@ -78,8 +79,8 @@ use datafusion_expr::{
     CreateMemoryTable, CreateView, DdlStatement, Expr, ExprFunctionExt, ExprSchemable,
     LogicalPlan, LogicalPlanBuilder, ScalarFunctionImplementation, SortExpr, TableType,
     WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition, cast, col,
-    create_udf, exists, in_subquery, lit, out_ref_col, placeholder, scalar_subquery,
-    when, wildcard,
+    create_udf, exists, in_subquery, lambda, lambda_var, lit, out_ref_col, placeholder,
+    scalar_subquery, when, wildcard,
 };
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
@@ -90,7 +91,9 @@ use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::empty::EmptyExec;
-use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties, displayable};
+use datafusion_physical_plan::{
+    ExecutionPlan, ExecutionPlanProperties, collect, displayable,
+};
 
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::options::JsonReadOptions;
@@ -3007,22 +3010,22 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     assert_snapshot!(
         pretty_format_batches(&sql_results).unwrap(),
         @r"
-    +---------------+------------------------------------------------------------------------------------+
-    | plan_type     | plan                                                                               |
-    +---------------+------------------------------------------------------------------------------------+
-    | logical_plan  | Sort: count(*) ASC NULLS LAST                                                      |
-    |               |   Projection: t1.b, count(Int64(1)) AS count(*)                                    |
-    |               |     Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1))]]                          |
-    |               |       TableScan: t1 projection=[b]                                                 |
-    | physical_plan | SortPreservingMergeExec: [count(*)@1 ASC NULLS LAST]                               |
-    |               |   SortExec: expr=[count(*)@1 ASC NULLS LAST], preserve_partitioning=[true]         |
-    |               |     ProjectionExec: expr=[b@0 as b, count(Int64(1))@1 as count(*)]                 |
-    |               |       AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[count(Int64(1))] |
-    |               |         RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=1           |
-    |               |           AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(Int64(1))]      |
-    |               |             DataSourceExec: partitions=1, partition_sizes=[1]                      |
-    |               |                                                                                    |
-    +---------------+------------------------------------------------------------------------------------+
+    +---------------+-------------------------------------------------------------------------------------+
+    | plan_type     | plan                                                                                |
+    +---------------+-------------------------------------------------------------------------------------+
+    | logical_plan  | Sort: count(*) ASC NULLS LAST                                                       |
+    |               |   Projection: t1.b, count(Int64(1)) AS count(*)                                     |
+    |               |     Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1))]]                           |
+    |               |       TableScan: t1 projection=[b]                                                  |
+    | physical_plan | SortPreservingMergeExec: [count(*)@1 ASC NULLS LAST]                                |
+    |               |   ProjectionExec: expr=[b@0 as b, count(Int64(1))@1 as count(*)]                    |
+    |               |     SortExec: expr=[count(Int64(1))@1 ASC NULLS LAST], preserve_partitioning=[true] |
+    |               |       AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[count(Int64(1))]  |
+    |               |         RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=1            |
+    |               |           AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(Int64(1))]       |
+    |               |             DataSourceExec: partitions=1, partition_sizes=[1]                       |
+    |               |                                                                                     |
+    +---------------+-------------------------------------------------------------------------------------+
     "
     );
 
@@ -4368,6 +4371,7 @@ async fn unnest_column_nulls() -> Result<()> {
 
     let options = UnnestOptions::new().with_preserve_nulls(false);
     let results = df
+        .clone()
         .unnest_columns_with_options(&["list"], options)?
         .collect()
         .await?;
@@ -4381,6 +4385,156 @@ async fn unnest_column_nulls() -> Result<()> {
     | 2    | A  |
     | 3    | D  |
     +------+----+
+    "
+    );
+
+    // Outer-unnest semantics: NULL and empty lists both produce a single
+    // output row containing NULL.
+    let options = UnnestOptions::new()
+        .with_null_handling(datafusion_common::NullHandling::PreserveAndExpandEmpty);
+    let results = df
+        .unnest_columns_with_options(&["list"], options)?
+        .collect()
+        .await?;
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r"
+    +------+----+
+    | list | id |
+    +------+----+
+    | 1    | A  |
+    | 2    | A  |
+    |      | B  |
+    |      | C  |
+    | 3    | D  |
+    +------+----+
+    "
+    );
+
+    Ok(())
+}
+
+/// Outer-unnest on a list-of-struct column. Verifies that
+/// (a) struct elements unnest into flattened sub-columns and
+/// (b) NULL and empty lists both still produce a single output row whose
+///     struct sub-columns are all NULL.
+#[tokio::test]
+async fn unnest_outer_list_of_struct() -> Result<()> {
+    use arrow::array::{Int32Array, StructArray};
+
+    // Per-row sub-list lengths: 2, 1, 0 (empty), 0 (null)
+    let names = StringArray::from(vec!["alice", "bob", "carol"]);
+    let ages = Int32Array::from(vec![30, 40, 50]);
+    let struct_values = StructArray::from(vec![
+        (
+            Arc::new(Field::new("name", DataType::Utf8, true)),
+            Arc::new(names) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("age", DataType::Int32, true)),
+            Arc::new(ages) as ArrayRef,
+        ),
+    ]);
+    let struct_field =
+        Arc::new(Field::new("item", struct_values.data_type().clone(), true));
+    let offsets = arrow::buffer::OffsetBuffer::<i32>::from_lengths([2, 1, 0, 0]);
+    let validity = arrow::buffer::NullBuffer::from(vec![true, true, true, false]);
+    let people = ListArray::new(
+        struct_field,
+        offsets,
+        Arc::new(struct_values),
+        Some(validity),
+    );
+    let group = Int32Array::from(vec![1, 2, 3, 4]);
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("people", Arc::new(people) as ArrayRef),
+        ("group", Arc::new(group) as ArrayRef),
+    ])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("teams", batch)?;
+    let df = ctx.table("teams").await?;
+
+    let options = UnnestOptions::new()
+        .with_null_handling(datafusion_common::NullHandling::PreserveAndExpandEmpty);
+    let results = df
+        // Unnest the list, then expand the resulting struct rows into columns.
+        .unnest_columns_with_options(&["people"], options.clone())?
+        .unnest_columns_with_options(&["people"], options)?
+        .collect()
+        .await?;
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r"
+    +-------------+------------+-------+
+    | people.name | people.age | group |
+    +-------------+------------+-------+
+    | alice       | 30         | 1     |
+    | bob         | 40         | 1     |
+    | carol       | 50         | 2     |
+    |             |            | 3     |
+    |             |            | 4     |
+    +-------------+------------+-------+
+    "
+    );
+
+    Ok(())
+}
+
+/// Outer-unnest applied to a `FixedSizeList` column. For fixed-size lists,
+/// every non-null row has the fixed length, so "empty" never occurs —
+/// `PreserveAndExpandEmpty` should behave identically to `Preserve` here.
+/// The test pins that equivalence so we notice if it ever diverges.
+#[tokio::test]
+async fn unnest_outer_fixed_size_list() -> Result<()> {
+    let batch = get_fixed_list_batch()?;
+    let ctx = SessionContext::new();
+    ctx.register_batch("shapes", batch)?;
+    let df = ctx.table("shapes").await?;
+
+    let preserve_results = df
+        .clone()
+        .unnest_columns_with_options(
+            &["tags"],
+            UnnestOptions::new().with_preserve_nulls(true),
+        )?
+        .collect()
+        .await?;
+    let outer_results = df
+        .unnest_columns_with_options(
+            &["tags"],
+            UnnestOptions::new().with_null_handling(
+                datafusion_common::NullHandling::PreserveAndExpandEmpty,
+            ),
+        )?
+        .collect()
+        .await?;
+    assert_eq!(
+        batches_to_sort_string(&preserve_results),
+        batches_to_sort_string(&outer_results),
+        "FixedSizeList has no empty case, so PreserveAndExpandEmpty must \
+         match Preserve exactly"
+    );
+
+    // And the snapshot itself, to make the expected shape explicit.
+    assert_snapshot!(
+        batches_to_sort_string(&outer_results),
+        @r"
+    +----------+-------+
+    | shape_id | tags  |
+    +----------+-------+
+    | 1        |       |
+    | 2        | tag21 |
+    | 2        | tag22 |
+    | 3        | tag31 |
+    | 3        | tag32 |
+    | 4        |       |
+    | 5        | tag51 |
+    | 5        | tag52 |
+    | 6        | tag61 |
+    | 6        | tag62 |
+    +----------+-------+
     "
     );
 
@@ -6472,11 +6626,8 @@ async fn test_fill_null() -> Result<()> {
 
     // Use fill_null to replace nulls on each column.
     let df_filled = df
-        .fill_null(ScalarValue::Int32(Some(0)), vec!["a".to_string()])?
-        .fill_null(
-            ScalarValue::Utf8(Some("default".to_string())),
-            vec!["b".to_string()],
-        )?;
+        .fill_null(&ScalarValue::Int32(Some(0)), &["a"])?
+        .fill_null(&ScalarValue::Utf8(Some("default".to_string())), &["b"])?;
 
     let results = df_filled.collect().await?;
     assert_snapshot!(
@@ -6502,8 +6653,7 @@ async fn test_fill_null_all_columns() -> Result<()> {
     // Use fill_null to replace nulls on all columns.
     // Only column "b" will be replaced since ScalarValue::Utf8(Some("default".to_string()))
     // can be cast to Utf8.
-    let df_filled =
-        df.fill_null(ScalarValue::Utf8(Some("default".to_string())), vec![])?;
+    let df_filled = df.fill_null(&ScalarValue::Utf8(Some("default".to_string())), &[])?;
 
     let results = df_filled.clone().collect().await?;
 
@@ -6521,7 +6671,7 @@ async fn test_fill_null_all_columns() -> Result<()> {
     );
 
     // Fill column "a" null values with a value that cannot be cast to Int32.
-    let df_filled = df_filled.fill_null(ScalarValue::Int32(Some(0)), vec![])?;
+    let df_filled = df_filled.fill_null(&ScalarValue::Int32(Some(0)), &[])?;
 
     let results = df_filled.collect().await?;
     assert_snapshot!(
@@ -7238,6 +7388,48 @@ async fn test_grouping_with_alias() -> Result<()> {
         .sort(vec![Sort::new(col("a"), true, false)])?;
 
     let results = df.collect().await?;
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_unresolved_lambda_variable() -> Result<()> {
+    let plan = table_with_mixed_lists()
+        .await?
+        .with_column(
+            "c",
+            array_transform(
+                make_array(vec![col("list")]),
+                lambda(
+                    ["x"],
+                    array_filter(
+                        lambda_var("x"),
+                        lambda(["y"], lambda_var("y").gt_eq(lit(2))),
+                    ),
+                ),
+            ),
+        )?
+        .select_columns(&["list", "c"])?
+        .into_unoptimized_plan()
+        .resolve_lambda_variables()?
+        .data;
+
+    let session = SessionContext::new();
+    let exec = session.state().create_physical_plan(&plan).await?;
+    let context = session.task_ctx();
+    let results = collect(exec, context).await?;
+
+    let expected = [
+        "+-----------+----------+",
+        "| list      | c        |",
+        "+-----------+----------+",
+        "| [1, 2, 3] | [[2, 3]] |",
+        "|           | []       |",
+        "| []        | [[]]     |",
+        "|           | []       |",
+        "+-----------+----------+",
+    ];
     assert_batches_eq!(expected, &results);
 
     Ok(())

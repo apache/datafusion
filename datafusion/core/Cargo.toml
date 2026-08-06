@@ -249,7 +249,17 @@ required-features = ["parquet"]
 
 [[bench]]
 harness = false
+name = "parquet_nested_schema_pruning"
+required-features = ["parquet"]
+
+[[bench]]
+harness = false
 name = "parquet_struct_projection"
+required-features = ["parquet"]
+
+[[bench]]
+harness = false
+name = "cse_projection_pushdown"
 required-features = ["parquet"]
 
 [[bench]]

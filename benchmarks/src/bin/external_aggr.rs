@@ -39,7 +39,9 @@ use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
-use datafusion_benchmarks::util::{BenchmarkRun, CommonOpt, QueryResult};
+use datafusion_benchmarks::util::{
+    BenchmarkRun, CommonOpt, PeakRecordingPool, QueryResult,
+};
 use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::{DEFAULT_PARQUET_EXTENSION, exec_err};
@@ -169,7 +171,7 @@ impl ExternalAggrConfig {
             ));
 
             let query_results = self
-                .benchmark_query(query_id, mem_limit, mem_pool_type)
+                .benchmark_query(query_id, mem_limit, mem_pool_type, &mut benchmark_run)
                 .await?;
             for iter in query_results {
                 benchmark_run.write_iter(iter.elapsed, iter.row_count);
@@ -182,11 +184,15 @@ impl ExternalAggrConfig {
     }
 
     /// Benchmark query `query_id` in `AGGR_QUERIES`
+    ///
+    /// `benchmark_run` is handed this query's runtime, which is built here
+    /// because each query runs under its own memory limit.
     async fn benchmark_query(
         &self,
         query_id: usize,
         mem_limit: u64,
         mem_pool_type: &str,
+        benchmark_run: &mut BenchmarkRun,
     ) -> Result<Vec<QueryResult>> {
         let query_name =
             format!("Q{query_id}({})", human_readable_size(mem_limit as usize));
@@ -198,6 +204,12 @@ impl ExternalAggrConfig {
                 return exec_err!("Invalid memory pool type: {}", mem_pool_type);
             }
         };
+        // This benchmark builds its pool directly rather than going through
+        // `CommonOpt::runtime_env_builder`, so it has to install the recorder
+        // itself to report a peak.
+        let memory_pool: Arc<dyn MemoryPool> =
+            Arc::new(PeakRecordingPool::new(memory_pool));
+        benchmark_run.set_memory_pool(&memory_pool);
         let runtime_env = RuntimeEnvBuilder::new()
             .with_memory_pool(memory_pool)
             .build_arc()?;
