@@ -29,7 +29,6 @@ use datafusion_common::{ColumnStatistics, Statistics};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
 use datafusion_physical_plan::ExecutionPlan;
 use sync_provider::create_sync_table_provider;
 use udf_udaf_udwf::{
@@ -41,7 +40,7 @@ use crate::catalog_provider::FFI_CatalogProvider;
 use crate::catalog_provider_list::FFI_CatalogProviderList;
 use crate::config::extension_options::FFI_ExtensionOptions;
 use crate::execution_plan::FFI_ExecutionPlan;
-use crate::execution_plan::tests::EmptyExec;
+use crate::execution_plan::tests::{EmptyExec, create_dynamic_filter};
 use crate::physical_optimizer::FFI_PhysicalOptimizerRule;
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 use crate::table_provider::FFI_TableProvider;
@@ -167,8 +166,7 @@ pub(crate) extern "C" fn create_empty_exec() -> FFI_ExecutionPlan {
 
 pub(crate) extern "C" fn create_exec_with_dynamic_expressions() -> FFI_ExecutionPlan {
     let schema = Arc::new(Schema::empty());
-    let expression: Arc<dyn PhysicalExpr> =
-        Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
+    let expression: Arc<dyn PhysicalExpr> = create_dynamic_filter();
     let plan =
         Arc::new(EmptyExec::new(schema).with_dynamic_expressions(vec![expression]));
     FFI_ExecutionPlan::new(plan, None)
