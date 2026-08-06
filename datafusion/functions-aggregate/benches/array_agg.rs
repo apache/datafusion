@@ -19,9 +19,10 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, AsArray, ListArray, NullBufferBuilder,
-    StringArray,
+    Array, ArrayRef, ArrowPrimitiveType, AsArray, Int64Array, ListArray,
+    NullBufferBuilder, StringArray,
 };
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Int64Type, Schema};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use datafusion_expr::{Accumulator, GroupsAccumulator, function::AccumulatorArgs};
@@ -29,6 +30,7 @@ use datafusion_functions_aggregate::array_agg::{
     ArrayAggAccumulator, DistinctArrayAggAccumulator, array_agg_udaf,
 };
 use datafusion_physical_expr::expressions::col;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 use arrow::buffer::OffsetBuffer;
 use arrow::util::bench_util::create_primitive_array;
@@ -79,6 +81,37 @@ fn prepare_groups_accumulator() -> Box<dyn GroupsAccumulator> {
             name: "array_agg(value)",
             is_distinct: false,
             exprs: std::slice::from_ref(&expr),
+        })
+        .unwrap()
+}
+
+fn prepare_ordered_accumulator() -> Box<dyn Accumulator> {
+    let value_field = Arc::new(Field::new("value", DataType::Int64, false));
+    let ordering_field = Arc::new(Field::new("ordering", DataType::Int64, false));
+    let schema = Arc::new(Schema::new(vec![
+        Arc::clone(&value_field),
+        Arc::clone(&ordering_field),
+    ]));
+    let return_field = Arc::new(Field::new_list(
+        "array_agg",
+        Field::new_list_field(DataType::Int64, true),
+        true,
+    ));
+    let value_expr = col("value", &schema).unwrap();
+    let ordering_expr = col("ordering", &schema).unwrap();
+    let order_bys = [PhysicalSortExpr::new(ordering_expr, SortOptions::default())];
+
+    array_agg_udaf()
+        .accumulator(AccumulatorArgs {
+            return_field,
+            schema: &schema,
+            expr_fields: std::slice::from_ref(&value_field),
+            ignore_nulls: false,
+            order_bys: &order_bys,
+            is_reversed: false,
+            name: "array_agg(value ORDER BY ordering)",
+            is_distinct: false,
+            exprs: std::slice::from_ref(&value_expr),
         })
         .unwrap()
 }
@@ -218,54 +251,6 @@ fn array_agg_benchmark(c: &mut Criterion) {
         "array_agg i64 merge_batch 70% nulls, 0% of nulls point to a zero length array",
         values,
     );
-
-    // Benchmark update_batch with memory accounting
-    let batches = (0..32)
-        .map(|_| Arc::new(create_primitive_array::<Int64Type>(8192, 0.0)) as ArrayRef)
-        .collect::<Vec<_>>();
-    c.bench_function("array_agg i64 update_batch with memory accounting", |b| {
-        b.iter_batched(
-            || ArrayAggAccumulator::try_new(&DataType::Int64, false).unwrap(),
-            |mut accumulator| {
-                for values in &batches {
-                    let size_pre = accumulator.size();
-                    accumulator
-                        .update_batch(std::slice::from_ref(values))
-                        .unwrap();
-                    let size_post = accumulator.size();
-                    black_box(size_post.saturating_sub(size_pre));
-                }
-                black_box(accumulator)
-            },
-            BatchSize::SmallInput,
-        )
-    });
-
-    // Benchmark grouped update_batch with memory accounting
-    let group_indices = (0..8192).map(|i| i % 10).collect::<Vec<_>>();
-    c.bench_function(
-        "array_agg i64 groups update_batch with memory accounting",
-        |b| {
-            b.iter_batched(
-                prepare_groups_accumulator,
-                |mut accumulator| {
-                    for values in &batches {
-                        accumulator
-                            .update_batch(
-                                std::slice::from_ref(values),
-                                &group_indices,
-                                None,
-                                10,
-                            )
-                            .unwrap();
-                        black_box(accumulator.size());
-                    }
-                    black_box(accumulator)
-                },
-                BatchSize::LargeInput,
-            )
-        },
-    );
 }
 
 /// A realistic pool of database names with variable lengths.
@@ -364,5 +349,104 @@ fn distinct_array_agg_benchmark(c: &mut Criterion) {
     );
 }
 
-criterion_group!(benches, array_agg_benchmark, distinct_array_agg_benchmark);
+fn array_agg_memory_accounting_benchmark(c: &mut Criterion) {
+    let batches = (0..32)
+        .map(|_| Arc::new(Int64Array::from_iter_values(0..8192_i64)) as ArrayRef)
+        .collect::<Vec<_>>();
+
+    c.bench_function("array_agg i64 update_batch with memory accounting", |b| {
+        b.iter_batched(
+            || ArrayAggAccumulator::try_new(&DataType::Int64, false).unwrap(),
+            |mut accumulator| {
+                for values in &batches {
+                    let size_pre = accumulator.size();
+                    accumulator
+                        .update_batch(std::slice::from_ref(values))
+                        .unwrap();
+                    let size_post = accumulator.size();
+                    black_box(size_post.saturating_sub(size_pre));
+                }
+                black_box(accumulator)
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    let group_indices = (0..8192).map(|i| i % 10).collect::<Vec<_>>();
+    c.bench_function(
+        "array_agg i64 groups update_batch with memory accounting",
+        |b| {
+            b.iter_batched(
+                prepare_groups_accumulator,
+                |mut accumulator| {
+                    for values in &batches {
+                        accumulator
+                            .update_batch(
+                                std::slice::from_ref(values),
+                                &group_indices,
+                                None,
+                                10,
+                            )
+                            .unwrap();
+                        black_box(accumulator.size());
+                    }
+                    black_box(accumulator)
+                },
+                BatchSize::LargeInput,
+            )
+        },
+    );
+
+    c.bench_function(
+        "distinct array_agg i64 update_batch with memory accounting",
+        |b| {
+            b.iter_batched(
+                || {
+                    DistinctArrayAggAccumulator::try_new(&DataType::Int64, None, false)
+                        .unwrap()
+                },
+                |mut accumulator| {
+                    for values in &batches {
+                        let size_pre = accumulator.size();
+                        accumulator
+                            .update_batch(std::slice::from_ref(values))
+                            .unwrap();
+                        let size_post = accumulator.size();
+                        black_box(size_post.saturating_sub(size_pre));
+                    }
+                    black_box(accumulator)
+                },
+                BatchSize::LargeInput,
+            )
+        },
+    );
+
+    c.bench_function(
+        "ordered array_agg i64 update_batch with memory accounting",
+        |b| {
+            b.iter_batched(
+                prepare_ordered_accumulator,
+                |mut accumulator| {
+                    for values in &batches {
+                        let size_pre = accumulator.size();
+                        accumulator
+                            .update_batch(&[Arc::clone(values), Arc::clone(values)])
+                            .unwrap();
+                        let size_post = accumulator.size();
+                        black_box(size_post.saturating_sub(size_pre));
+                    }
+                    black_box(accumulator)
+                },
+                BatchSize::LargeInput,
+            )
+        },
+    );
+}
+
+criterion_group!(
+    benches,
+    array_agg_benchmark,
+    distinct_array_agg_benchmark,
+    array_agg_memory_accounting_benchmark
+);
 criterion_main!(benches);
