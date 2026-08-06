@@ -36,6 +36,13 @@ changed between versions. They never set an expectation. There is currently no
 mechanism for version-specific expectations in DataFusion's SLT files, which is
 tracked by https://github.com/apache/datafusion/issues/23887.
 
+Older versions are read rather than ignored because `datafusion-spark` is meant
+to be reusable by engines that target more than one Spark release. Comet
+supports Spark 3.4 through 4.0. A function audited against 4.2.0 alone can be
+correct there and silently wrong for such a consumer, and nothing in the crate
+records which of the two it is. Finding the divergence is useful even though
+the test suite cannot yet assert it.
+
 ## Overview
 
 1. Study the Spark implementation across versions
@@ -48,6 +55,31 @@ tracked by https://github.com/apache/datafusion/issues/23887.
 8. Apply findings
 
 Audit one function per invocation.
+
+## Paths in This Skill Are Hints
+
+Every file path below was correct when this skill was written and several will
+rot. `FunctionRegistry.scala`, the golden-file directories, and
+`datafusion/common/src/config.rs` all move on someone else's schedule.
+
+**A path that does not resolve is a stop condition, not a step to skip.** The
+failure mode this exists to prevent is a command that quietly matches nothing,
+an audit that reads the silence as "no ANSI branch" or "Spark does not test
+this", and a confident report built on an empty grep. A `grep` over a
+nonexistent directory and a `grep` that genuinely found nothing are the same
+output.
+
+So when a path in this skill does not exist, or a command returns nothing where
+something was expected:
+
+1. Say so out loud in the audit report. Name the path and the step.
+2. Search for where the thing moved to, by content rather than by path. The
+   grep patterns here are more durable than the directories they are pointed at.
+3. If it cannot be found, mark every conclusion that depended on that step as
+   unestablished. Do not let an unread source become an absence of findings.
+
+The same rule covers a `.slt` file, an implementation file, or a Spark class
+that is not where this skill says it is.
 
 ## Step 1: Study the Spark Implementation
 
@@ -178,6 +210,43 @@ comments are written there too, not only in the function's own file. An audit
 that reads only `<function>.rs` will miss them and will leave a doc string that
 contradicts the code after a fix.
 
+**A `.slt` file under `test_files/spark/` does not imply an implementation in
+`datafusion/spark`.** `SessionStateBuilderSpark::with_spark_features` layers the
+Spark functions on top of `with_default_features`, so a name the spark crate
+does not define resolves to DataFusion's own function of that name. `md5`,
+`coalesce`, and `reverse` are served this way today, and `date_format` resolves
+through an alias on core's `to_char`. The query under audit still runs, and the
+code it runs is not in the directory the grep above searched. If that grep comes
+back empty, widen it before concluding the function is unimplemented:
+
+```bash
+grep -rln "\"$ARGUMENTS\"" \
+  datafusion/functions/src datafusion/functions-nested/src \
+  datafusion/functions-aggregate/src datafusion/functions-window/src \
+  datafusion/functions-table/src --include="*.rs"
+```
+
+A hit may be in a file named after something else, because core registers
+aliases. `date_format` lives in `to_char.rs`. Read the `aliases` vector, not
+just the file name.
+
+If that grep is also empty, the function is genuinely unimplemented and the
+`.slt` file is a porting stub with every query commented out. Check with
+`grep -cE '^(query|statement)' <file>.slt`, which returns zero for a stub.
+There is no implementation to audit in that case. Say so and stop, rather than
+reporting a clean audit of nothing.
+
+Otherwise audit what the grep found against Spark with the rest of this step's
+checklist. The findings land differently. A core function has non-Spark users,
+so Spark's semantics cannot be imposed on it. Where the two agree, record the
+coverage and leave the core function alone. Where they diverge, the fix is a
+Spark-specific implementation under `datafusion/spark/src/function/<category>/`
+that shadows the core one, never an edit to the core function.
+`datafusion/spark/src/function/math/abs.rs` shadowing
+`datafusion/functions/src/math/abs.rs` is the in-repo precedent. Say in the
+audit report which crate the audited code came from, because a reader who
+assumes `datafusion/spark` will look for a file that does not exist.
+
 Check each of the following. The first two have no Comet analog and are the
 most common source of silent divergence.
 
@@ -256,6 +325,10 @@ $ ./target/debug/datafusion-cli -c "SELECT next_day(arrow_cast(95026236,'Date32'
 Error during planning: Invalid function 'next_day'. Did you mean 'today'?
 ```
 
+Giving the CLI an opt-in for the Spark library is tracked by
+https://github.com/apache/datafusion/issues/24146. Until that lands, treat the
+error above as a registration gap and not as evidence about the function.
+
 For a throwaway probe that should not end up in the committed file, add a
 temporary `.slt` alongside it, run it by name, and delete it afterwards. To
 exercise a raw storage value that has no literal syntax, such as a `Date32`
@@ -321,7 +394,20 @@ Whether to match Spark's message text depends on who constructs the error:
   implementation to restate an Arrow error in Spark's words.
 
 Do not read the `abs.rs` precedent as licence to invent DataFusion-flavoured
-text for an error you *do* construct. Those sites predate this rule.
+text for an error you *do* construct. `abs` reports `Int32 overflow on
+abs(-2147483648)` where Spark 4.2.0 reports `[ARITHMETIC_OVERFLOW] overflow.`,
+which is a known divergence tracked by
+https://github.com/apache/datafusion/issues/24145. Follow its ANSI plumbing and
+test layout, not its wording.
+
+`abs` also shows why the "who constructs it" question is worth asking rather
+than assuming. Its scalar path builds the message in the spark crate, but its
+array path borrows `make_try_abs_function!` from
+`datafusion/functions/src/math/abs.rs`, so that half of the text is owned by
+core DataFusion and shared with core's own `abs`. Wherever a spark function
+reuses a core macro or kernel, Spark-specific error text is not available
+without un-sharing the code first. Check where the message is actually built
+before promising to match Spark's.
 
 **Rust unit tests.** Read the `#[test]` blocks in the same file. Per the crate
 README, direct invocation through `test_scalar_function!()` bypasses input
@@ -334,18 +420,34 @@ The `datafusion-spark` README recommends checking both projects for existing
 implementations. Diff against them to surface edge cases they handle that this
 crate misses.
 
-```bash
-# Comet, if checked out locally
-grep -rln "$ARGUMENTS" ../datafusion-comet/native/spark-expr/src/ --include="*.rs" 2>/dev/null
-```
-
-Sail is usually not checked out locally, and its directory layout has moved
-more than once, so search it by content rather than by path:
+Neither project needs to be checked out. Both are searched over HTTP, by
+content rather than by path, because both have moved their directory layouts
+more than once:
 
 ```bash
-gh api -X GET search/code -f q="$ARGUMENTS repo:lakehq/sail" --jq '.items[].path'
-gh api "repos/lakehq/sail/contents/<path from above>" --jq '.content' | base64 -d
+for repo in apache/datafusion-comet lakehq/sail; do
+  echo "=== $repo ==="
+  gh api -X GET search/code -f q="$ARGUMENTS repo:$repo" --jq '.items[].path'
+done
+
+# Then read a specific hit
+gh api "repos/<repo>/contents/<path from above>" --jq '.content' | base64 -d
 ```
+
+If a clone happens to be on disk, grep it instead. It is faster and it is not
+rate limited. Do not silence the failure with `2>/dev/null`, though: a grep over
+a directory that is not there prints an error, and swallowing it turns "Comet
+not checked out" into "Comet has no implementation".
+
+```bash
+[ -d ../datafusion-comet ] \
+  && grep -rln "$ARGUMENTS" ../datafusion-comet/native/spark-expr/src/ --include="*.rs" \
+  || echo "no local Comet clone, use the API above"
+```
+
+`gh api search/code` requires authentication and is rate limited to a handful of
+requests per minute. If it fails, say so in the audit report and mark Step 4 as
+not performed rather than reporting no differences found.
 
 As of this writing the implementations live under
 `crates/sail-function/src/scalar/<category>/spark_<function>.rs`, and Sail also
