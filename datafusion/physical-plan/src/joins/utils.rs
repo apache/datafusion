@@ -1779,25 +1779,6 @@ pub(crate) struct BuildProbeJoinMetrics {
     _elapsed_compute_finalizer: Arc<ElapsedComputeFinalizer>,
 }
 
-// Why is this in a Drop?
-// - We keep track of build_time and join_time separately, but baseline metrics have
-// a total elapsed_compute time. Instead of remembering to update both the metrics
-// at the same time, we chose to update elapsed_compute once at the end - summing up
-// both the parts.
-//
-// Why a separate `Arc`-wrapped finalizer instead of a `Drop` impl on
-// `BuildProbeJoinMetrics` directly?
-//
-// `BuildProbeJoinMetrics` is `Clone`, and its `Time` metrics wrap an
-// `Arc<AtomicUsize>` internally, so all clones share the same counters. If
-// `Drop` were implemented on `BuildProbeJoinMetrics` itself, every clone's
-// drop would fire the finalizer — inflating `elapsed_compute` by up to
-// `build_time`/'join_time' each time, not just once. This happens on every hash join
-// whose build side yields control before completing, which is the common
-// case for anything but a single-batch, already-ready build side.
-//
-// Wrapping the finalizer in its own `Arc` ensures it runs exactly once, when
-// the last clone is dropped, against the fully-accumulated final values.
 struct ElapsedComputeFinalizer {
     baseline: BaselineMetrics,
     build_time: metrics::Time,
@@ -1811,6 +1792,16 @@ impl Debug for ElapsedComputeFinalizer {
     }
 }
 
+// Why is this in a Drop?
+// - We keep track of build_time and join_time separately, but baseline metrics have
+// a total elapsed_compute time. Instead of remembering to update both the metrics
+// at the same time, we chose to update elapsed_compute once at the end - summing up
+// both the parts.
+//
+// How does this work?
+// - The elapsed_compute `Time` is represented by an `Arc<AtomicUsize>`. So even when
+// this `BuildProbeJoinMetrics` is dropped, the elapsed_compute is usable through the
+// Arc reference.
 impl Drop for ElapsedComputeFinalizer {
     fn drop(&mut self) {
         self.baseline.elapsed_compute().add(&self.build_time);
