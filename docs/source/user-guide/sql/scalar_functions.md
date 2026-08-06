@@ -4677,13 +4677,13 @@ array_to_string(array, delimiter[, null_string])
 transforms the values of an array
 
 ```sql
-array_transform(array, x -> x*2)
+array_transform(array, lambda)
 ```
 
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **lambda**: Lambda
+- **lambda**: The lambda function used to transform each value of the array.
 
 #### Example
 
