@@ -41,7 +41,8 @@ use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::arrow::arrow_reader::{
     ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection, RowSelector,
 };
-use datafusion::parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
+use datafusion::parquet::arrow::async_reader::AsyncFileReader;
+use datafusion::parquet::errors::ParquetError;
 use datafusion::parquet::file::metadata::{PageIndexPolicy, ParquetMetaData};
 use datafusion::parquet::file::properties::{EnabledStatistics, WriterProperties};
 use datafusion::parquet::schema::types::ColumnPath;
@@ -59,7 +60,7 @@ use bytes::Bytes;
 use datafusion::datasource::memory::DataSourceExec;
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use object_store::ObjectStore;
+use object_store::{ObjectStore, ObjectStoreExt};
 use tempfile::TempDir;
 use url::Url;
 
@@ -552,12 +553,19 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
         &self,
         _partition_index: usize,
         partitioned_file: PartitionedFile,
-        metadata_size_hint: Option<usize>,
+        _metadata_size_hint: Option<usize>,
         _metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Box<dyn AsyncFileReader + Send>> {
         // for this example we ignore the partition index and metrics
         // but in a real system you would likely use them to report details on
         // the performance of the reader.
+        //
+        // We also ignore the metadata size hint as this reader always serves
+        // metadata from the pre-populated `self.metadata` cache, so it never
+        // performs the footer fetch the hint is meant to optimize. A real
+        // implementation would likely pass the hint to
+        // `ParquetMetaDataReader::with_prefetch_hint` to reduce the number of
+        // IO requests needed to load the footer.
         let filename = partitioned_file
             .object_meta
             .location
@@ -568,13 +576,7 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
             .to_string();
 
         let object_store = Arc::clone(&self.object_store);
-        let mut inner =
-            ParquetObjectReader::new(object_store, partitioned_file.object_meta.location)
-                .with_file_size(partitioned_file.object_meta.size);
-
-        if let Some(hint) = metadata_size_hint {
-            inner = inner.with_footer_size_hint(hint)
-        };
+        let location = partitioned_file.object_meta.location;
 
         let metadata = self
             .metadata
@@ -583,16 +585,18 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
         Ok(Box::new(ParquetReaderWithCache {
             filename,
             metadata: Arc::clone(metadata),
-            inner,
+            object_store,
+            location,
         }))
     }
 }
 
-/// wrapper around a ParquetObjectReader that caches metadata
+/// An [`AsyncFileReader`] that reads from an [`ObjectStore`] and caches metadata
 struct ParquetReaderWithCache {
     filename: String,
     metadata: Arc<ParquetMetaData>,
-    inner: ParquetObjectReader,
+    object_store: Arc<dyn ObjectStore>,
+    location: object_store::path::Path,
 }
 
 impl AsyncFileReader for ParquetReaderWithCache {
@@ -601,7 +605,15 @@ impl AsyncFileReader for ParquetReaderWithCache {
         range: Range<u64>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Bytes>> {
         println!("get_bytes: {} Reading range {:?}", self.filename, range);
-        self.inner.get_bytes(range)
+        let object_store = Arc::clone(&self.object_store);
+        let location = self.location.clone();
+        async move {
+            object_store
+                .get_range(&location, range)
+                .await
+                .map_err(|e| ParquetError::External(Box::new(e)))
+        }
+        .boxed()
     }
 
     fn get_byte_ranges(
@@ -612,7 +624,15 @@ impl AsyncFileReader for ParquetReaderWithCache {
             "get_byte_ranges: {} Reading ranges {:?}",
             self.filename, ranges
         );
-        self.inner.get_byte_ranges(ranges)
+        let object_store = Arc::clone(&self.object_store);
+        let location = self.location.clone();
+        async move {
+            object_store
+                .get_ranges(&location, &ranges)
+                .await
+                .map_err(|e| ParquetError::External(Box::new(e)))
+        }
+        .boxed()
     }
 
     fn get_metadata(
