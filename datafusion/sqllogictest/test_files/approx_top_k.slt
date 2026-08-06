@@ -155,8 +155,8 @@ warm [{value: warm, count: 300}]
 # Approximation tests
 #
 # 9000 copies of 'dominant' plus 1000 singleton values. With k = 1 the summary
-# tracks 3 counters with a small bounded working set, so eviction happens
-# repeatedly in every partition and the alpha map is exercised.
+# tracks 3 counters, so filtering and eviction happen repeatedly in every
+# partition and the alpha map is exercised.
 ###########
 
 statement ok

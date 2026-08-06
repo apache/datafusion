@@ -1247,7 +1247,7 @@ An alternative syntax is also supported:
 
 ### `approx_top_k`
 
-Returns the approximate most frequent (top-k) values with their estimated counts as a list of `{value, count}` structs. Values are ranked first by the lower bound of the frequency estimate and then by the estimated count.
+Returns the approximate most frequent (top-k) values with their estimated counts as a list of `{value, count}` structs. Values are ranked by estimated count, with lower-error estimates preferred when counts tie.
 
 Because the aggregate uses bounded memory, `count` is an upper-bound estimate. Within one summary it is exact for a value that was tracked for the whole scan; distributed merging may add an omission bound from partitions where that value was not tracked. Values whose frequency is far from the top-k boundary are the ones reported reliably; ties and near-ties may be resolved arbitrarily.
 

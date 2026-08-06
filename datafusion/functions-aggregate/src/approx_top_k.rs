@@ -19,25 +19,28 @@
 //!
 //! This implements a distributed-friendly approximate top-k aggregation using
 //! the Filtered Space-Saving algorithm. The algorithm maintains a fixed-size summary
-//! of counters plus an alpha map (filter) that remembers evicted items' frequencies.
+//! of counters plus an alpha map (filter) that estimates unmonitored items'
+//! frequencies.
 //!
 //! Usage: `approx_top_k(column, k)`
 //! - `column`: The column to find the most frequent values from
 //! - `k`: The number of top elements to track (required, literal integer)
 //!
 //! Returns: `List<Struct { value: <input_type>, count: UInt64 }>` ranked by
-//! the estimated lower bound (`count - error`), then by `count`, then by value
-//! for deterministic ties (see `Counter` for the exact ordering).
+//! estimated count, then by error, then by value for deterministic ties (see
+//! `Counter` for the exact ordering).
 //!
 //! `count` is an *upper bound* on the true frequency: each counter also tracks
 //! an `error` such that the true frequency lies in `[count - error, count]`.
 //! Counters that were never evicted have `error == 0` and are therefore exact.
-//! The `error` is used internally for ranking but is not exposed in the output.
+//! The `error` is used internally to break estimated-count ties but is not
+//! exposed in the output.
 //!
 //! Algorithm references:
 //! - Filtered Space-Saving: Homem, Carvalho. "Finding top-k elements in data
-//!   streams" (Information Sciences, 2010).  Section 6 / equation (24) gives
-//!   the alpha map sizing used by `ALPHA_MAP_ELEMENTS_PER_COUNTER`.
+//!   streams" (Information Sciences, 2010),
+//!   <https://doi.org/10.1016/j.ins.2010.08.024>. Section 8 / equation (24)
+//!   gives the alpha map sizing used by `ALPHA_MAP_ELEMENTS_PER_COUNTER`.
 //! - Parallel Space Saving: <https://arxiv.org/pdf/1401.0702.pdf>
 //! - Space-Saving: Metwally, Agrawal, El Abbadi. "Efficient Computation of Frequent
 //!   and Top-k Elements in Data Streams" (ICDT 2005)
@@ -87,22 +90,17 @@ make_udaf_expr_and_func!(
 // ---------------------------------------------------------------------------
 
 /// Suggested constant from Homem & Carvalho, "Finding top-k elements in data
-/// streams", section 6, equation (24). Determines the size of the alpha map
+/// streams", section 8, equation (24). Determines the size of the alpha map
 /// relative to the capacity.
 const ALPHA_MAP_ELEMENTS_PER_COUNTER: usize = 6;
 
 /// Maximum allowed value for k in `approx_top_k(column, k)`.
 const APPROX_TOP_K_MAX_K: usize = 10_000;
 
-/// Avoid retaining pathological transient keys in the recycling pool.
-const MAX_RECYCLED_ITEM_CAPACITY: usize = 64 * 1024;
-
-/// Capacity multiplier for internal tracking (matches ClickHouse's default).
+/// Capacity multiplier for internal tracking.
 ///
 /// We track more items internally than k to improve accuracy.
 /// If user asks for top-5, we internally track top `5 * 3 = 15` items.
-/// Memory impact: ~100 bytes per counter; target_capacity is 2x the tracked
-/// counter count, so top-100 uses ~60 KB per accumulator.
 const CAPACITY_MULTIPLIER: usize = 3;
 
 /// Fixed high-quality hash state used for both counter lookup and alpha buckets.
@@ -331,13 +329,11 @@ fn serialize_single_counter_state(
 /// The algorithm guarantees that the true count lies within `[count - error, count]`.
 ///
 /// [`Ord`] ranks counters *best first*, so sorting a slice of counters yields
-/// them in the order they should be reported (and `drain`ing the tail evicts the
-/// least frequent). The ordering is:
+/// them in the order they should be reported. The ordering from the original
+/// Filtered Space-Saving algorithm is:
 ///
-/// 1. Higher `count - error` first: this is the guaranteed lower bound on the
-///    true frequency and prevents a hash-collision alpha boost from outranking
-///    an item with stronger observed evidence.
-/// 2. Then higher `count`, matching the Filtered Space-Saving tie-break.
+/// 1. Higher estimated `count` first.
+/// 2. Then lower `error`.
 /// 3. Then `item` bytes ascending. This last key only exists to make the
 ///    ordering *total*, which keeps `Ord` consistent with the derived [`Eq`] and
 ///    makes the reported top-k deterministic when counts tie.
@@ -355,12 +351,11 @@ struct Counter {
 
 impl Ord for Counter {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Reversed so that higher lower bounds and counts sort first.
+        // Reversed on count so sorting places the best counter first.
         other
             .count
-            .saturating_sub(other.error)
-            .cmp(&self.count.saturating_sub(self.error))
-            .then_with(|| other.count.cmp(&self.count))
+            .cmp(&self.count)
+            .then_with(|| self.error.cmp(&other.error))
             .then_with(|| self.item.cmp(&other.item))
     }
 }
@@ -375,8 +370,8 @@ impl PartialOrd for Counter {
 ///
 /// Uses a [`HashTable`] that stores `(hash, index)` tuples for O(1) counter
 /// lookups without duplicating the key bytes.  The actual item data lives in
-/// `counters[index].item`.  An alpha map (filter) remembers evicted items'
-/// frequencies.
+/// `counters[index].item`. An alpha map estimates the frequencies of filtered
+/// and evicted items.
 ///
 /// All heap buffers grow on demand.  Nothing is pre-allocated from `k`, because
 /// under `GROUP BY` there is one accumulator (and therefore one summary) per
@@ -438,6 +433,41 @@ impl AlphaMap {
         }
     }
 
+    fn set(&mut self, slot: usize, value: u64, slots: usize) -> u64 {
+        debug_assert_ne!(value, 0);
+        match self {
+            Self::Empty => {
+                let mut values = HashMap::new();
+                values.insert(slot, value);
+                *self = Self::Sparse(values);
+            }
+            Self::Sparse(values) => {
+                values.insert(slot, value);
+                if values.len() >= max(8, slots / 4) {
+                    let Self::Sparse(values) = std::mem::replace(self, Self::Empty)
+                    else {
+                        unreachable!()
+                    };
+                    let mut dense = vec![0; slots];
+                    for (slot, value) in values {
+                        dense[slot] = value;
+                    }
+                    *self = Self::Dense(dense);
+                }
+            }
+            Self::Dense(values) => values[slot] = value,
+        }
+        value
+    }
+
+    fn max_value(&self) -> u64 {
+        match self {
+            Self::Empty => 0,
+            Self::Sparse(values) => values.values().copied().max().unwrap_or(0),
+            Self::Dense(values) => values.iter().copied().max().unwrap_or(0),
+        }
+    }
+
     fn for_each(&self, mut visit: impl FnMut(usize, u64)) {
         match self {
             Self::Empty => {}
@@ -475,23 +505,24 @@ impl AlphaMap {
 #[derive(Debug, Clone)]
 struct SpaceSavingSummary {
     counters: Vec<Counter>,
-    /// Key buffers retained from evicted counters and reused by later inserts.
-    free_items: Vec<Vec<u8>>,
     /// Maps `(cached_hash, counter_index)`.  Lookups use the cached hash for
     /// the fast path and fall back to byte equality via the `counters` vec.
     counter_map: HashTable<(u64, usize)>,
-    /// Historical frequency of evicted items, indexed by `hash & (len - 1)`.
+    /// Counter indices in a min-heap ordered with the least desirable counter
+    /// at the root. Counter storage stays stable so hash-table indices remain
+    /// valid while heap entries move.
+    min_heap: Vec<usize>,
+    /// Reverse mapping from counter index to its position in `min_heap`.
+    heap_positions: Vec<usize>,
+    /// Frequency estimate for unmonitored items, indexed by `hash & (len - 1)`.
     ///
     /// Sparse until enough buckets are populated for a dense representation to
     /// use less memory. An empty map reads as all-zero alphas.
     alpha_map: AlphaMap,
-    /// Cached alpha-map statistics used by merge and serialization.
+    /// Exact maximum filter estimate, cached for distributed merge corrections.
     alpha_max: u64,
     alpha_nonzero: usize,
     requested_capacity: usize,
-    /// Internal target capacity to avoid frequent truncations.
-    /// Set to `max(8, requested_capacity * 2)`.
-    target_capacity: usize,
     /// Running total of heap bytes owned by counter item `Vec`s.
     /// Updated on push / evict / clone so that `size()` is O(1).
     item_heap_bytes: usize,
@@ -515,13 +546,13 @@ impl SpaceSavingSummary {
     fn new(capacity: usize) -> Self {
         Self {
             counters: Vec::new(),
-            free_items: Vec::new(),
             counter_map: HashTable::new(),
+            min_heap: Vec::new(),
+            heap_positions: Vec::new(),
             alpha_map: AlphaMap::Empty,
             alpha_max: 0,
             alpha_nonzero: 0,
             requested_capacity: capacity,
-            target_capacity: max(8, capacity.saturating_mul(2)),
             item_heap_bytes: 0,
         }
     }
@@ -529,7 +560,7 @@ impl SpaceSavingSummary {
     /// Read the alpha (historical evicted frequency) for `hash`.
     ///
     /// Returns 0 while the alpha map is still unallocated, which is the correct
-    /// value: nothing has been evicted yet.
+    /// value: nothing has been filtered or evicted yet.
     fn alpha_for(&self, hash: u64) -> u64 {
         let mask = Self::compute_alpha_map_size(self.requested_capacity) - 1;
         self.alpha_map.get((hash as usize) & mask)
@@ -539,27 +570,51 @@ impl SpaceSavingSummary {
         Self::compute_alpha_map_size(self.requested_capacity)
     }
 
-    /// Record that `counter` was evicted, folding its count into the alpha map.
-    ///
-    /// Alpha accumulates the guaranteed lower bounds of evicted counters. This
-    /// is the Filtered Space-Saving filter used to seed re-admitted items.
-    fn record_eviction(
-        alpha_map: &mut AlphaMap,
-        alpha_slots: usize,
-        alpha_max: &mut u64,
-        alpha_nonzero: &mut usize,
-        counter: &Counter,
-    ) {
-        let alpha_mask = alpha_slots - 1;
-        let alpha_idx = (counter.hash as usize) & alpha_mask;
-        let lower_bound = counter.count.saturating_sub(counter.error);
-        if lower_bound != 0 {
-            if alpha_map.get(alpha_idx) == 0 {
-                *alpha_nonzero += 1;
-            }
-            let alpha = alpha_map.add(alpha_idx, lower_bound, alpha_slots);
-            *alpha_max = max(*alpha_max, alpha);
+    fn alpha_slot(&self, hash: u64) -> usize {
+        (hash as usize) & (self.alpha_slots() - 1)
+    }
+
+    fn add_alpha(&mut self, hash: u64, increment: u64) -> u64 {
+        let slots = self.alpha_slots();
+        let slot = self.alpha_slot(hash);
+        if increment != 0 && self.alpha_map.get(slot) == 0 {
+            self.alpha_nonzero += 1;
         }
+        let alpha = self.alpha_map.add(slot, increment, slots);
+        self.alpha_max = max(self.alpha_max, alpha);
+        alpha
+    }
+
+    /// Store the evicted counter estimate in its filter bucket, as specified by
+    /// Filtered Space-Saving. Assignment is intentional: a filter cell estimates
+    /// unmonitored items in that bucket rather than accumulating evicted counts.
+    fn record_eviction(&mut self, hash: u64, count: u64) {
+        let slots = self.alpha_slots();
+        let slot = self.alpha_slot(hash);
+        let previous = self.alpha_map.get(slot);
+        if previous == 0 {
+            self.alpha_nonzero += 1;
+        }
+        self.alpha_map.set(slot, count, slots);
+        if count >= self.alpha_max {
+            self.alpha_max = count;
+        } else if previous == self.alpha_max {
+            self.alpha_max = self.alpha_map.max_value();
+        }
+    }
+
+    /// Preserve an upper bound when a distributed merge discards a candidate.
+    /// Merge is an extension to the original single-stream algorithm, so an
+    /// existing combined partition bound must never be reduced.
+    fn record_omission_bound(&mut self, hash: u64, count: u64) {
+        let slots = self.alpha_slots();
+        let slot = self.alpha_slot(hash);
+        let count = max(self.alpha_map.get(slot), count);
+        if self.alpha_map.get(slot) == 0 {
+            self.alpha_nonzero += 1;
+        }
+        self.alpha_map.set(slot, count, slots);
+        self.alpha_max = max(self.alpha_max, count);
     }
 
     fn is_empty(&self) -> bool {
@@ -593,77 +648,54 @@ impl SpaceSavingSummary {
             .map(|idx| &self.counters[idx])
     }
 
-    /// Add an item with increment 1.
+    /// Process one stream item using the original Filtered Space-Saving update.
     fn add(&mut self, item: &[u8]) {
-        self.insert(item, 1, 0);
-    }
-
-    /// Core insertion algorithm from Filtered Space-Saving.
-    fn insert(&mut self, item: &[u8], increment: u64, error: u64) {
         let hash = Self::hash_item(item);
 
         // Fast path: item already tracked.
         if let Some(idx) = self.find_counter_idx(item, hash) {
-            self.counters[idx].count = self.counters[idx].count.saturating_add(increment);
-            self.counters[idx].error = self.counters[idx].error.saturating_add(error);
+            self.counters[idx].count = self.counters[idx].count.saturating_add(1);
+            self.repair_heap(idx);
             return;
         }
 
         // Below capacity: add directly.
         if self.counters.len() < self.requested_capacity {
-            self.push_counter(item, hash, increment, error);
+            self.push_counter(item, hash, 1, 0);
             return;
         }
 
-        // At capacity: seed the new counter from the alpha map, so an item that
-        // has been evicted before re-enters with its historical frequency rather
-        // than from scratch. This boost breaks equal-lower-bound ties in favor
-        // of an item with prior evidence, reducing summary thrashing.
+        // Filter an unmonitored item until its bucket estimate reaches the
+        // minimum tracked estimate. This is the defining admission rule of the
+        // original Filtered Space-Saving algorithm.
         let alpha = self.alpha_for(hash);
+        let min_idx = self.min_heap[0];
+        let min_count = self.counters[min_idx].count;
+        if alpha.saturating_add(1) < min_count {
+            self.add_alpha(hash, 1);
+            return;
+        }
 
-        self.push_counter(
+        let victim_hash = self.counters[min_idx].hash;
+        self.record_eviction(victim_hash, min_count);
+        // Read alpha after recording the victim. When both values hash to the
+        // same bucket, this ordering is required by the original algorithm.
+        let admission_alpha = self.alpha_for(hash);
+        self.replace_min_counter(
             item,
             hash,
-            alpha.saturating_add(increment),
-            alpha.saturating_add(error),
+            admission_alpha.saturating_add(1),
+            admission_alpha,
         );
     }
 
-    fn take_item_buffer(&mut self, item: &[u8]) -> Vec<u8> {
-        if let Some(mut owned) = self.free_items.pop() {
-            let old_capacity = owned.capacity();
-            if old_capacity > max(1_024, item.len().saturating_mul(4)) {
-                self.item_heap_bytes = self.item_heap_bytes.saturating_sub(old_capacity);
-                let owned = item.to_vec();
-                self.item_heap_bytes =
-                    self.item_heap_bytes.saturating_add(owned.capacity());
-                return owned;
-            }
-            owned.clear();
-            owned.extend_from_slice(item);
-            self.item_heap_bytes = self
-                .item_heap_bytes
-                .saturating_add(owned.capacity().saturating_sub(old_capacity));
-            owned
-        } else {
-            let owned = item.to_vec();
-            self.item_heap_bytes = self.item_heap_bytes.saturating_add(owned.capacity());
-            owned
-        }
-    }
-
     fn push_counter(&mut self, item: &[u8], hash: u64, count: u64, error: u64) {
-        let idx = self.counters.len();
-        let item = self.take_item_buffer(item);
-        self.counter_map
-            .insert_unique(hash, (hash, idx), |&(h, _)| h);
-        self.counters.push(Counter {
-            item,
+        self.push_owned_counter(Counter {
+            item: item.to_vec(),
             hash,
             count,
             error,
         });
-        self.truncate_if_needed(false);
     }
 
     fn push_owned_counter(&mut self, counter: Counter) {
@@ -673,52 +705,126 @@ impl SpaceSavingSummary {
         self.counter_map
             .insert_unique(counter.hash, (counter.hash, idx), |&(h, _)| h);
         self.counters.push(counter);
+        let heap_pos = self.min_heap.len();
+        self.min_heap.push(idx);
+        self.heap_positions.push(heap_pos);
+        self.sift_up(heap_pos);
     }
 
-    /// Truncate counters down to `requested_capacity` once `target_capacity` is
-    /// reached, folding evicted items' counts into the alpha map.
-    ///
-    /// Eviction is batched rather than done on every insert: `counters` is
-    /// allowed to grow to `target_capacity` (2x) and is then cut back in one
-    /// pass, which amortises the selection cost over many inserts.
-    fn truncate_if_needed(&mut self, force_rebuild: bool) {
-        let need_truncate = self.counters.len() >= self.target_capacity;
+    fn replace_min_counter(&mut self, item: &[u8], hash: u64, count: u64, error: u64) {
+        let idx = self.min_heap[0];
+        let old_hash = self.counters[idx].hash;
+        self.counter_map
+            .find_entry(old_hash, |&(_, counter_idx)| counter_idx == idx)
+            .expect("counter map must contain the minimum counter")
+            .remove();
 
-        if need_truncate {
-            self.truncate_to_requested_capacity();
+        let old_capacity = self.counters[idx].item.capacity();
+        if old_capacity > max(1_024, item.len().saturating_mul(4)) {
+            self.counters[idx].item = item.to_vec();
+        } else {
+            self.counters[idx].item.clear();
+            self.counters[idx].item.extend_from_slice(item);
         }
+        let new_capacity = self.counters[idx].item.capacity();
+        self.item_heap_bytes = self
+            .item_heap_bytes
+            .saturating_sub(old_capacity)
+            .saturating_add(new_capacity);
+        self.counters[idx].hash = hash;
+        self.counters[idx].count = count;
+        self.counters[idx].error = error;
+        self.counter_map
+            .insert_unique(hash, (hash, idx), |&(h, _)| h);
+        self.sift_down(0);
+    }
 
-        if force_rebuild && !need_truncate {
-            self.rebuild_counter_map();
+    fn counter_is_worse(&self, left: usize, right: usize) -> bool {
+        self.counters[left] > self.counters[right]
+    }
+
+    fn swap_heap_entries(&mut self, left: usize, right: usize) {
+        self.min_heap.swap(left, right);
+        self.heap_positions[self.min_heap[left]] = left;
+        self.heap_positions[self.min_heap[right]] = right;
+    }
+
+    fn sift_up(&mut self, mut pos: usize) {
+        while pos != 0 {
+            let parent = (pos - 1) / 2;
+            if !self.counter_is_worse(self.min_heap[pos], self.min_heap[parent]) {
+                break;
+            }
+            self.swap_heap_entries(pos, parent);
+            pos = parent;
         }
     }
 
-    /// Reduce the buffered counters to the requested capacity and record every
-    /// discarded lower bound in the alpha filter.
-    fn truncate_to_requested_capacity(&mut self) {
+    fn sift_down(&mut self, mut pos: usize) {
+        loop {
+            let left = pos * 2 + 1;
+            if left >= self.min_heap.len() {
+                break;
+            }
+            let right = left + 1;
+            let mut worst = left;
+            if right < self.min_heap.len()
+                && self.counter_is_worse(self.min_heap[right], self.min_heap[left])
+            {
+                worst = right;
+            }
+            if !self.counter_is_worse(self.min_heap[worst], self.min_heap[pos]) {
+                break;
+            }
+            self.swap_heap_entries(pos, worst);
+            pos = worst;
+        }
+    }
+
+    fn repair_heap(&mut self, counter_idx: usize) {
+        let pos = self.heap_positions[counter_idx];
+        if pos != 0 && self.counter_is_worse(counter_idx, self.min_heap[(pos - 1) / 2]) {
+            self.sift_up(pos);
+        } else {
+            self.sift_down(pos);
+        }
+    }
+
+    fn rebuild_min_heap(&mut self) {
+        self.min_heap.clear();
+        self.heap_positions.clear();
+        self.min_heap.extend(0..self.counters.len());
+        self.heap_positions.extend(0..self.counters.len());
+        for pos in (0..self.min_heap.len() / 2).rev() {
+            self.sift_down(pos);
+        }
+    }
+
+    /// Reduce candidates produced by a distributed merge. Streaming updates
+    /// never exceed capacity; merge is the only operation requiring reduction.
+    fn reduce_to_requested_capacity(&mut self) {
         let k = self.requested_capacity;
         if k == 0 || k >= self.counters.len() {
+            self.rebuild_min_heap();
             return;
         }
 
         self.counters.select_nth_unstable(k - 1);
-        let alpha_slots = self.alpha_slots();
-        for counter in self.counters.drain(k..) {
-            Self::record_eviction(
-                &mut self.alpha_map,
-                alpha_slots,
-                &mut self.alpha_max,
-                &mut self.alpha_nonzero,
-                &counter,
-            );
-            if counter.item.capacity() <= MAX_RECYCLED_ITEM_CAPACITY {
-                self.free_items.push(counter.item);
-            } else {
-                self.item_heap_bytes =
-                    self.item_heap_bytes.saturating_sub(counter.item.capacity());
-            }
+        let omitted: Vec<_> = self.counters[k..]
+            .iter()
+            .map(|counter| (counter.hash, counter.count))
+            .collect();
+        for (hash, count) in omitted {
+            self.record_omission_bound(hash, count);
         }
+        let released = self.counters[k..]
+            .iter()
+            .map(|counter| counter.item.capacity())
+            .sum::<usize>();
+        self.item_heap_bytes = self.item_heap_bytes.saturating_sub(released);
+        self.counters.truncate(k);
         self.rebuild_counter_map();
+        self.rebuild_min_heap();
     }
 
     /// Rebuild the `counter_map` from the current `counters` vec.
@@ -733,12 +839,6 @@ impl SpaceSavingSummary {
         }
     }
 
-    fn release_free_items(&mut self) {
-        let released: usize = self.free_items.iter().map(Vec::capacity).sum();
-        self.item_heap_bytes = self.item_heap_bytes.saturating_sub(released);
-        self.free_items = Vec::new();
-    }
-
     #[cfg(test)]
     fn get(&self, item: &[u8]) -> Option<(u64, u64)> {
         self.find_counter(item).map(|c| (c.count, c.error))
@@ -746,10 +846,8 @@ impl SpaceSavingSummary {
 
     /// Borrow the `n` highest-ranked counters, sorted best-first.
     ///
-    /// `counters` may hold up to `target_capacity` entries between truncations,
-    /// so this selection is what actually enforces the reported limit.  Because
-    /// [`Counter`]'s ordering is total, the result is deterministic even when
-    /// counts tie.
+    /// Because [`Counter`]'s ordering is total, the result is deterministic even
+    /// when counts and errors tie.
     fn ranked_counters(&self, n: usize) -> Vec<&Counter> {
         if n == 0 || self.counters.is_empty() {
             return Vec::new();
@@ -775,9 +873,9 @@ impl SpaceSavingSummary {
             .collect()
     }
 
-    /// Merge another summary into this one using the Parallel Space-Saving
-    /// reduce-and-combine algorithm from <https://arxiv.org/pdf/1401.0702.pdf>,
-    /// matching ClickHouse's `SpaceSaving::merge()` implementation.
+    /// Merge another summary using the Parallel Space-Saving reduce-and-combine
+    /// algorithm from <https://arxiv.org/pdf/1401.0702.pdf>, extended with the
+    /// Filtered Space-Saving alpha bounds.
     fn merge(&mut self, other: SpaceSavingSummary) -> Result<()> {
         if other.is_empty() {
             return Ok(());
@@ -861,7 +959,7 @@ impl SpaceSavingSummary {
             });
         }
 
-        self.truncate_if_needed(false);
+        self.reduce_to_requested_capacity();
         Ok(())
     }
 
@@ -870,9 +968,7 @@ impl SpaceSavingSummary {
     /// The alpha map is encoded sparsely or as a bitmap plus packed `u64`
     /// values, whichever is smaller. This preserves the omission bounds needed
     /// by distributed merges without writing a dense zero-filled map.
-    fn serialize(&mut self, data_type: &DataType) -> Result<Vec<u8>> {
-        self.truncate_to_requested_capacity();
-        self.release_free_items();
+    fn serialize(&self, data_type: &DataType) -> Result<Vec<u8>> {
         if self.is_empty() {
             return Ok(Vec::new());
         }
@@ -1258,17 +1354,19 @@ impl SpaceSavingSummary {
         }
         reader.finish()?;
 
-        Ok(Self {
+        let mut summary = Self {
             counters,
-            free_items: Vec::new(),
             counter_map,
+            min_heap: Vec::new(),
+            heap_positions: Vec::new(),
             alpha_map,
             alpha_max,
             alpha_nonzero,
             requested_capacity,
-            target_capacity: max(8, requested_capacity.saturating_mul(2)),
             item_heap_bytes,
-        })
+        };
+        summary.rebuild_min_heap();
+        Ok(summary)
     }
 
     /// Approximate size in bytes of this summary.  O(1) thanks to
@@ -1276,7 +1374,8 @@ impl SpaceSavingSummary {
     fn size(&self) -> usize {
         size_of::<Self>()
             + self.counters.capacity() * size_of::<Counter>()
-            + self.free_items.capacity() * size_of::<Vec<u8>>()
+            + self.min_heap.capacity() * size_of::<usize>()
+            + self.heap_positions.capacity() * size_of::<usize>()
             + self.item_heap_bytes
             + self.counter_map.allocation_size()
             + self.alpha_map.allocation_size()
@@ -1294,7 +1393,7 @@ impl SpaceSavingSummary {
 /// Approximate top-k UDAF using the Filtered Space-Saving algorithm.
 #[user_doc(
     doc_section(label = "Approximate Functions"),
-    description = r#"Returns the approximate most frequent (top-k) values with their estimated counts as a list of `{value, count}` structs. Values are ranked first by the lower bound of the frequency estimate and then by the estimated count.
+    description = r#"Returns the approximate most frequent (top-k) values with their estimated counts as a list of `{value, count}` structs. Values are ranked by estimated count, with lower-error estimates preferred when counts tie.
 
 Because the aggregate uses bounded memory, `count` is an upper-bound estimate. Within one summary it is exact for a value that was tracked for the whole scan; distributed merging may add an omission bound from partitions where that value was not tracked. Values whose frequency is far from the top-k boundary are the ones reported reliably; ties and near-ties may be resolved arbitrarily.
 
@@ -2019,7 +2118,7 @@ impl GroupSummary {
     }
 
     fn serialize(
-        &mut self,
+        &self,
         output: &mut Vec<u8>,
         capacity: usize,
         data_type: &DataType,
@@ -2344,7 +2443,7 @@ impl GroupsAccumulator for ApproxTopKGroupsAccumulator {
         let groups = self.take_groups(emit_to);
         let mut builder = LargeBinaryBuilder::new();
         let mut scratch = Vec::new();
-        for mut summary in groups {
+        for summary in groups {
             summary.serialize(&mut scratch, self.capacity(), &self.input_data_type)?;
             builder.append_value(&scratch);
         }
@@ -2433,13 +2532,11 @@ mod tests {
             summary.add(b"frequent");
         }
 
-        // Repeated batches of distinct values force truncation and exercise
-        // both the alpha map and recycled key buffers.
+        // Distinct values exercise filtering, eviction, and key-buffer reuse.
         for i in 0..63u64 {
             let item = format!("rare_{i}");
             summary.add(item.as_bytes());
         }
-        summary.truncate_to_requested_capacity();
 
         assert_eq!(summary.len(), 2);
 
@@ -2449,8 +2546,7 @@ mod tests {
         assert_eq!(count, 100);
         assert_eq!(error, 0);
 
-        // Exactly one rare candidate survives alongside it; alpha collisions
-        // can change which rare value has the strongest lower bound.
+        // Exactly one rare candidate survives alongside it.
         let survivors: Vec<String> = (0..63u64)
             .map(|i| format!("rare_{i}"))
             .filter(|item| summary.get(item.as_bytes()).is_some())
@@ -2461,56 +2557,58 @@ mod tests {
         assert!(!summary.alpha_map.is_empty());
     }
 
-    /// The alpha map is only useful if it actually changes *retention*.
-    ///
-    /// Because [`Counter`] ranks on `count` and a re-admitted item enters with
-    /// `count = alpha + increment`, a bucket with a large accumulated alpha
-    /// produces a counter that outranks a genuinely fresh one.
+    /// The filter must reject weak candidates and admit one once its bucket
+    /// estimate reaches the minimum tracked frequency.
     #[test]
-    fn test_alpha_map_boost_affects_retention() {
+    fn test_alpha_filter_controls_admission() {
         let mut summary = SpaceSavingSummary::new(2);
-        summary.add(b"a");
-        summary.add(b"b");
-        let alpha_slots = summary.alpha_slots();
-        let alpha_mask = alpha_slots - 1;
-        let hot_bucket = 0;
-        let hot_alpha = 5;
-        summary.alpha_map.add(hot_bucket, hot_alpha, alpha_slots);
-        summary.alpha_max = hot_alpha;
-        summary.alpha_nonzero = 1;
+        for _ in 0..3 {
+            summary.add(b"a");
+            summary.add(b"b");
+        }
 
-        let boosted_item = find_item_for_bucket(hot_bucket, alpha_mask, "boosted");
-        summary.add(boosted_item.as_bytes());
-        let (count, error) = summary.get(boosted_item.as_bytes()).unwrap();
-        assert_eq!(count, hot_alpha + 1);
-        assert_eq!(error, hot_alpha);
+        let candidate = b"candidate";
+        let candidate_hash = SpaceSavingSummary::hash_item(candidate);
+        summary.add(candidate);
+        assert!(summary.get(candidate).is_none());
+        assert_eq!(summary.alpha_for(candidate_hash), 1);
 
-        let cold_bucket = (0..alpha_slots)
-            .find(|&slot| summary.alpha_map.get(slot) == 0)
-            .expect("expected at least one empty alpha bucket");
-        let plain_item = find_item_for_bucket(cold_bucket, alpha_mask, "zz_plain");
-        summary.add(plain_item.as_bytes());
-        let (plain_count, plain_error) = summary.get(plain_item.as_bytes()).unwrap();
-        assert_eq!(plain_count, 1);
-        assert_eq!(plain_error, 0);
+        summary.add(candidate);
+        assert!(summary.get(candidate).is_none());
+        assert_eq!(summary.alpha_for(candidate_hash), 2);
 
-        // Both lower bounds are one; alpha only breaks that tie on estimated
-        // count. Force eviction and prove the boosted item survives while the
-        // lexicographically-last unboosted item does not.
-        summary.truncate_to_requested_capacity();
-        assert!(summary.get(boosted_item.as_bytes()).is_some());
-        assert!(summary.get(plain_item.as_bytes()).is_none());
+        summary.add(candidate);
+        assert_eq!(summary.get(candidate), Some((3, 2)));
+        assert_eq!(summary.len(), 2);
     }
 
-    /// Search for an item whose hash lands in `bucket`.
-    fn find_item_for_bucket(bucket: usize, alpha_mask: usize, prefix: &str) -> String {
-        (0..1_000_000u64)
-            .map(|i| format!("{prefix}_{i}"))
+    #[test]
+    fn test_same_bucket_replacement_uses_evicted_estimate() {
+        let mut summary = SpaceSavingSummary::new(1);
+        for _ in 0..3 {
+            summary.add(b"victim");
+        }
+
+        let victim_slot = summary.alpha_slot(SpaceSavingSummary::hash_item(b"victim"));
+        let candidate = (0..1_000_000u64)
+            .map(|i| format!("candidate_{i}"))
             .find(|candidate| {
-                let hash = SpaceSavingSummary::hash_item(candidate.as_bytes());
-                (hash as usize) & alpha_mask == bucket
+                summary.alpha_slot(SpaceSavingSummary::hash_item(candidate.as_bytes()))
+                    == victim_slot
             })
-            .expect("should find an item hashing into the requested bucket")
+            .expect("should find an item in the victim's alpha bucket");
+
+        summary.add(candidate.as_bytes());
+        summary.add(candidate.as_bytes());
+        assert!(summary.get(candidate.as_bytes()).is_none());
+
+        summary.add(candidate.as_bytes());
+        // The victim assignment changes alpha from 2 to 3 before insertion.
+        assert_eq!(summary.get(candidate.as_bytes()), Some((4, 3)));
+        assert_eq!(
+            summary.alpha_for(SpaceSavingSummary::hash_item(b"victim")),
+            3
+        );
     }
 
     /// Once eviction has happened the reported counts are genuine upper-bound
@@ -2667,24 +2765,21 @@ mod tests {
     #[test]
     fn test_merge_common_counter_saturates_without_losing_count() {
         let mut left = SpaceSavingSummary::new(1);
-        left.insert(b"shared", u64::MAX - 5, 0);
+        left.push_owned_counter(Counter {
+            item: b"shared".to_vec(),
+            hash: SpaceSavingSummary::hash_item(b"shared"),
+            count: u64::MAX - 5,
+            error: 0,
+        });
 
         let mut right = SpaceSavingSummary::new(1);
-        right.insert(b"shared", 10, 0);
-        let alpha_slots = right.alpha_slots();
-        let synthetic = Counter {
-            item: b"evicted".to_vec(),
-            hash: SpaceSavingSummary::hash_item(b"evicted"),
-            count: 100,
+        right.push_owned_counter(Counter {
+            item: b"shared".to_vec(),
+            hash: SpaceSavingSummary::hash_item(b"shared"),
+            count: 10,
             error: 0,
-        };
-        SpaceSavingSummary::record_eviction(
-            &mut right.alpha_map,
-            alpha_slots,
-            &mut right.alpha_max,
-            &mut right.alpha_nonzero,
-            &synthetic,
-        );
+        });
+        right.record_eviction(SpaceSavingSummary::hash_item(b"evicted"), 100);
 
         left.merge(right).unwrap();
         assert_eq!(left.get(b"shared"), Some((u64::MAX, 0)));
