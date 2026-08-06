@@ -470,6 +470,10 @@ impl FFI_SessionRef {
     /// physical extension node exposed through the session. Their task context
     /// providers must remain live and return contexts appropriate for their decode
     /// callbacks.
+    ///
+    /// If `session` is already foreign, this re-exports its original FFI handle
+    /// rather than adding another wrapper layer. The handle adopts the codecs
+    /// supplied here while retaining its original private data and runtime.
     pub fn new_with_ffi_codecs(
         session: &dyn Session,
         runtime: Option<Handle>,
@@ -477,7 +481,10 @@ impl FFI_SessionRef {
         physical_codec: FFI_PhysicalExtensionCodec,
     ) -> Self {
         if let Some(session) = session.as_any().downcast_ref::<ForeignSession>() {
-            return session.session.clone();
+            let mut session = session.session.clone();
+            session.logical_codec = logical_codec;
+            session.physical_codec = physical_codec;
+            return session;
         }
 
         let private_data = Box::new(SessionPrivateData { session, runtime });
