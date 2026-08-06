@@ -45,6 +45,7 @@ use datafusion_physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 
 use crate::nested_schema_pruning::{
     CastColumnAccess, clip_for_cast, contains_struct, count_leaves, field_with_type,
+    type_for_leaf_subset,
 };
 
 /// The result of resolving which Parquet leaf columns and Arrow schema fields
@@ -500,22 +501,16 @@ pub(crate) fn build_projection_read_plan(
 /// - roots referenced as whole columns keep every leaf and their full
 ///   physical field (whole-column reads take precedence; cast accesses on
 ///   such roots were already dropped by the caller);
-/// - roots consumed through a cast, and not also through a `get_field`
-///   access on the same root, keep only the leaves the cast target names
-///   (see `crate::nested_schema_pruning`);
+/// - roots consumed through one or more casts keep the union of the leaves
+///   their targets name (see `crate::nested_schema_pruning`);
+/// - a root consumed through both casts and `get_field` accesses keeps the
+///   union of both access kinds;
 /// - roots consumed only through `get_field` accesses keep the union of the
 ///   leaves those accesses reach, as before;
 /// - any other referenced root, a cast that can't be safely clipped (see
-///   `nested_schema_pruning::clip_for_cast`), a root reached by two casts
-///   with *different* targets (a projection can consume the same column
-///   through more than one narrowing cast, e.g.
-///   `SELECT CAST(s AS STRUCT(a)), CAST(s AS STRUCT(b)) FROM t`; clipping to
-///   either target alone would starve the other), or a root reached by both a
-///   cast and a `get_field` access (not produced by
-///   `DefaultPhysicalExprAdapter`, which always routes a `get_field` over a
-///   narrowed column through the same cast rather than a separate access,
-///   but a custom `PhysicalExprAdapter` could in principle inject both),
-///   falls back to a full read of that root.
+///   `nested_schema_pruning::clip_for_cast`), or a merged leaf set whose
+///   emitted Arrow type can't be derived safely, falls back to a full read of
+///   that root.
 fn build_read_plan_with_cast_clipping(
     file_schema: &Schema,
     schema_descr: &SchemaDescriptor,
@@ -524,43 +519,20 @@ fn build_read_plan_with_cast_clipping(
     cast_accesses: &[CastColumnAccess],
 ) -> ParquetReadPlan {
     let whole_roots: BTreeSet<usize> = whole_root_indices.iter().copied().collect();
-    let struct_access_roots: BTreeSet<usize> =
-        struct_accesses.iter().map(|a| a.root_index).collect();
     // Every referenced root's Parquet leaves, grouped in one pass over the
     // schema descriptor rather than one `leaf_indices_for_roots` scan per
     // root (this function may look up several roots).
     let leaves_by_root = leaves_grouped_by_root(schema_descr);
 
-    // Root -> (absolute kept leaf indices, cast-clipped Arrow type) for
-    // roots successfully clipped via a cast.
-    let mut clipped_by_root: BTreeMap<usize, (Vec<usize>, DataType)> = BTreeMap::new();
+    // Root -> relative leaf offsets required by every narrowing cast on that
+    // root. A set makes repeated and overlapping targets a natural union.
+    let mut kept_offsets_by_root: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
     // Roots with a cast access that must fall back to a full read.
     let mut fallback_roots: BTreeSet<usize> = BTreeSet::new();
-    // The cast target already clipped for a root, so a second cast on the
-    // same root can be recognised as either a repeat (same target: nothing to
-    // do) or a conflict (different target: neither clip is valid on its own).
-    let mut clipped_target_by_root: BTreeMap<usize, &DataType> = BTreeMap::new();
 
     for access in cast_accesses {
         let root = access.root_index;
         if whole_roots.contains(&root) || fallback_roots.contains(&root) {
-            continue;
-        }
-        if let Some(previous) = clipped_target_by_root.get(&root) {
-            if **previous != access.target_type {
-                // The projection consumes this root through two different
-                // narrowing casts. Each cast only needs its own leaves, but
-                // the mask is per column: clipping to the first target would
-                // silently null-fill whatever the second one needs. Read the
-                // whole root instead.
-                clipped_by_root.remove(&root);
-                clipped_target_by_root.remove(&root);
-                fallback_roots.insert(root);
-            }
-            continue;
-        }
-        if struct_access_roots.contains(&root) {
-            fallback_roots.insert(root);
             continue;
         }
 
@@ -577,17 +549,61 @@ fn build_read_plan_with_cast_clipping(
         }
 
         match clip_for_cast(physical_type, &access.target_type) {
-            Some((kept_offsets, pruned_type)) => {
-                let start = root_leaves[0];
-                let absolute = kept_offsets.into_iter().map(|o| start + o).collect();
-                clipped_by_root.insert(root, (absolute, pruned_type));
-                clipped_target_by_root.insert(root, &access.target_type);
+            Some((kept_offsets, _pruned_type)) => {
+                kept_offsets_by_root
+                    .entry(root)
+                    .or_default()
+                    .extend(kept_offsets);
             }
             // Nothing prunable for this cast: every leaf is consumed.
             None => {
+                kept_offsets_by_root.remove(&root);
                 fallback_roots.insert(root);
             }
         }
+    }
+
+    // Add leaves reached through `get_field` to cast roots. The resolver
+    // returns absolute Parquet leaf indices; convert them back to offsets in
+    // their root so they can share the same union as cast clipping.
+    for leaf in resolve_struct_field_leaves(struct_accesses, file_schema, schema_descr) {
+        let root = schema_descr.get_column_root_idx(leaf);
+        if !kept_offsets_by_root.contains_key(&root) {
+            continue;
+        }
+        let Some(offset) = leaves_by_root
+            .get(&root)
+            .and_then(|root_leaves| root_leaves.binary_search(&leaf).ok())
+        else {
+            kept_offsets_by_root.remove(&root);
+            fallback_roots.insert(root);
+            continue;
+        };
+        kept_offsets_by_root
+            .get_mut(&root)
+            .expect("root presence checked above")
+            .insert(offset);
+    }
+
+    // Derive the reader's one emitted Arrow type from each merged leaf set.
+    // Any unsupported partial wrapper retains the total fallback guarantee.
+    let mut clipped_by_root: BTreeMap<usize, (Vec<usize>, DataType)> = BTreeMap::new();
+    for (root, kept_offsets) in kept_offsets_by_root {
+        if fallback_roots.contains(&root) {
+            continue;
+        }
+        let physical_type = file_schema.field(root).data_type();
+        let root_leaves = leaves_by_root.get(&root).map_or(&[][..], Vec::as_slice);
+        let kept_offsets = kept_offsets.into_iter().collect::<Vec<_>>();
+        let Some(pruned_type) = type_for_leaf_subset(physical_type, &kept_offsets) else {
+            fallback_roots.insert(root);
+            continue;
+        };
+        let absolute = kept_offsets
+            .into_iter()
+            .map(|offset| root_leaves[offset])
+            .collect();
+        clipped_by_root.insert(root, (absolute, pruned_type));
     }
 
     // `get_field` accesses on roots not already read in full (as a whole
@@ -596,14 +612,9 @@ fn build_read_plan_with_cast_clipping(
     let get_field_accesses: Vec<StructFieldAccess> = struct_accesses
         .iter()
         .filter(|a| {
-            // A root carrying a `get_field` access is put into
-            // `fallback_roots` before any clip is attempted (see the loop
-            // above), so it can never also be clipped. Assert that rather
-            // than re-testing it here, so a future reordering trips the
-            // assert instead of silently changing which leaves are read.
-            debug_assert!(!clipped_by_root.contains_key(&a.root_index));
             !whole_roots.contains(&a.root_index)
                 && !fallback_roots.contains(&a.root_index)
+                && !clipped_by_root.contains_key(&a.root_index)
         })
         .cloned()
         .collect();
@@ -1223,10 +1234,9 @@ mod test {
         );
     }
 
-    /// Once conflicting cast targets have demoted a root to a full read, a
-    /// *third* cast on it must not resurrect the clip.
+    /// A repeated third cast does not duplicate leaves or widen the union.
     #[test]
-    fn build_projection_read_plan_keeps_full_read_after_a_third_cast() {
+    fn build_projection_read_plan_keeps_union_after_a_third_cast() {
         let (file_schema, metadata) = write_id_struct_file();
         let schema_descr = metadata.file_metadata().schema_descr();
 
@@ -1239,10 +1249,19 @@ mod test {
 
         assert_eq!(
             read_plan.projection_mask,
-            ProjectionMask::leaves(schema_descr, [1, 2, 3])
+            ProjectionMask::leaves(schema_descr, [1, 2])
         );
         let s_field = read_plan.projected_schema.field_with_name("s").unwrap();
-        assert_eq!(s_field.data_type(), file_schema.field(1).data_type());
+        assert_eq!(
+            s_field.data_type(),
+            &DataType::Struct(
+                vec![
+                    Arc::new(Field::new("value", DataType::Int32, false)),
+                    Arc::new(Field::new("label", DataType::Utf8, false)),
+                ]
+                .into()
+            )
+        );
     }
 
     /// A whole-column reference wins over a `get_field` access on the same
@@ -1355,12 +1374,10 @@ mod test {
         );
     }
 
-    /// Two casts on the same root with *different* targets cannot both be
-    /// served by one mask: clipping to either target alone would null-fill
-    /// whatever the other one needs (or fail its runtime struct-compatibility
-    /// check outright). Read the whole root instead.
+    /// Two casts on the same root with disjoint targets share the union of
+    /// their leaves, while an unreferenced sibling remains pruned.
     #[test]
-    fn build_projection_read_plan_falls_back_on_conflicting_cast_targets() {
+    fn build_projection_read_plan_unions_disjoint_cast_targets() {
         let (file_schema, metadata) = write_id_struct_file();
         let schema_descr = metadata.file_metadata().schema_descr();
 
@@ -1380,11 +1397,42 @@ mod test {
 
         assert_eq!(
             read_plan.projection_mask,
-            ProjectionMask::leaves(schema_descr, [1, 2, 3]),
-            "every leaf of `s` must be read so both casts see their fields"
+            ProjectionMask::leaves(schema_descr, [1, 2]),
+            "the union must serve both casts without reading `s.pad`"
         );
         let s_field = read_plan.projected_schema.field_with_name("s").unwrap();
-        assert_eq!(s_field.data_type(), file_schema.field(1).data_type());
+        assert_eq!(
+            s_field.data_type(),
+            &DataType::Struct(
+                vec![
+                    Arc::new(Field::new("value", DataType::Int32, false)),
+                    Arc::new(Field::new("label", DataType::Utf8, false)),
+                ]
+                .into()
+            )
+        );
+    }
+
+    /// Overlapping cast targets deduplicate their shared leaves.
+    #[test]
+    fn build_projection_read_plan_unions_overlapping_cast_targets() {
+        let (file_schema, metadata) = write_id_struct_file();
+        let schema_descr = metadata.file_metadata().schema_descr();
+
+        let exprs = vec![
+            cast_to_struct("s", 1, vec![("value", DataType::Int32)]),
+            cast_to_struct(
+                "s",
+                1,
+                vec![("value", DataType::Int32), ("label", DataType::Utf8)],
+            ),
+        ];
+        let read_plan = build_projection_read_plan(exprs, &file_schema, schema_descr);
+
+        assert_eq!(
+            read_plan.projection_mask,
+            ProjectionMask::leaves(schema_descr, [1, 2])
+        );
     }
 
     /// The struct fast-path gate looks at the *projected* columns, not at
@@ -1411,12 +1459,10 @@ mod test {
         assert_eq!(read_plan.projected_schema.fields().len(), 1);
     }
 
-    /// A root reached by both a narrowing cast and a `get_field` access (not
-    /// producible by `DefaultPhysicalExprAdapter`, but a custom
-    /// `PhysicalExprAdapter` could inject both) falls back to a full read of
-    /// that root rather than attempting to union the two leaf sets.
+    /// A root reached by both a narrowing cast and a disjoint `get_field`
+    /// access shares the union of their leaves.
     #[test]
-    fn build_projection_read_plan_falls_back_when_cast_and_get_field_share_a_root() {
+    fn build_projection_read_plan_unions_cast_and_get_field_on_one_root() {
         let (file_schema, metadata) = write_id_struct_file();
         let schema_descr = metadata.file_metadata().schema_descr();
 
@@ -1440,8 +1486,7 @@ mod test {
 
         let read_plan = build_projection_read_plan(exprs, &file_schema, schema_descr);
 
-        // Every leaf of `s` is read (full fallback), not just value/label.
-        let expected_mask = ProjectionMask::leaves(schema_descr, [1, 2, 3]);
+        let expected_mask = ProjectionMask::leaves(schema_descr, [1, 2]);
         assert_eq!(read_plan.projection_mask, expected_mask);
 
         let s_field = read_plan.projected_schema.field_with_name("s").unwrap();
@@ -1451,7 +1496,6 @@ mod test {
                 vec![
                     Arc::new(Field::new("value", DataType::Int32, false)),
                     Arc::new(Field::new("label", DataType::Utf8, false)),
-                    Arc::new(Field::new("pad", DataType::Utf8, false)),
                 ]
                 .into()
             ),

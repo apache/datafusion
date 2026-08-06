@@ -128,6 +128,35 @@ pub(crate) fn clip_for_cast(
     Some((kept, pruned_type))
 }
 
+/// Rebuilds `physical` for a sorted, deduplicated subset of its leaf offsets.
+///
+/// This is the second half of merging several nested accesses to one root:
+/// callers union the offsets required by each access, then use this function
+/// to derive the Arrow type the Parquet reader emits for that union. Partial
+/// projection is supported through the same struct, list, and large-list
+/// shapes as [`clip_for_cast`]. Any partial selection below another wrapper
+/// returns `None`, preserving the total-fallback property of cast clipping.
+pub(crate) fn type_for_leaf_subset(
+    physical: &DataType,
+    kept: &[usize],
+) -> Option<DataType> {
+    let total = count_leaves(physical);
+    if kept.is_empty()
+        || kept.len() >= total
+        || kept.windows(2).any(|pair| pair[0] >= pair[1])
+        || kept.last().is_some_and(|last| *last >= total)
+    {
+        return None;
+    }
+
+    let mut next_leaf = 0;
+    let projected = project_type_for_leaves(physical, kept, &mut next_leaf);
+    if projected.is_ok() {
+        debug_assert_eq!(next_leaf, total, "leaf accounting must cover the type");
+    }
+    projected.ok().flatten()
+}
+
 /// Number of Parquet leaf columns a (Parquet-derived) Arrow type occupies.
 pub(crate) fn count_leaves(dt: &DataType) -> usize {
     match dt {
@@ -246,6 +275,54 @@ fn clip_type(
         // Anything else, leaf pairs, wrapper-kind mismatches, maps,
         // dictionaries, fixed-size lists, views, is kept wholesale.
         _ => keep_all_leaves(physical, next_leaf, kept),
+    }
+}
+
+/// Rebuilds one physical type subtree for `kept` leaf offsets.
+///
+/// `Ok(None)` means no selected leaf lies below this subtree. `Err(())` means
+/// only part of an unsupported wrapper was selected, so the caller must fall
+/// back to reading the full root.
+fn project_type_for_leaves(
+    physical: &DataType,
+    kept: &[usize],
+    next_leaf: &mut usize,
+) -> Result<Option<DataType>, ()> {
+    match physical {
+        DataType::Struct(fields) => {
+            let mut projected = Vec::with_capacity(fields.len());
+            for field in fields {
+                if let Some(dt) =
+                    project_type_for_leaves(field.data_type(), kept, next_leaf)?
+                {
+                    projected.push(field_with_type(field, dt));
+                }
+            }
+            Ok((!projected.is_empty()).then(|| DataType::Struct(projected.into())))
+        }
+        DataType::List(item) => {
+            Ok(project_type_for_leaves(item.data_type(), kept, next_leaf)?
+                .map(|projected| DataType::List(field_with_type(item, projected))))
+        }
+        DataType::LargeList(item) => {
+            Ok(project_type_for_leaves(item.data_type(), kept, next_leaf)?
+                .map(|projected| DataType::LargeList(field_with_type(item, projected))))
+        }
+        _ => {
+            let start = *next_leaf;
+            let end = start + count_leaves(physical);
+            let selected_start = kept.partition_point(|leaf| *leaf < start);
+            let selected_end = kept.partition_point(|leaf| *leaf < end);
+            let selected = selected_end - selected_start;
+            *next_leaf = end;
+            if selected == 0 {
+                Ok(None)
+            } else if selected == end - start {
+                Ok(Some(physical.clone()))
+            } else {
+                Err(())
+            }
+        }
     }
 }
 
@@ -453,6 +530,30 @@ mod tests {
         let (kept, emitted) = clip_for_cast(&physical, &target).unwrap();
         assert_eq!(kept, vec![0, 1]);
         assert_eq!(emitted, list_of(struct_of(vec![int64("x"), utf8("y")])));
+    }
+
+    /// A union assembled from two casts below a shared List<Struct> prefix
+    /// reconstructs one emitted type in physical field order.
+    #[test]
+    fn type_for_leaf_subset_unions_nested_cast_leaves() {
+        let physical = list_of(struct_of(vec![int64("x"), utf8("y"), utf8("pad")]));
+        let emitted = type_for_leaf_subset(&physical, &[0, 1]).unwrap();
+        assert_eq!(emitted, list_of(struct_of(vec![int64("x"), utf8("y")])));
+    }
+
+    /// Partial selection below a wrapper cast clipping does not understand
+    /// must fall back instead of predicting a type the reader may not emit.
+    #[test]
+    fn type_for_leaf_subset_rejects_unsupported_partial_wrapper() {
+        let physical = DataType::FixedSizeList(
+            Arc::new(Field::new(
+                "item",
+                struct_of(vec![int64("x"), utf8("pad")]),
+                true,
+            )),
+            2,
+        );
+        assert!(type_for_leaf_subset(&physical, &[0]).is_none());
     }
 
     /// Two levels of `list<struct>` nesting, the inner one also narrowed,
