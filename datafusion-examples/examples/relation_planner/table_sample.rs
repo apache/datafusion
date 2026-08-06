@@ -101,9 +101,10 @@ use rand::{Rng, SeedableRng, rngs::StdRng};
 use tonic::async_trait;
 
 use datafusion::{
+    catalog::Session,
     execution::{
-        RecordBatchStream, SendableRecordBatchStream, SessionState, SessionStateBuilder,
-        TaskContext, context::QueryPlanner,
+        RecordBatchStream, SendableRecordBatchStream, SessionStateBuilder, TaskContext,
+        context::QueryPlanner,
     },
     physical_expr::EquivalenceProperties,
     physical_plan::{
@@ -568,7 +569,7 @@ impl QueryPlanner for TableSampleQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session_state: &dyn Session,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
             TableSampleExtensionPlanner,
@@ -590,7 +591,7 @@ impl ExtensionPlanner for TableSampleExtensionPlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
+        _session_state: &dyn Session,
         _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let Some(sample_node) = node.as_any().downcast_ref::<TableSamplePlanNode>()
