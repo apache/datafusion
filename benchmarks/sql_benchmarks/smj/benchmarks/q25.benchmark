@@ -1,4 +1,4 @@
-name Q24
+name Q25
 group smj
 
 init
@@ -8,7 +8,7 @@ expect_plan SortMergeJoinExec
 expect_plan LeftMark
 
 run
--- Q24: LEFT MARK 1M x 10M | 1:10 | 1%
+-- Q25: LEFT MARK 1M x 10M | 1:10 | 50%
 WITH t1_sorted AS (
     SELECT value % 100000 as key, value as data
 FROM range(1000000)
@@ -26,7 +26,7 @@ WHERE t1_sorted.data < 0
     SELECT 1 FROM t2_sorted
     WHERE t2_sorted.key = t1_sorted.key
       AND t2_sorted.data <> t1_sorted.data
-      AND t2_sorted.data % 100 = 0
+      AND t2_sorted.data % 2 = 0
 )
 
 cleanup
