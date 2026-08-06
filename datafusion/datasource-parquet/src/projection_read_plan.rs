@@ -511,11 +511,16 @@ pub(crate) fn build_projection_read_plan(
 ///   through more than one narrowing cast, e.g.
 ///   `SELECT CAST(s AS STRUCT(a)), CAST(s AS STRUCT(b)) FROM t`; clipping to
 ///   either target alone would starve the other), or a root reached by both a
-///   cast and a `get_field` access (not produced by
-///   `DefaultPhysicalExprAdapter`, which always routes a `get_field` over a
-///   narrowed column through the same cast rather than a separate access,
-///   but a custom `PhysicalExprAdapter` could in principle inject both),
-///   falls back to a full read of that root.
+///   cast and a `get_field` access naming a field the cast target does not
+///   have (clipping to the target would starve that access), falls back to a
+///   full read of that root.
+///
+/// A root reached by both a cast and `get_field` accesses that the cast
+/// target does contain is clipped to the target: the clip keeps every leaf
+/// those accesses need. `DefaultPhysicalExprAdapter` produces this shape for
+/// `SELECT s, s['x']` over a struct the file stores more widely, where the
+/// whole-column read goes through the cast and the field read is narrowed to
+/// a `get_field` on the bare column.
 fn build_read_plan_with_cast_clipping(
     file_schema: &Schema,
     schema_descr: &SchemaDescriptor,
@@ -559,7 +564,20 @@ fn build_read_plan_with_cast_clipping(
             }
             continue;
         }
-        if struct_access_roots.contains(&root) {
+        // A `get_field` access on the same root is compatible with the clip
+        // as long as the cast target still names every field those accesses
+        // read: the clip keeps exactly the leaves the target names, so it
+        // keeps theirs too, and the clipped type the reader emits still has
+        // the fields to read out of. `DefaultPhysicalExprAdapter` produces
+        // this shape for `SELECT s, s['x']` over a narrowed struct -- the
+        // whole-column read goes through the cast while the field read is
+        // narrowed to a `get_field` on the bare column.
+        if struct_access_roots.contains(&root)
+            && !struct_accesses
+                .iter()
+                .filter(|a| a.root_index == root)
+                .all(|a| path_within_type(&access.target_type, &a.field_path))
+        {
             fallback_roots.insert(root);
             continue;
         }
@@ -596,14 +614,13 @@ fn build_read_plan_with_cast_clipping(
     let get_field_accesses: Vec<StructFieldAccess> = struct_accesses
         .iter()
         .filter(|a| {
-            // A root carrying a `get_field` access is put into
-            // `fallback_roots` before any clip is attempted (see the loop
-            // above), so it can never also be clipped. Assert that rather
-            // than re-testing it here, so a future reordering trips the
-            // assert instead of silently changing which leaves are read.
-            debug_assert!(!clipped_by_root.contains_key(&a.root_index));
+            // A clipped root already contributes its leaves and its projected
+            // type from the cast, and the clip was only accepted because the
+            // cast target covers this access too, so resolving it separately
+            // would be redundant.
             !whole_roots.contains(&a.root_index)
                 && !fallback_roots.contains(&a.root_index)
+                && !clipped_by_root.contains_key(&a.root_index)
         })
         .cloned()
         .collect();
@@ -662,6 +679,24 @@ fn build_read_plan_with_cast_clipping(
             file_schema.metadata().clone(),
         )),
     }
+}
+
+/// Does `path` name a field that exists inside `data_type`?
+///
+/// Used to decide whether a cast target still covers a `get_field` access on
+/// the same root, so the root can be clipped to the target instead of falling
+/// back to a full read.
+fn path_within_type(data_type: &DataType, path: &[String]) -> bool {
+    let Some((field_name, rest)) = path.split_first() else {
+        return false;
+    };
+    let DataType::Struct(fields) = data_type else {
+        return false;
+    };
+    let Some(field) = fields.iter().find(|f| f.name() == field_name) else {
+        return false;
+    };
+    rest.is_empty() || path_within_type(field.data_type(), rest)
 }
 
 /// Groups every Parquet leaf index by its root (Arrow) column index, in one
