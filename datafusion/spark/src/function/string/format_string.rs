@@ -2926,4 +2926,52 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn test_grouping_separator_ignore_zero_padding_for_float_nan() -> Result<()> {
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%010.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(f64::NAN))),
+            ],
+            Ok(Some("       NaN")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_ignore_zero_padding_for_float_inf() -> Result<()> {
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%010.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(f64::INFINITY))),
+            ],
+            Ok(Some("  Infinity")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grouping_separator_parentheses_zero_padding_decimal() -> Result<()> {
+        test_scalar_function!(
+            FormatStringFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%(0,15.2f".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(-123450), 2, 2)),
+            ],
+            Ok(Some("(000001,234.50)")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        Ok(())
+    }
 }
