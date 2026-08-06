@@ -28,6 +28,7 @@ pub mod sort_pushdown;
 pub mod sort_tpch;
 pub mod sql_benchmark;
 pub mod sql_benchmark_runner;
+pub mod sql_benchmark_suite;
 pub mod tpcds;
 pub mod tpch;
 pub mod util;
