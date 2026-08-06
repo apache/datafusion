@@ -1179,15 +1179,11 @@ pub trait PhysicalPlanNodeExt: Sized {
         })?;
         let schema: SchemaRef = SchemaRef::new(proto_schema.try_into()?);
 
-        let projection = if !scan.projection.is_empty() {
-            Some(
-                scan.projection
-                    .iter()
-                    .map(|i| *i as usize)
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            None
+        // Preserve the empty-projection sentinel written by `try_from_data_source_exec`.
+        let projection = match scan.projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Vec::new()),
+            indices => Some(indices.iter().map(|i| *i as usize).collect()),
         };
 
         let mut sort_information = vec![];
@@ -2364,12 +2360,13 @@ pub trait PhysicalPlanNodeExt: Sized {
             let proto_schema: protobuf::Schema =
                 source_conf.original_schema().as_ref().try_into()?;
 
-            let proto_projection = source_conf
-                .projection()
-                .as_ref()
-                .map_or_else(Vec::new, |v| {
-                    v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
-                });
+            // Proto3 can't tell `None` from `Some(vec![])`; encode the latter
+            // as the `[u32::MAX]` sentinel, matching the join/filter nodes.
+            let proto_projection = match source_conf.projection().as_ref() {
+                None => Vec::new(),
+                Some(v) if v.is_empty() => vec![u32::MAX],
+                Some(v) => v.iter().map(|x| *x as u32).collect(),
+            };
 
             let proto_sort_information = source_conf
                 .sort_information()
