@@ -2557,7 +2557,7 @@ _Alias of [to_char](#to_char)._
 
 ### `date_part`
 
-Returns the specified part of the date as an integer.
+Returns the specified part of the date as a double precision floating-point value. Matches PostgreSQL's `date_part` return type (https://www.postgresql.org/docs/current/functions-datetime.html).
 
 ```sql
 date_part(part, expression)
@@ -2593,13 +2593,13 @@ date_part(part, expression)
 +-----------------------------------------------------+
 | date_part(Utf8("year"),Utf8("2024-05-01T00:00:00")) |
 +-----------------------------------------------------+
-| 2024                                                |
+| 2024.0                                              |
 +-----------------------------------------------------+
 > SELECT extract(day FROM timestamp '2024-05-01T00:00:00');
 +----------------------------------------------------+
 | date_part(Utf8("DAY"),Utf8("2024-05-01T00:00:00")) |
 +----------------------------------------------------+
-| 1                                                  |
+| 1.0                                                |
 +----------------------------------------------------+
 ```
 
