@@ -40,7 +40,8 @@ use datafusion_common::{
     arrow_datafusion_err,
     config::{
         CsvOptions, JsonOptions, MaxRowGroupBytes, ParquetCdcOptions,
-        ParquetColumnOptions, ParquetOptions, TableParquetOptions,
+        ParquetColumnOptions, ParquetOptions, ParquetPushdownFilterMode,
+        TableParquetOptions,
     },
     file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
     parsers::CompressionTypeVariant,
@@ -964,6 +965,26 @@ impl From<CompressionTypeVariant> for protobuf::CompressionTypeVariant {
     }
 }
 
+impl From<protobuf::parquet_options::PushdownFilterMode> for ParquetPushdownFilterMode {
+    fn from(value: protobuf::parquet_options::PushdownFilterMode) -> Self {
+        match value {
+            protobuf::parquet_options::PushdownFilterMode::Auto => Self::Auto,
+            protobuf::parquet_options::PushdownFilterMode::Always => Self::Always,
+            protobuf::parquet_options::PushdownFilterMode::Heuristic => Self::Heuristic,
+        }
+    }
+}
+
+impl From<ParquetPushdownFilterMode> for protobuf::parquet_options::PushdownFilterMode {
+    fn from(value: ParquetPushdownFilterMode) -> Self {
+        match value {
+            ParquetPushdownFilterMode::Auto => Self::Auto,
+            ParquetPushdownFilterMode::Always => Self::Always,
+            ParquetPushdownFilterMode::Heuristic => Self::Heuristic,
+        }
+    }
+}
+
 impl From<protobuf::CsvQuoteStyle> for datafusion_common::parsers::CsvQuoteStyle {
     fn from(value: protobuf::CsvQuoteStyle) -> Self {
         match value {
@@ -1061,6 +1082,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 })
                 .unwrap_or(None),
             pushdown_filters: value.pushdown_filters,
+            pushdown_filter_mode: value.pushdown_filter_mode().into(),
             reorder_filters: value.reorder_filters,
             force_filter_selections: value.force_filter_selections,
             data_pagesize_limit: value.data_pagesize_limit as usize,
