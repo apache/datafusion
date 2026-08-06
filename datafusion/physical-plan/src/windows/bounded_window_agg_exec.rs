@@ -76,15 +76,26 @@ use hashbrown::hash_table::HashTable;
 use indexmap::IndexMap;
 use log::debug;
 
-/// Called by [`BoundedWindowAggExec`] when a PARTITION BY group closes,
-/// once per (output-partition-index, PARTITION BY tuple). The third argument
-/// is one entry per window expression on the exec, in the same order as
-/// [`BoundedWindowAggExec::window_expr`]; `None` for built-in functions
-/// (`row_number`, `rank`, `lead`/`lag`, ...), `Some(state)` for aggregates
-/// via [`datafusion_expr::Accumulator::state`].
-pub type FinalizedWindowStateObserver = Arc<
-    dyn Fn(usize, &PartitionKey, &[Option<Vec<ScalarValue>>]) -> Result<()> + Send + Sync,
->;
+/// Callback receiver for per-partition window state.
+pub trait WindowStateObserver: Send + Sync {
+    /// Invoked once per (output-partition-index, PARTITION BY tuple) as each
+    /// PARTITION BY group closes.
+    ///
+    /// # Arguments
+    ///
+    /// * `partition_idx` - Output partition index of the [`BoundedWindowAggExec`]
+    ///   stream firing this callback.
+    /// * `partition_key` - The PARTITION BY tuple that just closed.
+    /// * `states` - One entry per window expression on the exec, in the same
+    ///   order as [`BoundedWindowAggExec::window_expr`]; `None` for
+    ///   non-aggregate window functions.
+    fn finalized(
+        &self,
+        partition_idx: usize,
+        partition_key: &PartitionKey,
+        states: &[Option<Vec<ScalarValue>>],
+    ) -> Result<()>;
+}
 
 /// Window execution plan
 #[derive(Clone)]
@@ -113,7 +124,7 @@ pub struct BoundedWindowAggExec {
     /// Invoked at partition-close to publish finalized per-partition window
     /// state. Storage and multi-group handling are the caller's; the exec is
     /// a pure event source.
-    finalized_state_observer: Option<FinalizedWindowStateObserver>,
+    state_observer: Option<Arc<dyn WindowStateObserver>>,
 }
 
 impl std::fmt::Debug for BoundedWindowAggExec {
@@ -131,8 +142,8 @@ impl std::fmt::Debug for BoundedWindowAggExec {
             .field("cache", &self.cache)
             .field("can_repartition", &self.can_repartition)
             .field(
-                "finalized_state_observer",
-                &self.finalized_state_observer.as_ref().map(|_| "..."),
+                "state_observer",
+                &self.state_observer.as_ref().map(|_| "..."),
             )
             .finish()
     }
@@ -176,17 +187,14 @@ impl BoundedWindowAggExec {
             ordered_partition_by_indices,
             cache: Arc::new(cache),
             can_repartition,
-            finalized_state_observer: None,
+            state_observer: None,
         })
     }
 
-    /// Install a callback that receives each PARTITION BY group's finalized
-    /// window state at partition close.
-    pub fn with_finalized_state_observer(
-        mut self,
-        observer: FinalizedWindowStateObserver,
-    ) -> Self {
-        self.finalized_state_observer = Some(observer);
+    /// Install a [`WindowStateObserver`] that receives each PARTITION BY
+    /// group's finalized window state at partition close.
+    pub fn with_state_observer(mut self, observer: Arc<dyn WindowStateObserver>) -> Self {
+        self.state_observer = Some(observer);
         self
     }
 
@@ -399,8 +407,8 @@ impl ExecutionPlan for BoundedWindowAggExec {
             self.input_order_mode.clone(),
             self.can_repartition,
         )?;
-        if let Some(observer) = &self.finalized_state_observer {
-            new = new.with_finalized_state_observer(Arc::clone(observer));
+        if let Some(observer) = &self.state_observer {
+            new = new.with_state_observer(Arc::clone(observer));
         }
         Ok(Arc::new(new))
     }
@@ -430,7 +438,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
             BaselineMetrics::new(&self.metrics, partition),
             search_mode,
             partition,
-            self.finalized_state_observer.clone(),
+            self.state_observer.clone(),
         )?);
         Ok(stream)
     }
@@ -1096,41 +1104,40 @@ pub struct BoundedWindowAggStream {
     /// such bound is needed.
     most_recent_row: Option<RecordBatch>,
     /// Output partition index this stream serves; passed as the first
-    /// argument to `finalized_state_observer`.
+    /// argument to [`WindowStateObserver::finalized`].
     partition_idx: usize,
     /// If set, invoked from [`Self::publish_finalized_states`] with the
     /// finalized per-window-expression state for every partition key that is
     /// about to be dropped.
-    finalized_state_observer: Option<FinalizedWindowStateObserver>,
+    state_observer: Option<Arc<dyn WindowStateObserver>>,
 }
 
 impl BoundedWindowAggStream {
-    /// Fire `finalized_state_observer` for every partition key whose
+    /// Fire the [`WindowStateObserver`] for every partition key whose
     /// `WindowAggState::is_end` is true.
     fn publish_finalized_states(&mut self) -> Result<()> {
-        let Some(observer) = self.finalized_state_observer.clone() else {
+        let Some(observer) = &self.state_observer else {
             return Ok(());
         };
-        if self.window_agg_states.is_empty() {
+        let Some((first, rest)) = self.window_agg_states.split_first_mut() else {
             return Ok(());
-        }
-        let closed_keys: Vec<PartitionKey> = self.window_agg_states[0]
-            .iter()
-            .filter(|(_, ws)| ws.state.is_end)
-            .map(|(k, _)| k.clone())
-            .collect();
-        for key in closed_keys {
+        };
+        for (key, ws) in first.iter_mut() {
+            if !ws.state.is_end {
+                continue;
+            }
             let mut states: Vec<Option<Vec<ScalarValue>>> =
-                Vec::with_capacity(self.window_agg_states.len());
-            for per_expr in self.window_agg_states.iter_mut() {
-                let entry = per_expr.get_mut(&key).ok_or_else(|| {
+                Vec::with_capacity(1 + rest.len());
+            states.push(ws.aggregate_state()?);
+            for per_expr in rest.iter_mut() {
+                let entry = per_expr.get_mut(key).ok_or_else(|| {
                     exec_datafusion_err!(
-                        "finalized_state_observer: missing state for closed partition key"
+                        "state_observer: missing state for closed partition key"
                     )
                 })?;
                 states.push(entry.aggregate_state()?);
             }
-            observer(self.partition_idx, &key, &states)?;
+            observer.finalized(self.partition_idx, key, &states)?;
         }
         Ok(())
     }
@@ -1176,7 +1183,7 @@ impl BoundedWindowAggStream {
         baseline_metrics: BaselineMetrics,
         search_mode: Box<dyn PartitionSearcher>,
         partition_idx: usize,
-        finalized_state_observer: Option<FinalizedWindowStateObserver>,
+        state_observer: Option<Arc<dyn WindowStateObserver>>,
     ) -> Result<Self> {
         let state = window_expr.iter().map(|_| IndexMap::default()).collect();
         let empty_batch = RecordBatch::new_empty(Arc::clone(&schema));
@@ -1192,7 +1199,7 @@ impl BoundedWindowAggStream {
             search_mode,
             most_recent_row: None,
             partition_idx,
-            finalized_state_observer,
+            state_observer,
         })
     }
 
@@ -1474,6 +1481,7 @@ mod tests {
     use crate::projection::{ProjectionExec, ProjectionExpr};
     use crate::streaming::{PartitionStream, StreamingTableExec};
     use crate::test::TestMemoryExec;
+    use crate::windows::bounded_window_agg_exec::WindowStateObserver;
     use crate::windows::{
         BoundedWindowAggExec, InputOrderMode, create_udwf_window_expr, create_window_expr,
     };
@@ -1498,7 +1506,7 @@ mod tests {
     use datafusion_functions_window::nth_value::last_value_udwf;
     use datafusion_functions_window::nth_value::nth_value_udwf;
     use datafusion_physical_expr::expressions::{Column, Literal, col};
-    use datafusion_physical_expr::window::StandardWindowExpr;
+    use datafusion_physical_expr::window::{PartitionKey, StandardWindowExpr};
     use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 
     use futures::future::Shared;
@@ -2055,10 +2063,32 @@ mod tests {
         Ok(())
     }
 
+    type Observation = (usize, PartitionKey, Vec<Option<Vec<ScalarValue>>>);
+
+    /// Test [`WindowStateObserver`] that records every callback into a shared
+    /// `Vec` for later assertion.
+    struct RecordingObserver {
+        sink: Arc<std::sync::Mutex<Vec<Observation>>>,
+    }
+
+    impl WindowStateObserver for RecordingObserver {
+        fn finalized(
+            &self,
+            partition_idx: usize,
+            partition_key: &PartitionKey,
+            states: &[Option<Vec<ScalarValue>>],
+        ) -> Result<()> {
+            self.sink.lock().unwrap().push((
+                partition_idx,
+                partition_key.clone(),
+                states.to_vec(),
+            ));
+            Ok(())
+        }
+    }
+
     #[tokio::test]
     async fn test_finalized_state_observer_fires_at_partition_close() -> Result<()> {
-        use crate::windows::bounded_window_agg_exec::FinalizedWindowStateObserver;
-        use datafusion_physical_expr::window::PartitionKey;
         use std::sync::Mutex;
 
         let task_ctx = Arc::new(TaskContext::default());
@@ -2124,14 +2154,9 @@ mod tests {
             None,
         )?;
 
-        type Observation = (usize, PartitionKey, Vec<Option<Vec<ScalarValue>>>);
         let observations: Arc<Mutex<Vec<Observation>>> = Arc::new(Mutex::new(vec![]));
-        let sink = Arc::clone(&observations);
-        let observer: FinalizedWindowStateObserver = Arc::new(move |idx, key, states| {
-            sink.lock()
-                .unwrap()
-                .push((idx, key.clone(), states.to_vec()));
-            Ok(())
+        let observer: Arc<dyn WindowStateObserver> = Arc::new(RecordingObserver {
+            sink: Arc::clone(&observations),
         });
 
         let plan = BoundedWindowAggExec::try_new(
@@ -2140,7 +2165,7 @@ mod tests {
             InputOrderMode::Sorted,
             false,
         )?
-        .with_finalized_state_observer(observer);
+        .with_state_observer(observer);
 
         let _ = collect(Arc::new(plan).execute(0, task_ctx)?).await?;
 
@@ -2172,8 +2197,6 @@ mod tests {
         // `is_end` comes from PARTITION BY transition detection in
         // `mark_partition_end` (mid-stream) and EOS (tail), independent of
         // frame causality. This test locks that in.
-        use crate::windows::bounded_window_agg_exec::FinalizedWindowStateObserver;
-        use datafusion_physical_expr::window::PartitionKey;
         use std::sync::Mutex;
 
         let task_ctx = Arc::new(TaskContext::default());
@@ -2231,14 +2254,9 @@ mod tests {
             None,
         )?;
 
-        type Observation = (usize, PartitionKey, Vec<Option<Vec<ScalarValue>>>);
         let observations: Arc<Mutex<Vec<Observation>>> = Arc::new(Mutex::new(vec![]));
-        let sink = Arc::clone(&observations);
-        let observer: FinalizedWindowStateObserver = Arc::new(move |idx, key, states| {
-            sink.lock()
-                .unwrap()
-                .push((idx, key.clone(), states.to_vec()));
-            Ok(())
+        let observer: Arc<dyn WindowStateObserver> = Arc::new(RecordingObserver {
+            sink: Arc::clone(&observations),
         });
 
         let plan = BoundedWindowAggExec::try_new(
@@ -2247,7 +2265,7 @@ mod tests {
             InputOrderMode::Sorted,
             false,
         )?
-        .with_finalized_state_observer(observer);
+        .with_state_observer(observer);
 
         let _ = collect(Arc::new(plan).execute(0, task_ctx)?).await?;
 
@@ -2278,10 +2296,40 @@ mod tests {
         input: &[u64],
         task_ctx: Arc<TaskContext>,
     ) -> Result<(Vec<u64>, u64)> {
-        use crate::windows::bounded_window_agg_exec::FinalizedWindowStateObserver;
         use arrow::array::UInt64Array;
         use datafusion_functions_aggregate::sum::sum_udaf;
         use std::sync::Mutex;
+
+        /// Observer for `run_running_sum_task`: captures the single running
+        /// SUM total published at EOS. Asserts exactly-one fire and rejects
+        /// non-empty partition keys (this helper is no-PARTITION-BY only).
+        struct RunningSumObserver {
+            sink: Arc<Mutex<Option<u64>>>,
+        }
+
+        impl WindowStateObserver for RunningSumObserver {
+            fn finalized(
+                &self,
+                _partition_idx: usize,
+                partition_key: &PartitionKey,
+                states: &[Option<Vec<ScalarValue>>],
+            ) -> Result<()> {
+                assert!(
+                    partition_key.is_empty(),
+                    "empty PartitionKey for no-PARTITION-BY plan"
+                );
+                assert_eq!(states.len(), 1, "one window expression");
+                let state = states[0].as_ref().expect("sum() → Some(state)");
+                let total = match &state[0] {
+                    ScalarValue::UInt64(Some(v)) => *v,
+                    ScalarValue::Int64(Some(v)) => *v as u64,
+                    other => panic!("unexpected sum state element: {other:?}"),
+                };
+                let prev = self.sink.lock().unwrap().replace(total);
+                assert!(prev.is_none(), "observer must fire exactly once per task");
+                Ok(())
+            }
+        }
 
         let schema = test_schema();
         let mut sn_b = UInt64Builder::with_capacity(input.len());
@@ -2331,24 +2379,9 @@ mod tests {
         )?;
 
         let total_sink: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
-        let sink = Arc::clone(&total_sink);
-        let observer: FinalizedWindowStateObserver =
-            Arc::new(move |_idx, key, states| {
-                assert!(
-                    key.is_empty(),
-                    "empty PartitionKey for no-PARTITION-BY plan"
-                );
-                assert_eq!(states.len(), 1, "one window expression");
-                let state = states[0].as_ref().expect("sum() → Some(state)");
-                let total = match &state[0] {
-                    ScalarValue::UInt64(Some(v)) => *v,
-                    ScalarValue::Int64(Some(v)) => *v as u64,
-                    other => panic!("unexpected sum state element: {other:?}"),
-                };
-                let prev = sink.lock().unwrap().replace(total);
-                assert!(prev.is_none(), "observer must fire exactly once per task");
-                Ok(())
-            });
+        let observer: Arc<dyn WindowStateObserver> = Arc::new(RunningSumObserver {
+            sink: Arc::clone(&total_sink),
+        });
 
         let plan = BoundedWindowAggExec::try_new(
             vec![expr],
@@ -2356,7 +2389,7 @@ mod tests {
             InputOrderMode::Sorted,
             false,
         )?
-        .with_finalized_state_observer(observer);
+        .with_state_observer(observer);
         let batches = collect(Arc::new(plan).execute(0, task_ctx)?).await?;
 
         let mut out = Vec::with_capacity(input.len());
