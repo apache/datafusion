@@ -17,7 +17,7 @@
 
 //! Reports planning statistics alongside runtime metrics for benchmark queries.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -29,7 +29,7 @@ use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
-use datafusion::sql::parser::DFParser;
+use datafusion::sql::parser::{DFParser, Statement};
 use datafusion_common::config_err;
 use datafusion_common::stats::Precision;
 use regex::Regex;
@@ -85,9 +85,25 @@ impl RunOpt {
                 .to_string_lossy()
                 .to_string();
             let sql = fs::read_to_string(query_path)?;
-            for (statement, sql) in sql_statements(&sql)?.iter().enumerate() {
+            let statements = match sql_statements(&sql) {
+                Ok(statements) => statements,
+                Err(error) => {
+                    let report = QueryReport {
+                        query: query.clone(),
+                        statement: 1,
+                        operators: vec![],
+                        success: false,
+                        error: Some(error.to_string()),
+                    };
+                    print_query_report(&report, previous.as_deref());
+                    reports.push(report);
+                    store_report(&result_path, &reports)?;
+                    continue;
+                }
+            };
+            for (statement, sql) in statements.into_iter().enumerate() {
                 let statement = statement + 1;
-                let report = match self.report_query(&ctx, sql).await {
+                let report = match self.report_statement(&ctx, sql).await {
                     Ok(operators) => QueryReport {
                         query: query.clone(),
                         statement,
@@ -127,13 +143,13 @@ impl RunOpt {
             .join(report_name)
     }
 
-    async fn report_query(
+    async fn report_statement(
         &self,
         ctx: &SessionContext,
-        sql: &str,
+        statement: Statement,
     ) -> Result<Vec<OperatorReport>> {
-        let dataframe = ctx.sql(sql).await?;
-        let (state, logical_plan) = dataframe.into_parts();
+        let state = ctx.state();
+        let logical_plan = state.statement_to_plan(statement).await?;
         let logical_plan = state.optimize(&logical_plan)?;
         let physical_plan = state.create_physical_plan(&logical_plan).await?;
 
@@ -564,13 +580,8 @@ fn serialize_report(report: &[QueryReport]) -> Result<String> {
         .map_err(|error| DataFusionError::External(Box::new(error)))
 }
 
-fn sql_statements(sql: &str) -> Result<Vec<String>> {
-    DFParser::parse_sql(sql).map(|statements| {
-        statements
-            .into_iter()
-            .map(|statement| statement.to_string())
-            .collect()
-    })
+fn sql_statements(sql: &str) -> Result<VecDeque<Statement>> {
+    DFParser::parse_sql(sql)
 }
 
 fn query_files(path: &Path, query: Option<&str>) -> Result<Vec<PathBuf>> {
@@ -602,7 +613,7 @@ async fn register_parquet_files(ctx: &SessionContext, path: &Path) -> Result<()>
     let mut files = vec![];
     collect_parquet_files(path, &mut files)?;
 
-    let mut tables = BTreeMap::new();
+    let mut tables = BTreeMap::<String, PathBuf>::new();
     for file in files {
         let parent = file.parent().expect("Parquet file has a parent directory");
         let relative_parent = parent
@@ -626,10 +637,17 @@ async fn register_parquet_files(ctx: &SessionContext, path: &Path) -> Result<()>
                 .to_string();
             (table.clone(), path.join(table))
         };
-        if tables.contains_key(&table) {
-            return config_err!("Tried to register duplicate table {table}");
+        if let Some(existing_path) = tables.get(&table) {
+            if existing_path != &table_path {
+                return config_err!(
+                    "Tried to register duplicate table {table} from '{}' and '{}'",
+                    existing_path.display(),
+                    table_path.display()
+                );
+            }
+        } else {
+            tables.insert(table, table_path);
         }
-        tables.insert(table, table_path);
     }
 
     for (table, table_path) in tables {
@@ -664,11 +682,21 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn parses_sql_statements_without_splitting_string_literals() {
-        let statements = sql_statements("SELECT ';'; SELECT 2").unwrap();
+    fn parses_statements_without_losing_external_table_details() {
+        let statements = sql_statements(
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV \
+             PARTITIONED BY (p1, p2) LOCATION 'foo.csv' \
+             OPTIONS (format.delimiter '|'); SELECT ';'",
+        )
+        .unwrap();
 
         assert_eq!(statements.len(), 2);
-        assert!(statements[0].contains("';'"));
+        let Statement::CreateExternalTable(table) = &statements[0] else {
+            panic!("expected CREATE EXTERNAL TABLE");
+        };
+        assert_eq!(table.columns.len(), 1);
+        assert_eq!(table.table_partition_cols, ["p1", "p2"]);
+        assert_eq!(table.options.len(), 1);
     }
 
     #[test]
