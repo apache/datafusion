@@ -3387,7 +3387,7 @@ Strings are parsed as YYYY-MM-DD (e.g. ‘2023-07-20’) if no <a class="referen
 Integers and doubles are interpreted as days since the unix epoch (<code class="docutils literal notranslate"><span class="pre">1970-01-01T00:00:00Z</span></code>).
 Returns the corresponding date.</p>
 <p>Note: <code class="docutils literal notranslate"><span class="pre">to_date</span></code> returns Date32, which represents its values as the number of days since unix epoch(<code class="docutils literal notranslate"><span class="pre">1970-01-01</span></code>) stored as signed 32 bit value. The largest supported date value is <code class="docutils literal notranslate"><span class="pre">9999-12-31</span></code>.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">to_date</span><span class="p">(</span><span class="s1">&#39;2017-05-31&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;%Y-%m-%d&#39;</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">to_date</span><span class="p">(</span><span class="n">expression</span><span class="p">[,</span><span class="w"> </span><span class="p">...,</span><span class="w"> </span><span class="n">format_n</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id194">
@@ -3488,7 +3488,7 @@ Strings are parsed as <code class="docutils literal notranslate"><span class="pr
 Timestamps will have the time portion extracted.
 Returns the corresponding time.</p>
 <p>Note: <code class="docutils literal notranslate"><span class="pre">to_time</span></code> returns Time64(Nanosecond), which represents the time of day in nanoseconds since midnight.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">to_time</span><span class="p">(</span><span class="s1">&#39;12:30:45&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;%H:%M:%S&#39;</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">to_time</span><span class="p">(</span><span class="n">expression</span><span class="p">[,</span><span class="w"> </span><span class="p">...,</span><span class="w"> </span><span class="n">format_n</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id198">
@@ -5372,14 +5372,14 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <section id="array-transform">
 <h3><code class="docutils literal notranslate"><span class="pre">array_transform</span></code><a class="headerlink" href="#array-transform" title="Link to this heading">#</a></h3>
 <p>transforms the values of an array</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_transform</span><span class="p">(</span><span class="nb">array</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">x</span><span class="o">*</span><span class="mi">2</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_transform</span><span class="p">(</span><span class="nb">array</span><span class="p">,</span><span class="w"> </span><span class="n">lambda</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id343">
 <h4>Arguments<a class="headerlink" href="#id343" title="Link to this heading">#</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
-<li><p><strong>lambda</strong>: Lambda</p></li>
+<li><p><strong>lambda</strong>: The lambda function used to transform each value of the array.</p></li>
 </ul>
 </section>
 <section id="id344">
