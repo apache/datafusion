@@ -2496,6 +2496,68 @@ mod test {
     }
 
     #[tokio::test]
+    async fn test_pruning_setup_cache_skips_partition_value_literals() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let table_schema = TableSchemaBuilder::from(&file_schema)
+            .with_table_partition_cols(vec![Arc::new(Field::new(
+                "part",
+                DataType::Int32,
+                false,
+            ))])
+            .build();
+
+        let data_size1 = write_parquet(
+            Arc::clone(&store),
+            "part=1/file1.parquet",
+            record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap(),
+        )
+        .await;
+        let data_size2 = write_parquet(
+            Arc::clone(&store),
+            "part=2/file2.parquet",
+            record_batch!(("a", Int32, vec![Some(4), Some(5), Some(6)])).unwrap(),
+        )
+        .await;
+
+        let predicate =
+            logical2physical(&col("part").eq(lit(1i32)), table_schema.table_schema());
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_table_schema(table_schema)
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_row_group_stats_pruning(true)
+            .build();
+
+        let mut first_file = PartitionedFile::new(
+            "part=1/file1.parquet",
+            u64::try_from(data_size1).unwrap(),
+        );
+        first_file.partition_values = vec![ScalarValue::Int32(Some(1))];
+        let mut second_file = PartitionedFile::new(
+            "part=2/file2.parquet",
+            u64::try_from(data_size2).unwrap(),
+        );
+        second_file.partition_values = vec![ScalarValue::Int32(Some(2))];
+
+        let (_, first_rows) =
+            count_batches_and_rows(open_file(&morselizer, first_file).await.unwrap())
+                .await;
+        let (_, second_rows) =
+            count_batches_and_rows(open_file(&morselizer, second_file).await.unwrap())
+                .await;
+        assert_eq!((first_rows, second_rows), (3, 0));
+
+        assert_eq!(
+            morselizer.pruning_setup_cache.len(),
+            0,
+            "partition-value literal folding is file-local and should not populate the reusable setup cache"
+        );
+    }
+
+    #[tokio::test]
     async fn test_pruning_setup_cache_does_not_reuse_dynamic_filter_snapshot() {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
