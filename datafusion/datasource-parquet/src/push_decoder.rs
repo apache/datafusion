@@ -85,7 +85,7 @@ impl DecoderBuilderConfig<'_> {
     /// Build a [`ParquetPushDecoderBuilder`] from a prepared access plan.
     ///
     /// The caller is expected to attach the
-    /// [`RowFilter`](parquet::arrow::arrow_reader::RowFilter) and predicate
+    /// [`RowFilter`] and predicate
     /// cache size on the returned builder.
     pub(crate) fn build(
         &self,

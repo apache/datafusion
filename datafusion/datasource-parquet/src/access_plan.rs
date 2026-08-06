@@ -1431,7 +1431,7 @@ mod test {
     fn reorder_by_statistics_breaks_leading_ties_with_secondary_column() {
         let metadata =
             parquet_metadata_with_two_col_mins(&[(1, 300), (1, 100), (1, 200)]);
-        let plan = PreparedAccessPlan::new(vec![0, 1, 2], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], vec![false; 3], None).unwrap();
         let order =
             LexOrdering::new(vec![sort_expr("a", 0, false), sort_expr("b", 1, false)])
                 .unwrap();
@@ -1450,7 +1450,7 @@ mod test {
     fn reorder_by_statistics_honors_secondary_direction() {
         let metadata =
             parquet_metadata_with_two_col_mins(&[(1, 100), (1, 300), (0, 500)]);
-        let plan = PreparedAccessPlan::new(vec![0, 1, 2], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], vec![false; 3], None).unwrap();
         let order =
             LexOrdering::new(vec![sort_expr("a", 0, false), sort_expr("b", 1, true)])
                 .unwrap();
@@ -1470,7 +1470,7 @@ mod test {
     fn reorder_by_statistics_normalizes_desc_desc_for_reverse() {
         let metadata =
             parquet_metadata_with_two_col_mins(&[(1, 300), (2, 100), (1, 100)]);
-        let plan = PreparedAccessPlan::new(vec![0, 1, 2], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], vec![false; 3], None).unwrap();
         let order =
             LexOrdering::new(vec![sort_expr("a", 0, true), sort_expr("b", 1, true)])
                 .unwrap();
@@ -1490,7 +1490,7 @@ mod test {
     fn reorder_by_statistics_keeps_leading_prefix_on_non_column_secondary() {
         let metadata =
             parquet_metadata_with_two_col_mins(&[(5, 300), (3, 100), (4, 200)]);
-        let plan = PreparedAccessPlan::new(vec![0, 1, 2], None).unwrap();
+        let plan = PreparedAccessPlan::new(vec![0, 1, 2], vec![false; 3], None).unwrap();
         let order = LexOrdering::new(vec![
             sort_expr("a", 0, false),
             PhysicalSortExpr {
