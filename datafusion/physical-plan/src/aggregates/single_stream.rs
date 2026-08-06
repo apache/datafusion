@@ -41,7 +41,7 @@ use super::group_values::GroupByMetrics;
 use super::ordered_final_stream::OrderedFinalAggregateStream;
 use super::{AggregateExec, create_schema};
 use crate::aggregates::AggregateMode;
-use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
+use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::sorts::IncrementalSortIterator;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::SpillManager;
@@ -659,7 +659,7 @@ impl SingleHashAggregateStream {
 
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
-        let result = hash_table.next_output_batch();
+        let result = hash_table.next_output_batch(&self.baseline_metrics);
         timer.done();
 
         match result {
@@ -678,10 +678,7 @@ impl SingleHashAggregateStream {
                     SingleHashAggregateState::ProducingOutput { hash_table }
                 };
 
-                ControlFlow::Break((
-                    Poll::Ready(Some(Ok(batch.record_output(&self.baseline_metrics)))),
-                    next_state,
-                ))
+                ControlFlow::Break((Poll::Ready(Some(Ok(batch))), next_state))
             }
             Err(e) => Self::break_with_err(e),
             Ok(None) => {
