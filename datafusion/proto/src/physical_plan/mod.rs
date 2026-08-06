@@ -70,7 +70,6 @@ use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::coop::CooperativeExec;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::explain::ExplainExec;
-use datafusion_physical_plan::expressions::PhysicalSortExpr;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, SortMergeJoinExec,
@@ -2580,29 +2579,12 @@ pub trait PhysicalPlanNodeExt: Sized {
                 codec,
                 proto_converter,
             )?;
-        let sort_order = match exec.sort_order() {
-            Some(requirements) => {
-                let expr = requirements
-                    .iter()
-                    .map(|requirement| {
-                        let expr: PhysicalSortExpr = requirement.to_owned().into();
-                        let sort_expr = protobuf::PhysicalSortExprNode {
-                            expr: Some(Box::new(
-                                proto_converter
-                                    .physical_expr_to_proto(&expr.expr, codec)?,
-                            )),
-                            asc: !expr.options.descending,
-                            nulls_first: expr.options.nulls_first,
-                        };
-                        Ok(sort_expr)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                Some(protobuf::PhysicalSortExprNodeCollection {
-                    physical_sort_expr_nodes: expr,
-                })
-            }
-            None => None,
+        let encoder = ConverterPlanEncoder {
+            codec,
+            proto_converter,
         };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        let sort_order = exec.encode_sort_order(&encode_ctx)?;
 
         if let Some(sink) = exec.sink().downcast_ref::<JsonSink>() {
             return Ok(Some(protobuf::PhysicalPlanNode {
