@@ -1200,10 +1200,10 @@ select approx_median(NULL), arrow_typeof(approx_median(NULL)) from median_table;
 ----
 NULL Null
 
-query RT
+query ?T
 select median(NULL), arrow_typeof(median(NULL));
 ----
-NULL Float64
+NULL Null
 
 # median decimal
 statement ok

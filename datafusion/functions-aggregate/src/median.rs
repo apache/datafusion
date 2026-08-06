@@ -40,19 +40,20 @@ use arrow::datatypes::{
 };
 
 use datafusion_common::hash_utils::RandomState;
-use datafusion_common::utils::take_function_args;
+use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, assert_eq_or_internal_err, exec_datafusion_err,
-    exec_err, internal_datafusion_err, internal_err,
+    internal_datafusion_err, internal_err,
 };
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
-    function::AccumulatorArgs, utils::format_state_name,
+    Accumulator, AggregateUDFImpl, Coercion, Documentation, Signature, TypeSignature,
+    TypeSignatureClass, Volatility, function::AccumulatorArgs, utils::format_state_name,
 };
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
+use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 use datafusion_functions_aggregate_common::utils::{GenericDistinctBuffer, Hashable};
 use datafusion_macros::user_doc;
 use std::collections::HashMap;
@@ -104,7 +105,22 @@ impl Median {
             // Integer inputs are coerced to Float64 so the average of the two
             // middle values is not truncated. This matches DuckDB / PostgreSQL / Spark.
             // Float and Decimal inputs preserve their type.
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Decimal,
+                    )]),
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Float,
+                    )]),
+                    TypeSignature::Coercible(vec![Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_float64()),
+                        vec![TypeSignatureClass::Integer],
+                        NativeType::Float64,
+                    )]),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -118,28 +134,22 @@ impl AggregateUDFImpl for Median {
         &self.signature
     }
 
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let [data_type] = take_function_args(self.name(), arg_types)?;
-
-        fn coerced_type(data_type: &DataType) -> Result<DataType> {
-            match data_type {
-                DataType::Dictionary(_, value_type) => coerced_type(value_type),
-                // Untyped NULL defaults to Float64, matching Signature::numeric.
-                DataType::Null => Ok(DataType::Float64),
-                data_type if data_type.is_integer() => Ok(DataType::Float64),
-                data_type if data_type.is_numeric() => Ok(data_type.clone()),
-                _ => exec_err!("Median not supported for {data_type}"),
-            }
-        }
-
-        Ok(vec![coerced_type(data_type)?])
-    }
-
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].clone())
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        if args.input_fields[0].data_type().is_null() {
+            return Ok(vec![
+                Field::new(
+                    format_state_name(args.name, self.name()),
+                    DataType::Null,
+                    true,
+                )
+                .into(),
+            ]);
+        }
+
         //Intermediate state is a list of the elements we have collected so far
         let field = Field::new_list_field(args.input_fields[0].data_type().clone(), true);
         let state_name = if args.is_distinct {
@@ -176,6 +186,10 @@ impl AggregateUDFImpl for Median {
         }
 
         let dt = acc_args.expr_fields[0].data_type().clone();
+        if dt.is_null() {
+            return Ok(Box::new(NoopAccumulator::default()));
+        }
+
         downcast_integer! {
             dt => (helper, dt),
             DataType::Float16 => helper!(Float16Type, dt),
@@ -194,7 +208,7 @@ impl AggregateUDFImpl for Median {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
-        !args.is_distinct
+        !args.is_distinct && !args.expr_fields[0].data_type().is_null()
     }
 
     fn create_groups_accumulator(
