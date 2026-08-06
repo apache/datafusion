@@ -22,12 +22,13 @@ use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, AsArray, ListArray, NullBufferBuilder,
     StringArray,
 };
-use arrow::datatypes::{DataType, Field, Int64Type};
-use criterion::{Criterion, criterion_group, criterion_main};
-use datafusion_expr::Accumulator;
+use arrow::datatypes::{DataType, Field, Int64Type, Schema};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+use datafusion_expr::{Accumulator, GroupsAccumulator, function::AccumulatorArgs};
 use datafusion_functions_aggregate::array_agg::{
-    ArrayAggAccumulator, DistinctArrayAggAccumulator,
+    ArrayAggAccumulator, DistinctArrayAggAccumulator, array_agg_udaf,
 };
+use datafusion_physical_expr::expressions::col;
 
 use arrow::buffer::OffsetBuffer;
 use arrow::util::bench_util::create_primitive_array;
@@ -55,6 +56,31 @@ fn merge_batch_bench(c: &mut Criterion, name: &str, values: ArrayRef) {
             )
         })
     });
+}
+
+fn prepare_groups_accumulator() -> Box<dyn GroupsAccumulator> {
+    let input_field = Arc::new(Field::new("value", DataType::Int64, false));
+    let schema = Arc::new(Schema::new(vec![Arc::clone(&input_field)]));
+    let return_field = Arc::new(Field::new_list(
+        "array_agg",
+        Field::new_list_field(DataType::Int64, true),
+        true,
+    ));
+    let expr = col("value", &schema).unwrap();
+
+    array_agg_udaf()
+        .create_groups_accumulator(AccumulatorArgs {
+            return_field,
+            schema: &schema,
+            expr_fields: std::slice::from_ref(&input_field),
+            ignore_nulls: false,
+            order_bys: &[],
+            is_reversed: false,
+            name: "array_agg(value)",
+            is_distinct: false,
+            exprs: std::slice::from_ref(&expr),
+        })
+        .unwrap()
 }
 
 /// Create List array with the given item data type, null density, null locations and zero length lists density
@@ -191,6 +217,54 @@ fn array_agg_benchmark(c: &mut Criterion) {
         c,
         "array_agg i64 merge_batch 70% nulls, 0% of nulls point to a zero length array",
         values,
+    );
+
+    // Benchmark update_batch with memory accounting
+    let batches = (0..32)
+        .map(|_| Arc::new(create_primitive_array::<Int64Type>(8192, 0.0)) as ArrayRef)
+        .collect::<Vec<_>>();
+    c.bench_function("array_agg i64 update_batch with memory accounting", |b| {
+        b.iter_batched(
+            || ArrayAggAccumulator::try_new(&DataType::Int64, false).unwrap(),
+            |mut accumulator| {
+                for values in &batches {
+                    let size_pre = accumulator.size();
+                    accumulator
+                        .update_batch(std::slice::from_ref(values))
+                        .unwrap();
+                    let size_post = accumulator.size();
+                    black_box(size_post.saturating_sub(size_pre));
+                }
+                black_box(accumulator)
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    // Benchmark grouped update_batch with memory accounting
+    let group_indices = (0..8192).map(|i| i % 10).collect::<Vec<_>>();
+    c.bench_function(
+        "array_agg i64 groups update_batch with memory accounting",
+        |b| {
+            b.iter_batched(
+                prepare_groups_accumulator,
+                |mut accumulator| {
+                    for values in &batches {
+                        accumulator
+                            .update_batch(
+                                std::slice::from_ref(values),
+                                &group_indices,
+                                None,
+                                10,
+                            )
+                            .unwrap();
+                        black_box(accumulator.size());
+                    }
+                    black_box(accumulator)
+                },
+                BatchSize::LargeInput,
+            )
+        },
     );
 }
 
