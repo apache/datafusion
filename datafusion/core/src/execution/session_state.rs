@@ -45,8 +45,8 @@ use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
-    DFSchema, DataFusionError, ResolvedTableReference, TableReference, config_err,
-    exec_err, plan_datafusion_err,
+    DEFAULT_ARROW_EXTENSION, DEFAULT_ARROW_STREAM_EXTENSION, DFSchema, DataFusionError,
+    ResolvedTableReference, TableReference, config_err, exec_err, plan_datafusion_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
@@ -940,7 +940,18 @@ impl SessionState {
         &self,
         ext: &str,
     ) -> Option<Arc<dyn FileFormatFactory>> {
-        self.file_formats.get(&ext.to_lowercase()).cloned()
+        let ext = ext.to_lowercase();
+        self.file_formats
+            .get(&ext)
+            .or_else(|| {
+                if ext == DEFAULT_ARROW_STREAM_EXTENSION.trim_start_matches('.') {
+                    self.file_formats
+                        .get(DEFAULT_ARROW_EXTENSION.trim_start_matches('.'))
+                } else {
+                    None
+                }
+            })
+            .cloned()
     }
 
     /// Get a new TaskContext to run in this session
@@ -2439,6 +2450,15 @@ mod tests {
         let state = SessionStateBuilder::new().build();
 
         assert!(sql_to_expr(&state).is_err())
+    }
+
+    #[test]
+    fn test_get_file_format_factory() {
+        let state = SessionStateBuilder::new().with_default_features().build();
+
+        assert!(state.get_file_format_factory("arrow").is_some());
+        assert!(state.get_file_format_factory("arrows").is_some());
+        assert!(state.get_file_format_factory("unknown").is_none());
     }
 
     #[test]
