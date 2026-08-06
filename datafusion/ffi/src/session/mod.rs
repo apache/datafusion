@@ -15,10 +15,37 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! FFI support for [`Session`].
+//!
+//! # Serialization environment
+//!
+//! An exported session carries one
+//! [`crate::proto::extension_codec_bundle::FFI_ExtensionCodecBundle`].
+//! Every callback that moves a plan or expression across the boundary uses it:
+//! the logical codec for [`Session::optimize`], [`Session::create_physical_expr`],
+//! and [`Session::create_physical_plan`], and the physical codec for the planner
+//! returned by [`Session::query_planner`]. Because the bundle pairs both codecs
+//! with the task context provider that exported them, a planner reached through a
+//! session can round-trip the same custom extension nodes as the wrapper that
+//! exported the session.
+//!
+//! # Delegating physical planning
+//!
+//! Consider a session owned by library A that uses a query planner owned by
+//! library C. After A installs C's planner, [`ForeignSession::query_planner`]
+//! returns C's planner and [`ForeignSession::create_physical_plan`] dispatches
+//! to C's planner. C must not call `create_physical_plan`, or invoke the planner
+//! returned by `query_planner`, to delegate planning back to A. Repeating either
+//! self-call recurses until the stack is exhausted.
+//!
+//! To delegate safely, A must export its original planner before installing C's
+//! planner, and C must retain and invoke that planner directly. See the
+//! [`crate::query_planner`] module for details.
+
 use std::any::Any;
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow_schema::SchemaRef;
 use arrow_schema::ffi::FFI_ArrowSchema;
@@ -37,12 +64,16 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_proto::bytes::{logical_plan_from_bytes, logical_plan_to_bytes};
-use datafusion_proto::logical_plan::LogicalExtensionCodec;
+use datafusion_proto::bytes::{
+    logical_plan_from_bytes_with_extension_codec,
+    logical_plan_to_bytes_with_extension_codec,
+};
 use datafusion_proto::logical_plan::from_proto::parse_expr;
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::protobuf::LogicalExprNode;
-use datafusion_session::{CatalogProviderList, Session};
+use datafusion_session::{
+    CatalogProviderList, PhysicalOptimizerRule, QueryPlanner, Session,
+};
 use prost::Message;
 
 use stabby::str::Str as SStr;
@@ -55,7 +86,9 @@ use crate::catalog_provider_list::FFI_CatalogProviderList;
 use crate::execution::FFI_TaskContext;
 use crate::execution_plan::FFI_ExecutionPlan;
 use crate::physical_expr::FFI_PhysicalExpr;
-use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::physical_optimizer::FFI_PhysicalOptimizerRule;
+use crate::proto::extension_codec_bundle::FFI_ExtensionCodecBundle;
+use crate::query_planner::FFI_QueryPlanner;
 use crate::session::config::FFI_SessionConfig;
 use crate::udaf::FFI_AggregateUDF;
 use crate::udf::FFI_ScalarUDF;
@@ -86,6 +119,13 @@ pub(crate) struct FFI_SessionRef {
 
     catalog_list: unsafe extern "C" fn(&Self) -> FFI_CatalogProviderList,
 
+    query_planner: unsafe extern "C" fn(&Self) -> FFI_QueryPlanner,
+
+    optimize: unsafe extern "C" fn(
+        &Self,
+        logical_plan_serialized: SVec<u8>,
+    ) -> FFI_Result<SVec<u8>>,
+
     create_physical_plan:
         unsafe extern "C" fn(
             &Self,
@@ -110,7 +150,10 @@ pub(crate) struct FFI_SessionRef {
 
     task_ctx: unsafe extern "C" fn(&Self) -> FFI_TaskContext,
 
-    logical_codec: FFI_LogicalExtensionCodec,
+    physical_optimizers: unsafe extern "C" fn(&Self) -> SVec<FFI_PhysicalOptimizerRule>,
+
+    /// The serialization environment used by every callback on this session.
+    codecs: FFI_ExtensionCodecBundle,
 
     /// Used to create a clone on the provider of the registry. This should
     /// only need to be called by the receiver of the plan.
@@ -135,12 +178,12 @@ unsafe impl Send for FFI_SessionRef {}
 unsafe impl Sync for FFI_SessionRef {}
 
 struct SessionPrivateData<'a> {
-    session: &'a (dyn Session + Send + Sync),
+    session: &'a dyn Session,
     runtime: Option<Handle>,
 }
 
 impl FFI_SessionRef {
-    fn inner(&self) -> &(dyn Session + Send + Sync) {
+    fn inner(&self) -> &dyn Session {
         let private_data = self.private_data as *const SessionPrivateData;
         unsafe { (*private_data).session }
     }
@@ -166,11 +209,37 @@ unsafe extern "C" fn config_fn_wrapper(session: &FFI_SessionRef) -> FFI_SessionC
 unsafe extern "C" fn catalog_list_fn_wrapper(
     session: &FFI_SessionRef,
 ) -> FFI_CatalogProviderList {
-    FFI_CatalogProviderList::new_with_ffi_codec(
+    FFI_CatalogProviderList::new(
         session.inner().catalog_list(),
         unsafe { session.runtime() }.clone(),
-        session.logical_codec.clone(),
+        session.codecs.clone(),
     )
+}
+
+unsafe extern "C" fn query_planner_fn_wrapper(
+    session: &FFI_SessionRef,
+) -> FFI_QueryPlanner {
+    FFI_QueryPlanner::new(session.inner().query_planner(), session.codecs.clone())
+}
+
+unsafe extern "C" fn optimize_fn_wrapper(
+    session: &FFI_SessionRef,
+    logical_plan_serialized: SVec<u8>,
+) -> FFI_Result<SVec<u8>> {
+    let logical_codec = session.codecs.to_logical_codec();
+    let inner = session.inner();
+    let logical_plan = sresult_return!(logical_plan_from_bytes_with_extension_codec(
+        logical_plan_serialized.as_slice(),
+        inner.task_ctx().as_ref(),
+        logical_codec.as_ref(),
+    ));
+    let optimized_plan = sresult_return!(inner.optimize(&logical_plan));
+    let optimized_plan = sresult_return!(logical_plan_to_bytes_with_extension_codec(
+        &optimized_plan,
+        logical_codec.as_ref(),
+    ));
+
+    FFI_Result::Ok(SVec::from(optimized_plan.as_ref()))
 }
 
 unsafe extern "C" fn create_physical_plan_fn_wrapper(
@@ -181,13 +250,16 @@ unsafe extern "C" fn create_physical_plan_fn_wrapper(
         let runtime = session.runtime().clone();
         let session = session.clone();
         async move {
+            let logical_codec = session.codecs.to_logical_codec();
             let session = session.inner();
             let task_ctx = session.task_ctx();
 
-            let logical_plan = sresult_return!(logical_plan_from_bytes(
-                logical_plan_serialized.as_slice(),
-                task_ctx.as_ref(),
-            ));
+            let logical_plan =
+                sresult_return!(logical_plan_from_bytes_with_extension_codec(
+                    logical_plan_serialized.as_slice(),
+                    task_ctx.as_ref(),
+                    logical_codec.as_ref(),
+                ));
 
             let physical_plan = session.create_physical_plan(&logical_plan).await;
 
@@ -202,7 +274,7 @@ unsafe extern "C" fn create_physical_expr_fn_wrapper(
     expr_serialized: SVec<u8>,
     schema: WrappedSchema,
 ) -> FFI_Result<FFI_PhysicalExpr> {
-    let codec: Arc<dyn LogicalExtensionCodec> = (&session.logical_codec).into();
+    let codec = session.codecs.to_logical_codec();
     let session = session.inner();
 
     let logical_expr = LogicalExprNode::decode(expr_serialized.as_slice()).unwrap();
@@ -303,6 +375,18 @@ unsafe extern "C" fn task_ctx_fn_wrapper(session: &FFI_SessionRef) -> FFI_TaskCo
     session.inner().task_ctx().into()
 }
 
+unsafe extern "C" fn physical_optimizers_fn_wrapper(
+    session: &FFI_SessionRef,
+) -> SVec<FFI_PhysicalOptimizerRule> {
+    let runtime = unsafe { session.runtime().clone() };
+    session
+        .inner()
+        .physical_optimizers()
+        .iter()
+        .map(|rule| FFI_PhysicalOptimizerRule::new(Arc::clone(rule), runtime.clone()))
+        .collect()
+}
+
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_SessionRef) {
     unsafe {
         let private_data =
@@ -324,6 +408,8 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_SessionRef) -> FFI_SessionR
             session_id: session_id_fn_wrapper,
             config: config_fn_wrapper,
             catalog_list: catalog_list_fn_wrapper,
+            query_planner: query_planner_fn_wrapper,
+            optimize: optimize_fn_wrapper,
             create_physical_plan: create_physical_plan_fn_wrapper,
             create_physical_expr: create_physical_expr_fn_wrapper,
             scalar_functions: scalar_functions_fn_wrapper,
@@ -332,7 +418,8 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_SessionRef) -> FFI_SessionR
             table_options: table_options_fn_wrapper,
             default_table_options: default_table_options_fn_wrapper,
             task_ctx: task_ctx_fn_wrapper,
-            logical_codec: provider.logical_codec.clone(),
+            physical_optimizers: physical_optimizers_fn_wrapper,
+            codecs: provider.codecs.clone(),
 
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
@@ -351,10 +438,23 @@ impl Drop for FFI_SessionRef {
 
 impl FFI_SessionRef {
     /// Creates a new [`FFI_SessionRef`].
+    ///
+    /// Both codecs in `codecs` are used by this session's callbacks: the logical
+    /// codec for [`Session::optimize`] and [`Session::create_physical_expr`], and
+    /// the physical codec for the query planner returned by
+    /// [`Session::query_planner`]. Pass a bundle whose codecs can round-trip every
+    /// extension node exposed through the session; the bundle's task context
+    /// provider must also remain live for the lifetime of the exported session.
+    ///
+    /// When `session` is already a [`ForeignSession`], this re-exports its original
+    /// handle and discards `codecs`: the codecs a session was exported with are the
+    /// ones its callbacks need. Note that
+    /// [`FFI_QueryPlanner::new`](crate::query_planner::FFI_QueryPlanner::new) does
+    /// the reverse and adopts the supplied bundle.
     pub fn new(
-        session: &(dyn Session + Send + Sync),
+        session: &dyn Session,
         runtime: Option<Handle>,
-        logical_codec: FFI_LogicalExtensionCodec,
+        codecs: FFI_ExtensionCodecBundle,
     ) -> Self {
         if let Some(session) = session.as_any().downcast_ref::<ForeignSession>() {
             return session.session.clone();
@@ -366,6 +466,8 @@ impl FFI_SessionRef {
             session_id: session_id_fn_wrapper,
             config: config_fn_wrapper,
             catalog_list: catalog_list_fn_wrapper,
+            query_planner: query_planner_fn_wrapper,
+            optimize: optimize_fn_wrapper,
             create_physical_plan: create_physical_plan_fn_wrapper,
             create_physical_expr: create_physical_expr_fn_wrapper,
             scalar_functions: scalar_functions_fn_wrapper,
@@ -374,7 +476,8 @@ impl FFI_SessionRef {
             table_options: table_options_fn_wrapper,
             default_table_options: default_table_options_fn_wrapper,
             task_ctx: task_ctx_fn_wrapper,
-            logical_codec,
+            physical_optimizers: physical_optimizers_fn_wrapper,
+            codecs,
 
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
@@ -387,8 +490,17 @@ impl FFI_SessionRef {
 
 /// This wrapper struct exists on the receiver side of the FFI interface, so it has
 /// no guarantees about being able to access the data in `private_data`. Any functions
-/// defined on this struct must only use the stable functions provided in
-/// FFI_Session to interact with the foreign table provider.
+/// defined on this struct must use only the stable function pointers in
+/// `FFI_SessionRef` to interact with the foreign session.
+///
+/// # Query planner delegation
+///
+/// If the session owner installed the current foreign query planner,
+/// [`Session::create_physical_plan`] dispatches back to that planner and
+/// [`Session::query_planner`] returns that planner. The planner must retain and
+/// invoke the session owner's previous planner instead of using either method to
+/// delegate back to the session. Otherwise, repeated delegation exhausts the
+/// stack. See [`crate::query_planner`] for details.
 #[derive(Debug)]
 pub struct ForeignSession {
     session: FFI_SessionRef,
@@ -402,13 +514,15 @@ pub struct ForeignSession {
     table_options: TableOptions,
     runtime_env: Arc<RuntimeEnv>,
     props: ExecutionProps,
+    query_planner: OnceLock<Arc<dyn QueryPlanner + Send + Sync>>,
+    physical_optimizers: OnceLock<Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>>,
 }
 
 unsafe impl Send for ForeignSession {}
 unsafe impl Sync for ForeignSession {}
 
 impl FFI_SessionRef {
-    pub fn as_local(&self) -> Option<&(dyn Session + Send + Sync)> {
+    pub fn as_local(&self) -> Option<&dyn Session> {
         if (self.library_marker_id)() == crate::get_library_marker_id() {
             return Some(self.inner());
         }
@@ -462,7 +576,6 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
                     )
                 })
                 .collect();
-
             Ok(Self {
                 session: session.clone(),
                 config,
@@ -475,6 +588,8 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
                 extension_types: Arc::new(MemoryExtensionTypeRegistry::default()),
                 runtime_env: Default::default(),
                 props: Default::default(),
+                query_planner: OnceLock::new(),
+                physical_optimizers: OnceLock::new(),
             })
         }
     }
@@ -573,12 +688,38 @@ impl Session for ForeignSession {
         Arc::clone(&self.catalog_list)
     }
 
+    fn query_planner(&self) -> Arc<dyn QueryPlanner + Send + Sync> {
+        Arc::clone(self.query_planner.get_or_init(|| unsafe {
+            let planner = (self.session.query_planner)(&self.session);
+            (&planner).into()
+        }))
+    }
+
+    fn optimize(&self, plan: &LogicalPlan) -> datafusion_common::Result<LogicalPlan> {
+        unsafe {
+            let codec = self.session.codecs.to_logical_codec();
+            let logical_plan =
+                logical_plan_to_bytes_with_extension_codec(plan, codec.as_ref())?;
+            let optimized_plan = df_result!((self.session.optimize)(
+                &self.session,
+                SVec::from(logical_plan.as_ref()),
+            ))?;
+            logical_plan_from_bytes_with_extension_codec(
+                optimized_plan.as_slice(),
+                self.task_ctx().as_ref(),
+                codec.as_ref(),
+            )
+        }
+    }
+
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         unsafe {
-            let logical_plan = logical_plan_to_bytes(logical_plan)?;
+            let codec = self.session.codecs.to_logical_codec();
+            let logical_plan =
+                logical_plan_to_bytes_with_extension_codec(logical_plan, codec.as_ref())?;
             let physical_plan = df_result!(
                 (self.session.create_physical_plan)(
                     &self.session,
@@ -598,8 +739,7 @@ impl Session for ForeignSession {
         df_schema: &DFSchema,
     ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
         unsafe {
-            let codec: Arc<dyn LogicalExtensionCodec> =
-                (&self.session.logical_codec).into();
+            let codec = self.session.codecs.to_logical_codec();
             let logical_expr = serialize_expr(&expr, codec.as_ref())?.encode_to_vec();
             let schema = WrappedSchema(FFI_ArrowSchema::try_from(df_schema.as_arrow())?);
 
@@ -611,6 +751,15 @@ impl Session for ForeignSession {
 
             Ok((&physical_expr).into())
         }
+    }
+
+    fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
+        self.physical_optimizers.get_or_init(|| unsafe {
+            (self.session.physical_optimizers)(&self.session)
+                .into_iter()
+                .map(|rule| (&rule).into())
+                .collect()
+        })
     }
 
     fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
@@ -672,16 +821,94 @@ impl Session for ForeignSession {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use arrow_schema::{DataType, Field, Schema};
     use datafusion::catalog::MemoryCatalogProvider;
     use datafusion::execution::SessionStateBuilder;
     use datafusion_common::DataFusionError;
     use datafusion_expr::col;
+    use datafusion_expr::ptr_eq::arc_ptr_eq;
     use datafusion_expr::registry::FunctionRegistry;
     use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
+    use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 
     use super::*;
+    use crate::proto::physical_extension_codec::tests::TestExtensionCodec;
+
+    static QUERY_PLANNER_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static PHYSICAL_OPTIMIZER_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C" fn counting_query_planner(
+        session: &FFI_SessionRef,
+    ) -> FFI_QueryPlanner {
+        QUERY_PLANNER_CALLS.fetch_add(1, Ordering::Relaxed);
+        unsafe { query_planner_fn_wrapper(session) }
+    }
+
+    unsafe extern "C" fn counting_physical_optimizers(
+        session: &FFI_SessionRef,
+    ) -> SVec<FFI_PhysicalOptimizerRule> {
+        PHYSICAL_OPTIMIZER_CALLS.fetch_add(1, Ordering::Relaxed);
+        unsafe { physical_optimizers_fn_wrapper(session) }
+    }
+
+    #[test]
+    fn test_foreign_session_lazily_loads_planning_state() -> Result<(), DataFusionError> {
+        QUERY_PLANNER_CALLS.store(0, Ordering::Relaxed);
+        PHYSICAL_OPTIMIZER_CALLS.store(0, Ordering::Relaxed);
+
+        let (ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+        let codecs = FFI_ExtensionCodecBundle::new_default(task_ctx_provider, None);
+        let state = ctx.state();
+        let mut local_session = FFI_SessionRef::new(&state, None, codecs);
+        local_session.query_planner = counting_query_planner;
+        local_session.physical_optimizers = counting_physical_optimizers;
+
+        let mut foreign_session = ForeignSession::try_from(&local_session)?;
+        assert_eq!(QUERY_PLANNER_CALLS.load(Ordering::Relaxed), 0);
+        assert_eq!(PHYSICAL_OPTIMIZER_CALLS.load(Ordering::Relaxed), 0);
+
+        // `FFI_SessionRef::clone` restores the standard function pointers, so
+        // instrument the clone retained by `ForeignSession` as well.
+        foreign_session.session.query_planner = counting_query_planner;
+        foreign_session.session.physical_optimizers = counting_physical_optimizers;
+
+        foreign_session.query_planner();
+        foreign_session.query_planner();
+        assert_eq!(QUERY_PLANNER_CALLS.load(Ordering::Relaxed), 1);
+
+        foreign_session.physical_optimizers();
+        foreign_session.physical_optimizers();
+        assert_eq!(PHYSICAL_OPTIMIZER_CALLS.load(Ordering::Relaxed), 1);
+
+        Ok(())
+    }
+
+    /// An exported session must hand its own physical codec to the query planner
+    /// it exports. A default codec there stops custom physical extension nodes
+    /// from crossing a session callback.
+    #[test]
+    fn test_exported_query_planner_keeps_session_physical_codec() {
+        let (ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+        let physical_codec =
+            Arc::new(TestExtensionCodec {}) as Arc<dyn PhysicalExtensionCodec>;
+        let codecs = FFI_ExtensionCodecBundle::new(
+            task_ctx_provider,
+            None,
+            Arc::new(DefaultLogicalExtensionCodec {}),
+            Arc::clone(&physical_codec),
+        );
+
+        let state = ctx.state();
+        let local_session = FFI_SessionRef::new(&state, None, codecs);
+        let planner = unsafe { (local_session.query_planner)(&local_session) };
+
+        assert!(arc_ptr_eq(
+            &planner.codecs().to_physical_codec(),
+            &physical_codec
+        ));
+    }
 
     #[tokio::test]
     async fn test_ffi_session() -> Result<(), DataFusionError> {
@@ -699,13 +926,9 @@ mod tests {
             .with_table_options(table_options)
             .build();
 
-        let logical_codec = FFI_LogicalExtensionCodec::new(
-            Arc::new(DefaultLogicalExtensionCodec {}),
-            None,
-            task_ctx_provider,
-        );
+        let codecs = FFI_ExtensionCodecBundle::new_default(task_ctx_provider, None);
 
-        let local_session = FFI_SessionRef::new(&state, None, logical_codec);
+        let local_session = FFI_SessionRef::new(&state, None, codecs);
         let foreign_session = ForeignSession::try_from(&local_session)?;
 
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
@@ -731,14 +954,16 @@ mod tests {
 
         let logical_plan = LogicalPlan::default();
         assert_eq!(foreign_session.optimize(&logical_plan)?, logical_plan);
-        assert!(foreign_session.physical_optimizers().is_empty());
+        assert_eq!(
+            foreign_session.physical_optimizers().len(),
+            state.physical_optimizers().len()
+        );
         assert!(foreign_session.statistics_registry().is_none());
-        let planner_error = foreign_session
+        let planned = foreign_session
             .query_planner()
             .create_physical_plan(&logical_plan, &foreign_session)
-            .await
-            .unwrap_err();
-        assert!(planner_error.to_string().contains("does not expose"));
+            .await?;
+        assert_eq!(planned.name(), "EmptyExec");
 
         let physical_plan = foreign_session.create_physical_plan(&logical_plan).await?;
         assert_eq!(

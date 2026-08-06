@@ -42,7 +42,7 @@ A new `FFI_X` for trait `X` must follow this template. Use `FFI_CatalogProvider`
 pub struct FFI_X {
     some_method: unsafe extern "C" fn(this: &Self, ...) -> FFI_Result<...>,
     optional_method: Option<unsafe extern "C" fn(&Self, ...) -> FFI_Result<...>>,
-    pub logical_codec: FFI_LogicalExtensionCodec,
+    pub codecs: FFI_ExtensionCodecBundle,
 
     clone: unsafe extern "C" fn(&Self) -> Self,
     release: unsafe extern "C" fn(&mut Self),
@@ -60,7 +60,7 @@ Field rules:
 
 - **One `unsafe extern "C" fn` per trait method.** Always populate — `Arc<dyn Trait>` dispatch picks override-or-default at call time, so the producer side gets the right answer without the consumer needing to know. See § "Method coverage".
 - **`Option<fn>` is the capability-flag exception**, not a template. Crate uses it exactly once: `FFI_TableProvider::supports_filters_pushdown`. See § "Method coverage".
-- **Codec field** (`FFI_LogicalExtensionCodec` / `FFI_PhysicalExtensionCodec`) only if the trait moves `Expr`s / `LogicalPlan`s / `ExecutionPlan`s across the boundary.
+- **Codec field** — carry an `FFI_ExtensionCodecBundle` (`src/proto/extension_codec_bundle.rs`), not a bare `FFI_LogicalExtensionCodec` / `FFI_PhysicalExtensionCodec`, whenever the trait moves `Expr`s / `LogicalPlan`s / `ExecutionPlan`s across the boundary **or** exports an `FFI_SessionRef`. The bundle pairs one `FFI_TaskContextProvider` with both codecs so the three cannot drift apart, and a wrapper that only serializes logical data still needs the physical codec for any planner a consumer reaches through the session it exports. Forward the bundle unchanged to every nested `FFI_X` the wrapper creates, including in `clone_fn_wrapper`. Never store a bundle inside a codec: cloning a bundle clones its logical codec, so that would recurse forever — the dependency direction is bundle → codecs → task context provider.
 - **Method function pointers are private by default.** Mark `pub` only if a downstream library needs to invoke them directly (rare — typically only `version`, `library_marker_id`, embedded codecs are `pub`).
 - **`version: super::version` is mandatory.** Consumers gate compatibility on it.
 - **`library_marker_id: crate::get_library_marker_id` is mandatory *when the wrapper uses the standard `ForeignX` adapter pattern*.** Two flavors exist:
@@ -126,19 +126,14 @@ impl Clone for FFI_X { fn clone(&self) -> Self { unsafe { (self.clone)(self) } }
 
 `release` must null `private_data` so a double-free debug-asserts loudly.
 
-### 5. Constructor split
+### 5. Constructor
+
+One constructor per wrapper, taking the bundle:
 
 ```rust
 impl FFI_X {
     pub fn new(inner: Arc<dyn X>, runtime: Option<Handle>,
-               task_ctx_provider: impl Into<FFI_TaskContextProvider>,
-               logical_codec: Option<Arc<dyn LogicalExtensionCodec>>) -> Self {
-        // build FFI_LogicalExtensionCodec from defaults, then forward
-        Self::new_with_ffi_codec(inner, runtime, ffi_codec)
-    }
-
-    pub fn new_with_ffi_codec(inner: Arc<dyn X>, runtime: Option<Handle>,
-                              logical_codec: FFI_LogicalExtensionCodec) -> Self {
+               codecs: FFI_ExtensionCodecBundle) -> Self {
         // Round-trip downcast: if inner is already a ForeignX, return its FFI directly.
         if let Some(foreign) = inner.downcast_ref::<ForeignX>() {
             return foreign.0.clone();
@@ -149,6 +144,8 @@ impl FFI_X {
 ```
 
 The round-trip downcast is **mandatory** — without it, repeated FFI hops nest `ForeignX(FFI_X(ForeignX(...)))` and you pay the boundary cost every layer.
+
+Do **not** add a second constructor that builds the bundle from native codecs plus an `Option<Arc<dyn LogicalExtensionCodec>>`. That shape makes "use the default physical codec" implicit, which is the failure `FFI_ExtensionCodecBundle` exists to prevent. Callers with native codecs build the bundle themselves via `FFI_ExtensionCodecBundle::new`, or state the defaults explicitly via `FFI_ExtensionCodecBundle::new_default`.
 
 ### 6. The `Foreign<X>` consumer
 
@@ -356,5 +353,5 @@ When reviewing a PR that touches `datafusion/ffi/`:
 - Canonical wrapper to model after: `src/catalog_provider.rs`. Async + capability-flag variants: `src/table_provider.rs`.
 - Mutable-trait variant: `src/udaf/accumulator.rs` (`Box<dyn Accumulator>`).
 - Optional-method pattern: `FFI_TableProvider::supports_filters_pushdown`.
-- Codec wiring: `src/proto/logical_extension_codec.rs`, `src/proto/physical_extension_codec.rs`.
+- Codec wiring: `src/proto/extension_codec_bundle.rs` (the pairing every wrapper carries), `src/proto/logical_extension_codec.rs`, `src/proto/physical_extension_codec.rs`.
 - Examples crate: `datafusion-examples/examples/ffi` (end-to-end producer + consumer).

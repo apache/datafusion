@@ -21,7 +21,7 @@ use arrow::array::{RecordBatch, record_batch};
 use arrow::datatypes as arrow_schema;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::datasource::MemTable;
-use datafusion_ffi::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use datafusion_ffi::proto::extension_codec_bundle::FFI_ExtensionCodecBundle;
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use ffi_module_interface::TableProviderModule;
 
@@ -36,7 +36,7 @@ fn create_record_batch(start_value: i32, num_values: usize) -> RecordBatch {
 /// Here we only wish to create a simple table provider as an example.
 /// We create an in-memory table and convert it to it's FFI counterpart.
 extern "C" fn construct_simple_table_provider(
-    codec: FFI_LogicalExtensionCodec,
+    codecs: FFI_ExtensionCodecBundle,
 ) -> FFI_TableProvider {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int32, true),
@@ -53,7 +53,7 @@ extern "C" fn construct_simple_table_provider(
 
     let table_provider = MemTable::try_new(schema, vec![batches]).unwrap();
 
-    FFI_TableProvider::new_with_ffi_codec(Arc::new(table_provider), true, None, codec)
+    FFI_TableProvider::new(Arc::new(table_provider), true, None, codecs)
 }
 
 #[unsafe(no_mangle)]

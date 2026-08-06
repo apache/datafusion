@@ -42,7 +42,8 @@ use crate::config::extension_options::FFI_ExtensionOptions;
 use crate::execution_plan::FFI_ExecutionPlan;
 use crate::execution_plan::tests::EmptyExec;
 use crate::physical_optimizer::FFI_PhysicalOptimizerRule;
-use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::proto::extension_codec_bundle::FFI_ExtensionCodecBundle;
+use crate::query_planner::FFI_QueryPlanner;
 use crate::table_provider::FFI_TableProvider;
 use crate::table_provider_factory::FFI_TableProviderFactory;
 use crate::tests::catalog::create_catalog_provider_list;
@@ -50,11 +51,13 @@ use crate::udaf::FFI_AggregateUDF;
 use crate::udf::FFI_ScalarUDF;
 use crate::udtf::FFI_TableFunction;
 use crate::udwf::FFI_WindowUDF;
+use crate::util::FFI_Option;
 
 mod async_provider;
 pub mod catalog;
 pub mod config;
 mod physical_optimizer;
+mod query_planner;
 mod sync_provider;
 mod table_provider_factory;
 mod udf_udaf_udwf;
@@ -67,21 +70,21 @@ pub mod utils;
 pub struct ForeignLibraryModule {
     /// Construct an opinionated catalog provider
     pub create_catalog:
-        extern "C" fn(codec: FFI_LogicalExtensionCodec) -> FFI_CatalogProvider,
+        extern "C" fn(codecs: FFI_ExtensionCodecBundle) -> FFI_CatalogProvider,
 
     /// Construct an opinionated catalog provider list
     pub create_catalog_list:
-        extern "C" fn(codec: FFI_LogicalExtensionCodec) -> FFI_CatalogProviderList,
+        extern "C" fn(codecs: FFI_ExtensionCodecBundle) -> FFI_CatalogProviderList,
 
     /// Constructs the table provider
     pub create_table: extern "C" fn(
         synchronous: bool,
-        codec: FFI_LogicalExtensionCodec,
+        codecs: FFI_ExtensionCodecBundle,
     ) -> FFI_TableProvider,
 
     /// Constructs the table provider factory
     pub create_table_factory:
-        extern "C" fn(codec: FFI_LogicalExtensionCodec) -> FFI_TableProviderFactory,
+        extern "C" fn(codecs: FFI_ExtensionCodecBundle) -> FFI_TableProviderFactory,
 
     /// Create a scalar UDF
     pub create_scalar_udf: extern "C" fn() -> FFI_ScalarUDF,
@@ -93,7 +96,7 @@ pub struct ForeignLibraryModule {
     pub create_placement_udf: extern "C" fn() -> FFI_ScalarUDF,
 
     pub create_table_function:
-        extern "C" fn(FFI_LogicalExtensionCodec) -> FFI_TableFunction,
+        extern "C" fn(FFI_ExtensionCodecBundle) -> FFI_TableFunction,
 
     /// Create an aggregate UDAF using sum
     pub create_sum_udaf: extern "C" fn() -> FFI_AggregateUDF,
@@ -111,11 +114,29 @@ pub struct ForeignLibraryModule {
     pub create_exec_with_statistics: extern "C" fn() -> FFI_ExecutionPlan,
 
     pub create_table_with_statistics:
-        extern "C" fn(codec: FFI_LogicalExtensionCodec) -> FFI_TableProvider,
+        extern "C" fn(codecs: FFI_ExtensionCodecBundle) -> FFI_TableProvider,
 
     pub create_physical_optimizer_rule: extern "C" fn() -> FFI_PhysicalOptimizerRule,
 
     pub create_context_aware_optimizer_rule: extern "C" fn() -> FFI_PhysicalOptimizerRule,
+
+    /// Construct a query planner. When `library_a_planner` is provided the
+    /// planner delegates to it, as library C does after library A swaps planners.
+    pub create_query_planner: extern "C" fn(
+        codecs: FFI_ExtensionCodecBundle,
+        library_a_planner: FFI_Option<FFI_QueryPlanner>,
+    ) -> FFI_QueryPlanner,
+
+    /// Construct a query planner that returns a custom physical extension node.
+    /// Used to check that a node produced behind a session callback survives the
+    /// boundary through the session's own physical codec.
+    pub create_extension_node_query_planner:
+        extern "C" fn(codecs: FFI_ExtensionCodecBundle) -> FFI_QueryPlanner,
+
+    /// Construct a table provider whose `scan` plans through the query planner it
+    /// reaches on the session it is given, rather than planning locally.
+    pub create_session_planning_table:
+        extern "C" fn(codecs: FFI_ExtensionCodecBundle) -> FFI_TableProvider,
 
     pub version: extern "C" fn() -> u64,
 
@@ -142,20 +163,20 @@ pub fn create_record_batch(start_value: i32, num_values: usize) -> RecordBatch {
 /// We create an in-memory table and convert it to it's FFI counterpart.
 extern "C" fn construct_table_provider(
     synchronous: bool,
-    codec: FFI_LogicalExtensionCodec,
+    codecs: FFI_ExtensionCodecBundle,
 ) -> FFI_TableProvider {
     match synchronous {
-        true => create_sync_table_provider(codec),
-        false => create_async_table_provider(codec),
+        true => create_sync_table_provider(codecs),
+        false => create_async_table_provider(codecs),
     }
 }
 
 /// Here we only wish to create a simple table provider as an example.
 /// We create an in-memory table and convert it to it's FFI counterpart.
 extern "C" fn construct_table_provider_factory(
-    codec: FFI_LogicalExtensionCodec,
+    codecs: FFI_ExtensionCodecBundle,
 ) -> FFI_TableProviderFactory {
-    table_provider_factory::create(codec)
+    table_provider_factory::create(codecs)
 }
 
 pub(crate) extern "C" fn create_empty_exec() -> FFI_ExecutionPlan {
@@ -233,7 +254,7 @@ impl TableProvider for TableWithStats {
 }
 
 pub(crate) extern "C" fn create_table_with_statistics(
-    codec: FFI_LogicalExtensionCodec,
+    codecs: FFI_ExtensionCodecBundle,
 ) -> FFI_TableProvider {
     let schema = create_test_schema();
     let batch = create_record_batch(1, 5);
@@ -242,7 +263,7 @@ pub(crate) extern "C" fn create_table_with_statistics(
         inner,
         stats: make_test_statistics(),
     });
-    FFI_TableProvider::new_with_ffi_codec(provider, true, None, codec)
+    FFI_TableProvider::new(provider, true, None, codecs)
 }
 
 /// This defines the entry point for using the module.
@@ -269,6 +290,10 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
             physical_optimizer::create_physical_optimizer_rule,
         create_context_aware_optimizer_rule:
             physical_optimizer::create_context_aware_optimizer_rule,
+        create_query_planner: query_planner::create_query_planner,
+        create_extension_node_query_planner:
+            query_planner::create_extension_node_query_planner,
+        create_session_planning_table: query_planner::create_session_planning_table,
         version: super::version,
         create_first_value_udaf: create_ffi_first_value_func,
     }

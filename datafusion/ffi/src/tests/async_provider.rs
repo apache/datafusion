@@ -43,7 +43,7 @@ use tokio::runtime::Handle;
 use tokio::sync::{broadcast, mpsc};
 
 use super::create_record_batch;
-use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::proto::extension_codec_bundle::FFI_ExtensionCodecBundle;
 use crate::table_provider::FFI_TableProvider;
 
 #[derive(Debug)]
@@ -285,13 +285,8 @@ impl Stream for AsyncTestRecordBatchStream {
 }
 
 pub(crate) fn create_async_table_provider(
-    codec: FFI_LogicalExtensionCodec,
+    codecs: FFI_ExtensionCodecBundle,
 ) -> FFI_TableProvider {
     let (table_provider, tokio_rt) = start_async_provider();
-    FFI_TableProvider::new_with_ffi_codec(
-        Arc::new(table_provider),
-        true,
-        Some(tokio_rt),
-        codec,
-    )
+    FFI_TableProvider::new(Arc::new(table_provider), true, Some(tokio_rt), codecs)
 }

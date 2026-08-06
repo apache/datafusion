@@ -23,7 +23,7 @@ use datafusion_common::Result;
 use datafusion_expr::CreateExternalTable;
 
 use super::{create_record_batch, create_test_schema};
-use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::proto::extension_codec_bundle::FFI_ExtensionCodecBundle;
 use crate::table_provider_factory::FFI_TableProviderFactory;
 
 #[derive(Debug)]
@@ -52,7 +52,7 @@ impl TableProviderFactory for TestTableProviderFactory {
     }
 }
 
-pub(crate) fn create(codec: FFI_LogicalExtensionCodec) -> FFI_TableProviderFactory {
+pub(crate) fn create(codecs: FFI_ExtensionCodecBundle) -> FFI_TableProviderFactory {
     let factory = TestTableProviderFactory {};
-    FFI_TableProviderFactory::new_with_ffi_codec(Arc::new(factory), None, codec)
+    FFI_TableProviderFactory::new(Arc::new(factory), None, codecs)
 }

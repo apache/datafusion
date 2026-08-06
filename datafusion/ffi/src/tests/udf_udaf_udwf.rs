@@ -33,7 +33,7 @@ use datafusion_functions_aggregate::sum::Sum;
 use datafusion_functions_table::generate_series::RangeFunc;
 use datafusion_functions_window::rank::Rank;
 
-use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::proto::extension_codec_bundle::FFI_ExtensionCodecBundle;
 use crate::udaf::FFI_AggregateUDF;
 use crate::udf::FFI_ScalarUDF;
 use crate::udtf::FFI_TableFunction;
@@ -172,11 +172,11 @@ pub(crate) extern "C" fn create_placement_func() -> FFI_ScalarUDF {
 }
 
 pub(crate) extern "C" fn create_ffi_table_func(
-    codec: FFI_LogicalExtensionCodec,
+    codecs: FFI_ExtensionCodecBundle,
 ) -> FFI_TableFunction {
     let udtf: Arc<dyn TableFunctionImpl> = Arc::new(RangeFunc {});
 
-    FFI_TableFunction::new_with_ffi_codec(udtf, None, codec)
+    FFI_TableFunction::new(udtf, None, codecs)
 }
 
 pub(crate) extern "C" fn create_ffi_sum_func() -> FFI_AggregateUDF {

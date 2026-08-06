@@ -22,15 +22,11 @@ use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
 use datafusion_catalog::{SchemaProvider, TableProvider};
 use datafusion_common::error::{DataFusionError, Result};
-use datafusion_proto::logical_plan::{
-    DefaultLogicalExtensionCodec, LogicalExtensionCodec,
-};
 use stabby::string::String as SString;
 use stabby::vec::Vec as SVec;
 use tokio::runtime::Handle;
 
-use crate::execution::FFI_TaskContextProvider;
-use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::proto::extension_codec_bundle::FFI_ExtensionCodecBundle;
 use crate::table_provider::{FFI_TableProvider, ForeignTableProvider};
 use crate::util::{FFI_Option, FFI_Result};
 use crate::{df_result, sresult_return};
@@ -65,7 +61,9 @@ pub struct FFI_SchemaProvider {
 
     pub table_exist: unsafe extern "C" fn(provider: &Self, name: SString) -> bool,
 
-    pub logical_codec: FFI_LogicalExtensionCodec,
+    /// The serialization environment propagated to every table provider reached
+    /// through this schema.
+    pub codecs: FFI_ExtensionCodecBundle,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -128,14 +126,12 @@ unsafe extern "C" fn table_fn_wrapper(
 ) -> FfiFuture<FFI_Result<FFI_Option<FFI_TableProvider>>> {
     unsafe {
         let runtime = provider.runtime();
-        let logical_codec = provider.logical_codec.clone();
+        let codecs = provider.codecs.clone();
         let provider = Arc::clone(provider.inner());
 
         async move {
             let table = sresult_return!(provider.table(name.as_str()).await)
-                .map(|t| {
-                    FFI_TableProvider::new_with_ffi_codec(t, true, runtime, logical_codec)
-                })
+                .map(|t| FFI_TableProvider::new(t, true, runtime, codecs))
                 .into();
 
             FFI_Result::Ok(table)
@@ -151,15 +147,13 @@ unsafe extern "C" fn register_table_fn_wrapper(
 ) -> FFI_Result<FFI_Option<FFI_TableProvider>> {
     unsafe {
         let runtime = provider.runtime();
-        let logical_codec = provider.logical_codec.clone();
+        let codecs = provider.codecs.clone();
         let provider = provider.inner();
 
         let table = Arc::new(ForeignTableProvider(table));
 
         let returned_table = sresult_return!(provider.register_table(name.into(), table))
-            .map(|t| {
-                FFI_TableProvider::new_with_ffi_codec(t, true, runtime, logical_codec)
-            });
+            .map(|t| FFI_TableProvider::new(t, true, runtime, codecs));
 
         FFI_Result::Ok(returned_table.into())
     }
@@ -171,13 +165,11 @@ unsafe extern "C" fn deregister_table_fn_wrapper(
 ) -> FFI_Result<FFI_Option<FFI_TableProvider>> {
     unsafe {
         let runtime = provider.runtime();
-        let logical_codec = provider.logical_codec.clone();
+        let codecs = provider.codecs.clone();
         let provider = provider.inner();
 
         let returned_table = sresult_return!(provider.deregister_table(name.as_str()))
-            .map(|t| {
-                FFI_TableProvider::new_with_ffi_codec(t, true, runtime, logical_codec)
-            });
+            .map(|t| FFI_TableProvider::new(t, true, runtime, codecs));
 
         FFI_Result::Ok(returned_table.into())
     }
@@ -219,7 +211,7 @@ unsafe extern "C" fn clone_fn_wrapper(
             register_table: register_table_fn_wrapper,
             deregister_table: deregister_table_fn_wrapper,
             table_exist: table_exist_fn_wrapper,
-            logical_codec: provider.logical_codec.clone(),
+            codecs: provider.codecs.clone(),
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
@@ -237,27 +229,13 @@ impl Drop for FFI_SchemaProvider {
 
 impl FFI_SchemaProvider {
     /// Creates a new [`FFI_SchemaProvider`].
+    ///
+    /// `codecs` must describe the extension nodes used by every table in this
+    /// schema, since tables reached through it inherit it.
     pub fn new(
         provider: Arc<dyn SchemaProvider>,
         runtime: Option<Handle>,
-        task_ctx_provider: impl Into<FFI_TaskContextProvider>,
-        logical_codec: Option<Arc<dyn LogicalExtensionCodec>>,
-    ) -> Self {
-        let task_ctx_provider = task_ctx_provider.into();
-        let logical_codec =
-            logical_codec.unwrap_or_else(|| Arc::new(DefaultLogicalExtensionCodec {}));
-        let logical_codec = FFI_LogicalExtensionCodec::new(
-            logical_codec,
-            runtime.clone(),
-            task_ctx_provider.clone(),
-        );
-        Self::new_with_ffi_codec(provider, runtime, logical_codec)
-    }
-
-    pub fn new_with_ffi_codec(
-        provider: Arc<dyn SchemaProvider>,
-        runtime: Option<Handle>,
-        logical_codec: FFI_LogicalExtensionCodec,
+        codecs: FFI_ExtensionCodecBundle,
     ) -> Self {
         if let Some(provider) = provider.downcast_ref::<ForeignSchemaProvider>() {
             return provider.0.clone();
@@ -273,7 +251,7 @@ impl FFI_SchemaProvider {
             register_table: register_table_fn_wrapper,
             deregister_table: deregister_table_fn_wrapper,
             table_exist: table_exist_fn_wrapper,
-            logical_codec,
+            codecs,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
@@ -347,12 +325,7 @@ impl SchemaProvider for ForeignSchemaProvider {
         unsafe {
             let ffi_table = match table.downcast_ref::<ForeignTableProvider>() {
                 Some(t) => t.0.clone(),
-                None => FFI_TableProvider::new_with_ffi_codec(
-                    table,
-                    true,
-                    None,
-                    self.0.logical_codec.clone(),
-                ),
+                None => FFI_TableProvider::new(table, true, None, self.0.codecs.clone()),
             };
 
             let returned_provider: Option<FFI_TableProvider> =
@@ -403,9 +376,10 @@ mod tests {
         );
 
         let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+        let codecs = FFI_ExtensionCodecBundle::new_default(task_ctx_provider, None);
 
         let mut ffi_schema_provider =
-            FFI_SchemaProvider::new(schema_provider, None, task_ctx_provider, None);
+            FFI_SchemaProvider::new(schema_provider, None, codecs);
         ffi_schema_provider.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_schema_provider: Arc<dyn SchemaProvider> =
@@ -457,8 +431,8 @@ mod tests {
         let schema_provider = Arc::new(MemorySchemaProvider::new());
 
         let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
-        let mut ffi_schema =
-            FFI_SchemaProvider::new(schema_provider, None, task_ctx_provider, None);
+        let codecs = FFI_ExtensionCodecBundle::new_default(task_ctx_provider, None);
+        let mut ffi_schema = FFI_SchemaProvider::new(schema_provider, None, codecs);
 
         // Verify local libraries can be downcast to their original
         let foreign_schema: Arc<dyn SchemaProvider> = (&ffi_schema).into();

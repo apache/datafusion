@@ -23,7 +23,7 @@ use datafusion::{
     execution::TaskContextProvider,
     prelude::SessionContext,
 };
-use datafusion_ffi::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use datafusion_ffi::proto::extension_codec_bundle::FFI_ExtensionCodecBundle;
 use ffi_module_interface::TableProviderModule;
 
 #[tokio::main]
@@ -67,13 +67,17 @@ async fn main() -> Result<()> {
     let table_provider_module = get_module();
 
     let ctx = Arc::new(SessionContext::new());
-    let codec = FFI_LogicalExtensionCodec::new_default(
+    // The bundle pairs the task context provider with the logical and physical
+    // extension codecs the module should serialize with. This example moves no
+    // custom extension nodes, so both codecs are the defaults.
+    let codecs = FFI_ExtensionCodecBundle::new_default(
         &(Arc::clone(&ctx) as Arc<dyn TaskContextProvider>),
+        None,
     );
 
     // By calling the code below, the table provided will be created within
     // the module's code.
-    let ffi_table_provider = (table_provider_module.create_table)(codec);
+    let ffi_table_provider = (table_provider_module.create_table)(codecs);
 
     // In order to access the table provider within this executable, we need to
     // turn it into a `TableProvider`.

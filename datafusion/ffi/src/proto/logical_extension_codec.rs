@@ -40,6 +40,7 @@ use tokio::runtime::Handle;
 
 use crate::arrow_wrappers::WrappedSchema;
 use crate::execution::FFI_TaskContextProvider;
+use crate::proto::extension_codec_bundle::FFI_ExtensionCodecBundle;
 use crate::table_provider::FFI_TableProvider;
 use crate::udaf::FFI_AggregateUDF;
 use crate::udf::FFI_ScalarUDF;
@@ -99,7 +100,7 @@ pub struct FFI_LogicalExtensionCodec {
     try_encode_udwf:
         unsafe extern "C" fn(&Self, node: FFI_WindowUDF) -> FFI_Result<SVec<u8>>,
 
-    pub task_ctx_provider: FFI_TaskContextProvider,
+    pub(crate) task_ctx_provider: FFI_TaskContextProvider,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -163,11 +164,20 @@ unsafe extern "C" fn try_decode_table_provider_fn_wrapper(
         ctx.as_ref()
     ));
 
-    FFI_Result::Ok(FFI_TableProvider::new_with_ffi_codec(
+    // The function pointer receives only the codec, so there is no bundle to
+    // forward here. Pair this codec with an explicit default physical codec; see
+    // `FFI_ExtensionCodecBundle::new_logical_with_default_physical` for what that
+    // costs a consumer of the returned provider.
+    let codecs = FFI_ExtensionCodecBundle::new_logical_with_default_physical(
+        codec.clone(),
+        runtime.clone(),
+    );
+
+    FFI_Result::Ok(FFI_TableProvider::new(
         table_provider,
         true,
         runtime,
-        codec.clone(),
+        codecs,
     ))
 }
 
@@ -295,7 +305,7 @@ impl Drop for FFI_LogicalExtensionCodec {
 impl FFI_LogicalExtensionCodec {
     /// Creates a new [`FFI_LogicalExtensionCodec`].
     pub fn new(
-        codec: Arc<dyn LogicalExtensionCodec + Send>,
+        codec: Arc<dyn LogicalExtensionCodec>,
         runtime: Option<Handle>,
         task_ctx_provider: impl Into<FFI_TaskContextProvider>,
     ) -> Self {
@@ -404,8 +414,14 @@ impl LogicalExtensionCodec for ForeignLogicalExtensionCodec {
         buf: &mut Vec<u8>,
     ) -> Result<()> {
         let table_ref = table_ref.to_string();
-        let node =
-            FFI_TableProvider::new_with_ffi_codec(node, true, None, self.0.clone());
+        // As in `try_decode_table_provider_fn_wrapper`, only the codec is in scope.
+        // This handle exists solely so the owning library can encode `node`, so the
+        // default physical codec is never exercised.
+        let codecs = FFI_ExtensionCodecBundle::new_logical_with_default_physical(
+            self.0.clone(),
+            None,
+        );
+        let node = FFI_TableProvider::new(node, true, None, codecs);
 
         let bytes = df_result!(unsafe {
             (self.0.try_encode_table_provider)(&self.0, table_ref.as_str().into(), node)
@@ -712,14 +728,12 @@ mod tests {
 
     #[test]
     fn ffi_logical_extension_codec_local_bypass() {
-        let codec =
-            Arc::new(TestExtensionCodec {}) as Arc<dyn LogicalExtensionCodec + Send>;
+        let codec = Arc::new(TestExtensionCodec {}) as Arc<dyn LogicalExtensionCodec>;
         let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
 
         let mut ffi_codec =
             FFI_LogicalExtensionCodec::new(Arc::clone(&codec), None, task_ctx_provider);
 
-        let codec = codec as Arc<dyn LogicalExtensionCodec>;
         // Verify local libraries can be downcast to their original
         let foreign_codec: Arc<dyn LogicalExtensionCodec> = (&ffi_codec).into();
         assert!(arc_ptr_eq(&foreign_codec, &codec));

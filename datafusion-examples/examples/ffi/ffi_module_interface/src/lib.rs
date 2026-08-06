@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_ffi::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use datafusion_ffi::proto::extension_codec_bundle::FFI_ExtensionCodecBundle;
 use datafusion_ffi::table_provider::FFI_TableProvider;
 
 /// This struct defines the module interfaces. It is to be shared by
@@ -27,5 +27,5 @@ use datafusion_ffi::table_provider::FFI_TableProvider;
 pub struct TableProviderModule {
     /// Constructs the table provider
     pub create_table:
-        extern "C" fn(codec: FFI_LogicalExtensionCodec) -> FFI_TableProvider,
+        extern "C" fn(codecs: FFI_ExtensionCodecBundle) -> FFI_TableProvider,
 }

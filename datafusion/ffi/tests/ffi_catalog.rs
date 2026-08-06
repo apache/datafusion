@@ -29,9 +29,9 @@ mod tests {
     #[tokio::test]
     async fn test_catalog() -> datafusion_common::Result<()> {
         let module = get_module()?;
-        let (ctx, codec) = super::utils::ctx_and_codec();
+        let (ctx, codecs) = super::utils::ctx_and_codecs();
 
-        let ffi_catalog = (module.create_catalog)(codec);
+        let ffi_catalog = (module.create_catalog)(codecs);
         let foreign_catalog: Arc<dyn CatalogProvider> = (&ffi_catalog).into();
 
         let _ = ctx.register_catalog("fruit", foreign_catalog);
@@ -50,9 +50,9 @@ mod tests {
     #[tokio::test]
     async fn test_catalog_list() -> datafusion_common::Result<()> {
         let module = get_module()?;
-        let (ctx, codec) = super::utils::ctx_and_codec();
+        let (ctx, codecs) = super::utils::ctx_and_codecs();
 
-        let ffi_catalog_list = (module.create_catalog_list)(codec);
+        let ffi_catalog_list = (module.create_catalog_list)(codecs);
         let foreign_catalog_list: Arc<dyn CatalogProviderList> =
             (&ffi_catalog_list).into();
 
