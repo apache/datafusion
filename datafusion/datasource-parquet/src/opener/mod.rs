@@ -27,7 +27,8 @@ use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
-    DecoderBuilderConfig, PushDecoderStreamState, RgPlanEntry, RowGroupPruner,
+    DecoderBuilderConfig, FetchPolicy, PushDecoderStreamState, ReaderSlot, RgPlanEntry,
+    RowGroupPruner,
 };
 use crate::row_filter::RowFilterGenerator;
 use crate::row_group_filter::RowGroupAccessPlanFilter;
@@ -556,10 +557,19 @@ impl ParquetOpenState {
             }
             ParquetOpenState::PruneWithStatistics(prepared) => {
                 let prepared_row_groups = (*prepared).prune_row_groups()?;
-                if should_load_page_index(
-                    prepared_row_groups.prepared.page_pruning_predicate.as_ref(),
-                    &prepared_row_groups.row_groups,
-                ) {
+                // EXPERIMENT: the streaming policy plans at page granularity,
+                // which requires the offset index. Page-index loading is
+                // otherwise driven purely by whether *pruning* can use it, so
+                // without this the streaming path silently falls back to the
+                // push decoder on every scan that has no prunable predicate.
+                let streaming_needs_page_index =
+                    matches!(FetchPolicy::from_env(), FetchPolicy::Streaming { .. });
+                if streaming_needs_page_index
+                    || should_load_page_index(
+                        prepared_row_groups.prepared.page_pruning_predicate.as_ref(),
+                        &prepared_row_groups.row_groups,
+                    )
+                {
                     Ok(ParquetOpenState::LoadPageIndex(
                         prepared_row_groups.load_page_index().boxed(),
                     ))
@@ -1394,6 +1404,79 @@ impl RowGroupsPrunedParquetOpen {
             prepared.virtual_state.as_deref(),
         )?;
 
+        // EXPERIMENT: streaming (batch-granular) scan path, selected via
+        // DF_FETCH_POLICY=streaming. A long-lived sync
+        // `ParquetRecordBatchReader` pulls from a shared buffer that the
+        // stream driver fills with exactly the page ranges each batch needs
+        // (plus bounded readahead). Falls back to the push-decoder path when
+        // row filters are active or the offset index is unavailable.
+        //
+        // Note this does not drive `ParquetPushDecoder`: only the *plan* —
+        // which pages this scan reads, in decode order — comes from arrow-rs
+        // (`plan_scan_ranges`, which merely lives in that crate's
+        // `push_decoder` module). The decoder itself cannot be used here
+        // because `NeedsData` resolves only at row-group granularity, so it
+        // cannot say what the next *batch* needs. Teaching it to would let
+        // this path drop `SharedBuffers` and the sync reader entirely and go
+        // back to being a pure scheduler; see apache/arrow-rs#10555.
+        if let FetchPolicy::Streaming { window } = FetchPolicy::from_env() {
+            let pushdown_active =
+                prepared.pushdown_filters && prepared.predicate.is_some();
+            if !pushdown_active {
+                let streaming_access_plan = prepare_access_plan(access_plan.clone())?;
+                if let Some(streaming_plan) = crate::push_decoder::build_streaming_plan(
+                    &file_metadata,
+                    &streaming_access_plan.row_group_indexes,
+                    decoder_projection.projection_mask(),
+                    streaming_access_plan.row_selection.as_ref(),
+                ) {
+                    let stream = crate::push_decoder::build_streaming_stream(
+                        streaming_plan,
+                        crate::push_decoder::StreamingScanConfig {
+                            reader_metadata: reader_metadata.clone(),
+                            row_group_indexes: streaming_access_plan.row_group_indexes,
+                            row_selection: streaming_access_plan.row_selection,
+                            decoder_projection,
+                            batch_size: prepared.batch_size,
+                            limit: prepared.limit,
+                            reader: prepared.async_file_reader,
+                            baseline_metrics: prepared.baseline_metrics,
+                            window,
+                        },
+                    )?;
+                    let files_ranges_pruned_statistics =
+                        prepared.file_metrics.files_ranges_pruned_statistics.clone();
+                    return match prepared.file_pruner {
+                        Some(file_pruner) if file_pruner.is_watching() => {
+                            Ok(EarlyStoppingStream::new(
+                                stream,
+                                file_pruner,
+                                files_ranges_pruned_statistics,
+                            )
+                            .boxed())
+                        }
+                        _ => Ok(stream),
+                    };
+                } else {
+                    // The streaming path needs page locations. Falling back
+                    // silently makes "did it even run?" unanswerable without
+                    // a benchmark round-trip, which is exactly how the
+                    // no-page-index ClickBench files went unnoticed.
+                    debug!(
+                        "streaming fetch policy requested but {} has no offset index; \
+                         falling back to row-group-granular push decoding",
+                        prepared.file_name
+                    );
+                }
+            } else {
+                debug!(
+                    "streaming fetch policy requested but pushdown filters are \
+                     active for {}; falling back to row-group-granular push decoding",
+                    prepared.file_name
+                );
+            }
+        }
+
         let (decoder, rg_plan) = {
             let pushdown_predicate = prepared
                 .pushdown_filters
@@ -1490,7 +1573,10 @@ impl RowGroupsPrunedParquetOpen {
             decoder: Some(decoder),
             active_reader: None,
             rg_plan,
-            reader: prepared.async_file_reader,
+            reader: ReaderSlot::Idle(prepared.async_file_reader),
+            fetch_policy: FetchPolicy::from_env(),
+            parquet_metadata: Arc::clone(reader_metadata.metadata()),
+            prefetched_row_groups: std::collections::HashSet::new(),
             decoder_projection,
             arrow_reader_metrics,
             predicate_cache_inner_records,

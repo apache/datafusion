@@ -35,6 +35,7 @@ mod opener;
 mod page_filter;
 mod projection_read_plan;
 mod push_decoder;
+pub use push_decoder::PEAK_STAGED_BYTES;
 mod reader;
 mod row_filter;
 mod row_group_filter;
