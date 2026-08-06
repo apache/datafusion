@@ -176,6 +176,8 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// Each returned expression must have a [`PhysicalExpr::expression_id`]
     /// since all dynamic expressions such as [`DynamicFilterPhysicalExpr`]
     /// have an expression id.
+    ///
+    /// [`DynamicFilterPhysicalExpr`]: datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr
     fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         Vec::new()
     }
