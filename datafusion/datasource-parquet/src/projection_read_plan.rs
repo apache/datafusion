@@ -1164,7 +1164,7 @@ mod test {
             Arc::new(Field::new("label", DataType::Utf8, false)),
             Arc::new(Field::new("pad", DataType::Utf8, false)),
         ]
-            .into();
+        .into();
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
@@ -1186,7 +1186,7 @@ mod test {
                 )),
             ],
         )
-            .unwrap();
+        .unwrap();
 
         let file = NamedTempFile::new().expect("temp file");
         let mut writer =
@@ -1211,7 +1211,7 @@ mod test {
                 Arc::new(Field::new(first, DataType::Int32, false)),
                 Arc::new(Field::new(second, DataType::Utf8, false)),
             ]
-                .into()
+            .into()
         };
         let (a_fields, b_fields) = (group("p", "q"), group("m", "n"));
 
@@ -1237,7 +1237,7 @@ mod test {
                 values(b_fields, [3, 4], ["b0", "b1"]),
             ],
         )
-            .unwrap();
+        .unwrap();
 
         let file = NamedTempFile::new().expect("temp file");
         let mut writer =
@@ -1729,13 +1729,13 @@ mod test {
             Arc::new(Field::new("a", DataType::Int32, false)),
             Arc::new(Field::new("b", DataType::Int32, false)),
         ]
-            .into();
+        .into();
         let s_fields: Fields = vec![Arc::new(Field::new(
             "outer",
             DataType::Struct(outer_fields.clone()),
             false,
         ))]
-            .into();
+        .into();
         let schema = Arc::new(Schema::new(vec![Field::new(
             "s",
             DataType::Struct(s_fields.clone()),
