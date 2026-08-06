@@ -166,6 +166,8 @@ impl PhysicalExpr for NegativeExpr {
             sort_properties: -children[0].sort_properties,
             range: children[0].range.clone().arithmetic_negate()?,
             preserves_lex_ordering: false,
+            // Negation is one-to-one but reverses the ordering direction.
+            strictly_order_preserving: false,
         })
     }
 

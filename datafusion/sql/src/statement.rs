@@ -53,7 +53,7 @@ use datafusion_expr::{
     LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare,
     ResetVariable, SetVariable, SortExpr, Statement as PlanStatement, ToStringifiedPlan,
     TransactionAccessMode, TransactionConclusion, TransactionEnd,
-    TransactionIsolationLevel, TransactionStart, Volatility, WriteOp, cast, col,
+    TransactionIsolationLevel, TransactionStart, Volatility, WriteOp, cast,
 };
 use sqlparser::ast::{
     self, BeginTransactionKind, CheckConstraint, ForeignKeyConstraint, IndexColumn,
@@ -555,14 +555,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                     input_schema.fields().len()
                                 );
                             }
-                            let input_fields = input_schema.fields();
+                            let input_columns = input_schema.columns();
                             let project_exprs = schema
                                 .fields()
                                 .iter()
-                                .zip(input_fields)
-                                .map(|(field, input_field)| {
+                                .zip(input_columns)
+                                .map(|(field, input_column)| {
                                     cast(
-                                        col(input_field.name()),
+                                        Expr::Column(input_column),
                                         field.data_type().clone(),
                                     )
                                     .alias(field.name())
@@ -1804,7 +1804,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             name,
             columns,
             file_type,
-            location,
+            locations,
             table_partition_cols,
             if_not_exists,
             temporary,
@@ -1853,9 +1853,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let name = self.object_name_to_table_reference(name)?;
         let constraints =
             self.new_constraint_from_table_constraints(&all_constraints, &df_schema)?;
+
+        let Some(location) = locations.first().cloned() else {
+            return plan_err!("CREATE EXTERNAL TABLE requires at least one location");
+        };
+
+        // Keep the existing single-location builder API: seed it with the first
+        // location, then replace it with the complete list.
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
             Box::new(
                 PlanCreateExternalTable::builder(name, location, file_type, df_schema)
+                    .with_locations(locations)
                     .with_partition_cols(table_partition_cols)
                     .with_if_not_exists(if_not_exists)
                     .with_or_replace(or_replace)

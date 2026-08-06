@@ -36,6 +36,7 @@ use datafusion_physical_plan::execution_plan::Boundedness;
 use datafusion_physical_plan::projection::{
     ProjectionExec, make_with_child, update_expr, update_ordering_requirement,
 };
+use datafusion_physical_plan::scalar_subquery::ScalarSubqueryExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{
@@ -62,8 +63,8 @@ impl OutputRequirements {
     /// top-level [`OutputRequirementExec`] into the physical plan to keep track
     /// of global ordering and distribution requirements if there are any.
     /// Note that this rule should run at the beginning. It is idempotent: when
-    /// invoked on a plan that is already topped by an `OutputRequirementExec`,
-    /// it returns the plan unchanged.
+    /// invoked on a plan that already contains an `OutputRequirementExec` (at
+    /// the root or below it), it returns the plan unchanged.
     pub fn new_add_mode() -> Self {
         Self {
             mode: RuleMode::Add,
@@ -357,10 +358,10 @@ impl PhysicalOptimizerRule for OutputRequirements {
 /// This functions adds ancillary `OutputRequirementExec` to the physical plan, so that
 /// global requirements are not lost during optimization.
 ///
-/// Idempotent: if the plan is already topped by an `OutputRequirementExec`, it
-/// is returned unchanged so that re-running this rule (as adaptive execution
-/// in datafusion-ballista AQE does after every completed stage, see
-/// datafusion-ballista#1359) does not stack wrappers.
+/// Idempotent: re-running this rule (as adaptive execution in datafusion-ballista
+/// AQE does after every completed stage, see datafusion-ballista#1359) does not
+/// stack wrappers, whether the previously-added `OutputRequirementExec` sits at
+/// the root (handled here) or below it (handled in `require_top_ordering_helper`).
 fn require_top_ordering(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
     if plan.downcast_ref::<OutputRequirementExec>().is_some() {
         return Ok(plan);
@@ -380,17 +381,36 @@ fn require_top_ordering(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn Executio
     }
 }
 
+/// Which child (if any) `require_top_ordering_helper` should descend into when
+/// searching for the operator that establishes the global ordering.
+fn output_requirement_child(plan: &dyn ExecutionPlan) -> Option<usize> {
+    if plan.children().len() == 1 {
+        Some(0)
+    } else if plan.downcast_ref::<ScalarSubqueryExec>().is_some() {
+        // `ScalarSubqueryExec` is multi-child but order-transparent on child 0
+        // (the main input); its other children are subquery plans that don't
+        // affect output ordering, so descend into child 0. Without this the
+        // search stops here and loses the query's global ORDER BY.
+        Some(0)
+    } else {
+        None
+    }
+}
+
 /// Helper function that adds an ancillary `OutputRequirementExec` to the given plan.
 /// First entry in the tuple is resulting plan, second entry indicates whether any
 /// `OutputRequirementExec` is added to the plan.
 fn require_top_ordering_helper(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<(Arc<dyn ExecutionPlan>, bool)> {
-    let mut children = plan.children();
+    // A previous run of this rule already captured the ordering requirement at
+    // this node. Report it as already handled.
+    if plan.downcast_ref::<OutputRequirementExec>().is_some() {
+        return Ok((plan, true));
+    }
+
     // Global ordering defines desired ordering in the final result.
-    if children.len() != 1 {
-        Ok((plan, false))
-    } else if let Some(sort_exec) = plan.downcast_ref::<SortExec>() {
+    if let Some(sort_exec) = plan.downcast_ref::<SortExec>() {
         // In case of constant columns, output ordering of the `SortExec` would
         // be an empty set. Therefore; we check the sort expression field to
         // assign the requirements.
@@ -423,25 +443,27 @@ fn require_top_ordering_helper(
             )) as _,
             true,
         ))
-    } else if plan.maintains_input_order()[0]
-        && (plan.required_input_ordering()[0]
-            .as_ref()
-            .is_none_or(|o| matches!(o, OrderingRequirements::Soft(_))))
-    {
-        // Keep searching for a `SortExec` as long as ordering is maintained,
-        // and on-the-way operators do not themselves require an ordering.
-        // When an operator requires an ordering, any `SortExec` below can not
-        // be responsible for (i.e. the originator of) the global ordering.
-        let (new_child, is_changed) =
-            require_top_ordering_helper(Arc::clone(children.swap_remove(0)))?;
-
-        let plan = if is_changed {
-            plan.with_new_children(vec![new_child])?
-        } else {
-            plan
-        };
-
-        Ok((plan, is_changed))
+    } else if let Some(idx) = output_requirement_child(plan.as_ref()) {
+        // Keep searching for a `SortExec` / `SortPreservingMergeExec` as long as
+        // ordering is maintained, and on-the-way operators do not themselves
+        // require an ordering. When an operator requires an ordering, any
+        // `SortExec` below can not be responsible for (i.e. the originator of)
+        // the global ordering.
+        if plan.maintains_input_order()[idx]
+            && plan.required_input_ordering()[idx]
+                .as_ref()
+                .is_none_or(|o| matches!(o, OrderingRequirements::Soft(_)))
+        {
+            let mut children: Vec<Arc<dyn ExecutionPlan>> =
+                plan.children().into_iter().map(Arc::clone).collect();
+            let (new_child, is_changed) =
+                require_top_ordering_helper(Arc::clone(&children[idx]))?;
+            if is_changed {
+                children[idx] = new_child;
+                return Ok((plan.with_new_children(children)?, true));
+            }
+        }
+        Ok((plan, false))
     } else {
         // Stop searching, there is no global ordering desired for the query.
         Ok((plan, false))
