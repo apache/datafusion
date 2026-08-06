@@ -43,24 +43,96 @@ in the community:
 | `tpcds`               | TPC‑DS queries                                                     |
 | `tpch`                | TPC‑H queries                                                      |
 | `wide_schema`         | Small-projection queries on a wide (1024-col, 256-file) synthetic dataset; runs `wide` + `narrow` subgroups for comparison |
-| `predicate_eval`      | Conjunctive (AND) filter-evaluation micro-benchmarks; each subgroup is a different predicate pattern, to test how an adaptive predicate-ordering system behaves across them ([#11262](https://github.com/apache/datafusion/issues/11262)). Subgroups (`BENCH_SUBGROUP`): `costsel`, `cost`, `selectivity`, `cardinality`, `width`, `scale`, `neutral`, `correlation`, `drift`. Toggle a system under test with its native `DATAFUSION_*` env var |
+| `predicate_eval`      | Conjunctive (AND) filter-evaluation micro-benchmarks; each subgroup is a different predicate pattern, to test how an adaptive predicate-ordering system behaves across them ([#11262](https://github.com/apache/datafusion/issues/11262)). Subgroups (`--subgroup`): `costsel`, `cost`, `selectivity`, `cardinality`, `width`, `scale`, `neutral`, `correlation`, `drift`. Configure the system under test through its DataFusion settings. |
 
 # Running Benchmarks
 
-The easiest way to run a benchmark is to use the `bench.sh` shell script (up one level from this document)
-as it takes care of configuring any required environment variables and can populate any required data files.
-However, it is possible to directly run a sql benchmark using the `cargo bench` command. For example:
+Use `benchmark_runner` to run SQL benchmarks. It reads each suite's `.suite`
+file and exposes the suite's configuration as command-line options. Use the
+`bench.sh` shell script one level above this directory to download or generate
+required data files.
 
 ```shell
-BENCH_NAME=tpch cargo bench --bench sql
+cargo run -p datafusion-benchmarks --release --bin benchmark_runner -- tpch
 ```
+
+## SQL benchmark runner
+
+The `benchmark_runner` binary discovers suites from this directory and exposes
+suite-specific options alongside the common benchmark options. The suite name
+must come before all options.
+
+```bash
+cargo run -p datafusion-benchmarks --release --bin benchmark_runner -- --list
+cargo run -p datafusion-benchmarks --release --bin benchmark_runner -- tpch --help
+cargo run -p datafusion-benchmarks --release --bin benchmark_runner -- tpch --query 15 --format csv
+cargo run -p datafusion-benchmarks --release --bin benchmark_runner -- clickbench --partitioning partitioned --dry-run
+cargo run -p datafusion-benchmarks --release --bin benchmark_runner -- tpch --query 1 --result-mode persist
+cargo run -p datafusion-benchmarks --release --bin benchmark_runner -- tpch --query 1 --result-mode validate
+```
+
+Use `--path PATH` or `-p PATH` to override `DATA_DIR` for a suite that declares
+that path replacement. Suites without a `DATA_DIR` replacement reject the
+option. Suite-specific values follow this precedence: command-line option,
+environment variable, then the default in the suite metadata.
+
+`--dry-run` prints the resolved suite, filters, run mode, common options,
+suite-specific values, and path replacements as JSON. It reports source metadata
+for suite options and path replacements. It validates the command but does not
+load benchmark definitions, create a session, read datasets, execute SQL, or
+write benchmark results.
+
+Use `--result-mode persist` to save query results or `--result-mode validate` to
+compare them with saved results. The default, `--result-mode none`, does neither.
+For compatibility with direct Criterion runs, the runner also reads
+`BENCH_PERSIST_RESULTS` and `BENCH_VALIDATE`. Persistence takes precedence when
+both variables are `true`. An explicit `--result-mode` overrides both variables.
+
+### Suite metadata
+
+Each discoverable suite has one TOML metadata file named
+`<suite>/<suite>.suite`. The runner accepts these top-level fields:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `description` | Yes | Non-empty text shown by `--list` and suite help. |
+| `query_pattern` | No | Relative benchmark filename pattern. It must contain exactly one `{QUERY_ID}` or `{QUERY_ID_PADDED}` placeholder and defaults to `q{QUERY_ID_PADDED}.benchmark`. |
+| `path_replacements` | No | Map of replacement names to paths. Relative paths resolve from the suite directory. `DATA_DIR` enables `--path/-p`. |
+| `options` | No | Array of suite-specific option tables described below. |
+| `examples` | No | Array of `command` and `description` pairs appended to suite help. Both values must contain text. |
+
+Each `[[options]]` table has these fields:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Long option name without `--`; use lowercase ASCII letters, digits, and hyphens. |
+| `short` | No | One ASCII letter or digit without `-`. |
+| `env` | Yes | Environment variable that supplies the option value. |
+| `default` | Yes | Value used when neither the command line nor the environment supplies one. |
+| `values` | No | Accepted values. Omit the field to allow any value. Include `"..."` to allow the listed values plus any other value. Without `"..."`, the list is closed. |
+| `help` | Yes | Non-empty text shown in suite help. |
+
+Option names, short names, and environment keys must be unique within a suite.
+An option environment key cannot also appear in `path_replacements`. Suite
+options cannot reuse the runner's global names: `help` (`-h`), `query` (`-q`),
+`subgroup`, `iterations` (`-i`), `partitions` (`-n`), `batch-size` (`-s`),
+`mem-pool-type`, `memory-limit`, `sort-spill-reservation-bytes`, `debug` (`-d`),
+`simulate-latency`, `criterion`, `list`, `output` (`-o`), `save-baseline`,
+`path` (`-p`), `result-mode`, or `dry-run`.
 
 # Benchmark configuration
 
-Sql benchmarks are configured via environment variables. Cargo's bench command and
-[criterion](https://github.com/criterion-rs/criterion.rs) (the underlying benchmark framework) have an unfortunate
-limitation in that custom command arguments cannot be passed into a benchmark. The alternative is to use environment
-variables to pass in arguments which is what is used here.
+`benchmark_runner` is the preferred interface for configuring and running SQL
+benchmarks. Run `<suite> --help` to see the common and suite-specific options:
+
+```shell
+cargo run -p datafusion-benchmarks --release --bin benchmark_runner -- h2o --help
+```
+
+The runner maps suite options to the environment variables below for
+compatibility with benchmark files and direct Criterion runs. Direct
+`cargo bench --bench sql` invocations cannot accept custom arguments, so they
+still use environment variables.
 
 The SQL benchmarking tool uses the following environment variables:
 
@@ -76,10 +148,10 @@ The SQL benchmarking tool uses the following environment variables:
 | MEM_POOL_TYPE         | The memory pool type to use, should be one of "fair" or "greedy".                                                                                                                                 |
 | MEMORY_LIMIT          | Memory limit (e.g. '100M', '1.5G'). If not specified, run all pre-defined memory limits for given query if there's any, otherwise run with no memory limit.                                       | 
 
-Example – Run the H2O window benchmarks on the 'small' sized CSV data files:
+Example: run the H2O window benchmarks on the small CSV data files:
 
-``` bash
-BENCH_NAME=h2o BENCH_SUBGROUP=window H2O_BENCH_SIZE=small H20_FILE_TYPE=csv cargo bench --bench sql 
+```shell
+cargo run -p datafusion-benchmarks --release --bin benchmark_runner -- h2o --subgroup window --size small --format csv
 ```
 
 Some benchmarks use custom environment variables as outlined below:
@@ -101,21 +173,22 @@ Some benchmarks use custom environment variables as outlined below:
 
 ## How it works
 
-SQL benchmarks are run via cargo's bench command using [criterion](https://docs.rs/criterion/latest/criterion/)
-for running and gathering statistics of each sql being benchmarked.
+The runner executes SQL benchmarks with its basic runner by default. Pass
+`--criterion` to gather statistics with
+[Criterion](https://docs.rs/criterion/latest/criterion/).
 
 Each individual benchmark is represented by a `<name>.benchmark` file that contains a number of directives instructing
 the tool on how to load data, run initializations, run assertions, run the benchmark, optionally persist and
 validate results, and finally run any cleanup if required.
 
-Variables are supported in two forms:
+Benchmark files support replacement variables in two forms:
 
-* string substitution based on environment variables (with default values if unset): \${ENV_VAR} and
+* string substitution with an optional default: \${ENV_VAR} and
   \${ENV_VAR:-default}.
-* if / else based on whether an environment variable is true or not
+* if / else based on whether a replacement value is true or not
   (\${ENV_VAR:-default|true value|false value}). In this form only the value `true` (case-insensitive) selects the
-  true branch; any other set value selects the false branch. If ENV_VAR is unset, the valud of `default` is used to
-* select the branch.
+  true branch; any other supplied value selects the false branch. If the value is absent, the parser uses `default` to
+  select the branch.
 
 Comments in files are supported with lines starting with # or --.
 
@@ -157,8 +230,8 @@ The above showcases the use of defaults for variables: `${NAME:-default}`
 The name of the benchmark. This will be used as part of the display name used by criterion.<br/><br/>Example:<br/>
 <blockquote>name Q${QUERY_NUMBER_PADDED}</blockquote>
 
-The `name` directive also makes the value available to benchmark-file replacements as `BENCH_NAME`. This is separate
-from the `BENCH_NAME` environment variable used to select which benchmark group to run.
+The `name` directive also makes the value available to benchmark-file replacements as `BENCH_NAME`. This value is
+separate from the suite name passed to `benchmark_runner`.
 
 </td>
 </tr>
@@ -221,8 +294,8 @@ The run directive called during execution of the benchmark. If a path to a file 
 the run directive that path will be parsed and any sql statements in that file will be executed during the benchmark
 run. If no path is specified the next line is required to be the sql statement to execute. <br/><br/> Multiple
 statements are allowed within a single run directive, however a benchmark file may contain only one run directive. When
-running with `BENCH_PERSIST_RESULTS` or `BENCH_VALIDATE`, only the last `SELECT` or `WITH` statement from that run
-directive will be used for comparison. <br/><br/> The run directive (including any following sql statement) must be
+when persisting or validating results, only the last `SELECT` or `WITH` statement from that run directive will be used
+for comparison. <br/><br/> The run directive (including any following sql statement) must be
 followed by a blank line.<br/><br/>Example:<br/>
 <blockquote>run sql_benchmarks/imdb/queries/${QUERY_NUMBER_PADDED}.sql</blockquote>
 
