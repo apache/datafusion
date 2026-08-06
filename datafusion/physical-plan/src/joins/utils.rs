@@ -1779,37 +1779,32 @@ pub(crate) struct BuildProbeJoinMetrics {
     _elapsed_compute_finalizer: Arc<ElapsedComputeFinalizer>,
 }
 
-// `BuildProbeJoinMetrics` is `Clone`d into the build-side future
-// (`collect_left_input`) while the original stays with the `HashJoinStream`.
-// This finalizer updates the elapsed compute part of the metrics exactly once,
-// when the *last* of those instances is dropped.
-//
 // Why is this in a Drop?
 // - We keep track of build_time and join_time separately, but baseline metrics have
 // a total elapsed_compute time. Instead of remembering to update both the metrics
 // at the same time, we chose to update elapsed_compute once at the end - summing up
 // both the parts.
 //
-// Why is this its own `Arc`-wrapped type, rather than a `Drop` impl directly on
-// `BuildProbeJoinMetrics`?
-// - `BuildProbeJoinMetrics` is `Clone`, and previously implemented `Drop`
-// itself. That meant *every* clone's destructor ran this update, so
-// `build_time` (and `join_time`, if already non-zero) got added into
-// `elapsed_compute` once per clone - typically twice, since the struct is
-// cloned exactly once (into the build-side future). Because the underlying
-// `Time` metrics are `Arc<AtomicUsize>`, the clone dropped at build-completion
-// time would re-add whatever `build_time` had already accumulated, silently
-// inflating `elapsed_compute` by up to `build_time` on every hash join whose
-// build side yields control (e.g. `Pending`) before completing - which is the
-// common case for anything other than a single-batch, already-ready build
-// side. Wrapping the finalizer in an `Arc` instead means it only runs once,
-// when the last clone is dropped, using the fully-accumulated final values.
+// Why a separate `Arc`-wrapped finalizer instead of a `Drop` impl on
+// `BuildProbeJoinMetrics` directly?
+//
+// `BuildProbeJoinMetrics` is `Clone`, and its `Time` metrics wrap an
+// `Arc<AtomicUsize>` internally, so all clones share the same counters. If
+// `Drop` were implemented on `BuildProbeJoinMetrics` itself, every clone's
+// drop would fire the finalizer — inflating `elapsed_compute` by up to
+// `build_time`/'join_time' each time, not just once. This happens on every hash join
+// whose build side yields control before completing, which is the common
+// case for anything but a single-batch, already-ready build side.
+//
+// Wrapping the finalizer in its own `Arc` ensures it runs exactly once, when
+// the last clone is dropped, against the fully-accumulated final values.
 struct ElapsedComputeFinalizer {
     baseline: BaselineMetrics,
     build_time: metrics::Time,
     join_time: metrics::Time,
 }
 
+// Define Debug impl for ElapsedComputeFinalizer directly to avoid duplicates fields
 impl Debug for ElapsedComputeFinalizer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ElapsedComputeFinalizer").finish()
