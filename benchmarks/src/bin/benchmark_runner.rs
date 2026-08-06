@@ -33,7 +33,9 @@ use datafusion_benchmarks::sql_benchmark_runner::{
 use datafusion_benchmarks::sql_benchmark_suite::{
     ReservedOptions, SuiteExample, SuiteMetadata, discover_suites,
 };
-use datafusion_benchmarks::util::{BenchmarkRun, CommonOpt, print_memory_stats};
+use datafusion_benchmarks::util::{
+    BenchmarkRun, CommonOpt, print_memory_stats, take_iteration_peak,
+};
 use datafusion_common::instant::Instant;
 use datafusion_common::{DataFusionError, exec_datafusion_err};
 use datafusion_common_runtime::SpawnedTask;
@@ -734,7 +736,8 @@ async fn run_simple_benchmark(
 
         println!("{case_name} iteration {iteration}: {ms:.1} ms, {row_count} rows");
 
-        run.write_iter(elapsed, row_count);
+        let pool_peak_bytes = take_iteration_peak(&ctx.runtime_env().memory_pool);
+        run.write_iter(elapsed, row_count, pool_peak_bytes);
     }
 
     print_memory_stats(&*ctx.runtime_env().memory_pool);

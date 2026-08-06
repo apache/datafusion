@@ -98,6 +98,11 @@ pub struct BenchQuery {
     /// bytes. Recorded for failed queries too, since a query that ran out of
     /// memory is one whose peak is worth seeing.
     ///
+    /// Each iteration is measured on its own and the smallest reading wins, so
+    /// this is the peak of the least-contended pass rather than of the whole
+    /// run — see [`BenchmarkRun::write_iter`]. A failed query reports what it
+    /// held when it gave up instead, having completed no iteration.
+    ///
     /// `None` (and omitted from the JSON) only when the benchmark ran without a
     /// memory limit, since there is then no pool to record.
     ///
@@ -109,6 +114,30 @@ pub struct BenchQuery {
 pub struct QueryResult {
     pub elapsed: Duration,
     pub row_count: usize,
+    /// Peak [`MemoryPool`] reservation for *this* iteration alone, from
+    /// [`take_iteration_peak`]. `None` when the benchmark ran without a
+    /// recording pool.
+    ///
+    /// [`MemoryPool`]: datafusion::execution::memory_pool::MemoryPool
+    pub pool_peak_bytes: Option<usize>,
+}
+
+/// Read the peak reservation accumulated since the last call and start a fresh
+/// reading, so each iteration is measured on its own.
+///
+/// Benchmarks run every iteration of a query before reporting any of them, so
+/// the reading has to be taken here, at the end of an iteration, rather than
+/// where the results are later written out — by then the recorder holds the
+/// high-water mark of the whole set.
+///
+/// Returns `None` when the benchmark is running without a memory limit, since
+/// there is then no recording pool in front of the runtime's.
+pub fn take_iteration_peak(pool: &Arc<dyn MemoryPool>) -> Option<usize> {
+    PeakRecordingPool::from_pool(pool.as_ref()).map(|recorder| {
+        let peak = recorder.peak_reserved();
+        recorder.reset_peak();
+        peak
+    })
 }
 /// collects benchmark run data and then serializes it at the end
 pub struct BenchmarkRun {
@@ -179,16 +208,32 @@ impl BenchmarkRun {
             self.current_case = Some(0);
         }
     }
-    /// Write a new iteration to the current case
-    pub fn write_iter(&mut self, elapsed: Duration, row_count: usize) {
-        // The peak is not reset between iterations, so this ends up holding the
-        // largest reservation seen across all of them.
-        let pool_peak_bytes = self.peak_recorder().map(PeakRecordingPool::peak_reserved);
+    /// Write a new iteration to the current case.
+    ///
+    /// `pool_peak_bytes` is this iteration's own reading, from
+    /// [`take_iteration_peak`]. What reaches the results JSON is the
+    /// *smallest* across the query's iterations: a peak reservation is a max
+    /// over the operators holding memory at one moment, so it moves with how
+    /// the runtime happened to interleave partitions on that pass. Reducing
+    /// with `min` keeps the reading reproducible, where taking the largest —
+    /// as this did while the recorder ran unreset across every iteration —
+    /// lets one unlucky pass set the number for the whole query.
+    pub fn write_iter(
+        &mut self,
+        elapsed: Duration,
+        row_count: usize,
+        pool_peak_bytes: Option<usize>,
+    ) {
         if let Some(idx) = self.current_case {
             self.queries[idx]
                 .iterations
                 .push(QueryIter { elapsed, row_count });
-            self.queries[idx].pool_peak_bytes = pool_peak_bytes;
+            self.queries[idx].pool_peak_bytes =
+                match (self.queries[idx].pool_peak_bytes, pool_peak_bytes) {
+                    (Some(seen), Some(peak)) => Some(seen.min(peak)),
+                    (None, peak) => peak,
+                    (seen, None) => seen,
+                };
         } else {
             panic!("no cases existed yet");
         }
@@ -249,6 +294,16 @@ mod tests {
         ))))
     }
 
+    /// One iteration of a query: reserve, release, then take the reading —
+    /// the order a benchmark's iteration loop runs in.
+    fn run_iteration(run: &mut BenchmarkRun, pool: &Arc<dyn MemoryPool>, grow: usize) {
+        let reservation = MemoryConsumer::new("q").register(pool);
+        reservation.try_grow(grow).unwrap();
+        drop(reservation);
+        let peak = take_iteration_peak(pool);
+        run.write_iter(Duration::from_millis(1), 1, peak);
+    }
+
     #[test]
     fn each_case_reports_its_own_peak() {
         let pool = recording_pool(1024);
@@ -256,19 +311,67 @@ mod tests {
         run.set_memory_pool(&pool);
 
         run.start_new_case("q1");
-        let reservation = MemoryConsumer::new("q1").register(&pool);
-        reservation.try_grow(600).unwrap();
-        run.write_iter(Duration::from_millis(1), 1);
-        drop(reservation);
+        run_iteration(&mut run, &pool, 600);
 
         // The second case must not inherit the first case's high-water mark.
         run.start_new_case("q2");
-        let reservation = MemoryConsumer::new("q2").register(&pool);
-        reservation.try_grow(100).unwrap();
-        run.write_iter(Duration::from_millis(1), 1);
+        run_iteration(&mut run, &pool, 100);
 
         assert_eq!(run.queries[0].pool_peak_bytes, Some(600));
         assert_eq!(run.queries[1].pool_peak_bytes, Some(100));
+    }
+
+    #[test]
+    fn the_quietest_iteration_sets_the_peak() {
+        let pool = recording_pool(1024);
+        let mut run = BenchmarkRun::new();
+        run.set_memory_pool(&pool);
+
+        run.start_new_case("q1");
+        // Three passes over the same query. The 900 is what a pass looks like
+        // when more operators happened to hold memory at the same moment.
+        for grow in [300, 900, 400] {
+            run_iteration(&mut run, &pool, grow);
+        }
+
+        // Not 900: one unlucky pass must not set the number for the query.
+        assert_eq!(run.queries[0].pool_peak_bytes, Some(300));
+    }
+
+    #[test]
+    fn an_iteration_does_not_inherit_the_previous_peak() {
+        let pool = recording_pool(1024);
+        let mut run = BenchmarkRun::new();
+        run.set_memory_pool(&pool);
+
+        run.start_new_case("q1");
+        run_iteration(&mut run, &pool, 800);
+        // Before per-iteration readings the recorder still held 800 here, so
+        // this pass reported 800 rather than its own 100.
+        run_iteration(&mut run, &pool, 100);
+
+        assert_eq!(run.queries[0].pool_peak_bytes, Some(100));
+    }
+
+    #[test]
+    fn an_iteration_reading_covers_only_that_iteration() {
+        let pool = recording_pool(1024);
+        let setup = MemoryConsumer::new("setup").register(&pool);
+        setup.try_grow(700).unwrap();
+
+        // Bytes held when a reading is taken stay in it: `reset_peak` rebases
+        // on what is reserved, not on zero, so data the benchmark loaded up
+        // front counts for every iteration that runs with it.
+        assert_eq!(take_iteration_peak(&pool), Some(700));
+        assert_eq!(take_iteration_peak(&pool), Some(700));
+
+        // Releasing it does not pull the current reading down — a high-water
+        // mark only falls at a reset, so the interval that began with those
+        // bytes held still reports them...
+        drop(setup);
+        assert_eq!(take_iteration_peak(&pool), Some(700));
+        // ...and only the interval after that is clear of them.
+        assert_eq!(take_iteration_peak(&pool), Some(0));
     }
 
     #[test]
@@ -290,7 +393,8 @@ mod tests {
             .register(&second)
             .try_grow(100)
             .unwrap();
-        run.write_iter(Duration::from_millis(1), 1);
+        let peak = take_iteration_peak(&second);
+        run.write_iter(Duration::from_millis(1), 1, peak);
 
         assert_eq!(run.queries[0].pool_peak_bytes, Some(100));
     }
@@ -314,7 +418,7 @@ mod tests {
     fn the_peak_is_omitted_without_a_recording_pool() {
         let mut run = BenchmarkRun::new();
         run.start_new_case("q1");
-        run.write_iter(Duration::from_millis(1), 1);
+        run.write_iter(Duration::from_millis(1), 1, None);
 
         assert_eq!(run.queries[0].pool_peak_bytes, None);
         assert!(!run.to_json().contains("pool_peak_bytes"));

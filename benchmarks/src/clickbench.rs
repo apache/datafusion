@@ -19,7 +19,9 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
+use crate::util::{
+    BenchmarkRun, CommonOpt, QueryResult, print_memory_stats, take_iteration_peak,
+};
 use clap::Args;
 use datafusion::logical_expr::{ExplainFormat, ExplainOption};
 use datafusion::{
@@ -230,7 +232,11 @@ impl RunOpt {
             match query_run {
                 Ok(query_results) => {
                     for iter in query_results {
-                        benchmark_run.write_iter(iter.elapsed, iter.row_count);
+                        benchmark_run.write_iter(
+                            iter.elapsed,
+                            iter.row_count,
+                            iter.pool_peak_bytes,
+                        );
                     }
                 }
                 Err(e) => {
@@ -264,7 +270,12 @@ impl RunOpt {
             println!(
                 "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
             );
-            query_results.push(QueryResult { elapsed, row_count })
+            let pool_peak_bytes = take_iteration_peak(&ctx.runtime_env().memory_pool);
+            query_results.push(QueryResult {
+                elapsed,
+                row_count,
+                pool_peak_bytes,
+            })
         }
         if self.common.debug {
             ctx.sql(sql)

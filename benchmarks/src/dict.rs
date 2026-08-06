@@ -17,7 +17,7 @@
 
 use crate::util::BenchmarkRun;
 use crate::util::CommonOpt;
-use crate::util::QueryResult;
+use crate::util::{QueryResult, take_iteration_peak};
 use arrow::array::{ArrayRef, DictionaryArray, Int32Array, ListArray, StringArray};
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema};
@@ -343,7 +343,11 @@ impl RunOpt {
             match query_run {
                 Ok(query_results) => {
                     for iter in query_results {
-                        benchmark_run.write_iter(iter.elapsed, iter.row_count);
+                        benchmark_run.write_iter(
+                            iter.elapsed,
+                            iter.row_count,
+                            iter.pool_peak_bytes,
+                        );
                     }
                 }
                 Err(e) => {
@@ -378,7 +382,12 @@ impl RunOpt {
                 "Query '{}' iteration {i} returned {row_count} rows in {elapsed:?}",
                 query.name
             );
-            query_results.push(QueryResult { elapsed, row_count });
+            let pool_peak_bytes = take_iteration_peak(&ctx.runtime_env().memory_pool);
+            query_results.push(QueryResult {
+                elapsed,
+                row_count,
+                pool_peak_bytes,
+            });
         }
 
         Ok(query_results)

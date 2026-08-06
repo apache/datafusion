@@ -20,7 +20,7 @@
 //! - [H2O AI Benchmark](https://duckdb.org/2023/04/14/h2oai.html)
 //! - [Extended window function benchmark](https://duckdb.org/2024/06/26/benchmarks-over-time.html#window-functions-benchmark)
 
-use crate::util::{BenchmarkRun, CommonOpt, print_memory_stats};
+use crate::util::{BenchmarkRun, CommonOpt, print_memory_stats, take_iteration_peak};
 use clap::Args;
 use datafusion::logical_expr::{ExplainFormat, ExplainOption};
 use datafusion::{error::Result, prelude::SessionContext};
@@ -126,7 +126,8 @@ impl RunOpt {
                 println!(
                     "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
                 );
-                benchmark_run.write_iter(elapsed, row_count);
+                let pool_peak_bytes = take_iteration_peak(&ctx.runtime_env().memory_pool);
+                benchmark_run.write_iter(elapsed, row_count, pool_peak_bytes);
             }
             let avg = millis.iter().sum::<f64>() / millis.len() as f64;
             println!("Query {query_id} avg time: {avg:.2} ms");

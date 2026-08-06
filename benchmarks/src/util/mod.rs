@@ -25,4 +25,4 @@ mod run;
 pub use memory::print_memory_stats;
 pub use memory_pool::PeakRecordingPool;
 pub use options::CommonOpt;
-pub use run::{BenchQuery, BenchmarkRun, QueryResult};
+pub use run::{BenchQuery, BenchmarkRun, QueryResult, take_iteration_peak};

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
+use crate::util::{BenchmarkRun, CommonOpt, QueryResult, take_iteration_peak};
 use clap::Args;
 use datafusion::physical_plan::execute_stream;
 use datafusion::{error::Result, prelude::SessionContext};
@@ -600,7 +600,11 @@ impl RunOpt {
             match query_run {
                 Ok(query_results) => {
                     for iter in query_results {
-                        benchmark_run.write_iter(iter.elapsed, iter.row_count);
+                        benchmark_run.write_iter(
+                            iter.elapsed,
+                            iter.row_count,
+                            iter.pool_peak_bytes,
+                        );
                     }
                 }
                 Err(e) => {
@@ -646,7 +650,15 @@ impl RunOpt {
                 "Query {query_name} iteration {i} returned {row_count} rows in {elapsed:?}"
             );
 
-            query_results.push(QueryResult { elapsed, row_count });
+            let pool_peak_bytes = take_iteration_peak(&ctx.runtime_env().memory_pool);
+
+            query_results.push(QueryResult {
+                elapsed,
+
+                row_count,
+
+                pool_peak_bytes,
+            });
         }
 
         Ok(query_results)
