@@ -60,4 +60,64 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_udwf_documentation() -> Result<()> {
+        use datafusion::logical_expr::{DocSection, Documentation};
+        use datafusion_ffi::udwf::FFI_WindowUDF;
+
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+        struct MockUDWFWithDoc {
+            signature: datafusion::logical_expr::Signature,
+            doc: Documentation,
+        }
+
+        impl WindowUDFImpl for MockUDWFWithDoc {
+            fn name(&self) -> &str {
+                "mock_doc"
+            }
+            fn signature(&self) -> &datafusion::logical_expr::Signature {
+                &self.signature
+            }
+            fn partition_evaluator(
+                &self,
+                _: datafusion_expr::function::PartitionEvaluatorArgs,
+            ) -> Result<Box<dyn datafusion::logical_expr::PartitionEvaluator>>
+            {
+                unimplemented!()
+            }
+            fn field(
+                &self,
+                _: datafusion_expr::function::WindowUDFFieldArgs,
+            ) -> Result<arrow::datatypes::FieldRef> {
+                unimplemented!()
+            }
+            fn documentation(&self) -> Option<&Documentation> {
+                Some(&self.doc)
+            }
+        }
+
+        let doc = Documentation::builder(DocSection::default(), "description", "syntax")
+            .build();
+        let original_udwf = Arc::new(WindowUDF::from(MockUDWFWithDoc {
+            signature: datafusion::logical_expr::Signature::any(
+                0,
+                datafusion::logical_expr::Volatility::Immutable,
+            ),
+            doc: doc.clone(),
+        }));
+
+        let mut ffi_udwf = FFI_WindowUDF::from(original_udwf);
+        extern "C" fn mock_marker() -> usize {
+            0xdeadbeef
+        }
+        ffi_udwf.library_marker_id = mock_marker;
+
+        let foreign_udwf_impl: Arc<dyn WindowUDFImpl> = (&ffi_udwf).into();
+        let foreign_udwf = WindowUDF::new_from_shared_impl(foreign_udwf_impl);
+
+        assert_eq!(foreign_udwf.documentation(), Some(&doc));
+
+        Ok(())
+    }
 }
