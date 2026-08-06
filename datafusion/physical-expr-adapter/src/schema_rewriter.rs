@@ -288,6 +288,9 @@ enum FieldPathResolution<'a> {
 /// nested struct fields.
 fn resolve_field_path<'a>(fields: &'a Fields, path: &[&str]) -> FieldPathResolution<'a> {
     let Some((field_name, rest)) = path.split_first() else {
+        // Defensive default: callers reject an empty key list before getting
+        // here, so this is unreachable rather than a claim that an empty path
+        // names a non-struct.
         return FieldPathResolution::NotAStruct;
     };
     let Some(field) = fields.iter().find(|f| f.name() == field_name) else {
@@ -328,16 +331,31 @@ impl DefaultPhysicalExprAdapterRewriter {
     /// Expressions are rewritten bottom-up, so by the time we reach a
     /// `get_field` node its struct argument has already been wrapped in a cast
     /// by [`Self::rewrite_column`] whenever the logical and physical struct
-    /// types differ. Casting the whole struct just to read one field is
-    /// wasteful, and — more importantly — it hides the underlying column from
-    /// consumers that pattern match on `get_field(column, 'f')`. The Parquet
-    /// scan is one such consumer: it decides at planning time (against the
-    /// table schema) that a struct-field predicate can be evaluated as a row
-    /// filter, then fails to build that row filter at runtime because the
-    /// adapted expression no longer has a bare column under the `get_field`,
-    /// silently dropping the predicate and returning unfiltered rows.
+    /// types differ.
     ///
-    /// See <https://github.com/apache/datafusion/issues/24109>.
+    /// Narrowing that cast is worthwhile for two reasons:
+    ///
+    /// 1. Reading one field should not cost a whole struct. The wide form
+    ///    casts every field of the column — including ones the query never
+    ///    reads — to produce a value that is immediately discarded except for
+    ///    one field.
+    /// 2. It keeps the column visible. Consumers throughout the codebase
+    ///    pattern match on `get_field(column, 'f')` to recognise a struct
+    ///    field access; a cast between the `get_field` and its column defeats
+    ///    that match, and each such consumer then falls back to whatever it
+    ///    does for an unrecognised expression.
+    ///
+    /// The Parquet scan is one such consumer, and the reason this is a
+    /// correctness fix rather than only an optimisation: it decides at
+    /// planning time, against the table schema, that a struct-field predicate
+    /// can be evaluated as a row filter, and reports the predicate as fully
+    /// handled. See <https://github.com/apache/datafusion/issues/24109>.
+    ///
+    /// Fixing it here rather than teaching that one consumer to see through
+    /// casts is deliberate: the adapter is where the obscuring cast is
+    /// introduced, so every consumer benefits, and no consumer has to loosen
+    /// its pattern to accept arbitrary casts between a `get_field` and its
+    /// column.
     ///
     /// `get_field` also has a flattened multi-key form: `s['a']['b']` is
     /// simplified to `get_field(s, 'a', 'b')`, so the whole field path is
