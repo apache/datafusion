@@ -1247,7 +1247,11 @@ An alternative syntax is also supported:
 
 ### `approx_top_k`
 
-Returns the approximate most frequent (top-k) values with their estimated counts, using the Filtered Space-Saving algorithm. The returned counts are upper-bound estimates; the true frequency lies in `[count - error, count]`. NULL values are skipped; an empty or all-NULL input returns an empty list `[]`. For float columns, -0.0 and +0.0 are treated as distinct values, and different NaN representations are tracked separately.
+Returns the approximate most frequent (top-k) values with their estimated counts as a list of `{value, count}` structs. Values are ranked first by the lower bound of the frequency estimate and then by the estimated count.
+
+Because the aggregate uses bounded memory, `count` is an upper-bound estimate. Within one summary it is exact for a value that was tracked for the whole scan; distributed merging may add an omission bound from partitions where that value was not tracked. Values whose frequency is far from the top-k boundary are the ones reported reliably; ties and near-ties may be resolved arbitrarily.
+
+NULL values are skipped; an empty or all-NULL input returns an empty list `[]`. For float columns, -0.0 and +0.0 are treated as the same value, while different NaN representations are tracked separately.
 
 ```sql
 approx_top_k(expression, k)

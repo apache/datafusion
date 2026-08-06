@@ -25,42 +25,60 @@
 //! - `column`: The column to find the most frequent values from
 //! - `k`: The number of top elements to track (required, literal integer)
 //!
-//! Returns: `List<Struct { value: <input_type>, count: UInt64 }>` ordered by count descending.
+//! Returns: `List<Struct { value: <input_type>, count: UInt64 }>` ranked by
+//! the estimated lower bound (`count - error`), then by `count`, then by value
+//! for deterministic ties (see `Counter` for the exact ordering).
+//!
+//! `count` is an *upper bound* on the true frequency: each counter also tracks
+//! an `error` such that the true frequency lies in `[count - error, count]`.
+//! Counters that were never evicted have `error == 0` and are therefore exact.
+//! The `error` is used internally for ranking but is not exposed in the output.
 //!
 //! Algorithm references:
-//! - Filtered Space-Saving: <http://www.l2f.inesc-id.pt/~fmmb/wiki/uploads/Work/misnis.ref0a.pdf>
+//! - Filtered Space-Saving: Homem, Carvalho. "Finding top-k elements in data
+//!   streams" (Information Sciences, 2010).  Section 6 / equation (24) gives
+//!   the alpha map sizing used by `ALPHA_MAP_ELEMENTS_PER_COUNTER`.
 //! - Parallel Space Saving: <https://arxiv.org/pdf/1401.0702.pdf>
 //! - Space-Saving: Metwally, Agrawal, El Abbadi. "Efficient Computation of Frequent
 //!   and Top-k Elements in Data Streams" (ICDT 2005)
 
 use std::cmp::{Ordering, max, min};
+use std::hash::BuildHasher;
 use std::mem::size_of;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, BinaryArray, Date32Array, Date64Array, Float32Array, Float64Array,
-    Int8Array, Int16Array, Int32Array, Int64Array, LargeBinaryArray, LargeStringArray,
-    ListArray, StringArray, StructArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
-    UInt8Array, UInt16Array, UInt32Array, UInt64Array,
+    Array, ArrayRef, BinaryArray, BinaryBuilder, BinaryViewArray, BinaryViewBuilder,
+    BooleanArray, Date32Array, Date64Array, Float32Array, Float64Array, Int8Array,
+    Int16Array, Int32Array, Int64Array, LargeBinaryArray, LargeBinaryBuilder,
+    LargeStringArray, LargeStringBuilder, ListArray, NullArray, StringArray,
+    StringBuilder, StringViewArray, StringViewBuilder, StructArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, TimeUnit};
-use hashbrown::HashTable;
+use hashbrown::{HashMap, HashTable};
 
-use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
+use datafusion_common::hash_utils::QualityRandomState;
+use datafusion_common::types::{
+    logical_binary, logical_date, logical_float32, logical_float64, logical_string,
+};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, exec_err, not_impl_err, plan_err,
+};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Signature, TIMEZONE_WILDCARD,
-    TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, Coercion, Documentation, EmitTo, GroupsAccumulator,
+    Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
 make_udaf_expr_and_func!(
     ApproxTopK,
     approx_top_k,
-    "Returns the approximate most frequent (top-k) values and their counts using the Filtered Space-Saving algorithm.",
+    "Returns the approximate most frequent (top-k) values and their counts.",
     approx_top_k_udaf
 );
 
@@ -68,15 +86,16 @@ make_udaf_expr_and_func!(
 // Algorithm constants
 // ---------------------------------------------------------------------------
 
-/// Suggested constant from the paper "Finding top-k elements in data streams",
-/// chap 6, equation (24). Determines the size of the alpha map relative to the capacity.
+/// Suggested constant from Homem & Carvalho, "Finding top-k elements in data
+/// streams", section 6, equation (24). Determines the size of the alpha map
+/// relative to the capacity.
 const ALPHA_MAP_ELEMENTS_PER_COUNTER: usize = 6;
-
-/// Limit the max alpha value to avoid overflow with merges or weighted additions.
-const MAX_ALPHA_VALUE: u64 = u32::MAX as u64;
 
 /// Maximum allowed value for k in `approx_top_k(column, k)`.
 const APPROX_TOP_K_MAX_K: usize = 10_000;
+
+/// Avoid retaining pathological transient keys in the recycling pool.
+const MAX_RECYCLED_ITEM_CAPACITY: usize = 64 * 1024;
 
 /// Capacity multiplier for internal tracking (matches ClickHouse's default).
 ///
@@ -86,6 +105,222 @@ const APPROX_TOP_K_MAX_K: usize = 10_000;
 /// counter count, so top-100 uses ~60 KB per accumulator.
 const CAPACITY_MULTIPLIER: usize = 3;
 
+/// Fixed high-quality hash state used for both counter lookup and alpha buckets.
+/// The seed is part of the serialized sketch semantics: all partial summaries
+/// must assign an item to the same alpha bucket in order to merge their maps.
+const APPROX_TOP_K_HASH_STATE: QualityRandomState = QualityRandomState::with_seed(0);
+
+const STATE_MAGIC: &[u8; 4] = b"DFTK";
+const STATE_VERSION: u8 = 1;
+const STATE_HEADER_LEN: usize = 28;
+const SINGLETON_HEADER_LEN: usize = 16;
+const ALPHA_SPARSE: u8 = 0;
+const ALPHA_BITMAP: u8 = 1;
+const STATE_SINGLETON: u8 = 2;
+
+/// Stable type descriptor embedded in every intermediate state.
+fn state_type_descriptor(data_type: &DataType) -> Result<(u8, u8, Vec<u8>)> {
+    let descriptor = match data_type {
+        DataType::Null => (0, 0, vec![]),
+        DataType::Utf8 => (1, 0, vec![]),
+        DataType::LargeUtf8 => (2, 0, vec![]),
+        DataType::Utf8View => (3, 0, vec![]),
+        DataType::Binary => (4, 0, vec![]),
+        DataType::LargeBinary => (5, 0, vec![]),
+        DataType::BinaryView => (6, 0, vec![]),
+        DataType::Int8 => (10, 1, vec![]),
+        DataType::Int16 => (11, 2, vec![]),
+        DataType::Int32 => (12, 4, vec![]),
+        DataType::Int64 => (13, 8, vec![]),
+        DataType::UInt8 => (14, 1, vec![]),
+        DataType::UInt16 => (15, 2, vec![]),
+        DataType::UInt32 => (16, 4, vec![]),
+        DataType::UInt64 => (17, 8, vec![]),
+        DataType::Float32 => (18, 4, vec![]),
+        DataType::Float64 => (19, 8, vec![]),
+        DataType::Date32 => (20, 4, vec![]),
+        DataType::Date64 => (21, 8, vec![]),
+        DataType::Timestamp(unit, timezone) => {
+            let unit_offset = match unit {
+                TimeUnit::Second => 0,
+                TimeUnit::Millisecond => 1,
+                TimeUnit::Microsecond => 2,
+                TimeUnit::Nanosecond => 3,
+            };
+            let tag = if timezone.is_some() {
+                28 + unit_offset
+            } else {
+                24 + unit_offset
+            };
+            let params = timezone
+                .as_ref()
+                .map(|tz| tz.as_bytes().to_vec())
+                .unwrap_or_default();
+            (tag, 8, params)
+        }
+        other => return exec_err!("Unsupported data type for approx_top_k: {other}"),
+    };
+    Ok(descriptor)
+}
+
+fn validate_item_bytes(data_type: &DataType, item: &[u8]) -> Result<()> {
+    let (_, width, _) = state_type_descriptor(data_type)?;
+    if width != 0 && item.len() != width as usize {
+        return exec_err!(
+            "approx_top_k: corrupt intermediate state (expected {width}-byte value, got {})",
+            item.len()
+        );
+    }
+    if matches!(
+        data_type,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) {
+        std::str::from_utf8(item).map_err(|_| {
+            DataFusionError::Execution(
+                "approx_top_k: corrupt intermediate state (invalid UTF-8 value)"
+                    .to_string(),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+struct StateReader<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> StateReader<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn read_bytes(&mut self, len: usize, field: &str) -> Result<&'a [u8]> {
+        let end = self.offset.checked_add(len).ok_or_else(|| {
+            DataFusionError::Execution(format!(
+                "approx_top_k: corrupt intermediate state ({field} length overflow)"
+            ))
+        })?;
+        if end > self.bytes.len() {
+            return exec_err!(
+                "approx_top_k: corrupt intermediate state (truncated {field})"
+            );
+        }
+        let value = &self.bytes[self.offset..end];
+        self.offset = end;
+        Ok(value)
+    }
+
+    fn read_u8(&mut self, field: &str) -> Result<u8> {
+        Ok(self.read_bytes(1, field)?[0])
+    }
+
+    fn read_u32(&mut self, field: &str) -> Result<u32> {
+        Ok(u32::from_le_bytes(
+            self.read_bytes(4, field)?.try_into().unwrap(),
+        ))
+    }
+
+    fn read_u64(&mut self, field: &str) -> Result<u64> {
+        Ok(u64::from_le_bytes(
+            self.read_bytes(8, field)?.try_into().unwrap(),
+        ))
+    }
+
+    fn finish(self) -> Result<()> {
+        if self.offset != self.bytes.len() {
+            return exec_err!(
+                "approx_top_k: corrupt intermediate state ({} trailing bytes)",
+                self.bytes.len() - self.offset
+            );
+        }
+        Ok(())
+    }
+}
+
+fn serialize_single_counter_state(
+    output: &mut Vec<u8>,
+    capacity: usize,
+    data_type: &DataType,
+    item: Option<&[u8]>,
+    count: u64,
+    error: u64,
+) -> Result<()> {
+    let (type_tag, item_width, type_params) = state_type_descriptor(data_type)?;
+    if let Some(item) = item {
+        validate_item_bytes(data_type, item)?;
+        if count == 0 || error > count {
+            return exec_err!("approx_top_k: invalid singleton count/error interval");
+        }
+        if count == 1 && error == 0 {
+            output.clear();
+            let total = SINGLETON_HEADER_LEN
+                .checked_add(type_params.len())
+                .and_then(|size| size.checked_add(item.len()))
+                .ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "approx_top_k singleton state size overflow".to_string(),
+                    )
+                })?;
+            output.try_reserve_exact(total).map_err(|e| {
+                DataFusionError::ResourcesExhausted(format!(
+                    "Unable to allocate approx_top_k singleton state: {e}"
+                ))
+            })?;
+            output.extend_from_slice(STATE_MAGIC);
+            output.push(STATE_VERSION);
+            output.push(STATE_SINGLETON);
+            output.push(type_tag);
+            output.push(item_width);
+            output.extend_from_slice(&(capacity as u32).to_le_bytes());
+            output.extend_from_slice(&(type_params.len() as u32).to_le_bytes());
+            output.extend_from_slice(&type_params);
+            output.extend_from_slice(item);
+            return Ok(());
+        }
+    }
+
+    output.clear();
+    let item_bytes = item.map_or(0, |item| item.len());
+    let total = STATE_HEADER_LEN
+        .checked_add(type_params.len())
+        .and_then(|size| size.checked_add(item_bytes))
+        .and_then(|size| size.checked_add(item.map_or(0, |_| 16)))
+        .and_then(|size| {
+            size.checked_add(usize::from(item_width == 0 && item.is_some()) * 8)
+        })
+        .ok_or_else(|| {
+            DataFusionError::Execution("approx_top_k state size overflow".to_string())
+        })?;
+    output.try_reserve_exact(total).map_err(|e| {
+        DataFusionError::ResourcesExhausted(format!(
+            "Unable to allocate approx_top_k singleton state: {e}"
+        ))
+    })?;
+    output.extend_from_slice(STATE_MAGIC);
+    output.push(STATE_VERSION);
+    output.push(ALPHA_SPARSE);
+    output.push(type_tag);
+    output.push(item_width);
+    output.extend_from_slice(&(capacity as u32).to_le_bytes());
+    output.extend_from_slice(&(u32::from(item.is_some())).to_le_bytes());
+    output.extend_from_slice(
+        &(SpaceSavingSummary::compute_alpha_map_size(capacity) as u32).to_le_bytes(),
+    );
+    output.extend_from_slice(&0u32.to_le_bytes());
+    output.extend_from_slice(&(type_params.len() as u32).to_le_bytes());
+    output.extend_from_slice(&type_params);
+    if let Some(item) = item {
+        if item_width == 0 {
+            output.extend_from_slice(&(item.len() as u64).to_le_bytes());
+        }
+        output.extend_from_slice(item);
+        output.extend_from_slice(&count.to_le_bytes());
+        output.extend_from_slice(&error.to_le_bytes());
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // SpaceSavingSummary  (core algorithm)
 // ---------------------------------------------------------------------------
@@ -94,11 +329,23 @@ const CAPACITY_MULTIPLIER: usize = 3;
 ///
 /// Each entry tracks an item, its estimated count, and the error bound.
 /// The algorithm guarantees that the true count lies within `[count - error, count]`.
-#[derive(Debug, Clone)]
+///
+/// [`Ord`] ranks counters *best first*, so sorting a slice of counters yields
+/// them in the order they should be reported (and `drain`ing the tail evicts the
+/// least frequent). The ordering is:
+///
+/// 1. Higher `count - error` first: this is the guaranteed lower bound on the
+///    true frequency and prevents a hash-collision alpha boost from outranking
+///    an item with stronger observed evidence.
+/// 2. Then higher `count`, matching the Filtered Space-Saving tie-break.
+/// 3. Then `item` bytes ascending. This last key only exists to make the
+///    ordering *total*, which keeps `Ord` consistent with the derived [`Eq`] and
+///    makes the reported top-k deterministic when counts tie.
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Counter {
     /// The serialized bytes representing the tracked item.
     item: Vec<u8>,
-    /// FNV-1a hash of the item (cached to avoid recomputation).
+    /// Hash of the item (cached to avoid recomputation).
     hash: u64,
     /// The estimated frequency count (may overestimate due to eviction handling).
     count: u64,
@@ -106,24 +353,21 @@ struct Counter {
     error: u64,
 }
 
-impl Counter {
-    /// Compare counters for sorting: higher `(count - error)` wins,
-    /// then higher `count` breaks ties.
-    fn is_greater_than(&self, other: &Counter) -> bool {
-        let self_lb = self.count.saturating_sub(self.error);
-        let other_lb = other.count.saturating_sub(other.error);
-        (self_lb > other_lb) || (self_lb == other_lb && self.count > other.count)
+impl Ord for Counter {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Reversed so that higher lower bounds and counts sort first.
+        other
+            .count
+            .saturating_sub(other.error)
+            .cmp(&self.count.saturating_sub(self.error))
+            .then_with(|| other.count.cmp(&self.count))
+            .then_with(|| self.item.cmp(&other.item))
     }
+}
 
-    /// Ordering for top-k selection: highest-ranked counters sort first.
-    fn cmp_by_rank(&self, other: &Counter) -> Ordering {
-        if other.is_greater_than(self) {
-            Ordering::Greater
-        } else if self.is_greater_than(other) {
-            Ordering::Less
-        } else {
-            Ordering::Equal
-        }
+impl PartialOrd for Counter {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -133,16 +377,120 @@ impl Counter {
 /// lookups without duplicating the key bytes.  The actual item data lives in
 /// `counters[index].item`.  An alpha map (filter) remembers evicted items'
 /// frequencies.
+///
+/// All heap buffers grow on demand.  Nothing is pre-allocated from `k`, because
+/// under `GROUP BY` there is one accumulator (and therefore one summary) per
+/// group: eagerly sizing the alpha map from `k` would cost
+/// `next_power_of_two(k * CAPACITY_MULTIPLIER * ALPHA_MAP_ELEMENTS_PER_COUNTER) * 8`
+/// bytes for every group, including singleton groups that never evict anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AlphaMap {
+    Empty,
+    Sparse(HashMap<usize, u64>),
+    Dense(Vec<u64>),
+}
+
+impl AlphaMap {
+    fn is_empty(&self) -> bool {
+        matches!(self, Self::Empty)
+    }
+
+    fn get(&self, slot: usize) -> u64 {
+        match self {
+            Self::Empty => 0,
+            Self::Sparse(values) => values.get(&slot).copied().unwrap_or(0),
+            Self::Dense(values) => values[slot],
+        }
+    }
+
+    fn add(&mut self, slot: usize, increment: u64, slots: usize) -> u64 {
+        if increment == 0 {
+            return self.get(slot);
+        }
+        match self {
+            Self::Empty => {
+                let mut values = HashMap::new();
+                values.insert(slot, increment);
+                *self = Self::Sparse(values);
+                increment
+            }
+            Self::Sparse(values) => {
+                let value = values.entry(slot).or_default();
+                *value = value.saturating_add(increment);
+                let result = *value;
+                if values.len() >= max(8, slots / 4) {
+                    let Self::Sparse(values) = std::mem::replace(self, Self::Empty)
+                    else {
+                        unreachable!()
+                    };
+                    let mut dense = vec![0; slots];
+                    for (slot, value) in values {
+                        dense[slot] = value;
+                    }
+                    *self = Self::Dense(dense);
+                }
+                result
+            }
+            Self::Dense(values) => {
+                values[slot] = values[slot].saturating_add(increment);
+                values[slot]
+            }
+        }
+    }
+
+    fn for_each(&self, mut visit: impl FnMut(usize, u64)) {
+        match self {
+            Self::Empty => {}
+            Self::Sparse(values) => {
+                for (&slot, &value) in values {
+                    visit(slot, value);
+                }
+            }
+            Self::Dense(values) => {
+                for (slot, &value) in values.iter().enumerate() {
+                    if value != 0 {
+                        visit(slot, value);
+                    }
+                }
+            }
+        }
+    }
+
+    fn sorted_entries(&self) -> Vec<(usize, u64)> {
+        let mut entries = Vec::new();
+        self.for_each(|slot, value| entries.push((slot, value)));
+        entries.sort_unstable_by_key(|&(slot, _)| slot);
+        entries
+    }
+
+    fn allocation_size(&self) -> usize {
+        match self {
+            Self::Empty => 0,
+            Self::Sparse(values) => values.allocation_size(),
+            Self::Dense(values) => values.capacity() * size_of::<u64>(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct SpaceSavingSummary {
     counters: Vec<Counter>,
+    /// Key buffers retained from evicted counters and reused by later inserts.
+    free_items: Vec<Vec<u8>>,
     /// Maps `(cached_hash, counter_index)`.  Lookups use the cached hash for
     /// the fast path and fall back to byte equality via the `counters` vec.
     counter_map: HashTable<(u64, usize)>,
-    alpha_map: Vec<u64>,
+    /// Historical frequency of evicted items, indexed by `hash & (len - 1)`.
+    ///
+    /// Sparse until enough buckets are populated for a dense representation to
+    /// use less memory. An empty map reads as all-zero alphas.
+    alpha_map: AlphaMap,
+    /// Cached alpha-map statistics used by merge and serialization.
+    alpha_max: u64,
+    alpha_nonzero: usize,
     requested_capacity: usize,
     /// Internal target capacity to avoid frequent truncations.
-    /// Set to `max(64, requested_capacity * 2)`.
+    /// Set to `max(8, requested_capacity * 2)`.
     target_capacity: usize,
     /// Running total of heap bytes owned by counter item `Vec`s.
     /// Updated on push / evict / clone so that `size()` is O(1).
@@ -151,41 +499,67 @@ struct SpaceSavingSummary {
 
 impl SpaceSavingSummary {
     fn compute_alpha_map_size(capacity: usize) -> usize {
-        (capacity * ALPHA_MAP_ELEMENTS_PER_COUNTER).next_power_of_two()
+        capacity
+            .saturating_mul(ALPHA_MAP_ELEMENTS_PER_COUNTER)
+            .next_power_of_two()
     }
 
-    /// FNV-1a hash for item bytes.
+    /// Fixed high-quality hash for item bytes.
     fn hash_item(item: &[u8]) -> u64 {
-        let mut hash: u64 = 0xcbf29ce484222325;
-        for &byte in item {
-            hash ^= byte as u64;
-            hash = hash.wrapping_mul(0x100000001b3);
-        }
-        hash
+        APPROX_TOP_K_HASH_STATE.hash_one(item)
     }
 
+    /// Create an empty summary that will track up to `capacity` counters.
+    ///
+    /// No heap allocation happens here; see the note on [`SpaceSavingSummary`].
     fn new(capacity: usize) -> Self {
         Self {
             counters: Vec::new(),
+            free_items: Vec::new(),
             counter_map: HashTable::new(),
-            alpha_map: Vec::new(),
-            requested_capacity: 0,
-            target_capacity: 0,
+            alpha_map: AlphaMap::Empty,
+            alpha_max: 0,
+            alpha_nonzero: 0,
+            requested_capacity: capacity,
+            target_capacity: max(8, capacity.saturating_mul(2)),
             item_heap_bytes: 0,
         }
-        .resized(capacity)
     }
 
-    fn resized(mut self, new_capacity: usize) -> Self {
-        if self.requested_capacity != new_capacity {
-            debug_assert!(self.counters.is_empty());
-            let alpha_map_size = Self::compute_alpha_map_size(new_capacity);
-            self.alpha_map = vec![0u64; alpha_map_size];
-            self.requested_capacity = new_capacity;
-            self.target_capacity = max(64, new_capacity.saturating_mul(2));
-            self.counters.reserve(self.target_capacity);
+    /// Read the alpha (historical evicted frequency) for `hash`.
+    ///
+    /// Returns 0 while the alpha map is still unallocated, which is the correct
+    /// value: nothing has been evicted yet.
+    fn alpha_for(&self, hash: u64) -> u64 {
+        let mask = Self::compute_alpha_map_size(self.requested_capacity) - 1;
+        self.alpha_map.get((hash as usize) & mask)
+    }
+
+    fn alpha_slots(&self) -> usize {
+        Self::compute_alpha_map_size(self.requested_capacity)
+    }
+
+    /// Record that `counter` was evicted, folding its count into the alpha map.
+    ///
+    /// Alpha accumulates the guaranteed lower bounds of evicted counters. This
+    /// is the Filtered Space-Saving filter used to seed re-admitted items.
+    fn record_eviction(
+        alpha_map: &mut AlphaMap,
+        alpha_slots: usize,
+        alpha_max: &mut u64,
+        alpha_nonzero: &mut usize,
+        counter: &Counter,
+    ) {
+        let alpha_mask = alpha_slots - 1;
+        let alpha_idx = (counter.hash as usize) & alpha_mask;
+        let lower_bound = counter.count.saturating_sub(counter.error);
+        if lower_bound != 0 {
+            if alpha_map.get(alpha_idx) == 0 {
+                *alpha_nonzero += 1;
+            }
+            let alpha = alpha_map.add(alpha_idx, lower_bound, alpha_slots);
+            *alpha_max = max(*alpha_max, alpha);
         }
-        self
     }
 
     fn is_empty(&self) -> bool {
@@ -237,26 +611,50 @@ impl SpaceSavingSummary {
 
         // Below capacity: add directly.
         if self.counters.len() < self.requested_capacity {
-            self.push_counter(item.to_vec(), hash, increment, error);
+            self.push_counter(item, hash, increment, error);
             return;
         }
 
-        // At capacity: use alpha map for historical frequency.
-        let alpha_mask = self.alpha_map.len() - 1;
-        let alpha_idx = (hash as usize) & alpha_mask;
-        let alpha = self.alpha_map[alpha_idx];
+        // At capacity: seed the new counter from the alpha map, so an item that
+        // has been evicted before re-enters with its historical frequency rather
+        // than from scratch. This boost breaks equal-lower-bound ties in favor
+        // of an item with prior evidence, reducing summary thrashing.
+        let alpha = self.alpha_for(hash);
 
         self.push_counter(
-            item.to_vec(),
+            item,
             hash,
             alpha.saturating_add(increment),
             alpha.saturating_add(error),
         );
     }
 
-    fn push_counter(&mut self, item: Vec<u8>, hash: u64, count: u64, error: u64) {
+    fn take_item_buffer(&mut self, item: &[u8]) -> Vec<u8> {
+        if let Some(mut owned) = self.free_items.pop() {
+            let old_capacity = owned.capacity();
+            if old_capacity > max(1_024, item.len().saturating_mul(4)) {
+                self.item_heap_bytes = self.item_heap_bytes.saturating_sub(old_capacity);
+                let owned = item.to_vec();
+                self.item_heap_bytes =
+                    self.item_heap_bytes.saturating_add(owned.capacity());
+                return owned;
+            }
+            owned.clear();
+            owned.extend_from_slice(item);
+            self.item_heap_bytes = self
+                .item_heap_bytes
+                .saturating_add(owned.capacity().saturating_sub(old_capacity));
+            owned
+        } else {
+            let owned = item.to_vec();
+            self.item_heap_bytes = self.item_heap_bytes.saturating_add(owned.capacity());
+            owned
+        }
+    }
+
+    fn push_counter(&mut self, item: &[u8], hash: u64, count: u64, error: u64) {
         let idx = self.counters.len();
-        self.item_heap_bytes += item.capacity();
+        let item = self.take_item_buffer(item);
         self.counter_map
             .insert_unique(hash, (hash, idx), |&(h, _)| h);
         self.counters.push(Counter {
@@ -268,33 +666,59 @@ impl SpaceSavingSummary {
         self.truncate_if_needed(false);
     }
 
-    /// Truncate counters when `target_capacity` is reached,
-    /// updating the alpha map with evicted items' true counts.
+    fn push_owned_counter(&mut self, counter: Counter) {
+        let idx = self.counters.len();
+        self.item_heap_bytes =
+            self.item_heap_bytes.saturating_add(counter.item.capacity());
+        self.counter_map
+            .insert_unique(counter.hash, (counter.hash, idx), |&(h, _)| h);
+        self.counters.push(counter);
+    }
+
+    /// Truncate counters down to `requested_capacity` once `target_capacity` is
+    /// reached, folding evicted items' counts into the alpha map.
+    ///
+    /// Eviction is batched rather than done on every insert: `counters` is
+    /// allowed to grow to `target_capacity` (2x) and is then cut back in one
+    /// pass, which amortises the selection cost over many inserts.
     fn truncate_if_needed(&mut self, force_rebuild: bool) {
         let need_truncate = self.counters.len() >= self.target_capacity;
 
         if need_truncate {
-            let k = self.requested_capacity;
-            if k < self.counters.len() {
-                self.counters
-                    .select_nth_unstable_by(k - 1, |a, b| a.cmp_by_rank(b));
-
-                let alpha_mask = self.alpha_map.len() - 1;
-                for counter in self.counters.drain(k..) {
-                    let alpha_idx = (counter.hash as usize) & alpha_mask;
-                    let true_count = counter.count.saturating_sub(counter.error);
-                    self.alpha_map[alpha_idx] = min(
-                        self.alpha_map[alpha_idx].saturating_add(true_count),
-                        MAX_ALPHA_VALUE,
-                    );
-                    self.item_heap_bytes -= counter.item.capacity();
-                }
-            }
+            self.truncate_to_requested_capacity();
         }
 
-        if need_truncate || force_rebuild {
+        if force_rebuild && !need_truncate {
             self.rebuild_counter_map();
         }
+    }
+
+    /// Reduce the buffered counters to the requested capacity and record every
+    /// discarded lower bound in the alpha filter.
+    fn truncate_to_requested_capacity(&mut self) {
+        let k = self.requested_capacity;
+        if k == 0 || k >= self.counters.len() {
+            return;
+        }
+
+        self.counters.select_nth_unstable(k - 1);
+        let alpha_slots = self.alpha_slots();
+        for counter in self.counters.drain(k..) {
+            Self::record_eviction(
+                &mut self.alpha_map,
+                alpha_slots,
+                &mut self.alpha_max,
+                &mut self.alpha_nonzero,
+                &counter,
+            );
+            if counter.item.capacity() <= MAX_RECYCLED_ITEM_CAPACITY {
+                self.free_items.push(counter.item);
+            } else {
+                self.item_heap_bytes =
+                    self.item_heap_bytes.saturating_sub(counter.item.capacity());
+            }
+        }
+        self.rebuild_counter_map();
     }
 
     /// Rebuild the `counter_map` from the current `counters` vec.
@@ -309,28 +733,43 @@ impl SpaceSavingSummary {
         }
     }
 
+    fn release_free_items(&mut self) {
+        let released: usize = self.free_items.iter().map(Vec::capacity).sum();
+        self.item_heap_bytes = self.item_heap_bytes.saturating_sub(released);
+        self.free_items = Vec::new();
+    }
+
     #[cfg(test)]
     fn get(&self, item: &[u8]) -> Option<(u64, u64)> {
         self.find_counter(item).map(|c| (c.count, c.error))
     }
 
-    /// Get the top-k items sorted by (count - error) descending.
-    fn top_k(&self, k: usize) -> Vec<(&[u8], u64, u64)> {
-        if k == 0 || self.counters.is_empty() {
+    /// Borrow the `n` highest-ranked counters, sorted best-first.
+    ///
+    /// `counters` may hold up to `target_capacity` entries between truncations,
+    /// so this selection is what actually enforces the reported limit.  Because
+    /// [`Counter`]'s ordering is total, the result is deterministic even when
+    /// counts tie.
+    fn ranked_counters(&self, n: usize) -> Vec<&Counter> {
+        if n == 0 || self.counters.is_empty() {
             return Vec::new();
         }
 
-        let mut sorted: Vec<_> = self.counters.iter().collect();
-        let return_size = min(sorted.len(), k);
+        let mut ranked: Vec<&Counter> = self.counters.iter().collect();
+        let keep = min(ranked.len(), n);
 
-        if return_size < sorted.len() {
-            sorted.select_nth_unstable_by(return_size - 1, |a, b| a.cmp_by_rank(b));
-            sorted.truncate(return_size);
+        if keep < ranked.len() {
+            ranked.select_nth_unstable(keep - 1);
+            ranked.truncate(keep);
         }
 
-        sorted.sort_by(|a, b| a.cmp_by_rank(b));
+        ranked.sort_unstable();
+        ranked
+    }
 
-        sorted
+    /// Get the top-k items as `(item, count, error)` in [`Counter`] order.
+    fn top_k(&self, k: usize) -> Vec<(&[u8], u64, u64)> {
+        self.ranked_counters(k)
             .into_iter()
             .map(|c| (c.item.as_slice(), c.count, c.error))
             .collect()
@@ -339,215 +778,433 @@ impl SpaceSavingSummary {
     /// Merge another summary into this one using the Parallel Space-Saving
     /// reduce-and-combine algorithm from <https://arxiv.org/pdf/1401.0702.pdf>,
     /// matching ClickHouse's `SpaceSaving::merge()` implementation.
-    fn merge(&mut self, other: &SpaceSavingSummary) {
+    fn merge(&mut self, other: SpaceSavingSummary) -> Result<()> {
         if other.is_empty() {
-            return;
+            return Ok(());
         }
 
         if self.is_empty() {
-            self.counters.clone_from(&other.counters);
-            self.counter_map.clone_from(&other.counter_map);
-            self.alpha_map.clone_from(&other.alpha_map);
-            self.requested_capacity = other.requested_capacity;
-            self.target_capacity = other.target_capacity;
-            // Recompute from cloned vecs since clone may allocate exact-size
-            // (capacity == len), which can differ from the original's capacity.
-            self.item_heap_bytes = self.counters.iter().map(|c| c.item.capacity()).sum();
-            return;
+            *self = other;
+            return Ok(());
         }
 
-        // Compute m1/m2: the minimum counter count in each summary.
-        // Per the Parallel Space-Saving paper (Theorem 1), if a summary has
-        // reached capacity, items not in its counter list could have had at
-        // most min(counter.count) frequency.  This is the merge correction.
+        // Compute m1/m2: the largest alpha in each full summary. In Filtered
+        // Space-Saving this bounds the frequency hidden in an omitted item.
         let m1 = if self.counters.len() >= self.requested_capacity {
-            self.counters.iter().map(|c| c.count).min().unwrap_or(0)
+            self.alpha_max
         } else {
             0
         };
         let m2 = if other.counters.len() >= other.requested_capacity {
-            other.counters.iter().map(|c| c.count).min().unwrap_or(0)
+            other.alpha_max
         } else {
             0
         };
 
-        // Step 1: Bump all self counters by m2 (upper bound of what they
-        // could have counted in the other partition).
-        if m2 > 0 {
-            for counter in &mut self.counters {
+        // Merge existing counters first. Common items combine directly, while
+        // items omitted by `other` receive its omission bound. Applying the
+        // correction only to omitted items avoids trying to undo a saturating
+        // addition for common counters.
+        for counter in &mut self.counters {
+            if let Some(other_idx) = other.find_counter_idx(&counter.item, counter.hash) {
+                let other_counter = &other.counters[other_idx];
+                counter.count = counter.count.saturating_add(other_counter.count);
+                counter.error = counter.error.saturating_add(other_counter.error);
+            } else if m2 > 0 {
                 counter.count = counter.count.saturating_add(m2);
                 counter.error = counter.error.saturating_add(m2);
             }
         }
 
-        // Step 2: Merge other's counters into self.
-        for other_counter in &other.counters {
-            if let Some(idx) =
-                self.find_counter_idx(&other_counter.item, other_counter.hash)
+        // Add counters that are present only in `other`, correcting them with
+        // this summary's omission bound.
+        let unmatched = other
+            .counters
+            .iter()
+            .filter(|counter| {
+                self.find_counter_idx(&counter.item, counter.hash).is_none()
+            })
+            .count();
+        self.counters.try_reserve(unmatched).map_err(|e| {
+            DataFusionError::ResourcesExhausted(format!(
+                "Unable to grow approx_top_k counters during merge: {e}"
+            ))
+        })?;
+        self.counter_map
+            .try_reserve(unmatched, |&(hash, _)| hash)
+            .map_err(|e| {
+                DataFusionError::ResourcesExhausted(format!(
+                    "Unable to grow approx_top_k counter map during merge: {e}"
+                ))
+            })?;
+        for mut other_counter in other.counters {
+            if self
+                .find_counter_idx(&other_counter.item, other_counter.hash)
+                .is_none()
             {
-                // Item exists in both: add other's count, subtract the m2 we
-                // already added in step 1 (guaranteed non-negative).
-                self.counters[idx].count = self.counters[idx]
-                    .count
-                    .saturating_add(other_counter.count.saturating_sub(m2));
-                self.counters[idx].error = self.counters[idx]
-                    .error
-                    .saturating_add(other_counter.error.saturating_sub(m2));
-            } else {
-                // Item only in other: add with m1 (upper bound of what it
-                // could have counted in self's partition).
-                let item = other_counter.item.clone();
-                self.item_heap_bytes += item.capacity();
-                self.counters.push(Counter {
-                    item,
-                    hash: other_counter.hash,
-                    count: other_counter.count.saturating_add(m1),
-                    error: other_counter.error.saturating_add(m1),
-                });
+                other_counter.count = other_counter.count.saturating_add(m1);
+                other_counter.error = other_counter.error.saturating_add(m1);
+                self.push_owned_counter(other_counter);
             }
         }
 
-        // Merge alpha maps element-wise.
-        if self.alpha_map.len() == other.alpha_map.len() {
-            for (i, &other_alpha) in other.alpha_map.iter().enumerate() {
-                self.alpha_map[i] = min(
-                    self.alpha_map[i].saturating_add(other_alpha),
-                    MAX_ALPHA_VALUE,
-                );
-            }
+        // Alpha buckets represent disjoint input partitions, so combine them
+        // additively. An unallocated map is the all-zero map.
+        if !other.alpha_map.is_empty() {
+            let alpha_slots = self.alpha_slots();
+            other.alpha_map.for_each(|slot, other_alpha| {
+                if self.alpha_map.get(slot) == 0 {
+                    self.alpha_nonzero += 1;
+                }
+                let alpha = self.alpha_map.add(slot, other_alpha, alpha_slots);
+                self.alpha_max = max(self.alpha_max, alpha);
+            });
         }
 
-        self.truncate_if_needed(true);
+        self.truncate_if_needed(false);
+        Ok(())
     }
 
-    /// Serialize the summary to bytes (matches ClickHouse's `write()` format).
+    /// Serialize a complete, mergeable Filtered Space-Saving summary.
     ///
-    /// Only the top `requested_capacity` counters are written.  The alpha map
-    /// carries evicted frequency information for the coordinator merge.
-    fn serialize(&mut self) -> Vec<u8> {
-        self.truncate_if_needed(false);
-
-        // If there are still more counters than requested_capacity (because
-        // target_capacity wasn't reached), partition out the top ones and
-        // fold the tail into the alpha map before serializing.
-        let k = self.requested_capacity;
-        if k > 0 && k < self.counters.len() {
-            self.counters
-                .select_nth_unstable_by(k - 1, |a, b| a.cmp_by_rank(b));
-
-            let alpha_mask = self.alpha_map.len() - 1;
-            for counter in self.counters.drain(k..) {
-                let alpha_idx = (counter.hash as usize) & alpha_mask;
-                let true_count = counter.count.saturating_sub(counter.error);
-                self.alpha_map[alpha_idx] = min(
-                    self.alpha_map[alpha_idx].saturating_add(true_count),
-                    MAX_ALPHA_VALUE,
-                );
-                self.item_heap_bytes -= counter.item.capacity();
-            }
-            self.rebuild_counter_map();
+    /// The alpha map is encoded sparsely or as a bitmap plus packed `u64`
+    /// values, whichever is smaller. This preserves the omission bounds needed
+    /// by distributed merges without writing a dense zero-filled map.
+    fn serialize(&mut self, data_type: &DataType) -> Result<Vec<u8>> {
+        self.truncate_to_requested_capacity();
+        self.release_free_items();
+        if self.is_empty() {
+            return Ok(Vec::new());
         }
 
-        let num_counters = self.counters.len();
+        let (type_tag, item_width, type_params) = state_type_descriptor(data_type)?;
+        let alpha_slots = Self::compute_alpha_map_size(self.requested_capacity);
+        let alpha_nonzero = self.alpha_nonzero;
+        let bitmap_bytes = alpha_slots / 8;
+        let sparse_bytes = alpha_nonzero.checked_mul(12).ok_or_else(|| {
+            DataFusionError::Execution("approx_top_k state size overflow".to_string())
+        })?;
+        let packed_bitmap_bytes = bitmap_bytes
+            .checked_add(alpha_nonzero.checked_mul(8).ok_or_else(|| {
+                DataFusionError::Execution("approx_top_k state size overflow".to_string())
+            })?)
+            .ok_or_else(|| {
+                DataFusionError::Execution("approx_top_k state size overflow".to_string())
+            })?;
+        let alpha_encoding = if packed_bitmap_bytes < sparse_bytes {
+            ALPHA_BITMAP
+        } else {
+            ALPHA_SPARSE
+        };
 
-        // Pre-compute total size for a single allocation.
-        let counter_bytes: usize =
-            self.counters.iter().map(|c| 4 + c.item.len() + 16).sum();
-        let total = 16 + counter_bytes + 8 + self.alpha_map.len() * 8;
-        let mut bytes = Vec::with_capacity(total);
+        let variable_items = item_width == 0;
+        let counter_bytes = self.counters.iter().try_fold(0usize, |total, counter| {
+            validate_item_bytes(data_type, &counter.item)?;
+            let record = counter
+                .item
+                .len()
+                .checked_add(16 + usize::from(variable_items) * 8)
+                .ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "approx_top_k state size overflow".to_string(),
+                    )
+                })?;
+            total.checked_add(record).ok_or_else(|| {
+                DataFusionError::Execution("approx_top_k state size overflow".to_string())
+            })
+        })?;
+        let alpha_bytes = if alpha_encoding == ALPHA_SPARSE {
+            sparse_bytes
+        } else {
+            packed_bitmap_bytes
+        };
+        let total = STATE_HEADER_LEN
+            .checked_add(type_params.len())
+            .and_then(|n| n.checked_add(counter_bytes))
+            .and_then(|n| n.checked_add(alpha_bytes))
+            .ok_or_else(|| {
+                DataFusionError::Execution("approx_top_k state size overflow".to_string())
+            })?;
 
-        bytes.extend_from_slice(&(self.requested_capacity as u64).to_le_bytes());
-        bytes.extend_from_slice(&(num_counters as u64).to_le_bytes());
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(total).map_err(|e| {
+            DataFusionError::ResourcesExhausted(format!(
+                "Unable to allocate approx_top_k state: {e}"
+            ))
+        })?;
+        bytes.extend_from_slice(STATE_MAGIC);
+        bytes.push(STATE_VERSION);
+        bytes.push(alpha_encoding);
+        bytes.push(type_tag);
+        bytes.push(item_width);
+        bytes.extend_from_slice(&(self.requested_capacity as u32).to_le_bytes());
+        bytes.extend_from_slice(&(self.counters.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&(alpha_slots as u32).to_le_bytes());
+        bytes.extend_from_slice(&(alpha_nonzero as u32).to_le_bytes());
+        bytes.extend_from_slice(&(type_params.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&type_params);
 
-        for counter in &self.counters {
-            bytes.extend_from_slice(&(counter.item.len() as u32).to_le_bytes());
+        let ranked = self.ranked_counters(self.requested_capacity);
+        for counter in ranked {
+            if variable_items {
+                bytes.extend_from_slice(&(counter.item.len() as u64).to_le_bytes());
+            }
             bytes.extend_from_slice(&counter.item);
             bytes.extend_from_slice(&counter.count.to_le_bytes());
             bytes.extend_from_slice(&counter.error.to_le_bytes());
         }
 
-        bytes.extend_from_slice(&(self.alpha_map.len() as u64).to_le_bytes());
-        for &alpha in &self.alpha_map {
-            bytes.extend_from_slice(&alpha.to_le_bytes());
+        if alpha_encoding == ALPHA_SPARSE {
+            match &self.alpha_map {
+                AlphaMap::Dense(values) => {
+                    for (slot, &alpha) in values.iter().enumerate() {
+                        if alpha != 0 {
+                            bytes.extend_from_slice(&(slot as u32).to_le_bytes());
+                            bytes.extend_from_slice(&alpha.to_le_bytes());
+                        }
+                    }
+                }
+                _ => {
+                    for (slot, alpha) in self.alpha_map.sorted_entries() {
+                        bytes.extend_from_slice(&(slot as u32).to_le_bytes());
+                        bytes.extend_from_slice(&alpha.to_le_bytes());
+                    }
+                }
+            }
+        } else {
+            let bitmap_start = bytes.len();
+            bytes.resize(bitmap_start + bitmap_bytes, 0);
+            match &self.alpha_map {
+                AlphaMap::Dense(values) => {
+                    for (slot, &alpha) in values.iter().enumerate() {
+                        if alpha != 0 {
+                            bytes[bitmap_start + slot / 8] |= 1 << (slot % 8);
+                            bytes.extend_from_slice(&alpha.to_le_bytes());
+                        }
+                    }
+                }
+                _ => {
+                    for (slot, alpha) in self.alpha_map.sorted_entries() {
+                        bytes[bitmap_start + slot / 8] |= 1 << (slot % 8);
+                        bytes.extend_from_slice(&alpha.to_le_bytes());
+                    }
+                }
+            }
         }
 
-        bytes
+        debug_assert_eq!(bytes.len(), total);
+        Ok(bytes)
     }
 
-    /// Deserialize a summary from bytes.
-    fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() < 16 {
-            return exec_err!("Invalid Space-Saving summary bytes: too short");
+    /// Deserialize a versioned summary, validating it against the receiving
+    /// accumulator's exact capacity and input type.
+    fn from_bytes(
+        bytes: &[u8],
+        expected_capacity: usize,
+        expected_data_type: &DataType,
+    ) -> Result<Self> {
+        let mut reader = StateReader::new(bytes);
+        if reader.read_bytes(4, "magic")? != STATE_MAGIC {
+            return exec_err!("approx_top_k: corrupt intermediate state (bad magic)");
         }
-
-        let requested_capacity =
-            u64::from_le_bytes(bytes[0..8].try_into().unwrap()) as usize;
-        let num_counters = u64::from_le_bytes(bytes[8..16].try_into().unwrap()) as usize;
-
-        // Validate against reasonable upper bounds to prevent OOM from
-        // malformed state.
-        if requested_capacity == 0 {
-            return exec_err!("Invalid Space-Saving summary: requested_capacity is 0");
-        }
-        let max_capacity = APPROX_TOP_K_MAX_K * CAPACITY_MULTIPLIER;
-        if requested_capacity > max_capacity {
+        let version = reader.read_u8("version")?;
+        if version != STATE_VERSION {
             return exec_err!(
-                "Invalid Space-Saving summary: requested_capacity {requested_capacity} \
-                 exceeds maximum {max_capacity}"
+                "approx_top_k: unsupported intermediate state version {version}"
+            );
+        }
+        let alpha_encoding = reader.read_u8("alpha encoding")?;
+        if alpha_encoding == STATE_SINGLETON {
+            let type_tag = reader.read_u8("type tag")?;
+            let item_width = reader.read_u8("item width")?;
+            let requested_capacity = reader.read_u32("capacity")? as usize;
+            let type_params_len = reader.read_u32("type parameters length")? as usize;
+            let type_params = reader.read_bytes(type_params_len, "type parameters")?;
+            let (expected_tag, expected_width, expected_params) =
+                state_type_descriptor(expected_data_type)?;
+            if type_tag != expected_tag
+                || item_width != expected_width
+                || type_params != expected_params
+                || matches!(expected_data_type, DataType::Null)
+            {
+                return exec_err!(
+                    "approx_top_k: corrupt intermediate state (singleton value type does not match {expected_data_type})"
+                );
+            }
+            if requested_capacity != expected_capacity
+                || requested_capacity == 0
+                || requested_capacity > APPROX_TOP_K_MAX_K * CAPACITY_MULTIPLIER
+            {
+                return exec_err!(
+                    "approx_top_k: corrupt intermediate state (invalid singleton capacity {requested_capacity})"
+                );
+            }
+            let item = reader.read_bytes(
+                reader.bytes.len().saturating_sub(reader.offset),
+                "singleton item",
+            )?;
+            validate_item_bytes(expected_data_type, item)?;
+            reader.finish()?;
+
+            let mut owned = Vec::new();
+            owned.try_reserve_exact(item.len()).map_err(|e| {
+                DataFusionError::ResourcesExhausted(format!(
+                    "Unable to allocate approx_top_k singleton item: {e}"
+                ))
+            })?;
+            owned.extend_from_slice(item);
+            let hash = Self::hash_item(&owned);
+            let mut summary = Self::new(requested_capacity);
+            summary.counters.try_reserve_exact(1).map_err(|e| {
+                DataFusionError::ResourcesExhausted(format!(
+                    "Unable to allocate approx_top_k singleton counter: {e}"
+                ))
+            })?;
+            summary
+                .counter_map
+                .try_reserve(1, |&(hash, _)| hash)
+                .map_err(|e| {
+                    DataFusionError::ResourcesExhausted(format!(
+                        "Unable to allocate approx_top_k singleton counter map: {e}"
+                    ))
+                })?;
+            summary.push_owned_counter(Counter {
+                item: owned,
+                hash,
+                count: 1,
+                error: 0,
+            });
+            return Ok(summary);
+        }
+        if !matches!(alpha_encoding, ALPHA_SPARSE | ALPHA_BITMAP) {
+            return exec_err!(
+                "approx_top_k: corrupt intermediate state (unknown alpha encoding {alpha_encoding})"
+            );
+        }
+        let type_tag = reader.read_u8("type tag")?;
+        let item_width = reader.read_u8("item width")?;
+        let requested_capacity = reader.read_u32("capacity")? as usize;
+        let num_counters = reader.read_u32("counter count")? as usize;
+        let alpha_slots = reader.read_u32("alpha slot count")? as usize;
+        let alpha_nonzero = reader.read_u32("alpha nonzero count")? as usize;
+        let type_params_len = reader.read_u32("type parameters length")? as usize;
+        let type_params = reader.read_bytes(type_params_len, "type parameters")?;
+
+        let (expected_tag, expected_width, expected_params) =
+            state_type_descriptor(expected_data_type)?;
+        if type_tag != expected_tag
+            || item_width != expected_width
+            || type_params != expected_params
+        {
+            return exec_err!(
+                "approx_top_k: corrupt intermediate state (value type does not match {expected_data_type})"
+            );
+        }
+        if requested_capacity != expected_capacity {
+            return exec_err!(
+                "approx_top_k: corrupt intermediate state (capacity {requested_capacity} does not match expected {expected_capacity})"
+            );
+        }
+        if requested_capacity == 0
+            || requested_capacity > APPROX_TOP_K_MAX_K * CAPACITY_MULTIPLIER
+        {
+            return exec_err!(
+                "approx_top_k: corrupt intermediate state (invalid capacity {requested_capacity})"
             );
         }
         if num_counters > requested_capacity {
             return exec_err!(
-                "Invalid Space-Saving summary: num_counters {num_counters} exceeds \
-                 requested_capacity {requested_capacity}"
+                "approx_top_k: corrupt intermediate state ({num_counters} entries exceeds capacity {requested_capacity})"
             );
         }
-        // Each counter needs at least 20 bytes (4 len + 0 item + 8 count + 8 error).
-        let max_possible = (bytes.len().saturating_sub(16)) / 20;
-        if num_counters > max_possible {
+        if matches!(expected_data_type, DataType::Null) && num_counters != 0 {
             return exec_err!(
-                "Invalid Space-Saving summary: num_counters {num_counters} exceeds \
-                 what fits in {} bytes",
-                bytes.len()
+                "approx_top_k: corrupt intermediate state (Null state contains values)"
+            );
+        }
+        let expected_alpha_slots = Self::compute_alpha_map_size(requested_capacity);
+        if alpha_slots != expected_alpha_slots || !alpha_slots.is_power_of_two() {
+            return exec_err!(
+                "approx_top_k: corrupt intermediate state (invalid alpha slot count {alpha_slots})"
+            );
+        }
+        if alpha_nonzero > alpha_slots
+            || (alpha_nonzero != 0 && num_counters != requested_capacity)
+        {
+            return exec_err!(
+                "approx_top_k: corrupt intermediate state (invalid alpha nonzero count {alpha_nonzero})"
             );
         }
 
-        let mut counters = Vec::with_capacity(num_counters);
-        let mut counter_map = HashTable::with_capacity(num_counters);
-        let mut item_heap_bytes: usize = 0;
-        let mut offset: usize = 16;
+        let min_record_bytes = if item_width == 0 {
+            24
+        } else {
+            item_width as usize + 16
+        };
+        if num_counters
+            > reader.bytes.len().saturating_sub(reader.offset) / min_record_bytes
+        {
+            return exec_err!(
+                "approx_top_k: corrupt intermediate state (counter count exceeds payload)"
+            );
+        }
+
+        let mut counters: Vec<Counter> = Vec::new();
+        counters.try_reserve_exact(num_counters).map_err(|e| {
+            DataFusionError::ResourcesExhausted(format!(
+                "Unable to allocate approx_top_k counters: {e}"
+            ))
+        })?;
+        let mut counter_map: HashTable<(u64, usize)> = HashTable::new();
+        counter_map
+            .try_reserve(num_counters, |&(hash, _)| hash)
+            .map_err(|e| {
+                DataFusionError::ResourcesExhausted(format!(
+                    "Unable to allocate approx_top_k counter map: {e}"
+                ))
+            })?;
+        let mut item_heap_bytes = 0usize;
 
         for idx in 0..num_counters {
-            if offset.checked_add(4).is_none_or(|end| end > bytes.len()) {
+            let item_len = if item_width == 0 {
+                usize::try_from(reader.read_u64("item length")?).map_err(|_| {
+                    DataFusionError::Execution(
+                        "approx_top_k: corrupt intermediate state (item length overflow)"
+                            .to_string(),
+                    )
+                })?
+            } else {
+                item_width as usize
+            };
+            let item_bytes = reader.read_bytes(item_len, "item")?;
+            validate_item_bytes(expected_data_type, item_bytes)?;
+            let count = reader.read_u64("count")?;
+            let error = reader.read_u64("error")?;
+            if count == 0 || error > count {
                 return exec_err!(
-                    "Invalid Space-Saving summary bytes: truncated item length"
+                    "approx_top_k: corrupt intermediate state (invalid count/error interval {count}/{error})"
                 );
             }
-            let item_len =
-                u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
-                    as usize;
-            offset += 4;
 
-            let needed = item_len.checked_add(16);
-            if needed
-                .is_none_or(|n| offset.checked_add(n).is_none_or(|end| end > bytes.len()))
+            let hash = Self::hash_item(item_bytes);
+            if counter_map
+                .find(hash, |&(h, existing_idx)| {
+                    h == hash && counters[existing_idx].item == item_bytes
+                })
+                .is_some()
             {
                 return exec_err!(
-                    "Invalid Space-Saving summary bytes: truncated counter"
+                    "approx_top_k: corrupt intermediate state (duplicate value)"
                 );
             }
-
-            let item = bytes[offset..offset + item_len].to_vec();
-            offset += item_len;
-
-            let count = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
-            offset += 8;
-
-            let error = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
-            offset += 8;
-
-            let hash = Self::hash_item(&item);
-            item_heap_bytes += item.capacity();
+            let mut item = Vec::new();
+            item.try_reserve_exact(item_len).map_err(|e| {
+                DataFusionError::ResourcesExhausted(format!(
+                    "Unable to allocate approx_top_k item: {e}"
+                ))
+            })?;
+            item.extend_from_slice(item_bytes);
+            item_heap_bytes = item_heap_bytes.saturating_add(item.capacity());
             counter_map.insert_unique(hash, (hash, idx), |&(h, _)| h);
             counters.push(Counter {
                 item,
@@ -557,45 +1214,59 @@ impl SpaceSavingSummary {
             });
         }
 
-        if offset.checked_add(8).is_none_or(|end| end > bytes.len()) {
-            return exec_err!(
-                "Invalid Space-Saving summary bytes: missing alpha map size"
-            );
-        }
-        let alpha_map_size =
-            u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) as usize;
-        offset += 8;
+        let mut alpha_map = AlphaMap::Empty;
+        let mut alpha_max = 0;
 
-        // Validate alpha_map_size is a power of two (required for bitmask indexing).
-        if alpha_map_size == 0 || !alpha_map_size.is_power_of_two() {
-            return exec_err!(
-                "Invalid Space-Saving summary: alpha_map_size {alpha_map_size} \
-                 is not a positive power of two"
-            );
+        if alpha_encoding == ALPHA_SPARSE {
+            let mut previous_slot = None;
+            for _ in 0..alpha_nonzero {
+                let slot = reader.read_u32("alpha slot")? as usize;
+                let alpha = reader.read_u64("alpha value")?;
+                if slot >= alpha_slots
+                    || alpha == 0
+                    || previous_slot.is_some_and(|previous| slot <= previous)
+                {
+                    return exec_err!(
+                        "approx_top_k: corrupt intermediate state (invalid sparse alpha entry)"
+                    );
+                }
+                alpha_max = max(alpha_max, alpha);
+                alpha_map.add(slot, alpha, alpha_slots);
+                previous_slot = Some(slot);
+            }
+        } else {
+            let bitmap = reader.read_bytes(alpha_slots / 8, "alpha bitmap")?;
+            let popcount: usize =
+                bitmap.iter().map(|byte| byte.count_ones() as usize).sum();
+            if popcount != alpha_nonzero {
+                return exec_err!(
+                    "approx_top_k: corrupt intermediate state (alpha bitmap count mismatch)"
+                );
+            }
+            for slot in 0..alpha_slots {
+                if bitmap[slot / 8] & (1 << (slot % 8)) != 0 {
+                    let alpha = reader.read_u64("alpha value")?;
+                    if alpha == 0 {
+                        return exec_err!(
+                            "approx_top_k: corrupt intermediate state (zero packed alpha value)"
+                        );
+                    }
+                    alpha_max = max(alpha_max, alpha);
+                    alpha_map.add(slot, alpha, alpha_slots);
+                }
+            }
         }
-
-        let alpha_bytes = alpha_map_size
-            .checked_mul(8)
-            .and_then(|n| offset.checked_add(n));
-        if alpha_bytes.is_none_or(|end| end > bytes.len()) {
-            return exec_err!("Invalid Space-Saving summary bytes: truncated alpha map");
-        }
-
-        let mut alpha_map = Vec::with_capacity(alpha_map_size);
-        for _ in 0..alpha_map_size {
-            let alpha = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
-            offset += 8;
-            alpha_map.push(alpha);
-        }
-
-        let target_capacity = max(64, requested_capacity.saturating_mul(2));
+        reader.finish()?;
 
         Ok(Self {
             counters,
+            free_items: Vec::new(),
             counter_map,
             alpha_map,
+            alpha_max,
+            alpha_nonzero,
             requested_capacity,
-            target_capacity,
+            target_capacity: max(8, requested_capacity.saturating_mul(2)),
             item_heap_bytes,
         })
     }
@@ -605,11 +1276,14 @@ impl SpaceSavingSummary {
     fn size(&self) -> usize {
         size_of::<Self>()
             + self.counters.capacity() * size_of::<Counter>()
+            + self.free_items.capacity() * size_of::<Vec<u8>>()
             + self.item_heap_bytes
-            // HashTable<(u64, usize)>: each bucket stores (hash, idx) + 1 control byte.
-            + self.counter_map.capacity()
-                * (size_of::<(u64, usize)>() + size_of::<u8>())
-            + self.alpha_map.capacity() * size_of::<u64>()
+            + self.counter_map.allocation_size()
+            + self.alpha_map.allocation_size()
+    }
+
+    fn heap_size(&self) -> usize {
+        self.size().saturating_sub(size_of::<Self>())
     }
 }
 
@@ -620,7 +1294,11 @@ impl SpaceSavingSummary {
 /// Approximate top-k UDAF using the Filtered Space-Saving algorithm.
 #[user_doc(
     doc_section(label = "Approximate Functions"),
-    description = r#"Returns the approximate most frequent (top-k) values with their estimated counts, using the Filtered Space-Saving algorithm. The returned counts are upper-bound estimates; the true frequency lies in `[count - error, count]`. NULL values are skipped; an empty or all-NULL input returns an empty list `[]`. For float columns, -0.0 and +0.0 are treated as distinct values, and different NaN representations are tracked separately."#,
+    description = r#"Returns the approximate most frequent (top-k) values with their estimated counts as a list of `{value, count}` structs. Values are ranked first by the lower bound of the frequency estimate and then by the estimated count.
+
+Because the aggregate uses bounded memory, `count` is an upper-bound estimate. Within one summary it is exact for a value that was tracked for the whole scan; distributed merging may add an omission bound from partitions where that value was not tracked. Values whose frequency is far from the top-k boundary are the ones reported reliably; ties and near-ties may be resolved arbitrarily.
+
+NULL values are skipped; an empty or all-NULL input returns an empty list `[]`. For float columns, -0.0 and +0.0 are treated as the same value, while different NaN representations are tracked separately."#,
     syntax_example = "approx_top_k(expression, k)",
     sql_example = r#"```sql
 > SELECT approx_top_k(column_name, 3) FROM table_name;
@@ -649,56 +1327,60 @@ impl Default for ApproxTopK {
 
 impl ApproxTopK {
     pub fn new() -> Self {
-        // Supported value types for the first argument.
-        let value_types = &[
-            DataType::Utf8,
-            DataType::LargeUtf8,
-            DataType::Binary,
-            DataType::LargeBinary,
-            DataType::Int8,
-            DataType::Int16,
-            DataType::Int32,
-            DataType::Int64,
-            DataType::UInt8,
-            DataType::UInt16,
-            DataType::UInt32,
-            DataType::UInt64,
-            DataType::Float32,
-            DataType::Float64,
-            DataType::Date32,
-            DataType::Date64,
-            DataType::Timestamp(TimeUnit::Second, None),
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            DataType::Timestamp(TimeUnit::Microsecond, None),
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-            DataType::Timestamp(TimeUnit::Second, Some(TIMEZONE_WILDCARD.into())),
-            DataType::Timestamp(TimeUnit::Millisecond, Some(TIMEZONE_WILDCARD.into())),
-            DataType::Timestamp(TimeUnit::Microsecond, Some(TIMEZONE_WILDCARD.into())),
-            DataType::Timestamp(TimeUnit::Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+        let with_integer_k = |value| {
+            TypeSignature::Coercible(vec![
+                Coercion::new_exact(value),
+                Coercion::new_exact(TypeSignatureClass::Integer),
+            ])
+        };
+        let variants = vec![
+            with_integer_k(TypeSignatureClass::Native(logical_string())),
+            with_integer_k(TypeSignatureClass::Native(logical_binary())),
+            with_integer_k(TypeSignatureClass::Integer),
+            with_integer_k(TypeSignatureClass::Native(logical_float32())),
+            with_integer_k(TypeSignatureClass::Native(logical_float64())),
+            with_integer_k(TypeSignatureClass::Native(logical_date())),
+            with_integer_k(TypeSignatureClass::Timestamp),
         ];
-        // k must be a literal integer; accept any integer type for convenience.
-        let k_types = &[
-            DataType::Int8,
-            DataType::Int16,
-            DataType::Int32,
-            DataType::Int64,
-            DataType::UInt8,
-            DataType::UInt16,
-            DataType::UInt32,
-            DataType::UInt64,
-        ];
-
-        let mut variants = Vec::with_capacity(value_types.len() * k_types.len());
-        for vt in value_types {
-            for kt in k_types {
-                variants.push(TypeSignature::Exact(vec![vt.clone(), kt.clone()]));
-            }
-        }
 
         Self {
             signature: Signature::one_of(variants, Volatility::Immutable),
         }
     }
+}
+
+fn get_approx_top_k_k(args: &AccumulatorArgs) -> Result<usize> {
+    if args.exprs.len() < 2 {
+        return plan_err!("approx_top_k requires two arguments: column and k");
+    }
+
+    let k = args.exprs[1]
+        .downcast_ref::<datafusion_physical_expr::expressions::Literal>()
+        .and_then(|lit| match lit.value() {
+            // Reject negatives before `as usize` can wrap them. Zero converts
+            // losslessly and is handled by the range check below.
+            ScalarValue::Int8(Some(v)) if *v >= 0 => Some(*v as usize),
+            ScalarValue::Int16(Some(v)) if *v >= 0 => Some(*v as usize),
+            ScalarValue::Int32(Some(v)) if *v >= 0 => Some(*v as usize),
+            ScalarValue::Int64(Some(v)) if *v >= 0 => Some(*v as usize),
+            ScalarValue::UInt8(Some(v)) => Some(*v as usize),
+            ScalarValue::UInt16(Some(v)) => Some(*v as usize),
+            ScalarValue::UInt32(Some(v)) => Some(*v as usize),
+            ScalarValue::UInt64(Some(v)) => usize::try_from(*v).ok(),
+            _ => None,
+        });
+
+    let Some(k) = k else {
+        return plan_err!(
+            "approx_top_k requires k to be a positive literal integer between 1 and 10000"
+        );
+    };
+    if k == 0 || k > APPROX_TOP_K_MAX_K {
+        return plan_err!(
+            "approx_top_k requires k to be between 1 and {APPROX_TOP_K_MAX_K}, got {k}"
+        );
+    }
+    Ok(k)
 }
 
 impl AggregateUDFImpl for ApproxTopK {
@@ -711,17 +1393,7 @@ impl AggregateUDFImpl for ApproxTopK {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let value_type = if !arg_types.is_empty() {
-            match &arg_types[0] {
-                // Large variants are narrowed: the summary stores in-memory
-                // byte slices, not large column offsets, so i32 offsets suffice.
-                DataType::LargeUtf8 => DataType::Utf8,
-                DataType::LargeBinary => DataType::Binary,
-                other => other.clone(),
-            }
-        } else {
-            DataType::Utf8
-        };
+        let value_type = arg_types.first().cloned().unwrap_or(DataType::Utf8);
 
         let struct_fields = Fields::from(vec![
             Field::new("value", value_type, true),
@@ -737,51 +1409,36 @@ impl AggregateUDFImpl for ApproxTopK {
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         Ok(vec![Arc::new(Field::new(
             format_state_name(args.name, "summary"),
-            DataType::Binary,
-            true,
+            DataType::LargeBinary,
+            false,
         ))])
     }
 
     fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        if args.exprs.len() < 2 {
-            return plan_err!("approx_top_k requires two arguments: column and k");
+        if args.is_distinct {
+            return not_impl_err!("approx_top_k does not support DISTINCT");
         }
-
-        let k_expr = &args.exprs[1];
-        let k = k_expr
-            .downcast_ref::<datafusion_physical_expr::expressions::Literal>()
-            .and_then(|lit| match lit.value() {
-                // Guard against negative values before casting to usize to
-                // avoid wrapping (e.g. -1i32 as usize → u64::MAX).
-                // Zero is allowed through and caught by the bounds check below.
-                ScalarValue::Int8(Some(v)) if *v >= 0 => Some(*v as usize),
-                ScalarValue::Int16(Some(v)) if *v >= 0 => Some(*v as usize),
-                ScalarValue::Int32(Some(v)) if *v >= 0 => Some(*v as usize),
-                ScalarValue::Int64(Some(v)) if *v >= 0 => Some(*v as usize),
-                ScalarValue::UInt8(Some(v)) => Some(*v as usize),
-                ScalarValue::UInt16(Some(v)) => Some(*v as usize),
-                ScalarValue::UInt32(Some(v)) => Some(*v as usize),
-                ScalarValue::UInt64(Some(v)) => Some(*v as usize),
-                _ => None,
-            });
-
-        let Some(k) = k else {
-            return plan_err!(
-                "approx_top_k requires k to be a positive literal integer \
-                 between 1 and 10000"
-            );
-        };
-
-        if k == 0 || k > APPROX_TOP_K_MAX_K {
-            return plan_err!(
-                "approx_top_k requires k to be between 1 and {APPROX_TOP_K_MAX_K}, got {k}"
-            );
-        }
-
+        let k = get_approx_top_k_k(&args)?;
         let data_type = args.expr_fields[0].data_type().clone();
         Ok(Box::new(ApproxTopKAccumulator::new_with_data_type(
             k, data_type,
         )))
+    }
+
+    fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        !args.is_distinct
+    }
+
+    fn create_groups_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
+        if args.is_distinct {
+            return not_impl_err!("approx_top_k does not support DISTINCT");
+        }
+        let k = get_approx_top_k_k(&args)?;
+        let data_type = args.expr_fields[0].data_type().clone();
+        Ok(Box::new(ApproxTopKGroupsAccumulator::new(k, data_type)))
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -815,17 +1472,113 @@ impl ApproxTopKAccumulator {
     /// Build the value array for the result based on the input data type.
     fn build_value_array(&self, top_items: &[(&[u8], u64, u64)]) -> Result<ArrayRef> {
         match &self.input_data_type {
-            DataType::Utf8 | DataType::LargeUtf8 => {
-                let values: Vec<Option<String>> = top_items
-                    .iter()
-                    .map(|(bytes, _, _)| String::from_utf8(bytes.to_vec()).ok())
-                    .collect();
-                Ok(Arc::new(StringArray::from(values)) as ArrayRef)
+            DataType::Null => Ok(Arc::new(NullArray::new(top_items.len()))),
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+                let total_bytes = top_items.iter().try_fold(0usize, |total, item| {
+                    total.checked_add(item.0.len()).ok_or_else(|| {
+                        DataFusionError::Execution(
+                            "approx_top_k output size overflow".to_string(),
+                        )
+                    })
+                })?;
+                if matches!(&self.input_data_type, DataType::Utf8)
+                    && total_bytes > i32::MAX as usize
+                {
+                    return exec_err!("approx_top_k Utf8 output exceeds 2 GiB");
+                }
+                match &self.input_data_type {
+                    DataType::Utf8 => {
+                        let mut builder =
+                            StringBuilder::with_capacity(top_items.len(), total_bytes);
+                        for (bytes, _, _) in top_items {
+                            builder.append_value(std::str::from_utf8(bytes).map_err(
+                                |_| {
+                                    DataFusionError::Execution(
+                                        "approx_top_k state contains invalid UTF-8"
+                                            .to_string(),
+                                    )
+                                },
+                            )?);
+                        }
+                        Ok(Arc::new(builder.finish()))
+                    }
+                    DataType::LargeUtf8 => {
+                        let mut builder = LargeStringBuilder::with_capacity(
+                            top_items.len(),
+                            total_bytes,
+                        );
+                        for (bytes, _, _) in top_items {
+                            builder.append_value(std::str::from_utf8(bytes).map_err(
+                                |_| {
+                                    DataFusionError::Execution(
+                                        "approx_top_k state contains invalid UTF-8"
+                                            .to_string(),
+                                    )
+                                },
+                            )?);
+                        }
+                        Ok(Arc::new(builder.finish()))
+                    }
+                    DataType::Utf8View => {
+                        let mut builder =
+                            StringViewBuilder::with_capacity(top_items.len());
+                        for (bytes, _, _) in top_items {
+                            builder.append_value(std::str::from_utf8(bytes).map_err(
+                                |_| {
+                                    DataFusionError::Execution(
+                                        "approx_top_k state contains invalid UTF-8"
+                                            .to_string(),
+                                    )
+                                },
+                            )?);
+                        }
+                        Ok(Arc::new(builder.finish()))
+                    }
+                    _ => unreachable!(),
+                }
             }
-            DataType::Binary | DataType::LargeBinary => {
-                let values: Vec<Option<&[u8]>> =
-                    top_items.iter().map(|(bytes, _, _)| Some(*bytes)).collect();
-                Ok(Arc::new(BinaryArray::from(values)) as ArrayRef)
+            DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
+                let total_bytes = top_items.iter().try_fold(0usize, |total, item| {
+                    total.checked_add(item.0.len()).ok_or_else(|| {
+                        DataFusionError::Execution(
+                            "approx_top_k output size overflow".to_string(),
+                        )
+                    })
+                })?;
+                if matches!(&self.input_data_type, DataType::Binary)
+                    && total_bytes > i32::MAX as usize
+                {
+                    return exec_err!("approx_top_k Binary output exceeds 2 GiB");
+                }
+                match &self.input_data_type {
+                    DataType::Binary => {
+                        let mut builder =
+                            BinaryBuilder::with_capacity(top_items.len(), total_bytes);
+                        for (bytes, _, _) in top_items {
+                            builder.append_value(bytes);
+                        }
+                        Ok(Arc::new(builder.finish()))
+                    }
+                    DataType::LargeBinary => {
+                        let mut builder = LargeBinaryBuilder::with_capacity(
+                            top_items.len(),
+                            total_bytes,
+                        );
+                        for (bytes, _, _) in top_items {
+                            builder.append_value(bytes);
+                        }
+                        Ok(Arc::new(builder.finish()))
+                    }
+                    DataType::BinaryView => {
+                        let mut builder =
+                            BinaryViewBuilder::with_capacity(top_items.len());
+                        for (bytes, _, _) in top_items {
+                            builder.append_value(bytes);
+                        }
+                        Ok(Arc::new(builder.finish()))
+                    }
+                    _ => unreachable!(),
+                }
             }
             DataType::Int8 => {
                 let values: Vec<Option<i8>> = top_items
@@ -971,26 +1724,110 @@ impl ApproxTopKAccumulator {
                     _ => unreachable!(),
                 }
             }
-            _ => {
-                let values: Vec<Option<String>> = top_items
-                    .iter()
-                    .map(|(bytes, _, _)| String::from_utf8(bytes.to_vec()).ok())
-                    .collect();
-                Ok(Arc::new(StringArray::from(values)) as ArrayRef)
-            }
+            other => exec_err!("Unsupported data type for approx_top_k: {other}"),
         }
     }
 
     /// Get the output data type for the value field.
     fn output_value_data_type(&self) -> DataType {
-        match &self.input_data_type {
-            // LargeUtf8 is narrowed to Utf8: the summary stores in-memory
-            // byte slices, not large column offsets, so i32 offsets suffice.
-            DataType::LargeUtf8 => DataType::Utf8,
-            DataType::LargeBinary => DataType::Binary,
-            other => other.clone(),
-        }
+        self.input_data_type.clone()
     }
+}
+
+/// Visit every non-null value as the canonical bytes used by the sketch.
+fn for_each_encoded_value<F>(data_array: &ArrayRef, mut visit: F) -> Result<()>
+where
+    F: FnMut(usize, Option<&[u8]>) -> Result<()>,
+{
+    macro_rules! process_array {
+        ($array_type:ty) => {{
+            let Some(arr) = data_array.as_any().downcast_ref::<$array_type>() else {
+                return exec_err!(
+                    "approx_top_k: failed to downcast array to {}",
+                    stringify!($array_type)
+                );
+            };
+            for i in 0..arr.len() {
+                if arr.is_null(i) {
+                    visit(i, None)?;
+                } else {
+                    visit(i, Some(&arr.value(i).to_le_bytes()))?;
+                }
+            }
+        }};
+    }
+
+    macro_rules! process_bytes_array {
+        ($array_type:ty) => {{
+            let Some(arr) = data_array.as_any().downcast_ref::<$array_type>() else {
+                return exec_err!(
+                    "approx_top_k: failed to downcast array to {}",
+                    stringify!($array_type)
+                );
+            };
+            for i in 0..arr.len() {
+                if arr.is_null(i) {
+                    visit(i, None)?;
+                } else {
+                    visit(i, Some(arr.value(i).as_ref()))?;
+                }
+            }
+        }};
+    }
+
+    macro_rules! process_float_array {
+        ($array_type:ty, $bits_type:ty) => {{
+            let Some(arr) = data_array.as_any().downcast_ref::<$array_type>() else {
+                return exec_err!(
+                    "approx_top_k: failed to downcast array to {}",
+                    stringify!($array_type)
+                );
+            };
+            for i in 0..arr.len() {
+                if arr.is_null(i) {
+                    visit(i, None)?;
+                } else {
+                    let bits: $bits_type = arr.value(i).to_bits();
+                    let bits = if bits << 1 == 0 { 0 } else { bits };
+                    visit(i, Some(&bits.to_le_bytes()))?;
+                }
+            }
+        }};
+    }
+
+    match data_array.data_type() {
+        DataType::Null => {
+            for row in 0..data_array.len() {
+                visit(row, None)?;
+            }
+        }
+        DataType::Utf8 => process_bytes_array!(StringArray),
+        DataType::LargeUtf8 => process_bytes_array!(LargeStringArray),
+        DataType::Utf8View => process_bytes_array!(StringViewArray),
+        DataType::Binary => process_bytes_array!(BinaryArray),
+        DataType::LargeBinary => process_bytes_array!(LargeBinaryArray),
+        DataType::BinaryView => process_bytes_array!(BinaryViewArray),
+        DataType::Int8 => process_array!(Int8Array),
+        DataType::Int16 => process_array!(Int16Array),
+        DataType::Int32 => process_array!(Int32Array),
+        DataType::Int64 => process_array!(Int64Array),
+        DataType::UInt8 => process_array!(UInt8Array),
+        DataType::UInt16 => process_array!(UInt16Array),
+        DataType::UInt32 => process_array!(UInt32Array),
+        DataType::UInt64 => process_array!(UInt64Array),
+        DataType::Float32 => process_float_array!(Float32Array, u32),
+        DataType::Float64 => process_float_array!(Float64Array, u64),
+        DataType::Date32 => process_array!(Date32Array),
+        DataType::Date64 => process_array!(Date64Array),
+        DataType::Timestamp(unit, _) => match unit {
+            TimeUnit::Second => process_array!(TimestampSecondArray),
+            TimeUnit::Millisecond => process_array!(TimestampMillisecondArray),
+            TimeUnit::Microsecond => process_array!(TimestampMicrosecondArray),
+            TimeUnit::Nanosecond => process_array!(TimestampNanosecondArray),
+        },
+        other => return exec_err!("Unsupported data type for approx_top_k: {other}"),
+    }
+    Ok(())
 }
 
 impl Accumulator for ApproxTopKAccumulator {
@@ -998,86 +1835,12 @@ impl Accumulator for ApproxTopKAccumulator {
         if values.is_empty() {
             return Ok(());
         }
-
-        let data_array = &values[0];
-
-        // Downcast once and iterate directly to avoid per-row ScalarValue allocation.
-        macro_rules! process_array {
-            ($array_type:ty, $data_array:expr) => {{
-                let Some(arr) = $data_array.as_any().downcast_ref::<$array_type>() else {
-                    return exec_err!(
-                        "approx_top_k: failed to downcast array to {}",
-                        stringify!($array_type)
-                    );
-                };
-                for i in 0..arr.len() {
-                    if !arr.is_null(i) {
-                        self.summary.add(&arr.value(i).to_le_bytes());
-                    }
-                }
-            }};
-        }
-
-        macro_rules! process_bytes_array {
-            ($array_type:ty, $data_array:expr) => {{
-                let Some(arr) = $data_array.as_any().downcast_ref::<$array_type>() else {
-                    return exec_err!(
-                        "approx_top_k: failed to downcast array to {}",
-                        stringify!($array_type)
-                    );
-                };
-                for i in 0..arr.len() {
-                    if !arr.is_null(i) {
-                        self.summary.add(arr.value(i).as_ref());
-                    }
-                }
-            }};
-        }
-
-        match data_array.data_type() {
-            DataType::Utf8 => process_bytes_array!(StringArray, data_array),
-            DataType::LargeUtf8 => {
-                process_bytes_array!(LargeStringArray, data_array)
+        for_each_encoded_value(&values[0], |_, bytes| {
+            if let Some(bytes) = bytes {
+                self.summary.add(bytes);
             }
-            DataType::Binary => process_bytes_array!(BinaryArray, data_array),
-            DataType::LargeBinary => {
-                process_bytes_array!(LargeBinaryArray, data_array)
-            }
-            DataType::Int8 => process_array!(Int8Array, data_array),
-            DataType::Int16 => process_array!(Int16Array, data_array),
-            DataType::Int32 => process_array!(Int32Array, data_array),
-            DataType::Int64 => process_array!(Int64Array, data_array),
-            DataType::UInt8 => process_array!(UInt8Array, data_array),
-            DataType::UInt16 => process_array!(UInt16Array, data_array),
-            DataType::UInt32 => process_array!(UInt32Array, data_array),
-            DataType::UInt64 => process_array!(UInt64Array, data_array),
-            // Note: floats are compared by their byte representation, so -0.0 and +0.0
-            // are treated as distinct values, and different NaN bit patterns are tracked
-            // separately. This matches ClickHouse's behavior for topK with floats.
-            DataType::Float32 => process_array!(Float32Array, data_array),
-            DataType::Float64 => process_array!(Float64Array, data_array),
-            DataType::Date32 => process_array!(Date32Array, data_array),
-            DataType::Date64 => process_array!(Date64Array, data_array),
-            DataType::Timestamp(unit, _) => match unit {
-                TimeUnit::Second => {
-                    process_array!(TimestampSecondArray, data_array)
-                }
-                TimeUnit::Millisecond => {
-                    process_array!(TimestampMillisecondArray, data_array)
-                }
-                TimeUnit::Microsecond => {
-                    process_array!(TimestampMicrosecondArray, data_array)
-                }
-                TimeUnit::Nanosecond => {
-                    process_array!(TimestampNanosecondArray, data_array)
-                }
-            },
-            other => {
-                return exec_err!("Unsupported data type for approx_top_k: {other}");
-            }
-        }
-
-        Ok(())
+            Ok(())
+        })
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -1085,8 +1848,9 @@ impl Accumulator for ApproxTopKAccumulator {
             return Ok(());
         }
 
-        let Some(summary_array) = states[0].as_any().downcast_ref::<BinaryArray>() else {
-            return exec_err!("Expected Binary array for summary state");
+        let Some(summary_array) = states[0].as_any().downcast_ref::<LargeBinaryArray>()
+        else {
+            return exec_err!("Expected LargeBinary array for approx_top_k state");
         };
 
         for i in 0..summary_array.len() {
@@ -1094,8 +1858,15 @@ impl Accumulator for ApproxTopKAccumulator {
                 continue;
             }
             let bytes = summary_array.value(i);
-            let other_summary = SpaceSavingSummary::from_bytes(bytes)?;
-            self.summary.merge(&other_summary);
+            if bytes.is_empty() {
+                continue;
+            }
+            let other_summary = SpaceSavingSummary::from_bytes(
+                bytes,
+                self.k * CAPACITY_MULTIPLIER,
+                &self.input_data_type,
+            )?;
+            self.summary.merge(other_summary)?;
         }
 
         Ok(())
@@ -1128,11 +1899,488 @@ impl Accumulator for ApproxTopKAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![ScalarValue::Binary(Some(self.summary.serialize()))])
+        Ok(vec![ScalarValue::LargeBinary(Some(
+            self.summary.serialize(&self.input_data_type)?,
+        ))])
     }
 
     fn size(&self) -> usize {
-        size_of::<Self>() + self.summary.size()
+        size_of::<Self>() - size_of::<SpaceSavingSummary>() + self.summary.size()
+    }
+}
+
+#[derive(Debug)]
+enum GroupSummary {
+    Empty,
+    Singleton(Counter),
+    Full(Box<SpaceSavingSummary>),
+}
+
+impl GroupSummary {
+    fn heap_size(&self) -> usize {
+        match self {
+            Self::Empty => 0,
+            Self::Singleton(counter) => counter.item.capacity(),
+            Self::Full(summary) => size_of::<SpaceSavingSummary>() + summary.heap_size(),
+        }
+    }
+
+    fn add(&mut self, item: &[u8], capacity: usize) {
+        if let Self::Full(summary) = self {
+            summary.add(item);
+            return;
+        }
+        let hash = SpaceSavingSummary::hash_item(item);
+        match self {
+            Self::Empty => {
+                *self = Self::Singleton(Counter {
+                    item: item.to_vec(),
+                    hash,
+                    count: 1,
+                    error: 0,
+                });
+            }
+            Self::Singleton(counter) if counter.hash == hash && counter.item == item => {
+                counter.count = counter.count.saturating_add(1);
+            }
+            Self::Singleton(_) => {
+                let Self::Singleton(counter) = std::mem::replace(self, Self::Empty)
+                else {
+                    unreachable!()
+                };
+                let mut summary = SpaceSavingSummary::new(capacity);
+                summary.push_owned_counter(counter);
+                summary.add(item);
+                *self = Self::Full(Box::new(summary));
+            }
+            Self::Full(_) => unreachable!(),
+        }
+    }
+
+    fn merge(&mut self, mut other: SpaceSavingSummary, capacity: usize) -> Result<()> {
+        if other.is_empty() {
+            return Ok(());
+        }
+
+        if other.alpha_nonzero == 0 && other.counters.len() == 1 {
+            let counter = other.counters.pop().unwrap();
+            match self {
+                Self::Empty => *self = Self::Singleton(counter),
+                Self::Singleton(existing)
+                    if existing.hash == counter.hash && existing.item == counter.item =>
+                {
+                    existing.count = existing.count.saturating_add(counter.count);
+                    existing.error = existing.error.saturating_add(counter.error);
+                }
+                Self::Singleton(_) => {
+                    let Self::Singleton(existing) = std::mem::replace(self, Self::Empty)
+                    else {
+                        unreachable!()
+                    };
+                    let mut summary = SpaceSavingSummary::new(capacity);
+                    summary.push_owned_counter(existing);
+                    summary.push_owned_counter(counter);
+                    *self = Self::Full(Box::new(summary));
+                }
+                Self::Full(summary) => {
+                    let mut singleton = SpaceSavingSummary::new(capacity);
+                    singleton.push_owned_counter(counter);
+                    summary.merge(singleton)?;
+                }
+            }
+            return Ok(());
+        }
+
+        match std::mem::replace(self, Self::Empty) {
+            Self::Empty => *self = Self::Full(Box::new(other)),
+            Self::Singleton(counter) => {
+                let mut summary = SpaceSavingSummary::new(capacity);
+                summary.push_owned_counter(counter);
+                summary.merge(other)?;
+                *self = Self::Full(Box::new(summary));
+            }
+            Self::Full(mut summary) => {
+                summary.merge(other)?;
+                *self = Self::Full(summary);
+            }
+        }
+        Ok(())
+    }
+
+    fn top_k(&self, k: usize) -> Vec<(&[u8], u64, u64)> {
+        match self {
+            Self::Empty => vec![],
+            Self::Singleton(counter) if k != 0 => {
+                vec![(counter.item.as_slice(), counter.count, counter.error)]
+            }
+            Self::Singleton(_) => vec![],
+            Self::Full(summary) => summary.top_k(k),
+        }
+    }
+
+    fn serialize(
+        &mut self,
+        output: &mut Vec<u8>,
+        capacity: usize,
+        data_type: &DataType,
+    ) -> Result<()> {
+        match self {
+            Self::Empty => output.clear(),
+            Self::Singleton(counter) => serialize_single_counter_state(
+                output,
+                capacity,
+                data_type,
+                Some(&counter.item),
+                counter.count,
+                counter.error,
+            )?,
+            Self::Full(summary) => *output = summary.serialize(data_type)?,
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct ApproxTopKGroupsAccumulator {
+    summaries: Vec<GroupSummary>,
+    allocated_bytes: usize,
+    k: usize,
+    input_data_type: DataType,
+}
+
+impl ApproxTopKGroupsAccumulator {
+    fn new(k: usize, input_data_type: DataType) -> Self {
+        Self {
+            summaries: vec![],
+            allocated_bytes: 0,
+            k,
+            input_data_type,
+        }
+    }
+
+    fn capacity(&self) -> usize {
+        self.k * CAPACITY_MULTIPLIER
+    }
+
+    fn ensure_groups(&mut self, total_num_groups: usize) {
+        if total_num_groups > self.summaries.len() {
+            self.summaries
+                .resize_with(total_num_groups, || GroupSummary::Empty);
+        }
+    }
+
+    fn update_allocated_bytes(&mut self, before: usize, after: usize) {
+        if after >= before {
+            self.allocated_bytes = self.allocated_bytes.saturating_add(after - before);
+        } else {
+            self.allocated_bytes = self.allocated_bytes.saturating_sub(before - after);
+        }
+    }
+
+    fn take_groups(&mut self, emit_to: EmitTo) -> Vec<GroupSummary> {
+        let groups = emit_to.take_needed(&mut self.summaries);
+        let freed = groups.iter().map(GroupSummary::heap_size).sum();
+        self.allocated_bytes = self.allocated_bytes.saturating_sub(freed);
+        groups
+    }
+
+    fn consume_top_values(
+        groups: Vec<GroupSummary>,
+        k: usize,
+        mut append: impl FnMut(&[u8]) -> Result<()>,
+    ) -> Result<(Vec<usize>, Vec<u64>)> {
+        let mut lengths = Vec::with_capacity(groups.len());
+        let mut counts = Vec::new();
+        let mut total_items = 0usize;
+        for group in groups {
+            let top = group.top_k(k);
+            total_items = total_items.checked_add(top.len()).ok_or_else(|| {
+                DataFusionError::Execution(
+                    "approx_top_k result size overflow".to_string(),
+                )
+            })?;
+            if total_items > i32::MAX as usize {
+                return exec_err!("approx_top_k grouped result exceeds List capacity");
+            }
+            lengths.push(top.len());
+            for (item, count, _) in top {
+                append(item)?;
+                counts.push(count);
+            }
+        }
+        Ok((lengths, counts))
+    }
+}
+
+impl GroupsAccumulator for ApproxTopKGroupsAccumulator {
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        self.ensure_groups(total_num_groups);
+        let capacity = self.capacity();
+        for_each_encoded_value(&values[0], |row, item| {
+            let included =
+                opt_filter.is_none_or(|filter| filter.is_valid(row) && filter.value(row));
+            if included && let Some(item) = item {
+                let group = group_indices[row];
+                let before = self.summaries[group].heap_size();
+                self.summaries[group].add(item, capacity);
+                let after = self.summaries[group].heap_size();
+                self.update_allocated_bytes(before, after);
+            }
+            Ok(())
+        })
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        total_num_groups: usize,
+    ) -> Result<()> {
+        self.ensure_groups(total_num_groups);
+        let capacity = self.capacity();
+        let Some(states) = values[0].as_any().downcast_ref::<LargeBinaryArray>() else {
+            return exec_err!("Expected LargeBinary array for approx_top_k state");
+        };
+        for (row, &group) in group_indices.iter().enumerate() {
+            if states.is_null(row) {
+                continue;
+            }
+            if states.value(row).is_empty() {
+                continue;
+            }
+            let other = SpaceSavingSummary::from_bytes(
+                states.value(row),
+                self.capacity(),
+                &self.input_data_type,
+            )?;
+            let before = self.summaries[group].heap_size();
+            self.summaries[group].merge(other, capacity)?;
+            let after = self.summaries[group].heap_size();
+            self.update_allocated_bytes(before, after);
+        }
+        Ok(())
+    }
+
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        let groups = self.take_groups(emit_to);
+        let (value_array, lengths, counts) = match &self.input_data_type {
+            DataType::Utf8 => {
+                let mut builder = StringBuilder::new();
+                let mut total_bytes = 0usize;
+                let (lengths, counts) =
+                    Self::consume_top_values(groups, self.k, |item| {
+                        total_bytes =
+                            total_bytes.checked_add(item.len()).ok_or_else(|| {
+                                DataFusionError::Execution(
+                                    "approx_top_k output size overflow".to_string(),
+                                )
+                            })?;
+                        if total_bytes > i32::MAX as usize {
+                            return exec_err!("approx_top_k Utf8 output exceeds 2 GiB");
+                        }
+                        builder.append_value(std::str::from_utf8(item).map_err(
+                            |_| {
+                                DataFusionError::Execution(
+                                    "approx_top_k state contains invalid UTF-8"
+                                        .to_string(),
+                                )
+                            },
+                        )?);
+                        Ok(())
+                    })?;
+                (Arc::new(builder.finish()) as ArrayRef, lengths, counts)
+            }
+            DataType::LargeUtf8 => {
+                let mut builder = LargeStringBuilder::new();
+                let mut total_bytes = 0usize;
+                let (lengths, counts) =
+                    Self::consume_top_values(groups, self.k, |item| {
+                        total_bytes =
+                            total_bytes.checked_add(item.len()).ok_or_else(|| {
+                                DataFusionError::Execution(
+                                    "approx_top_k output size overflow".to_string(),
+                                )
+                            })?;
+                        if total_bytes > i64::MAX as usize {
+                            return exec_err!(
+                                "approx_top_k LargeUtf8 output exceeds 8 EiB"
+                            );
+                        }
+                        builder.append_value(std::str::from_utf8(item).map_err(
+                            |_| {
+                                DataFusionError::Execution(
+                                    "approx_top_k state contains invalid UTF-8"
+                                        .to_string(),
+                                )
+                            },
+                        )?);
+                        Ok(())
+                    })?;
+                (Arc::new(builder.finish()) as ArrayRef, lengths, counts)
+            }
+            DataType::Utf8View => {
+                let mut builder = StringViewBuilder::new();
+                let (lengths, counts) =
+                    Self::consume_top_values(groups, self.k, |item| {
+                        builder.append_value(std::str::from_utf8(item).map_err(
+                            |_| {
+                                DataFusionError::Execution(
+                                    "approx_top_k state contains invalid UTF-8"
+                                        .to_string(),
+                                )
+                            },
+                        )?);
+                        Ok(())
+                    })?;
+                (Arc::new(builder.finish()) as ArrayRef, lengths, counts)
+            }
+            DataType::Binary => {
+                let mut builder = BinaryBuilder::new();
+                let mut total_bytes = 0usize;
+                let (lengths, counts) =
+                    Self::consume_top_values(groups, self.k, |item| {
+                        total_bytes =
+                            total_bytes.checked_add(item.len()).ok_or_else(|| {
+                                DataFusionError::Execution(
+                                    "approx_top_k output size overflow".to_string(),
+                                )
+                            })?;
+                        if total_bytes > i32::MAX as usize {
+                            return exec_err!("approx_top_k Binary output exceeds 2 GiB");
+                        }
+                        builder.append_value(item);
+                        Ok(())
+                    })?;
+                (Arc::new(builder.finish()) as ArrayRef, lengths, counts)
+            }
+            DataType::LargeBinary => {
+                let mut builder = LargeBinaryBuilder::new();
+                let mut total_bytes = 0usize;
+                let (lengths, counts) =
+                    Self::consume_top_values(groups, self.k, |item| {
+                        total_bytes =
+                            total_bytes.checked_add(item.len()).ok_or_else(|| {
+                                DataFusionError::Execution(
+                                    "approx_top_k output size overflow".to_string(),
+                                )
+                            })?;
+                        if total_bytes > i64::MAX as usize {
+                            return exec_err!(
+                                "approx_top_k LargeBinary output exceeds 8 EiB"
+                            );
+                        }
+                        builder.append_value(item);
+                        Ok(())
+                    })?;
+                (Arc::new(builder.finish()) as ArrayRef, lengths, counts)
+            }
+            DataType::BinaryView => {
+                let mut builder = BinaryViewBuilder::new();
+                let (lengths, counts) =
+                    Self::consume_top_values(groups, self.k, |item| {
+                        builder.append_value(item);
+                        Ok(())
+                    })?;
+                (Arc::new(builder.finish()) as ArrayRef, lengths, counts)
+            }
+            DataType::Null => {
+                let (lengths, counts) =
+                    Self::consume_top_values(groups, self.k, |_| Ok(()))?;
+                (Arc::new(NullArray::new(0)) as ArrayRef, lengths, counts)
+            }
+            _ => {
+                let (_, item_width, _) = state_type_descriptor(&self.input_data_type)?;
+                let item_width = item_width as usize;
+                let mut item_bytes = Vec::new();
+                let (lengths, counts) =
+                    Self::consume_top_values(groups, self.k, |item| {
+                        item_bytes.try_reserve(item.len()).map_err(|e| {
+                            DataFusionError::ResourcesExhausted(format!(
+                                "Unable to allocate approx_top_k grouped values: {e}"
+                            ))
+                        })?;
+                        item_bytes.extend_from_slice(item);
+                        Ok(())
+                    })?;
+                let top_items: Vec<_> = item_bytes
+                    .chunks_exact(item_width)
+                    .map(|item| (item, 0, 0))
+                    .collect();
+                let helper = ApproxTopKAccumulator::new_with_data_type(
+                    self.k,
+                    self.input_data_type.clone(),
+                );
+                (helper.build_value_array(&top_items)?, lengths, counts)
+            }
+        };
+        let count_array = Arc::new(UInt64Array::from(counts)) as ArrayRef;
+        let struct_fields = Fields::from(vec![
+            Field::new("value", self.input_data_type.clone(), true),
+            Field::new("count", DataType::UInt64, false),
+        ]);
+        let struct_array = StructArray::try_new(
+            struct_fields.clone(),
+            vec![value_array, count_array],
+            None,
+        )?;
+        let list_field =
+            Arc::new(Field::new("item", DataType::Struct(struct_fields), true));
+        let list = ListArray::try_new(
+            list_field,
+            OffsetBuffer::from_lengths(lengths),
+            Arc::new(struct_array),
+            None,
+        )?;
+        Ok(Arc::new(list))
+    }
+
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        let groups = self.take_groups(emit_to);
+        let mut builder = LargeBinaryBuilder::new();
+        let mut scratch = Vec::new();
+        for mut summary in groups {
+            summary.serialize(&mut scratch, self.capacity(), &self.input_data_type)?;
+            builder.append_value(&scratch);
+        }
+        Ok(vec![Arc::new(builder.finish())])
+    }
+
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let mut builder = LargeBinaryBuilder::new();
+        let mut scratch = Vec::new();
+        for_each_encoded_value(&values[0], |row, item| {
+            let included =
+                opt_filter.is_none_or(|filter| filter.is_valid(row) && filter.value(row));
+            if included && item.is_some() {
+                serialize_single_counter_state(
+                    &mut scratch,
+                    self.capacity(),
+                    &self.input_data_type,
+                    item,
+                    1,
+                    0,
+                )?;
+            } else {
+                scratch.clear();
+            }
+            builder.append_value(&scratch);
+            Ok(())
+        })?;
+        Ok(vec![Arc::new(builder.finish())])
+    }
+
+    fn size(&self) -> usize {
+        self.summaries.capacity() * size_of::<GroupSummary>() + self.allocated_bytes
     }
 }
 
@@ -1185,46 +2433,123 @@ mod tests {
             summary.add(b"frequent");
         }
 
+        // Repeated batches of distinct values force truncation and exercise
+        // both the alpha map and recycled key buffers.
         for i in 0..63u64 {
             let item = format!("rare_{i}");
             summary.add(item.as_bytes());
         }
+        summary.truncate_to_requested_capacity();
 
         assert_eq!(summary.len(), 2);
 
+        // The dominant item is retained with an exact count: it was never
+        // evicted, so it carries no error.
         let (count, error) = summary.get(b"frequent").unwrap();
         assert_eq!(count, 100);
         assert_eq!(error, 0);
 
-        let evicted_count = (0..63u64)
-            .filter(|i| {
-                let item = format!("rare_{i}");
-                summary.get(item.as_bytes()).is_none()
-            })
-            .count();
-        assert!(evicted_count >= 61);
+        // Exactly one rare candidate survives alongside it; alpha collisions
+        // can change which rare value has the strongest lower bound.
+        let survivors: Vec<String> = (0..63u64)
+            .map(|i| format!("rare_{i}"))
+            .filter(|item| summary.get(item.as_bytes()).is_some())
+            .collect();
+        assert_eq!(survivors.len(), 1);
+
+        // Eviction is what allocates the alpha map.
+        assert!(!summary.alpha_map.is_empty());
     }
 
+    /// The alpha map is only useful if it actually changes *retention*.
+    ///
+    /// Because [`Counter`] ranks on `count` and a re-admitted item enters with
+    /// `count = alpha + increment`, a bucket with a large accumulated alpha
+    /// produces a counter that outranks a genuinely fresh one.
     #[test]
-    fn test_space_saving_alpha_map() {
+    fn test_alpha_map_boost_affects_retention() {
+        let mut summary = SpaceSavingSummary::new(2);
+        summary.add(b"a");
+        summary.add(b"b");
+        let alpha_slots = summary.alpha_slots();
+        let alpha_mask = alpha_slots - 1;
+        let hot_bucket = 0;
+        let hot_alpha = 5;
+        summary.alpha_map.add(hot_bucket, hot_alpha, alpha_slots);
+        summary.alpha_max = hot_alpha;
+        summary.alpha_nonzero = 1;
+
+        let boosted_item = find_item_for_bucket(hot_bucket, alpha_mask, "boosted");
+        summary.add(boosted_item.as_bytes());
+        let (count, error) = summary.get(boosted_item.as_bytes()).unwrap();
+        assert_eq!(count, hot_alpha + 1);
+        assert_eq!(error, hot_alpha);
+
+        let cold_bucket = (0..alpha_slots)
+            .find(|&slot| summary.alpha_map.get(slot) == 0)
+            .expect("expected at least one empty alpha bucket");
+        let plain_item = find_item_for_bucket(cold_bucket, alpha_mask, "zz_plain");
+        summary.add(plain_item.as_bytes());
+        let (plain_count, plain_error) = summary.get(plain_item.as_bytes()).unwrap();
+        assert_eq!(plain_count, 1);
+        assert_eq!(plain_error, 0);
+
+        // Both lower bounds are one; alpha only breaks that tie on estimated
+        // count. Force eviction and prove the boosted item survives while the
+        // lexicographically-last unboosted item does not.
+        summary.truncate_to_requested_capacity();
+        assert!(summary.get(boosted_item.as_bytes()).is_some());
+        assert!(summary.get(plain_item.as_bytes()).is_none());
+    }
+
+    /// Search for an item whose hash lands in `bucket`.
+    fn find_item_for_bucket(bucket: usize, alpha_mask: usize, prefix: &str) -> String {
+        (0..1_000_000u64)
+            .map(|i| format!("{prefix}_{i}"))
+            .find(|candidate| {
+                let hash = SpaceSavingSummary::hash_item(candidate.as_bytes());
+                (hash as usize) & alpha_mask == bucket
+            })
+            .expect("should find an item hashing into the requested bucket")
+    }
+
+    /// Once eviction has happened the reported counts are genuine upper-bound
+    /// estimates rather than exact frequencies.
+    #[test]
+    fn test_counts_are_upper_bounds_after_eviction() {
+        const TRUE_FREQUENCY: u64 = 3;
         let mut summary = SpaceSavingSummary::new(2);
 
         for i in 0..64u64 {
-            let item = format!("item_{i}");
-            summary.add(item.as_bytes());
+            for _ in 0..TRUE_FREQUENCY {
+                summary.add(format!("filler_{i}").as_bytes());
+            }
         }
 
-        assert_eq!(summary.len(), 2);
+        let top = summary.top_k(8);
+        assert!(
+            top.iter().any(|&(_, _, error)| error > 0),
+            "expected at least one inflated estimate, got {top:?}"
+        );
 
-        let alpha_sum: u64 = summary.alpha_map.iter().sum();
-        assert!(alpha_sum > 0);
+        for &(item, count, error) in &top {
+            let name = String::from_utf8_lossy(item);
+            assert!(
+                count >= TRUE_FREQUENCY,
+                "{name}: count {count} is below the true frequency"
+            );
+            assert!(
+                count.saturating_sub(error) <= TRUE_FREQUENCY,
+                "{name}: lower bound {} exceeds the true frequency",
+                count - error
+            );
+        }
 
-        summary.add(b"item_0");
-        assert_eq!(summary.len(), 3);
-
-        let (count, error) = summary.get(b"item_0").unwrap();
-        assert!(count > 1);
-        assert_eq!(count, error + 1);
+        // Counts must be non-increasing, which is what the documented ordering
+        // promises.
+        for pair in top.windows(2) {
+            assert!(pair[0].1 >= pair[1].1, "counts are not descending: {top:?}");
+        }
     }
 
     #[test]
@@ -1234,8 +2559,9 @@ mod tests {
         summary.add(b"test");
         summary.add(b"value");
 
-        let bytes = summary.serialize();
-        let restored = SpaceSavingSummary::from_bytes(&bytes).unwrap();
+        let bytes = summary.serialize(&DataType::Utf8).unwrap();
+        let restored =
+            SpaceSavingSummary::from_bytes(&bytes, 3, &DataType::Utf8).unwrap();
 
         assert_eq!(restored.capacity(), summary.capacity());
         assert_eq!(restored.len(), summary.len());
@@ -1244,6 +2570,60 @@ mod tests {
         assert_eq!(count, 2);
         let (count, _) = restored.get(b"value").unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_rejects_malformed_serialized_states() {
+        let mut summary = SpaceSavingSummary::new(3);
+        summary.add(b"x");
+        let valid = summary.serialize(&DataType::Utf8).unwrap();
+
+        for end in 0..valid.len() {
+            assert!(
+                SpaceSavingSummary::from_bytes(&valid[..end], 3, &DataType::Utf8)
+                    .is_err(),
+                "accepted state truncated at byte {end}"
+            );
+        }
+
+        let mut bad = valid.clone();
+        bad[0] ^= 0xff;
+        assert!(SpaceSavingSummary::from_bytes(&bad, 3, &DataType::Utf8).is_err());
+
+        let mut bad = valid.clone();
+        bad.extend_from_slice(&[0]);
+        assert!(SpaceSavingSummary::from_bytes(&bad, 3, &DataType::Utf8).is_err());
+
+        let mut bad_null = valid.clone();
+        bad_null[6] = 0;
+        assert!(SpaceSavingSummary::from_bytes(&bad_null, 3, &DataType::Null).is_err());
+
+        let mut bad = valid.clone();
+        bad[8..12].copy_from_slice(&4u32.to_le_bytes());
+        assert!(SpaceSavingSummary::from_bytes(&bad, 3, &DataType::Utf8).is_err());
+        assert!(SpaceSavingSummary::from_bytes(&valid, 3, &DataType::Binary).is_err());
+
+        // Header (28), variable item length (8), one byte item, then count/error.
+        let mut bad = valid.clone();
+        bad[36] = 0xff;
+        assert!(SpaceSavingSummary::from_bytes(&bad, 3, &DataType::Utf8).is_err());
+
+        let mut bad = valid.clone();
+        bad[45..53].copy_from_slice(&2u64.to_le_bytes());
+        assert!(SpaceSavingSummary::from_bytes(&bad, 3, &DataType::Utf8).is_err());
+
+        let mut duplicate = valid.clone();
+        duplicate[12..16].copy_from_slice(&2u32.to_le_bytes());
+        duplicate.extend_from_slice(&valid[28..]);
+        assert!(SpaceSavingSummary::from_bytes(&duplicate, 3, &DataType::Utf8).is_err());
+
+        let mut impossible = Vec::new();
+        serialize_single_counter_state(&mut impossible, 3, &DataType::Utf8, None, 0, 0)
+            .unwrap();
+        impossible[16..20].copy_from_slice(&1u32.to_le_bytes());
+        impossible.extend_from_slice(&0u32.to_le_bytes());
+        impossible.extend_from_slice(&1u64.to_le_bytes());
+        assert!(SpaceSavingSummary::from_bytes(&impossible, 3, &DataType::Utf8).is_err());
     }
 
     #[test]
@@ -1256,13 +2636,58 @@ mod tests {
         summary2.add(b"apple");
         summary2.add(b"banana");
 
-        summary1.merge(&summary2);
+        summary1.merge(summary2).unwrap();
 
         let (count, _) = summary1.get(b"apple").unwrap();
         assert_eq!(count, 3);
 
         let (count, _) = summary1.get(b"banana").unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_merge_common_exact_counter_keeps_zero_error() {
+        let mut left = SpaceSavingSummary::new(3);
+        let mut right = SpaceSavingSummary::new(3);
+        for _ in 0..100 {
+            left.add(b"shared");
+        }
+        left.add(b"left_a");
+        left.add(b"left_b");
+        for _ in 0..99 {
+            right.add(b"shared");
+        }
+        right.add(b"right_a");
+        right.add(b"right_b");
+
+        left.merge(right).unwrap();
+        assert_eq!(left.get(b"shared"), Some((199, 0)));
+    }
+
+    #[test]
+    fn test_merge_common_counter_saturates_without_losing_count() {
+        let mut left = SpaceSavingSummary::new(1);
+        left.insert(b"shared", u64::MAX - 5, 0);
+
+        let mut right = SpaceSavingSummary::new(1);
+        right.insert(b"shared", 10, 0);
+        let alpha_slots = right.alpha_slots();
+        let synthetic = Counter {
+            item: b"evicted".to_vec(),
+            hash: SpaceSavingSummary::hash_item(b"evicted"),
+            count: 100,
+            error: 0,
+        };
+        SpaceSavingSummary::record_eviction(
+            &mut right.alpha_map,
+            alpha_slots,
+            &mut right.alpha_max,
+            &mut right.alpha_nonzero,
+            &synthetic,
+        );
+
+        left.merge(right).unwrap();
+        assert_eq!(left.get(b"shared"), Some((u64::MAX, 0)));
     }
 
     #[test]
@@ -1286,12 +2711,99 @@ mod tests {
             summary2.add(b"second_top");
         }
 
-        summary1.merge(&summary2);
+        summary1.merge(summary2).unwrap();
 
         let top = summary1.top_k(2);
         assert!(!top.is_empty());
         let top_item_result = top.iter().find(|(item, _, _)| *item == b"top_item");
         assert!(top_item_result.is_some());
+    }
+
+    /// An item can be frequent overall while being evicted from one partition
+    /// because that partition happened to see mostly other traffic.  The merge
+    /// must still report it, and must not report a lower bound above the true
+    /// total.
+    #[test]
+    fn test_merge_recovers_item_evicted_from_one_partition() {
+        let mut evicting = SpaceSavingSummary::new(2);
+        evicting.add(b"shared");
+        for i in 0..64u64 {
+            for _ in 0..4 {
+                evicting.add(format!("noise_{i}").as_bytes());
+            }
+        }
+        assert!(
+            evicting.get(b"shared").is_none(),
+            "a single occurrence should lose to the count-4 noise"
+        );
+
+        let mut keeping = SpaceSavingSummary::new(2);
+        for _ in 0..5 {
+            keeping.add(b"shared");
+        }
+
+        keeping.merge(evicting).unwrap();
+
+        let (count, error) = keeping
+            .get(b"shared")
+            .expect("merge must keep an item that survived in one partition");
+
+        // True total across both partitions is 1 + 5 = 6.
+        const TRUE_TOTAL: u64 = 6;
+        assert!(
+            count >= 5,
+            "count {count} lost the 5 occurrences seen locally"
+        );
+        assert!(
+            count.saturating_sub(error) <= TRUE_TOTAL,
+            "lower bound {} exceeds the true total",
+            count - error
+        );
+    }
+
+    /// Recall check on a skewed stream: the heavy hitters must all be reported.
+    ///
+    /// Space-Saving guarantees that any item with frequency above
+    /// `total / capacity` is retained.  Here `capacity` is `k * 3 = 15` and the
+    /// stream has 6500 items, so the guarantee threshold is ~433 and every item
+    /// in the true top 5 (frequencies 1000..600) clears it.
+    #[test]
+    fn test_skewed_stream_top_k_recall() {
+        const HEAVY: usize = 10;
+        const TAIL: usize = 1000;
+        let k = 5usize;
+
+        let mut stream: Vec<String> = Vec::new();
+        for i in 0..HEAVY {
+            let frequency = (HEAVY - i) * 100;
+            for _ in 0..frequency {
+                stream.push(format!("heavy_{i}"));
+            }
+        }
+        for i in 0..TAIL {
+            stream.push(format!("tail_{i:04}"));
+        }
+
+        // Interleave deterministically by striding with a prime step coprime to
+        // the length, so the heavy hitters are spread through the stream rather
+        // than arriving in convenient runs.
+        let n = stream.len();
+        let step = 7919;
+        assert_eq!(n, 5500 + TAIL);
+
+        let mut summary = SpaceSavingSummary::new(k * CAPACITY_MULTIPLIER);
+        for j in 0..n {
+            summary.add(stream[(j * step) % n].as_bytes());
+        }
+
+        let reported: Vec<String> = summary
+            .top_k(k)
+            .iter()
+            .map(|(item, _, _)| String::from_utf8_lossy(item).into_owned())
+            .collect();
+        let expected: Vec<String> = (0..k).map(|i| format!("heavy_{i}")).collect();
+
+        assert_eq!(reported, expected, "top-{k} on a skewed stream");
     }
 
     /// Helper to extract top-k results from a ScalarValue::List result.
@@ -1303,11 +2815,6 @@ mod tests {
                 .downcast_ref::<StructArray>()
                 .expect("Expected StructArray");
 
-            let value_array = struct_array
-                .column(0)
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .expect("Expected StringArray for values");
             let count_array = struct_array
                 .column(1)
                 .as_any()
@@ -1316,7 +2823,28 @@ mod tests {
 
             (0..struct_array.len())
                 .map(|i| {
-                    let value = value_array.value(i).to_string();
+                    let value = match struct_array.column(0).data_type() {
+                        DataType::Utf8 => struct_array
+                            .column(0)
+                            .as_any()
+                            .downcast_ref::<StringArray>()
+                            .unwrap()
+                            .value(i),
+                        DataType::LargeUtf8 => struct_array
+                            .column(0)
+                            .as_any()
+                            .downcast_ref::<LargeStringArray>()
+                            .unwrap()
+                            .value(i),
+                        DataType::Utf8View => struct_array
+                            .column(0)
+                            .as_any()
+                            .downcast_ref::<StringViewArray>()
+                            .unwrap()
+                            .value(i),
+                        other => panic!("Expected string values, got {other}"),
+                    }
+                    .to_string();
                     let count = count_array.value(i);
                     (value, count)
                 })
@@ -1360,14 +2888,14 @@ mod tests {
 
         let state2 = acc2.state().unwrap();
 
-        let summary_bytes = if let ScalarValue::Binary(Some(bytes)) = &state2[0] {
+        let summary_bytes = if let ScalarValue::LargeBinary(Some(bytes)) = &state2[0] {
             bytes.clone()
         } else {
-            panic!("Expected Binary for summary")
+            panic!("Expected LargeBinary for summary")
         };
 
         let summary_array: ArrayRef =
-            Arc::new(BinaryArray::from(vec![Some(summary_bytes.as_slice())]));
+            Arc::new(LargeBinaryArray::from(vec![Some(summary_bytes.as_slice())]));
 
         acc1.merge_batch(&[summary_array]).unwrap();
 
@@ -1407,24 +2935,24 @@ mod tests {
         let state3 = worker3_acc.state().unwrap();
 
         let summary_bytes: Vec<Option<&[u8]>> = vec![
-            if let ScalarValue::Binary(Some(ref b)) = state1[0] {
+            if let ScalarValue::LargeBinary(Some(ref b)) = state1[0] {
                 Some(b.as_slice())
             } else {
                 None
             },
-            if let ScalarValue::Binary(Some(ref b)) = state2[0] {
+            if let ScalarValue::LargeBinary(Some(ref b)) = state2[0] {
                 Some(b.as_slice())
             } else {
                 None
             },
-            if let ScalarValue::Binary(Some(ref b)) = state3[0] {
+            if let ScalarValue::LargeBinary(Some(ref b)) = state3[0] {
                 Some(b.as_slice())
             } else {
                 None
             },
         ];
 
-        let summary_array: ArrayRef = Arc::new(BinaryArray::from(summary_bytes));
+        let summary_array: ArrayRef = Arc::new(LargeBinaryArray::from(summary_bytes));
 
         let mut coord_acc = ApproxTopKAccumulator::new_with_data_type(3, DataType::Utf8);
         coord_acc.merge_batch(&[summary_array]).unwrap();
@@ -1435,6 +2963,56 @@ mod tests {
         assert!(top_k.len() >= 2);
         assert_eq!(top_k[0], ("apple".to_string(), 5));
         assert_eq!(top_k[1], ("banana".to_string(), 4));
+    }
+
+    #[test]
+    fn test_merge_orders_preserve_frequency_intervals() {
+        use std::collections::HashMap;
+
+        let capacity = 9;
+        let mut partitions: Vec<_> =
+            (0..4).map(|_| SpaceSavingSummary::new(capacity)).collect();
+        let mut truth = HashMap::<String, u64>::new();
+        let mut rng = 0x1234_5678_9abc_def0u64;
+        for row in 0..10_000usize {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let item = if rng % 10 < 6 {
+                "hot".to_string()
+            } else {
+                format!("tail_{}", rng % 100)
+            };
+            partitions[row % 4].add(item.as_bytes());
+            *truth.entry(item).or_default() += 1;
+        }
+
+        let serialized: Vec<_> = partitions
+            .iter_mut()
+            .map(|summary| summary.serialize(&DataType::Utf8).unwrap())
+            .collect();
+        for order in [[0, 1, 2, 3], [3, 2, 1, 0], [1, 3, 0, 2]] {
+            let mut merged = SpaceSavingSummary::new(capacity);
+            for index in order {
+                let other = SpaceSavingSummary::from_bytes(
+                    &serialized[index],
+                    capacity,
+                    &DataType::Utf8,
+                )
+                .unwrap();
+                merged.merge(other).unwrap();
+            }
+            let top = merged.top_k(3);
+            assert_eq!(top[0].0, b"hot");
+            for &(item, count, error) in &top {
+                let item = std::str::from_utf8(item).unwrap();
+                let true_count = truth[item];
+                assert!(count >= true_count, "{item}: {count} < {true_count}");
+                assert!(
+                    count.saturating_sub(error) <= true_count,
+                    "{item}: lower bound {} > {true_count}",
+                    count - error
+                );
+            }
+        }
     }
 
     #[test]
@@ -1471,5 +3049,253 @@ mod tests {
         assert_eq!(top_k.len(), 2);
         assert_eq!(top_k[0], ("hello".to_string(), 3));
         assert_eq!(top_k[1], ("world".to_string(), 2));
+    }
+
+    #[test]
+    fn test_accumulator_view_inputs() {
+        let mut acc = ApproxTopKAccumulator::new_with_data_type(2, DataType::Utf8View);
+        let batch: ArrayRef = Arc::new(StringViewArray::from(vec![
+            "hello", "world", "hello", "hello", "world",
+        ]));
+        acc.update_batch(&[batch]).unwrap();
+
+        assert_eq!(acc.output_value_data_type(), DataType::Utf8View);
+        let result = acc.evaluate().unwrap();
+        let ScalarValue::List(list) = result else {
+            panic!("expected list")
+        };
+        assert_eq!(
+            list.values().data_type(),
+            &DataType::Struct(Fields::from(vec![
+                Field::new("value", DataType::Utf8View, true),
+                Field::new("count", DataType::UInt64, false),
+            ]))
+        );
+
+        let mut acc = ApproxTopKAccumulator::new_with_data_type(1, DataType::BinaryView);
+        let batch: ArrayRef = Arc::new(BinaryViewArray::from(vec![
+            b"a".as_slice(),
+            b"b".as_slice(),
+            b"a".as_slice(),
+        ]));
+        acc.update_batch(&[batch]).unwrap();
+        assert_eq!(acc.output_value_data_type(), DataType::BinaryView);
+        assert_eq!(acc.summary.top_k(1)[0], (b"a".as_slice(), 2, 0));
+    }
+
+    #[test]
+    fn test_all_supported_physical_types_and_timestamp_metadata() {
+        fn assert_round_trip(values: ArrayRef) {
+            let data_type = values.data_type().clone();
+            let mut partial =
+                ApproxTopKAccumulator::new_with_data_type(2, data_type.clone());
+            partial.update_batch(std::slice::from_ref(&values)).unwrap();
+            let state = partial.state().unwrap();
+            let state = state[0].to_array_of_size(1).unwrap();
+
+            let mut final_acc =
+                ApproxTopKAccumulator::new_with_data_type(2, data_type.clone());
+            final_acc.merge_batch(&[state]).unwrap();
+            let ScalarValue::List(result) = final_acc.evaluate().unwrap() else {
+                panic!("expected List result for {data_type}");
+            };
+            let values = result
+                .values()
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .unwrap();
+            assert_eq!(values.column(0).data_type(), &data_type);
+        }
+
+        let binary = b"a".as_slice();
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(vec!["a", "a"])),
+            Arc::new(LargeStringArray::from(vec!["a", "a"])),
+            Arc::new(StringViewArray::from(vec!["a", "a"])),
+            Arc::new(BinaryArray::from(vec![binary, binary])),
+            Arc::new(LargeBinaryArray::from(vec![binary, binary])),
+            Arc::new(BinaryViewArray::from(vec![binary, binary])),
+            Arc::new(Int8Array::from(vec![1, 1])),
+            Arc::new(Int16Array::from(vec![1, 1])),
+            Arc::new(Int32Array::from(vec![1, 1])),
+            Arc::new(Int64Array::from(vec![1, 1])),
+            Arc::new(UInt8Array::from(vec![1, 1])),
+            Arc::new(UInt16Array::from(vec![1, 1])),
+            Arc::new(UInt32Array::from(vec![1, 1])),
+            Arc::new(UInt64Array::from(vec![1, 1])),
+            Arc::new(Float32Array::from(vec![1.0, 1.0])),
+            Arc::new(Float64Array::from(vec![1.0, 1.0])),
+            Arc::new(Date32Array::from(vec![1, 1])),
+            Arc::new(Date64Array::from(vec![1, 1])),
+            Arc::new(TimestampSecondArray::from(vec![1, 1])),
+            Arc::new(TimestampMillisecondArray::from(vec![1, 1])),
+            Arc::new(TimestampMicrosecondArray::from(vec![1, 1])),
+            Arc::new(
+                TimestampNanosecondArray::from(vec![1, 1])
+                    .with_timezone("America/New_York"),
+            ),
+            Arc::new(NullArray::new(2)),
+        ];
+        for values in arrays {
+            assert_round_trip(values);
+        }
+    }
+
+    #[test]
+    fn test_float_zero_and_nan_equality() {
+        let mut left = ApproxTopKAccumulator::new_with_data_type(3, DataType::Float64);
+        let mut right = ApproxTopKAccumulator::new_with_data_type(3, DataType::Float64);
+        left.update_batch(&[Arc::new(Float64Array::from(vec![0.0, -0.0]))])
+            .unwrap();
+        right
+            .update_batch(&[Arc::new(Float64Array::from(vec![-0.0]))])
+            .unwrap();
+        let state = right.state().unwrap();
+        let ScalarValue::LargeBinary(Some(bytes)) = &state[0] else {
+            panic!("expected LargeBinary state")
+        };
+        left.merge_batch(&[Arc::new(LargeBinaryArray::from(vec![Some(
+            bytes.as_slice(),
+        )]))])
+        .unwrap();
+        assert_eq!(
+            left.summary.get(&0.0f64.to_bits().to_le_bytes()),
+            Some((3, 0))
+        );
+        assert!(
+            left.summary
+                .get(&(-0.0f64).to_bits().to_le_bytes())
+                .is_none()
+        );
+
+        let nan1 = f64::from_bits(0x7ff8_0000_0000_0001);
+        let nan2 = f64::from_bits(0x7ff8_0000_0000_0002);
+        let mut acc = ApproxTopKAccumulator::new_with_data_type(2, DataType::Float64);
+        acc.update_batch(&[Arc::new(Float64Array::from(vec![nan1, nan1, nan2]))])
+            .unwrap();
+        assert_eq!(acc.summary.get(&nan1.to_bits().to_le_bytes()), Some((2, 0)));
+        assert_eq!(acc.summary.get(&nan2.to_bits().to_le_bytes()), Some((1, 0)));
+    }
+
+    #[test]
+    fn test_serialized_state_preserves_compact_alpha_map() {
+        let mut summary = SpaceSavingSummary::new(3);
+        for i in 0..8u64 {
+            summary.add(format!("item_{i}").as_bytes());
+        }
+        assert!(!summary.alpha_map.is_empty());
+
+        let bytes = summary.serialize(&DataType::Utf8).unwrap();
+        let restored =
+            SpaceSavingSummary::from_bytes(&bytes, 3, &DataType::Utf8).unwrap();
+        assert_eq!(restored.len(), summary.len());
+        assert_eq!(restored.alpha_map, summary.alpha_map);
+
+        let dense_alpha_bytes = summary.alpha_slots() * size_of::<u64>();
+        assert!(bytes.len() < STATE_HEADER_LEN + dense_alpha_bytes + 200);
+    }
+
+    /// Equal counts must not produce arbitrary output order, otherwise results
+    /// vary run to run and SQL-level tests cannot assert on them.
+    #[test]
+    fn test_tied_counts_are_ordered_deterministically() {
+        let mut summary = SpaceSavingSummary::new(8);
+        for item in ["delta", "alpha", "charlie", "bravo"] {
+            summary.add(item.as_bytes());
+        }
+
+        let reported: Vec<String> = summary
+            .top_k(4)
+            .iter()
+            .map(|(item, _, _)| String::from_utf8_lossy(item).into_owned())
+            .collect();
+        assert_eq!(reported, vec!["alpha", "bravo", "charlie", "delta"]);
+    }
+
+    #[test]
+    fn test_native_groups_accumulator_update_state_merge_and_filter() {
+        fn values_for_group(array: &ArrayRef, group: usize) -> Vec<(String, u64)> {
+            let list = array.as_any().downcast_ref::<ListArray>().unwrap();
+            let values = list.value(group);
+            let values = values.as_any().downcast_ref::<StructArray>().unwrap();
+            let strings = values
+                .column(0)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+            let counts = values
+                .column(1)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap();
+            (0..values.len())
+                .map(|row| (strings.value(row).to_string(), counts.value(row)))
+                .collect()
+        }
+
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "x", "a", "y", "b"]));
+        let filter = BooleanArray::from(vec![
+            Some(true),
+            Some(true),
+            Some(true),
+            None,
+            Some(false),
+        ]);
+        let groups = [0, 1, 0, 1, 0];
+        let mut partial = ApproxTopKGroupsAccumulator::new(2, DataType::Utf8);
+        partial
+            .update_batch(&[values], &groups, Some(&filter), 2)
+            .unwrap();
+        let allocated = partial.allocated_bytes;
+        assert!(allocated > 0);
+
+        let state = partial.state(EmitTo::All).unwrap();
+        assert_eq!(partial.allocated_bytes, 0);
+        assert!(state[0].as_any().is::<LargeBinaryArray>());
+
+        let mut final_acc = ApproxTopKGroupsAccumulator::new(2, DataType::Utf8);
+        final_acc.merge_batch(&state, &[0, 1], 2).unwrap();
+        let result = final_acc.evaluate(EmitTo::All).unwrap();
+        assert_eq!(values_for_group(&result, 0), vec![("a".to_string(), 2)]);
+        assert_eq!(values_for_group(&result, 1), vec![("x".to_string(), 1)]);
+
+        let raw: ArrayRef = Arc::new(StringArray::from(vec![Some("z"), None, Some("q")]));
+        let filter = BooleanArray::from(vec![true, true, false]);
+        let converter = ApproxTopKGroupsAccumulator::new(1, DataType::Utf8);
+        let states = converter.convert_to_state(&[raw], Some(&filter)).unwrap();
+        let compact_states = states[0]
+            .as_any()
+            .downcast_ref::<LargeBinaryArray>()
+            .unwrap();
+        assert_eq!(compact_states.value(0).len(), SINGLETON_HEADER_LEN + 1);
+        assert!(compact_states.value(1).is_empty());
+        assert!(compact_states.value(2).is_empty());
+        let mut merged = ApproxTopKGroupsAccumulator::new(1, DataType::Utf8);
+        merged.merge_batch(&states, &[0, 1, 2], 3).unwrap();
+        let result = merged.evaluate(EmitTo::All).unwrap();
+        assert_eq!(values_for_group(&result, 0), vec![("z".to_string(), 1)]);
+        assert!(values_for_group(&result, 1).is_empty());
+        assert!(values_for_group(&result, 2).is_empty());
+
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+        let mut emit = ApproxTopKGroupsAccumulator::new(1, DataType::Utf8);
+        emit.update_batch(&[values], &[0, 1, 2], None, 3).unwrap();
+        let initial_size = emit.size();
+
+        let first_state = emit.state(EmitTo::First(1)).unwrap();
+        assert_eq!(first_state[0].len(), 1);
+        assert!(emit.size() < initial_size);
+        let mut first = ApproxTopKGroupsAccumulator::new(1, DataType::Utf8);
+        first.merge_batch(&first_state, &[0], 1).unwrap();
+        let result = first.evaluate(EmitTo::All).unwrap();
+        assert_eq!(values_for_group(&result, 0), vec![("a".to_string(), 1)]);
+
+        let result = emit.evaluate(EmitTo::First(1)).unwrap();
+        assert_eq!(values_for_group(&result, 0), vec![("b".to_string(), 1)]);
+        let shifted: ArrayRef = Arc::new(StringArray::from(vec!["c"]));
+        emit.update_batch(&[shifted], &[0], None, 1).unwrap();
+        let result = emit.evaluate(EmitTo::All).unwrap();
+        assert_eq!(values_for_group(&result, 0), vec![("c".to_string(), 2)]);
+        assert_eq!(emit.allocated_bytes, 0);
     }
 }
