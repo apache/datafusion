@@ -1773,9 +1773,16 @@ pub(crate) struct BuildProbeJoinMetrics {
     pub(crate) probe_hit_rate: metrics::RatioMetrics,
     /// Average number of build matches per matched probe row
     pub(crate) avg_fanout: metrics::RatioMetrics,
+    /// Ensures the `elapsed_compute` update below happens exactly once, no
+    /// matter how many clones of `BuildProbeJoinMetrics` exist (see
+    /// `ElapsedComputeFinalizer` for why this is needed).
+    _elapsed_compute_finalizer: Arc<ElapsedComputeFinalizer>,
 }
 
-// This Drop implementation updates the elapsed compute part of the metrics.
+// `BuildProbeJoinMetrics` is `Clone`d into the build-side future
+// (`collect_left_input`) while the original stays with the `HashJoinStream`.
+// This finalizer updates the elapsed compute part of the metrics exactly once,
+// when the *last* of those instances is dropped.
 //
 // Why is this in a Drop?
 // - We keep track of build_time and join_time separately, but baseline metrics have
@@ -1783,11 +1790,33 @@ pub(crate) struct BuildProbeJoinMetrics {
 // at the same time, we chose to update elapsed_compute once at the end - summing up
 // both the parts.
 //
-// How does this work?
-// - The elapsed_compute `Time` is represented by an `Arc<AtomicUsize>`. So even when
-// this `BuildProbeJoinMetrics` is dropped, the elapsed_compute is usable through the
-// Arc reference.
-impl Drop for BuildProbeJoinMetrics {
+// Why is this its own `Arc`-wrapped type, rather than a `Drop` impl directly on
+// `BuildProbeJoinMetrics`?
+// - `BuildProbeJoinMetrics` is `Clone`, and previously implemented `Drop`
+// itself. That meant *every* clone's destructor ran this update, so
+// `build_time` (and `join_time`, if already non-zero) got added into
+// `elapsed_compute` once per clone - typically twice, since the struct is
+// cloned exactly once (into the build-side future). Because the underlying
+// `Time` metrics are `Arc<AtomicUsize>`, the clone dropped at build-completion
+// time would re-add whatever `build_time` had already accumulated, silently
+// inflating `elapsed_compute` by up to `build_time` on every hash join whose
+// build side yields control (e.g. `Pending`) before completing - which is the
+// common case for anything other than a single-batch, already-ready build
+// side. Wrapping the finalizer in an `Arc` instead means it only runs once,
+// when the last clone is dropped, using the fully-accumulated final values.
+struct ElapsedComputeFinalizer {
+    baseline: BaselineMetrics,
+    build_time: metrics::Time,
+    join_time: metrics::Time,
+}
+
+impl Debug for ElapsedComputeFinalizer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ElapsedComputeFinalizer").finish()
+    }
+}
+
+impl Drop for ElapsedComputeFinalizer {
     fn drop(&mut self) {
         self.baseline.elapsed_compute().add(&self.build_time);
         self.baseline.elapsed_compute().add(&self.join_time);
@@ -1829,6 +1858,12 @@ impl BuildProbeJoinMetrics {
             .with_type(MetricType::Summary)
             .ratio_metrics("avg_fanout", partition);
 
+        let elapsed_compute_finalizer = Arc::new(ElapsedComputeFinalizer {
+            baseline: baseline.clone(),
+            build_time: build_time.clone(),
+            join_time: join_time.clone(),
+        });
+
         Self {
             build_time,
             build_input_batches,
@@ -1840,6 +1875,7 @@ impl BuildProbeJoinMetrics {
             baseline,
             probe_hit_rate,
             avg_fanout,
+            _elapsed_compute_finalizer: elapsed_compute_finalizer,
         }
     }
 }
@@ -2545,8 +2581,10 @@ pub fn compare_join_arrays(
 mod tests {
     use std::collections::HashMap;
     use std::pin::Pin;
+    use std::time::Duration;
 
     use super::*;
+    use crate::metrics::MetricValue;
 
     use arrow::datatypes::{DataType, Fields};
     use arrow::error::{ArrowError, Result as ArrowResult};
@@ -2723,6 +2761,48 @@ mod tests {
             .map(|x| x.to_owned())
             .collect::<HashSet<Column>>();
         check_join_set_is_valid(&left, &right, on)
+    }
+
+    #[test]
+    fn build_probe_join_metrics_elapsed_compute_not_double_counted_on_clone() {
+        // `BuildProbeJoinMetrics` is cloned into the build-side future
+        // (`collect_left_input`) while the original stays with the
+        // `HashJoinStream` (see `HashJoinExec::execute`). Reproduce that
+        // shape here without spinning up a full hash join: accrue build_time
+        // before the clone is dropped (mirroring a build side that yields
+        // control at least once before completing), then accrue the rest of
+        // build_time plus join_time before the original is dropped.
+        let metrics_set = ExecutionPlanMetricsSet::new();
+        let join_metrics = BuildProbeJoinMetrics::new(0, &metrics_set);
+
+        let build_side_clone = join_metrics.clone();
+        join_metrics
+            .build_time
+            .add_duration(Duration::from_millis(100));
+        drop(build_side_clone);
+
+        join_metrics
+            .build_time
+            .add_duration(Duration::from_millis(50));
+        join_metrics
+            .join_time
+            .add_duration(Duration::from_millis(20));
+        drop(join_metrics);
+
+        let elapsed_compute = metrics_set
+            .clone_inner()
+            .iter()
+            .find_map(|m| match m.value() {
+                MetricValue::ElapsedCompute(time) => Some(time.value()),
+                _ => None,
+            })
+            .expect("elapsed_compute metric should be present");
+        let expected = Duration::from_millis(100 + 50 + 20).as_nanos() as usize;
+        assert_eq!(
+            elapsed_compute, expected,
+            "elapsed_compute should equal build_time + join_time exactly once, \
+             not once per BuildProbeJoinMetrics clone"
+        );
     }
 
     #[test]
