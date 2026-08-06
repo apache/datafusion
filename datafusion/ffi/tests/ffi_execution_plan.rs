@@ -73,7 +73,7 @@ mod tests {
         assert!(plan.is::<ForeignExecutionPlan>());
         plan.check_invariants(InvariantLevel::Always)?;
 
-        let produced = plan.dynamic_expressions();
+        let produced = plan.dynamic_expressions_produced();
         assert_eq!(produced.len(), 1);
         assert!(produced[0].expression_id().is_some());
         drop(plan);

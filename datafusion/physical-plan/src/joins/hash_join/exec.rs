@@ -964,8 +964,11 @@ impl HashJoinExec {
         self.null_equality
     }
 
-    /// Get the dynamic filter expression for testing purposes.
-    /// Returns the dynamic filter expression for this hash join, if set.
+    /// Returns the dynamic filter expression produced by this hash join, if set.
+    #[deprecated(
+        since = "55.0.0",
+        note = "Use ExecutionPlan::dynamic_expressions_produced instead"
+    )]
     pub fn dynamic_filter_expr(&self) -> Option<&Arc<DynamicFilterPhysicalExpr>> {
         self.dynamic_filter.as_ref().map(|df| &df.filter)
     }
@@ -1330,7 +1333,7 @@ impl ExecutionPlan for HashJoinExec {
         vec![&self.left, &self.right]
     }
 
-    fn dynamic_expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+    fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         self.dynamic_filter
             .iter()
             .map(|dynamic_filter| {
@@ -1821,12 +1824,10 @@ impl ExecutionPlan for HashJoinExec {
             .transpose()?;
 
         let dynamic_filter = self
-            .dynamic_filter_expr()
-            .map(|df| {
-                let df_expr: Arc<dyn PhysicalExpr> =
-                    Arc::clone(df) as Arc<dyn PhysicalExpr>;
-                ctx.encode_expr(&df_expr)
-            })
+            .dynamic_expressions_produced()
+            .into_iter()
+            .next()
+            .map(|expr| ctx.encode_expr(&expr))
             .transpose()?;
 
         Ok(Some(protobuf::PhysicalPlanNode {
@@ -6882,8 +6883,7 @@ mod tests {
             NullEquality::NullEqualsNothing,
             false,
         )?;
-        assert!(join.dynamic_filter_expr().is_none());
-        assert!(join.dynamic_expressions().is_empty());
+        assert!(join.dynamic_expressions_produced().is_empty());
 
         let df = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![Arc::new(Column::new("b1", 1)) as _],
@@ -6891,19 +6891,15 @@ mod tests {
         ));
         let join = join.with_dynamic_filter_expr(Arc::clone(&df))?;
 
-        let restored = join
-            .dynamic_filter_expr()
-            .expect("should have dynamic filter");
+        let produced = join.dynamic_expressions_produced();
+        assert_eq!(produced.len(), 1);
         assert_eq!(
-            restored
+            produced[0]
                 .expression_id()
                 .expect("DynamicFilterPhysicalExpr always has an expression_id"),
             df.expression_id()
                 .expect("DynamicFilterPhysicalExpr always has an expression_id"),
         );
-        let produced = join.dynamic_expressions();
-        assert_eq!(produced.len(), 1);
-        assert_eq!(produced[0].expression_id(), df.expression_id());
         Ok(())
     }
 

@@ -176,7 +176,7 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// Each returned expression must have a [`PhysicalExpr::expression_id`]
     /// since all dynamic expressions such as [`DynamicFilterPhysicalExpr`]
     /// have an expression id.
-    fn dynamic_expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+    fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         Vec::new()
     }
 
@@ -1337,16 +1337,16 @@ fn check_dynamic_expression_invariants<P: ExecutionPlan + ?Sized>(
     plan: &P,
 ) -> Result<()> {
     let mut produced_ids = HashSet::new();
-    for expr in plan.dynamic_expressions() {
+    for expr in plan.dynamic_expressions_produced() {
         let Some(expression_id) = expr.expression_id() else {
             return internal_err!(
-                "{}::dynamic_expressions returned an expression without an expression ID",
+                "{}::dynamic_expressions_produced returned an expression without an expression ID",
                 plan.name()
             );
         };
         assert_or_internal_err!(
             produced_ids.insert(expression_id),
-            "{}::dynamic_expressions returned duplicate expression ID {expression_id}",
+            "{}::dynamic_expressions_produced returned duplicate expression ID {expression_id}",
             plan.name()
         );
     }
@@ -1822,7 +1822,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn dynamic_expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
             self.dynamic_expressions.iter().map(Arc::clone).collect()
         }
 

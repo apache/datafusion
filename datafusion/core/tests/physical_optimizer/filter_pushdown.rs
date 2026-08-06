@@ -50,7 +50,9 @@ use datafusion_functions_aggregate::{
     min_max::{max_udaf, min_udaf},
 };
 use datafusion_physical_expr::{
-    LexOrdering, PhysicalSortExpr, expressions::col, utils::conjunction,
+    LexOrdering, PhysicalSortExpr,
+    expressions::{DynamicFilterPhysicalExpr, col},
+    utils::conjunction,
 };
 use datafusion_physical_expr::{
     Partitioning, ScalarFunctionExpr, aggregate::AggregateExprBuilder,
@@ -2983,8 +2985,13 @@ async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
 
         // Verify that a dynamic filter was created
         let dynamic_filter = hash_join
-            .dynamic_filter_expr()
+            .dynamic_expressions_produced()
+            .into_iter()
+            .next()
             .expect("Dynamic filter should be created");
+        let dynamic_filter = (dynamic_filter as Arc<dyn std::any::Any + Send + Sync>)
+            .downcast::<DynamicFilterPhysicalExpr>()
+            .expect("produced expression should be a DynamicFilterPhysicalExpr");
 
         // Verify that is_used() returns the expected value based on probe side support.
         // When probe_supports_pushdown=false: no consumer holds a reference (is_used=false)
@@ -3095,7 +3102,7 @@ fn test_discover_dynamic_expression_producers() {
     fn producer_count(plan: &Arc<dyn ExecutionPlan>) -> usize {
         let mut count = 0;
         plan.apply(|node| {
-            count += node.dynamic_expressions().len();
+            count += node.dynamic_expressions_produced().len();
             Ok(TreeNodeRecursion::Continue)
         })
         .expect("plan traversal should succeed");

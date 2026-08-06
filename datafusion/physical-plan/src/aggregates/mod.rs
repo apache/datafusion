@@ -1087,6 +1087,10 @@ impl AggregateExec {
     }
 
     /// Returns the dynamic filter expression for this aggregate, if set.
+    #[deprecated(
+        since = "55.0.0",
+        note = "Use ExecutionPlan::dynamic_expressions_produced instead"
+    )]
     pub fn dynamic_filter_expr(&self) -> Option<&Arc<DynamicFilterPhysicalExpr>> {
         self.dynamic_filter.as_ref().map(|df| &df.filter)
     }
@@ -1960,7 +1964,7 @@ impl ExecutionPlan for AggregateExec {
         vec![&self.input]
     }
 
-    fn dynamic_expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+    fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         self.dynamic_filter
             .iter()
             .map(|dynamic_filter| {
@@ -2200,14 +2204,12 @@ impl ExecutionPlan for AggregateExec {
             limit: options.limit() as u64,
             descending: options.descending(),
         });
-        let dynamic_filter = match self.dynamic_filter_expr() {
-            Some(filter) => {
-                let expr: Arc<dyn PhysicalExpr> =
-                    Arc::clone(filter) as Arc<dyn PhysicalExpr>;
-                Some(ctx.encode_expr(&expr)?)
-            }
-            None => None,
-        };
+        let dynamic_filter = self
+            .dynamic_expressions_produced()
+            .into_iter()
+            .next()
+            .map(|expr| ctx.encode_expr(&expr))
+            .transpose()?;
 
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
@@ -7564,14 +7566,14 @@ mod tests {
             lit(false),
         ));
         let agg = agg.with_dynamic_filter_expr(Arc::clone(&new_df))?;
-        let produced = agg.dynamic_expressions();
+        let produced = agg.dynamic_expressions_produced();
         assert_eq!(produced.len(), 1);
         assert_eq!(produced[0].expression_id(), new_df.expression_id());
 
         // The aggregate's filter should now resolve to the new inner expression.
-        let swapped = agg
-            .dynamic_filter_expr()
-            .expect("should still have dynamic filter")
+        let swapped = produced[0]
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .expect("produced expression should be a DynamicFilterPhysicalExpr")
             .current()?;
         assert_eq!(format!("{swapped}"), format!("{}", lit(false)));
 
@@ -7615,7 +7617,7 @@ mod tests {
             child,
             Arc::clone(&schema),
         )?;
-        assert!(agg.dynamic_filter_expr().is_none());
+        assert!(agg.dynamic_expressions_produced().is_empty());
 
         let df = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![col("a", &schema)?],

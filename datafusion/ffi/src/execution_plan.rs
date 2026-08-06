@@ -52,7 +52,8 @@ pub struct FFI_ExecutionPlan {
     pub children: unsafe extern "C" fn(plan: &Self) -> SVec<FFI_ExecutionPlan>,
 
     /// Return the dynamic expressions produced by this plan node.
-    pub dynamic_expressions: unsafe extern "C" fn(plan: &Self) -> SVec<FFI_PhysicalExpr>,
+    pub dynamic_expressions_produced:
+        unsafe extern "C" fn(plan: &Self) -> SVec<FFI_PhysicalExpr>,
 
     pub with_new_children:
         unsafe extern "C" fn(plan: &Self, children: SVec<Self>) -> FFI_Result<Self>,
@@ -142,11 +143,11 @@ unsafe extern "C" fn children_fn_wrapper(
         .collect()
 }
 
-unsafe extern "C" fn dynamic_expressions_fn_wrapper(
+unsafe extern "C" fn dynamic_expressions_produced_fn_wrapper(
     plan: &FFI_ExecutionPlan,
 ) -> SVec<FFI_PhysicalExpr> {
     plan.inner()
-        .dynamic_expressions()
+        .dynamic_expressions_produced()
         .into_iter()
         .map(FFI_PhysicalExpr::from)
         .collect()
@@ -320,7 +321,7 @@ impl FFI_ExecutionPlan {
         Self {
             properties: properties_fn_wrapper,
             children: children_fn_wrapper,
-            dynamic_expressions: dynamic_expressions_fn_wrapper,
+            dynamic_expressions_produced: dynamic_expressions_produced_fn_wrapper,
             with_new_children: with_new_children_fn_wrapper,
             name: name_fn_wrapper,
             execute: execute_fn_wrapper,
@@ -457,10 +458,10 @@ impl ExecutionPlan for ForeignExecutionPlan {
         }
     }
 
-    fn dynamic_expressions(
+    fn dynamic_expressions_produced(
         &self,
     ) -> Vec<Arc<dyn datafusion_physical_plan::PhysicalExpr>> {
-        unsafe { (self.plan.dynamic_expressions)(&self.plan) }
+        unsafe { (self.plan.dynamic_expressions_produced)(&self.plan) }
             .iter()
             .map(<Arc<dyn datafusion_physical_plan::PhysicalExpr>>::from)
             .collect()
@@ -593,7 +594,7 @@ pub mod tests {
             unimplemented!()
         }
 
-        fn dynamic_expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
             self.dynamic_expressions.iter().map(Arc::clone).collect()
         }
 
@@ -642,7 +643,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_ffi_execution_plan_dynamic_expressions() -> Result<()> {
+    fn test_ffi_execution_plan_dynamic_expressions_produced() -> Result<()> {
         let schema = Arc::new(arrow::datatypes::Schema::empty());
         let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
         let expected_id = dynamic_filter
@@ -659,7 +660,7 @@ pub mod tests {
             datafusion_physical_plan::execution_plan::InvariantLevel::Always,
         )?;
 
-        let produced = foreign_plan.dynamic_expressions();
+        let produced = foreign_plan.dynamic_expressions_produced();
         assert_eq!(produced.len(), 1);
         assert_eq!(produced[0].expression_id(), Some(expected_id));
         drop(foreign_plan);
