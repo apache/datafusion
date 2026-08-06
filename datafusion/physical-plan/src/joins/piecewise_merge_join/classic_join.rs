@@ -278,14 +278,7 @@ impl ClassicPWMJStream {
         }
 
         if !self.batch_process_state.continue_process {
-            self.batch_process_state
-                .output_batches
-                .finish_buffered_batch()?;
-            if let Some(batch) = self
-                .batch_process_state
-                .output_batches
-                .next_completed_batch()
-            {
+            if let Some(batch) = self.batch_process_state.next_drained_batch()? {
                 return Ok(StatefulStreamResult::Ready(Some(batch)));
             }
 
@@ -294,7 +287,7 @@ impl ClassicPWMJStream {
         }
 
         // Produce more work
-        let batch = resolve_classic_join(
+        let scan_batch = resolve_classic_join(
             buffered_side,
             stream_batch,
             &self.schema,
@@ -305,23 +298,18 @@ impl ClassicPWMJStream {
         )?;
 
         if !self.batch_process_state.continue_process {
-            // A flush can queue multiple batches, so transition only after draining.
-            self.batch_process_state
-                .output_batches
-                .finish_buffered_batch()?;
-            if let Some(batch) = self
-                .batch_process_state
-                .output_batches
-                .next_completed_batch()
-            {
+            // The queue can hold several completed batches, so transition only
+            // after draining all of them.
+            if let Some(batch) = self.batch_process_state.next_drained_batch()? {
                 return Ok(StatefulStreamResult::Ready(Some(batch)));
             }
 
+            // Fully drained; emit the scan's empty tail batch and move on.
             self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
-            return Ok(StatefulStreamResult::Ready(Some(batch)));
+            return Ok(StatefulStreamResult::Ready(Some(scan_batch)));
         }
 
-        Ok(StatefulStreamResult::Ready(Some(batch)))
+        Ok(StatefulStreamResult::Ready(Some(scan_batch)))
     }
 
     // Process remaining unmatched rows
@@ -335,22 +323,7 @@ impl ClassicPWMJStream {
         }
 
         if !self.batch_process_state.continue_process {
-            if let Some(batch) = self
-                .batch_process_state
-                .output_batches
-                .next_completed_batch()
-            {
-                return Ok(StatefulStreamResult::Ready(Some(batch)));
-            }
-
-            self.batch_process_state
-                .output_batches
-                .finish_buffered_batch()?;
-            if let Some(batch) = self
-                .batch_process_state
-                .output_batches
-                .next_completed_batch()
-            {
+            if let Some(batch) = self.batch_process_state.next_drained_batch()? {
                 return Ok(StatefulStreamResult::Ready(Some(batch)));
             }
 
@@ -386,27 +359,11 @@ impl ClassicPWMJStream {
         self.batch_process_state.output_batches.push_batch(batch)?;
 
         self.batch_process_state.continue_process = false;
-        if let Some(batch) = self
-            .batch_process_state
-            .output_batches
-            .next_completed_batch()
-        {
-            return Ok(StatefulStreamResult::Ready(Some(batch)));
-        }
-
-        self.batch_process_state
-            .output_batches
-            .finish_buffered_batch()?;
-        if let Some(batch) = self
-            .batch_process_state
-            .output_batches
-            .next_completed_batch()
-        {
+        if let Some(batch) = self.batch_process_state.next_drained_batch()? {
             return Ok(StatefulStreamResult::Ready(Some(batch)));
         }
 
         self.state = PiecewiseMergeJoinStreamState::Completed;
-        self.batch_process_state.reset();
         Ok(StatefulStreamResult::Continue)
     }
 }
@@ -450,6 +407,17 @@ impl BatchProcessState {
         self.found = false;
         self.continue_process = true;
         self.processed_null_count = false;
+    }
+
+    // Pops the next completed batch, flushing the partial remainder once the
+    // queue is empty. `None` guarantees the coalescer holds no pending rows,
+    // so the stream may leave its current state without losing output.
+    fn next_drained_batch(&mut self) -> Result<Option<RecordBatch>> {
+        if let Some(batch) = self.output_batches.next_completed_batch() {
+            return Ok(Some(batch));
+        }
+        self.output_batches.finish_buffered_batch()?;
+        Ok(self.output_batches.next_completed_batch())
     }
 }
 
@@ -836,7 +804,9 @@ mod tests {
 
     #[tokio::test]
     async fn join_right_unmatched_rows_exceeding_batch_size() -> Result<()> {
-        // 100 < {1, 2, 3} is false, making every streamed row unmatched.
+        // 100 < {1, 2, 3} is false, making every streamed row unmatched; with
+        // batch_size 2 the scan finishes with more than one completed batch
+        // still queued, and all of them must be emitted before the stream ends.
         let left = build_table(("a1", &vec![0]), ("b1", &vec![100]), ("c1", &vec![0]));
         let right = build_table(
             ("a2", &vec![10, 20, 30]),
@@ -878,6 +848,9 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_unmatched_rows_exact_batch_multiple() -> Result<()> {
+        // Four unmatched buffered rows with batch_size 2 flush with no
+        // remainder (an exact multiple); the unmatched pass must terminate
+        // once the queue drains instead of recomputing the same rows.
         let left = build_table(
             ("a1", &vec![10, 20, 30, 40]),
             ("b1", &vec![100, 101, 102, 103]),
@@ -896,6 +869,9 @@ mod tests {
         let mut stream = join.execute(0, task_ctx)?;
 
         let mut batches = Vec::with_capacity(2);
+        // Bounded polls (ignoring the empty batch the scan phase emits): a
+        // non-terminating stream fails the count assertion below instead of
+        // hanging the test.
         for _ in 0..3 {
             match stream.next().await.transpose()? {
                 Some(batch) if batch.num_rows() > 0 => batches.push(batch),
