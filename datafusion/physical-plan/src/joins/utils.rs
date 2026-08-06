@@ -1779,6 +1779,9 @@ pub(crate) struct BuildProbeJoinMetrics {
     _elapsed_compute_finalizer: Arc<ElapsedComputeFinalizer>,
 }
 
+// Upon being dropped, this will update the "elapsed compute" part of the metrics.
+// Wrapped in an `Arc` so that it is only dropped once (we previously had a bug
+// where it was cloned, causing over-estimated metrics).
 struct ElapsedComputeFinalizer {
     baseline: BaselineMetrics,
     build_time: metrics::Time,
