@@ -425,10 +425,7 @@ impl DataSink for ParquetSink {
 
         let input = ctx.encode_child(exec.input())?;
         let sort_order = exec.encode_sort_order(ctx)?;
-        let sink = protobuf::ParquetSink {
-            config: Some((&self.config).try_into()?),
-            parquet_options: Some(self.parquet_options().try_into()?),
-        };
+        let sink = protobuf::ParquetSink::try_from(self)?;
         let node = protobuf::ParquetSinkExecNode {
             input: Some(Box::new(input)),
             sink: Some(sink),
@@ -442,6 +439,43 @@ impl DataSink for ParquetSink {
 }
 
 #[cfg(feature = "proto")]
+impl TryFrom<&ParquetSink> for datafusion_proto_models::protobuf::ParquetSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &ParquetSink) -> Result<Self> {
+        Ok(Self {
+            config: Some(value.config().try_into()?),
+            parquet_options: Some(value.parquet_options().try_into()?),
+        })
+    }
+}
+
+#[cfg(feature = "proto")]
+impl TryFrom<&datafusion_proto_models::protobuf::ParquetSink> for ParquetSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &datafusion_proto_models::protobuf::ParquetSink) -> Result<Self> {
+        let config =
+            FileSinkConfig::try_from(value.config.as_ref().ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "ParquetSink is missing required field 'config'"
+                )
+            })?)?;
+        let parquet_options = value
+            .parquet_options
+            .as_ref()
+            .ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "ParquetSink is missing required field 'parquet_options'"
+                )
+            })?
+            .try_into()?;
+
+        Ok(Self::new(config, parquet_options))
+    }
+}
+
+#[cfg(feature = "proto")]
 impl ParquetSink {
     /// Reconstructs a [`DataSinkExec`] containing a `ParquetSink` from protobuf.
     pub fn try_from_proto(
@@ -450,16 +484,11 @@ impl ParquetSink {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         use datafusion_proto_models::protobuf;
 
-        let sink_node = match &node.physical_plan_type {
-            Some(protobuf::physical_plan_node::PhysicalPlanType::ParquetSink(sink)) => {
-                sink.as_ref()
-            }
-            _ => {
-                return datafusion_common::internal_err!(
-                    "PhysicalPlanNode is not a ParquetSink"
-                );
-            }
-        };
+        let sink_node = datafusion_physical_plan::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::ParquetSink,
+            "ParquetSink",
+        );
         let input = ctx.decode_required_child(
             sink_node.input.as_deref(),
             "ParquetSinkExecNode",
@@ -470,22 +499,7 @@ impl ParquetSink {
                 "ParquetSinkExecNode is missing required field 'sink'"
             )
         })?;
-        let config =
-            FileSinkConfig::try_from(proto_sink.config.as_ref().ok_or_else(|| {
-                datafusion_common::internal_datafusion_err!(
-                    "ParquetSink is missing required field 'config'"
-                )
-            })?)?;
-        let parquet_options = proto_sink
-            .parquet_options
-            .as_ref()
-            .ok_or_else(|| {
-                datafusion_common::internal_datafusion_err!(
-                    "ParquetSink is missing required field 'parquet_options'"
-                )
-            })?
-            .try_into()?;
-        let data_sink = ParquetSink::new(config, parquet_options);
+        let data_sink = ParquetSink::try_from(proto_sink)?;
         let sort_order = DataSinkExec::decode_sort_order(
             sink_node.sort_order.as_ref(),
             ctx,

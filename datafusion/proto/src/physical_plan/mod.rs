@@ -793,9 +793,7 @@ pub trait PhysicalPlanNodeExt: Sized {
                     ParquetSink::try_from_proto(self.node(), &decode_ctx)
                 }
                 #[cfg(not(feature = "parquet"))]
-                panic!(
-                    "Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled"
-                )
+                not_impl_err!("ParquetSink requires the `parquet` feature")
             }
             PhysicalPlanType::Unnest(_) => {
                 UnnestExec::try_from_proto(self.node(), &decode_ctx)
@@ -1693,7 +1691,7 @@ pub trait PhysicalPlanNodeExt: Sized {
             ParquetSink::try_from_proto(&node, &decode_ctx)
         }
         #[cfg(not(feature = "parquet"))]
-        panic!("Trying to use ParquetSink without `parquet` feature enabled");
+        not_impl_err!("ParquetSink requires the `parquet` feature")
     }
 
     #[deprecated(
