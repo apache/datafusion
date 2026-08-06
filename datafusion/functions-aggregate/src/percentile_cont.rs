@@ -63,7 +63,7 @@ use crate::utils::validate_percentile_expr;
 
 /// Precision multiplier for linear interpolation calculations.
 ///
-/// This value of 1,000,000 was chosen to balance precision against overflow risk:
+/// This value of 1,000,000 was chosen to balance precision with overflow safety:
 /// - Provides 6 decimal places of precision for the fractional component
 /// - Small enough to avoid overflow when multiplied with typical numeric values
 /// - Sufficient precision for most statistical applications

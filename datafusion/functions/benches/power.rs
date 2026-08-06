@@ -23,6 +23,8 @@
 //! through a Float64 round-trip, which is measurably slower than the
 //! decimal kernel for the cases the kernel can handle.
 
+extern crate criterion;
+
 use arrow::array::{Decimal128Array, Int64Array};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use criterion::{Criterion, criterion_group, criterion_main};

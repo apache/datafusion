@@ -763,6 +763,9 @@
 //! [`Array`]: arrow::array::Array
 #![cfg_attr(doc, doc = include_str!("optimizer_rule_reference.md"))]
 
+extern crate core;
+#[cfg(feature = "sql")]
+extern crate sqlparser;
 /// DataFusion crate version
 pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
 

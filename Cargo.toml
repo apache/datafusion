@@ -217,7 +217,6 @@ zstd = { version = "0.13", default-features = false }
 allow_attributes = "warn"
 as_ptr_cast_mut = "warn"
 assigning_clones = "warn"
-char_lit_as_u8 = "warn"
 clear_with_drain = "warn"
 coerce_container_to_any = "warn"
 debug_assert_with_mut_call = "warn"
@@ -225,11 +224,9 @@ decimal_bitwise_operands = "warn"
 default_union_representation = "warn"
 doc_include_without_cfg = "warn"
 empty_enum_variants_with_brackets = "warn"
-empty_line_after_outer_attr = "warn"
 exit = "warn"
 flat_map_option = "warn"
 fn_to_numeric_cast_any = "warn"
-if_let_mutex = "warn"
 imprecise_flops = "warn"
 index_refutable_slice = "warn"
 inefficient_to_string = "warn"
@@ -246,11 +243,9 @@ macro_use_imports = "warn"
 manual_ilog2 = "warn"
 manual_instant_elapsed = "warn"
 manual_is_power_of_two = "warn"
-manual_ok_or = "warn"
 match_wild_err_arm = "warn"
 mem_forget = "warn"
 mismatching_type_param_order = "warn"
-missing_enforced_import_renames = "warn"
 mut_mut = "warn"
 mutex_integer = "warn"
 # https://github.com/apache/datafusion/issues/18503
@@ -268,51 +263,27 @@ ref_option_ref = "warn"
 same_length_and_capacity = "warn"
 str_split_at_newline = "warn"
 string_add_assign = "warn"
-suspicious_command_arg_space = "warn"
 suspicious_xor_used_as_pow = "warn"
 trailing_empty_array = "warn"
 transmute_ptr_to_ptr = "warn"
 uninhabited_references = "warn"
 uninlined_format_args = "warn"
 unnecessary_lazy_evaluations = "warn"
-unnecessary_safety_comment = "warn"
 unnecessary_self_imports = "warn"
 unused_async = "warn"
 unused_rounding = "warn"
 used_underscore_binding = "warn"
-useless_transmute = "warn"
 verbose_file_reads = "warn"
 wildcard_dependencies = "warn"
 zero_sized_map_values = "warn"
 
-# Keep this list sorted alphabetically.
 [workspace.lints.rust]
-# Part of the `rust_2018_idioms` group, but ~800 violations today:
-# https://github.com/apache/datafusion/issues/18467
-elided_lifetimes_in_paths = "allow"
-future_incompatible = { level = "warn", priority = -1 }
-nonstandard_style = { level = "warn", priority = -1 }
-rust_2018_idioms = { level = "warn", priority = -1 }
-rust_2021_prelude_collisions = "warn"
-semicolon_in_expressions_from_macros = "warn"
 unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(datafusion_coop, values("tokio", "tokio_fallback", "per_stream"))',
     "cfg(coverage)",
     "cfg(coverage_nightly)",
 ] }
-unsafe_op_in_unsafe_fn = "warn"
-unused_extern_crates = "warn"
-unused_import_braces = "warn"
-unused_lifetimes = "warn"
 unused_qualifications = "deny"
-
-# Keep this list sorted alphabetically.
-[workspace.lints.rustdoc]
-all = { level = "warn", priority = -1 }
-# Part of the `all` group, but has too many violations today to enable:
-# https://github.com/apache/datafusion/issues/18467
-missing_crate_level_docs = "allow"
-unescaped_backticks = "allow"
 
 # --------------------
 # Compilation Profiles

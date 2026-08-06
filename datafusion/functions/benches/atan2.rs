@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+extern crate criterion;
+
 use arrow::datatypes::{DataType, Field, Float32Type, Float64Type};
 use arrow::util::bench_util::create_primitive_array;
 use criterion::{Criterion, criterion_group, criterion_main};

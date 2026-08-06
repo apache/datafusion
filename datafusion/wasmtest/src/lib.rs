@@ -22,6 +22,8 @@
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+extern crate wasm_bindgen;
+
 use datafusion_common::ScalarValue;
 use datafusion_expr::lit;
 use datafusion_expr::simplify::SimplifyContext;
