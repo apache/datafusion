@@ -1155,7 +1155,13 @@ impl FinalHashAggregateStream {
                     return Self::break_with_err(e);
                 }
 
-                if self.hit_soft_group_limit(&hash_table) {
+                // Soft group limits are usually small and rarely coincide with
+                // spilling. Once spilling has occurred, skip this optimization to
+                // make the internal logic simpler.
+                let spilled = spill_context
+                    .as_ref()
+                    .is_some_and(|context| context.has_spills());
+                if self.hit_soft_group_limit(&hash_table) && !spilled {
                     let timer = elapsed_compute.timer();
                     let result = self.start_output(&mut hash_table);
                     timer.done();
