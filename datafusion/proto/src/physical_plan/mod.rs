@@ -70,7 +70,6 @@ use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::coop::CooperativeExec;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::explain::ExplainExec;
-use datafusion_physical_plan::expressions::PhysicalSortExpr;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, SortMergeJoinExec,
@@ -1179,15 +1178,11 @@ pub trait PhysicalPlanNodeExt: Sized {
         })?;
         let schema: SchemaRef = SchemaRef::new(proto_schema.try_into()?);
 
-        let projection = if !scan.projection.is_empty() {
-            Some(
-                scan.projection
-                    .iter()
-                    .map(|i| *i as usize)
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            None
+        // Preserve the empty-projection sentinel written by `try_from_data_source_exec`.
+        let projection = match scan.projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Vec::new()),
+            indices => Some(indices.iter().map(|i| *i as usize).collect()),
         };
 
         let mut sort_information = vec![];
@@ -2364,12 +2359,13 @@ pub trait PhysicalPlanNodeExt: Sized {
             let proto_schema: protobuf::Schema =
                 source_conf.original_schema().as_ref().try_into()?;
 
-            let proto_projection = source_conf
-                .projection()
-                .as_ref()
-                .map_or_else(Vec::new, |v| {
-                    v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
-                });
+            // Proto3 can't tell `None` from `Some(vec![])`; encode the latter
+            // as the `[u32::MAX]` sentinel, matching the join/filter nodes.
+            let proto_projection = match source_conf.projection().as_ref() {
+                None => Vec::new(),
+                Some(v) if v.is_empty() => vec![u32::MAX],
+                Some(v) => v.iter().map(|x| *x as u32).collect(),
+            };
 
             let proto_sort_information = source_conf
                 .sort_information()
@@ -2583,29 +2579,12 @@ pub trait PhysicalPlanNodeExt: Sized {
                 codec,
                 proto_converter,
             )?;
-        let sort_order = match exec.sort_order() {
-            Some(requirements) => {
-                let expr = requirements
-                    .iter()
-                    .map(|requirement| {
-                        let expr: PhysicalSortExpr = requirement.to_owned().into();
-                        let sort_expr = protobuf::PhysicalSortExprNode {
-                            expr: Some(Box::new(
-                                proto_converter
-                                    .physical_expr_to_proto(&expr.expr, codec)?,
-                            )),
-                            asc: !expr.options.descending,
-                            nulls_first: expr.options.nulls_first,
-                        };
-                        Ok(sort_expr)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                Some(protobuf::PhysicalSortExprNodeCollection {
-                    physical_sort_expr_nodes: expr,
-                })
-            }
-            None => None,
+        let encoder = ConverterPlanEncoder {
+            codec,
+            proto_converter,
         };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        let sort_order = exec.encode_sort_order(&encode_ctx)?;
 
         if let Some(sink) = exec.sink().downcast_ref::<JsonSink>() {
             return Ok(Some(protobuf::PhysicalPlanNode {
