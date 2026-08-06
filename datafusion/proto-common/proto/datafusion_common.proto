@@ -617,6 +617,8 @@ message ParquetOptions {
 
   uint64 max_row_group_size = 15;
 
+  uint64 max_in_list_size = 38;
+
   string created_by = 16;
 
   oneof coerce_int96_opt {
