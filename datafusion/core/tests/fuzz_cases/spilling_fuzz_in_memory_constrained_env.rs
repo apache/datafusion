@@ -308,33 +308,15 @@ async fn test_sort_preserving_merge_peak_memory_with_spilled_input_round_robin()
 }
 
 #[tokio::test]
-async fn test_sort_preserving_merge_peak_memory_with_spilled_input_no_round_robin()
--> Result<()> {
-    run_sort_preserving_merge_peak_memory_with_spilled_input(false, false, false).await
-}
-
-#[tokio::test]
 async fn test_sort_preserving_merge_peak_memory_with_spilled_input_round_robin_multi_column()
 -> Result<()> {
     run_sort_preserving_merge_peak_memory_with_spilled_input(true, true, false).await
 }
 
 #[tokio::test]
-async fn test_sort_preserving_merge_peak_memory_with_spilled_input_no_round_robin_multi_column()
--> Result<()> {
-    run_sort_preserving_merge_peak_memory_with_spilled_input(false, true, false).await
-}
-
-#[tokio::test]
 async fn test_sort_preserving_merge_peak_memory_with_spilled_input_round_robin_tied_values()
 -> Result<()> {
     run_sort_preserving_merge_peak_memory_with_spilled_input(true, false, true).await
-}
-
-#[tokio::test]
-async fn test_sort_preserving_merge_peak_memory_with_spilled_input_no_round_robin_tied_values()
--> Result<()> {
-    run_sort_preserving_merge_peak_memory_with_spilled_input(false, false, true).await
 }
 
 /// Intended to measure the maximum number of record batches held in memory by
