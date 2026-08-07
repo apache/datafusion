@@ -83,7 +83,7 @@ use url::Url;
 ///
 /// Specifically, this example illustrates how to:
 /// 1. Use [`ParquetFileReaderFactory`] to avoid re-reading parquet metadata on each query
-/// 2. Use [`datafusion::physical_optimizer::pruning::PruningPredicate`] for predicate analysis
+/// 2. Use [`PruningPredicate`] for predicate analysis
 /// 3. Pass a row group selection to [`ParquetSource`]
 /// 4. Pass a row selection (within a row group) to [`ParquetSource`]
 ///
@@ -155,6 +155,7 @@ use url::Url;
 /// ```
 ///
 /// [`ListingTable`]: datafusion::datasource::listing::ListingTable
+/// [`PruningPredicate`]: datafusion::physical_optimizer::pruning::PruningPredicate
 /// [Page Index](https://github.com/apache/parquet-format/blob/master/PageIndex.md)
 pub async fn parquet_advanced_index() -> Result<()> {
     // the object store is used to read the parquet files (in this case, it is
