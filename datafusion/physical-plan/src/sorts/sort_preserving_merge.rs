@@ -473,9 +473,24 @@ impl ExecutionPlan for SortPreservingMergeExec {
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
-        let expr = self
-            .expr()
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `SortPreservingMergeExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            input,
+            expr,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            fetch,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+            // Not serialized: `SortPreservingMergeExecNode` has no field for it,
+            // so decoding always yields the `true` default from
+            // `SortPreservingMergeExec::new`.
+            enable_round_robin_repartition: _,
+        } = self;
+        let input = ctx.encode_child(input)?;
+        let expr = expr
             .iter()
             .map(|e| {
                 Ok(protobuf::PhysicalExprNode {
@@ -496,7 +511,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     Box::new(protobuf::SortPreservingMergeExecNode {
                         input: Some(Box::new(input)),
                         expr,
-                        fetch: self.fetch().map(|f| f as i64).unwrap_or(-1),
+                        fetch: fetch.map(|f| f as i64).unwrap_or(-1),
                     }),
                 ),
             ),
@@ -518,14 +533,17 @@ impl SortPreservingMergeExec {
             protobuf::physical_plan_node::PhysicalPlanType::SortPreservingMerge,
             "SortPreservingMergeExec",
         );
+        // Destructure exhaustively so that a new field on
+        // `SortPreservingMergeExecNode` is a compile error here rather than a
+        // silently dropped field.
+        let protobuf::SortPreservingMergeExecNode { input, expr, fetch } = &**spm;
         let input = ctx.decode_required_child(
-            spm.input.as_deref(),
+            input.as_deref(),
             "SortPreservingMergeExec",
             "input",
         )?;
         let input_schema = input.schema();
-        let exprs = spm
-            .expr
+        let exprs = expr
             .iter()
             .map(|e| {
                 let sort = match &e.expr_type {
@@ -554,7 +572,7 @@ impl SortPreservingMergeExec {
         let Some(ordering) = LexOrdering::new(exprs) else {
             return internal_err!("SortPreservingMergeExec requires an ordering");
         };
-        let fetch = (spm.fetch >= 0).then_some(spm.fetch as usize);
+        let fetch = (*fetch >= 0).then_some(*fetch as usize);
         Ok(Arc::new(
             SortPreservingMergeExec::new(ordering, input).with_fetch(fetch),
         ))
