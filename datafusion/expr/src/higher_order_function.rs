@@ -248,7 +248,7 @@ pub struct LambdaArgument {
     /// parameters leave no slot in the merged batch and the body's compressed
     /// column indices line up directly with what the evaluator built.
     ///
-    /// Callers who already have a [`LambdaExpr`] should read the used names
+    /// Callers who already have a `LambdaExpr` should read the used names
     /// from `LambdaExpr::used_params()` and pass them to [`Self::new`];
     /// [`Self::new`] handles the name → index translation.
     used_param_indices: Vec<usize>,
