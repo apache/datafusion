@@ -60,17 +60,17 @@ use datafusion_datasource_json::file_format::{
 use datafusion_datasource_parquet::file_format::{ParquetFormat, ParquetFormatFactory};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
-    AggregateUDF, DmlStatement, FetchType, HigherOrderUDF, RangePartitioning,
+    AggregateUDF, DmlStatement, FetchType, HigherOrderUDF, Operator, RangePartitioning,
     RecursiveQuery, SkipType, TableSource, Unnest, WriteOp,
 };
 use datafusion_expr::{
     DistinctOn, DropView, Expr, JoinConstraint, LogicalPlan, LogicalPlanBuilder,
     ScalarUDF, SortExpr, Statement, WindowUDF, dml,
     logical_plan::{
-        Aggregate, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateView,
-        DdlStatement, Distinct, EmptyRelation, Extension, Join, Prepare, Projection,
-        Repartition, Sort, SubqueryAlias, TableScan, TableScanBuilder, Values, Window,
-        builder::project,
+        Aggregate, AsOfJoin, AsOfMatch, CreateCatalog, CreateCatalogSchema,
+        CreateExternalTable, CreateView, DdlStatement, Distinct, EmptyRelation,
+        Extension, Join, Prepare, Projection, Repartition, Sort, SubqueryAlias,
+        TableScan, TableScanBuilder, Values, Window, builder::project,
     },
 };
 use datafusion_proto_common::protobuf_common;
@@ -1033,6 +1033,61 @@ impl AsLogicalPlan for LogicalPlanNode {
                     join.null_aware,
                 )?))
             }
+            LogicalPlanType::AsOfJoin(join) => {
+                let left_keys =
+                    from_proto::parse_exprs(&join.left_join_key, ctx, extension_codec)?;
+                let right_keys =
+                    from_proto::parse_exprs(&join.right_join_key, ctx, extension_codec)?;
+                if left_keys.len() != right_keys.len() {
+                    return Err(proto_error(format!(
+                        "Received an AsOfJoinNode with left_join_key and right_join_key of different lengths: {} and {}",
+                        left_keys.len(),
+                        right_keys.len()
+                    )));
+                }
+                let left_match = from_proto::parse_expr(
+                    join.left_match_expr.as_ref().ok_or_else(|| {
+                        proto_error("AsOfJoinNode left_match_expr is missing")
+                    })?,
+                    ctx,
+                    extension_codec,
+                )?;
+                let right_match = from_proto::parse_expr(
+                    join.right_match_expr.as_ref().ok_or_else(|| {
+                        proto_error("AsOfJoinNode right_match_expr is missing")
+                    })?,
+                    ctx,
+                    extension_codec,
+                )?;
+                let match_operator = protobuf::AsOfMatchOperator::try_from(
+                    join.match_operator,
+                )
+                .map_err(|_| {
+                    proto_error(format!(
+                        "Unknown ASOF match operator {}",
+                        join.match_operator
+                    ))
+                })?;
+                let op = Operator::try_from_proto(match_operator)?;
+                let join_constraint = protobuf::JoinConstraint::try_from(
+                    join.join_constraint,
+                )
+                .map_err(|_| {
+                    proto_error(format!(
+                        "Unknown ASOF JoinConstraint {}",
+                        join.join_constraint
+                    ))
+                })?;
+                let left = into_logical_plan!(join.left, ctx, extension_codec)?;
+                let right = into_logical_plan!(join.right, ctx, extension_codec)?;
+                Ok(LogicalPlan::AsOfJoin(AsOfJoin::try_new(
+                    Arc::new(left),
+                    Arc::new(right),
+                    left_keys.into_iter().zip(right_keys).collect(),
+                    AsOfMatch::new(left_match, op, right_match),
+                    JoinConstraint::from_proto(join_constraint),
+                )?))
+            }
             LogicalPlanType::Union(union) => {
                 assert_or_internal_err!(
                     union.inputs.len() >= 2,
@@ -1681,6 +1736,59 @@ impl AsLogicalPlan for LogicalPlanNode {
                             null_equality: null_equality.into(),
                             filter,
                             null_aware: *null_aware,
+                        },
+                    ))),
+                })
+            }
+            LogicalPlan::AsOfJoin(AsOfJoin {
+                left,
+                right,
+                on,
+                match_condition,
+                join_constraint,
+                ..
+            }) => {
+                let left = LogicalPlanNode::try_from_logical_plan(
+                    left.as_ref(),
+                    extension_codec,
+                )?;
+                let right = LogicalPlanNode::try_from_logical_plan(
+                    right.as_ref(),
+                    extension_codec,
+                )?;
+                let (left_join_key, right_join_key) = on
+                    .iter()
+                    .map(|(left, right)| {
+                        Ok((
+                            serialize_expr(left, extension_codec)?,
+                            serialize_expr(right, extension_codec)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, ToProtoError>>()?
+                    .into_iter()
+                    .unzip();
+                let match_operator =
+                    protobuf::AsOfMatchOperator::try_from_proto(match_condition.op)?;
+                Ok(LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::AsOfJoin(Box::new(
+                        protobuf::AsOfJoinNode {
+                            left: Some(Box::new(left)),
+                            right: Some(Box::new(right)),
+                            left_join_key,
+                            right_join_key,
+                            left_match_expr: Some(Box::new(serialize_expr(
+                                &match_condition.left,
+                                extension_codec,
+                            )?)),
+                            right_match_expr: Some(Box::new(serialize_expr(
+                                &match_condition.right,
+                                extension_codec,
+                            )?)),
+                            match_operator: match_operator.into(),
+                            join_constraint: protobuf::JoinConstraint::from_proto(
+                                *join_constraint,
+                            )
+                            .into(),
                         },
                     ))),
                 })

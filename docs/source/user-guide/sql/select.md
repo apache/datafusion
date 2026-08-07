@@ -319,6 +319,7 @@ SELECT a FROM table_name WHERE a > 10;
 
 ```text
 from_item [join_type] JOIN from_item [join_condition]
+from_item ASOF JOIN from_item MATCH_CONDITION (condition) [join_condition]
 from_item CROSS JOIN from_item
 from_item NATURAL JOIN from_item
 from_item [join_type] JOIN LATERAL (query) AS alias [join_condition]
@@ -399,6 +400,45 @@ SELECT * FROM x LEFT JOIN x AS y ON x.column_1 = y.column_2;
 | 1        | 2        |          |          |
 +----------+----------+----------+----------+
 ```
+
+### ASOF JOIN
+
+An `ASOF JOIN` matches each left row with at most one right row according to an
+ordered comparison. It preserves every left row and fills the right columns
+with `NULL` when no right row matches.
+
+```sql
+SELECT t.*, p.price
+FROM trades AS t
+ASOF JOIN prices AS p
+MATCH_CONDITION (t.ts >= p.ts)
+ON t.symbol = p.symbol;
+```
+
+`MATCH_CONDITION` must compare an expression from the left input with an
+expression from the right input using one of the following operators:
+
+| Condition | Selected right row                        |
+| --------- | ----------------------------------------- |
+| `l >= r`  | Greatest `r` less than or equal to `l`    |
+| `l > r`   | Greatest `r` strictly less than `l`       |
+| `l <= r`  | Smallest `r` greater than or equal to `l` |
+| `l < r`   | Smallest `r` strictly greater than `l`    |
+
+An optional `ON` clause containing equality conditions combined with `AND`, or
+a `USING` clause, divides rows into equality groups before the ordered match.
+An unqualified `USING` key appears once in wildcard output, while both qualified
+input keys remain addressable.
+
+Without equality keys, all rows belong to one group. The initial execution
+strategy collects one ordered right partition and shares it across every left
+partition, so output partitioning follows the left input. The complete right
+input must fit in memory and may be scanned once per left partition; spilling
+and repartitioned ASOF execution are not yet supported.
+
+A `NULL` in either ordered expression or in any equality key does not match.
+Both inputs must be bounded. If multiple right rows have the same equality keys
+and ordered value, which tied row is selected is nondeterministic.
 
 ### RIGHT OUTER JOIN
 
