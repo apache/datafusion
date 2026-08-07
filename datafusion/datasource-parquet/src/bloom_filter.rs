@@ -253,7 +253,6 @@ mod tests {
     use object_store::{ObjectStore, ObjectStoreExt};
     use parquet::arrow::ArrowWriter;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
-    use parquet::arrow::async_reader::ParquetObjectReader;
     use parquet::file::properties::{EnabledStatistics, WriterProperties};
 
     fn build_test_pruning_predicate(
@@ -651,14 +650,10 @@ mod tests {
         let file_metrics =
             ParquetFileMetrics::new(0, object_meta.location.as_ref(), &metrics);
         let store: Arc<dyn ObjectStore> = Arc::new(in_memory);
-        let inner =
-            ParquetObjectReader::new(Arc::clone(&store), object_meta.location.clone())
-                .with_file_size(object_meta.size);
-
         let partitioned_file = PartitionedFile::new_from_meta(object_meta);
 
         let reader =
-            ParquetFileReader::new(file_metrics.clone(), store, inner, partitioned_file);
+            ParquetFileReader::new(file_metrics.clone(), store, partitioned_file);
         let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
 
         let access_plan = ParquetAccessPlan::new_all(builder.metadata().num_row_groups());
