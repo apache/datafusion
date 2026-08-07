@@ -41,11 +41,11 @@ use std::sync::Arc;
 
 use crate::logical_plan::plan::RangePartitioning;
 use crate::{
-    Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, Distinct,
-    DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join, Limit,
-    LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition, Sort,
-    Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode,
-    Values, Window, builder::unnest_with_options, dml::CopyTo,
+    Aggregate, Analyze, AsOfJoin, AsOfMatch, CreateMemoryTable, CreateView, DdlStatement,
+    Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join,
+    Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition,
+    Sort, Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest,
+    UserDefinedLogicalNode, Values, Window, builder::unnest_with_options, dml::CopyTo,
 };
 use datafusion_common::tree_node::TreeNodeRefContainer;
 
@@ -148,6 +148,23 @@ impl TreeNode for LogicalPlan {
                     schema,
                     null_equality,
                     null_aware,
+                })
+            }),
+            LogicalPlan::AsOfJoin(AsOfJoin {
+                left,
+                right,
+                on,
+                match_condition,
+                join_constraint,
+                schema,
+            }) => (left, right).map_elements(f)?.update_data(|(left, right)| {
+                LogicalPlan::AsOfJoin(AsOfJoin {
+                    left,
+                    right,
+                    on,
+                    match_condition,
+                    join_constraint,
+                    schema,
                 })
             }),
             LogicalPlan::Limit(Limit { skip, fetch, input }) => input
@@ -447,6 +464,13 @@ impl LogicalPlan {
             LogicalPlan::Join(Join { on, filter, .. }) => {
                 (on, filter).apply_ref_elements(f)
             }
+            LogicalPlan::AsOfJoin(AsOfJoin {
+                on,
+                match_condition,
+                ..
+            }) => on.apply_elements(&mut f)?.visit_sibling(|| {
+                (&match_condition.left, &match_condition.right).apply_ref_elements(&mut f)
+            }),
             LogicalPlan::Sort(Sort { expr, .. }) => expr.apply_elements(f),
             LogicalPlan::Extension(extension) => {
                 // would be nice to avoid this copy -- maybe can
@@ -610,6 +634,29 @@ impl LogicalPlan {
                     null_aware,
                 })
             }),
+            LogicalPlan::AsOfJoin(AsOfJoin {
+                left,
+                right,
+                on,
+                match_condition,
+                join_constraint,
+                schema,
+            }) => (on, (match_condition.left, match_condition.right))
+                .map_elements(f)?
+                .update_data(|(on, (left_match, right_match))| {
+                    LogicalPlan::AsOfJoin(AsOfJoin {
+                        left,
+                        right,
+                        on,
+                        match_condition: Box::new(AsOfMatch {
+                            left: left_match,
+                            op: match_condition.op,
+                            right: right_match,
+                        }),
+                        join_constraint,
+                        schema,
+                    })
+                }),
             LogicalPlan::Sort(Sort { expr, input, fetch }) => expr
                 .map_elements(f)?
                 .update_data(|expr| LogicalPlan::Sort(Sort { expr, input, fetch })),
