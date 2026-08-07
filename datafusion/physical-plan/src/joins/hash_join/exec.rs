@@ -1933,17 +1933,18 @@ impl HashJoinExec {
             indices => Some(indices.iter().map(|i| *i as usize).collect()),
         };
 
-        let mut hash_join = HashJoinExec::try_new(
-            left,
-            right,
-            on,
-            filter,
-            &join_type,
-            projection,
-            partition_mode,
-            null_equality,
-            hashjoin.null_aware,
-        )?;
+        let mut hash_join = HashJoinExecBuilder::new(left, right, on, join_type)
+            .with_filter(filter)
+            .with_projection(projection)
+            .with_partition_mode(partition_mode)
+            .with_null_equality(null_equality)
+            .with_null_aware(hashjoin.null_aware)
+            // Restore the row limit that `limit_pushdown` may have pushed into
+            // the join. The field is presence-tracked, so a message written
+            // before it existed decodes to `None` (no limit) rather than to
+            // `Some(0)`.
+            .with_fetch(hashjoin.fetch.map(|f| f as usize))
+            .build()?;
 
         if let Some(dynamic_filter_proto) = &hashjoin.dynamic_filter {
             // The dynamic filter is a `DynamicFilterPhysicalExpr` over the probe
@@ -1958,16 +1959,6 @@ impl HashJoinExec {
                     )
                 })?;
             hash_join = hash_join.with_dynamic_filter_expr(df)?;
-        }
-
-        // Restore the row limit that `limit_pushdown` may have pushed into the
-        // join. The field is presence-tracked, so a message written before it
-        // existed decodes to `None` (no limit) rather than to `Some(0)`.
-        if let Some(fetch) = hashjoin.fetch {
-            hash_join = hash_join
-                .builder()
-                .with_fetch(Some(fetch as usize))
-                .build()?;
         }
 
         Ok(Arc::new(hash_join))
