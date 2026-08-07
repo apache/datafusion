@@ -2843,7 +2843,7 @@ Returns the corresponding date.
 Note: `to_date` returns Date32, which represents its values as the number of days since unix epoch(`1970-01-01`) stored as signed 32 bit value. The largest supported date value is `9999-12-31`.
 
 ```sql
-to_date('2017-05-31', '%Y-%m-%d')
+to_date(expression[, ..., format_n])
 ```
 
 #### Arguments
@@ -2851,7 +2851,7 @@ to_date('2017-05-31', '%Y-%m-%d')
 - **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order
   they appear with the first successful one being returned. If none of the formats successfully parse the expression
-  an error will be returned.
+  an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
 
 #### Example
 
@@ -2944,7 +2944,7 @@ Returns the corresponding time.
 Note: `to_time` returns Time64(Nanosecond), which represents the time of day in nanoseconds since midnight.
 
 ```sql
-to_time('12:30:45', '%H:%M:%S')
+to_time(expression[, ..., format_n])
 ```
 
 #### Arguments
@@ -3006,7 +3006,8 @@ to_timestamp(expression[, ..., format_n])
 - **format_n**:
   Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
   Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-  parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+  parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+  Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
   only supported at the end of the string preceded by a space.
 
 #### Example
@@ -3050,7 +3051,8 @@ to_timestamp_micros(expression[, ..., format_n])
 - **format_n**:
   Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
   Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-  parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+  parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+  Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
   only supported at the end of the string preceded by a space.
 
 #### Example
@@ -3094,7 +3096,8 @@ to_timestamp_millis(expression[, ..., format_n])
 - **format_n**:
   Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
   Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-  parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+  parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+  Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
   only supported at the end of the string preceded by a space.
 
 #### Example
@@ -3137,7 +3140,8 @@ to_timestamp_nanos(expression[, ..., format_n])
 - **format_n**:
   Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
   Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-  parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+  parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+  Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
   only supported at the end of the string preceded by a space.
 
 #### Example
@@ -3181,7 +3185,8 @@ to_timestamp_seconds(expression[, ..., format_n])
 - **format_n**:
   Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression.
   Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully
-  parse the expression an error will be returned. Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
+  parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
+  Note: parsing of named timezones (e.g. 'America/New_York') using %Z is
   only supported at the end of the string preceded by a space.
 
 #### Example
@@ -3218,7 +3223,7 @@ to_unixtime(expression[, ..., format_n])
 #### Arguments
 
 - **expression**: Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators.
-- **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned.
+- **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order they appear with the first successful one being returned. If none of the formats successfully parse the expression an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL.
 
 #### Example
 
@@ -3606,7 +3611,7 @@ array_dims(array)
 
 ### `array_distance`
 
-Returns the Euclidean distance between two input arrays of equal length.
+Returns the Euclidean distance between two one-dimensional input arrays of equal length.
 
 ```sql
 array_distance(array1, array2)
@@ -4696,13 +4701,13 @@ array_to_string(array, delimiter[, null_string])
 transforms the values of an array
 
 ```sql
-array_transform(array, x -> x*2)
+array_transform(array, lambda)
 ```
 
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **lambda**: Lambda
+- **lambda**: The lambda function used to transform each value of the array.
 
 #### Example
 

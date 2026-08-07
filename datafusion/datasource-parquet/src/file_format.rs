@@ -297,6 +297,7 @@ async fn get_file_decryption_properties(
 }
 
 #[cfg(not(feature = "parquet_encryption"))]
+#[expect(clippy::unused_async)]
 async fn get_file_decryption_properties(
     _state: &dyn Session,
     _options: &TableParquetOptions,

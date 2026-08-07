@@ -56,7 +56,7 @@ use datafusion_expr::{
     LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare,
     ResetVariable, SetVariable, SortExpr, Statement as PlanStatement, ToStringifiedPlan,
     TransactionAccessMode, TransactionConclusion, TransactionEnd,
-    TransactionIsolationLevel, TransactionStart, Volatility, WriteOp, cast, col,
+    TransactionIsolationLevel, TransactionStart, Volatility, WriteOp, cast,
 };
 use sqlparser::ast::{
     self, BeginTransactionKind, CheckConstraint, ForeignKeyConstraint, IndexColumn,
@@ -558,14 +558,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                     input_schema.fields().len()
                                 );
                             }
-                            let input_fields = input_schema.fields();
+                            let input_columns = input_schema.columns();
                             let project_exprs = schema
                                 .fields()
                                 .iter()
-                                .zip(input_fields)
-                                .map(|(field, input_field)| {
+                                .zip(input_columns)
+                                .map(|(field, input_column)| {
                                     cast(
-                                        col(input_field.name()),
+                                        Expr::Column(input_column),
                                         field.data_type().clone(),
                                     )
                                     .alias(field.name())

@@ -871,6 +871,18 @@ impl HashJoinExec {
             return false;
         }
 
+        // A null-aware anti join emits a build-side NULL only when the probe
+        // is truly empty. The pushed filter can empty the probe by pruning
+        // every row, which would surface that NULL wrongly. A NOT NULL build
+        // key cannot produce such a NULL, so the filter stays there.
+        if self.null_aware
+            && self.on.iter().any(|(build_key, _)| {
+                build_key.nullable(&self.left.schema()).unwrap_or(true)
+            })
+        {
+            return false;
+        }
+
         // `preserve_file_partitions` can report Hash partitioning for Hive-style
         // file groups, but those partitions are not actually hash-distributed.
         // Partitioned dynamic filters rely on hash routing, so disable them in
@@ -1633,14 +1645,11 @@ impl ExecutionPlan for HashJoinExec {
                 };
             });
 
-        // For semi/anti joins, the non-preserved side's columns are not in the
-        // output, but filters on join key columns can still be pushed there.
-        // We find output columns that are join keys on the preserved side and
-        // add their output indices to the non-preserved side's allowed set.
-        // The name-based remap in FilterRemapper will then match them to the
-        // corresponding column in the non-preserved child's schema.
+        // For semi joins, filters on output join keys can also be pushed to the
+        // non-output side: every emitted row has an equal key there. This is not
+        // true for anti joins, whose emitted rows have no match.
         match self.join_type {
-            JoinType::LeftSemi | JoinType::LeftAnti => {
+            JoinType::LeftSemi => {
                 let left_key_indices: HashSet<usize> = self
                     .on
                     .iter()
@@ -1654,7 +1663,7 @@ impl ExecutionPlan for HashJoinExec {
                     }
                 }
             }
-            JoinType::RightSemi | JoinType::RightAnti => {
+            JoinType::RightSemi => {
                 let right_key_indices: HashSet<usize> = self
                     .on
                     .iter()
@@ -1957,21 +1966,18 @@ impl HashJoinExec {
 /// Determines which sides of a join are "preserved" for filter pushdown.
 ///
 /// A preserved side means filters on that side's columns can be safely pushed
-/// below the join. This mirrors the logic in the logical optimizer's
-/// `lr_is_preserved` in `datafusion/optimizer/src/push_down_filter.rs`.
+/// below the join. This mostly mirrors the logical optimizer's `lr_is_preserved`;
+/// semi joins additionally allow join-key filters on the non-output side.
 fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     match join_type {
         JoinType::Inner => (true, true),
         JoinType::Left => (true, false),
         JoinType::Right => (false, true),
         JoinType::Full => (false, false),
-        // Filters in semi/anti joins are either on the preserved side, or on join keys,
-        // as all output columns come from the preserved side. Join key filters can be
-        // safely pushed down into the other side.
-        JoinType::LeftSemi | JoinType::LeftAnti => (true, true),
-        JoinType::RightSemi | JoinType::RightAnti => (true, true),
-        JoinType::LeftMark => (true, false),
-        JoinType::RightMark => (false, true),
+        // Callers restrict the non-output side of semi joins to join-key columns.
+        JoinType::LeftSemi | JoinType::RightSemi => (true, true),
+        JoinType::LeftAnti | JoinType::LeftMark => (true, false),
+        JoinType::RightAnti | JoinType::RightMark => (false, true),
     }
 }
 
@@ -6836,10 +6842,10 @@ mod tests {
         assert_eq!(lr_is_preserved(JoinType::Right), (false, true));
         assert_eq!(lr_is_preserved(JoinType::Full), (false, false));
         assert_eq!(lr_is_preserved(JoinType::LeftSemi), (true, true));
-        assert_eq!(lr_is_preserved(JoinType::LeftAnti), (true, true));
+        assert_eq!(lr_is_preserved(JoinType::LeftAnti), (true, false));
         assert_eq!(lr_is_preserved(JoinType::LeftMark), (true, false));
         assert_eq!(lr_is_preserved(JoinType::RightSemi), (true, true));
-        assert_eq!(lr_is_preserved(JoinType::RightAnti), (true, true));
+        assert_eq!(lr_is_preserved(JoinType::RightAnti), (false, true));
         assert_eq!(lr_is_preserved(JoinType::RightMark), (false, true));
     }
 
@@ -6945,6 +6951,79 @@ mod tests {
         )?;
 
         assert!(!join.allow_join_dynamic_filter_pushdown(session_config.options()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_dynamic_filter_pushdown_rejects_null_aware_nullable_build_key() -> Result<()>
+    {
+        let left = build_table_two_cols(
+            ("a1", &vec![Some(1), None]),
+            ("b1", &vec![Some(1), Some(2)]),
+        );
+        let right = build_table_two_cols(
+            ("a2", &vec![Some(2), Some(3)]),
+            ("b2", &vec![Some(1), Some(2)]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("a2", &right.schema())?) as _,
+        )];
+
+        let mut session_config = SessionConfig::default();
+        session_config
+            .options_mut()
+            .optimizer
+            .enable_join_dynamic_filter_pushdown = true;
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        assert!(!join.allow_join_dynamic_filter_pushdown(session_config.options()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_dynamic_filter_pushdown_allows_null_aware_non_null_build_key() -> Result<()> {
+        // A NOT NULL build key cannot surface a build-side NULL, so the
+        // pushdown must stay enabled.
+        let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![1]));
+        let right = build_table(("a2", &vec![2]), ("b2", &vec![2]), ("c2", &vec![2]));
+        let on = vec![(
+            Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("a2", &right.schema())?) as _,
+        )];
+
+        let mut session_config = SessionConfig::default();
+        session_config
+            .options_mut()
+            .optimizer
+            .enable_join_dynamic_filter_pushdown = true;
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        assert!(join.allow_join_dynamic_filter_pushdown(session_config.options()));
 
         Ok(())
     }

@@ -49,12 +49,12 @@ use datafusion_datasource_parquet::source::ParquetSource;
 #[cfg(feature = "parquet")]
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
-use datafusion_expr::physical_planning_context::{ScalarSubqueryResults, SubqueryIndex};
+use datafusion_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::{
     Empty, GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, TimestampValue,
 };
-use datafusion_physical_expr::{LexOrdering, LexRequirement};
+use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
 use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
 use datafusion_physical_plan::aggregates::AggregateExec;
@@ -70,7 +70,6 @@ use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::coop::CooperativeExec;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::explain::ExplainExec;
-use datafusion_physical_plan::expressions::PhysicalSortExpr;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, SortMergeJoinExec,
@@ -85,7 +84,7 @@ use datafusion_physical_plan::proto::{
     ExecutionPlanEncodeCtx,
 };
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
+use datafusion_physical_plan::scalar_subquery::ScalarSubqueryExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::{InterleaveExec, UnionExec};
@@ -96,7 +95,6 @@ use prost::Message;
 use prost::bytes::BufMut;
 
 use crate::common::{byte_to_string, str_to_byte};
-use crate::convert::TryFromProto;
 use crate::convert_required;
 use crate::physical_plan::from_proto::{
     parse_physical_expr_with_converter, parse_physical_sort_exprs,
@@ -119,6 +117,388 @@ fn encode_human_display_alias(human_display: &str, alias: &str) -> String {
         "{HUMAN_DISPLAY_ALIAS_PREFIX}{}:{alias}{human_display}",
         alias.len()
     )
+}
+
+#[cfg(test)]
+mod file_scan_config_serde {
+    use super::*;
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::{Constraint, Constraints, ScalarValue, Statistics};
+    use datafusion_datasource::file::FileSource;
+    use datafusion_datasource::file_groups::FileGroup;
+    use datafusion_datasource::file_stream::FileOpener;
+    use datafusion_datasource::{PartitionedFile, TableSchema};
+    use datafusion_execution::object_store::ObjectStoreUrl;
+    use datafusion_physical_expr::expressions::Column;
+    use datafusion_physical_expr::projection::{
+        ProjectionExpr as FileProjectionExpr, ProjectionExprs as FileProjectionExprs,
+    };
+    use datafusion_physical_expr::{
+        LexOrdering, Partitioning, PhysicalSortExpr, RangePartitioning, SplitPoint,
+    };
+    use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+    use object_store::ObjectStore;
+
+    #[derive(Clone)]
+    struct SerdeTestSource {
+        metrics: ExecutionPlanMetricsSet,
+        table_schema: TableSchema,
+        projection: Option<FileProjectionExprs>,
+    }
+
+    impl SerdeTestSource {
+        fn new(
+            table_schema: TableSchema,
+            projection: Option<FileProjectionExprs>,
+        ) -> Self {
+            Self {
+                metrics: ExecutionPlanMetricsSet::new(),
+                table_schema,
+                projection,
+            }
+        }
+    }
+
+    impl FileSource for SerdeTestSource {
+        fn create_file_opener(
+            &self,
+            _object_store: Arc<dyn ObjectStore>,
+            _base_config: &FileScanConfig,
+            _partition: usize,
+        ) -> Result<Arc<dyn FileOpener>> {
+            internal_err!("not needed for FileScanConfig serde tests")
+        }
+
+        fn table_schema(&self) -> &TableSchema {
+            &self.table_schema
+        }
+
+        fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
+            Arc::new(self.clone())
+        }
+
+        fn metrics(&self) -> &ExecutionPlanMetricsSet {
+            &self.metrics
+        }
+
+        fn file_type(&self) -> &str {
+            "serde-test"
+        }
+
+        fn try_pushdown_projection(
+            &self,
+            projection: &FileProjectionExprs,
+        ) -> Result<Option<Arc<dyn FileSource>>> {
+            Ok(Some(Arc::new(Self {
+                projection: Some(projection.clone()),
+                ..self.clone()
+            })))
+        }
+
+        fn projection(&self) -> Option<&FileProjectionExprs> {
+            self.projection.as_ref()
+        }
+    }
+
+    fn populated_projection() -> FileProjectionExprs {
+        FileProjectionExprs::new(vec![FileProjectionExpr::new(
+            Arc::new(Column::new("value", 0)),
+            "projected_value",
+        )])
+    }
+
+    fn test_config(output_partitioning: Option<Partitioning>) -> FileScanConfig {
+        test_config_with_projection(output_partitioning, Some(populated_projection()))
+    }
+
+    fn test_config_with_projection(
+        output_partitioning: Option<Partitioning>,
+        projection: Option<FileProjectionExprs>,
+    ) -> FileScanConfig {
+        let file_schema = Arc::new(
+            Schema::new(vec![
+                Field::new("value", DataType::Int32, false),
+                Field::new("label", DataType::Utf8, true),
+            ])
+            .with_metadata(HashMap::from([(
+                "serde_test_key".to_string(),
+                "serde_test_value".to_string(),
+            )])),
+        );
+        let table_schema = TableSchema::builder(Arc::clone(&file_schema))
+            .with_table_partition_cols(vec![Arc::new(Field::new(
+                "part",
+                DataType::Utf8,
+                false,
+            ))])
+            .build();
+        let table_statistics = Statistics::new_unknown(table_schema.table_schema());
+        let source = Arc::new(SerdeTestSource::new(table_schema, projection));
+        let first_file = PartitionedFile::new("data/part=a/file.arrow", 1024)
+            .with_partition_values(vec![ScalarValue::Utf8(Some("a".to_string()))])
+            .with_range(10, 900)
+            .with_arrow_schema(Arc::clone(&file_schema))
+            .with_statistics(Arc::new(table_statistics.clone()));
+        let second_file = PartitionedFile::new("data/part=b/file.arrow", 2048)
+            .with_partition_values(vec![ScalarValue::Utf8(Some("b".to_string()))]);
+        let third_file = PartitionedFile::new("data/part=c/file.arrow", 4096)
+            .with_partition_values(vec![ScalarValue::Utf8(Some("c".to_string()))])
+            .with_arrow_schema(Arc::clone(&file_schema));
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(
+            Column::new("value", 0),
+        ))])
+        .expect("single expression ordering");
+
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+            .with_file_groups(vec![
+                FileGroup::new(vec![first_file, second_file]),
+                FileGroup::new(vec![third_file]),
+            ])
+            .with_constraints(Constraints::new_unverified(vec![Constraint::PrimaryKey(
+                vec![0],
+            )]))
+            .with_statistics(table_statistics)
+            .with_limit(Some(17))
+            .with_batch_size(Some(256))
+            .with_output_ordering(vec![ordering])
+            .with_output_partitioning(output_partitioning)
+            .build()
+    }
+
+    fn hash_partitioning() -> Partitioning {
+        Partitioning::Hash(vec![Arc::new(Column::new("value", 0))], 3)
+    }
+
+    fn range_partitioning() -> Partitioning {
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(
+            Column::new("value", 0),
+        ))])
+        .expect("single expression ordering");
+        Partitioning::Range(RangePartitioning::new(
+            ordering,
+            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+        ))
+    }
+
+    fn decode_source(conf: &protobuf::FileScanExecConf) -> Result<Arc<dyn FileSource>> {
+        Ok(Arc::new(SerdeTestSource::new(
+            FileScanConfig::parse_table_schema_from_proto(conf)?,
+            None,
+        )))
+    }
+
+    struct FileScanSerdeHarness {
+        codec: DefaultPhysicalExtensionCodec,
+        converter: DefaultPhysicalProtoConverter,
+        task_ctx: TaskContext,
+    }
+
+    impl FileScanSerdeHarness {
+        fn new() -> Self {
+            Self {
+                codec: DefaultPhysicalExtensionCodec {},
+                converter: DefaultPhysicalProtoConverter {},
+                task_ctx: TaskContext::default(),
+            }
+        }
+
+        fn encode(&self, config: &FileScanConfig) -> Result<protobuf::FileScanExecConf> {
+            let encoder = ConverterPlanEncoder {
+                codec: &self.codec,
+                proto_converter: &self.converter,
+            };
+            config.try_to_proto(&ExecutionPlanEncodeCtx::new(&encoder))
+        }
+
+        fn decode(&self, conf: &protobuf::FileScanExecConf) -> Result<FileScanConfig> {
+            self.decode_with_source(conf, decode_source(conf)?)
+        }
+
+        fn decode_with_source(
+            &self,
+            conf: &protobuf::FileScanExecConf,
+            file_source: Arc<dyn FileSource>,
+        ) -> Result<FileScanConfig> {
+            let physical_decode_ctx =
+                PhysicalPlanDecodeContext::new(&self.task_ctx, &self.codec);
+            let decoder = ConverterPlanDecoder {
+                ctx: &physical_decode_ctx,
+                proto_converter: &self.converter,
+            };
+            FileScanConfig::try_from_proto(
+                conf,
+                &ExecutionPlanDecodeCtx::new(&decoder),
+                file_source,
+            )
+        }
+    }
+
+    #[test]
+    fn new_file_scan_config_serde_roundtrips_all_partitioning_variants() -> Result<()> {
+        let serde = FileScanSerdeHarness::new();
+
+        for config in [
+            test_config(None),
+            test_config(Some(Partitioning::RoundRobinBatch(2))),
+            test_config(Some(hash_partitioning())),
+            test_config(Some(range_partitioning())),
+            test_config(Some(Partitioning::UnknownPartitioning(4))),
+        ] {
+            let encoded = serde.encode(&config)?;
+            let reencoded = serde.encode(&serde.decode(&encoded)?)?;
+            assert_eq!(reencoded.output_partitioning, encoded.output_partitioning);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn new_file_scan_config_serde_preserves_complete_fixture() -> Result<()> {
+        let serde = FileScanSerdeHarness::new();
+        let config = test_config(None);
+        let decoded = serde.decode(&serde.encode(&config)?)?;
+
+        assert_eq!(decoded.constraints, config.constraints);
+        assert_eq!(
+            decoded.file_schema().metadata,
+            config.file_schema().metadata
+        );
+        assert_eq!(decoded.file_groups.len(), 2);
+        assert_eq!(decoded.file_groups[0].len(), 2);
+        assert_eq!(decoded.file_groups[1].len(), 1);
+        assert!(decoded.file_groups[0].files()[0].arrow_schema.is_some());
+        assert!(decoded.file_groups[0].files()[1].arrow_schema.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn new_file_scan_config_serde_preserves_projection_presence() -> Result<()> {
+        let serde = FileScanSerdeHarness::new();
+
+        let absent = serde.encode(&test_config_with_projection(None, None))?;
+        assert!(absent.projection_exprs.is_none());
+        assert!(serde.decode(&absent)?.file_source().projection().is_none());
+
+        let empty = serde.encode(&test_config_with_projection(
+            None,
+            Some(FileProjectionExprs::new(vec![])),
+        ))?;
+        assert!(
+            empty
+                .projection_exprs
+                .as_ref()
+                .is_some_and(|projection| projection.projections.is_empty())
+        );
+        assert!(
+            serde
+                .decode(&empty)?
+                .file_source()
+                .projection()
+                .is_some_and(|projection| projection.as_ref().is_empty())
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn new_file_scan_config_decode_rejects_malformed_required_fields() -> Result<()> {
+        let serde = FileScanSerdeHarness::new();
+        let valid = serde.encode(&test_config(None))?;
+        let file_source = decode_source(&valid)?;
+
+        for (field, malformed) in [
+            (
+                "schema",
+                protobuf::FileScanExecConf {
+                    schema: None,
+                    ..valid.clone()
+                },
+            ),
+            (
+                "constraints",
+                protobuf::FileScanExecConf {
+                    constraints: None,
+                    ..valid.clone()
+                },
+            ),
+            (
+                "statistics",
+                protobuf::FileScanExecConf {
+                    statistics: None,
+                    ..valid.clone()
+                },
+            ),
+        ] {
+            let err = serde
+                .decode_with_source(&malformed, Arc::clone(&file_source))
+                .expect_err("missing required field must fail");
+            assert!(err.to_string().contains(field), "unexpected error: {err}");
+        }
+
+        let mut missing_projection_expr = valid.clone();
+        missing_projection_expr
+            .projection_exprs
+            .as_mut()
+            .expect("test config has projection expressions")
+            .projections[0]
+            .expr = None;
+        let err = serde
+            .decode_with_source(&missing_projection_expr, file_source)
+            .expect_err("missing projection expression must fail");
+        assert!(
+            err.to_string()
+                .contains("ProjectionExpr missing expr field"),
+            "unexpected error: {err}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn new_file_scan_config_decode_rejects_invalid_range_ordering() -> Result<()> {
+        let serde = FileScanSerdeHarness::new();
+        let mut proto = serde.encode(&test_config(Some(range_partitioning())))?;
+
+        let mut duplicate_ordering = proto.clone();
+        let range = match duplicate_ordering
+            .output_partitioning
+            .as_mut()
+            .and_then(|p| p.partition_method.as_mut())
+        {
+            Some(protobuf::partitioning::PartitionMethod::Range(range)) => range,
+            other => panic!("expected range partitioning, got {other:?}"),
+        };
+        range.sort_expr.push(range.sort_expr[0].clone());
+
+        let err = serde
+            .decode(&duplicate_ordering)
+            .expect_err("duplicate range ordering must fail");
+        assert!(
+            err.to_string().contains("duplicate expressions"),
+            "unexpected error: {err}"
+        );
+
+        let range = match proto
+            .output_partitioning
+            .as_mut()
+            .and_then(|p| p.partition_method.as_mut())
+        {
+            Some(protobuf::partitioning::PartitionMethod::Range(range)) => range,
+            other => panic!("expected range partitioning, got {other:?}"),
+        };
+        range.sort_expr.clear();
+
+        let err = serde
+            .decode(&proto)
+            .expect_err("empty range ordering must fail");
+        assert!(
+            err.to_string().contains("requires non-empty ordering"),
+            "unexpected error: {err}"
+        );
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -783,15 +1163,19 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::Analyze(_) => {
                 AnalyzeExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::JsonSink(sink) => {
-                self.try_into_json_sink_physical_plan(sink, ctx, proto_converter)
+            PhysicalPlanType::JsonSink(_) => {
+                JsonSink::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::CsvSink(sink) => {
-                self.try_into_csv_sink_physical_plan(sink, ctx, proto_converter)
+            PhysicalPlanType::CsvSink(_) => {
+                CsvSink::try_from_proto(self.node(), &decode_ctx)
             }
-            #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
-            PhysicalPlanType::ParquetSink(sink) => {
-                self.try_into_parquet_sink_physical_plan(sink, ctx, proto_converter)
+            PhysicalPlanType::ParquetSink(_) => {
+                #[cfg(feature = "parquet")]
+                {
+                    ParquetSink::try_from_proto(self.node(), &decode_ctx)
+                }
+                #[cfg(not(feature = "parquet"))]
+                not_impl_err!("ParquetSink requires the `parquet` feature")
             }
             PhysicalPlanType::Unnest(_) => {
                 UnnestExec::try_from_proto(self.node(), &decode_ctx)
@@ -811,8 +1195,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::Buffer(_) => {
                 BufferExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::ScalarSubquery(sq) => {
-                self.try_into_scalar_subquery_physical_plan(sq, ctx, proto_converter)
+            PhysicalPlanType::ScalarSubquery(_) => {
+                ScalarSubqueryExec::try_from_proto(self.node(), &decode_ctx)
             }
         }
     }
@@ -855,29 +1239,11 @@ pub trait PhysicalPlanNodeExt: Sized {
             return Ok(node);
         }
 
-        if let Some(exec) = plan.downcast_ref::<DataSinkExec>()
-            && let Some(node) = protobuf::PhysicalPlanNode::try_from_data_sink_exec(
-                exec,
-                codec,
-                proto_converter,
-            )?
-        {
-            return Ok(node);
-        }
-
         if let Some(exec) = plan.downcast_ref::<LazyMemoryExec>()
             && let Some(node) =
                 protobuf::PhysicalPlanNode::try_from_lazy_memory_exec(exec)?
         {
             return Ok(node);
-        }
-
-        if let Some(exec) = plan.downcast_ref::<ScalarSubqueryExec>() {
-            return protobuf::PhysicalPlanNode::try_from_scalar_subquery_exec(
-                exec,
-                codec,
-                proto_converter,
-            );
         }
 
         let mut buf: Vec<u8> = vec![];
@@ -1187,15 +1553,11 @@ pub trait PhysicalPlanNodeExt: Sized {
         })?;
         let schema: SchemaRef = SchemaRef::new(proto_schema.try_into()?);
 
-        let projection = if !scan.projection.is_empty() {
-            Some(
-                scan.projection
-                    .iter()
-                    .map(|i| *i as usize)
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            None
+        // Preserve the empty-projection sentinel written by `try_from_data_source_exec`.
+        let projection = match scan.projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Vec::new()),
+            indices => Some(indices.iter().map(|i| *i as usize).collect()),
         };
 
         let mut sort_information = vec![];
@@ -1643,81 +2005,53 @@ pub trait PhysicalPlanNodeExt: Sized {
         AnalyzeExec::try_from_proto(self.node(), &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `JsonSink` deserializes itself via `JsonSink::try_from_proto`"
+    )]
     fn try_into_json_sink_physical_plan(
         &self,
         sink: &protobuf::JsonSinkExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input = into_physical_plan(&sink.input, ctx, proto_converter)?;
-
-        let data_sink = JsonSink::try_from_proto(
-            sink.sink
-                .as_ref()
-                .ok_or_else(|| proto_error("Missing required field in protobuf"))?,
-        )?;
-        let sink_schema = input.schema();
-        let sort_order = sink
-            .sort_order
-            .as_ref()
-            .map(|collection| {
-                parse_physical_sort_exprs(
-                    &collection.physical_sort_expr_nodes,
-                    ctx,
-                    &sink_schema,
-                    proto_converter,
-                )
-                .map(|sort_exprs| {
-                    LexRequirement::new(sort_exprs.into_iter().map(Into::into))
-                })
-            })
-            .transpose()?
-            .flatten();
-        Ok(Arc::new(DataSinkExec::new(
-            input,
-            Arc::new(data_sink),
-            sort_order,
-        )))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::JsonSink(Box::new(sink.clone()))),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        JsonSink::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `CsvSink` deserializes itself via `CsvSink::try_from_proto`"
+    )]
     fn try_into_csv_sink_physical_plan(
         &self,
         sink: &protobuf::CsvSinkExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let input = into_physical_plan(&sink.input, ctx, proto_converter)?;
-
-        let data_sink = CsvSink::try_from_proto(
-            sink.sink
-                .as_ref()
-                .ok_or_else(|| proto_error("Missing required field in protobuf"))?,
-        )?;
-        let sink_schema = input.schema();
-        let sort_order = sink
-            .sort_order
-            .as_ref()
-            .map(|collection| {
-                parse_physical_sort_exprs(
-                    &collection.physical_sort_expr_nodes,
-                    ctx,
-                    &sink_schema,
-                    proto_converter,
-                )
-                .map(|sort_exprs| {
-                    LexRequirement::new(sort_exprs.into_iter().map(Into::into))
-                })
-            })
-            .transpose()?
-            .flatten();
-        Ok(Arc::new(DataSinkExec::new(
-            input,
-            Arc::new(data_sink),
-            sort_order,
-        )))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::CsvSink(Box::new(sink.clone()))),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        CsvSink::try_from_proto(&node, &decode_ctx)
     }
 
     #[cfg_attr(not(feature = "parquet"), expect(unused_variables))]
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `ParquetSink` deserializes itself via `ParquetSink::try_from_proto`"
+    )]
     fn try_into_parquet_sink_physical_plan(
         &self,
         sink: &protobuf::ParquetSinkExecNode,
@@ -1726,38 +2060,20 @@ pub trait PhysicalPlanNodeExt: Sized {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         #[cfg(feature = "parquet")]
         {
-            let input = into_physical_plan(&sink.input, ctx, proto_converter)?;
-
-            let data_sink = ParquetSink::try_from_proto(
-                sink.sink
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Missing required field in protobuf"))?,
-            )?;
-            let sink_schema = input.schema();
-            let sort_order = sink
-                .sort_order
-                .as_ref()
-                .map(|collection| {
-                    parse_physical_sort_exprs(
-                        &collection.physical_sort_expr_nodes,
-                        ctx,
-                        &sink_schema,
-                        proto_converter,
-                    )
-                    .map(|sort_exprs| {
-                        LexRequirement::new(sort_exprs.into_iter().map(Into::into))
-                    })
-                })
-                .transpose()?
-                .flatten();
-            Ok(Arc::new(DataSinkExec::new(
-                input,
-                Arc::new(data_sink),
-                sort_order,
-            )))
+            let node = protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::ParquetSink(Box::new(
+                    sink.clone(),
+                ))),
+            };
+            let decoder = ConverterPlanDecoder {
+                ctx,
+                proto_converter,
+            };
+            let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+            ParquetSink::try_from_proto(&node, &decode_ctx)
         }
         #[cfg(not(feature = "parquet"))]
-        panic!("Trying to use ParquetSink without `parquet` feature enabled");
+        not_impl_err!("ParquetSink requires the `parquet` feature")
     }
 
     #[deprecated(
@@ -1950,38 +2266,27 @@ pub trait PhysicalPlanNodeExt: Sized {
         BufferExec::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `ScalarSubqueryExec` deserializes itself via `ScalarSubqueryExec::try_from_proto`"
+    )]
     fn try_into_scalar_subquery_physical_plan(
         &self,
         sq: &protobuf::ScalarSubqueryExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // First, deserialize the main input plan. We set up the subquery results
-        // container first, so that ScalarSubqueryExpr nodes can reference it.
-        let subquery_results = ScalarSubqueryResults::new(sq.subqueries.len());
-        let input_ctx = ctx.with_scalar_subquery_results(subquery_results.clone());
-        let input = into_physical_plan(&sq.input, &input_ctx, proto_converter)?;
-
-        // Now deserialize the subquery children.
-        let subqueries: Vec<ScalarSubqueryLink> = sq
-            .subqueries
-            .iter()
-            .enumerate()
-            .map(|(index, sq_plan)| {
-                let plan =
-                    sq_plan.try_into_physical_plan_with_context(ctx, proto_converter)?;
-                Ok(ScalarSubqueryLink {
-                    plan,
-                    index: SubqueryIndex::new(index),
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(Arc::new(ScalarSubqueryExec::new(
-            input,
-            subqueries,
-            subquery_results,
-        )))
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::ScalarSubquery(Box::new(
+                sq.clone(),
+            ))),
+        };
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        ScalarSubqueryExec::try_from_proto(&node, &decode_ctx)
     }
 
     #[deprecated(
@@ -2383,12 +2688,13 @@ pub trait PhysicalPlanNodeExt: Sized {
             let proto_schema: protobuf::Schema =
                 source_conf.original_schema().as_ref().try_into()?;
 
-            let proto_projection = source_conf
-                .projection()
-                .as_ref()
-                .map_or_else(Vec::new, |v| {
-                    v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
-                });
+            // Proto3 can't tell `None` from `Some(vec![])`; encode the latter
+            // as the `[u32::MAX]` sentinel, matching the join/filter nodes.
+            let proto_projection = match source_conf.projection().as_ref() {
+                None => Vec::new(),
+                Some(v) if v.is_empty() => vec![u32::MAX],
+                Some(v) => v.iter().map(|x| *x as u32).collect(),
+            };
 
             let proto_sort_information = source_conf
                 .sort_information()
@@ -2591,83 +2897,21 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `DataSinkExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_data_sink_exec(
         exec: &DataSinkExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Option<protobuf::PhysicalPlanNode>> {
-        let input: protobuf::PhysicalPlanNode =
-            protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-                exec.input().to_owned(),
-                codec,
-                proto_converter,
-            )?;
-        let sort_order = match exec.sort_order() {
-            Some(requirements) => {
-                let expr = requirements
-                    .iter()
-                    .map(|requirement| {
-                        let expr: PhysicalSortExpr = requirement.to_owned().into();
-                        let sort_expr = protobuf::PhysicalSortExprNode {
-                            expr: Some(Box::new(
-                                proto_converter
-                                    .physical_expr_to_proto(&expr.expr, codec)?,
-                            )),
-                            asc: !expr.options.descending,
-                            nulls_first: expr.options.nulls_first,
-                        };
-                        Ok(sort_expr)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                Some(protobuf::PhysicalSortExprNodeCollection {
-                    physical_sort_expr_nodes: expr,
-                })
-            }
-            None => None,
+        let encoder = ConverterPlanEncoder {
+            codec,
+            proto_converter,
         };
-
-        if let Some(sink) = exec.sink().downcast_ref::<JsonSink>() {
-            return Ok(Some(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::JsonSink(Box::new(
-                    protobuf::JsonSinkExecNode {
-                        input: Some(Box::new(input)),
-                        sink: Some(protobuf::JsonSink::try_from_proto(sink)?),
-                        sink_schema: Some(exec.schema().as_ref().try_into()?),
-                        sort_order,
-                    },
-                ))),
-            }));
-        }
-
-        if let Some(sink) = exec.sink().downcast_ref::<CsvSink>() {
-            return Ok(Some(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::CsvSink(Box::new(
-                    protobuf::CsvSinkExecNode {
-                        input: Some(Box::new(input)),
-                        sink: Some(protobuf::CsvSink::try_from_proto(sink)?),
-                        sink_schema: Some(exec.schema().as_ref().try_into()?),
-                        sort_order,
-                    },
-                ))),
-            }));
-        }
-
-        #[cfg(feature = "parquet")]
-        if let Some(sink) = exec.sink().downcast_ref::<ParquetSink>() {
-            return Ok(Some(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::ParquetSink(Box::new(
-                    protobuf::ParquetSinkExecNode {
-                        input: Some(Box::new(input)),
-                        sink: Some(protobuf::ParquetSink::try_from_proto(sink)?),
-                        sink_schema: Some(exec.schema().as_ref().try_into()?),
-                        sort_order,
-                    },
-                ))),
-            }));
-        }
-
-        // If unknown DataSink then let extension handle it
-        Ok(None)
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)
     }
 
     #[deprecated(
@@ -2866,35 +3110,22 @@ pub trait PhysicalPlanNodeExt: Sized {
             .ok_or_else(|| internal_datafusion_err!("BufferExec is not serializable"))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `ScalarSubqueryExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_scalar_subquery_exec(
         exec: &ScalarSubqueryExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<protobuf::PhysicalPlanNode> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            Arc::clone(exec.input()),
+        let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
-        )?;
-        let subqueries = exec
-            .subqueries()
-            .iter()
-            .map(|sq| {
-                protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-                    Arc::clone(&sq.plan),
-                    codec,
-                    proto_converter,
-                )
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::ScalarSubquery(Box::new(
-                protobuf::ScalarSubqueryExecNode {
-                    input: Some(Box::new(input)),
-                    subqueries,
-                },
-            ))),
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        exec.try_to_proto(&encode_ctx)?.ok_or_else(|| {
+            internal_datafusion_err!("ScalarSubqueryExec is not serializable")
         })
     }
 }
@@ -3410,18 +3641,6 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
     }
 }
 
-fn into_physical_plan(
-    node: &Option<Box<protobuf::PhysicalPlanNode>>,
-    ctx: &PhysicalPlanDecodeContext<'_>,
-    proto_converter: &dyn PhysicalProtoConverterExtension,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    if let Some(field) = node {
-        proto_converter.proto_to_execution_plan(field, ctx)
-    } else {
-        Err(proto_error("Missing required field in protobuf"))
-    }
-}
-
 /// Adapter backing [`ExecutionPlanEncodeCtx`] for plans migrated to the
 /// `try_to_proto` hook (#22419). Routes child-plan and child-expr encoding back
 /// through the central converter so nested plans honor their own hooks.
@@ -3483,6 +3702,16 @@ impl ExecutionPlanDecode for ConverterPlanDecoder<'_, '_> {
         node: &protobuf::PhysicalPlanNode,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.proto_converter.proto_to_execution_plan(node, self.ctx)
+    }
+
+    fn decode_plan_with_scalar_subquery_results(
+        &self,
+        node: &protobuf::PhysicalPlanNode,
+        results: ScalarSubqueryResults,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let scoped_ctx = self.ctx.with_scalar_subquery_results(results);
+        self.proto_converter
+            .proto_to_execution_plan(node, &scoped_ctx)
     }
 
     fn decode_expr(

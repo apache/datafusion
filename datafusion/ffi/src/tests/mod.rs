@@ -31,8 +31,9 @@ use datafusion_expr::{Expr, TableType};
 use datafusion_physical_plan::ExecutionPlan;
 use sync_provider::create_sync_table_provider;
 use udf_udaf_udwf::{
-    create_ffi_abs_func, create_ffi_random_func, create_ffi_rank_func,
-    create_ffi_stddev_func, create_ffi_sum_func, create_ffi_table_func,
+    create_ffi_abs_func, create_ffi_first_value_func, create_ffi_random_func,
+    create_ffi_rank_func, create_ffi_stddev_func, create_ffi_sum_func,
+    create_ffi_table_func,
 };
 
 use crate::catalog_provider::FFI_CatalogProvider;
@@ -42,6 +43,8 @@ use crate::execution_plan::FFI_ExecutionPlan;
 use crate::execution_plan::tests::EmptyExec;
 use crate::physical_optimizer::FFI_PhysicalOptimizerRule;
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::proto::physical_extension_codec::FFI_PhysicalExtensionCodec;
+use crate::query_planner::FFI_QueryPlanner;
 use crate::table_provider::FFI_TableProvider;
 use crate::table_provider_factory::FFI_TableProviderFactory;
 use crate::tests::catalog::create_catalog_provider_list;
@@ -49,11 +52,13 @@ use crate::udaf::FFI_AggregateUDF;
 use crate::udf::FFI_ScalarUDF;
 use crate::udtf::FFI_TableFunction;
 use crate::udwf::FFI_WindowUDF;
+use crate::util::FFI_Option;
 
 mod async_provider;
 pub mod catalog;
 pub mod config;
 mod physical_optimizer;
+mod query_planner;
 mod sync_provider;
 mod table_provider_factory;
 mod udf_udaf_udwf;
@@ -116,7 +121,18 @@ pub struct ForeignLibraryModule {
 
     pub create_context_aware_optimizer_rule: extern "C" fn() -> FFI_PhysicalOptimizerRule,
 
+    /// Construct a query planner. When `library_a_planner` is provided the
+    /// planner delegates to it, as library C does after library A swaps planners.
+    pub create_query_planner: extern "C" fn(
+        logical_codec: FFI_LogicalExtensionCodec,
+        physical_codec: FFI_PhysicalExtensionCodec,
+        library_a_planner: FFI_Option<FFI_QueryPlanner>,
+    ) -> FFI_QueryPlanner,
+
     pub version: extern "C" fn() -> u64,
+
+    /// Create an aggregate UDAF using first_value
+    pub create_first_value_udaf: extern "C" fn() -> FFI_AggregateUDF,
 }
 
 pub fn create_test_schema() -> Arc<Schema> {
@@ -265,6 +281,8 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
             physical_optimizer::create_physical_optimizer_rule,
         create_context_aware_optimizer_rule:
             physical_optimizer::create_context_aware_optimizer_rule,
+        create_query_planner: query_planner::create_query_planner,
         version: super::version,
+        create_first_value_udaf: create_ffi_first_value_func,
     }
 }
