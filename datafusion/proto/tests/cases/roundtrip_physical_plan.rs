@@ -4557,7 +4557,9 @@ fn test_hash_join_with_dynamic_filter_roundtrip() -> Result<()> {
         .downcast_ref::<HashJoinExec>()
         .expect("Should be HashJoinExec");
     let deserialized_hash_join_df = deserialized_join
-        .dynamic_filter_expr()
+        .dynamic_expressions_produced()
+        .into_iter()
+        .next()
         .expect("HashJoinExec should have a dynamic filter after roundtrip");
 
     // Extract the dynamic filter pushed down to the probe side's ParquetSource.
@@ -4565,7 +4567,7 @@ fn test_hash_join_with_dynamic_filter_roundtrip() -> Result<()> {
 
     // The HashJoinExec's dynamic filter and the probe side's predicate should
     // refer to the same underlying expression.
-    let plan_df: Arc<dyn PhysicalExpr> = deserialized_hash_join_df.clone();
+    let plan_df = deserialized_hash_join_df;
     assert_dynamic_filters_equal(&plan_df, &deserialized_predicate);
     assert_dynamic_filter_update_is_visible(&plan_df, &deserialized_predicate)?;
 
@@ -4710,7 +4712,9 @@ fn test_aggregate_with_dynamic_filter_roundtrip() -> Result<()> {
         .downcast_ref::<AggregateExec>()
         .expect("Should be AggregateExec");
     let deserialized_agg_df = deserialized_agg
-        .dynamic_filter_expr()
+        .dynamic_expressions_produced()
+        .into_iter()
+        .next()
         .expect("AggregateExec should have a dynamic filter after roundtrip");
 
     // Extract the dynamic filter pushed down to the child ParquetSource.
@@ -4718,7 +4722,7 @@ fn test_aggregate_with_dynamic_filter_roundtrip() -> Result<()> {
 
     // The AggregateExec's dynamic filter and the child's predicate should
     // refer to the same underlying expression.
-    let plan_df: Arc<dyn PhysicalExpr> = deserialized_agg_df.clone();
+    let plan_df = deserialized_agg_df;
     assert_dynamic_filters_equal(&plan_df, &deserialized_predicate);
     assert_dynamic_filter_update_is_visible(&plan_df, &deserialized_predicate)?;
 
@@ -4778,7 +4782,9 @@ fn test_sort_topk_with_dynamic_filter_roundtrip() -> Result<()> {
         .downcast_ref::<SortExec>()
         .expect("Should be SortExec");
     let deserialized_sort_df = deserialized_sort
-        .dynamic_filter_expr()
+        .dynamic_expressions_produced()
+        .into_iter()
+        .next()
         .expect("SortExec should have a dynamic filter after roundtrip");
 
     // Extract the dynamic filter pushed down to the child ParquetSource.
@@ -4786,7 +4792,7 @@ fn test_sort_topk_with_dynamic_filter_roundtrip() -> Result<()> {
 
     // The SortExec's dynamic filter and the child's predicate should
     // refer to the same underlying expression.
-    let plan_df: Arc<dyn PhysicalExpr> = deserialized_sort_df;
+    let plan_df = deserialized_sort_df;
     assert_dynamic_filters_equal(&plan_df, &deserialized_predicate);
     assert_dynamic_filter_update_is_visible(&plan_df, &deserialized_predicate)?;
 

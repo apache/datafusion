@@ -28,6 +28,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Statistics};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{Expr, TableType};
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use sync_provider::create_sync_table_provider;
 use udf_udaf_udwf::{
@@ -40,7 +41,7 @@ use crate::catalog_provider::FFI_CatalogProvider;
 use crate::catalog_provider_list::FFI_CatalogProviderList;
 use crate::config::extension_options::FFI_ExtensionOptions;
 use crate::execution_plan::FFI_ExecutionPlan;
-use crate::execution_plan::tests::EmptyExec;
+use crate::execution_plan::tests::{EmptyExec, create_dynamic_filter};
 use crate::physical_optimizer::FFI_PhysicalOptimizerRule;
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 use crate::proto::physical_extension_codec::FFI_PhysicalExtensionCodec;
@@ -112,6 +113,8 @@ pub struct ForeignLibraryModule {
 
     pub create_empty_exec: extern "C" fn() -> FFI_ExecutionPlan,
 
+    pub create_exec_with_dynamic_expressions: extern "C" fn() -> FFI_ExecutionPlan,
+
     pub create_exec_with_statistics: extern "C" fn() -> FFI_ExecutionPlan,
 
     pub create_table_with_statistics:
@@ -174,6 +177,14 @@ pub(crate) extern "C" fn create_empty_exec() -> FFI_ExecutionPlan {
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
 
     let plan = Arc::new(EmptyExec::new(schema));
+    FFI_ExecutionPlan::new(plan, None)
+}
+
+pub(crate) extern "C" fn create_exec_with_dynamic_expressions() -> FFI_ExecutionPlan {
+    let schema = Arc::new(Schema::empty());
+    let expression: Arc<dyn PhysicalExpr> = create_dynamic_filter();
+    let plan =
+        Arc::new(EmptyExec::new(schema).with_dynamic_expressions(vec![expression]));
     FFI_ExecutionPlan::new(plan, None)
 }
 
@@ -275,6 +286,7 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_rank_udwf: create_ffi_rank_func,
         create_extension_options: config::create_extension_options,
         create_empty_exec,
+        create_exec_with_dynamic_expressions,
         create_exec_with_statistics,
         create_table_with_statistics,
         create_physical_optimizer_rule:
