@@ -109,8 +109,8 @@ pub(crate) struct StructFieldAccess {
 ///                                       } }
 /// ```
 #[derive(Debug, Default)]
-struct StructAccessTree {
-    roots: BTreeMap<usize, StructAccessNode>,
+struct StructAccessTree<'a> {
+    roots: BTreeMap<usize, StructAccessNode<'a>>,
 }
 
 /// One node in a [`StructAccessTree`].
@@ -118,19 +118,19 @@ struct StructAccessTree {
 /// `selected_here` is `true` when at least one access path terminates at this
 /// node. Duplicate paths are idempotent.
 #[derive(Debug, Default)]
-struct StructAccessNode {
-    children: BTreeMap<String, StructAccessNode>,
+struct StructAccessNode<'a> {
+    children: BTreeMap<&'a str, StructAccessNode<'a>>,
     selected_here: bool,
 }
 
-impl StructAccessTree {
+impl<'a> StructAccessTree<'a> {
     /// Builds a [`StructAccessTree`] from a flat list of accesses.
     ///
     /// For each [`StructFieldAccess`], walks from the given root index down
     /// the field path, creating intermediate nodes as needed, and sets the
     /// terminal node's `selected_here` to `true`. Paths sharing a prefix
     /// collapse onto common intermediate nodes.
-    fn from_accesses(accesses: &[StructFieldAccess]) -> Self {
+    fn from_accesses(accesses: &'a [StructFieldAccess]) -> Self {
         let mut tree = Self::default();
         for StructFieldAccess {
             root_index,
@@ -139,7 +139,7 @@ impl StructAccessTree {
         {
             let mut node = tree.roots.entry(*root_index).or_default();
             for component in field_path {
-                node = node.children.entry(component.clone()).or_default();
+                node = node.children.entry(component.as_str()).or_default();
             }
             node.selected_here = true;
         }
@@ -148,7 +148,7 @@ impl StructAccessTree {
 
     /// Returns the node for the given file-schema column index, or `None` if
     /// no access path was recorded under that root.
-    fn root(&self, idx: usize) -> Option<&StructAccessNode> {
+    fn root(&self, idx: usize) -> Option<&StructAccessNode<'a>> {
         self.roots.get(&idx)
     }
 }
@@ -863,7 +863,7 @@ where
 /// order and free of duplicates by construction — callers do not need to
 /// sort or dedup.
 fn resolve_struct_field_leaves(
-    access_tree: &StructAccessTree,
+    access_tree: &StructAccessTree<'_>,
     schema_descr: &SchemaDescriptor,
 ) -> Vec<usize> {
     let mut leaf_indices = Vec::new();
@@ -873,10 +873,13 @@ fn resolve_struct_field_leaves(
         let Some(root_node) = access_tree.roots.get(&root_idx) else {
             continue;
         };
-        // `parts()[0]` is the root field name; walk the rest against the tree.
+        // The first part is the root field name, already used in step 1; walk
+        // the rest against the tree.
         let col = schema_descr.column(leaf_idx);
-        let path = col.path().parts();
-        if leaf_under_tree(root_node, &path[1..]) {
+        let Some((_root_name, rest)) = col.path().parts().split_first() else {
+            continue;
+        };
+        if leaf_under_tree(root_node, rest) {
             leaf_indices.push(leaf_idx);
         }
     }
@@ -888,7 +891,7 @@ fn resolve_struct_field_leaves(
 ///
 /// A shallower `selected_here` node subsumes deeper accesses: once the walk
 /// reaches such a node, every leaf below it is included.
-fn leaf_under_tree(mut node: &StructAccessNode, path: &[String]) -> bool {
+fn leaf_under_tree(mut node: &StructAccessNode<'_>, path: &[String]) -> bool {
     for component in path {
         if node.selected_here {
             return true;
@@ -946,7 +949,7 @@ fn leaf_under_tree(mut node: &StructAccessNode, path: &[String]) -> bool {
 fn build_filter_schema(
     file_schema: &Schema,
     regular_indices: &[usize],
-    access_tree: &StructAccessTree,
+    access_tree: &StructAccessTree<'_>,
 ) -> SchemaRef {
     let regular_set: BTreeSet<usize> = regular_indices.iter().copied().collect();
 
@@ -1026,7 +1029,7 @@ fn build_filter_schema(
 ///
 /// A new `DataType::Struct` whose fields are a subset of `dt`'s, restricted
 /// to the paths represented by `node`. The original `dt` is not modified.
-fn prune_struct_type(dt: &DataType, node: &StructAccessNode) -> DataType {
+fn prune_struct_type(dt: &DataType, node: &StructAccessNode<'_>) -> DataType {
     if node.selected_here {
         // Subsumption: the entire subtree below this node is required.
         return dt.clone();
@@ -1605,11 +1608,8 @@ mod test {
 
     #[test]
     fn struct_access_tree_groups_paths_by_root() {
-        let tree = StructAccessTree::from_accesses(&[
-            access(0, &["a"]),
-            access(2, &["x"]),
-            access(2, &["y"]),
-        ]);
+        let accesses = [access(0, &["a"]), access(2, &["x"]), access(2, &["y"])];
+        let tree = StructAccessTree::from_accesses(&accesses);
 
         assert_eq!(tree.roots.keys().copied().collect::<Vec<_>>(), vec![0, 2]);
         let root0 = tree.root(0).unwrap();
@@ -1618,17 +1618,15 @@ mod test {
 
         let root2 = tree.root(2).unwrap();
         assert_eq!(
-            root2.children.keys().cloned().collect::<Vec<_>>(),
-            vec!["x".to_string(), "y".to_string()],
+            root2.children.keys().copied().collect::<Vec<_>>(),
+            vec!["x", "y"],
         );
     }
 
     #[test]
     fn struct_access_tree_shared_prefix_collapses_into_one_node() {
-        let tree = StructAccessTree::from_accesses(&[
-            access(0, &["outer", "a"]),
-            access(0, &["outer", "b"]),
-        ]);
+        let accesses = [access(0, &["outer", "a"]), access(0, &["outer", "b"])];
+        let tree = StructAccessTree::from_accesses(&accesses);
 
         let root = tree.root(0).unwrap();
         assert!(!root.selected_here);
@@ -1638,8 +1636,8 @@ mod test {
         assert!(!outer.selected_here);
         // Both leaves below share the single `outer` node.
         assert_eq!(
-            outer.children.keys().cloned().collect::<Vec<_>>(),
-            vec!["a".to_string(), "b".to_string()],
+            outer.children.keys().copied().collect::<Vec<_>>(),
+            vec!["a", "b"],
         );
         assert!(outer.children["a"].selected_here);
         assert!(outer.children["b"].selected_here);
@@ -1650,10 +1648,8 @@ mod test {
         // `s['outer']` (whole subtree) and `s['outer']['a']` (specific leaf)
         // both recorded. Consumers honor the shallower selection at walk time;
         // the builder simply records both `selected_here` flags.
-        let tree = StructAccessTree::from_accesses(&[
-            access(0, &["outer"]),
-            access(0, &["outer", "a"]),
-        ]);
+        let accesses = [access(0, &["outer"]), access(0, &["outer", "a"])];
+        let tree = StructAccessTree::from_accesses(&accesses);
 
         let outer = &tree.root(0).unwrap().children["outer"];
         assert!(outer.selected_here);
@@ -1693,10 +1689,8 @@ mod test {
     /// keep the entire `outer` subtree, ignoring the deeper child entry.
     #[test]
     fn prune_struct_type_shallow_selection_subsumes_deeper_children() {
-        let tree = StructAccessTree::from_accesses(&[
-            access(0, &["outer"]),
-            access(0, &["outer", "a"]),
-        ]);
+        let accesses = [access(0, &["outer"]), access(0, &["outer", "a"])];
+        let tree = StructAccessTree::from_accesses(&accesses);
 
         let outer_type = DataType::Struct(
             vec![
