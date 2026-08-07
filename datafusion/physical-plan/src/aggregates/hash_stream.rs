@@ -293,7 +293,9 @@ impl PartialHashAggregateStream {
             Arc::clone(&schema),
             batch_size,
         )?;
-        let skip_aggregation_probe = if agg.group_by.is_single() {
+        let can_skip_aggregation =
+            agg.group_by.is_single() && hash_table.can_skip_aggregation();
+        let skip_aggregation_probe = if can_skip_aggregation {
             let options = &context.session_config().options().execution;
             let probe_ratio_threshold =
                 options.skip_partial_aggregation_probe_ratio_threshold;

@@ -367,13 +367,7 @@ impl FileFormat for ParquetFormat {
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
             // fetch schemas concurrently, if requested
-            .buffer_unordered(
-                state
-                    .config_options()
-                    .execution
-                    .meta_fetch_concurrency
-                    .get(),
-            )
+            .buffer_unordered(state.config_options().execution.meta_fetch_concurrency)
             .try_collect()
             .await?;
 

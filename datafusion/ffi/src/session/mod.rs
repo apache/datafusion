@@ -42,7 +42,7 @@ use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::logical_plan::from_proto::parse_expr;
 use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::protobuf::LogicalExprNode;
-use datafusion_session::{CatalogProviderList, Session};
+use datafusion_session::Session;
 use prost::Message;
 
 use stabby::str::Str as SStr;
@@ -51,7 +51,6 @@ use stabby::vec::Vec as SVec;
 use tokio::runtime::Handle;
 
 use crate::arrow_wrappers::WrappedSchema;
-use crate::catalog_provider_list::FFI_CatalogProviderList;
 use crate::execution::FFI_TaskContext;
 use crate::execution_plan::FFI_ExecutionPlan;
 use crate::physical_expr::FFI_PhysicalExpr;
@@ -83,8 +82,6 @@ pub(crate) struct FFI_SessionRef {
     session_id: unsafe extern "C" fn(&Self) -> SStr,
 
     config: unsafe extern "C" fn(&Self) -> FFI_SessionConfig,
-
-    catalog_list: unsafe extern "C" fn(&Self) -> FFI_CatalogProviderList,
 
     create_physical_plan:
         unsafe extern "C" fn(
@@ -161,16 +158,6 @@ unsafe extern "C" fn session_id_fn_wrapper(session: &FFI_SessionRef) -> SStr<'_>
 unsafe extern "C" fn config_fn_wrapper(session: &FFI_SessionRef) -> FFI_SessionConfig {
     let session = session.inner();
     session.config().into()
-}
-
-unsafe extern "C" fn catalog_list_fn_wrapper(
-    session: &FFI_SessionRef,
-) -> FFI_CatalogProviderList {
-    FFI_CatalogProviderList::new_with_ffi_codec(
-        session.inner().catalog_list(),
-        unsafe { session.runtime() }.clone(),
-        session.logical_codec.clone(),
-    )
 }
 
 unsafe extern "C" fn create_physical_plan_fn_wrapper(
@@ -323,7 +310,6 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_SessionRef) -> FFI_SessionR
         FFI_SessionRef {
             session_id: session_id_fn_wrapper,
             config: config_fn_wrapper,
-            catalog_list: catalog_list_fn_wrapper,
             create_physical_plan: create_physical_plan_fn_wrapper,
             create_physical_expr: create_physical_expr_fn_wrapper,
             scalar_functions: scalar_functions_fn_wrapper,
@@ -365,7 +351,6 @@ impl FFI_SessionRef {
         Self {
             session_id: session_id_fn_wrapper,
             config: config_fn_wrapper,
-            catalog_list: catalog_list_fn_wrapper,
             create_physical_plan: create_physical_plan_fn_wrapper,
             create_physical_expr: create_physical_expr_fn_wrapper,
             scalar_functions: scalar_functions_fn_wrapper,
@@ -393,7 +378,6 @@ impl FFI_SessionRef {
 pub struct ForeignSession {
     session: FFI_SessionRef,
     config: SessionConfig,
-    catalog_list: Arc<dyn CatalogProviderList>,
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     higher_order_functions: HashMap<String, Arc<HigherOrderUDF>>,
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
@@ -425,9 +409,6 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
 
             let config = (session.config)(session);
             let config = SessionConfig::try_from(&config)?;
-
-            let ffi_catalog_list = (session.catalog_list)(session);
-            let catalog_list = (&ffi_catalog_list).into();
 
             let scalar_functions = (session.scalar_functions)(session)
                 .into_iter()
@@ -466,7 +447,6 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
             Ok(Self {
                 session: session.clone(),
                 config,
-                catalog_list,
                 table_options,
                 scalar_functions,
                 higher_order_functions: HashMap::new(),
@@ -567,10 +547,6 @@ impl Session for ForeignSession {
 
     fn config_options(&self) -> &ConfigOptions {
         self.config.options()
-    }
-
-    fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
-        Arc::clone(&self.catalog_list)
     }
 
     async fn create_physical_plan(
@@ -674,7 +650,6 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema};
-    use datafusion::catalog::MemoryCatalogProvider;
     use datafusion::execution::SessionStateBuilder;
     use datafusion_common::DataFusionError;
     use datafusion_expr::col;
@@ -718,28 +693,7 @@ mod tests {
 
         assert_eq!(foreign_session.session_id(), state.session_id());
 
-        let foreign_catalog_list = foreign_session.catalog_list();
-        assert_eq!(
-            foreign_catalog_list.catalog_names(),
-            state.catalog_list().catalog_names()
-        );
-        foreign_catalog_list.register_catalog(
-            "foreign_registered".to_owned(),
-            Arc::new(MemoryCatalogProvider::new()),
-        );
-        assert!(state.catalog_list().catalog("foreign_registered").is_some());
-
         let logical_plan = LogicalPlan::default();
-        assert_eq!(foreign_session.optimize(&logical_plan)?, logical_plan);
-        assert!(foreign_session.physical_optimizers().is_empty());
-        assert!(foreign_session.statistics_registry().is_none());
-        let planner_error = foreign_session
-            .query_planner()
-            .create_physical_plan(&logical_plan, &foreign_session)
-            .await
-            .unwrap_err();
-        assert!(planner_error.to_string().contains("does not expose"));
-
         let physical_plan = foreign_session.create_physical_plan(&logical_plan).await?;
         assert_eq!(
             format!("{physical_plan:?}"),

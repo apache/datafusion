@@ -49,7 +49,7 @@ impl TreeNode for Expr {
     ) -> Result<TreeNodeRecursion> {
         match self {
             Expr::Alias(Alias { expr, .. })
-            | Expr::Unnest(Unnest { expr, .. })
+            | Expr::Unnest(Unnest { expr })
             | Expr::Not(expr)
             | Expr::IsNotNull(expr)
             | Expr::IsTrue(expr)
@@ -150,9 +150,9 @@ impl TreeNode for Expr {
                     quantifier,
                 })
             }),
-            Expr::Unnest(Unnest { expr, outer }) => expr
+            Expr::Unnest(Unnest { expr, .. }) => expr
                 .map_elements(f)?
-                .update_data(|expr| Expr::Unnest(Unnest { expr, outer })),
+                .update_data(|expr| Expr::Unnest(Unnest { expr })),
             Expr::Alias(Alias {
                 expr,
                 relation,

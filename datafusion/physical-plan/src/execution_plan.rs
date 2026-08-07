@@ -48,7 +48,7 @@ use crate::metrics::MetricsSet;
 use crate::projection::ProjectionExec;
 use crate::repartition::RepartitionExec;
 use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use crate::statistics::{ChildStats, StatisticsArgs};
+use crate::statistics::StatisticsArgs;
 use crate::stream::RecordBatchStreamAdapter;
 
 use arrow::array::{Array, RecordBatch};
@@ -538,10 +538,10 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
 
     /// Returns statistics for a specific partition of this `ExecutionPlan` node.
     ///
-    /// Deprecated: use [`StatisticsContext::compute`] instead.
-    ///
-    /// [`StatisticsContext::compute`]: crate::statistics::StatisticsContext::compute
-    #[deprecated(since = "55.0.0", note = "Use StatisticsContext::compute instead")]
+    /// Deprecated: use [`Self::statistics_with_args`] instead,
+    /// which accepts a [`StatisticsArgs`] carrying pre-computed child
+    /// statistics.
+    #[deprecated(since = "55.0.0", note = "Use statistics_with_args instead")]
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if let Some(idx) = partition {
             // Validate partition index
@@ -556,45 +556,19 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         Ok(Arc::new(Statistics::new_unknown(&self.schema())))
     }
 
-    /// Returns statistics for a specific partition of this `ExecutionPlan` node,
-    /// given pre-computed child statistics.
-    ///
+    /// Returns statistics for a specific partition of this `ExecutionPlan` node.
     /// If statistics are not available, should return [`Statistics::new_unknown`]
     /// (the default), not an error.
-    /// If `args.partition()` is `None`, it returns statistics for all partitions.
+    /// If `partition` is `None`, it returns statistics for all partitions.
     ///
-    /// Implementations should not call [`StatisticsContext::compute`] from within
-    /// this method; child statistics are provided via `input_stats`.
+    /// [`StatisticsArgs`] carries the partition index and a shared cache.
+    /// Create one with [`StatisticsArgs::new`] and pass it to this method.
     ///
-    /// Use [`StatisticsContext::compute`] to initiate a full plan-tree walk.
-    ///
-    /// [`StatisticsContext::compute`]: crate::statistics::StatisticsContext::compute
-    fn statistics_from_inputs(
-        &self,
-        _input_stats: &[Arc<Statistics>],
-        args: &StatisticsArgs,
-    ) -> Result<Arc<Statistics>> {
+    /// [`StatisticsArgs`]: crate::statistics::StatisticsArgs
+    /// [`StatisticsArgs::new`]: crate::statistics::StatisticsArgs::new
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         #[expect(deprecated)]
         self.partition_statistics(args.partition())
-    }
-
-    /// Returns, per child, which statistics the [`StatisticsContext`] should resolve
-    /// before calling [`Self::statistics_from_inputs`].
-    ///
-    /// One entry per child (same order as [`Self::children`]): [`ChildStats::At`]
-    /// requests the child's statistics at a partition (`None` = overall);
-    /// [`ChildStats::Skip`] omits a child whose statistics this node does not need
-    /// (a `Statistics::new_unknown` placeholder fills its `input_stats` slot).
-    ///
-    /// The default skips every child, so a node that derives nothing from its
-    /// children (for example one that only overrides the deprecated
-    /// [`Self::partition_statistics`]) triggers no child traversal. A node that reads
-    /// `input_stats` in [`Self::statistics_from_inputs`] must override this to declare
-    /// the children it uses.
-    ///
-    /// [`StatisticsContext`]: crate::statistics::StatisticsContext
-    fn child_stats_requests(&self, _partition: Option<usize>) -> Vec<ChildStats> {
-        self.children().iter().map(|_| ChildStats::Skip).collect()
     }
 
     /// Returns `true` if a limit can be safely pushed down through this
@@ -664,12 +638,6 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// There are two different phases in filter pushdown, which some operators may handle the same and some differently.
     /// Depending on the phase the operator may or may not be allowed to modify the plan.
     /// See [`FilterPushdownPhase`] for more details.
-    ///
-    /// Implementations must preserve the order of `parent_filters` in the
-    /// returned child [`FilterDescription`]: each child parent-filter result is
-    /// matched back to the corresponding input parent filter by position.
-    /// Unsupported filters should therefore be marked unsupported in place,
-    /// rather than removed or appended after supported filters.
     fn gather_filters_for_pushdown(
         &self,
         _phase: FilterPushdownPhase,
@@ -828,27 +796,6 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         _preserve_order: bool,
     ) -> Option<Arc<dyn ExecutionPlan>> {
         None
-    }
-
-    /// Serialize this plan to its protobuf representation, if it knows how.
-    ///
-    /// This is the `ExecutionPlan` analog of
-    /// [`PhysicalExpr::try_to_proto`].
-    ///
-    /// * `Ok(None)` (the default) — "I don't serialize myself"; the caller
-    ///   (`datafusion-proto`) falls back to the central downcast chain. Every
-    ///   un-migrated plan keeps its existing behavior.
-    /// * `Ok(Some(node))` — fully serialized; the caller must not fall back.
-    /// * `Err(_)` — a real failure (e.g. a child failed to serialize).
-    ///
-    /// Only *self-contained* plans should override this — see [`crate::proto`]
-    /// for the session-dependency boundary.
-    #[cfg(feature = "proto")]
-    fn try_to_proto(
-        &self,
-        _ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
-    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
-        Ok(None)
     }
 }
 
@@ -1780,9 +1727,8 @@ mod tests {
             unimplemented!()
         }
 
-        fn statistics_from_inputs(
+        fn statistics_with_args(
             &self,
-            _input_stats: &[Arc<Statistics>],
             _args: &StatisticsArgs,
         ) -> Result<Arc<Statistics>> {
             unimplemented!()
@@ -1843,9 +1789,8 @@ mod tests {
             unimplemented!()
         }
 
-        fn statistics_from_inputs(
+        fn statistics_with_args(
             &self,
-            _input_stats: &[Arc<Statistics>],
             _args: &StatisticsArgs,
         ) -> Result<Arc<Statistics>> {
             unimplemented!()

@@ -483,14 +483,6 @@ Your benchmark should create and use an instance of `BenchmarkRun` defined in `b
 - Call its `start_new_case` method with a string that will appear in the "Query" column of the
   compare output.
 - Use `write_iter` to record elapsed times for the behavior you're benchmarking.
-- Call `set_memory_pool` with the `RuntimeEnv`'s memory pool (`ctx.runtime_env().memory_pool`),
-  and again for each new runtime if your benchmark builds one per query. Each case then reports a
-  `pool_peak_bytes` field: the peak `MemoryPool` reservation reached while running it, which is the
-  largest value across that case's iterations. The field is omitted when the benchmark runs without
-  `--memory-limit`, since no pool is installed to record. Comparing it against the peak RSS printed
-  by `print_memory_stats` shows how much of the run's memory the pool actually accounted for; the
-  pool only tracks the "large" allocations that scale with input size, so the two are expected to
-  differ.
 - When all cases are done, call the `BenchmarkRun`'s `maybe_write_json` method, giving it the value
   of the `--output` structopt field on `RunOpt`.
 
@@ -515,34 +507,22 @@ The runner applies two ClickBench-specific setup steps automatically:
   runner enables the parquet `binary_as_string` option so those columns
   are read as strings.
 
-If you set up ClickBench manually through SQL, register the single-file
-dataset as follows:
+If you set up ClickBench manually through SQL, use the same `EventDate`
+view pattern:
 
 ```sql
 CREATE EXTERNAL TABLE hits_raw
 STORED AS PARQUET
 LOCATION 'benchmarks/data/hits.parquet';
-```
 
-For the partitioned dataset, register the directory and enable
-`binary_as_string`:
-
-```sql
-CREATE EXTERNAL TABLE hits_raw
-STORED AS PARQUET
-LOCATION 'benchmarks/data/hits_partitioned'
-OPTIONS ('binary_as_string' 'true');
-```
-
-After registering either dataset as `hits_raw`, create the `hits` view with
-the required `EventDate` conversion:
-
-```sql
 CREATE VIEW hits AS
 SELECT * EXCEPT ("EventDate"),
        CAST(CAST("EventDate" AS INTEGER) AS DATE) AS "EventDate"
 FROM hits_raw;
 ```
+
+For the partitioned dataset, use `benchmarks/data/hits_partitioned` and
+add `OPTIONS ('binary_as_string' 'true')` to the external table statement.
 
 From the repository root, download data and run the default ClickBench
 queries against the single parquet file:

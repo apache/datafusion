@@ -19,12 +19,10 @@
 
 mod early_stop;
 mod encryption;
-mod pruning_cache;
 
 use self::early_stop::EarlyStoppingStream;
 #[cfg(feature = "parquet_encryption")]
 use self::encryption::EncryptionContext;
-use self::pruning_cache::{ParquetPruningSetup, ParquetPruningSetupCache};
 use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
 use crate::page_filter::PagePruningAccessPlanFilter;
@@ -41,14 +39,17 @@ use crate::{
 use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
 use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
+use datafusion_functions::core::input_file_name::InputFileNameFunc;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
-use datafusion_physical_expr_adapter::rewrite::rewrite_input_file_name_in_projection;
+use datafusion_physical_expr_adapter::rewrite::{
+    expr_references_scalar_udf, rewrite_input_file_name_in_projection,
+};
 use std::collections::{HashMap, VecDeque};
-use std::fmt;
+use std::fmt::{self, Display};
 use std::future::Future;
 use std::mem;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use arrow::datatypes::{FieldRef, Schema, SchemaRef, TimeUnit};
 #[cfg(feature = "parquet_encryption")]
@@ -56,7 +57,8 @@ use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{
-    ColumnStatistics, HashSet, Result, ScalarValue, Statistics, exec_err, internal_err,
+    ColumnStatistics, DataFusionError, HashSet, Result, ScalarValue, Statistics,
+    exec_err, internal_err,
 };
 use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
@@ -67,7 +69,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
 };
-use datafusion_pruning::{FilePruner, PruningPredicate, PruningPredicateBuilder};
+use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
@@ -291,11 +293,6 @@ pub(super) struct ParquetMorselizer {
     /// Maximum size of the predicate cache, in bytes. If none, uses
     /// the arrow-rs default.
     pub max_predicate_cache_size: Option<usize>,
-    /// Maximum `IN (...)` list size that the pruning predicate will rewrite
-    /// into per-value statistics checks. Lists longer than this skip
-    /// container-level pruning. Sourced from
-    /// `datafusion.execution.parquet.max_in_list_size`.
-    pub max_in_list_size: usize,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
     /// Optional sort order used to reorder row groups by their min/max statistics.
@@ -316,6 +313,109 @@ impl fmt::Debug for ParquetMorselizer {
             .field("enable_bloom_filter", &self.enable_bloom_filter)
             .finish()
     }
+}
+
+/// Scan-local cache for CPU-only pruning setup that can be reused across files
+/// with the same adapted expression inputs and physical schema.
+#[derive(Debug, Default)]
+pub(super) struct ParquetPruningSetupCache {
+    entries: Mutex<ParquetPruningSetupEntries>,
+}
+
+type ParquetPruningSetupEntries =
+    HashMap<ParquetPruningSetupCacheKey, ParquetPruningSetup>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ParquetPruningSetupCacheKey {
+    // Schema coercions such as INT96 resolution and file-schema type coercions
+    // are included through the final physical schema used for adaptation.
+    logical_file_schema: SchemaRef,
+    physical_file_schema: SchemaRef,
+    // Page-index options are intentionally not part of this key because page
+    // pruning predicates are built after this cache entry is applied.
+    predicate_ptr: Option<usize>,
+    // The projection and predicate are scan-level inputs once literal column
+    // replacement has been ruled out, so pointer identity is stable within the
+    // scan and avoids structural expression hashing.
+    projection_expr_ptrs: Vec<usize>,
+}
+
+impl ParquetPruningSetupCacheKey {
+    fn new(
+        logical_file_schema: &SchemaRef,
+        physical_file_schema: &SchemaRef,
+        projection: &ProjectionExprs,
+        predicate: Option<&Arc<dyn PhysicalExpr>>,
+    ) -> Self {
+        Self {
+            logical_file_schema: Arc::clone(logical_file_schema),
+            physical_file_schema: Arc::clone(physical_file_schema),
+            predicate_ptr: predicate.map(physical_expr_ptr),
+            projection_expr_ptrs: projection
+                .iter()
+                .map(|expr| physical_expr_ptr(&expr.expr))
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ParquetPruningSetup {
+    projection: ProjectionExprs,
+    predicate: Option<Arc<dyn PhysicalExpr>>,
+    pruning_predicate: Option<Arc<PruningPredicate>>,
+}
+
+fn cache_lock_poisoned(context: &str, err: impl Display) -> DataFusionError {
+    DataFusionError::External(Box::new(std::io::Error::other(format!(
+        "{context}: {err}"
+    ))))
+}
+
+impl ParquetPruningSetupCache {
+    fn entries(&self) -> Result<MutexGuard<'_, ParquetPruningSetupEntries>> {
+        self.entries.lock().map_err(|e| {
+            cache_lock_poisoned("Parquet pruning setup cache lock poisoned", e)
+        })
+    }
+
+    fn get_or_insert_with(
+        &self,
+        key: &ParquetPruningSetupCacheKey,
+        make_setup: impl FnOnce() -> Result<ParquetPruningSetup>,
+    ) -> Result<ParquetPruningSetup> {
+        if let Some(setup) = self.entries()?.get(key) {
+            return Ok(setup.clone());
+        }
+
+        // Compute outside the cache lock. Concurrent first misses for the same
+        // key may duplicate this CPU-only setup, but the first completed insert
+        // still makes subsequent files reuse the cached entry. Reintroduce
+        // single-flight coordination only if profiling shows duplicate setup is
+        // material.
+        let setup = make_setup()?;
+        self.entries()?.insert(key.clone(), setup.clone());
+        Ok(setup)
+    }
+}
+
+fn physical_expr_ptr(expr: &Arc<dyn PhysicalExpr>) -> usize {
+    Arc::as_ptr(expr) as *const () as usize
+}
+
+fn is_pruning_setup_reusable(
+    projection: &ProjectionExprs,
+    predicate: Option<&Arc<dyn PhysicalExpr>>,
+    has_literal_columns: bool,
+) -> bool {
+    let has_dynamic_predicate = predicate.is_some_and(|predicate| {
+        DynamicFilterTracking::classify(predicate).contains_dynamic_filter()
+    });
+    let has_input_file_name_projection = projection
+        .iter()
+        .any(|expr| expr_references_scalar_udf::<InputFileNameFunc>(&expr.expr));
+
+    !has_literal_columns && !has_dynamic_predicate && !has_input_file_name_projection
 }
 
 impl Morselizer for ParquetMorselizer {
@@ -448,6 +548,7 @@ struct PreparedParquetOpen {
     /// the logical-with-virtual schema. `None` when no virtual columns were
     /// requested.
     virtual_state: Option<Arc<VirtualColumnsState>>,
+    pruning_setup_reusable: bool,
     reorder_predicates: bool,
     pushdown_filters: bool,
     force_filter_selections: bool,
@@ -458,10 +559,9 @@ struct PreparedParquetOpen {
     coerce_int96: Option<TimeUnit>,
     coerce_int96_tz: Option<Arc<str>>,
     expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
-    pruning_setup_cache: Option<Arc<ParquetPruningSetupCache>>,
+    pruning_setup_cache: Arc<ParquetPruningSetupCache>,
     predicate_creation_errors: Count,
     max_predicate_cache_size: Option<usize>,
-    max_in_list_size: usize,
     reverse_row_groups: bool,
     sort_order_for_reorder: Option<LexOrdering>,
     preserve_order: bool,
@@ -799,14 +899,13 @@ impl ParquetMorselizer {
 
         let mut projection = self.projection.clone();
         let mut predicate = self.predicate.clone();
-        let pruning_setup_cache =
-            (ParquetPruningSetupCache::is_pruning_setup_reusable(
-                &projection,
-                predicate.as_ref(),
-                &literal_columns,
-            ) && self.expr_adapter_factory.supports_reusable_rewrites())
-            .then(|| Arc::clone(&self.pruning_setup_cache));
-        if !literal_columns.is_empty() {
+        let has_literal_columns = !literal_columns.is_empty();
+        let pruning_setup_reusable = is_pruning_setup_reusable(
+            &projection,
+            predicate.as_ref(),
+            has_literal_columns,
+        );
+        if has_literal_columns {
             projection = projection.try_map_exprs(|expr| {
                 replace_columns_with_literals(Arc::clone(&expr), &literal_columns)
             })?;
@@ -856,6 +955,7 @@ impl ParquetMorselizer {
             projection,
             predicate,
             virtual_state: self.virtual_state.as_ref().map(Arc::clone),
+            pruning_setup_reusable,
             reorder_predicates: self.reorder_filters,
             pushdown_filters: self.pushdown_filters,
             force_filter_selections: self.force_filter_selections,
@@ -866,10 +966,9 @@ impl ParquetMorselizer {
             coerce_int96: self.coerce_int96,
             coerce_int96_tz: self.coerce_int96_tz.clone(),
             expr_adapter_factory: Arc::clone(&self.expr_adapter_factory),
-            pruning_setup_cache,
+            pruning_setup_cache: Arc::clone(&self.pruning_setup_cache),
             predicate_creation_errors,
             max_predicate_cache_size: self.max_predicate_cache_size,
-            max_in_list_size: self.max_in_list_size,
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             preserve_order: self.preserve_order,
@@ -1015,12 +1114,13 @@ impl MetadataLoadedParquetOpen {
             )?;
         }
 
-        let pruning_setup = prepared.build_or_get_pruning_setup(&physical_file_schema)?;
+        let pruning_setup = build_or_get_pruning_setup(&prepared, &physical_file_schema)?;
         let ParquetPruningSetup {
             projection,
             predicate,
             pruning_predicate,
         } = pruning_setup;
+
         prepared.projection = projection;
         prepared.predicate = predicate;
         prepared.physical_file_schema = Arc::clone(&physical_file_schema);
@@ -1439,7 +1539,6 @@ impl RowGroupsPrunedParquetOpen {
                     Arc::clone(reader_metadata.metadata()),
                     prepared.predicate_creation_errors.clone(),
                     prepared.file_metrics.predicate_evaluation_errors.clone(),
-                    prepared.max_in_list_size,
                 ))
             }
             _ => None,
@@ -1604,14 +1703,13 @@ pub(crate) fn build_pruning_predicates(
     predicate: Option<&Arc<dyn PhysicalExpr>>,
     file_schema: &SchemaRef,
     predicate_creation_errors: &Count,
-    max_in_list_size: usize,
 ) -> Option<Arc<PruningPredicate>> {
     let predicate = predicate.as_ref()?;
-    PruningPredicateBuilder::new()
-        .with_file_schema(Arc::clone(file_schema))
-        .with_error_counter(predicate_creation_errors)
-        .with_max_in_list_size(max_in_list_size)
-        .build(Arc::clone(predicate))
+    build_pruning_predicate(
+        Arc::clone(predicate),
+        file_schema,
+        predicate_creation_errors,
+    )
 }
 
 /// Returns true if the page index must be loaded for page-level pruning.
@@ -1630,89 +1728,90 @@ fn should_load_page_index(
     })
 }
 
-impl PreparedParquetOpen {
-    fn build_or_get_pruning_setup(
-        &self,
-        physical_file_schema: &SchemaRef,
-    ) -> Result<ParquetPruningSetup> {
-        if let Some(cache) = &self.pruning_setup_cache {
-            cache.get_or_insert_with(
-                &self.logical_file_schema,
-                physical_file_schema,
-                &self.projection,
-                self.predicate.as_ref(),
-                || self.build_pruning_setup(physical_file_schema),
-            )
-        } else {
-            self.build_pruning_setup(physical_file_schema)
-        }
-    }
-
-    fn build_pruning_setup(
-        &self,
-        physical_file_schema: &SchemaRef,
-    ) -> Result<ParquetPruningSetup> {
-        let mut projection = self.projection.clone();
-        let mut predicate = self.predicate.clone();
-
-        // Adapt the projection & filter predicate to the physical file schema.
-        // This evaluates missing columns and inserts any necessary casts.
-        // After rewriting to the file schema, further simplifications may be possible.
-        // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
-        // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
-        // Additionally, if any casts were inserted we can move casts from the column to the literal side:
-        // `CAST(col AS INT) = 5` can become `col = CAST(5 AS <col type>)`, which can be evaluated statically.
-        //
-        // When the schemas are identical and there is no predicate, the
-        // rewriter is a no-op: column indices already match (partition
-        // columns are appended after file columns in the table schema),
-        // types are the same, and there are no missing columns. Skip the
-        // tree walk entirely in that case.
-        let needs_rewrite = predicate.is_some()
-            || self.logical_file_schema.as_ref() != physical_file_schema.as_ref();
-        if needs_rewrite {
-            // When virtual columns are requested, augment the logical and
-            // physical schemas passed to the rewriter/simplifier with those
-            // fields. We keep `physical_file_schema` itself as the pure file
-            // schema so downstream pruning and row-filter construction stay
-            // unaffected.
-            let (logical_for_rewrite, physical_for_rewrite) =
-                if let Some(state) = self.virtual_state.as_ref() {
-                    (
-                        Arc::clone(&state.logical_schema_with_virtual),
-                        append_fields(physical_file_schema, &state.virtual_columns),
-                    )
-                } else {
-                    (
-                        Arc::clone(&self.logical_file_schema),
-                        Arc::clone(physical_file_schema),
-                    )
-                };
-            let rewriter = self.expr_adapter_factory.create(
-                Arc::clone(&logical_for_rewrite),
-                Arc::clone(&physical_for_rewrite),
-            )?;
-            let simplifier = PhysicalExprSimplifier::new(&physical_for_rewrite);
-            predicate = predicate
-                .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
-                .transpose()?;
-            projection = projection
-                .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
-        }
-
-        let pruning_predicate = build_pruning_predicates(
-            predicate.as_ref(),
+fn build_or_get_pruning_setup(
+    prepared: &PreparedParquetOpen,
+    physical_file_schema: &SchemaRef,
+) -> Result<ParquetPruningSetup> {
+    if prepared.pruning_setup_reusable
+        && prepared.expr_adapter_factory.supports_reusable_rewrites()
+    {
+        let key = ParquetPruningSetupCacheKey::new(
+            &prepared.logical_file_schema,
             physical_file_schema,
-            &self.predicate_creation_errors,
-            self.max_in_list_size,
+            &prepared.projection,
+            prepared.predicate.as_ref(),
         );
-
-        Ok(ParquetPruningSetup {
-            projection,
-            predicate,
-            pruning_predicate,
+        prepared.pruning_setup_cache.get_or_insert_with(&key, || {
+            build_pruning_setup(prepared, physical_file_schema)
         })
+    } else {
+        build_pruning_setup(prepared, physical_file_schema)
     }
+}
+
+fn build_pruning_setup(
+    prepared: &PreparedParquetOpen,
+    physical_file_schema: &SchemaRef,
+) -> Result<ParquetPruningSetup> {
+    let mut projection = prepared.projection.clone();
+    let mut predicate = prepared.predicate.clone();
+
+    // Adapt the projection & filter predicate to the physical file schema.
+    // This evaluates missing columns and inserts any necessary casts.
+    // After rewriting to the file schema, further simplifications may be possible.
+    // For example, if `'a' = col_that_is_missing` becomes `'a' = NULL` that can then be simplified to `FALSE`
+    // and we can avoid doing any more work on the file (bloom filters, loading the page index, etc.).
+    // Additionally, if any casts were inserted we can move casts from the column to the literal side:
+    // `CAST(col AS INT) = 5` can become `col = CAST(5 AS <col type>)`, which can be evaluated statically.
+    //
+    // When the schemas are identical and there is no predicate, the
+    // rewriter is a no-op: column indices already match (partition
+    // columns are appended after file columns in the table schema),
+    // types are the same, and there are no missing columns. Skip the
+    // tree walk entirely in that case.
+    let needs_rewrite = predicate.is_some()
+        || prepared.logical_file_schema.as_ref() != physical_file_schema.as_ref();
+    if needs_rewrite {
+        // When virtual columns are requested, augment the logical and
+        // physical schemas passed to the rewriter/simplifier with those
+        // fields. We keep `physical_file_schema` itself as the pure file
+        // schema so downstream pruning and row-filter construction stay
+        // unaffected.
+        let (logical_for_rewrite, physical_for_rewrite) =
+            if let Some(state) = prepared.virtual_state.as_ref() {
+                (
+                    Arc::clone(&state.logical_schema_with_virtual),
+                    append_fields(physical_file_schema, &state.virtual_columns),
+                )
+            } else {
+                (
+                    Arc::clone(&prepared.logical_file_schema),
+                    Arc::clone(physical_file_schema),
+                )
+            };
+        let rewriter = prepared.expr_adapter_factory.create(
+            Arc::clone(&logical_for_rewrite),
+            Arc::clone(&physical_for_rewrite),
+        )?;
+        let simplifier = PhysicalExprSimplifier::new(&physical_for_rewrite);
+        predicate = predicate
+            .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
+            .transpose()?;
+        projection =
+            projection.try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
+    }
+
+    let pruning_predicate = build_pruning_predicates(
+        predicate.as_ref(),
+        physical_file_schema,
+        &prepared.predicate_creation_errors,
+    );
+
+    Ok(ParquetPruningSetup {
+        projection,
+        predicate,
+        pruning_predicate,
+    })
 }
 
 /// Returns a `ArrowReaderMetadata` with the page index loaded, loading
@@ -1756,12 +1855,12 @@ mod test {
         CachedParquetFileReaderFactory, DefaultParquetFileReaderFactory,
         ParquetFileReaderFactory, ParquetRowSelection, RowGroupAccess,
     };
-    use arrow::array::{RecordBatch, record_batch};
+    use arrow::array::RecordBatch;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
         ColumnStatistics, Result, ScalarValue, Statistics, assert_contains,
-        config::ConfigOptions, internal_err, stats::Precision,
+        config::ConfigOptions, internal_err, record_batch, stats::Precision,
     };
     use datafusion_datasource::morsel::{Morsel, Morselizer};
     use datafusion_datasource::{PartitionedFile, TableSchema, TableSchemaBuilder};
@@ -1770,7 +1869,6 @@ mod test {
     };
     use datafusion_execution::cache::default_cache::DefaultCache;
     use datafusion_expr::{ScalarUDF, col, lit};
-    use datafusion_functions::core::input_file_name::InputFileNameFunc;
     use datafusion_physical_expr::{
         PhysicalExpr, ScalarFunctionExpr,
         expressions::{Column, DynamicFilterPhysicalExpr, Literal},
@@ -1782,7 +1880,6 @@ mod test {
         PhysicalExprAdapterFactory, replace_columns_with_literals,
     };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-    use datafusion_pruning::MAX_IN_LIST_SIZE;
     use futures::StreamExt;
     use futures::stream::BoxStream;
     use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
@@ -1816,7 +1913,6 @@ mod test {
         coerce_int96: Option<TimeUnit>,
         expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
         max_predicate_cache_size: Option<usize>,
-        max_in_list_size: usize,
         reverse_row_groups: bool,
         preserve_order: bool,
     }
@@ -1926,7 +2022,6 @@ mod test {
                 coerce_int96: None,
                 expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
                 max_predicate_cache_size: None,
-                max_in_list_size: MAX_IN_LIST_SIZE,
                 reverse_row_groups: false,
                 preserve_order: false,
             }
@@ -2112,7 +2207,6 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: self.max_predicate_cache_size,
-                max_in_list_size: self.max_in_list_size,
                 reverse_row_groups: self.reverse_row_groups,
                 sort_order_for_reorder: None,
                 virtual_state,
@@ -2378,65 +2472,42 @@ mod test {
         ))
     }
 
-    struct CacheTestFiles {
-        store: Arc<dyn ObjectStore>,
-        table_schema: SchemaRef,
-        files: [PartitionedFile; 2],
-    }
-
-    impl CacheTestFiles {
-        async fn same_physical_schema(table_type: DataType) -> Self {
-            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-            let table_schema =
-                Arc::new(Schema::new(vec![Field::new("a", table_type, false)]));
-            let data_size1 = write_parquet(
-                Arc::clone(&store),
-                "file1.parquet",
-                record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap(),
-            )
-            .await;
-            let data_size2 = write_parquet(
-                Arc::clone(&store),
-                "file2.parquet",
-                record_batch!(("a", Int32, vec![Some(4), Some(5), Some(6)])).unwrap(),
-            )
-            .await;
-            Self {
-                store,
-                table_schema,
-                files: [
-                    PartitionedFile::new(
-                        "file1.parquet",
-                        u64::try_from(data_size1).unwrap(),
-                    ),
-                    PartitionedFile::new(
-                        "file2.parquet",
-                        u64::try_from(data_size2).unwrap(),
-                    ),
-                ],
-            }
-        }
-    }
-
     #[tokio::test]
     async fn test_pruning_setup_cache_reuses_adapter_for_same_schema() {
-        let files = CacheTestFiles::same_physical_schema(DataType::Int64).await;
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let table_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+
+        let batch1 =
+            record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let batch2 =
+            record_batch!(("a", Int32, vec![Some(4), Some(5), Some(6)])).unwrap();
+        let data_size1 = write_parquet(Arc::clone(&store), "file1.parquet", batch1).await;
+        let data_size2 = write_parquet(Arc::clone(&store), "file2.parquet", batch2).await;
 
         let create_count = Arc::new(AtomicUsize::new(0));
         let factory: Arc<dyn PhysicalExprAdapterFactory> = Arc::new(
             CountingPhysicalExprAdapterFactory::new(Arc::clone(&create_count), true),
         );
-        let predicate = logical2physical(&col("a").gt(lit(0i64)), &files.table_schema);
+        let predicate = logical2physical(&col("a").gt(lit(0i64)), &table_schema);
 
         let morselizer = ParquetMorselizerBuilder::new()
-            .with_store(Arc::clone(&files.store))
-            .with_schema(Arc::clone(&files.table_schema))
+            .with_store(Arc::clone(&store))
+            .with_schema(table_schema)
             .with_projection_indices(&[0])
             .with_predicate(predicate)
             .with_expr_adapter_factory(factory)
             .build();
 
-        open_files_and_assert_row_count(&morselizer, files.files, 3).await;
+        open_files_and_assert_row_count(
+            &morselizer,
+            [
+                PartitionedFile::new("file1.parquet", u64::try_from(data_size1).unwrap()),
+                PartitionedFile::new("file2.parquet", u64::try_from(data_size2).unwrap()),
+            ],
+            3,
+        )
+        .await;
 
         assert_eq!(
             create_count.load(Ordering::SeqCst),
@@ -2447,23 +2518,40 @@ mod test {
 
     #[tokio::test]
     async fn test_pruning_setup_cache_skips_non_reusable_adapter() {
-        let files = CacheTestFiles::same_physical_schema(DataType::Int64).await;
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let table_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+
+        let batch1 =
+            record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let batch2 =
+            record_batch!(("a", Int32, vec![Some(4), Some(5), Some(6)])).unwrap();
+        let data_size1 = write_parquet(Arc::clone(&store), "file1.parquet", batch1).await;
+        let data_size2 = write_parquet(Arc::clone(&store), "file2.parquet", batch2).await;
 
         let create_count = Arc::new(AtomicUsize::new(0));
         let factory: Arc<dyn PhysicalExprAdapterFactory> = Arc::new(
             CountingPhysicalExprAdapterFactory::new(Arc::clone(&create_count), false),
         );
-        let predicate = logical2physical(&col("a").gt(lit(0i64)), &files.table_schema);
+        let predicate = logical2physical(&col("a").gt(lit(0i64)), &table_schema);
 
         let morselizer = ParquetMorselizerBuilder::new()
-            .with_store(Arc::clone(&files.store))
-            .with_schema(Arc::clone(&files.table_schema))
+            .with_store(Arc::clone(&store))
+            .with_schema(table_schema)
             .with_projection_indices(&[0])
             .with_predicate(predicate)
             .with_expr_adapter_factory(factory)
             .build();
 
-        open_files_and_assert_row_count(&morselizer, files.files, 3).await;
+        open_files_and_assert_row_count(
+            &morselizer,
+            [
+                PartitionedFile::new("file1.parquet", u64::try_from(data_size1).unwrap()),
+                PartitionedFile::new("file2.parquet", u64::try_from(data_size2).unwrap()),
+            ],
+            3,
+        )
+        .await;
 
         assert_eq!(
             create_count.load(Ordering::SeqCst),
@@ -2474,86 +2562,42 @@ mod test {
 
     #[tokio::test]
     async fn test_pruning_setup_cache_skips_input_file_name_projection() {
-        let files = CacheTestFiles::same_physical_schema(DataType::Int64).await;
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let table_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+
+        let batch1 =
+            record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap();
+        let batch2 =
+            record_batch!(("a", Int32, vec![Some(4), Some(5), Some(6)])).unwrap();
+        let data_size1 = write_parquet(Arc::clone(&store), "file1.parquet", batch1).await;
+        let data_size2 = write_parquet(Arc::clone(&store), "file2.parquet", batch2).await;
+
         let projection = ProjectionExprs::new(vec![
             ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
             ProjectionExpr::new(input_file_name_expr(), "file"),
         ]);
 
         let morselizer = ParquetMorselizerBuilder::new()
-            .with_store(Arc::clone(&files.store))
-            .with_schema(Arc::clone(&files.table_schema))
+            .with_store(Arc::clone(&store))
+            .with_schema(table_schema)
             .with_projection(projection)
             .build();
 
-        open_files_and_assert_row_count(&morselizer, files.files, 3).await;
+        open_files_and_assert_row_count(
+            &morselizer,
+            [
+                PartitionedFile::new("file1.parquet", u64::try_from(data_size1).unwrap()),
+                PartitionedFile::new("file2.parquet", u64::try_from(data_size2).unwrap()),
+            ],
+            3,
+        )
+        .await;
 
         assert_eq!(
-            morselizer.pruning_setup_cache.len(),
+            morselizer.pruning_setup_cache.entries().unwrap().len(),
             0,
             "input_file_name() projections are per-file and should not populate the reusable setup cache"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_pruning_setup_cache_skips_partition_value_literals() {
-        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-        let file_schema =
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-        let table_schema = TableSchemaBuilder::from(&file_schema)
-            .with_table_partition_cols(vec![Arc::new(Field::new(
-                "part",
-                DataType::Int32,
-                false,
-            ))])
-            .build();
-
-        let data_size1 = write_parquet(
-            Arc::clone(&store),
-            "part=1/file1.parquet",
-            record_batch!(("a", Int32, vec![Some(1), Some(2), Some(3)])).unwrap(),
-        )
-        .await;
-        let data_size2 = write_parquet(
-            Arc::clone(&store),
-            "part=2/file2.parquet",
-            record_batch!(("a", Int32, vec![Some(4), Some(5), Some(6)])).unwrap(),
-        )
-        .await;
-
-        let predicate =
-            logical2physical(&col("part").eq(lit(1i32)), table_schema.table_schema());
-        let morselizer = ParquetMorselizerBuilder::new()
-            .with_store(Arc::clone(&store))
-            .with_table_schema(table_schema)
-            .with_projection_indices(&[0])
-            .with_predicate(predicate)
-            .with_row_group_stats_pruning(true)
-            .build();
-
-        let mut first_file = PartitionedFile::new(
-            "part=1/file1.parquet",
-            u64::try_from(data_size1).unwrap(),
-        );
-        first_file.partition_values = vec![ScalarValue::Int32(Some(1))];
-        let mut second_file = PartitionedFile::new(
-            "part=2/file2.parquet",
-            u64::try_from(data_size2).unwrap(),
-        );
-        second_file.partition_values = vec![ScalarValue::Int32(Some(2))];
-
-        let (_, first_rows) =
-            count_batches_and_rows(open_file(&morselizer, first_file).await.unwrap())
-                .await;
-        let (_, second_rows) =
-            count_batches_and_rows(open_file(&morselizer, second_file).await.unwrap())
-                .await;
-        assert_eq!((first_rows, second_rows), (3, 0));
-
-        assert_eq!(
-            morselizer.pruning_setup_cache.len(),
-            0,
-            "partition-value literal folding is file-local and should not populate the reusable setup cache"
         );
     }
 
@@ -2601,7 +2645,7 @@ mod test {
                 .await;
         assert_eq!(values, vec![10, 11, 12]);
         assert_eq!(
-            morselizer.pruning_setup_cache.len(),
+            morselizer.pruning_setup_cache.entries().unwrap().len(),
             0,
             "dynamic predicates snapshot pruning state and should not populate the reusable setup cache"
         );

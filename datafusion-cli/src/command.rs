@@ -259,7 +259,7 @@ impl FromStr for OutputFormat {
 }
 
 impl OutputFormat {
-    pub fn execute(&self, print_options: &mut PrintOptions) -> Result<()> {
+    pub async fn execute(&self, print_options: &mut PrintOptions) -> Result<()> {
         match self {
             Self::ChangeFormat(format) => {
                 if let Ok(format) = format.parse::<PrintFormat>() {

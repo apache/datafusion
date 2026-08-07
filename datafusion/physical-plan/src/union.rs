@@ -43,10 +43,9 @@ use crate::filter_pushdown::{
 };
 use crate::metrics::BaselineMetrics;
 use crate::projection::{ProjectionExec, make_with_child};
-use crate::statistics::{ChildStats, StatisticsArgs};
+use crate::statistics::StatisticsArgs;
 use crate::stream::ObservedStream;
 
-use arrow::array::RecordBatchOptions;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
@@ -59,87 +58,10 @@ use datafusion_physical_expr::{
     EquivalenceProperties, PhysicalExpr, calculate_union, conjunction,
 };
 
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use itertools::Itertools;
 use log::{debug, trace, warn};
 use tokio::macros::support::thread_rng_n;
-
-/// Wraps a child stream so that every batch it yields is re-stamped with
-/// `schema` instead of the child's own schema.
-///
-/// This is used by both [`UnionExec`] and [`InterleaveExec`] when a child's
-/// output schema disagrees with the operator's declared output schema --
-/// in practice this only happens for nullability (the declared schema is
-/// nullable wherever *any* input's field is, but casts are only inserted
-/// between inputs when the *type* differs, not when only nullability
-/// does). For [`UnionExec`], [`UnionExec::try_new`] guarantees this: it
-/// calls `calculate_union`, which rejects any input whose field data types
-/// don't match the computed union schema. [`InterleaveExec::try_new`] does
-/// not repeat that check -- its inputs are only ever produced by the
-/// optimizer rewriting an already-validated `UnionExec`, whose children's
-/// types are therefore already known to agree -- but if this wrapper ever
-/// did see a genuine data type mismatch (e.g. from a hand-built
-/// `InterleaveExec`), `RecordBatch::try_new_with_options` below reports it
-/// as an error rather than silently yielding a corrupt batch.
-struct SchemaConformingStream {
-    schema: SchemaRef,
-    inner: SendableRecordBatchStream,
-}
-
-impl SchemaConformingStream {
-    fn new(schema: SchemaRef, inner: SendableRecordBatchStream) -> Self {
-        Self { schema, inner }
-    }
-}
-
-impl RecordBatchStream for SchemaConformingStream {
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
-    }
-}
-
-impl Stream for SchemaConformingStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        self.inner.poll_next_unpin(cx).map(|opt| {
-            opt.map(|batch_result| {
-                batch_result.and_then(|batch| {
-                    let options =
-                        RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
-                    RecordBatch::try_new_with_options(
-                        Arc::clone(&self.schema),
-                        batch.columns().to_vec(),
-                        &options,
-                    )
-                    .map_err(Into::into)
-                })
-            })
-        })
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
-    }
-}
-
-/// Wraps `stream` in a [`SchemaConformingStream`] if its schema disagrees
-/// with `schema`, otherwise returns it unchanged. See
-/// [`SchemaConformingStream`] and
-/// <https://github.com/apache/datafusion/issues/15394>.
-fn conform_stream_schema(
-    schema: SchemaRef,
-    stream: SendableRecordBatchStream,
-) -> SendableRecordBatchStream {
-    if stream.schema() == schema {
-        stream
-    } else {
-        Box::pin(SchemaConformingStream::new(schema, stream))
-    }
-}
 
 /// `UnionExec`: `UNION ALL` execution plan.
 ///
@@ -221,20 +143,6 @@ impl UnionExec {
     /// Get inputs of the execution plan
     pub fn inputs(&self) -> &Vec<Arc<dyn ExecutionPlan>> {
         &self.inputs
-    }
-
-    /// Maps a global output partition index to the `(input index, local
-    /// partition index)` of the input that owns it, or `None` if out of range.
-    fn owning_input(&self, partition: usize) -> Option<(usize, usize)> {
-        let mut remaining = partition;
-        for (i, input) in self.inputs.iter().enumerate() {
-            let count = input.output_partitioning().partition_count();
-            if remaining < count {
-                return Some((i, remaining));
-            }
-            remaining -= count;
-        }
-        None
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -372,7 +280,6 @@ impl ExecutionPlan for UnionExec {
             if partition < input.output_partitioning().partition_count() {
                 let stream = input.execute(partition, context)?;
                 debug!("Found a Union partition to execute");
-                let stream = conform_stream_schema(self.schema(), stream);
                 return Ok(Box::pin(ObservedStream::new(
                     stream,
                     baseline_metrics,
@@ -392,41 +299,30 @@ impl ExecutionPlan for UnionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
-        if let Some(partition_idx) = partition {
-            // For a specific partition, compute stats only for the input that
-            // owns it; the other inputs are not needed and are skipped.
-            let targeted = self.owning_input(partition_idx);
-            self.inputs
-                .iter()
-                .enumerate()
-                .map(|(i, _)| match targeted {
-                    Some((target_i, target_partition)) if i == target_i => {
-                        ChildStats::At(Some(target_partition))
-                    }
-                    _ => ChildStats::Skip,
-                })
-                .collect()
-        } else {
-            vec![ChildStats::At(None); self.inputs.len()]
-        }
-    }
-
-    fn statistics_from_inputs(
-        &self,
-        input_stats: &[Arc<Statistics>],
-        args: &StatisticsArgs,
-    ) -> Result<Arc<Statistics>> {
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         if let Some(partition_idx) = args.partition() {
             // For a specific partition, find which input it belongs to
-            if let Some((target_i, _)) = self.owning_input(partition_idx) {
-                // This partition belongs to this input - return its stats
-                return Ok(Arc::clone(&input_stats[target_i]));
+            let mut remaining_idx = partition_idx;
+            for (i, input) in self.inputs.iter().enumerate() {
+                let input_partition_count = input.output_partitioning().partition_count();
+                if remaining_idx < input_partition_count {
+                    // This partition belongs to this input - compute stats
+                    // for the specific child at the specific partition
+                    let child = &self.inputs[i];
+                    return args.compute_child_statistics(child, Some(remaining_idx));
+                }
+                remaining_idx -= input_partition_count;
             }
             // If we get here, the partition index is out of bounds
             Ok(Arc::new(Statistics::new_unknown(&self.schema())))
         } else {
-            let stats_refs = input_stats.iter().map(|s| s.as_ref()).collect::<Vec<_>>();
+            // Collect overall stats for each input from the cache
+            let stats = self
+                .inputs
+                .iter()
+                .map(|input| args.compute_child_statistics(input, None))
+                .collect::<Result<Vec<_>>>()?;
+            let stats_refs = stats.iter().map(|s| s.as_ref()).collect::<Vec<_>>();
 
             Ok(Arc::new(Statistics::try_merge_iter_with_ndv_fallback(
                 stats_refs,
@@ -552,50 +448,11 @@ impl ExecutionPlan for UnionExec {
         // on all children (either pushed down or via FilterExec)
         Ok(propagation)
     }
-    #[cfg(feature = "proto")]
-    fn try_to_proto(
-        &self,
-        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
-    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
-        use datafusion_proto_models::protobuf;
-        let inputs = ctx.encode_children(self.inputs())?;
-        Ok(Some(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(
-                protobuf::physical_plan_node::PhysicalPlanType::Union(
-                    protobuf::UnionExecNode { inputs },
-                ),
-            ),
-        }))
-    }
-}
-
-#[cfg(feature = "proto")]
-impl UnionExec {
-    pub fn try_from_proto(
-        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
-        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        use datafusion_proto_models::protobuf;
-        let union = crate::expect_plan_variant!(
-            node,
-            protobuf::physical_plan_node::PhysicalPlanType::Union,
-            "UnionExec",
-        );
-        let inputs = union
-            .inputs
-            .iter()
-            .map(|input| ctx.decode_child(input))
-            .collect::<Result<Vec<_>>>()?;
-        UnionExec::try_new(inputs)
-    }
 }
 
 /// Combines multiple input streams by interleaving them.
 ///
-/// All inputs must share an identical [`Partitioning::Hash`] or [`Partitioning::Range`] so that
-/// partition `k` covers the same data across every input. Each output partition is the
-/// interleaving of the same-indexed partition from all inputs:
-/// `output[k] = input[0][k] + input[1][k] + ... + input[n-1][k]`
+/// This only works if all inputs have the same hash-partitioning.
 ///
 /// # Data Flow
 /// ```text
@@ -640,7 +497,7 @@ impl InterleaveExec {
     pub fn try_new(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Result<Self> {
         assert_or_internal_err!(
             can_interleave(inputs.iter()),
-            "Not all InterleaveExec children have a consistent hash or range partitioning"
+            "Not all InterleaveExec children have a consistent hash partitioning"
         );
         let cache = Self::compute_properties(&inputs)?;
         Ok(InterleaveExec {
@@ -747,8 +604,7 @@ impl ExecutionPlan for InterleaveExec {
         let mut input_stream_vec = vec![];
         for input in self.inputs.iter() {
             if partition < input.output_partitioning().partition_count() {
-                let stream = input.execute(partition, Arc::clone(&context))?;
-                input_stream_vec.push(conform_stream_schema(self.schema(), stream));
+                input_stream_vec.push(input.execute(partition, Arc::clone(&context))?);
             } else {
                 // Do not find a partition to execute
                 break;
@@ -775,19 +631,15 @@ impl ExecutionPlan for InterleaveExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
-        vec![ChildStats::At(partition); self.inputs.len()]
-    }
-
-    fn statistics_from_inputs(
-        &self,
-        input_stats: &[Arc<Statistics>],
-        _args: &StatisticsArgs,
-    ) -> Result<Arc<Statistics>> {
-        let stats = input_stats
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        let stats = self
+            .inputs
             .iter()
-            .map(|s| s.as_ref().clone())
-            .collect::<Vec<_>>();
+            .map(|input| {
+                args.compute_child_statistics(input, args.partition())
+                    .map(Arc::unwrap_or_clone)
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(Arc::new(Statistics::try_merge_iter_with_ndv_fallback(
             stats.iter(),
@@ -799,50 +651,10 @@ impl ExecutionPlan for InterleaveExec {
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         vec![false; self.children().len()]
     }
-    #[cfg(feature = "proto")]
-    fn try_to_proto(
-        &self,
-        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
-    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
-        use datafusion_proto_models::protobuf;
-        let inputs = ctx.encode_children(self.inputs())?;
-        Ok(Some(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(
-                protobuf::physical_plan_node::PhysicalPlanType::Interleave(
-                    protobuf::InterleaveExecNode { inputs },
-                ),
-            ),
-        }))
-    }
 }
 
-#[cfg(feature = "proto")]
-impl InterleaveExec {
-    pub fn try_from_proto(
-        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
-        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        use datafusion_proto_models::protobuf;
-        let interleave = crate::expect_plan_variant!(
-            node,
-            protobuf::physical_plan_node::PhysicalPlanType::Interleave,
-            "InterleaveExec",
-        );
-        let inputs = interleave
-            .inputs
-            .iter()
-            .map(|input| ctx.decode_child(input))
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Arc::new(InterleaveExec::try_new(inputs)?))
-    }
-}
-
-/// Returns true if all inputs have the same [`Partitioning::Hash`] or [`Partitioning::Range`]
-/// spec, making them safe to interleave. Two inputs are interleave-compatible when partition
-/// `k` covers the identical key range or hash bucket across every input.
-///
-/// Note: compatibility is checked sequentially against the first input, so
-/// `InputDistributionRequirements::co_partitioned` is not needed here.
+/// If all the input partitions have the same Hash partition spec with the first_input_partition
+/// The InterleaveExec is partition aware.
 ///
 /// It might be too strict here in the case that the input partition specs are compatible but not exactly the same.
 /// For example one input partition has the partition spec Hash('a','b','c') and
@@ -855,7 +667,7 @@ pub fn can_interleave<T: Borrow<Arc<dyn ExecutionPlan>>>(
     };
 
     let reference = first.borrow().output_partitioning();
-    matches!(reference, Partitioning::Hash(_, _) | Partitioning::Range(_))
+    matches!(reference, Partitioning::Hash(_, _))
         && inputs
             .map(|plan| plan.borrow().output_partitioning().clone())
             .all(|partition| partition == *reference)
@@ -997,19 +809,16 @@ mod tests {
     use super::*;
     use crate::collect;
     use crate::repartition::RepartitionExec;
-    use crate::statistics::{StatisticsArgs, StatisticsContext};
+    use crate::statistics::StatisticsArgs;
     use crate::test::exec::StatisticsExec;
     use crate::test::{self, TestMemoryExec};
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::DataType;
-    use datafusion_common::SplitPoint;
     use datafusion_common::stats::Precision;
     use datafusion_common::{ColumnStatistics, ScalarValue};
-    use datafusion_physical_expr::RangePartitioning;
     use datafusion_physical_expr::equivalence::convert_to_orderings;
     use datafusion_physical_expr::expressions::col;
-    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
     // Generate a schema which consists of 7 columns (a, b, c, d, e, f, g)
     fn create_test_schema() -> Result<SchemaRef> {
@@ -1058,52 +867,6 @@ mod tests {
 
         let result: Vec<RecordBatch> = collect(union_exec, task_ctx).await?;
         assert_eq!(result.len(), 9);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_interleave_conforms_batch_schema() -> Result<()> {
-        // Two inputs agree on the column's type but disagree on nullability;
-        // InterleaveExec's declared schema ORs nullability across inputs, so
-        // every yielded batch must be re-stamped with that schema. See
-        // <https://github.com/apache/datafusion/issues/15394>.
-        let task_ctx = Arc::new(TaskContext::default());
-
-        let schema_not_null =
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-        let batch_not_null = RecordBatch::try_new(
-            Arc::clone(&schema_not_null),
-            vec![Arc::new(arrow::array::Int32Array::from(vec![1, 2]))],
-        )?;
-
-        let schema_nullable =
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
-        let batch_nullable = RecordBatch::try_new(
-            Arc::clone(&schema_nullable),
-            vec![Arc::new(arrow::array::Int32Array::from(vec![3, 4]))],
-        )?;
-
-        let hash_expr = vec![col("a", schema_not_null.as_ref())?];
-        let left: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
-            TestMemoryExec::try_new_exec(&[vec![batch_not_null]], schema_not_null, None)?,
-            Partitioning::Hash(hash_expr.clone(), 1),
-        )?);
-        let right: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
-            TestMemoryExec::try_new_exec(&[vec![batch_nullable]], schema_nullable, None)?,
-            Partitioning::Hash(hash_expr, 1),
-        )?);
-
-        let interleave: Arc<dyn ExecutionPlan> =
-            Arc::new(InterleaveExec::try_new(vec![left, right])?);
-        let interleave_schema = interleave.schema();
-        assert!(interleave_schema.field(0).is_nullable());
-
-        let batches = collect(interleave, task_ctx).await?;
-        assert!(!batches.is_empty());
-        for batch in &batches {
-            assert_eq!(batch.schema(), interleave_schema);
-        }
 
         Ok(())
     }
@@ -1237,8 +1000,7 @@ mod tests {
             Arc::new(StatisticsExec::new(right, schema.as_ref().clone()));
 
         let union = UnionExec::try_new(vec![left, right])?;
-        let stats =
-            StatisticsContext::new().compute(union.as_ref(), &StatisticsArgs::new())?;
+        let stats = union.statistics_with_args(&StatisticsArgs::new())?;
 
         assert_eq!(stats.as_ref(), &expected);
         Ok(())
@@ -1255,8 +1017,7 @@ mod tests {
             Arc::new(StatisticsExec::new(right, schema.as_ref().clone()));
 
         let union = UnionExec::try_new(vec![left, right])?;
-        let stats =
-            StatisticsContext::new().compute(union.as_ref(), &StatisticsArgs::new())?;
+        let stats = union.statistics_with_args(&StatisticsArgs::new())?;
 
         assert_eq!(stats.as_ref(), &expected);
         Ok(())
@@ -1277,8 +1038,7 @@ mod tests {
         )?);
 
         let interleave = InterleaveExec::try_new(vec![left, right])?;
-        let stats =
-            StatisticsContext::new().compute(&interleave, &StatisticsArgs::new())?;
+        let stats = interleave.statistics_with_args(&StatisticsArgs::new())?;
 
         assert_eq!(stats.as_ref(), &expected);
         Ok(())
@@ -1300,8 +1060,8 @@ mod tests {
         )?);
 
         let interleave = InterleaveExec::try_new(vec![left, right])?;
-        let stats = StatisticsContext::new()
-            .compute(&interleave, &StatisticsArgs::new().with_partition(Some(0)))?;
+        let stats = interleave
+            .statistics_with_args(&StatisticsArgs::new().with_partition(Some(0)))?;
 
         let expected = Statistics::default()
             .with_num_rows(Precision::Inexact(5))
@@ -1494,124 +1254,6 @@ mod tests {
                 "UnionExec/InterleaveExec requires all inputs to have the same number of fields"
             )
         );
-    }
-
-    fn make_hash_exec(
-        schema: &SchemaRef,
-        hash_cols: Vec<&str>,
-        buckets: usize,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exprs = hash_cols
-            .iter()
-            .map(|c| col(c, schema))
-            .collect::<Result<Vec<_>>>()?;
-        let base = Arc::new(TestMemoryExec::try_new(&[], Arc::clone(schema), None)?);
-        Ok(Arc::new(RepartitionExec::try_new(
-            base,
-            Partitioning::Hash(exprs, buckets),
-        )?))
-    }
-
-    fn make_range_exec(
-        schema: &SchemaRef,
-        split_values: Vec<i32>,
-        sort_options: SortOptions,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let sort_expr =
-            PhysicalSortExpr::new(col(schema.field(0).name(), schema)?, sort_options);
-        let ordering = LexOrdering::new(vec![sort_expr]).unwrap();
-        let split_points = split_values
-            .into_iter()
-            .map(|v| SplitPoint::new(vec![ScalarValue::Int32(Some(v))]))
-            .collect();
-        let base = Arc::new(TestMemoryExec::try_new(&[], Arc::clone(schema), None)?);
-        Ok(Arc::new(RepartitionExec::try_new(
-            base,
-            Partitioning::Range(RangePartitioning::try_new(ordering, split_points)?),
-        )?))
-    }
-
-    #[test]
-    fn test_can_interleave_matrix() -> Result<()> {
-        let name_column = "name";
-        let age_column = "age";
-        let schema = Arc::new(Schema::new(vec![
-            Field::new(name_column, DataType::Int32, true),
-            Field::new(age_column, DataType::Int32, true),
-        ]));
-
-        let ascending = SortOptions {
-            descending: false,
-            nulls_first: false,
-        };
-        struct Case {
-            inputs: Vec<Arc<dyn ExecutionPlan>>,
-            expected: bool,
-            label: &'static str,
-        }
-
-        let cases = vec![
-            // compatible
-            Case {
-                label: "matching hash on single column",
-                expected: true,
-                inputs: vec![
-                    make_hash_exec(&schema, vec![name_column], 3)?,
-                    make_hash_exec(&schema, vec![name_column], 3)?,
-                ],
-            },
-            Case {
-                label: "matching hash on multiple columns",
-                expected: true,
-                inputs: vec![
-                    make_hash_exec(&schema, vec![name_column, age_column], 3)?,
-                    make_hash_exec(&schema, vec![name_column, age_column], 3)?,
-                ],
-            },
-            Case {
-                label: "matching range same splits and order",
-                expected: true,
-                inputs: vec![
-                    make_range_exec(&schema, vec![10, 20], ascending)?,
-                    make_range_exec(&schema, vec![10, 20], ascending)?,
-                ],
-            },
-            // incompatible
-            Case {
-                label: "subset range partition",
-                expected: false,
-                inputs: vec![
-                    make_range_exec(&schema, vec![10, 20], ascending)?,
-                    make_range_exec(&schema, vec![10, 15], ascending)?,
-                ],
-            },
-            Case {
-                label: "range different split points",
-                expected: false,
-                inputs: vec![
-                    make_range_exec(&schema, vec![10, 20], ascending)?,
-                    make_range_exec(&schema, vec![10, 30], ascending)?,
-                ],
-            },
-            Case {
-                label: "mixed range and hash",
-                expected: false,
-                inputs: vec![
-                    make_range_exec(&schema, vec![10, 20], ascending)?,
-                    make_hash_exec(&schema, vec![name_column], 3)?,
-                ],
-            },
-        ];
-
-        for case in cases {
-            assert_eq!(
-                can_interleave(case.inputs.iter()),
-                case.expected,
-                "{}",
-                case.label
-            );
-        }
-        Ok(())
     }
 
     #[test]

@@ -295,7 +295,7 @@ impl RunOpt {
         let mut benchmark_run = BenchmarkRun::new();
         for query_id in query_range {
             benchmark_run.start_new_case(&format!("Query {query_id}"));
-            let query_run = self.benchmark_query(query_id, &mut benchmark_run).await?;
+            let query_run = self.benchmark_query(query_id).await?;
             for iter in query_run {
                 benchmark_run.write_iter(iter.elapsed, iter.row_count);
             }
@@ -304,13 +304,7 @@ impl RunOpt {
         Ok(())
     }
 
-    /// `benchmark_run` is handed this query's runtime, which is built here so
-    /// each query gets a pool of its own.
-    async fn benchmark_query(
-        &self,
-        query_id: usize,
-        benchmark_run: &mut BenchmarkRun,
-    ) -> Result<Vec<QueryResult>> {
+    async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
         let mut config = self
             .common
             .config()?
@@ -320,7 +314,6 @@ impl RunOpt {
             self.hash_join_buffering_capacity;
         let rt = self.common.build_runtime()?;
         let ctx = SessionContext::new_with_config_rt(config, rt);
-        benchmark_run.set_memory_pool(&ctx.runtime_env().memory_pool);
 
         // register tables
         self.register_tables(&ctx).await?;
@@ -355,14 +348,14 @@ impl RunOpt {
         println!("Query {query_id} avg time: {avg:.2} ms");
 
         // Print memory usage stats using mimalloc (only when compiled with --features mimalloc_extended)
-        print_memory_stats(&*ctx.runtime_env().memory_pool);
+        print_memory_stats();
 
         Ok(query_results)
     }
 
     async fn register_tables(&self, ctx: &SessionContext) -> Result<()> {
         for table in IMDB_TABLES {
-            let table_provider = { self.get_table(ctx, table)? };
+            let table_provider = { self.get_table(ctx, table).await? };
 
             if self.mem_table {
                 println!("Loading table '{table}' into memory");
@@ -423,7 +416,7 @@ impl RunOpt {
         Ok(result)
     }
 
-    fn get_table(
+    async fn get_table(
         &self,
         ctx: &SessionContext,
         table: &str,

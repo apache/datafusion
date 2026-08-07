@@ -22,7 +22,7 @@ use arrow::array::types::Time64NanosecondType;
 use arrow::array::{Array, PrimitiveArray, StringArrayType};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::*;
-use chrono::format::{Item, Parsed, StrftimeItems, parse};
+use chrono::NaiveTime;
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -141,7 +141,6 @@ impl ScalarUDFImpl for ToTimeFunc {
 /// Convert string arguments to time (standalone function, not a method on ToTimeFunc)
 fn string_to_time(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let formats = collect_formats(args)?;
-    let formats = compile_formats(&formats);
 
     match &args[0] {
         ColumnarValue::Scalar(ScalarValue::Utf8(s))
@@ -208,25 +207,10 @@ fn timestamp_to_time(arg: &ColumnarValue) -> Result<ColumnarValue> {
     arg.cast_to(&Time64(arrow::datatypes::TimeUnit::Nanosecond), None)
 }
 
-struct CompiledTimeFormat<'a> {
-    source: &'a str,
-    items: Vec<Item<'a>>,
-}
-
-fn compile_formats<'a>(formats: &[&'a str]) -> Vec<CompiledTimeFormat<'a>> {
-    formats
-        .iter()
-        .map(|source| CompiledTimeFormat {
-            source,
-            items: StrftimeItems::new(source).collect(),
-        })
-        .collect()
-}
-
 /// Parse time array using the provided formats
 fn parse_time_array<'a, A: StringArrayType<'a>>(
     array: &A,
-    formats: &[CompiledTimeFormat<'_>],
+    formats: &[&str],
 ) -> Result<PrimitiveArray<Time64NanosecondType>> {
     let mut values = Vec::with_capacity(array.len());
     for i in 0..array.len() {
@@ -240,12 +224,10 @@ fn parse_time_array<'a, A: StringArrayType<'a>>(
 }
 
 /// Parse time string using provided formats
-fn parse_time_with_formats(s: &str, formats: &[CompiledTimeFormat<'_>]) -> Result<i64> {
+fn parse_time_with_formats(s: &str, formats: &[&str]) -> Result<i64> {
     for format in formats {
-        let mut parsed = Parsed::new();
-        if parse(&mut parsed, s, format.items.iter()).is_ok()
-            && let Ok(time) = parsed.to_naive_time()
-        {
+        if let Ok(time) = NaiveTime::parse_from_str(s, format) {
+            // Use Arrow's time_to_time64ns function instead of custom implementation
             return Ok(time_to_time64ns(time));
         }
     }
@@ -253,8 +235,5 @@ fn parse_time_with_formats(s: &str, formats: &[CompiledTimeFormat<'_>]) -> Resul
         "Error parsing '{}' as time. Tried formats: {:?}",
         s,
         formats
-            .iter()
-            .map(|format| format.source)
-            .collect::<Vec<_>>()
     )
 }

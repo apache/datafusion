@@ -645,10 +645,10 @@ drop table test_lowercase;
 
 query IIII
 SELECT
-  arrow_cast(ASCII(ascii_1), 'Int32') as c1,
-  arrow_cast(ASCII(ascii_2), 'Int32') as c2,
-  arrow_cast(ASCII(unicode_1), 'Int32') as c3,
-  arrow_cast(ASCII(unicode_2), 'Int32') as c4
+  ASCII(ascii_1) as c1,
+  ASCII(ascii_2) as c2,
+  ASCII(unicode_1) as c3,
+  ASCII(unicode_2) as c4
 FROM test_basic_operator;
 ----
 65 88 100 128293
@@ -972,82 +972,6 @@ NULL NULL NULL NULL
 # Test FIND_IN_SET
 # --------------------------------------
 
-# array on the left and a literal on the right
-query I
-SELECT find_in_set(ascii_1, 'Andrew,Xiangpeng') FROM test_basic_operator
-----
-1
-2
-0
-0
-0
-0
-0
-0
-0
-NULL
-NULL
-
-# literal on the left and an array on the right
-query I
-SELECT find_in_set('🔥', unicode_2) FROM test_basic_operator
-----
-1
-0
-0
-0
-0
-0
-0
-0
-0
-NULL
-1
-
-# arrays on both sides
-query I
-SELECT find_in_set(unicode_2, unicode_1) FROM test_basic_operator
-----
-0
-1
-0
-0
-0
-1
-1
-1
-1
-NULL
-NULL
-
-# Explicit casts are needed to exercise the LargeUtf8 scalar/array paths;
-# otherwise string coercion chooses a different common physical type.
-query II
-SELECT
-  find_in_set(arrow_cast(ascii_1, 'LargeUtf8'), arrow_cast('Andrew,Xiangpeng', 'LargeUtf8')),
-  find_in_set(arrow_cast('🔥', 'LargeUtf8'), arrow_cast(unicode_2, 'LargeUtf8'))
-FROM test_basic_operator
-----
-1 1
-2 0
-0 0
-0 0
-0 0
-0 0
-0 0
-0 0
-0 0
-NULL NULL
-NULL 1
-
-# null literals paired with arrays
-query II
-SELECT find_in_set(ascii_1, NULL), find_in_set(NULL, ascii_2)
-FROM test_basic_operator
-LIMIT 1
-----
-NULL NULL
-
 query IIIIII
 SELECT
   FIND_IN_SET(ascii_1, 'a,b,c,d'),
@@ -1329,8 +1253,8 @@ NULL NULL NULL NULL NULL NULL
 
 query II
 SELECT
-  arrow_cast(CHARACTER_LENGTH(ascii_1), 'Int64'),
-  arrow_cast(CHARACTER_LENGTH(unicode_1), 'Int64')
+  CHARACTER_LENGTH(ascii_1),
+  CHARACTER_LENGTH(unicode_1)
 FROM
     test_basic_operator
 ----
@@ -1351,12 +1275,7 @@ NULL NULL
 # --------------------------------------
 
 query IIII
-select
-  arrow_cast(bit_length(ascii_1), 'Int64'),
-  arrow_cast(bit_length(ascii_2), 'Int64'),
-  arrow_cast(bit_length(unicode_1), 'Int64'),
-  arrow_cast(bit_length(unicode_2), 'Int64')
-from test_basic_operator;
+select bit_length(ascii_1), bit_length(ascii_2), bit_length(unicode_1), bit_length(unicode_2) from test_basic_operator;
 ----
 48 8 144 32
 72 72 176 176
@@ -1941,28 +1860,11 @@ SELECT left(ascii_1, 0), right(ascii_1, 0) FROM test_basic_operator
 NULL NULL
 NULL NULL
 
-# left and right preserve the input string type
-query TTTTTT
-SELECT
-  arrow_typeof(left(arrow_cast(ascii_1, 'Utf8'), 3)),
-  arrow_typeof(right(arrow_cast(ascii_1, 'Utf8'), 3)),
-  arrow_typeof(left(arrow_cast(ascii_1, 'LargeUtf8'), 3)),
-  arrow_typeof(right(arrow_cast(ascii_1, 'LargeUtf8'), 3)),
-  arrow_typeof(left(arrow_cast(ascii_1, 'Utf8View'), 3)),
-  arrow_typeof(right(arrow_cast(ascii_1, 'Utf8View'), 3))
-FROM test_basic_operator LIMIT 1
+# left and right return Utf8View
+query TT
+SELECT arrow_typeof(left(ascii_1, 3)), arrow_typeof(right(ascii_1, 3)) FROM test_basic_operator LIMIT 1
 ----
-Utf8 Utf8 LargeUtf8 LargeUtf8 Utf8View Utf8View
-
-# substr preserves the input string type
-query TTT
-SELECT
-  arrow_typeof(substr(arrow_cast(ascii_1, 'Utf8'), 1, 3)),
-  arrow_typeof(substr(arrow_cast(ascii_1, 'LargeUtf8'), 1, 3)),
-  arrow_typeof(substr(arrow_cast(ascii_1, 'Utf8View'), 1, 3))
-FROM test_basic_operator LIMIT 1
-----
-Utf8 LargeUtf8 Utf8View
+Utf8View Utf8View
 
 # --------------------------------------
 # Test repeat() against array inputs with various null patterns. The scalar

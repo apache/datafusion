@@ -18,8 +18,6 @@
 //! Physical expressions for window functions
 
 mod bounded_window_agg_exec;
-#[cfg(feature = "proto")]
-mod proto;
 mod utils;
 mod window_agg_exec;
 

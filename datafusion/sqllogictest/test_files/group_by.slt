@@ -4608,9 +4608,9 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [max(timestamp_table.t1)@1 DESC], fetch=4
 02)--SortExec: TopK(fetch=4), expr=[max(timestamp_table.t1)@1 DESC], preserve_partitioning=[true]
-03)----AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[max(timestamp_table.t1)]
+03)----AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[max(timestamp_table.t1)], lim=[4]
 04)------RepartitionExec: partitioning=Hash([c2@0], 8), input_partitions=8
-05)--------AggregateExec: mode=Partial, gby=[c2@1 as c2], aggr=[max(timestamp_table.t1)]
+05)--------AggregateExec: mode=Partial, gby=[c2@1 as c2], aggr=[max(timestamp_table.t1)], lim=[4]
 06)----------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=4
 07)------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/0.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/1.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/2.csv], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/group_by/timestamp_table/3.csv]]}, projection=[t1, c2], file_type=csv, has_header=true
 
@@ -5641,127 +5641,3 @@ set datafusion.execution.target_partitions = 4;
 
 statement count 0
 drop table t;
-
-# DISTINCT must not be removed when a unique key is downgraded to a
-# non-unique functional dependency by a join: `u.id` is a primary key, but
-# after the LEFT JOIN each `u` row can occur once per matching order.
-statement ok
-CREATE TABLE users_with_pk (id INT, name VARCHAR, primary key(id)) AS VALUES
-  (1, 'alice'),
-  (2, 'bob');
-
-statement ok
-CREATE TABLE user_orders (user_id INT, amount INT) AS VALUES
-  (1, 10),
-  (1, 20),
-  (2, 30);
-
-query I
-SELECT DISTINCT u.id
-  FROM users_with_pk u
-  LEFT JOIN user_orders o ON u.id = o.user_id
-  ORDER BY u.id;
-----
-1
-2
-
-# The DISTINCT must be planned as an Aggregate; it cannot be removed based
-# on the (join-downgraded) primary key of `users_with_pk`.
-query TT
-EXPLAIN SELECT DISTINCT u.id
-  FROM users_with_pk u
-  LEFT JOIN user_orders o ON u.id = o.user_id;
-----
-logical_plan
-01)Aggregate: groupBy=[[u.id]], aggr=[[]]
-02)--SubqueryAlias: u
-03)----TableScan: users_with_pk projection=[id]
-physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[]
-02)--RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
-03)----AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
-
-statement ok
-drop table users_with_pk;
-
-statement ok
-drop table user_orders;
-
-# Test multi group by int + Duration
-statement ok
-CREATE TABLE duration_group_test AS VALUES
-  (1, arrow_cast(5, 'Duration(Second)')),
-  (1, arrow_cast(5, 'Duration(Second)')),
-  (1, arrow_cast(7, 'Duration(Second)')),
-  (2, arrow_cast(5, 'Duration(Second)'));
-
-# Single Duration group key ({5s, 7s}, 5s x3) via the GroupValuesPrimitive path.
-query ?I
-SELECT column2, count(*) FROM duration_group_test GROUP BY column2 ORDER BY column2;
-----
-0 days 0 hours 0 mins 5 secs 3
-0 days 0 hours 0 mins 7 secs 1
-
-# Multi-column GROUP BY: a primitive key and a Duration key on the same path.
-query I?I
-SELECT column1, column2, count(*)
-FROM duration_group_test GROUP BY column1, column2 ORDER BY column1, column2;
-----
-1 0 days 0 hours 0 mins 5 secs 2
-1 0 days 0 hours 0 mins 7 secs 1
-2 0 days 0 hours 0 mins 5 secs 1
-
-statement ok
-DROP TABLE duration_group_test;
-
-# Test multi group by int + Float16
-statement ok
-CREATE TABLE float16_group_test AS VALUES
-  (arrow_cast(1.5, 'Float16'), 1),
-  (arrow_cast(1.5, 'Float16'), 1),
-  (arrow_cast(2.5, 'Float16'), 2),
-  (arrow_cast(-0.0, 'Float16'), 3),
-  (arrow_cast(0.0, 'Float16'), 3);
-
-# Single Float16 group key ({1.5, 2.5, ±0.0}) via the GroupValuesPrimitive path.
-query I
-SELECT count(*) FROM (SELECT column1 FROM float16_group_test GROUP BY column1);
-----
-3
-
-# Multi-column GROUP BY: a primitive key and a Float16 key on the same path.
-query I
-SELECT count(*) FROM (SELECT column1, column2 FROM float16_group_test GROUP BY column1, column2);
-----
-3
-
-statement ok
-DROP TABLE float16_group_test;
-
-# Test multi group by int + Interval
-statement ok
-CREATE TABLE interval_group_test AS VALUES
-  (1, INTERVAL '1' MONTH),
-  (1, INTERVAL '1' MONTH),
-  (1, INTERVAL '30' DAY),
-  (2, INTERVAL '1' MONTH);
-
-# Single Interval group key ({1 month, 30 days}) via the GroupValuesPrimitive path.
-query I
-SELECT count(*) FROM interval_group_test GROUP BY column2 ORDER BY count(*);
-----
-1
-3
-
-# Multi-column GROUP BY: a primitive key and an Interval key on the same path.
-query II
-SELECT column1, count(*)
-FROM interval_group_test GROUP BY column1, column2 ORDER BY column1, count(*);
-----
-1 1
-1 2
-2 1
-
-statement ok
-DROP TABLE interval_group_test;

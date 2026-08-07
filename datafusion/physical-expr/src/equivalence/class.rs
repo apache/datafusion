@@ -551,19 +551,7 @@ impl EquivalenceGroup {
         sort_exprs
             .into_iter()
             .map(|sort_expr| self.normalize_sort_expr(sort_expr))
-            .filter(|sort_expr| !self.is_uniform_constant(&sort_expr.expr))
-    }
-
-    /// Returns `true` when `expr` is a *globally* constant column, safe to drop
-    /// from a required ordering. Only [`AcrossPartitions::Uniform`] qualifies; a
-    /// [`AcrossPartitions::Heterogeneous`] value is constant within a partition
-    /// but varies across partitions, so it still discriminates the order once
-    /// partitions are merged and must be kept.
-    fn is_uniform_constant(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
-        matches!(
-            self.is_expr_constant(expr),
-            Some(AcrossPartitions::Uniform(_))
-        )
+            .filter(|sort_expr| self.is_expr_constant(&sort_expr.expr).is_none())
     }
 
     /// Normalizes the given sort requirement according to this group. The
@@ -594,7 +582,7 @@ impl EquivalenceGroup {
         sort_reqs
             .into_iter()
             .map(|req| self.normalize_sort_requirement(req))
-            .filter(|req| !self.is_uniform_constant(&req.expr))
+            .filter(|req| self.is_expr_constant(&req.expr).is_none())
     }
 
     /// Perform an indirect projection of `expr` by consulting the equivalence

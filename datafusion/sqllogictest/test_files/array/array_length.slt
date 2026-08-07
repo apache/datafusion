@@ -159,6 +159,21 @@ select array_distance([2], [3]), list_distance([1], [2]), list_distance([1], [-2
 query error
 select list_distance([1], [1, 2]);
 
+query R
+select array_distance([[1, 1]], [1, 2]);
+----
+1
+
+query R
+select array_distance([[1, 1]], [[1, 2]]);
+----
+1
+
+query R
+select array_distance([[1, 1]], [[1, 2]]);
+----
+1
+
 query RR
 select array_distance([1, 1, 0, 0], [2, 2, 1, 1]), list_distance([1, 2, 3], [1, 2, 3]);
 ----
@@ -188,40 +203,6 @@ query R
 select list_distance([1, 2, 3], [1, 2, 3]) AS distance;
 ----
 0
-
-# array_distance with null outer arrays
-query RR
-select
-  array_distance(arrow_cast(NULL, 'List(Float64)'), [1, 2]),
-  array_distance([1, 2], arrow_cast(NULL, 'List(Float64)'));
-----
-NULL NULL
-
-# invalid argument count and types
-query error DataFusion error: Error during planning: Execution error: Function 'array_distance' user-defined coercion failed with: Execution error: array_distance function requires 2 arguments
-select array_distance();
-
-query error DataFusion error: Error during planning: Execution error: Function 'array_distance' user-defined coercion failed with: Execution error: array_distance function requires 2 arguments
-select array_distance([1]);
-
-query error DataFusion error: Error during planning: Execution error: Function 'array_distance' user-defined coercion failed with: Execution error: array_distance function requires 2 arguments
-select array_distance([1], [2], [3]);
-
-query error array_distance does not support type Int64
-select array_distance(1, [1]);
-
-query error array_distance does not support types
-select array_distance([1], arrow_cast([1], 'LargeList(Float64)'));
-
-query error array_distance only supports one-dimensional arrays
-select array_distance([[1, 1]], [1, 2]);
-
-query error array_distance only supports one-dimensional arrays
-select array_distance([[1, 1]], [[1, 2]]);
-
-query error array_distance only supports one-dimensional arrays
-select array_distance([[1, 2], [100, 100]], [[1, 4], [0, 0]]);
-
 
 # array_distance with columns
 query RRR

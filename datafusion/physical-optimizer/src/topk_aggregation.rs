@@ -46,7 +46,6 @@ impl TopKAggregation {
         aggr: &AggregateExec,
         order_by: &str,
         order_desc: bool,
-        nulls_first: bool,
         limit: usize,
     ) -> Option<Arc<dyn ExecutionPlan>> {
         // Current only support single group key
@@ -67,26 +66,6 @@ impl TopKAggregation {
 
         // Check if this is ordering by an aggregate function (MIN/MAX)
         if let Some((field, desc)) = aggr.get_minmax_desc() {
-            // A nullable MIN/MAX starts as NULL and becomes non-NULL when the
-            // group sees its first value. With NULLS FIRST that transition
-            // worsens the group's rank, so a bounded aggregation cannot safely
-            // discard other NULL groups. Use regular aggregation for exact
-            // results. Non-nullable inputs never take this transition and can
-            // still use TopK.
-            let input_nullable = aggr
-                .aggr_expr()
-                .iter()
-                .exactly_one()
-                .ok()?
-                .expressions()
-                .into_iter()
-                .exactly_one()
-                .ok()?
-                .nullable(aggr.input_schema.as_ref())
-                .ok()?;
-            if nulls_first && input_nullable {
-                return None;
-            }
             // ensure the sort direction matches aggregate function
             if desc != order_desc {
                 return None;
@@ -121,7 +100,6 @@ impl TopKAggregation {
         let order = sort.properties().output_ordering()?;
         let order = order.iter().exactly_one().ok()?;
         let order_desc = order.options.descending;
-        let nulls_first = order.options.nulls_first;
         let order = order.expr.downcast_ref::<Column>()?;
         let mut cur_col_name = order.name().to_string();
         let limit = sort.fetch()?;
@@ -133,13 +111,7 @@ impl TopKAggregation {
             }
             if let Some(aggr) = plan.downcast_ref::<AggregateExec>() {
                 // either we run into an Aggregate and transform it
-                match Self::transform_agg(
-                    aggr,
-                    &cur_col_name,
-                    order_desc,
-                    nulls_first,
-                    limit,
-                ) {
+                match Self::transform_agg(aggr, &cur_col_name, order_desc, limit) {
                     None => cardinality_preserved = false,
                     Some(plan) => return Ok(Transformed::yes(plan)),
                 }

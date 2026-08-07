@@ -102,15 +102,13 @@ use tonic::async_trait;
 
 use datafusion::optimizer::simplify_expressions::simplify_literal::parse_literal;
 use datafusion::{
-    catalog::Session,
     execution::{
-        RecordBatchStream, SendableRecordBatchStream, SessionStateBuilder, TaskContext,
-        context::QueryPlanner,
+        RecordBatchStream, SendableRecordBatchStream, SessionState, SessionStateBuilder,
+        TaskContext, context::QueryPlanner,
     },
     physical_expr::EquivalenceProperties,
     physical_plan::{
-        ChildStats, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
-        StatisticsArgs,
+        DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, StatisticsArgs,
         metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput},
     },
     physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
@@ -120,7 +118,6 @@ use datafusion_common::{
     DFSchemaRef, DataFusionError, Result, Statistics, internal_err, not_impl_err,
     plan_datafusion_err, plan_err,
 };
-use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{
     UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
     logical_plan::{Extension, LogicalPlan, LogicalPlanBuilder},
@@ -566,7 +563,7 @@ impl QueryPlanner for TableSampleQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &dyn Session,
+        session_state: &SessionState,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
             TableSampleExtensionPlanner,
@@ -588,8 +585,7 @@ impl ExtensionPlanner for TableSampleExtensionPlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &dyn Session,
-        _planning_ctx: &PhysicalPlanningContext,
+        _session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let Some(sample_node) = node.as_any().downcast_ref::<TableSamplePlanNode>()
         else {
@@ -726,16 +722,10 @@ impl ExecutionPlan for SampleExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
-        vec![ChildStats::At(partition)]
-    }
-
-    fn statistics_from_inputs(
-        &self,
-        input_stats: &[Arc<Statistics>],
-        _args: &StatisticsArgs,
-    ) -> Result<Arc<Statistics>> {
-        let mut stats = input_stats[0].as_ref().clone();
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        let mut stats = Arc::unwrap_or_clone(
+            args.compute_child_statistics(&self.input, args.partition())?,
+        );
         let ratio = self.upper_bound - self.lower_bound;
 
         // Scale statistics by sampling ratio (inexact due to randomness)

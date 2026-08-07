@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use crate::strings::{
     BulkNullStringArrayBuilder, GenericStringArrayBuilder, StringViewArrayBuilder,
 };
@@ -24,11 +22,10 @@ use crate::utils::make_scalar_function;
 use DataType::{LargeUtf8, Utf8, Utf8View};
 use arrow::array::{Array, ArrayRef, AsArray, StringArrayType};
 use arrow::datatypes::DataType;
-use datafusion_common::Result;
-use datafusion_common::types::{NativeType, logical_string};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
-    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -59,16 +56,11 @@ impl Default for ReverseFunc {
 
 impl ReverseFunc {
     pub fn new() -> Self {
+        use DataType::*;
         Self {
-            signature: Signature::coercible(
-                vec![
-                    Coercion::new_implicit(
-                        TypeSignatureClass::Native(logical_string()),
-                        vec![TypeSignatureClass::Any],
-                        NativeType::String,
-                    )
-                    .with_encoding_preservation(EncodingPreservation::dictionary()),
-                ],
+            signature: Signature::uniform(
+                1,
+                vec![Utf8View, Utf8, LargeUtf8],
                 Volatility::Immutable,
             ),
         }
@@ -89,7 +81,13 @@ impl ScalarUDFImpl for ReverseFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(reverse, vec![])(&args.args)
+        let args = &args.args;
+        match args[0].data_type() {
+            Utf8 | Utf8View | LargeUtf8 => make_scalar_function(reverse, vec![])(args),
+            other => {
+                exec_err!("Unsupported data type {other:?} for function reverse")
+            }
+        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -115,11 +113,6 @@ fn reverse(args: &[ArrayRef]) -> Result<ArrayRef> {
             &args[0].as_string_view(),
             StringViewArrayBuilder::with_capacity(len),
         ),
-        DataType::Dictionary(_, _) => {
-            let dictionary = args[0].as_any_dictionary();
-            let converted = reverse(&[Arc::clone(dictionary.values())])?;
-            Ok(dictionary.with_values(converted))
-        }
         _ => unreachable!(
             "Reverse can only be applied to Utf8View, Utf8 and LargeUtf8 types"
         ),

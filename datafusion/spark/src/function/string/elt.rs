@@ -24,7 +24,7 @@ use arrow::compute::{can_cast_types, cast};
 use arrow::datatypes::DataType::{Int64, Utf8};
 use arrow::datatypes::{DataType, Int64Type};
 use datafusion_common::cast::as_string_array;
-use datafusion_common::{DataFusionError, Result, exec_err, plan_datafusion_err};
+use datafusion_common::{DataFusionError, Result, plan_datafusion_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -63,11 +63,7 @@ impl ScalarUDFImpl for SparkElt {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let enable_ansi_mode = args.config_options.execution.enable_ansi_mode;
-        make_scalar_function(
-            move |arrays: &[ArrayRef]| elt(arrays, enable_ansi_mode),
-            vec![],
-        )(&args.args)
+        make_scalar_function(elt, vec![])(&args.args)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -84,13 +80,18 @@ impl ScalarUDFImpl for SparkElt {
                 "ELT index must be Int64 (or castable to Int64), got {idx_dt:?}"
             )));
         }
-        let mut coerced = vec![Utf8; length];
-        coerced[0] = Int64;
+        let mut coerced = Vec::with_capacity(arg_types.len());
+        coerced.push(Int64);
+
+        for _ in 1..length {
+            coerced.push(Utf8);
+        }
+
         Ok(coerced)
     }
 }
 
-fn elt(args: &[ArrayRef], enable_ansi_mode: bool) -> Result<ArrayRef> {
+fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
     let n_rows = args[0].len();
 
     let idx: &PrimitiveArray<Int64Type> =
@@ -102,10 +103,11 @@ fn elt(args: &[ArrayRef], enable_ansi_mode: bool) -> Result<ArrayRef> {
         })?;
 
     let num_values = args.len() - 1;
-    let mut cols: Vec<StringArray> = Vec::with_capacity(num_values);
+    let mut cols: Vec<Arc<StringArray>> = Vec::with_capacity(num_values);
     for a in args.iter().skip(1) {
         let casted = cast(a, &Utf8)?;
-        cols.push(as_string_array(&casted)?.clone());
+        let sa = as_string_array(&casted)?;
+        cols.push(Arc::new(sa.clone()));
     }
 
     let mut builder = StringBuilder::new();
@@ -118,12 +120,10 @@ fn elt(args: &[ArrayRef], enable_ansi_mode: bool) -> Result<ArrayRef> {
 
         let index = idx.value(i);
 
+        // TODO: if spark.sql.ansi.enabled is true,
+        //  throw ArrayIndexOutOfBoundsException for invalid indices;
+        //  if false, return NULL instead (current behavior).
         if index < 1 || (index as usize) > num_values {
-            if enable_ansi_mode {
-                return exec_err!(
-                    "The index {index} is out of bounds. The array has {num_values} elements."
-                );
-            }
             builder.append_null();
             continue;
         }
@@ -146,13 +146,13 @@ mod tests {
     use super::*;
     use arrow::array::Int64Array;
 
-    fn run_elt_arrays(arrs: Vec<ArrayRef>) -> Result<StringArray> {
-        run_elt_arrays_with(arrs, false)
-    }
-
-    fn run_elt_arrays_with(arrs: Vec<ArrayRef>, ansi: bool) -> Result<StringArray> {
-        let arr = elt(&arrs, ansi)?;
-        Ok(as_string_array(&arr)?.clone())
+    fn run_elt_arrays(arrs: Vec<ArrayRef>) -> Result<Arc<StringArray>> {
+        let arr = elt(&arrs)?;
+        let string_array = arr
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| DataFusionError::Internal("expected Utf8".into()))?;
+        Ok(Arc::new(string_array.clone()))
     }
 
     #[test]

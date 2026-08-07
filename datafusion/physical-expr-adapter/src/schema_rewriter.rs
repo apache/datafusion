@@ -183,12 +183,9 @@ pub trait PhysicalExprAdapterFactory: Send + Sync + std::fmt::Debug {
     /// Return true when rewritten expressions from this factory can be reused
     /// for the same logical schema, physical schema, and input expressions.
     ///
-    /// When true, DataFusion may cache and reuse expressions adapted by the
-    /// [`PhysicalExprAdapter`] returned from [`Self::create`]. Otherwise,
-    /// DataFusion adapts expressions for each file.
-    ///
     /// Factories that opt in must not depend on factory-local mutable state or
     /// other per-file inputs that are not represented by those rewrite inputs.
+    ///
     /// Custom factories default to non-reusable because they may depend on
     /// factory-local state.
     fn supports_reusable_rewrites(&self) -> bool {
@@ -211,7 +208,6 @@ impl PhysicalExprAdapterFactory for DefaultPhysicalExprAdapterFactory {
         }))
     }
 
-    // Safe because this factory has no state beyond `create`'s schema inputs.
     fn supports_reusable_rewrites(&self) -> bool {
         true
     }
@@ -647,11 +643,10 @@ mod tests {
     use super::*;
     use arrow::array::{
         Array, BooleanArray, GenericListArray, Int32Array, Int64Array, RecordBatch,
-        RecordBatchOptions, StringArray, StringViewArray, StructArray, record_batch,
+        RecordBatchOptions, StringArray, StringViewArray, StructArray,
     };
-    use arrow::datatypes as arrow_schema;
     use arrow::datatypes::{Field, Fields, Schema};
-    use datafusion_common::assert_contains;
+    use datafusion_common::{assert_contains, record_batch};
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{Column, Literal, col};
 

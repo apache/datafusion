@@ -47,8 +47,8 @@ use datafusion_proto::physical_plan::{
 use datafusion_proto::protobuf;
 
 /// Example of using multiple extension codecs for serialization / deserialization
-pub fn composed_extension_codec() -> Result<()> {
-    // Build execution plan that has both types of nodes
+pub async fn composed_extension_codec() -> Result<()> {
+    // build execution plan that has both types of nodes
     //
     // Note each node requires a different `PhysicalExtensionCodec` to decode
     let exec_plan = Arc::new(ParentExec {
@@ -63,18 +63,18 @@ pub fn composed_extension_codec() -> Result<()> {
         Arc::new(ChildPhysicalExtensionCodec {}),
     ]);
 
-    // Serialize execution plan to proto
+    // serialize execution plan to proto
     let proto: protobuf::PhysicalPlanNode =
         protobuf::PhysicalPlanNode::try_from_physical_plan(
             exec_plan.clone(),
             &composed_codec,
         )?;
 
-    // Deserialize proto back to execution plan
+    // deserialize proto back to execution plan
     let result_exec_plan: Arc<dyn ExecutionPlan> =
         proto.try_into_physical_plan(&ctx.task_ctx(), &composed_codec)?;
 
-    // Assert that the original and deserialized execution plans are equal
+    // assert that the original and deserialized execution plans are equal
     assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
 
     Ok(())

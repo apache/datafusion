@@ -207,6 +207,11 @@ where
 
         Ok(vec![Arc::new(builder.finish())])
     }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
+    }
+
     fn size(&self) -> usize {
         size_of::<Self>()
             + self.seen.capacity() * (size_of::<(usize, T::Native)>() + size_of::<u64>())

@@ -45,23 +45,20 @@ jobs:
     name: Test doc build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           submodules: true
           fetch-depth: 1
       - name: Setup uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1  # v8.3.1
       - name: Install doc dependencies
         run: uv sync --package datafusion-docs
-      - name: Install Graphviz
+      - name: Install dependency graph tooling
         run: |
           set -x
           sudo apt-get update
           sudo apt-get install -y graphviz
-      - name: Install cargo-depgraph
-        uses: taiki-e/install-action@1beb33eee6d086258184383af9a538940be190ed  # v2.85.6
-        with:
-          tool: cargo-depgraph@1.6
+          cargo install cargo-depgraph --version ^1.6 --locked
       - name: Build docs html and check for warnings
         run: |
           set -x

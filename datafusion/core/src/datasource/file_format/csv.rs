@@ -45,7 +45,7 @@ mod tests {
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::write::BatchSerializer;
     use datafusion_expr::{col, lit};
-    use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+    use datafusion_physical_plan::statistics::StatisticsArgs;
     use datafusion_physical_plan::{ExecutionPlan, collect};
 
     use arrow::array::{
@@ -217,14 +217,11 @@ mod tests {
 
         // test metadata
         assert_eq!(
-            StatisticsContext::new()
-                .compute(exec.as_ref(), &StatisticsArgs::new())?
-                .num_rows,
+            exec.statistics_with_args(&StatisticsArgs::new())?.num_rows,
             Precision::Absent
         );
         assert_eq!(
-            StatisticsContext::new()
-                .compute(exec.as_ref(), &StatisticsArgs::new())?
+            exec.statistics_with_args(&StatisticsArgs::new())?
                 .total_byte_size,
             Precision::Absent
         );
@@ -591,7 +588,8 @@ mod tests {
 
         //convert compressed_stream to decoded_stream
         let decoded_stream = compressed_csv
-            .read_to_delimited_chunks_from_stream(compressed_stream.unwrap());
+            .read_to_delimited_chunks_from_stream(compressed_stream.unwrap())
+            .await;
         let (schema, records_read) = compressed_csv
             .infer_schema_from_stream(&session_state, records_to_read, decoded_stream)
             .await?;

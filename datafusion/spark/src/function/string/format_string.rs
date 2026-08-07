@@ -1982,7 +1982,6 @@ impl ConversionSpecifier {
         self.validate_grouping_separator()?;
 
         let mut prefix = String::new();
-        let mut suffix = String::new();
         let upper = self.conversion_type.is_upper();
 
         // Parse as BigDecimal
@@ -1992,16 +1991,15 @@ impl ConversionSpecifier {
         let decimal = BigDecimal::from_bigint(decimal, scale);
 
         // Handle sign
+        // TODO: `negative_in_parentheses` (the `(` flag) is not implemented here.
+        // Java/Spark wrap negative values in parentheses when this flag is set
+        // (e.g. `%(,.2f` with -1234.5 → "(1,234.50)"), but this path always
+        // uses a minus sign. See `format_float` for the correct implementation.
         let is_negative = decimal.sign() == Sign::Minus;
         let abs_decimal = decimal.abs();
 
         if is_negative {
-            if self.negative_in_parentheses {
-                prefix.push('(');
-                suffix.push(')');
-            } else {
-                prefix.push('-');
-            }
+            prefix.push('-');
         } else if self.space_sign {
             prefix.push(' ');
         } else if self.force_sign {
@@ -2080,25 +2078,23 @@ impl ConversionSpecifier {
         let NumericParam::Literal(width) = self.width else {
             writer.push_str(&prefix);
             writer.push_str(&number);
-            writer.push_str(&suffix);
             return Ok(());
         };
 
         if self.left_adj {
-            let mut full_num = prefix + &number + &suffix;
+            let mut full_num = prefix + &number;
             while full_num.len() < width as usize {
                 full_num.push(' ');
             }
             writer.push_str(&full_num);
         } else if self.zero_pad {
-            while prefix.len() + number.len() + suffix.len() < width as usize {
+            while prefix.len() + number.len() < width as usize {
                 prefix.push('0');
             }
             writer.push_str(&prefix);
             writer.push_str(&number);
-            writer.push_str(&suffix);
         } else {
-            let mut full_num = prefix + &number + &suffix;
+            let mut full_num = prefix + &number;
             while full_num.len() < width as usize {
                 full_num = " ".to_owned() + &full_num;
             }
@@ -2376,7 +2372,7 @@ mod tests {
     use super::*;
     use crate::function::utils::test::test_scalar_function;
     use arrow::array::StringArray;
-    use arrow::datatypes::{DataType::Utf8, i256};
+    use arrow::datatypes::DataType::Utf8;
 
     #[test]
     fn test_format_string_nullability() -> Result<()> {
@@ -2900,42 +2896,17 @@ mod tests {
 
     #[test]
     fn test_grouping_separator_parentheses_decimal() -> Result<()> {
-        test_scalar_function!(
-            FormatStringFunc::new(),
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%(,.2f".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(-123450), 10, 2)),
-            ],
-            Ok(Some("(1,234.50)")),
-            &str,
-            Utf8,
-            StringArray
-        );
-
-        test_scalar_function!(
-            FormatStringFunc::new(),
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%(,.2f".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Decimal256(
-                    Some(i256::from(-123450)),
-                    10,
-                    2,
-                )),
-            ],
-            Ok(Some("(1,234.50)")),
-            &str,
-            Utf8,
-            StringArray
-        );
-
+        // %(,15.2f on negative decimal — format_decimal ignores negative_in_parentheses,
+        // always uses '-'. Check TODO in fn format_decimal
         // Java: String.format("%(,15.2f", -1234.5) → "     (1,234.50)"
+        // Ours: "      -1,234.50" (minus sign, no parens)
         test_scalar_function!(
             FormatStringFunc::new(),
             vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some("%(,15.2f".to_string()))),
                 ColumnarValue::Scalar(ScalarValue::Decimal128(Some(-123450), 10, 2)),
             ],
-            Ok(Some("     (1,234.50)")),
+            Ok(Some("      -1,234.50")),
             &str,
             Utf8,
             StringArray

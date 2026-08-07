@@ -145,10 +145,6 @@ pub struct FFI_AggregateUDF {
     /// the foreign interface. See [`crate::get_library_marker_id`] and
     /// the crate's `README.md` for more information.
     pub library_marker_id: extern "C" fn() -> usize,
-
-    /// FFI equivalent to [`AggregateUDF::supports_null_handling_clause`]
-    pub supports_null_handling_clause:
-        unsafe extern "C" fn(udaf: &FFI_AggregateUDF) -> bool,
 }
 
 unsafe impl Send for FFI_AggregateUDF {}
@@ -331,12 +327,6 @@ unsafe extern "C" fn order_sensitivity_fn_wrapper(
     unsafe { udaf.inner().order_sensitivity().into() }
 }
 
-unsafe extern "C" fn supports_null_handling_clause_fn_wrapper(
-    udaf: &FFI_AggregateUDF,
-) -> bool {
-    unsafe { udaf.inner().supports_null_handling_clause() }
-}
-
 unsafe extern "C" fn coerce_types_fn_wrapper(
     udaf: &FFI_AggregateUDF,
     arg_types: SVec<WrappedSchema>,
@@ -411,7 +401,6 @@ impl From<Arc<AggregateUDF>> for FFI_AggregateUDF {
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
             library_marker_id: crate::get_library_marker_id,
-            supports_null_handling_clause: supports_null_handling_clause_fn_wrapper,
         }
     }
 }
@@ -606,10 +595,6 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
         unsafe { (self.udaf.order_sensitivity)(&self.udaf).into() }
     }
 
-    fn supports_null_handling_clause(&self) -> bool {
-        unsafe { (self.udaf.supports_null_handling_clause)(&self.udaf) }
-    }
-
     fn simplify(&self) -> Option<AggregateFunctionSimplification> {
         None
     }
@@ -786,19 +771,6 @@ mod tests {
         let return_field = foreign_udaf.return_field(&[input_field])?;
 
         assert_eq!(&metadata, return_field.metadata());
-        Ok(())
-    }
-
-    #[test]
-    fn test_supports_null_handling_clause() -> Result<()> {
-        let first_value = create_test_foreign_udaf(
-            datafusion::functions_aggregate::first_last::FirstValue::new(),
-        )?;
-        assert!(first_value.supports_null_handling_clause());
-
-        let sum = create_test_foreign_udaf(Sum::new())?;
-        assert!(!sum.supports_null_handling_clause());
-
         Ok(())
     }
 

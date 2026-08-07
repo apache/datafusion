@@ -43,14 +43,12 @@
                   }
                 },
                 "virtualTable": {
-                  "expressions": [
+                  "values": [
                     {
                       "fields": [
                         {
-                          "literal": {
-                            "i64": "0",
-                            "nullable": false
-                          }
+                          "i64": "0",
+                          "nullable": false
                         }
                       ]
                     }

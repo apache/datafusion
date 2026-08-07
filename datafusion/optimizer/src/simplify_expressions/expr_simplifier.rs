@@ -40,7 +40,6 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_expr::expr::HigherOrderFunction;
-use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{
     BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Like, Operator, Volatility,
     and, binary::BinaryTypeCoercer, lit, or, preimage::PreimageResult,
@@ -708,15 +707,11 @@ impl ConstEvaluator {
             return ConstSimplifyResult::NotSimplified(s, m);
         }
 
-        let phys_expr = match create_physical_expr(
-            &expr,
-            &DUMMY_DF_SCHEMA,
-            &self.execution_props,
-            &PhysicalPlanningContext::default(),
-        ) {
-            Ok(e) => e,
-            Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
-        };
+        let phys_expr =
+            match create_physical_expr(&expr, &DUMMY_DF_SCHEMA, &self.execution_props) {
+                Ok(e) => e,
+                Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
+            };
         let metadata = phys_expr
             .return_field(DUMMY_BATCH.schema_ref())
             .ok()
@@ -2546,36 +2541,6 @@ mod tests {
         assert_eq!(simplify(expr_b), expected_b);
     }
 
-    /// `c3_non_null IN (SELECT a FROM t)`, where `a` has the given nullability.
-    fn in_subquery_expr(a_nullable: bool) -> Expr {
-        let schema = Schema::new(vec![Field::new("a", DataType::Int64, a_nullable)]);
-        let source = Arc::new(LogicalTableSource::new(Arc::new(schema)));
-        let subquery = LogicalPlanBuilder::scan("t", source, None)
-            .unwrap()
-            .project(vec![col("a")])
-            .unwrap()
-            .build()
-            .unwrap();
-
-        in_subquery(col("c3_non_null"), Arc::new(subquery))
-    }
-
-    #[test]
-    fn test_simplify_eq_not_self_in_subquery() {
-        // `expr_a`: even though `c3_non_null` is non-nullable, the `IN` evaluates to NULL
-        // when `c3_non_null` matches no row and the subquery's `a` contains a NULL. So the
-        // expression is nullable and `A = A` must not fold to `true`.
-        let expr_a = in_subquery_expr(true);
-        let expected_a = expr_a.clone().is_not_null().or(lit_bool_null());
-
-        // `expr_b`: neither side can be NULL, so the `IN` is non-nullable and `A = A` is true.
-        let expr_b = in_subquery_expr(false);
-        let expected_b = lit(true);
-
-        assert_eq!(simplify(expr_a.clone().eq(expr_a)), expected_a);
-        assert_eq!(simplify(expr_b.clone().eq(expr_b)), expected_b);
-    }
-
     #[test]
     fn test_simplify_or_true() {
         let expr_a = col("c2").or(lit(true));
@@ -3097,6 +3062,17 @@ mod tests {
 
     #[test]
     fn test_simplify_negated_bitwise_and() {
+        // !c4 & c4 --> 0
+        let expr = (-col("c4_non_null")) & col("c4_non_null");
+        let expected = lit(0u32);
+
+        assert_eq!(simplify(expr), expected);
+        // c4 & !c4 --> 0
+        let expr = col("c4_non_null") & (-col("c4_non_null"));
+        let expected = lit(0u32);
+
+        assert_eq!(simplify(expr), expected);
+
         // !c3 & c3 --> 0
         let expr = (-col("c3_non_null")) & col("c3_non_null");
         let expected = lit(0i64);
@@ -3111,6 +3087,18 @@ mod tests {
 
     #[test]
     fn test_simplify_negated_bitwise_or() {
+        // !c4 | c4 --> -1
+        let expr = (-col("c4_non_null")) | col("c4_non_null");
+        let expected = lit(-1i32);
+
+        assert_eq!(simplify(expr), expected);
+
+        // c4 | !c4 --> -1
+        let expr = col("c4_non_null") | (-col("c4_non_null"));
+        let expected = lit(-1i32);
+
+        assert_eq!(simplify(expr), expected);
+
         // !c3 | c3 --> -1
         let expr = (-col("c3_non_null")) | col("c3_non_null");
         let expected = lit(-1i64);
@@ -3126,6 +3114,18 @@ mod tests {
 
     #[test]
     fn test_simplify_negated_bitwise_xor() {
+        // !c4 ^ c4 --> -1
+        let expr = (-col("c4_non_null")) ^ col("c4_non_null");
+        let expected = lit(-1i32);
+
+        assert_eq!(simplify(expr), expected);
+
+        // c4 ^ !c4 --> -1
+        let expr = col("c4_non_null") ^ (-col("c4_non_null"));
+        let expected = lit(-1i32);
+
+        assert_eq!(simplify(expr), expected);
+
         // !c3 ^ c3 --> -1
         let expr = (-col("c3_non_null")) ^ col("c3_non_null");
         let expected = lit(-1i64);

@@ -19,6 +19,8 @@
 //! DataFusion logical plans to be serialized and transmitted between
 //! processes.
 
+use std::collections::HashMap;
+
 use datafusion_common::{NullEquality, SplitPoint, TableReference, UnnestOptions};
 use datafusion_expr::dml::{
     MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
@@ -55,17 +57,8 @@ use crate::protobuf::LogicalPlanNode;
 
 impl FromProto<&UnnestOptions> for protobuf::UnnestOptions {
     fn from_proto(opts: &UnnestOptions) -> Self {
-        use datafusion_common::NullHandling;
-        use protobuf::unnest_options::NullHandling as ProtoNullHandling;
-        let null_handling = match opts.null_handling {
-            NullHandling::Preserve => ProtoNullHandling::Preserve,
-            NullHandling::Drop => ProtoNullHandling::Drop,
-            NullHandling::PreserveAndExpandEmpty => {
-                ProtoNullHandling::PreserveAndExpandEmpty
-            }
-        } as i32;
         Self {
-            null_handling,
+            preserve_nulls: opts.preserve_nulls,
             recursions: opts
                 .recursions
                 .iter()
@@ -228,7 +221,7 @@ pub fn serialize_expr(
                 metadata: metadata
                     .as_ref()
                     .map(|m| m.to_hashmap())
-                    .unwrap_or_default(),
+                    .unwrap_or(HashMap::new()),
             });
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Alias(alias)),
@@ -578,10 +571,9 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::Negative(expr)),
             }
         }
-        Expr::Unnest(Unnest { expr, outer }) => {
+        Expr::Unnest(Unnest { expr }) => {
             let expr = protobuf::Unnest {
                 exprs: vec![serialize_expr(expr.as_ref(), codec)?],
-                outer: *outer,
             };
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::Unnest(expr)),
@@ -659,7 +651,7 @@ pub fn serialize_expr(
                 metadata: field
                     .as_ref()
                     .map(|f| f.metadata().clone())
-                    .unwrap_or_default(),
+                    .unwrap_or(HashMap::new()),
             })),
         },
         Expr::Lambda(Lambda { params, body }) => protobuf::LogicalExprNode {

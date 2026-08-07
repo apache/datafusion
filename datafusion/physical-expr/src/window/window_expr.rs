@@ -30,7 +30,6 @@ use arrow::compute::kernels::sort::SortColumn;
 use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::hash_utils::RandomState;
 use datafusion_common::utils::compare_rows;
 use datafusion_common::{
     Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err, internal_err,
@@ -99,14 +98,10 @@ pub trait WindowExpr: Send + Sync + Debug {
 
     /// Evaluate the window function against the batch. This function facilitates
     /// stateful, bounded-memory implementations.
-    ///
-    /// `eval_ctx` carries stream-level (cross-partition) information; see
-    /// [`WindowEvalContext`].
     fn evaluate_stateful(
         &self,
         _partition_batches: &PartitionBatches,
         _window_agg_state: &mut PartitionWindowAggStates,
-        _eval_ctx: &WindowEvalContext<'_>,
     ) -> Result<()> {
         internal_err!("evaluate_stateful is not implemented for {}", self.name())
     }
@@ -230,18 +225,9 @@ pub trait AggregateWindowExpr: WindowExpr {
         &self,
         partition_batches: &PartitionBatches,
         window_agg_state: &mut PartitionWindowAggStates,
-        eval_ctx: &WindowEvalContext<'_>,
     ) -> Result<()> {
         let field = self.field()?;
         let out_type = field.data_type();
-        // Every partition consults the same most recent input row, so its
-        // ORDER BY values can be evaluated once, outside the per-partition
-        // loop.
-        let most_recent_row_order_bys = eval_ctx
-            .most_recent_row
-            .map(|batch| self.order_by_columns(batch))
-            .transpose()?
-            .map(get_orderby_values);
         for (partition_row, partition_batch_state) in partition_batches.iter() {
             if !window_agg_state.contains_key(partition_row) {
                 let accumulator = self.get_accumulator()?;
@@ -262,6 +248,7 @@ pub trait AggregateWindowExpr: WindowExpr {
             };
             let state = &mut window_state.state;
             let record_batch = &partition_batch_state.record_batch;
+            let most_recent_row = partition_batch_state.most_recent_row.as_ref();
 
             // If there is no window state context, initialize it.
             let window_frame_ctx = state.window_frame_ctx.get_or_insert_with(|| {
@@ -271,7 +258,7 @@ pub trait AggregateWindowExpr: WindowExpr {
             let out_col = self.get_result_column(
                 accumulator,
                 record_batch,
-                most_recent_row_order_bys.as_deref(),
+                most_recent_row,
                 // Start search from the last range
                 &mut state.window_frame_range,
                 window_frame_ctx,
@@ -289,8 +276,7 @@ pub trait AggregateWindowExpr: WindowExpr {
     /// # Arguments
     /// * `accumulator`: The accumulator to use for the calculation.
     /// * `record_batch`: batch belonging to the current partition (see [`PartitionBatchState`]).
-    /// * `most_recent_row_order_bys`: ORDER BY values of the most recent input
-    ///   row, if available (see [`WindowExpr::evaluate_stateful`]).
+    /// * `most_recent_row`: the batch that contains the most recent row, if available (see [`PartitionBatchState`]).
     /// * `last_range`: The last range of rows that were processed (see [`WindowAggState`]).
     /// * `window_frame_ctx`: Details about the window frame (see [`WindowFrameContext`]).
     /// * `idx`: The index of the current row in the record batch.
@@ -300,7 +286,7 @@ pub trait AggregateWindowExpr: WindowExpr {
         &self,
         accumulator: &mut Box<dyn Accumulator>,
         record_batch: &RecordBatch,
-        most_recent_row_order_bys: Option<&[ArrayRef]>,
+        most_recent_row: Option<&RecordBatch>,
         last_range: &mut Range<usize>,
         window_frame_ctx: &mut WindowFrameContext,
         mut idx: usize,
@@ -340,6 +326,10 @@ pub trait AggregateWindowExpr: WindowExpr {
             return value.to_array_of_size(record_batch.num_rows());
         }
         let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
+        let most_recent_row_order_bys = most_recent_row
+            .map(|batch| self.order_by_columns(batch))
+            .transpose()?
+            .map(get_orderby_values);
 
         // We iterate on each row to perform a running calculation.
         let length = values[0].len();
@@ -356,7 +346,7 @@ pub trait AggregateWindowExpr: WindowExpr {
                 && !is_end_bound_safe(
                     window_frame_ctx,
                     &order_bys,
-                    most_recent_row_order_bys,
+                    most_recent_row_order_bys.as_deref(),
                     self.order_by(),
                     idx,
                 )?
@@ -614,43 +604,15 @@ pub enum WindowFn {
 /// PartitionKey would consist of unique `[a,b]` pairs
 pub type PartitionKey = Vec<ScalarValue>;
 
-/// Stream-level context passed to [`WindowExpr::evaluate_stateful`].
-///
-/// This carries information that spans all partitions of the input, as
-/// opposed to the per-partition state in [`PartitionBatches`] and
-/// [`PartitionWindowAggStates`]. It is `non_exhaustive` so that fields can
-/// be added without breaking implementors; construct it with
-/// [`Default::default`] and the `with_*` builder methods.
-#[derive(Debug, Clone, Copy, Default)]
-#[non_exhaustive]
-pub struct WindowEvalContext<'a> {
-    /// A single-row batch containing the most recent input row, whichever
-    /// partition that row belongs to. It is `Some` only when the input is
-    /// ordered by the first ORDER BY column across partitions (`Linear`
-    /// mode), in which case no future input row -- in any partition -- can
-    /// precede it in that column; implementations can use this bound to
-    /// decide whether pending window frames can be finalized before their
-    /// partition receives more data.
-    pub most_recent_row: Option<&'a RecordBatch>,
-}
-
-impl<'a> WindowEvalContext<'a> {
-    /// Sets the most recent input row (see [`Self::most_recent_row`]).
-    pub fn with_most_recent_row(mut self, batch: Option<&'a RecordBatch>) -> Self {
-        self.most_recent_row = batch;
-        self
-    }
-}
-
 #[derive(Debug)]
 pub struct WindowState {
     pub state: WindowAggState,
     pub window_fn: WindowFn,
 }
-pub type PartitionWindowAggStates = IndexMap<PartitionKey, WindowState, RandomState>;
+pub type PartitionWindowAggStates = IndexMap<PartitionKey, WindowState>;
 
 /// The IndexMap (i.e. an ordered HashMap) where record batches are separated for each partition.
-pub type PartitionBatches = IndexMap<PartitionKey, PartitionBatchState, RandomState>;
+pub type PartitionBatches = IndexMap<PartitionKey, PartitionBatchState>;
 
 #[cfg(test)]
 mod tests {

@@ -85,40 +85,23 @@
                     "direct": {}
                   },
                   "virtualTable": {
-                    "expressions": [
-                      {
-                        "fields": [
-                          {
-                            "literal": {
-                              "fp32": 1.0,
-                              "nullable": false
-                            }
-                          },
-                          {
-                            "literal": {
-                              "fp32": 10.0,
-                              "nullable": false
-                            }
-                          }
-                        ]
-                      },
-                      {
-                        "fields": [
-                          {
-                            "literal": {
-                              "fp32": 100.0,
-                              "nullable": false
-                            }
-                          },
-                          {
-                            "literal": {
-                              "fp32": 10.0,
-                              "nullable": false
-                            }
-                          }
-                        ]
-                      }
-                    ]
+                    "values": [{
+                      "fields": [{
+                        "fp32": 1.0,
+                        "nullable": false
+                      }, {
+                        "fp32": 10.0,
+                        "nullable": false
+                      }]
+                    }, {
+                      "fields": [{
+                        "fp32": 100.0,
+                        "nullable": false
+                      }, {
+                        "fp32": 10.0,
+                        "nullable": false
+                      }]
+                    }]
                   }
                 }
               }

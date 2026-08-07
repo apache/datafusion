@@ -78,7 +78,6 @@ github:
           - "cargo test (macos-aarch64)"
           - "Verify Vendored Code"
           - "Check cargo fmt"
-          - "Check GitHub Actions install tooling"
           - "clippy"
           - "check Cargo.toml formatting"
           - "check configs.md and ***_functions.md is up-to-date"
@@ -115,3 +114,4 @@ github:
 # https://datafusion.apache.org/
 publish:
   whoami: asf-site
+

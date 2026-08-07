@@ -44,7 +44,6 @@ use datafusion_execution::cache::cache_manager::{
 };
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{
     Expr, Partitioning as LogicalPartitioning, TableProviderFilterPushDown, TableType,
 };
@@ -55,7 +54,7 @@ use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Result of a file listing operation from [`ListingTable::list_files_for_scan`].
@@ -615,7 +614,6 @@ impl TableProvider for ListingTable {
                         output_partitioning,
                         &df_schema,
                         state.execution_props(),
-                        &PhysicalPlanningContext::default(),
                     )?
                 }
             };
@@ -817,16 +815,8 @@ impl ListingTable {
         }))
         .await?;
         let meta_fetch_concurrency =
-            ctx.config_options().execution.meta_fetch_concurrency.get();
-        // Table paths can overlap, for example when one path is a directory and
-        // another names a file inside it. A ListingTable uses one object store,
-        // so the object path uniquely identifies a file within this scan.
-        let mut seen_files = HashSet::new();
-        let file_list = stream::iter(file_list)
-            .flatten_unordered(meta_fetch_concurrency)
-            .try_filter(move |file| {
-                future::ready(seen_files.insert(file.object_meta.location.clone()))
-            });
+            ctx.config_options().execution.meta_fetch_concurrency;
+        let file_list = stream::iter(file_list).flatten_unordered(meta_fetch_concurrency);
         // collect the statistics and ordering if required by the config
         let files = file_list
             .map(|part_file| async {
@@ -842,9 +832,7 @@ impl ListingTable {
                     .with_ordering(ordering))
             })
             .boxed()
-            .buffer_unordered(
-                ctx.config_options().execution.meta_fetch_concurrency.get(),
-            );
+            .buffer_unordered(ctx.config_options().execution.meta_fetch_concurrency);
 
         get_files_with_limit(files, file_limit, ctx.config().collect_statistics()).await
     }

@@ -515,6 +515,7 @@ impl<'a> TestCase<'a> {
         let exec = self
             .test_parquet_file
             .create_scan(&ctx, Some(filter.clone()))
+            .await
             .unwrap();
         let result = collect(exec.clone(), ctx.task_ctx()).await.unwrap();
 

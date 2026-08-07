@@ -158,6 +158,7 @@ impl CsvFormat {
                         .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
                         .boxed(),
                 )
+                .await
                 .map_err(DataFusionError::from)
                 .left_stream(),
             Err(e) => {
@@ -167,9 +168,9 @@ impl CsvFormat {
         stream.boxed()
     }
 
-    /// Convert a stream of bytes into a stream of [`Bytes`] containing newline
+    /// Convert a stream of bytes into a stream of of [`Bytes`] containing newline
     /// delimited CSV records, while accounting for `\` and `"`.
-    pub fn read_to_delimited_chunks_from_stream<'a>(
+    pub async fn read_to_delimited_chunks_from_stream<'a>(
         &self,
         stream: BoxStream<'a, Result<Bytes>>,
     ) -> BoxStream<'a, Result<Bytes>> {

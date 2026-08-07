@@ -35,7 +35,7 @@ use std::sync::Arc;
 use crate::output_requirements::OutputRequirementExec;
 use crate::utils::{
     add_sort_above_with_check, is_coalesce_partitions, is_repartition,
-    is_sort_preserving_merge,
+    is_sort_preserving_merge, range_partitioning_satisfies_key_partitioning,
 };
 
 use arrow::compute::SortOptions;
@@ -62,7 +62,7 @@ use datafusion_physical_plan::joins::{
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+use datafusion_physical_plan::statistics::StatisticsArgs;
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::{InterleaveExec, UnionExec, can_interleave};
 use datafusion_physical_plan::windows::WindowAggExec;
@@ -698,13 +698,18 @@ fn add_roundrobin_on_top(
     }
 }
 
-// Partial aggregates require unspecified input distribution, but their output
-// may already satisfy the final aggregate's key distribution because partial
-// aggregation preserves/projects input partitioning. Keep that reusable output
-// partitioning intact when preserve_file_partitions would otherwise insert
-// RoundRobin below the partial aggregate.
-fn partial_aggregate_output_satisfies_final_partitioning(
+// TODO: remove this temporary bridge once [`Partitioning::Range`]
+// generally satisfies [`Distribution::KeyPartitioned`] through
+// [`Partitioning::satisfaction`].
+// <https://github.com/apache/datafusion/issues/23266>.
+//
+// Partial aggregates do not require key partitioning, but they preserve their
+// input partitioning for the final aggregate. Until Range satisfies
+// KeyPartitioned generally, this check keeps preserve_file_partitions from
+// inserting RoundRobin between a reusable Range input and the partial aggregate.
+fn partial_aggregate_preserves_reusable_partitioning(
     plan: &Arc<dyn ExecutionPlan>,
+    child: &Arc<dyn ExecutionPlan>,
     allow_subset_satisfy_partitioning: bool,
 ) -> bool {
     let Some(aggregate) = plan.downcast_ref::<AggregateExec>() else {
@@ -717,15 +722,24 @@ fn partial_aggregate_output_satisfies_final_partitioning(
         return false;
     }
 
-    let key_distribution = Distribution::KeyPartitioned(aggregate.output_group_expr());
+    let group_exprs = aggregate.group_expr().input_exprs();
+    let output_partitioning = child.output_partitioning();
+    let eq_properties = child.equivalence_properties();
+    let key_distribution = Distribution::KeyPartitioned(group_exprs.clone());
 
-    plan.output_partitioning()
+    output_partitioning
         .satisfaction(
             &key_distribution,
-            plan.equivalence_properties(),
+            eq_properties,
             allow_subset_satisfy_partitioning,
         )
         .is_satisfied()
+        || range_partitioning_satisfies_key_partitioning(
+            output_partitioning,
+            &group_exprs,
+            eq_properties,
+            allow_subset_satisfy_partitioning,
+        )
 }
 
 /// Adds a [`SortPreservingMergeExec`] or a [`CoalescePartitionsExec`] operator
@@ -989,8 +1003,8 @@ fn get_repartition_requirement_status(
     {
         // Decide whether adding a round robin is beneficial depending on
         // the statistical information we have on the number of rows:
-        let roundrobin_beneficial_stats = match StatisticsContext::new()
-            .compute(child.as_ref(), &StatisticsArgs::new())?
+        let roundrobin_beneficial_stats = match child
+            .statistics_with_args(&StatisticsArgs::new())?
             .num_rows
         {
             Precision::Exact(n_rows) => n_rows > batch_size,
@@ -1294,8 +1308,9 @@ pub fn ensure_distribution(
 
             let preserve_partial_aggregate_partitioning =
                 preserve_file_partition_threshold_met
-                    && partial_aggregate_output_satisfies_final_partitioning(
+                    && partial_aggregate_preserves_reusable_partitioning(
                         &plan,
+                        &child.plan,
                         allow_subset_satisfy_partitioning,
                     );
 

@@ -386,11 +386,10 @@ pub fn when(when: Expr, then: Expr) -> CaseBuilder {
     CaseBuilder::new(None, vec![when], vec![then], None)
 }
 
-/// Create a Unnest expression with default (non-outer) semantics.
+/// Create a Unnest expression
 pub fn unnest(expr: Expr) -> Expr {
     Expr::Unnest(Unnest {
         expr: Box::new(expr),
-        outer: false,
     })
 }
 

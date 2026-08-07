@@ -86,10 +86,6 @@ impl ScalarUDFImpl for CotFunc {
         }
     }
 
-    fn is_strict(&self) -> bool {
-        true
-    }
-
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }

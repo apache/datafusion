@@ -632,10 +632,10 @@ mod tests {
         ]);
 
         let test_cases = vec![
-            // d + b can wrap
+            // d + b
             (
                 Arc::new(BinaryExpr::new(col_d, Operator::Plus, Arc::clone(&col_b))) as _,
-                SortProperties::Unordered,
+                SortProperties::Ordered(option_asc),
             ),
             // b
             (col_b, SortProperties::Ordered(option_asc)),
@@ -717,8 +717,8 @@ mod tests {
             (vec![col_b], vec![]),
             // TEST CASE 5
             (vec![col_d], vec![(col_d, option_asc)]),
-            // TEST CASE 5: a + d is not ordered because addition can wrap.
-            (vec![&a_plus_d], vec![]),
+            // TEST CASE 5
+            (vec![&a_plus_d], vec![(&a_plus_d, option_asc)]),
             // TEST CASE 6
             (
                 vec![col_b, col_d],
@@ -1011,7 +1011,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ordering_equivalence_with_non_lex_monotonic_concat() -> Result<()> {
+    fn test_ordering_equivalence_with_lex_monotonic_concat() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Utf8, false),
             Field::new("b", DataType::Utf8, false),
@@ -1033,23 +1033,28 @@ mod tests {
         // Assume existing ordering is [c ASC, a ASC, b ASC]
         let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
 
-        let initial_ordering: LexOrdering = [
+        eq_properties.add_ordering([
             PhysicalSortExpr::new_default(Arc::clone(&col_c)).asc(),
             PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
             PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
-        ]
-        .into();
-
-        eq_properties.add_ordering(initial_ordering.clone());
+        ]);
 
         // Add equality condition c = concat(a, b)
         eq_properties.add_equal_conditions(Arc::clone(&col_c), a_concat_b)?;
 
         let orderings = eq_properties.oeq_class();
 
-        // The ordering should remain unchanged since concat is not lex-monotonic
-        assert_eq!(orderings.len(), 1);
-        assert!(orderings.contains(&initial_ordering));
+        let expected_ordering1 = [PhysicalSortExpr::new_default(col_c).asc()].into();
+        let expected_ordering2 = [
+            PhysicalSortExpr::new_default(col_a).asc(),
+            PhysicalSortExpr::new_default(col_b).asc(),
+        ]
+        .into();
+
+        // The ordering should be [c ASC] and [a ASC, b ASC]
+        assert_eq!(orderings.len(), 2);
+        assert!(orderings.contains(&expected_ordering1));
+        assert!(orderings.contains(&expected_ordering2));
 
         Ok(())
     }
@@ -1092,6 +1097,55 @@ mod tests {
         // The ordering should remain unchanged since multiplication is not lex-monotonic
         assert_eq!(orderings.len(), 1);
         assert!(orderings.contains(&initial_ordering));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ordering_equivalence_with_concat_equality() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+            Field::new("c", DataType::Utf8, false),
+        ]));
+
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let col_c = col("c", &schema)?;
+
+        let a_concat_b = Arc::new(ScalarFunctionExpr::new(
+            "concat",
+            concat(),
+            vec![Arc::clone(&col_a), Arc::clone(&col_b)],
+            Field::new("f", DataType::Utf8, true).into(),
+            Arc::new(ConfigOptions::default()),
+        )) as _;
+
+        // Assume existing ordering is [concat(a, b) ASC, a ASC, b ASC]
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+        eq_properties.add_ordering([
+            PhysicalSortExpr::new_default(Arc::clone(&a_concat_b)).asc(),
+            PhysicalSortExpr::new_default(Arc::clone(&col_a)).asc(),
+            PhysicalSortExpr::new_default(Arc::clone(&col_b)).asc(),
+        ]);
+
+        // Add equality condition c = concat(a, b)
+        eq_properties.add_equal_conditions(col_c, Arc::clone(&a_concat_b))?;
+
+        let orderings = eq_properties.oeq_class();
+
+        let expected_ordering1 = [PhysicalSortExpr::new_default(a_concat_b).asc()].into();
+        let expected_ordering2 = [
+            PhysicalSortExpr::new_default(col_a).asc(),
+            PhysicalSortExpr::new_default(col_b).asc(),
+        ]
+        .into();
+
+        // The ordering should be [c ASC] and [a ASC, b ASC]
+        assert_eq!(orderings.len(), 2);
+        assert!(orderings.contains(&expected_ordering1));
+        assert!(orderings.contains(&expected_ordering2));
 
         Ok(())
     }
