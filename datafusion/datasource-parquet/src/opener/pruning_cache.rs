@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{Result, ScalarValue};
+use datafusion_execution::cache::lru_queue::LruQueue;
 use datafusion_functions::core::input_file_name::InputFileNameFunc;
 use datafusion_physical_expr::expressions::DynamicFilterTracking;
 use datafusion_physical_expr::projection::ProjectionExprs;
@@ -30,11 +31,20 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_pruning::PruningPredicate;
 use parking_lot::Mutex;
 
+/// Maximum number of physical-schema variants retained per scan.
+const MAX_PRUNING_SETUP_CACHE_ENTRIES: usize = 64;
+
 /// Scan-local cache for CPU-only pruning setup that can be reused across files
 /// with the same adapted expression inputs and physical schema.
-#[derive(Debug, Default)]
 pub(crate) struct ParquetPruningSetupCache {
-    entries: Mutex<HashMap<ParquetPruningSetupCacheKey, ParquetPruningSetup>>,
+    entries: Mutex<LruQueue<ParquetPruningSetupCacheKey, ParquetPruningSetup>>,
+    max_entries: usize,
+}
+
+impl Default for ParquetPruningSetupCache {
+    fn default() -> Self {
+        Self::new(MAX_PRUNING_SETUP_CACHE_ENTRIES)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -79,6 +89,13 @@ pub(super) struct ParquetPruningSetup {
 }
 
 impl ParquetPruningSetupCache {
+    fn new(max_entries: usize) -> Self {
+        Self {
+            entries: Mutex::new(LruQueue::new()),
+            max_entries,
+        }
+    }
+
     /// Return whether the original scan expressions can produce a setup shared
     /// by multiple files.
     ///
@@ -117,8 +134,8 @@ impl ParquetPruningSetupCache {
             projection,
             predicate,
         );
-        if let Some(setup) = self.entries.lock().get(&key) {
-            return Ok(setup.clone());
+        if let Some(setup) = self.entries.lock().get(&key).cloned() {
+            return Ok(setup);
         }
 
         // Compute outside the cache lock. Concurrent first misses for the same
@@ -127,7 +144,11 @@ impl ParquetPruningSetupCache {
         // single-flight coordination only if profiling shows duplicate setup is
         // material.
         let setup = make_setup()?;
-        self.entries.lock().insert(key, setup.clone());
+        let mut entries = self.entries.lock();
+        entries.put(key, setup.clone());
+        while entries.len() > self.max_entries {
+            entries.pop();
+        }
         Ok(setup)
     }
 
@@ -139,4 +160,48 @@ impl ParquetPruningSetupCache {
 
 fn physical_expr_ptr(expr: &Arc<dyn PhysicalExpr>) -> usize {
     Arc::as_ptr(expr) as *const () as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    fn setup() -> ParquetPruningSetup {
+        ParquetPruningSetup {
+            projection: ProjectionExprs::new([]),
+            predicate: None,
+            pruning_predicate: None,
+        }
+    }
+
+    #[test]
+    fn evicts_least_recently_used_setup_at_capacity() {
+        let cache = ParquetPruningSetupCache::new(1);
+        let logical_schema = Arc::new(Schema::empty());
+        let first_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let second_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let projection = ProjectionExprs::new([]);
+        let mut build_count = 0;
+
+        for physical_schema in [&first_schema, &second_schema, &first_schema] {
+            cache
+                .get_or_insert_with(
+                    &logical_schema,
+                    physical_schema,
+                    &projection,
+                    None,
+                    || {
+                        build_count += 1;
+                        Ok(setup())
+                    },
+                )
+                .unwrap();
+        }
+
+        assert_eq!(cache.len(), 1);
+        assert_eq!(build_count, 3);
+    }
 }
