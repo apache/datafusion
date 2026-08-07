@@ -33,13 +33,12 @@ use datafusion_datasource_csv::file_format::CsvSink;
 use datafusion_datasource_json::file_format::JsonSink;
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::ParquetSink;
-use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::WindowFunctionDefinition;
 use datafusion_physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::{
-    HigherOrderFunctionExpr, LexOrdering, PhysicalSortExpr, ScalarFunctionExpr,
+    HigherOrderFunctionExpr, PhysicalSortExpr, ScalarFunctionExpr,
 };
 use datafusion_physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
