@@ -1087,8 +1087,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::CsvScan(scan) => {
                 self.try_into_csv_scan_physical_plan(scan, ctx, proto_converter)
             }
-            PhysicalPlanType::JsonScan(scan) => {
-                self.try_into_json_scan_physical_plan(scan, ctx, proto_converter)
+            PhysicalPlanType::JsonScan(_) => {
+                JsonSource::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::ParquetScan(scan) => {
                 self.try_into_parquet_scan_physical_plan(scan, ctx, proto_converter)
@@ -1393,21 +1393,25 @@ pub trait PhysicalPlanNodeExt: Sized {
         Ok(DataSourceExec::from_data_source(conf))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `JsonSource` deserializes itself via `JsonSource::try_from_proto`"
+    )]
     fn try_into_json_scan_physical_plan(
         &self,
         scan: &protobuf::JsonScanExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let base_conf = scan.base_conf.as_ref().unwrap();
-        let table_schema = parse_table_schema_from_proto(base_conf)?;
-        let scan_conf = parse_protobuf_file_scan_config(
-            base_conf,
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::JsonScan(scan.clone())),
+        };
+        let decoder = ConverterPlanDecoder {
             ctx,
             proto_converter,
-            Arc::new(JsonSource::new(table_schema)),
-        )?;
-        Ok(DataSourceExec::from_data_source(scan_conf))
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        JsonSource::try_from_proto(&node, &decode_ctx)
     }
 
     fn try_into_arrow_scan_physical_plan(
@@ -2597,23 +2601,6 @@ pub trait PhysicalPlanNodeExt: Sized {
                             },
                             newlines_in_values: csv_config.newlines_in_values(),
                             truncate_rows: csv_config.truncate_rows(),
-                        },
-                    )),
-                }));
-            }
-        }
-
-        if let Some(scan_conf) = data_source.downcast_ref::<FileScanConfig>() {
-            let source = scan_conf.file_source();
-            if let Some(_json_source) = source.downcast_ref::<JsonSource>() {
-                return Ok(Some(protobuf::PhysicalPlanNode {
-                    physical_plan_type: Some(PhysicalPlanType::JsonScan(
-                        protobuf::JsonScanExecNode {
-                            base_conf: Some(serialize_file_scan_config(
-                                scan_conf,
-                                codec,
-                                proto_converter,
-                            )?),
                         },
                     )),
                 }));
