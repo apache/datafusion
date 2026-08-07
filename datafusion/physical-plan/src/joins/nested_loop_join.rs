@@ -775,13 +775,35 @@ impl ExecutionPlan for NestedLoopJoinExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
 
-        let left = ctx.encode_child(self.left())?;
-        let right = ctx.encode_child(self.right())?;
+        // Destructure exhaustively (no `..`) so that a newly added field is a
+        // compile error here instead of being silently left out of the proto.
+        let Self {
+            left,
+            right,
+            filter,
+            join_type,
+            projection,
+            // derived from the children's schemas by `try_new` on decode
+            join_schema: _,
+            // runtime build-side state, not part of the plan
+            build_side_data: _,
+            // runtime spill state, not part of the plan
+            left_spill_data: _,
+            // recomputed by `try_new` on decode
+            column_indices: _,
+            // runtime metrics, not part of the plan
+            metrics: _,
+            // recomputed by `try_new` on decode
+            cache: _,
+        } = self;
 
-        let join_type = crate::joins::proto::join_type_to_proto(*self.join_type());
+        let left = ctx.encode_child(left)?;
+        let right = ctx.encode_child(right)?;
 
-        let filter = self
-            .filter()
+        let join_type = crate::joins::proto::join_type_to_proto(*join_type);
+
+        let filter = filter
+            .as_ref()
             .map(|f| crate::joins::proto::join_filter_to_proto(f, ctx))
             .transpose()?;
 
@@ -793,7 +815,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
                         right: Some(Box::new(right)),
                         join_type: join_type.into(),
                         filter,
-                        projection: match self.projection.as_ref() {
+                        projection: match projection.as_ref() {
                             None => Vec::new(),
                             Some(v) if v.is_empty() => vec![u32::MAX],
                             Some(v) => v.iter().map(|x| *x as u32).collect(),
@@ -819,31 +841,32 @@ impl NestedLoopJoinExec {
             "NestedLoopJoinExec",
         );
 
-        let left = ctx.decode_required_child(
-            join.left.as_deref(),
-            "NestedLoopJoinExec",
-            "left",
-        )?;
-        let right = ctx.decode_required_child(
-            join.right.as_deref(),
-            "NestedLoopJoinExec",
-            "right",
-        )?;
+        // Destructure exhaustively (no `..`) so that a newly added proto field
+        // is a compile error here instead of being silently ignored.
+        let protobuf::NestedLoopJoinExecNode {
+            left,
+            right,
+            join_type,
+            filter,
+            projection,
+        } = &**join;
 
-        let join_type = crate::joins::proto::join_type_from_proto(
-            join.join_type,
-            "NestedLoopJoinExec",
-        )?;
+        let left =
+            ctx.decode_required_child(left.as_deref(), "NestedLoopJoinExec", "left")?;
+        let right =
+            ctx.decode_required_child(right.as_deref(), "NestedLoopJoinExec", "right")?;
 
-        let filter = join
-            .filter
+        let join_type =
+            crate::joins::proto::join_type_from_proto(*join_type, "NestedLoopJoinExec")?;
+
+        let filter = filter
             .as_ref()
             .map(|f| {
                 crate::joins::proto::join_filter_from_proto(f, ctx, "NestedLoopJoinExec")
             })
             .transpose()?;
 
-        let projection = match join.projection.as_slice() {
+        let projection = match projection.as_slice() {
             [] => None,
             [u32::MAX] => Some(Vec::new()),
             indices => Some(indices.iter().map(|i| *i as usize).collect()),
