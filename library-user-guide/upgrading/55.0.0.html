@@ -1243,13 +1243,26 @@ fail to plan at all. The simplest approach is to delegate to a <code class="docu
 <span class="p">}</span>
 </pre></div>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">ForeignSession::create_physical_plan</span></code> continues to run the complete planning
-pipeline in the library that owns the session. <code class="docutils literal notranslate"><span class="pre">ForeignSession::query_planner</span></code>
-returns <code class="docutils literal notranslate"><span class="pre">UnsupportedQueryPlanner</span></code> until the query planner FFI interface is
-available. FFI wrappers for the individual planner and optimizer interfaces are
-not included in this release.</p>
+<p><code class="docutils literal notranslate"><span class="pre">ForeignSession::create_physical_plan</span></code> runs the complete planning pipeline in the
+library that owns the session. <code class="docutils literal notranslate"><span class="pre">ForeignSession::query_planner</span></code>, <code class="docutils literal notranslate"><span class="pre">optimize</span></code>, and
+<code class="docutils literal notranslate"><span class="pre">physical_optimizers</span></code> forward to the owning session across the FFI boundary. A
+foreign query planner can also be installed on a session through the new
+<code class="docutils literal notranslate"><span class="pre">datafusion_ffi::query_planner::FFI_QueryPlanner</span></code>; see that module’s
+documentation for how plans and extension codecs cross the boundary.</p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/23703">PR #23703</a> for details on
 the catalog changes.</p>
+</section>
+<section id="ffi-logicalextensioncodec-task-ctx-provider-is-now-private">
+<h3><code class="docutils literal notranslate"><span class="pre">FFI_LogicalExtensionCodec::task_ctx_provider</span></code> is now private<a class="headerlink" href="#ffi-logicalextensioncodec-task-ctx-provider-is-now-private" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">task_ctx_provider</span></code> field on
+<code class="docutils literal notranslate"><span class="pre">datafusion_ffi::proto::logical_extension_codec::FFI_LogicalExtensionCodec</span></code> was
+<code class="docutils literal notranslate"><span class="pre">pub</span></code> and is now crate-private, matching <code class="docutils literal notranslate"><span class="pre">FFI_PhysicalExtensionCodec</span></code>.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Code that read or cloned <code class="docutils literal notranslate"><span class="pre">FFI_LogicalExtensionCodec::task_ctx_provider</span></code>
+directly. Pass the task context provider to <code class="docutils literal notranslate"><span class="pre">FFI_LogicalExtensionCodec::new</span></code>
+instead, and keep your own copy if you need it elsewhere.</p></li>
+</ul>
 </section>
 <section id="unused-async-removed-from-several-public-functions">
 <h3>Unused <code class="docutils literal notranslate"><span class="pre">async</span></code> removed from several public functions<a class="headerlink" href="#unused-async-removed-from-several-public-functions" title="Link to this heading">#</a></h3>
@@ -1533,6 +1546,7 @@ following the pattern in <a class="reference external" href="https://github.com/
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#time-interval-now-returns-a-time-instead-of-an-interval"><code class="docutils literal notranslate"><span class="pre">time</span> <span class="pre">±</span> <span class="pre">interval</span></code> now returns a <code class="docutils literal notranslate"><span class="pre">time</span></code> instead of an <code class="docutils literal notranslate"><span class="pre">interval</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-planning-state-moved-to-an-explicit-physicalplanningcontext">Physical-planning state moved to an explicit <code class="docutils literal notranslate"><span class="pre">PhysicalPlanningContext</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#catalog-planner-and-optimizer-contracts-moved-to-datafusion-session">Catalog, planner, and optimizer contracts moved to <code class="docutils literal notranslate"><span class="pre">datafusion-session</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ffi-logicalextensioncodec-task-ctx-provider-is-now-private"><code class="docutils literal notranslate"><span class="pre">FFI_LogicalExtensionCodec::task_ctx_provider</span></code> is now private</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#unused-async-removed-from-several-public-functions">Unused <code class="docutils literal notranslate"><span class="pre">async</span></code> removed from several public functions</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#movingmin-and-movingmax-changed-to-pub-crate"><code class="docutils literal notranslate"><span class="pre">MovingMin</span></code> and <code class="docutils literal notranslate"><span class="pre">MovingMax</span></code> changed to <code class="docutils literal notranslate"><span class="pre">pub(crate)</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#windowexpr-evaluate-stateful-now-takes-a-windowevalcontext"><code class="docutils literal notranslate"><span class="pre">WindowExpr::evaluate_stateful</span></code> now takes a <code class="docutils literal notranslate"><span class="pre">WindowEvalContext</span></code></a></li>
