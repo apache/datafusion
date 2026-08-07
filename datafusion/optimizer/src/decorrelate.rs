@@ -350,15 +350,22 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     new_correlated_cols
                         .insert(Column::new(Some(alias.alias.clone()), col.name.clone()));
                 }
+                let new_plan = LogicalPlan::SubqueryAlias(
+                    datafusion_expr::logical_plan::SubqueryAlias::try_new(
+                        alias.input.clone(),
+                        alias.alias.clone(),
+                    )?,
+                );
+
                 self.correlated_subquery_cols_map
-                    .insert(plan.clone(), new_correlated_cols);
+                    .insert(new_plan.clone(), new_correlated_cols);
                 if let Some(input_map) =
                     self.collected_count_expr_map.get(alias.input.deref())
                 {
                     self.collected_count_expr_map
-                        .insert(plan.clone(), input_map.clone());
+                        .insert(new_plan.clone(), input_map.clone());
                 }
-                Ok(Transformed::no(plan))
+                Ok(Transformed::yes(new_plan))
             }
             LogicalPlan::Limit(limit) => {
                 let input_expr_map = self

@@ -3309,7 +3309,8 @@ impl ScalarValue {
         let values = if values.is_empty() {
             new_empty_array(data_type)
         } else {
-            Self::iter_to_array(values.iter().cloned()).unwrap()
+            let arr = Self::iter_to_array(values.iter().cloned()).unwrap();
+            cast_with_options(&arr, data_type, &DEFAULT_CAST_OPTIONS).unwrap()
         };
         Arc::new(
             SingleRowListArrayBuilder::new(values)
@@ -3371,7 +3372,8 @@ impl ScalarValue {
         let values = if values.len() == 0 {
             new_empty_array(data_type)
         } else {
-            Self::iter_to_array(values).unwrap()
+            let arr = Self::iter_to_array(values).unwrap();
+            cast_with_options(&arr, data_type, &DEFAULT_CAST_OPTIONS).unwrap()
         };
         Arc::new(
             SingleRowListArrayBuilder::new(values)
@@ -3414,7 +3416,8 @@ impl ScalarValue {
         let values = if values.is_empty() {
             new_empty_array(data_type)
         } else {
-            Self::iter_to_array(values.iter().cloned()).unwrap()
+            let arr = Self::iter_to_array(values.iter().cloned()).unwrap();
+            cast_with_options(&arr, data_type, &DEFAULT_CAST_OPTIONS).unwrap()
         };
         Arc::new(SingleRowListArrayBuilder::new(values).build_large_list_array())
     }
@@ -11543,5 +11546,29 @@ mod tests {
         run_tests::<Decimal64Type>();
         run_tests::<Decimal128Type>();
         run_tests::<Decimal256Type>();
+    }
+
+    #[test]
+    fn test_new_list_nested_nullability_mismatch_issue_24022() {
+        // requested element type: Struct(n: Int32 nullable=true)
+        let requested_element_type =
+            DataType::Struct(Fields::from(vec![Field::new("n", DataType::Int32, true)]));
+
+        // inferred from concrete values: Struct(n: Int32 nullable=false)
+        let inferred_field = Field::new("n", DataType::Int32, false);
+
+        let value = ScalarValue::Struct(Arc::new(StructArray::from(vec![(
+            Arc::new(inferred_field),
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+        )])));
+
+        let list = ScalarValue::new_list(&[value], &requested_element_type, true);
+        assert_eq!(
+            list.data_type(),
+            &DataType::List(Arc::new(Field::new_list_field(
+                requested_element_type,
+                true
+            )))
+        );
     }
 }
