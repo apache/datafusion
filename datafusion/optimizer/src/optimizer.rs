@@ -411,6 +411,11 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
             let r = f(Arc::make_mut(right))?;
             l || r
         }
+        LogicalPlan::AsOfJoin(join) => {
+            let l = f(Arc::make_mut(&mut join.left))?;
+            let r = f(Arc::make_mut(&mut join.right))?;
+            l || r
+        }
         LogicalPlan::Union(Union { inputs, .. }) => {
             let mut changed = false;
             for input in inputs {
