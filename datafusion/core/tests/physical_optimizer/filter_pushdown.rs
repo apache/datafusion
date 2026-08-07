@@ -50,9 +50,7 @@ use datafusion_functions_aggregate::{
     min_max::{max_udaf, min_udaf},
 };
 use datafusion_physical_expr::{
-    LexOrdering, PhysicalSortExpr,
-    expressions::{DynamicFilterPhysicalExpr, col},
-    utils::conjunction,
+    LexOrdering, PhysicalSortExpr, expressions::col, utils::conjunction,
 };
 use datafusion_physical_expr::{
     Partitioning, ScalarFunctionExpr, aggregate::AggregateExprBuilder,
@@ -2905,12 +2903,16 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
     );
 }
 
-// Not portable to sqllogictest: asserts on `HashJoinExec::dynamic_filter_for_test().is_used()`
-// which is a debug-only API. The observable behavior (probe-side scan
+// Not portable to sqllogictest: asserts on the dynamic filter's Arc ownership.
+// The observable behavior (probe-side scan
 // receiving the dynamic filter when the data source supports it) is
 // already covered by the simpler CollectLeft port in push_down_filter_parquet.slt;
 // the with_support(false) branch has no SQL analog (parquet always supports
 // pushdown).
+#[expect(
+    deprecated,
+    reason = "the borrowed getter avoids adding a producer Arc that is_used would count"
+)]
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
     use datafusion_common::JoinType;
@@ -2985,13 +2987,8 @@ async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
 
         // Verify that a dynamic filter was created
         let dynamic_filter = hash_join
-            .dynamic_expressions_produced()
-            .into_iter()
-            .next()
+            .dynamic_filter_expr()
             .expect("Dynamic filter should be created");
-        let dynamic_filter = (dynamic_filter as Arc<dyn std::any::Any + Send + Sync>)
-            .downcast::<DynamicFilterPhysicalExpr>()
-            .expect("produced expression should be a DynamicFilterPhysicalExpr");
 
         // Verify that is_used() returns the expected value based on probe side support.
         // When probe_supports_pushdown=false: no consumer holds a reference (is_used=false)
