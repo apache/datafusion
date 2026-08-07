@@ -16,11 +16,11 @@
 // under the License.
 
 //! Shared benchmark utilities
-pub mod latency_object_store;
 mod memory;
 mod memory_pool;
 mod options;
 mod run;
+pub mod simulated_object_store;
 
 pub use memory::print_memory_stats;
 pub use memory_pool::PeakRecordingPool;

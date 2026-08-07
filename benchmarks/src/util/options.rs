@@ -30,7 +30,9 @@ use datafusion::{
 use datafusion_common::{DataFusionError, Result};
 use object_store::local::LocalFileSystem;
 
-use super::{latency_object_store::LatencyObjectStore, memory_pool::PeakRecordingPool};
+use super::{
+    memory_pool::PeakRecordingPool, simulated_object_store::SimulatedObjectStore,
+};
 
 // Common benchmark options (don't use doc comments otherwise this doc
 // shows up in help files)
@@ -66,8 +68,10 @@ pub struct CommonOpt {
     #[arg(short, long, env)]
     pub debug: bool,
 
-    /// Simulate object store latency to mimic remote storage (e.g. S3).
-    /// Adds random latency in the range 20-200ms to each object store operation.
+    /// Serve the local filesystem as if it were remote object storage (e.g. S3
+    /// or GCS): per-request latency, per-connection bandwidth, a bounded
+    /// connection pool, and paginated LIST. See
+    /// [`crate::util::simulated_object_store`].
     #[arg(long = "simulate-latency", env)]
     pub simulate_latency: bool,
 }
@@ -135,17 +139,20 @@ impl CommonOpt {
         Ok(rt_builder)
     }
 
-    /// Build the runtime environment, optionally wrapping the local filesystem
-    /// with a throttled object store to simulate remote storage latency.
+    /// Build the runtime environment, optionally presenting the local
+    /// filesystem as remote object storage.
     pub fn build_runtime(&self) -> Result<Arc<RuntimeEnv>> {
         let rt = self.runtime_env_builder()?.build_arc()?;
         if self.simulate_latency {
-            let store: Arc<dyn object_store::ObjectStore> =
-                Arc::new(LatencyObjectStore::new(LocalFileSystem::new()));
+            let store = SimulatedObjectStore::new(LocalFileSystem::new());
+            let config = store.config().clone();
             let url = ObjectStoreUrl::parse("file:///")?;
-            rt.register_object_store(url.as_ref(), store);
+            rt.register_object_store(url.as_ref(), Arc::new(store));
             println!(
-                "Simulating S3-like object store latency (get: 25-200ms, list: 40-400ms)"
+                "Simulating remote object storage (get TTFB: 25-200ms, list TTFB: \
+                 40-400ms/page, {} MB/s per connection, {} connections)",
+                config.connection_bytes_per_second / (1024 * 1024),
+                config.max_concurrent_requests,
             );
         }
         Ok(rt)

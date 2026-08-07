@@ -165,7 +165,8 @@ CARGO_COMMAND       command that runs the benchmark binary
 DATAFUSION_DIR      directory to use (default $DATAFUSION_DIR)
 RESULTS_NAME        folder where the benchmark files are stored
 PREFER_HASH_JOIN    Prefer hash join algorithm (default true)
-SIMULATE_LATENCY    Simulate object store latency to mimic S3 (default false)
+SIMULATE_LATENCY    Serve local files as if they were remote object storage: per-request
+                    latency, per-connection bandwidth and paginated LIST (default false)
 DATAFUSION_*        Set the given datafusion configuration
 "
     exit 1
