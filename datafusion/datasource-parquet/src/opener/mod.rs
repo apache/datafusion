@@ -29,7 +29,6 @@ use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
     DecoderBuilderConfig, PushDecoderStreamState, RgPlanEntry, RowGroupPruner,
 };
-use crate::row_filter::RowFilterGenerator;
 use crate::row_group_filter::RowGroupAccessPlanFilter;
 use crate::{
     BloomFilterStatistics, Int96Coercer, ParquetAccessPlan, ParquetFileMetrics,
@@ -1394,18 +1393,26 @@ impl RowGroupsPrunedParquetOpen {
             prepared.virtual_state.as_deref(),
         )?;
 
-        let (decoder, rg_plan) = {
+        let (decoder, rg_plan, filter_installed, row_filter_context) = {
             let pushdown_predicate = prepared
                 .pushdown_filters
                 .then_some(prepared.predicate.as_ref())
                 .flatten();
-            let mut row_filter_generator = RowFilterGenerator::new(
-                pushdown_predicate,
-                &prepared.physical_file_schema,
-                file_metadata.as_ref(),
-                prepared.reorder_predicates,
-                &prepared.file_metrics,
-            );
+            // Precompute the prebuilt candidate list once per file. Both the
+            // initial `RowFilter` and any per-RG rebuilds (via
+            // `RowFilterContext::build`) reuse it, so tree walks
+            // (`reassign_expr_columns`) and column resolution only run once —
+            // not once per row group.
+            let precomputed_context = pushdown_predicate.and_then(|predicate| {
+                crate::push_decoder::RowFilterContext::try_new(
+                    predicate,
+                    &prepared.physical_file_schema,
+                    &file_metadata,
+                    prepared.reorder_predicates,
+                    prepared.file_metrics.clone(),
+                    prepared.max_predicate_cache_size,
+                )
+            });
 
             // Build the prepared access plan first — `prepare_access_plan` may
             // call `reorder_by_statistics` (for `sort_order_for_reorder`) and
@@ -1423,25 +1430,66 @@ impl RowGroupsPrunedParquetOpen {
             };
 
             let prepared_access_plan = prepare_access_plan(access_plan)?;
+            // Build `rg_plan` parallel to the decoder's view: the
+            // `prepared_access_plan` has already had its empty-selection
+            // row groups stripped, so 1:1 correspondence with the readers
+            // arrow-rs will hand back is restored. We zip with the
+            // `fully_matched` flag so the stream can toggle the per-row
+            // `RowFilter` per RG.
             let rg_plan: VecDeque<RgPlanEntry> = prepared_access_plan
                 .row_group_indexes
                 .iter()
                 .copied()
-                .map(|rg_index| RgPlanEntry { rg_index })
+                .zip(prepared_access_plan.fully_matched.iter().copied())
+                .map(|(rg_index, fully_matched)| RgPlanEntry {
+                    rg_index,
+                    fully_matched,
+                })
                 .collect();
+
+            // Decide the initial row filter state based on the first RG to
+            // read. If that RG is `fully_matched` the per-row predicate is
+            // a no-op for every row, so we install an empty `RowFilter`
+            // (arrow-rs's `has_predicates` check then short-circuits the
+            // per-row eval) and the stream toggles back to the real filter
+            // at the first non-fully-matched RG boundary.
+            //
+            // `RowFilterContext` carries everything `build_row_filter`
+            // needs so the stream can regenerate the filter later — the
+            // installed filter is owned by the decoder and is not
+            // recoverable once replaced.
+            let first_rg_fully_matched = rg_plan.front().is_some_and(|e| e.fully_matched);
+            let initial_filter = precomputed_context
+                .as_ref()
+                .and_then(|ctx| ctx.build_row_filter());
+            let row_filter_context = precomputed_context;
 
             let mut builder =
                 decoder_config.build(prepared_access_plan, reader_metadata.clone());
-            if let Some(row_filter) = row_filter_generator.next_filter() {
-                builder = builder.with_row_filter(row_filter);
-                if let Some(max_predicate_cache_size) = prepared.max_predicate_cache_size
-                {
-                    builder =
-                        builder.with_max_predicate_cache_size(max_predicate_cache_size);
+            let mut filter_installed = false;
+            if let Some(row_filter) = initial_filter {
+                if first_rg_fully_matched {
+                    builder = builder.with_row_filter(
+                        parquet::arrow::arrow_reader::RowFilter::new(vec![]),
+                    );
+                } else {
+                    builder = builder.with_row_filter(row_filter);
+                    filter_installed = true;
+                    if let Some(max_predicate_cache_size) =
+                        prepared.max_predicate_cache_size
+                    {
+                        builder = builder
+                            .with_max_predicate_cache_size(max_predicate_cache_size);
+                    }
                 }
             }
 
-            (builder.build()?, rg_plan)
+            (
+                builder.build()?,
+                rg_plan,
+                filter_installed,
+                row_filter_context,
+            )
         };
 
         let predicate_cache_inner_records =
@@ -1485,6 +1533,10 @@ impl RowGroupsPrunedParquetOpen {
             .file_metrics
             .row_groups_pruned_dynamic_filter
             .clone();
+        let row_filter_skipped_fully_matched = prepared
+            .file_metrics
+            .row_filter_skipped_fully_matched
+            .clone();
 
         let stream = PushDecoderStreamState {
             decoder: Some(decoder),
@@ -1498,6 +1550,9 @@ impl RowGroupsPrunedParquetOpen {
             baseline_metrics: prepared.baseline_metrics,
             row_group_pruner,
             row_groups_pruned_dynamic,
+            row_filter_context,
+            filter_installed,
+            row_filter_skipped_fully_matched,
         }
         .into_stream();
 
@@ -3328,6 +3383,44 @@ mod test {
             ))
         }
 
+        #[tokio::test]
+        async fn test_input_file_name_projection() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let path = "dir/input_file_name.parquet";
+            let (file_schema, data_size) = write_grouped_file(&store, path, 1, 3).await;
+
+            let projection = ProjectionExprs::new([
+                ProjectionExpr::new(Arc::new(Column::new("value", 0)), "value"),
+                ProjectionExpr::new(input_file_name_expr(), "file_name"),
+            ]);
+
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(file_schema)
+                .with_projection(projection)
+                .build();
+
+            let file =
+                PartitionedFile::new(path.to_string(), u64::try_from(data_size).unwrap());
+            let mut stream = open_file(&morselizer, file).await.unwrap();
+            let batch = stream.next().await.unwrap().unwrap();
+            assert!(stream.next().await.is_none());
+
+            assert_eq!(batch.num_columns(), 2);
+            assert_eq!(batch.schema().field(0).name(), "value");
+            assert_eq!(batch.schema().field(1).name(), "file_name");
+
+            let file_names = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("file_name column should be Utf8");
+            assert_eq!(file_names.len(), 3);
+            for i in 0..file_names.len() {
+                assert_eq!(file_names.value(i), path);
+            }
+        }
+
         /// Collect every `Int64` value from the given column in every batch
         /// of a stream. Used to verify the `row_number` column end to end.
         async fn collect_int64_values(
@@ -3445,44 +3538,6 @@ mod test {
             let stream = open_file(&morselizer, file).await.unwrap();
             let row_numbers = collect_int64_values(stream, 0).await;
             assert_eq!(row_numbers, vec![0, 1, 2, 3]);
-        }
-
-        #[tokio::test]
-        async fn test_input_file_name_projection() {
-            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-            let path = "dir/input_file_name.parquet";
-            let (file_schema, data_size) = write_grouped_file(&store, path, 1, 3).await;
-
-            let projection = ProjectionExprs::new([
-                ProjectionExpr::new(Arc::new(Column::new("value", 0)), "value"),
-                ProjectionExpr::new(input_file_name_expr(), "file_name"),
-            ]);
-
-            let morselizer = ParquetMorselizerBuilder::new()
-                .with_store(Arc::clone(&store))
-                .with_schema(file_schema)
-                .with_projection(projection)
-                .build();
-
-            let file =
-                PartitionedFile::new(path.to_string(), u64::try_from(data_size).unwrap());
-            let mut stream = open_file(&morselizer, file).await.unwrap();
-            let batch = stream.next().await.unwrap().unwrap();
-            assert!(stream.next().await.is_none());
-
-            assert_eq!(batch.num_columns(), 2);
-            assert_eq!(batch.schema().field(0).name(), "value");
-            assert_eq!(batch.schema().field(1).name(), "file_name");
-
-            let file_names = batch
-                .column(1)
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .expect("file_name column should be Utf8");
-            assert_eq!(file_names.len(), 3);
-            for i in 0..file_names.len() {
-                assert_eq!(file_names.value(i), path);
-            }
         }
 
         #[tokio::test]
