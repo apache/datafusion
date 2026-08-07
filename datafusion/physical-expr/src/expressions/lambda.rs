@@ -388,6 +388,72 @@ mod tests {
         assert_eq!(used.len(), 1);
     }
 
+    /// A lambda whose body references neither declared parameter (e.g. a
+    /// constant expression) must report an empty used-params set. This
+    /// exercises the merged-batch path that has no parameter columns to
+    /// push at all.
+    #[test]
+    fn test_used_params_all_unused() {
+        let body = Arc::new(NoOp::new());
+
+        let lambda =
+            LambdaExpr::try_new(vec!["k".to_string(), "v".to_string()], body).unwrap();
+
+        assert!(lambda.projection().is_empty());
+        assert!(lambda.used_params().is_empty());
+    }
+
+    /// A three-parameter lambda whose body skips the middle parameter must
+    /// report only the first and last as used, preserving declaration
+    /// order regardless of how [`Self::used_params`] (a set) reports them.
+    #[test]
+    fn test_used_params_three_params_middle_unused() {
+        let a_field = Arc::new(Field::new("a", DataType::Int32, true));
+        let c_field = Arc::new(Field::new("c", DataType::Int32, true));
+        let body = Arc::new(crate::expressions::BinaryExpr::new(
+            Arc::new(LambdaVariable::new(0, Arc::clone(&a_field))),
+            datafusion_expr::Operator::Plus,
+            Arc::new(LambdaVariable::new(2, Arc::clone(&c_field))),
+        ));
+
+        let lambda = LambdaExpr::try_new(
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            body,
+        )
+        .unwrap();
+
+        let used = lambda.used_params();
+        assert!(used.contains("a"));
+        assert!(!used.contains("b"));
+        assert!(used.contains("c"));
+        assert_eq!(used.len(), 2);
+    }
+
+    /// A two-parameter lambda whose body references both parameters, but in
+    /// the reverse of their declared order (`v` before `k`), must still
+    /// report both as used. Declaration order (not reference order) is what
+    /// downstream code (`LambdaArgument::new`) relies on when it maps these
+    /// names back to positions in the merged batch.
+    #[test]
+    fn test_used_params_both_used_in_reverse_reference_order() {
+        let k_field = Arc::new(Field::new("k", DataType::Int32, true));
+        let v_field = Arc::new(Field::new("v", DataType::Int32, true));
+        let body = Arc::new(crate::expressions::BinaryExpr::new(
+            Arc::new(LambdaVariable::new(1, Arc::clone(&v_field))),
+            datafusion_expr::Operator::Plus,
+            Arc::new(LambdaVariable::new(0, Arc::clone(&k_field))),
+        ));
+
+        let lambda =
+            LambdaExpr::try_new(vec!["k".to_string(), "v".to_string()], body).unwrap();
+
+        assert_eq!(lambda.projection(), &[0, 1]);
+        let used = lambda.used_params();
+        assert!(used.contains("k"));
+        assert!(used.contains("v"));
+        assert_eq!(used.len(), 2);
+    }
+
     /// Inside a nested lambda that re-declares one of the outer parameter
     /// names, only the non-shadowed outer references should be reported as
     /// used by the outer lambda. In
