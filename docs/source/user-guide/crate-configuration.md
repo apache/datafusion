@@ -249,3 +249,19 @@ backtrace:    0: std::backtrace_rs::backtrace::libunwind::trace
    3: std::backtrace::Backtrace::capture
    ...
 ```
+
+## Dynamic Linking
+
+Some projects that use `datafusion` may have many tests, examples, and other binaries. With static linking every such binary will link its own copy of `datafusion`. Static linking is often desirable for distribution simplicity and performance, but may result in disk use bloat and slow build times due to repeated linking.
+
+The `datafusion` crate provides a special `dylib` feature that allows users to link it as a shared library:
+
+```toml
+datafusion = { version = "*", features = ["dylib"] }
+```
+
+This will compile `datafusion` once into an `.so` or `.dll` file and reuse it in all binaries.
+
+While dynamic linking can help with the bloat and build times in local development, enabling it in `release` may prevent some optimizations and require distributing the `libdatafusion_dylib` alongside your application.
+
+See [`datafusion-dylib`](https://github.com/apache/datafusion/blob/main/datafusion/dylib/README.md) readme for implementation details.
