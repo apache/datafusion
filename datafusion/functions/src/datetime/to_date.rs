@@ -38,7 +38,7 @@ Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T0
 Returns the corresponding date.
 
 Note: `to_date` returns Date32, which represents its values as the number of days since unix epoch(`1970-01-01`) stored as signed 32 bit value. The largest supported date value is `9999-12-31`.",
-    syntax_example = "to_date('2017-05-31', '%Y-%m-%d')",
+    syntax_example = "to_date(expression[, ..., format_n])",
     sql_example = r#"```sql
 > select to_date('2023-01-31');
 +-------------------------------+
@@ -100,7 +100,7 @@ impl ToDateFunc {
                 args,
                 |s, format| {
                     string_to_timestamp_millis_formatted(s, format)
-                        .map(|n| n / (24 * 60 * 60 * 1_000))
+                        .map(|n| n.div_euclid(24 * 60 * 60 * 1_000))
                         .and_then(|v| {
                             v.try_into().map_err(|_| {
                                 internal_datafusion_err!("Unable to cast to Date32 for converting from i64 to i32 failed")

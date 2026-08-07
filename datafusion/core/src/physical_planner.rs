@@ -1106,6 +1106,7 @@ impl DefaultPhysicalPlanner {
                     children.one()?,
                     input,
                     expr,
+                    node.schema(),
                 )?,
             LogicalPlan::Filter(Filter {
                 predicate, input, ..
@@ -1329,6 +1330,7 @@ impl DefaultPhysicalPlanner {
                             physical_left,
                             input,
                             expr,
+                            left.schema(),
                         )?,
                         _ => physical_left,
                     };
@@ -1343,6 +1345,7 @@ impl DefaultPhysicalPlanner {
                             physical_right,
                             input,
                             expr,
+                            right.schema(),
                         )?,
                         _ => physical_right,
                     };
@@ -1727,6 +1730,7 @@ impl DefaultPhysicalPlanner {
                         join,
                         input,
                         expr,
+                        new_logical.schema(),
                     )?
                 } else {
                     join
@@ -2958,6 +2962,7 @@ impl DefaultPhysicalPlanner {
         input_exec: Arc<dyn ExecutionPlan>,
         input: &Arc<LogicalPlan>,
         expr: &[Expr],
+        output_schema: &DFSchema,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input_logical_schema = input.as_ref().schema();
         let input_physical_schema = input_exec.schema();
@@ -3015,7 +3020,11 @@ impl DefaultPhysicalPlanner {
                     .into_iter()
                     .map(|(expr, alias)| ProjectionExpr { expr, alias })
                     .collect();
-                Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input_exec)?))
+                Ok(Arc::new(ProjectionExec::try_new_with_schema_metadata(
+                    proj_exprs,
+                    input_exec,
+                    output_schema.as_arrow(),
+                )?))
             }
             PlanAsyncExpr::Async(
                 async_map,
@@ -3027,8 +3036,11 @@ impl DefaultPhysicalPlanner {
                     .into_iter()
                     .map(|(expr, alias)| ProjectionExpr { expr, alias })
                     .collect();
-                let new_proj_exec =
-                    ProjectionExec::try_new(proj_exprs, Arc::new(async_exec))?;
+                let new_proj_exec = ProjectionExec::try_new_with_schema_metadata(
+                    proj_exprs,
+                    Arc::new(async_exec),
+                    output_schema.as_arrow(),
+                )?;
                 Ok(Arc::new(new_proj_exec))
             }
             _ => internal_err!("Unexpected PlanAsyncExpressions variant"),
@@ -3128,15 +3140,14 @@ impl<'a> OptimizationInvariantChecker<'a> {
         previous_schema: &Arc<Schema>,
     ) -> Result<()> {
         // if the rule is not permitted to change the schema, confirm that it did not change.
-        if self.rule.schema_check()
-            && !is_allowed_schema_change(previous_schema.as_ref(), plan.schema().as_ref())
-        {
-            internal_err!(
-                "PhysicalOptimizer rule '{}' failed. Schema mismatch. Expected original schema: {}, got new schema: {}",
-                self.rule.name(),
-                previous_schema,
-                plan.schema()
-            )?
+        if self.rule.schema_check() {
+            is_allowed_schema_change(previous_schema.as_ref(), plan.schema().as_ref())
+                .map_err(|e| {
+                    e.context(format!(
+                        "PhysicalOptimizer rule '{}' failed. Schema mismatch.",
+                        self.rule.name(),
+                    ))
+                })?
         }
 
         // check invariants per each ExecutionPlan node
@@ -3155,28 +3166,45 @@ impl<'a> OptimizationInvariantChecker<'a> {
 /// This change is allowed because for any field the non-nullable domain `F` is a strict subset
 /// of the nullable domain `F ∪ { NULL }`. A physical schema that guarantees a stricter subset
 /// of values will not violate any assumptions made based on the less strict schema.
-fn is_allowed_schema_change(old: &Schema, new: &Schema) -> bool {
+fn is_allowed_schema_change(old: &Schema, new: &Schema) -> Result<()> {
     if new.metadata != old.metadata {
-        return false;
+        return internal_err!(
+            "Schema metadata mismatch: Expected original metadata: {:?}, got metadata: {:?}",
+            old.metadata,
+            new.metadata
+        );
     }
 
     if new.fields.len() != old.fields.len() {
-        return false;
+        return internal_err!(
+            "Schema field mismatch: Expected original field count: {}, got field count: {}",
+            old.fields.len(),
+            new.fields.len()
+        );
     }
 
     let new_fields = new.fields.iter().map(|f| f.as_ref());
     let old_fields = old.fields.iter().map(|f| f.as_ref());
     old_fields
         .zip(new_fields)
-        .all(|(old, new)| is_allowed_field_change(old, new))
+        .try_for_each(|(old, new)| is_allowed_field_change(old, new))
 }
 
-fn is_allowed_field_change(old_field: &Field, new_field: &Field) -> bool {
-    new_field.name() == old_field.name()
+fn is_allowed_field_change(old_field: &Field, new_field: &Field) -> Result<()> {
+    if new_field.name() == old_field.name()
         && new_field.data_type() == old_field.data_type()
         && new_field.metadata() == old_field.metadata()
         && (new_field.is_nullable() == old_field.is_nullable()
             || !new_field.is_nullable())
+    {
+        Ok(())
+    } else {
+        internal_err!(
+            "Schema field unallowed change: old field: {:?}, new field: {:?}",
+            old_field,
+            new_field
+        )
+    }
 }
 
 impl<'n> TreeNodeVisitor<'n> for OptimizationInvariantChecker<'_> {
@@ -3560,6 +3588,43 @@ mod tests {
         )?;
 
         assert_eq!(window_expr.name(), "window_alias");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_projection_preserves_field_metadata_for_aggregate() -> Result<()> {
+        use datafusion_common::metadata::FieldMetadata;
+        use datafusion_expr::expr::AggregateFunction;
+        use datafusion_functions_aggregate::min_max::max_udaf;
+
+        let schema = Schema::new(vec![Field::new("value", DataType::Utf8, false)]);
+        let input = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(schema.to_dfschema()?),
+        });
+        let metadata =
+            FieldMetadata::from(HashMap::from([("foo".to_string(), "bar".to_string())]));
+        let projection = LogicalPlan::Projection(Projection::try_new(
+            vec![col("value").alias_with_metadata("value", Some(metadata))],
+            Arc::new(input),
+        )?);
+        let aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
+            Arc::new(projection),
+            vec![],
+            vec![Expr::AggregateFunction(AggregateFunction::new_udf(
+                max_udaf(),
+                vec![col("value")],
+                false,
+                None,
+                vec![],
+                None,
+            ))],
+        )?);
+
+        DefaultPhysicalPlanner::default()
+            .create_physical_plan(&aggregate, &SessionContext::new().state())
+            .await?;
+
         Ok(())
     }
 
@@ -5038,7 +5103,7 @@ digraph {
         let expected_err = OptimizationInvariantChecker::new(&rule)
             .check(&ok_plan, &different_schema)
             .unwrap_err();
-        assert!(expected_err.to_string().contains("PhysicalOptimizer rule 'OptimizerRuleWithSchemaCheck' failed. Schema mismatch. Expected original schema"));
+        assert!(expected_err.to_string().contains("PhysicalOptimizer rule 'OptimizerRuleWithSchemaCheck' failed. Schema mismatch."));
 
         // The recursive `check_invariants` walk only runs under `debug_assertions`
         // (see `OptimizationInvariantChecker::check`). In release builds the walk is

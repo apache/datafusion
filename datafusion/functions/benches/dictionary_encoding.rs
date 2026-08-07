@@ -42,10 +42,16 @@ fn create_string_dictionary(cardinality: usize) -> ArrayRef {
 }
 
 fn benchmark_dictionary_string_udfs(c: &mut Criterion) {
-    let udfs: [(&str, Arc<ScalarUDF>); 3] = [
+    let udfs: [(&str, Arc<ScalarUDF>); 6] = [
         ("ascii", datafusion_functions::string::ascii()),
         ("bit_length", datafusion_functions::string::bit_length()),
+        (
+            "character_length",
+            datafusion_functions::unicode::character_length(),
+        ),
+        ("initcap", datafusion_functions::unicode::initcap()),
         ("octet_length", datafusion_functions::string::octet_length()),
+        ("reverse", datafusion_functions::unicode::reverse()),
     ];
     let config_options = Arc::new(ConfigOptions::default());
 

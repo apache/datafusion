@@ -485,6 +485,14 @@ impl ParquetSource {
         self.table_parquet_options.global.max_predicate_cache_size
     }
 
+    /// Return the maximum size of an `IN (...)` list that the pruning
+    /// predicate will rewrite into per-value statistics checks. Lists
+    /// longer than this skip container-level pruning. Reads from
+    /// `datafusion.execution.parquet.max_in_list_size`.
+    pub fn max_in_list_size(&self) -> usize {
+        self.table_parquet_options.global.max_in_list_size
+    }
+
     #[cfg(feature = "parquet_encryption")]
     fn get_encryption_factory_with_config(
         &self,
@@ -647,6 +655,7 @@ impl FileSource for ParquetSource {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
+            max_in_list_size: self.max_in_list_size(),
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             virtual_state,
@@ -781,6 +790,7 @@ impl FileSource for ParquetSource {
                         Some(predicate),
                         self.table_schema.table_schema(),
                         &predicate_creation_errors,
+                        self.max_in_list_size(),
                     ) {
                         let mut guarantees = pruning_predicate
                             .literal_guarantees()
@@ -1754,6 +1764,69 @@ mod tests {
             file_with_min("has_min", Some(10)),
         ]);
         assert_eq!(names(&reordered), vec!["has_min", "no_stats"]);
+    }
+
+    /// Multi-column TopK: when the leading column's `min` ties across
+    /// files, the secondary sort key breaks the tie (lexicographic,
+    /// mirroring the row-group level reorder).
+    #[test]
+    fn reorder_files_breaks_leading_ties_with_secondary_column() {
+        use datafusion_common::stats::Precision;
+        use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
+        use datafusion_datasource::PartitionedFile;
+        use pushdown_sort_helpers::*;
+        use reorder_files_helpers::*;
+
+        fn file_with_two_mins(
+            name: &str,
+            min_a: i32,
+            min_b: Option<i32>,
+        ) -> PartitionedFile {
+            let mut pf = PartitionedFile::new(name.to_string(), 0);
+            let col = |min: Option<i32>| ColumnStatistics {
+                null_count: Precision::Absent,
+                max_value: Precision::Absent,
+                min_value: min
+                    .map(|v| Precision::Exact(ScalarValue::Int32(Some(v))))
+                    .unwrap_or(Precision::Absent),
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Absent,
+            };
+            pf.statistics = Some(Arc::new(Statistics {
+                num_rows: Precision::Absent,
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![col(Some(min_a)), col(min_b)],
+            }));
+            pf
+        }
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let mut source = ParquetSource::new(Arc::clone(&schema));
+        source.sort_order_for_reorder = Some(
+            LexOrdering::new(vec![
+                sort_expr_on(&schema, "a", false),
+                sort_expr_on(&schema, "b", false),
+            ])
+            .unwrap(),
+        );
+
+        let reordered = source.reorder_files(vec![
+            file_with_two_mins("tie_late", 1, Some(300)),
+            file_with_two_mins("first", 0, Some(999)),
+            file_with_two_mins("tie_early", 1, Some(100)),
+            file_with_two_mins("tie_no_b_stats", 1, None),
+        ]);
+
+        // `first` wins on the leading key; the `a = 1` ties order by
+        // `min(b)` ASC with missing-`b`-stats last.
+        assert_eq!(
+            names(&reordered),
+            vec!["first", "tie_early", "tie_late", "tie_no_b_stats"]
+        );
     }
 
     /// When no sort pushdown has fired (`sort_order_for_reorder` is
