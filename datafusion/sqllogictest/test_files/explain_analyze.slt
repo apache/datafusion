@@ -422,7 +422,7 @@ FROM t1
 JOIN t2 ON t1.k > t2.k;
 ----
 Plan with Metrics
-01)PiecewiseMergeJoin: operator=Gt, join_type=Inner, on=(k > k), metrics=[output_bytes=0.0 B, build_mem_used=144.0 B]
+01)PiecewiseMergeJoin: operator=Gt, join_type=Inner, on=(k > k), metrics=[output_bytes=0.0 B, build_mem_used=128.0 B]
 02)--ProjectionExec: expr=[column1@0 as k], metrics=[output_bytes=16.0 B]
 03)----SortExec: expr=[column1@0 ASC], preserve_partitioning=[false], metrics=[output_bytes=16.0 B, spilled_bytes=0.0 B]
 04)------DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]

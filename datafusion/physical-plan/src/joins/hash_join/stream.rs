@@ -33,7 +33,8 @@ use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
 use crate::joins::utils::{
-    OnceFut, equal_rows_arr, get_final_indices_from_shared_bitmap, matchable_join_keys,
+    OnceFut, build_batch_offsets, equal_rows_arr_multi, flat_index_to_batch_row,
+    get_final_indices_from_shared_bitmap, matchable_join_keys,
 };
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
@@ -41,8 +42,9 @@ use crate::{
     hash_utils::create_hashes,
     joins::utils::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
-        StatefulStreamResult, adjust_indices_by_join_type, apply_join_filter_to_indices,
-        build_batch_empty_build_side, build_batch_from_indices,
+        StatefulStreamResult, adjust_indices_by_join_type,
+        apply_join_filter_to_indices_multi, build_batch_empty_build_side,
+        build_batch_from_indices, build_batch_from_indices_multi,
         need_produce_result_in_final,
     },
 };
@@ -395,7 +397,7 @@ impl RecordBatchStream for HashJoinStream {
 #[expect(clippy::too_many_arguments)]
 pub(super) fn lookup_join_hashmap(
     build_hashmap: &dyn JoinHashMapType,
-    build_side_values: &[ArrayRef],
+    build_side_values: &[Vec<ArrayRef>],
     probe_side_values: &[ArrayRef],
     null_equality: NullEquality,
     hashes_buffer: &[u64],
@@ -421,7 +423,7 @@ pub(super) fn lookup_join_hashmap(
 
     // TODO: optimize equal_rows_arr to avoid allocation of intermediate arrays
     // https://github.com/apache/datafusion/issues/12131
-    let (build_indices, probe_indices) = equal_rows_arr(
+    let (build_indices, probe_indices) = equal_rows_arr_multi(
         &build_indices_unfiltered,
         &probe_indices_unfiltered,
         build_side_values,
@@ -784,7 +786,7 @@ impl HashJoinStream {
         if is_empty {
             let result = build_batch_empty_build_side(
                 &self.schema,
-                build_side.left_data.batch(),
+                build_side.left_data.schema(),
                 &state.batch,
                 &self.column_indices,
                 self.join_type,
@@ -841,14 +843,13 @@ impl HashJoinStream {
 
         // apply join filter if exists
         let (left_indices, right_indices) = if let Some(filter) = &self.filter {
-            apply_join_filter_to_indices(
-                build_side.left_data.batch(),
+            apply_join_filter_to_indices_multi(
+                build_side.left_data.batches(),
                 &state.batch,
                 left_indices,
                 right_indices,
                 filter,
                 JoinSide::Left,
-                None,
                 self.join_type,
             )?
         } else {
@@ -903,23 +904,34 @@ impl HashJoinStream {
         )?;
 
         // Build output batch and push to coalescer
-        let (build_batch, probe_batch, join_side) =
-            if self.join_type == JoinType::RightMark {
-                (&state.batch, build_side.left_data.batch(), JoinSide::Right)
-            } else {
-                (build_side.left_data.batch(), &state.batch, JoinSide::Left)
-            };
-
-        let batch = build_batch_from_indices(
-            &self.schema,
-            build_batch,
-            probe_batch,
-            &left_indices,
-            &right_indices,
-            &self.column_indices,
-            join_side,
-            self.join_type,
-        )?;
+        let batch = if self.join_type == JoinType::RightMark {
+            // RightMark output is the probe (right) columns plus a mark column; the
+            // build-side (left) data is never read here (see `build_join_schema`),
+            // so a single-batch call with an empty left placeholder is sufficient.
+            let empty_left =
+                RecordBatch::new_empty(Arc::clone(build_side.left_data.schema()));
+            build_batch_from_indices(
+                &self.schema,
+                &state.batch,
+                &empty_left,
+                &left_indices,
+                &right_indices,
+                &self.column_indices,
+                JoinSide::Right,
+                self.join_type,
+            )?
+        } else {
+            build_batch_from_indices_multi(
+                &self.schema,
+                build_side.left_data.batches(),
+                &state.batch,
+                &left_indices,
+                &right_indices,
+                &self.column_indices,
+                JoinSide::Left,
+                self.join_type,
+            )?
+        };
 
         let push_status = self.output_buffer.push_batch(batch)?;
 
@@ -995,15 +1007,20 @@ impl HashJoinStream {
                 .probe_side_non_empty
                 .load(Ordering::Relaxed)
         {
-            // Since null_aware validation ensures single column join, we only check the first column
-            let build_key_column = &build_side.left_data.values()[0];
+            // Since null_aware validation ensures single column join, we only check
+            // the first column. The build-side key values are stored per build batch
+            // and `left_side` holds flat indices into their logical concatenation, so
+            // resolve each flat index to its (batch, row) before testing for NULL.
+            let build_key_batches = &build_side.left_data.values()[0];
+            let offsets = build_batch_offsets(build_key_batches.iter().map(|a| a.len()));
 
             // Filter out indices where the key is NULL
             let filtered_indices: Vec<u64> = left_side
                 .iter()
                 .filter_map(|idx| {
-                    let idx_usize = idx.unwrap() as usize;
-                    if build_key_column.is_null(idx_usize) {
+                    let (batch, row) =
+                        flat_index_to_batch_row(&offsets, idx.unwrap() as usize);
+                    if build_key_batches[batch].is_null(row) {
                         None // Skip rows with NULL keys
                     } else {
                         Some(idx.unwrap())
@@ -1029,9 +1046,9 @@ impl HashJoinStream {
         // Push final unmatched indices to output buffer
         if !left_side.is_empty() {
             let empty_right_batch = RecordBatch::new_empty(self.right.schema());
-            let batch = build_batch_from_indices(
+            let batch = build_batch_from_indices_multi(
                 &self.schema,
-                build_side.left_data.batch(),
+                build_side.left_data.batches(),
                 &empty_right_batch,
                 &left_side,
                 &right_side,

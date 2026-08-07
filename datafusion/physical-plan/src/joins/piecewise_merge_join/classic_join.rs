@@ -354,8 +354,7 @@ impl ClassicPWMJStream {
             true,
         );
 
-        let new_buffered_batch =
-            take_record_batch(buffered_data.batch(), &buffered_indices)?;
+        let new_buffered_batch = buffered_data.gather_indices(&buffered_indices)?;
         let mut buffered_columns = new_buffered_batch.columns().to_vec();
 
         let streamed_columns: Vec<ArrayRef> = self
@@ -609,8 +608,7 @@ fn build_matched_indices_and_set_buffered_bitmap(
 
     let new_buffered_batch = buffered_side
         .buffered_data
-        .batch()
-        .slice(buffered_range.0, buffered_range.1);
+        .gather_range(buffered_range.0, buffered_range.1)?;
     let mut buffered_columns = new_buffered_batch.columns().to_vec();
 
     let indices = UInt32Array::from_value(streamed_range.0 as u32, streamed_range.1);
@@ -662,7 +660,7 @@ mod tests {
     };
     use arrow::array::{Date32Array, Date64Array};
     use arrow_schema::{DataType, Field};
-    use datafusion_common::test_util::batches_to_string;
+    use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_execution::TaskContext;
     use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
     use insta::assert_snapshot;
@@ -816,6 +814,65 @@ mod tests {
         | 3  | 1  | 9  | 10 | 2  | 70 |
         +----+----+----+----+----+----+
         ");
+        Ok(())
+    }
+
+    // The buffered side may arrive as several record batches. Since it is no longer
+    // concatenated into one batch, rows are gathered across batches with
+    // `interleave` (matched suffix ranges and unmatched buffered rows). This test
+    // runs each join type with the buffered (left) side provided both as a single
+    // batch (the original `slice`/`take` path) and as the same data split into
+    // several batches (the `interleave` path), and asserts the results are equal.
+    #[tokio::test]
+    async fn join_buffered_multi_batch_equals_single_batch() -> Result<()> {
+        // Buffered (left) side, globally sorted descending on `b1` (required for `<`).
+        let a1 = vec![1, 2, 3, 4, 5];
+        let b1 = vec![10, 8, 6, 4, 2];
+        let c1 = vec![70, 80, 90, 100, 110];
+
+        // Probe (right) side.
+        let a2 = vec![10, 20, 30, 40];
+        let b2 = vec![9, 7, 5, 3];
+        let c2 = vec![700, 800, 900, 1000];
+
+        for join_type in [
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+        ] {
+            // Single batch buffered side (original slice/take path).
+            let left_single = build_table(("a1", &a1), ("b1", &b1), ("c1", &c1));
+            let right = build_table(("a2", &a2), ("b2", &b2), ("c2", &c2));
+            let on = (
+                Arc::new(Column::new_with_schema("b1", &left_single.schema())?) as _,
+                Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+            );
+            let (_, single_batches) =
+                join_collect(left_single, right, on, Operator::Lt, join_type).await?;
+
+            // Same data, buffered side split into three batches (interleave path).
+            let batch = build_table_i32(("a1", &a1), ("b1", &b1), ("c1", &c1));
+            let schema = batch.schema();
+            let buffered_batches =
+                vec![batch.slice(0, 2), batch.slice(2, 2), batch.slice(4, 1)];
+            let left_multi =
+                TestMemoryExec::try_new_exec(&[buffered_batches], schema, None).unwrap();
+            let right = build_table(("a2", &a2), ("b2", &b2), ("c2", &c2));
+            let on = (
+                Arc::new(Column::new_with_schema("b1", &left_multi.schema())?) as _,
+                Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+            );
+            let (_, multi_batches) =
+                join_collect(left_multi, right, on, Operator::Lt, join_type).await?;
+
+            assert_eq!(
+                batches_to_sort_string(&single_batches),
+                batches_to_sort_string(&multi_batches),
+                "multi-batch buffered result differs from single-batch for {join_type:?}"
+            );
+        }
+
         Ok(())
     }
 
