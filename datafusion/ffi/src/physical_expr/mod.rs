@@ -389,6 +389,13 @@ unsafe extern "C" fn is_volatile_node_fn_wrapper(expr: &FFI_PhysicalExpr) -> boo
     let expr = expr.inner();
     expr.is_volatile_node()
 }
+
+unsafe extern "C" fn expression_id_fn_wrapper(
+    expr: &FFI_PhysicalExpr,
+) -> FFI_Option<u64> {
+    expr.inner().expression_id().into()
+}
+
 unsafe extern "C" fn display_fn_wrapper(expr: &FFI_PhysicalExpr) -> SString {
     let expr = expr.inner();
     format!("{expr}").into()
@@ -446,12 +453,6 @@ unsafe extern "C" fn clone_fn_wrapper(expr: &FFI_PhysicalExpr) -> FFI_PhysicalEx
             library_marker_id: crate::get_library_marker_id,
         }
     }
-}
-
-unsafe extern "C" fn expression_id_fn_wrapper(
-    expr: &FFI_PhysicalExpr,
-) -> FFI_Option<u64> {
-    expr.inner().expression_id().into()
 }
 
 impl Drop for FFI_PhysicalExpr {

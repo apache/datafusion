@@ -4315,6 +4315,147 @@ async fn join_time_excludes_consumer_wait() -> Result<()> {
     .await
 }
 
+/// Three 2-row batches with unique matching keys, right-side column names.
+fn join_time_batches_right() -> Vec<RecordBatch> {
+    vec![
+        build_table_i32(
+            ("a2", &vec![0, 1]),
+            ("b2", &vec![1, 2]),
+            ("c2", &vec![7, 8]),
+        ),
+        build_table_i32(
+            ("a2", &vec![2, 3]),
+            ("b2", &vec![3, 4]),
+            ("c2", &vec![7, 8]),
+        ),
+        build_table_i32(
+            ("a2", &vec![4, 5]),
+            ("b2", &vec![5, 6]),
+            ("c2", &vec![7, 8]),
+        ),
+    ]
+}
+
+/// Build a no-filter Inner materializing join over the given input streams.
+/// The small batch size makes the output surface as multiple batches, so a
+/// slow consumer test sees multiple emits.
+fn materializing_join_time_test_join(
+    streamed: SendableRecordBatchStream,
+    buffered: SendableRecordBatchStream,
+) -> (SendableRecordBatchStream, ExecutionPlanMetricsSet) {
+    use crate::joins::sort_merge_join::materializing_stream::MaterializingSortMergeJoinStream;
+    use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
+
+    let metrics = ExecutionPlanMetricsSet::new();
+    let out_schema = Arc::new(Schema::new(
+        streamed
+            .schema()
+            .fields()
+            .iter()
+            .chain(buffered.schema().fields().iter())
+            .map(|f| f.as_ref().clone())
+            .collect::<Vec<_>>(),
+    ));
+    let (reservation, spill_manager, runtime_env) =
+        test_stream_resources(buffered.schema(), &metrics);
+    let stream = MaterializingSortMergeJoinStream::try_new(
+        out_schema,
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+        streamed,
+        buffered,
+        vec![Arc::new(Column::new("b1", 1)) as _],
+        vec![Arc::new(Column::new("b2", 1)) as _],
+        None,
+        Inner,
+        2,
+        SortMergeJoinMetrics::new(0, &metrics),
+        reservation,
+        spill_manager,
+        runtime_env,
+    )
+    .unwrap();
+    (stream, metrics)
+}
+
+/// join_time must not include time spent waiting for the streamed input.
+#[tokio::test]
+async fn materializing_join_time_excludes_streamed_input_wait() -> Result<()> {
+    check_join_time_excluded(|delay| async move {
+        let streamed = delayed_stream(join_time_batches(), delay);
+        let buffered = delayed_stream(join_time_batches_right(), Duration::ZERO);
+        let (stream, metrics) = materializing_join_time_test_join(streamed, buffered);
+
+        let start = Instant::now();
+        let batches = collect_stream(stream).await?;
+        let wall = start.elapsed();
+
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 6, "all rows should match");
+        assert!(
+            wall >= delay * 3,
+            "streamed delays should dominate wall time, got {wall:?}"
+        );
+        Ok((join_time_of(&metrics), wall))
+    })
+    .await
+}
+
+/// join_time must not include time spent waiting for the buffered input.
+#[tokio::test]
+async fn materializing_join_time_excludes_buffered_input_wait() -> Result<()> {
+    check_join_time_excluded(|delay| async move {
+        let streamed = delayed_stream(join_time_batches(), Duration::ZERO);
+        let buffered = delayed_stream(join_time_batches_right(), delay);
+        let (stream, metrics) = materializing_join_time_test_join(streamed, buffered);
+
+        let start = Instant::now();
+        let batches = collect_stream(stream).await?;
+        let wall = start.elapsed();
+
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 6, "all rows should match");
+        assert!(
+            wall >= delay * 3,
+            "buffered delays should dominate wall time, got {wall:?}"
+        );
+        Ok((join_time_of(&metrics), wall))
+    })
+    .await
+}
+
+/// join_time must not include time the consumer spends holding an emitted
+/// batch (the generator is suspended inside `emitter.emit` meanwhile).
+#[tokio::test]
+async fn materializing_join_time_excludes_consumer_wait() -> Result<()> {
+    check_join_time_excluded(|delay| async move {
+        let streamed = delayed_stream(join_time_batches(), Duration::ZERO);
+        let buffered = delayed_stream(join_time_batches_right(), Duration::ZERO);
+        let (mut stream, metrics) = materializing_join_time_test_join(streamed, buffered);
+
+        let start = Instant::now();
+        let mut output_batches = 0u32;
+        while let Some(batch) = stream.next().await {
+            batch?;
+            output_batches += 1;
+            // Simulate a slow consumer between emitted batches.
+            tokio::time::sleep(delay).await;
+        }
+        let wall = start.elapsed();
+
+        assert!(
+            output_batches >= 3,
+            "expected multiple emitted batches, got {output_batches}"
+        );
+        assert!(
+            wall >= delay * output_batches,
+            "consumer delays should dominate wall time, got {wall:?}"
+        );
+        Ok((join_time_of(&metrics), wall))
+    })
+    .await
+}
+
 /// An inner key group spanning multiple inner batches must survive the inner
 /// input returning Pending mid-way: inner rows delivered before the Pending
 /// still take part in the filter evaluation.
@@ -4889,6 +5030,77 @@ async fn bitwise_spill_with_filter() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// A single inner key group spanning several inner batches can spill more
+/// than once under memory pressure. Every spilled slice must still be
+/// evaluated against the outer rows — an earlier spill file must not be
+/// dropped when a later slice of the same group spills.
+#[tokio::test]
+async fn bitwise_multi_spill_inner_key_group() -> Result<()> {
+    // Outer: one row with key 1, c1 = 5.
+    let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![5]));
+
+    // Inner: one key group (b2 = 1) spanning two batches. Only the first
+    // batch satisfies the filter c1 < c2 (5 < 10); the second (5 < 0) does
+    // not, so dropping the first spilled slice flips the semi-join result.
+    let right_batches = vec![
+        build_table_i32(("a2", &vec![10]), ("b2", &vec![1]), ("c2", &vec![10])),
+        build_table_i32(("a2", &vec![20]), ("b2", &vec![1]), ("c2", &vec![0])),
+    ];
+    let right = build_table_from_batches(right_batches);
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+    let filter = build_c1_lt_c2_filter(left.schema().as_ref(), right.schema().as_ref());
+
+    // 100-byte pool: every buffered slice fails its reservation, so each
+    // inner batch of the key group spills separately.
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(100, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(SessionConfig::default().with_batch_size(1))
+            .with_runtime(runtime),
+    );
+
+    let join = SortMergeJoinExec::try_new(
+        left,
+        right,
+        on,
+        Some(filter),
+        LeftSemi,
+        sort_options,
+        NullEquality::NullEqualsNothing,
+    )?;
+    let stream = join.execute(0, task_ctx)?;
+    let batches = common::collect(stream).await?;
+
+    let output_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(
+        output_rows, 1,
+        "left row must match the group's first (spilled) inner slice",
+    );
+
+    let metrics = join.metrics().expect("must have metrics");
+    assert_eq!(
+        metrics.spill_count(),
+        Some(1),
+        "all overflows of one key group must share a single spill file",
+    );
+    assert_eq!(
+        metrics.spilled_rows(),
+        Some(2),
+        "both inner slices of the group must be spilled",
+    );
     Ok(())
 }
 

@@ -42,6 +42,7 @@ pub use datafusion_physical_expr::{
 
 use std::any::Any;
 use std::borrow::Borrow;
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, LazyLock};
 
@@ -168,6 +169,22 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         check_default_invariants(self, check)
     }
 
+    /// Returns the dynamic expressions produced by this plan node.
+    ///
+    /// A dynamic expression is produced when this node updates or completes its
+    /// runtime state during execution. Expressions that this node only consumes
+    /// must not be returned. This method is shallow and does not include dynamic
+    /// expressions produced by child plans.
+    ///
+    /// Each returned expression must have a [`PhysicalExpr::expression_id`]
+    /// since all dynamic expressions such as [`DynamicFilterPhysicalExpr`]
+    /// have an expression id.
+    ///
+    /// [`DynamicFilterPhysicalExpr`]: datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr
+    fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        Vec::new()
+    }
+
     /// Specifies simple per-child input distribution requirements.
     ///
     /// Deprecated: override [`Self::input_distribution_requirements`] instead.
@@ -253,9 +270,11 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// Apply a closure `f` to each expression in the current physical plan node. `f`
     /// should not be called in any child expressions nor in any expressions of child nodes.
     ///
-    /// The closure can return [`TreeNodeRecursion::Stop`] to stop iteration, otherwise
-    /// iteration should continue. ([`TreeNodeRecursion::Jump`] and [`TreeNodeRecursion::Jump`]
-    /// are equivalent because this method is not recursive.
+    /// Similarly to other [`TreeNode`] APIs, the closure can return
+    /// [`TreeNodeRecursion::Stop`] to stop iteration, otherwise iteration
+    /// should continue. Note that [`TreeNodeRecursion::Continue`] and
+    /// [`TreeNodeRecursion::Jump`] are equivalent because this method is not
+    /// recursive.
     ///
     ///
     /// # Example Usage
@@ -1435,6 +1454,27 @@ macro_rules! check_len {
     };
 }
 
+/// All dynamic expressions must have an expression id.
+fn check_dynamic_expression_invariants<P: ExecutionPlan + ?Sized>(
+    plan: &P,
+) -> Result<()> {
+    let mut produced_ids = HashSet::new();
+    for expr in plan.dynamic_expressions_produced() {
+        let Some(expression_id) = expr.expression_id() else {
+            return internal_err!(
+                "{}::dynamic_expressions_produced returned an expression without an expression ID",
+                plan.name()
+            );
+        };
+        assert_or_internal_err!(
+            produced_ids.insert(expression_id),
+            "{}::dynamic_expressions_produced returned duplicate expression ID {expression_id}",
+            plan.name()
+        );
+    }
+    Ok(())
+}
+
 /// Checks a set of invariants that apply to all ExecutionPlan implementations.
 /// Returns an error if the given node does not conform.
 pub fn check_default_invariants<P: ExecutionPlan + ?Sized>(
@@ -1448,6 +1488,7 @@ pub fn check_default_invariants<P: ExecutionPlan + ?Sized>(
     check_len!(plan, benefits_from_input_partitioning, children_len);
     plan.input_distribution_requirements()
         .check_invariants(plan, check)?;
+    check_dynamic_expression_invariants(plan)?;
 
     Ok(())
 }
@@ -1850,13 +1891,26 @@ mod tests {
 
     use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
 
     #[derive(Debug)]
-    pub struct EmptyExec;
+    pub struct EmptyExec {
+        dynamic_expressions: Vec<Arc<dyn PhysicalExpr>>,
+    }
 
     impl EmptyExec {
         pub fn new(_schema: SchemaRef) -> Self {
-            Self
+            Self {
+                dynamic_expressions: vec![],
+            }
+        }
+
+        fn with_dynamic_expressions(
+            mut self,
+            dynamic_expressions: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Self {
+            self.dynamic_expressions = dynamic_expressions;
+            self
         }
     }
 
@@ -1897,6 +1951,10 @@ mod tests {
             Ok(TreeNodeRecursion::Continue)
         }
 
+        fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+            self.dynamic_expressions.iter().map(Arc::clone).collect()
+        }
+
         fn execute(
             &self,
             _partition: usize,
@@ -1912,6 +1970,32 @@ mod tests {
         ) -> Result<Arc<Statistics>> {
             unimplemented!()
         }
+    }
+
+    #[test]
+    fn test_dynamic_expression_invariants() -> Result<()> {
+        let schema = Arc::new(Schema::empty());
+        let dynamic: Arc<dyn PhysicalExpr> =
+            Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
+        let valid = EmptyExec::new(Arc::clone(&schema))
+            .with_dynamic_expressions(vec![Arc::clone(&dynamic)]);
+        check_default_invariants(&valid, InvariantLevel::Always)?;
+
+        let missing_id =
+            EmptyExec::new(Arc::clone(&schema)).with_dynamic_expressions(vec![lit(true)]);
+        let error = check_default_invariants(&missing_id, InvariantLevel::Always)
+            .unwrap_err()
+            .strip_backtrace();
+        assert!(error.contains("without an expression ID"), "{error}");
+
+        let duplicate = EmptyExec::new(schema)
+            .with_dynamic_expressions(vec![Arc::clone(&dynamic), dynamic]);
+        let error = check_default_invariants(&duplicate, InvariantLevel::Always)
+            .unwrap_err()
+            .strip_backtrace();
+        assert!(error.contains("duplicate expression ID"), "{error}");
+
+        Ok(())
     }
 
     #[derive(Debug)]

@@ -67,13 +67,14 @@ use arrow::{
     array::Int64Array, datatypes::SchemaRef, record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
+use datafusion::catalog::Session;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::{
     common::cast::as_int64_array,
     common::{DFSchemaRef, arrow_datafusion_err},
     error::{DataFusionError, Result},
     execution::{
-        context::{QueryPlanner, SessionState, TaskContext},
+        context::{QueryPlanner, TaskContext},
         runtime_env::RuntimeEnv,
     },
     logical_expr::{
@@ -469,7 +470,7 @@ impl QueryPlanner for TopKQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session_state: &dyn Session,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Teach the default physical planner how to plan TopK nodes.
         let physical_planner =
@@ -632,7 +633,7 @@ impl ExtensionPlanner for TopKPlanner {
         node: &dyn UserDefinedLogicalNode,
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
+        _session_state: &dyn Session,
         _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         Ok(

@@ -139,6 +139,12 @@ SELECT to_date('01-14-2023 01:01:30+05:30', '%q', '%d-%m-%Y %H/%M/%S', '%+', '%m
 ----
 2023-01-13
 
+# Formatted pre-epoch datetimes retain their calendar date
+query D
+SELECT to_date('1969-12-31 12:00:00', '%Y-%m-%d %H:%M:%S');
+----
+1969-12-31
+
 statement error DataFusion error: Execution error: to_date function unsupported data type at index 1: List
 SELECT to_date('2022-08-03T14:38:50+05:30', make_array('%s', '%q', '%d-%m-%Y %H:%M:%S%#z', '%+'));
 

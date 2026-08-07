@@ -1741,7 +1741,7 @@ mod tests {
         acc2.update_batch(&[data(["b", "c", "a"])])?;
         acc1 = merge(acc1, acc2)?;
 
-        assert_eq!(acc1.size(), 282);
+        assert_eq!(acc1.size(), 290);
 
         Ok(())
     }

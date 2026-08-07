@@ -62,14 +62,12 @@ fn find_library() -> Result<PathBuf> {
     find_cdylib(deps_dir)
 }
 
-pub fn get_module() -> Result<ForeignLibraryModule> {
+fn load_module(lib_path: &Path) -> Result<ForeignLibraryModule> {
     let expected_version = crate::version();
-
-    let lib_path = find_library()?;
 
     // Load the library using libloading
     let lib = unsafe {
-        libloading::Library::new(&lib_path)
+        libloading::Library::new(lib_path)
             .map_err(|e| DataFusionError::External(Box::new(e)))?
     };
 
@@ -86,4 +84,41 @@ pub fn get_module() -> Result<ForeignLibraryModule> {
     std::mem::forget(lib);
 
     Ok(module)
+}
+
+pub fn get_module() -> Result<ForeignLibraryModule> {
+    load_module(&find_library()?)
+}
+
+/// Load an independent copy of the integration-test cdylib.
+///
+/// Copying to a unique path makes the dynamic loader create a separate image
+/// with its own library marker and Rust object graph.
+pub fn get_module_copy(name: &str) -> Result<ForeignLibraryModule> {
+    let source = find_library()?;
+    let file_name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| DataFusionError::External("Invalid cdylib filename".into()))?;
+    // Windows cannot remove a loaded DLL, so use a stable name that bounds the
+    // retained test artifacts to one file per library role.
+    #[cfg(target_os = "windows")]
+    let destination = source.with_file_name(format!("{name}_{file_name}"));
+    #[cfg(not(target_os = "windows"))]
+    let destination =
+        source.with_file_name(format!("{}_{}_{}", std::process::id(), name, file_name));
+
+    std::fs::copy(&source, &destination)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    match load_module(&destination) {
+        Ok(module) => {
+            #[cfg(not(target_os = "windows"))]
+            let _ = std::fs::remove_file(destination);
+            Ok(module)
+        }
+        Err(error) => {
+            let _ = std::fs::remove_file(destination);
+            Err(error)
+        }
+    }
 }

@@ -1513,10 +1513,8 @@ fn test_hashjoin_parent_filter_pushdown_mark_join() {
     );
 }
 
-/// Test that filters on join key columns are pushed to both sides of semi/anti joins.
-/// For LeftSemi/LeftAnti, the output only contains left columns, but filters on
-/// join key columns can also be pushed to the right (non-preserved) side because
-/// the equijoin condition guarantees the key values match.
+/// Semi-join key filters can be pushed to both sides, but anti-join filters must
+/// only rely on the output side to preserve their semantics.
 #[test]
 fn test_hashjoin_parent_filter_pushdown_semi_anti_join() {
     use datafusion_common::JoinType;
@@ -1546,8 +1544,8 @@ fn test_hashjoin_parent_filter_pushdown_semi_anti_join() {
     let join = Arc::new(
         HashJoinExec::try_new(
             left_scan,
-            right_scan,
-            on,
+            Arc::clone(&right_scan),
+            on.clone(),
             None,
             &JoinType::LeftSemi,
             None,
@@ -1586,6 +1584,24 @@ fn test_hashjoin_parent_filter_pushdown_semi_anti_join() {
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, w], file_type=test, pushdown_supported=true, predicate=k@0 = x
     "
     );
+
+    let join = Arc::new(
+        HashJoinExec::try_new(
+            TestScanBuilder::new(Arc::clone(&left_schema)).build(),
+            right_scan,
+            on,
+            None,
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    );
+    let predicate = Arc::new(Literal::new(ScalarValue::Boolean(Some(false))));
+    let plan = Arc::new(FilterExec::try_new(predicate, join).unwrap());
+    assert_parent_filter_remains(plan);
 }
 
 #[test]
@@ -1824,13 +1840,13 @@ fn col_lit_predicate(
     ))
 }
 
-fn assert_parent_filter_remains_above_aggregate(plan: Arc<dyn ExecutionPlan>) {
+fn assert_parent_filter_remains(plan: Arc<dyn ExecutionPlan>) {
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     let optimized = FilterPushdown::new().optimize(plan, &config).unwrap();
     assert!(
         optimized.downcast_ref::<FilterExec>().is_some(),
-        "parent filter must remain above aggregate"
+        "parent filter must remain"
     );
 }
 
@@ -2159,7 +2175,7 @@ fn test_no_pushdown_constant_false_through_global_aggregate() {
     let predicate = Arc::new(Literal::new(ScalarValue::Boolean(Some(false))));
     let plan = Arc::new(FilterExec::try_new(predicate, aggregate).unwrap());
 
-    assert_parent_filter_remains_above_aggregate(plan);
+    assert_parent_filter_remains(plan);
 }
 
 #[test]
@@ -2196,7 +2212,7 @@ fn test_no_pushdown_constant_false_through_empty_grouping_set() {
     let predicate = Arc::new(Literal::new(ScalarValue::Boolean(Some(false))));
     let plan = Arc::new(FilterExec::try_new(predicate, aggregate).unwrap());
 
-    assert_parent_filter_remains_above_aggregate(plan);
+    assert_parent_filter_remains(plan);
 }
 
 #[test]
@@ -2990,8 +3006,9 @@ fn test_hashjoin_dynamic_filter_pushdown_is_used() {
         let hash_join = plan
             .downcast_ref::<HashJoinExec>()
             .expect("Plan should be HashJoinExec");
-        let expression_id = hash_join
-            .dynamic_filter_expr()
+        let dynamic_filters = hash_join.dynamic_expressions_produced();
+        let expression_id = dynamic_filters
+            .first()
             .expect("Dynamic filter should be created")
             .expression_id()
             .expect("Dynamic filters always have an expression ID");
@@ -3195,6 +3212,72 @@ async fn test_discover_dynamic_filters_via_expressions_api() {
         count_after, 2,
         "After optimization, should discover exactly 2 dynamic filters (1 in HashJoinExec, 1 in DataSourceExec), found {count_after}"
     );
+}
+
+#[test]
+fn test_discover_dynamic_expression_producers() {
+    fn producer_count(plan: &Arc<dyn ExecutionPlan>) -> usize {
+        let mut count = 0;
+        plan.apply(|node| {
+            count += node.dynamic_expressions_produced().len();
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .expect("plan traversal should succeed");
+        count
+    }
+
+    let build_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_schema))
+        .with_support(true)
+        .with_batches(vec![
+            record_batch!(("a", Utf8, ["foo", "bar"]), ("b", Int32, [1, 2])).unwrap(),
+        ])
+        .build();
+
+    let probe_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_schema))
+        .with_support(true)
+        .with_batches(vec![
+            record_batch!(
+                ("a", Utf8, ["foo", "bar", "baz", "qux"]),
+                ("c", Float64, [1.0, 2.0, 3.0, 4.0])
+            )
+            .unwrap(),
+        ])
+        .build();
+
+    let plan = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            probe_scan,
+            vec![(
+                col("a", &build_schema).unwrap(),
+                col("a", &probe_schema).unwrap(),
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+    assert_eq!(producer_count(&plan), 0);
+
+    let mut config = ConfigOptions::default();
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    config.execution.parquet.pushdown_filters = true;
+    let optimized_plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    assert_eq!(producer_count(&optimized_plan), 1);
 }
 
 // ==== Filter pushdown through SortExec tests ====
