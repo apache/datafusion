@@ -354,25 +354,23 @@ fn apply_projection(
 mod tests {
     use super::*;
     use crate::logical_plan::consumer::utils::tests::test_consumer;
+    use crate::logical_plan::producer::{
+        DefaultSubstraitProducer, to_substrait_named_struct,
+    };
     use datafusion::arrow::array::Array;
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::ScalarValue;
+    use datafusion::prelude::SessionContext;
     use substrait::proto::expression::Literal;
+    use substrait::proto::expression::RexType;
     use substrait::proto::expression::literal::{
         List, LiteralType, Struct as LiteralStruct,
     };
+    use substrait::proto::expression::nested::Struct as ExpressionStruct;
     use substrait::proto::read_rel::VirtualTable;
 
-    #[test]
-    fn deprecated_literal_rows_use_expected_fields() -> datafusion::common::Result<()> {
-        let list_type =
-            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
-        let schema = DFSchema::try_from(Schema::new(vec![Field::new(
-            "list",
-            list_type.clone(),
-            false,
-        )]))?;
-        let list_literal = Literal {
+    fn list_literal() -> Literal {
+        Literal {
             nullable: false,
             type_variation_reference: 0,
             literal_type: Some(LiteralType::List(List {
@@ -382,11 +380,23 @@ mod tests {
                     literal_type: Some(LiteralType::I32(1)),
                 }],
             })),
-        };
+        }
+    }
+
+    fn list_schema() -> datafusion::common::Result<DFSchema> {
+        let list_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
+        DFSchema::try_from(Schema::new(vec![Field::new("list", list_type, false)]))
+    }
+
+    #[test]
+    fn deprecated_literal_rows_use_expected_fields() -> datafusion::common::Result<()> {
+        let schema = list_schema()?;
+        let list_type = schema.field(0).data_type();
         #[expect(deprecated)]
         let virtual_table = VirtualTable {
             values: vec![LiteralStruct {
-                fields: vec![list_literal],
+                fields: vec![list_literal()],
             }],
             ..Default::default()
         };
@@ -395,7 +405,69 @@ mod tests {
         let Expr::Literal(ScalarValue::List(list), _) = &rows[0][0] else {
             panic!("expected list literal")
         };
-        assert_eq!(list.data_type(), &list_type);
+        assert_eq!(list.data_type(), list_type);
+
+        #[expect(deprecated)]
+        let mismatched_table = VirtualTable {
+            values: vec![LiteralStruct { fields: vec![] }],
+            ..Default::default()
+        };
+        let err = convert_literal_rows(&test_consumer(), &mismatched_table, &schema)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Field count mismatch"),
+            "got: {err}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn expression_rows_use_expected_fields() -> datafusion::common::Result<()> {
+        let schema = list_schema()?;
+        let state = SessionContext::new().state();
+        let mut producer = DefaultSubstraitProducer::new(&state);
+        let base_schema =
+            to_substrait_named_struct(&mut producer, &DFSchemaRef::new(schema.clone()))?;
+        let expression = Expression {
+            rex_type: Some(RexType::Literal(list_literal())),
+        };
+        let virtual_table = VirtualTable {
+            expressions: vec![ExpressionStruct {
+                fields: vec![expression],
+            }],
+            ..Default::default()
+        };
+        let read = ReadRel {
+            base_schema: Some(base_schema.clone()),
+            read_type: Some(ReadType::VirtualTable(virtual_table)),
+            ..Default::default()
+        };
+
+        let plan = from_read_rel(&test_consumer(), &read).await?;
+        let LogicalPlan::Values(values) = plan else {
+            panic!("expected Values plan")
+        };
+        let Expr::Literal(ScalarValue::List(list), _) = &values.values[0][0] else {
+            panic!("expected list literal")
+        };
+        assert_eq!(list.data_type(), schema.field(0).data_type());
+
+        let mismatched_read = ReadRel {
+            base_schema: Some(base_schema),
+            read_type: Some(ReadType::VirtualTable(VirtualTable {
+                expressions: vec![ExpressionStruct { fields: vec![] }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let err = from_read_rel(&test_consumer(), &mismatched_read)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Field count mismatch"),
+            "got: {err}"
+        );
 
         Ok(())
     }

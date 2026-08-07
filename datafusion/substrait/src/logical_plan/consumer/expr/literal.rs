@@ -822,6 +822,22 @@ fn expected_map_fields(
 mod tests {
     use super::*;
     use crate::logical_plan::consumer::utils::tests::test_consumer;
+    use substrait::proto::expression::literal::map::KeyValue;
+
+    fn literal(literal_type: Option<LiteralType>) -> Literal {
+        Literal {
+            nullable: false,
+            type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+            literal_type,
+        }
+    }
+
+    fn assert_expected_field_error(lit: &Literal, field: &Field, expected: &str) {
+        let err =
+            from_substrait_literal_with_expected_field(&test_consumer(), lit, field)
+                .unwrap_err();
+        assert!(err.to_string().contains(expected), "got: {err}");
+    }
 
     #[test]
     fn interval_compound_different_precision() -> datafusion::common::Result<()> {
@@ -857,5 +873,125 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn expected_field_validation_errors() {
+        let i32_literal = literal(Some(LiteralType::I32(1)));
+        assert_expected_field_error(
+            &i32_literal,
+            &Field::new("expected", DataType::Utf8, false),
+            "Literal type mismatch",
+        );
+
+        let list_literal =
+            literal(Some(LiteralType::List(proto::expression::literal::List {
+                values: vec![i32_literal.clone()],
+            })));
+        assert_expected_field_error(
+            &list_literal,
+            &Field::new("expected", DataType::Int32, false),
+            "Expected List literal",
+        );
+
+        let struct_literal = literal(Some(LiteralType::Struct(
+            proto::expression::literal::Struct {
+                fields: vec![i32_literal.clone()],
+            },
+        )));
+        assert_expected_field_error(
+            &struct_literal,
+            &Field::new("expected", DataType::Int32, false),
+            "Expected Struct literal",
+        );
+        assert_expected_field_error(
+            &struct_literal,
+            &Field::new_struct("expected", Vec::<Field>::new(), false),
+            "Struct literal field count mismatch",
+        );
+
+        let map_literal =
+            literal(Some(LiteralType::Map(proto::expression::literal::Map {
+                key_values: vec![KeyValue {
+                    key: Some(i32_literal.clone()),
+                    value: Some(i32_literal.clone()),
+                }],
+            })));
+        assert_expected_field_error(
+            &map_literal,
+            &Field::new("expected", DataType::Int32, false),
+            "Expected Map literal",
+        );
+
+        let non_struct_entries = Field::new("entries", DataType::Int32, false);
+        assert_expected_field_error(
+            &map_literal,
+            &Field::new(
+                "expected",
+                DataType::Map(Arc::new(non_struct_entries), false),
+                false,
+            ),
+            "Expected Map entries field to contain a Struct",
+        );
+
+        let one_field_entries = Field::new_struct(
+            "entries",
+            vec![Field::new("key", DataType::Int32, false)],
+            false,
+        );
+        assert_expected_field_error(
+            &map_literal,
+            &Field::new(
+                "expected",
+                DataType::Map(Arc::new(one_field_entries), false),
+                false,
+            ),
+            "Expected Map entries Struct to have 2 fields",
+        );
+
+        let mismatched_key_entries = Field::new_struct(
+            "entries",
+            vec![
+                Field::new("key", DataType::Utf8, false),
+                Field::new("value", DataType::Int32, false),
+            ],
+            false,
+        );
+        assert_expected_field_error(
+            &map_literal,
+            &Field::new(
+                "expected",
+                DataType::Map(Arc::new(mismatched_key_entries), false),
+                false,
+            ),
+            "Literal type mismatch",
+        );
+
+        let unsupported_literal = literal(None);
+        assert_expected_field_error(
+            &unsupported_literal,
+            &Field::new("expected", DataType::Int32, false),
+            "Unsupported literal_type",
+        );
+
+        let invalid_list_variation = Literal {
+            type_variation_reference: u32::MAX,
+            ..list_literal
+        };
+        let err = from_substrait_literal_without_names(
+            &test_consumer(),
+            &invalid_list_variation,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("Unknown type variation reference"),
+            "got: {err}"
+        );
+
+        let empty_map =
+            literal(Some(LiteralType::EmptyMap(proto::r#type::Map::default())));
+        let err = from_substrait_literal_without_names(&test_consumer(), &empty_map)
+            .unwrap_err();
+        assert!(err.to_string().contains("Missing key type"), "got: {err}");
     }
 }
