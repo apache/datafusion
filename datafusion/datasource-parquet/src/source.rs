@@ -1089,15 +1089,9 @@ impl FileSource for ParquetSource {
 
 #[cfg(feature = "proto")]
 impl ParquetSource {
-    /// Reconstruct a `DataSourceExec` (wrapping a `FileScanConfig` over a
-    /// `ParquetSource`) from a `ParquetScan` [`PhysicalPlanNode`].
+    /// Reconstructs a `DataSourceExec` from a protobuf `ParquetScan`.
     ///
-    /// The inverse of [`FileSource::try_to_proto`] on `ParquetSource`. The
-    /// reader factory is not on the wire, so it is rebuilt as a
-    /// `CachedParquetFileReaderFactory` from the decode context's runtime
-    /// environment.
-    ///
-    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    /// Rebuilds the reader factory from the decode context because it is not serialized.
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
@@ -1127,7 +1121,6 @@ impl ParquetSource {
             )
         })?;
 
-        // Full table schema (file + partition columns).
         let schema: Arc<Schema> = Arc::new(
             base_conf
                 .schema

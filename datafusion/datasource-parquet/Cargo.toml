@@ -75,8 +75,6 @@ name = "datafusion_datasource_parquet"
 path = "src/mod.rs"
 
 [features]
-# Enables `FileSource::try_to_proto` on `ParquetSource` and the `ParquetScan`
-# decode entry point. Mirrors the `proto` feature on `datafusion-datasource`.
 proto = [
     "dep:datafusion-proto-models",
     "datafusion-datasource/proto",
