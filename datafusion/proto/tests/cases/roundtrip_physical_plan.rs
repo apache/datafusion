@@ -23,6 +23,7 @@ use std::vec;
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
+use async_trait::async_trait;
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, SchemaRef};
@@ -39,7 +40,7 @@ use datafusion::datasource::physical_plan::{
     FileSinkConfig, ParquetSource, wrap_partition_type_in_dict,
     wrap_partition_value_in_dict,
 };
-use datafusion::datasource::sink::DataSinkExec;
+use datafusion::datasource::sink::{DataSink, DataSinkExec};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::TaskContext;
 use datafusion::functions_aggregate::count::count_udaf;
@@ -81,6 +82,7 @@ use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::metrics::MetricCategory;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion::physical_plan::proto::ExecutionPlanEncodeCtx;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::scalar_subquery::{
     ScalarSubqueryExec, ScalarSubqueryLink,
@@ -2051,6 +2053,150 @@ fn roundtrip_explain() -> Result<()> {
     assert_eq!(roundtripped.schema(), schema);
     assert_eq!(roundtripped.stringified_plans(), stringified_plans);
     assert!(roundtripped.verbose());
+    Ok(())
+}
+
+#[derive(Debug)]
+struct ProtoHookSink {
+    schema: SchemaRef,
+}
+
+impl DisplayAs for ProtoHookSink {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "ProtoHookSink")
+    }
+}
+
+#[async_trait]
+impl DataSink for ProtoHookSink {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    async fn write_all(
+        &self,
+        _data: SendableRecordBatchStream,
+        _context: &Arc<TaskContext>,
+    ) -> Result<u64> {
+        unreachable!("serialization test does not execute the sink")
+    }
+
+    fn try_to_proto(
+        &self,
+        exec: &DataSinkExec,
+        ctx: &ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<PhysicalPlanNode>> {
+        let input = ctx.encode_child(exec.input())?;
+        let sort_order = exec.encode_sort_order(ctx)?;
+        assert!(matches!(
+            input.physical_plan_type,
+            Some(protobuf::physical_plan_node::PhysicalPlanType::PlaceholderRow(_))
+        ));
+        assert_eq!(
+            sort_order
+                .as_ref()
+                .map(|ordering| ordering.physical_sort_expr_nodes.len()),
+            Some(1)
+        );
+        assert_eq!(exec.schema().fields().len(), 1);
+
+        Ok(Some(PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Empty(
+                    protobuf::EmptyExecNode {
+                        schema: Some(exec.schema().as_ref().try_into()?),
+                        partitions: 1,
+                    },
+                ),
+            ),
+        }))
+    }
+}
+
+#[test]
+fn data_sink_exec_delegates_to_sink_proto_hook() -> Result<()> {
+    let input_schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int64,
+        false,
+    )]));
+    let input = Arc::new(PlaceholderRowExec::new(Arc::clone(&input_schema)));
+    let sink = Arc::new(ProtoHookSink {
+        schema: Arc::clone(&input_schema),
+    });
+    let sort_order = [PhysicalSortRequirement::new(
+        Arc::new(Column::new("value", 0)),
+        Some(SortOptions::default()),
+    )]
+    .into();
+    let plan = Arc::new(DataSinkExec::new(input, sink, Some(sort_order)));
+
+    let node = PhysicalPlanNode::try_from_physical_plan(
+        plan,
+        &DefaultPhysicalExtensionCodec {},
+    )?;
+
+    assert!(matches!(
+        node.physical_plan_type,
+        Some(protobuf::physical_plan_node::PhysicalPlanType::Empty(_))
+    ));
+    Ok(())
+}
+
+#[test]
+fn file_sink_config_roundtrip_preserves_fields() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "partition",
+        DataType::Utf8,
+        false,
+    )]));
+    let config = FileSinkConfig {
+        original_url: "file:///tmp/output".to_string(),
+        object_store_url: ObjectStoreUrl::local_filesystem(),
+        file_group: FileGroup::new(vec![PartitionedFile::new("/tmp/output", 1)]),
+        table_paths: vec![ListingTableUrl::parse("file:///tmp/output")?],
+        output_schema: schema,
+        table_partition_cols: vec![("partition".to_string(), DataType::Utf8)],
+        insert_op: InsertOp::Overwrite,
+        keep_partition_by_columns: true,
+        file_extension: "parquet".to_string(),
+        file_output_mode: FileOutputMode::Directory,
+    };
+
+    let encoded = protobuf::FileSinkConfig::try_from(&config)?;
+    assert_eq!(encoded.insert_op(), protobuf::InsertOp::Overwrite);
+    assert_eq!(
+        encoded.file_output_mode(),
+        protobuf::FileOutputMode::Directory
+    );
+
+    let decoded = FileSinkConfig::try_from(&encoded)?;
+    assert_eq!(decoded.object_store_url, config.object_store_url);
+    assert_eq!(decoded.table_paths, config.table_paths);
+    assert_eq!(
+        decoded.output_schema.as_ref(),
+        config.output_schema.as_ref()
+    );
+    assert_eq!(decoded.table_partition_cols, config.table_partition_cols);
+    assert_eq!(decoded.insert_op, config.insert_op);
+    assert_eq!(
+        decoded.keep_partition_by_columns,
+        config.keep_partition_by_columns
+    );
+    assert_eq!(decoded.file_extension, config.file_extension);
+    assert_eq!(decoded.file_output_mode, config.file_output_mode);
+
+    let [decoded_file] = decoded.file_group.files() else {
+        panic!("expected one decoded output file");
+    };
+    let [config_file] = config.file_group.files() else {
+        panic!("expected one configured output file");
+    };
+    assert_eq!(
+        decoded_file.object_meta.location,
+        config_file.object_meta.location
+    );
+    assert_eq!(decoded_file.object_meta.size, config_file.object_meta.size);
     Ok(())
 }
 
