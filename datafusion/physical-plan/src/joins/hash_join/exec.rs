@@ -1841,6 +1841,7 @@ impl ExecutionPlan for HashJoinExec {
                         },
                         null_aware: self.null_aware,
                         dynamic_filter,
+                        fetch: self.fetch.map(|f| f as u64),
                     },
                 )),
             ),
@@ -1957,6 +1958,16 @@ impl HashJoinExec {
                     )
                 })?;
             hash_join = hash_join.with_dynamic_filter_expr(df)?;
+        }
+
+        // Restore the row limit that `limit_pushdown` may have pushed into the
+        // join. The field is presence-tracked, so a message written before it
+        // existed decodes to `None` (no limit) rather than to `Some(0)`.
+        if let Some(fetch) = hashjoin.fetch {
+            hash_join = hash_join
+                .builder()
+                .with_fetch(Some(fetch as usize))
+                .build()?;
         }
 
         Ok(Arc::new(hash_join))

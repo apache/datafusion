@@ -542,6 +542,63 @@ fn roundtrip_hash_join_projection_states() -> Result<()> {
     Ok(())
 }
 
+/// Regression: `HashJoinExecNode` had no `fetch` field, so the row limit that
+/// the `limit_pushdown` physical optimizer rule pushes into the join via
+/// `ExecutionPlan::with_fetch` was silently dropped by serde. Because that rule
+/// also removes the enclosing `GlobalLimitExec` once the join absorbs the limit,
+/// a round-tripped plan had no limit left at all and a distributed executor
+/// returned more rows than the query asked for.
+///
+/// Note this cannot be covered by `roundtrip_test`: that helper compares
+/// `format!("{plan:?}")`, and `HashJoinExec`'s `Debug` output does not include
+/// `fetch`, so the before/after strings match even when the value is lost. The
+/// assertions below therefore inspect `fetch()` directly.
+#[test]
+fn roundtrip_hash_join_fetch() -> Result<()> {
+    let field_a = Field::new("col", DataType::Int64, false);
+    let schema_left = Arc::new(Schema::new(vec![field_a.clone()]));
+    let schema_right = Arc::new(Schema::new(vec![field_a]));
+    let on = vec![(
+        Arc::new(Column::new("col", schema_left.index_of("col")?)) as _,
+        Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
+    )];
+
+    for fetch in [None, Some(7)] {
+        let join = HashJoinExec::try_new(
+            Arc::new(EmptyExec::new(Arc::clone(&schema_left))),
+            Arc::new(EmptyExec::new(Arc::clone(&schema_right))),
+            on.clone(),
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+
+        let plan: Arc<dyn ExecutionPlan> = match fetch {
+            // This is how `limit_pushdown` installs the limit.
+            Some(fetch) => join
+                .with_fetch(Some(fetch))
+                .expect("HashJoinExec supports fetch"),
+            None => Arc::new(join),
+        };
+        assert_eq!(plan.fetch(), fetch);
+
+        let ctx = SessionContext::new();
+        let codec = DefaultPhysicalExtensionCodec {};
+        let proto_converter = DefaultPhysicalProtoConverter {};
+        let deserialized =
+            roundtrip_test_and_return(plan, &ctx, &codec, &proto_converter)?;
+
+        let deserialized_join = deserialized
+            .downcast_ref::<HashJoinExec>()
+            .expect("should be a HashJoinExec");
+        assert_eq!(deserialized_join.fetch(), fetch);
+    }
+    Ok(())
+}
+
 /// Same regression coverage for `NestedLoopJoinExec`, which shares the
 /// `repeated uint32 projection` proto field shape with `HashJoinExec`.
 #[test]
