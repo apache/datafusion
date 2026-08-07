@@ -144,6 +144,16 @@ pub struct FunctionalDependence {
     /// such as after LEFT JOIN or RIGHT JOIN operations, this property may
     /// change.
     pub nullable: bool,
+    /// Whether the source key permits multiple NULL rows with inconsistent
+    /// dependent values. This is `true` only for dependencies derived from
+    /// `UNIQUE` constraints (which allow duplicate NULLs). It is `false` for
+    /// PRIMARY KEY constraints, downgraded PKs (where join padding produces
+    /// consistent NULL dependents), and GROUP BY derived keys (where at most
+    /// one NULL group exists).
+    ///
+    /// When `true`, the dependency must NOT be used for GROUP BY expansion,
+    /// GROUP BY/ORDER BY reduction, or DISTINCT removal.
+    pub duplicate_nulls: bool,
     // The functional dependency mode:
     pub mode: Dependency,
 }
@@ -168,6 +178,7 @@ impl FunctionalDependence {
             source_indices,
             target_indices,
             nullable,
+            duplicate_nulls: false,
             // Start with the least restrictive mode by default:
             mode: Dependency::Multi,
         }
@@ -175,6 +186,11 @@ impl FunctionalDependence {
 
     pub fn with_mode(mut self, mode: Dependency) -> Self {
         self.mode = mode;
+        self
+    }
+
+    pub fn with_duplicate_nulls(mut self, duplicate_nulls: bool) -> Self {
+        self.duplicate_nulls = duplicate_nulls;
         self
     }
 }
@@ -219,7 +235,8 @@ impl FunctionalDependencies {
                             indices.to_vec(),
                             (0..n_field).collect::<Vec<_>>(),
                             true,
-                        ),
+                        )
+                        .with_duplicate_nulls(true),
                     };
                     // As primary keys are guaranteed to be unique, set the
                     // functional dependency mode to `Dependency::Single`:
@@ -301,6 +318,7 @@ impl FunctionalDependencies {
             source_indices,
             target_indices,
             nullable,
+            duplicate_nulls,
             mode,
         } in &self.deps
         {
@@ -321,7 +339,8 @@ impl FunctionalDependencies {
                     new_target_indices,
                     *nullable,
                 )
-                .with_mode(*mode);
+                .with_mode(*mode)
+                .with_duplicate_nulls(*duplicate_nulls);
                 projected_func_dependencies.push(new_func_dependence);
             }
         }
@@ -522,9 +541,15 @@ pub fn get_target_functional_dependencies(
     for FunctionalDependence {
         source_indices,
         target_indices,
+        duplicate_nulls,
         ..
     } in &dependencies.deps
     {
+        // A dependency that allows duplicate NULLs (from a UNIQUE constraint)
+        // does not guarantee determination across NULL keys, so skip it.
+        if *duplicate_nulls {
+            continue;
+        }
         let source_key_names = source_indices
             .iter()
             .map(|id_key_idx| &field_names[*id_key_idx])
@@ -532,6 +557,48 @@ pub fn get_target_functional_dependencies(
         // If the GROUP BY expression contains a determinant key, we can use
         // the associated fields after aggregation even if they are not part
         // of the GROUP BY expression.
+        if source_key_names
+            .iter()
+            .all(|source_key_name| group_by_expr_names.contains(source_key_name))
+        {
+            combined_target_indices.extend(target_indices.iter());
+        }
+    }
+    (!combined_target_indices.is_empty()).then_some({
+        let mut result = combined_target_indices.into_iter().collect::<Vec<_>>();
+        result.sort();
+        result
+    })
+}
+
+/// Returns target indices for determinant keys that allow duplicate NULLs
+/// (from UNIQUE constraints) and whose source columns are all inside the
+/// given group by expressions. These columns are functionally determined by
+/// the GROUP BY key when the key is non-NULL, but cannot safely be added to
+/// GROUP BY because NULL keys may have multiple distinct target values.
+/// They should instead be wrapped in an aggregate like ANY_VALUE.
+pub fn get_nullable_unique_target_functional_dependencies(
+    schema: &DFSchema,
+    group_by_expr_names: &[String],
+) -> Option<Vec<usize>> {
+    let mut combined_target_indices = HashSet::new();
+    let dependencies = schema.functional_dependencies();
+    let field_names = schema.field_names();
+    for FunctionalDependence {
+        source_indices,
+        target_indices,
+        duplicate_nulls,
+        ..
+    } in &dependencies.deps
+    {
+        // Only interested in dependencies that allow duplicate NULLs (UNIQUE).
+        if !*duplicate_nulls {
+            continue;
+        }
+        let source_key_names = source_indices
+            .iter()
+            .map(|id_key_idx| &field_names[*id_key_idx])
+            .collect::<Vec<_>>();
         if source_key_names
             .iter()
             .all(|source_key_name| group_by_expr_names.contains(source_key_name))

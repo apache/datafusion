@@ -32,7 +32,10 @@ use crate::utils::{
 use arrow::datatypes::DataType;
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, not_impl_err, plan_err};
+use datafusion_common::{
+    Column, DFSchema, DFSchemaRef, Result,
+    get_nullable_unique_target_functional_dependencies, not_impl_err, plan_err,
+};
 use datafusion_common::{NullHandling, RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::ExprSchemable;
 use datafusion_expr::builder::get_struct_unnested_columns;
@@ -313,6 +316,22 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 aggr_exprs.push(extra_aggr);
             }
         }
+
+        // For UNIQUE constraints with nullable keys, columns that are
+        // functionally determined cannot be safely added to GROUP BY (because
+        // NULL keys may map to multiple target values). Instead, wrap them in
+        // ANY_VALUE so they become valid aggregate expressions and the query
+        // returns the correct number of groups.
+        let select_exprs = if !group_by_exprs.is_empty() {
+            self.wrap_nullable_unique_targets_in_any_value(
+                &base_plan,
+                &select_exprs,
+                &group_by_exprs,
+                &mut aggr_exprs,
+            )?
+        } else {
+            select_exprs
+        };
 
         // Process group by, aggregation or having
         let AggregatePlanResult {
@@ -1144,6 +1163,86 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } else {
             builder.project(expr)?.build()
         }
+    }
+
+    /// For columns that are targets of UNIQUE (nullable) functional
+    /// dependencies and not already in the GROUP BY or aggregate expressions,
+    /// wrap them in `ANY_VALUE(col)` so the query returns the correct number
+    /// of groups instead of incorrectly splitting NULL groups.
+    ///
+    /// Returns a (possibly modified) copy of `select_exprs`. Any new aggregate
+    /// expressions are appended to `aggr_exprs`.
+    fn wrap_nullable_unique_targets_in_any_value(
+        &self,
+        input: &LogicalPlan,
+        select_exprs: &[Expr],
+        group_by_exprs: &[Expr],
+        aggr_exprs: &mut Vec<Expr>,
+    ) -> Result<Vec<Expr>> {
+        let schema = input.schema();
+
+        // Compute GROUP BY expression names the same way as
+        // add_group_by_exprs_from_dependencies does.
+        let group_by_expr_names: Vec<String> = group_by_exprs
+            .iter()
+            .map(|e| e.schema_name().to_string())
+            .collect();
+
+        // Find target indices of UNIQUE deps whose sources are in GROUP BY.
+        let Some(target_indices) = get_nullable_unique_target_functional_dependencies(
+            schema,
+            &group_by_expr_names,
+        ) else {
+            return Ok(select_exprs.to_vec());
+        };
+
+        // Look up ANY_VALUE aggregate. If not available, fall back to the
+        // normal validation path (which will produce an error).
+        let Some(any_value_udf) = self.context_provider.get_aggregate_meta("any_value")
+        else {
+            return Ok(select_exprs.to_vec());
+        };
+
+        // Build a set of target field names (qualified) to check against.
+        let target_field_names: HashSet<String> = target_indices
+            .iter()
+            .map(|&idx| {
+                let (qualifier, field) = schema.qualified_field(idx);
+                Column::new(qualifier.cloned(), field.name().clone()).flat_name()
+            })
+            .collect();
+
+        // Rewrite select_exprs: wrap bare column references that are UNIQUE
+        // dep targets (and not already in GROUP BY) in ANY_VALUE.
+        let mut new_select_exprs = Vec::with_capacity(select_exprs.len());
+        for expr in select_exprs {
+            if let Expr::Column(col) = expr {
+                let col_name = col.flat_name();
+                if target_field_names.contains(&col_name)
+                    && !group_by_expr_names.contains(&col_name)
+                {
+                    let any_value_expr = Expr::AggregateFunction(
+                        datafusion_expr::expr::AggregateFunction::new_udf(
+                            Arc::clone(&any_value_udf),
+                            vec![expr.clone()],
+                            false,
+                            None,
+                            vec![],
+                            None,
+                        ),
+                    );
+                    // Add to aggregate expressions if not already present.
+                    if !aggr_exprs.contains(&any_value_expr) {
+                        aggr_exprs.push(any_value_expr.clone());
+                    }
+                    // Alias to preserve the original column name in output.
+                    new_select_exprs.push(any_value_expr.alias(col.name()));
+                    continue;
+                }
+            }
+            new_select_exprs.push(expr.clone());
+        }
+        Ok(new_select_exprs)
     }
 
     /// Create an aggregate plan.
