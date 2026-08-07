@@ -440,8 +440,23 @@ impl ExecutionPlan for CrossJoinExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
 
-        let left = ctx.encode_child(self.left())?;
-        let right = ctx.encode_child(self.right())?;
+        // Destructure exhaustively (no `..`) so that a newly added field is a
+        // compile error here instead of being silently left out of the proto.
+        let Self {
+            left,
+            right,
+            // derived from the children's schemas by `new` on decode
+            schema: _,
+            // runtime build-side state, not part of the plan
+            left_fut: _,
+            // runtime metrics, not part of the plan
+            metrics: _,
+            // recomputed by `new` on decode
+            cache: _,
+        } = self;
+
+        let left = ctx.encode_child(left)?;
+        let right = ctx.encode_child(right)?;
 
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
@@ -470,16 +485,13 @@ impl CrossJoinExec {
             "CrossJoinExec",
         );
 
-        let left = ctx.decode_required_child(
-            crossjoin.left.as_deref(),
-            "CrossJoinExec",
-            "left",
-        )?;
-        let right = ctx.decode_required_child(
-            crossjoin.right.as_deref(),
-            "CrossJoinExec",
-            "right",
-        )?;
+        // Destructure exhaustively (no `..`) so that a newly added proto field
+        // is a compile error here instead of being silently ignored.
+        let protobuf::CrossJoinExecNode { left, right } = &**crossjoin;
+
+        let left = ctx.decode_required_child(left.as_deref(), "CrossJoinExec", "left")?;
+        let right =
+            ctx.decode_required_child(right.as_deref(), "CrossJoinExec", "right")?;
 
         Ok(Arc::new(CrossJoinExec::new(left, right)))
     }
