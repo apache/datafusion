@@ -563,9 +563,23 @@ impl ExecutionPlan for ProjectionExec {
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
-        let expr = ctx.encode_expressions(self.expr().iter().map(|p| &p.expr))?;
-        let expr_name = self.expr().iter().map(|p| p.alias.clone()).collect();
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `ProjectionExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            // The projector is rebuilt from the projection expressions and the
+            // input schema on decode; the expressions themselves are serialized.
+            projector,
+            input,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+        } = self;
+        let projection_exprs = projector.projection().as_ref();
+        let input = ctx.encode_child(input)?;
+        let expr = ctx.encode_expressions(projection_exprs.iter().map(|p| &p.expr))?;
+        let expr_name = projection_exprs.iter().map(|p| p.alias.clone()).collect();
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Projection(Box::new(
@@ -602,16 +616,19 @@ impl ProjectionExec {
             protobuf::physical_plan_node::PhysicalPlanType::Projection,
             "ProjectionExec",
         );
-        let input = ctx.decode_required_child(
-            projection.input.as_deref(),
-            "ProjectionExec",
-            "input",
-        )?;
+        // Destructure exhaustively so that a new field on `ProjectionExecNode`
+        // is a compile error here rather than a silently dropped field.
+        let protobuf::ProjectionExecNode {
+            input,
+            expr,
+            expr_name,
+        } = &**projection;
+        let input =
+            ctx.decode_required_child(input.as_deref(), "ProjectionExec", "input")?;
         let input_schema = input.schema();
-        let exprs = projection
-            .expr
+        let exprs = expr
             .iter()
-            .zip(projection.expr_name.iter())
+            .zip(expr_name.iter())
             .map(|(expr, name)| {
                 Ok(ProjectionExpr {
                     expr: ctx.decode_expr(expr, input_schema.as_ref())?,
