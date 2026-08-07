@@ -863,14 +863,6 @@ impl HashJoinExec {
             return false;
         }
 
-        // Bounds and membership filters derived from the build side do not
-        // account for null-equal matching: a probe-side NULL key evaluates
-        // such predicates to NULL and would be pruned, even though it can
-        // match a build-side NULL when nulls compare equal.
-        if self.null_equality == NullEquality::NullEqualsNull {
-            return false;
-        }
-
         // A null-aware anti join emits a build-side NULL only when the probe
         // is truly empty. The pushed filter can empty the probe by pruning
         // every row, which would surface that NULL wrongly. A NOT NULL build
@@ -1424,6 +1416,7 @@ impl ExecutionPlan for HashJoinExec {
                             filter,
                             on_right,
                             repartition_random_state,
+                            self.null_equality,
                             self.null_aware,
                         ))
                     })))
@@ -6956,7 +6949,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dynamic_filter_pushdown_rejects_null_equal_join() -> Result<()> {
+    fn test_dynamic_filter_pushdown_allowed_for_null_equal_join() -> Result<()> {
         let (_, _, on) = build_schema_and_on()?;
         let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![1]));
         let right = build_table(("a2", &vec![1]), ("b1", &vec![1]), ("c2", &vec![1]));
@@ -6979,7 +6972,9 @@ mod tests {
             false,
         )?;
 
-        assert!(!join.allow_join_dynamic_filter_pushdown(session_config.options()));
+        // Null-equal joins keep dynamic filter pushdown: the pushed predicate carries an
+        // `IS NULL` disjunct so a probe-side NULL still reaches the join.
+        assert!(join.allow_join_dynamic_filter_pushdown(session_config.options()));
 
         Ok(())
     }
