@@ -106,6 +106,10 @@ impl AsyncFuncExec {
         ))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `AsyncFuncExec` serializes itself via `AsyncFuncExec::try_to_proto`, which reads the field directly. There is no replacement; please open an issue if you have a use case for it."
+    )]
     pub fn async_exprs(&self) -> &[Arc<AsyncFuncExpr>] {
         &self.async_exprs
     }
