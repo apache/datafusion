@@ -1050,14 +1050,21 @@ SELECT nej_build.id, nej_probe.id FROM nej_build JOIN nej_probe ON nej_build.id 
 11 11
 NULL NULL
 
-# The probe side now carries a DynamicFilter for a null-equal join (widened with IS NULL at runtime)
+# The populated filter shows the final shape: an IS NULL disjunct ahead of the
+# bounds and membership checks, keeping the probe NULL alive for the join.
+statement ok
+set datafusion.explain.analyze_categories = 'rows';
+
 query TT
-EXPLAIN SELECT nej_build.id, nej_probe.id FROM nej_build JOIN nej_probe ON nej_build.id IS NOT DISTINCT FROM nej_probe.id
+EXPLAIN ANALYZE SELECT nej_build.id, nej_probe.id FROM nej_build JOIN nej_probe ON nej_build.id IS NOT DISTINCT FROM nej_probe.id
 ----
-physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], NullsEqual: true
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/nej_build.parquet]]}, projection=[id], file_type=parquet
-03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/nej_probe.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+Plan with Metrics
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], NullsEqual: true, metrics=[output_rows=2, output_batches=1, array_map_created_count=0, build_input_batches=1, build_input_rows=2, input_batches=1, input_rows=2, avg_fanout=100% (2/2), probe_hit_rate=100% (2/2)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/nej_build.parquet]]}, projection=[id], file_type=parquet, metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=0, pushdown_rows_pruned=0, predicate_cache_inner_records=0, predicate_cache_records=0, scan_efficiency_ratio=12.92% (65/503)]
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/nej_probe.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ id@0 IS NULL OR id@0 >= 11 AND id@0 <= 11 AND id@0 IN (SET) ([11, NULL]) ], dynamic_rg_pruning=eligible, pruning_predicate=id_null_count@0 > 0 OR id_null_count@0 != row_count@2 AND id_max@1 >= 11 AND id_null_count@0 != row_count@2 AND id_min@3 <= 11 AND (id_null_count@0 != row_count@2 AND id_min@3 <= 11 AND 11 <= id_max@1 OR id_null_count@0 != row_count@2 AND id_min@3 <= NULL AND NULL <= id_max@1), required_guarantees=[], metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=1 total → 1 matched, page_index_rows_pruned=3 total → 3 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=2, pushdown_rows_pruned=1, predicate_cache_inner_records=3, predicate_cache_records=3, scan_efficiency_ratio=14.45% (74/512)]
+
+statement ok
+reset datafusion.explain.analyze_categories;
 
 statement ok
 drop table nej_build;
