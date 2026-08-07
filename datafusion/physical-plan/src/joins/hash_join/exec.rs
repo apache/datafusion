@@ -1852,6 +1852,7 @@ impl ExecutionPlan for HashJoinExec {
                         },
                         null_aware: self.null_aware,
                         dynamic_filter,
+                        fetch: self.fetch.map(|f| f as u64),
                     },
                 )),
             ),
@@ -1866,7 +1867,7 @@ impl HashJoinExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        use datafusion_common::internal_datafusion_err;
+        use datafusion_common::{internal_datafusion_err, plan_datafusion_err};
         use datafusion_proto_models::protobuf;
         use std::any::Any;
 
@@ -1943,17 +1944,35 @@ impl HashJoinExec {
             indices => Some(indices.iter().map(|i| *i as usize).collect()),
         };
 
-        let mut hash_join = HashJoinExec::try_new(
-            left,
-            right,
-            on,
-            filter,
-            &join_type,
-            projection,
-            partition_mode,
-            null_equality,
-            hashjoin.null_aware,
-        )?;
+        // Restore the row limit that `limit_pushdown` may have pushed into the
+        // join. The field is presence-tracked, so a message written before it
+        // existed decodes to `None` (no limit) rather than to `Some(0)`.
+        //
+        // The conversion is checked, not `as usize`: `fetch` is a `u64` on the
+        // wire but a `usize` in the plan, and on a 32-bit target `as usize`
+        // truncates. A fetch of `1 << 32` would become `0` -- not merely a
+        // wrong limit but the worst one, silently turning the query into an
+        // empty result. Report the out-of-range value instead. Please do not
+        // "simplify" this back to `as usize`.
+        let fetch = hashjoin
+            .fetch
+            .map(|f| {
+                usize::try_from(f).map_err(|_| {
+                    plan_datafusion_err!(
+                        "HashJoinExec: fetch value {f} cannot be represented as usize on this target"
+                    )
+                })
+            })
+            .transpose()?;
+
+        let mut hash_join = HashJoinExecBuilder::new(left, right, on, join_type)
+            .with_filter(filter)
+            .with_projection(projection)
+            .with_partition_mode(partition_mode)
+            .with_null_equality(null_equality)
+            .with_null_aware(hashjoin.null_aware)
+            .with_fetch(fetch)
+            .build()?;
 
         if let Some(dynamic_filter_proto) = &hashjoin.dynamic_filter {
             // The dynamic filter is a `DynamicFilterPhysicalExpr` over the probe
