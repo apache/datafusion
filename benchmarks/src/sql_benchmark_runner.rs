@@ -42,6 +42,8 @@ pub struct BenchmarkFilter {
 pub struct SqlRunConfig {
     pub common: CommonOpt,
     pub filter: BenchmarkFilter,
+    pub replacements: HashMap<String, String>,
+    pub query_filename: Option<String>,
     pub persist_results: bool,
     pub validate_results: bool,
     pub output: Option<PathBuf>,
@@ -55,10 +57,12 @@ pub fn run_criterion_benchmarks_impl(
 ) -> Result<()> {
     let rt = make_tokio_runtime()?;
     let listing_ctx = make_ctx(&config.common)?;
-    let all_benchmarks = rt.block_on(load_benchmark_definitions(
+    let all_benchmarks = rt.block_on(load_benchmark_definitions_for_query(
         &config.filter,
         &listing_ctx,
         benchmark_dir,
+        &config.replacements,
+        config.query_filename.as_deref(),
     ))?;
     let selected = filter_benchmarks(&config.filter, all_benchmarks.clone());
 
@@ -134,6 +138,23 @@ pub fn default_sql_benchmark_directory() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sql_benchmarks")
 }
 
+/// Replacements used by the Criterion SQL benchmark harness.
+pub fn default_criterion_replacements() -> HashMap<String, String> {
+    criterion_replacements(std::env::var("DATA_DIR").ok())
+}
+
+fn criterion_replacements(data_dir: Option<String>) -> HashMap<String, String> {
+    HashMap::from([(
+        "data_dir".to_string(),
+        data_dir.unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("data")
+                .to_string_lossy()
+                .into_owned()
+        }),
+    )])
+}
+
 fn make_tokio_runtime() -> Result<Runtime> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -163,11 +184,41 @@ pub async fn load_benchmark_definitions(
     filter: &BenchmarkFilter,
     ctx: &SessionContext,
     benchmark_dir: &Path,
+    replacements: &HashMap<String, String>,
+) -> Result<BTreeMap<String, Vec<SqlBenchmark>>> {
+    load_benchmark_definitions_for_query(filter, ctx, benchmark_dir, replacements, None)
+        .await
+}
+
+/// Loads benchmark definitions, optionally limiting discovery to one filename.
+pub async fn load_benchmark_definitions_for_query(
+    filter: &BenchmarkFilter,
+    ctx: &SessionContext,
+    benchmark_dir: &Path,
+    replacements: &HashMap<String, String>,
+    query_filename: Option<&str>,
 ) -> Result<BTreeMap<String, Vec<SqlBenchmark>>> {
     let mut benches = BTreeMap::new();
-    let replacements = benchmark_replacements(filter);
+    let mut replacements = replacements.clone();
+    let selected_suite_dir = filter
+        .name
+        .as_ref()
+        .map(|name| benchmark_dir.join(name.to_ascii_lowercase()))
+        .filter(|path| path.is_dir());
+    let discovery_dir = selected_suite_dir.as_deref().unwrap_or(benchmark_dir);
+    if let Some(subgroup) = &filter.subgroup {
+        replacements.insert("bench_subgroup".to_string(), subgroup.to_string());
+    }
 
-    for path in discover_benchmark_paths(benchmark_dir)? {
+    for path in discover_benchmark_paths(discovery_dir)?
+        .into_iter()
+        .filter(|path| {
+            query_filename.is_none_or(|filename| {
+                path.file_name()
+                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(filename))
+            })
+        })
+    {
         let benchmark = SqlBenchmark::new_with_replacements(
             ctx,
             &path,
@@ -184,25 +235,6 @@ pub async fn load_benchmark_definitions(
     sort_benchmarks(&mut benches);
 
     Ok(benches)
-}
-
-/// Builds template replacements from CLI values that also appear in benchmark files.
-fn benchmark_replacements(filter: &BenchmarkFilter) -> HashMap<String, String> {
-    let mut replacements = HashMap::new();
-    let data_dir = std::env::var("DATA_DIR").unwrap_or_else(|_| {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("data")
-            .to_string_lossy()
-            .into_owned()
-    });
-
-    replacements.insert("data_dir".to_string(), data_dir);
-
-    if let Some(subgroup) = &filter.subgroup {
-        replacements.insert("bench_subgroup".to_string(), subgroup.to_string());
-    }
-
-    replacements
 }
 
 pub fn sort_benchmarks(benchmarks: &mut BTreeMap<String, Vec<SqlBenchmark>>) {
@@ -558,6 +590,155 @@ mod tests {
         fs::write(&path, contents).unwrap();
 
         path
+    }
+
+    #[tokio::test]
+    async fn caller_replacements_reach_parser() {
+        let temp = tempfile::tempdir().unwrap();
+        write_benchmark(
+            temp.path(),
+            "alpha/benchmarks/q01.benchmark",
+            "name Q01\n\nload\nSELECT '${ALPHA_FORMAT}'\n\nrun\nSELECT 1\n",
+        );
+        let replacements =
+            HashMap::from([("alpha_format".to_string(), "csv".to_string())]);
+
+        let result = load_benchmark_definitions(
+            &BenchmarkFilter {
+                name: Some("alpha".to_string()),
+                subgroup: None,
+                query: Some("1".to_string()),
+            },
+            &SessionContext::new(),
+            temp.path(),
+            &replacements,
+        )
+        .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn query_filename_filters_paths_before_parsing() {
+        let temp = tempfile::tempdir().unwrap();
+        write_benchmark(
+            temp.path(),
+            "alpha/benchmarks/q07.benchmark",
+            "name Q07\n\nrun\nSELECT 7\n",
+        );
+        write_benchmark(
+            temp.path(),
+            "alpha/benchmarks/q08.benchmark",
+            "this is not a benchmark definition",
+        );
+        write_benchmark(
+            temp.path(),
+            "beta/benchmarks/q07.benchmark",
+            "this is not a benchmark definition",
+        );
+
+        let benches = load_benchmark_definitions_for_query(
+            &BenchmarkFilter {
+                name: Some("alpha".to_string()),
+                subgroup: None,
+                query: Some("7".to_string()),
+            },
+            &SessionContext::new(),
+            temp.path(),
+            &HashMap::new(),
+            Some("q07.benchmark"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(benches["alpha"].len(), 1);
+        assert_eq!(benches["alpha"][0].name(), "Q07");
+    }
+
+    #[test]
+    fn criterion_replacements_use_benchmarks_data_directory() {
+        let expected = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("data")
+            .to_string_lossy()
+            .into_owned();
+
+        assert_eq!(criterion_replacements(None)["data_dir"], expected);
+    }
+
+    #[test]
+    fn criterion_replacements_use_explicit_data_directory() {
+        let replacements = criterion_replacements(Some("/custom/data".to_string()));
+
+        assert_eq!(replacements["data_dir"], "/custom/data");
+    }
+
+    #[tokio::test]
+    async fn query_filename_keeps_matches_in_multiple_subgroups() {
+        let temp = tempfile::tempdir().unwrap();
+        for subgroup in ["aggregate", "window"] {
+            write_benchmark(
+                temp.path(),
+                &format!("alpha/benchmarks/{subgroup}/q03.benchmark"),
+                &format!("name Q03\nsubgroup {subgroup}\n\nrun\nSELECT 3\n"),
+            );
+        }
+
+        let filter = BenchmarkFilter {
+            name: Some("alpha".to_string()),
+            subgroup: None,
+            query: Some("3".to_string()),
+        };
+        let benches = load_benchmark_definitions_for_query(
+            &filter,
+            &SessionContext::new(),
+            temp.path(),
+            &HashMap::new(),
+            Some("q03.benchmark"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(filter_benchmarks(&filter, benches)["alpha"].len(), 2);
+
+        let filter = BenchmarkFilter {
+            subgroup: Some("window".to_string()),
+            ..filter
+        };
+        let benches = load_benchmark_definitions_for_query(
+            &filter,
+            &SessionContext::new(),
+            temp.path(),
+            &HashMap::new(),
+            Some("q03.benchmark"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(filter_benchmarks(&filter, benches)["alpha"].len(), 1);
+    }
+
+    #[tokio::test]
+    async fn query_filename_accepts_alphanumeric_pattern() {
+        let temp = tempfile::tempdir().unwrap();
+        write_benchmark(
+            temp.path(),
+            "imdb/benchmarks/01a.benchmark",
+            "name Q01a\n\nrun\nSELECT 1\n",
+        );
+
+        let benches = load_benchmark_definitions_for_query(
+            &BenchmarkFilter {
+                name: Some("imdb".to_string()),
+                subgroup: None,
+                query: Some("1a".to_string()),
+            },
+            &SessionContext::new(),
+            temp.path(),
+            &HashMap::new(),
+            Some("01a.benchmark"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(benches["imdb"][0].name(), "Q01a");
     }
 
     #[test]
