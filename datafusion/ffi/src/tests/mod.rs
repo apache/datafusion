@@ -43,6 +43,8 @@ use crate::execution_plan::FFI_ExecutionPlan;
 use crate::execution_plan::tests::EmptyExec;
 use crate::physical_optimizer::FFI_PhysicalOptimizerRule;
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::proto::physical_extension_codec::FFI_PhysicalExtensionCodec;
+use crate::query_planner::FFI_QueryPlanner;
 use crate::table_provider::FFI_TableProvider;
 use crate::table_provider_factory::FFI_TableProviderFactory;
 use crate::tests::catalog::create_catalog_provider_list;
@@ -50,11 +52,13 @@ use crate::udaf::FFI_AggregateUDF;
 use crate::udf::FFI_ScalarUDF;
 use crate::udtf::FFI_TableFunction;
 use crate::udwf::FFI_WindowUDF;
+use crate::util::FFI_Option;
 
 mod async_provider;
 pub mod catalog;
 pub mod config;
 mod physical_optimizer;
+mod query_planner;
 mod sync_provider;
 mod table_provider_factory;
 mod udf_udaf_udwf;
@@ -116,6 +120,14 @@ pub struct ForeignLibraryModule {
     pub create_physical_optimizer_rule: extern "C" fn() -> FFI_PhysicalOptimizerRule,
 
     pub create_context_aware_optimizer_rule: extern "C" fn() -> FFI_PhysicalOptimizerRule,
+
+    /// Construct a query planner. When `library_a_planner` is provided the
+    /// planner delegates to it, as library C does after library A swaps planners.
+    pub create_query_planner: extern "C" fn(
+        logical_codec: FFI_LogicalExtensionCodec,
+        physical_codec: FFI_PhysicalExtensionCodec,
+        library_a_planner: FFI_Option<FFI_QueryPlanner>,
+    ) -> FFI_QueryPlanner,
 
     pub version: extern "C" fn() -> u64,
 
@@ -269,6 +281,7 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
             physical_optimizer::create_physical_optimizer_rule,
         create_context_aware_optimizer_rule:
             physical_optimizer::create_context_aware_optimizer_rule,
+        create_query_planner: query_planner::create_query_planner,
         version: super::version,
         create_first_value_udaf: create_ffi_first_value_func,
     }
