@@ -5033,6 +5033,77 @@ async fn bitwise_spill_with_filter() -> Result<()> {
     Ok(())
 }
 
+/// A single inner key group spanning several inner batches can spill more
+/// than once under memory pressure. Every spilled slice must still be
+/// evaluated against the outer rows — an earlier spill file must not be
+/// dropped when a later slice of the same group spills.
+#[tokio::test]
+async fn bitwise_multi_spill_inner_key_group() -> Result<()> {
+    // Outer: one row with key 1, c1 = 5.
+    let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![5]));
+
+    // Inner: one key group (b2 = 1) spanning two batches. Only the first
+    // batch satisfies the filter c1 < c2 (5 < 10); the second (5 < 0) does
+    // not, so dropping the first spilled slice flips the semi-join result.
+    let right_batches = vec![
+        build_table_i32(("a2", &vec![10]), ("b2", &vec![1]), ("c2", &vec![10])),
+        build_table_i32(("a2", &vec![20]), ("b2", &vec![1]), ("c2", &vec![0])),
+    ];
+    let right = build_table_from_batches(right_batches);
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+    let filter = build_c1_lt_c2_filter(left.schema().as_ref(), right.schema().as_ref());
+
+    // 100-byte pool: every buffered slice fails its reservation, so each
+    // inner batch of the key group spills separately.
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(100, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(SessionConfig::default().with_batch_size(1))
+            .with_runtime(runtime),
+    );
+
+    let join = SortMergeJoinExec::try_new(
+        left,
+        right,
+        on,
+        Some(filter),
+        LeftSemi,
+        sort_options,
+        NullEquality::NullEqualsNothing,
+    )?;
+    let stream = join.execute(0, task_ctx)?;
+    let batches = common::collect(stream).await?;
+
+    let output_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(
+        output_rows, 1,
+        "left row must match the group's first (spilled) inner slice",
+    );
+
+    let metrics = join.metrics().expect("must have metrics");
+    assert_eq!(
+        metrics.spill_count(),
+        Some(1),
+        "all overflows of one key group must share a single spill file",
+    );
+    assert_eq!(
+        metrics.spilled_rows(),
+        Some(2),
+        "both inner slices of the group must be spilled",
+    );
+    Ok(())
+}
+
 /// Once the inner key group has spilled, an outer key group spanning a batch
 /// boundary must still be evaluated against the spilled inner rows — the
 /// second outer batch's rows must not be treated as having no inner group to
