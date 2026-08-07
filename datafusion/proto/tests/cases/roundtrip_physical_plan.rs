@@ -563,7 +563,14 @@ fn roundtrip_hash_join_fetch() -> Result<()> {
         Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
     )];
 
-    for fetch in [None, Some(7)] {
+    // `usize::MAX` and `u32::MAX as usize` pin the decode-side `u64 -> usize`
+    // conversion: it is a checked `usize::try_from`, and a large fetch must
+    // survive the round trip exactly rather than being truncated or clamped.
+    // Both are representable on every target (on a 32-bit target `usize::MAX`
+    // is simply `u32::MAX`), so this stays portable. The truncating case
+    // itself -- a `u64` fetch above `usize::MAX` -- is only reachable on a
+    // 32-bit target and so is not exercised by this test on a 64-bit host.
+    for fetch in [None, Some(7), Some(u32::MAX as usize), Some(usize::MAX)] {
         let join = HashJoinExec::try_new(
             Arc::new(EmptyExec::new(Arc::clone(&schema_left))),
             Arc::new(EmptyExec::new(Arc::clone(&schema_right))),
