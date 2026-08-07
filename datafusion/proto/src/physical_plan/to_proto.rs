@@ -24,7 +24,7 @@ use datafusion_common::{
     DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
+use datafusion_datasource::file_sink_config::FileSinkConfig;
 use datafusion_datasource::{FileRange, PartitionedFile};
 use datafusion_datasource_csv::file_format::CsvSink;
 use datafusion_datasource_json::file_format::JsonSink;
@@ -518,10 +518,7 @@ impl TryFromProto<&JsonSink> for protobuf::JsonSink {
     type Error = DataFusionError;
 
     fn try_from_proto(value: &JsonSink) -> Result<Self, Self::Error> {
-        Ok(Self {
-            config: Some(protobuf::FileSinkConfig::try_from_proto(value.config())?),
-            writer_options: Some(value.writer_options().try_into()?),
-        })
+        Self::try_from(value)
     }
 }
 
@@ -529,10 +526,7 @@ impl TryFromProto<&CsvSink> for protobuf::CsvSink {
     type Error = DataFusionError;
 
     fn try_from_proto(value: &CsvSink) -> Result<Self, Self::Error> {
-        Ok(Self {
-            config: Some(protobuf::FileSinkConfig::try_from_proto(value.config())?),
-            writer_options: Some(value.writer_options().try_into()?),
-        })
+        Self::try_from(value)
     }
 }
 
@@ -541,10 +535,7 @@ impl TryFromProto<&ParquetSink> for protobuf::ParquetSink {
     type Error = DataFusionError;
 
     fn try_from_proto(value: &ParquetSink) -> Result<Self, Self::Error> {
-        Ok(Self {
-            config: Some(protobuf::FileSinkConfig::try_from_proto(value.config())?),
-            parquet_options: Some(value.parquet_options().try_into()?),
-        })
+        Self::try_from(value)
     }
 }
 

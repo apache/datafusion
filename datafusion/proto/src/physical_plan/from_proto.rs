@@ -57,7 +57,7 @@ use super::{
 };
 use crate::convert::TryFromProto;
 use crate::protobuf::physical_expr_node::ExprType;
-use crate::{convert_required, convert_required_proto, protobuf};
+use crate::{convert_required, protobuf};
 use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 
 /// Parses a physical sort expression from a protobuf.
@@ -586,10 +586,7 @@ impl TryFromProto<&protobuf::JsonSink> for JsonSink {
     type Error = DataFusionError;
 
     fn try_from_proto(value: &protobuf::JsonSink) -> Result<Self, Self::Error> {
-        Ok(Self::new(
-            convert_required_proto!(FileSinkConfig, value.config)?,
-            convert_required!(value.writer_options)?,
-        ))
+        Self::try_from(value)
     }
 }
 
@@ -598,10 +595,7 @@ impl TryFromProto<&protobuf::ParquetSink> for ParquetSink {
     type Error = DataFusionError;
 
     fn try_from_proto(value: &protobuf::ParquetSink) -> Result<Self, Self::Error> {
-        Ok(Self::new(
-            convert_required_proto!(FileSinkConfig, value.config)?,
-            convert_required!(value.parquet_options)?,
-        ))
+        Self::try_from(value)
     }
 }
 
@@ -609,10 +603,7 @@ impl TryFromProto<&protobuf::CsvSink> for CsvSink {
     type Error = DataFusionError;
 
     fn try_from_proto(value: &protobuf::CsvSink) -> Result<Self, Self::Error> {
-        Ok(Self::new(
-            convert_required_proto!(FileSinkConfig, value.config)?,
-            convert_required!(value.writer_options)?,
-        ))
+        Self::try_from(value)
     }
 }
 

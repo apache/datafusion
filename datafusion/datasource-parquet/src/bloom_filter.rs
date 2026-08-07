@@ -249,12 +249,22 @@ mod tests {
     use datafusion_expr::{Expr, col, lit};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-    use datafusion_pruning::PruningPredicate;
+    use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
     use object_store::{ObjectStore, ObjectStoreExt};
     use parquet::arrow::ArrowWriter;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
     use parquet::arrow::async_reader::ParquetObjectReader;
     use parquet::file::properties::{EnabledStatistics, WriterProperties};
+
+    fn build_test_pruning_predicate(
+        expr: Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+        schema: Schema,
+    ) -> PruningPredicate {
+        PruningPredicateBuilder::new()
+            .with_file_schema(Arc::new(schema))
+            .try_build(expr)
+            .unwrap()
+    }
 
     #[tokio::test]
     async fn test_row_group_bloom_filter_pruning_predicate_simple_expr() {
@@ -321,8 +331,7 @@ mod tests {
             false,
         );
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate =
-            PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+        let pruning_predicate = build_test_pruning_predicate(expr, schema);
 
         let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
             file_name,
@@ -439,8 +448,7 @@ mod tests {
                 None,
             ));
             let expr = logical2physical(&expr, &schema);
-            let pruning_predicate =
-                PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+            let pruning_predicate = build_test_pruning_predicate(expr, schema);
 
             let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
                 &format!("decimal128-{precision}.parquet"),
@@ -477,8 +485,7 @@ mod tests {
                 None,
             ));
             let expr = logical2physical(&expr, &schema);
-            let pruning_predicate =
-                PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+            let pruning_predicate = build_test_pruning_predicate(expr, schema);
 
             let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
                 &format!("negative-decimal128-{precision}.parquet"),
@@ -573,8 +580,7 @@ mod tests {
             let data = bytes::Bytes::from(std::fs::read(path).unwrap());
 
             let expr = logical2physical(&expr, &schema);
-            let pruning_predicate =
-                PruningPredicate::try_new(expr, Arc::new(schema)).unwrap();
+            let pruning_predicate = build_test_pruning_predicate(expr, schema);
 
             let pruned_row_groups = test_row_group_bloom_filter_pruning_predicate(
                 &file_name,
