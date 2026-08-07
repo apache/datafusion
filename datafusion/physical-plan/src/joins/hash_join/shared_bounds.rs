@@ -699,11 +699,20 @@ impl SharedBuildAccumulator {
         Ok(())
     }
 
-    /// Wraps a pushdown filter so a null-aware anti join keeps its probe-side NULL rows.
+    /// Wraps a pushdown filter so a null-aware join keeps its probe-side NULL value keys.
     ///
     /// The build-side predicate drops probe rows whose key is NULL, but `NOT IN` three-valued
-    /// logic needs that NULL to reach the join. OR-ing `probe_key IS NULL` preserves the dynamic
-    /// filter's selectivity for non-NULL rows while letting the NULL through.
+    /// logic needs those rows to reach the join. OR-ing `value_key IS NULL` preserves the
+    /// dynamic filter's selectivity for non-NULL rows while letting the NULLs through.
+    ///
+    /// Only `on_right[0]` needs the escape: per the key layout on
+    /// `HashJoinExec::null_aware`, it is the scalar `NOT IN` value key and
+    /// `on_right[1..]` are correlation scope keys. A pruned probe row has a
+    /// non-NULL value key, so it can neither mark a build row UNKNOWN nor
+    /// (being outside the build-key bounds/membership) match one. The other
+    /// UNKNOWN source — build rows with a NULL value key — cannot coexist with
+    /// this filter, because `allow_join_dynamic_filter_pushdown` disables
+    /// pushdown whenever a build key is nullable.
     fn null_aware_filter(
         &self,
         filter_expr: Arc<dyn PhysicalExpr>,
@@ -711,10 +720,9 @@ impl SharedBuildAccumulator {
         if !self.null_aware {
             return filter_expr;
         }
-        debug_assert_eq!(
-            self.on_right.len(),
-            1,
-            "null_aware anti join must have exactly one probe key"
+        debug_assert!(
+            !self.on_right.is_empty(),
+            "null_aware join must have at least one probe key"
         );
         let probe_key_is_null: Arc<dyn PhysicalExpr> =
             Arc::new(IsNullExpr::new(Arc::clone(&self.on_right[0])));
@@ -1072,5 +1080,60 @@ mod tests {
         let (partitions, completed) = partitioned_state(&acc);
         assert!(matches!(partitions[0], PartitionStatus::CanceledUnknown));
         assert_eq!(completed, 1);
+    }
+
+    // Correlated null-aware LeftMark joins have multiple probe keys
+    // (`on_right[0]` = scalar NOT IN value key, `on_right[1..]` = correlation
+    // scope keys). The NULL escape must accept that shape and wrap only the
+    // value key.
+    #[test]
+    fn null_aware_multi_key_filter_escapes_value_key_only() {
+        let on_right: Vec<PhysicalExprRef> = vec![
+            Arc::new(Column::new("value_key", 0)),
+            Arc::new(Column::new("scope_key", 1)),
+        ];
+        let dynamic_filter = test_dynamic_filter(&on_right);
+        let acc = SharedBuildAccumulator {
+            inner: Mutex::new(AccumulatorState {
+                data: AccumulatedBuildData::CollectLeft {
+                    data: PartitionStatus::Pending,
+                    reported_count: 0,
+                    expected_reports: 1,
+                },
+                completion: CompletionState::Pending,
+            }),
+            completion_notify: Notify::new(),
+            dynamic_filter,
+            on_right,
+            repartition_random_state: SeededRandomState::with_seed(1),
+            probe_schema: Arc::new(Schema::new(vec![
+                Field::new("value_key", DataType::Int32, true),
+                Field::new("scope_key", DataType::Int32, false),
+            ])),
+            null_aware: true,
+        };
+
+        let two_key_bounds = PartitionBounds::new(vec![
+            ColumnBounds::new(ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(5))),
+            ColumnBounds::new(ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(20))),
+        ]);
+        acc.build_filter(FinalizeInput::CollectLeft(reported(
+            PushdownStrategy::Empty,
+            two_key_bounds,
+        )))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        let or = binary_expr(&expr);
+        assert_eq!(or.op(), &Operator::Or);
+        let is_null = or
+            .left()
+            .downcast_ref::<IsNullExpr>()
+            .expect("expected IS NULL escape as the left disjunct");
+        let column = is_null
+            .arg()
+            .downcast_ref::<Column>()
+            .expect("expected column under IS NULL");
+        assert_eq!(column.index(), 0, "escape must target the NOT IN value key");
     }
 }
