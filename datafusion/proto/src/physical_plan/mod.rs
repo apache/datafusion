@@ -134,7 +134,7 @@ mod file_scan_config_serde {
         ProjectionExpr as FileProjectionExpr, ProjectionExprs as FileProjectionExprs,
     };
     use datafusion_physical_expr::{
-        LexOrdering, Partitioning, RangePartitioning, SplitPoint,
+        LexOrdering, Partitioning, PhysicalSortExpr, RangePartitioning, SplitPoint,
     };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use object_store::ObjectStore;
