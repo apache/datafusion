@@ -31,7 +31,7 @@ use arrow::{
 use datafusion_common::ScalarValue;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
-use datafusion_pruning::PruningPredicate;
+use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
 
 use log::{debug, trace};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
@@ -144,10 +144,10 @@ impl PagePruningAccessPlanFilter {
         let predicates = split_conjunction(expr)
             .into_iter()
             .filter_map(|predicate| {
-                let pp = match PruningPredicate::try_new(
-                    Arc::clone(predicate),
-                    Arc::clone(&schema),
-                ) {
+                let pp = match PruningPredicateBuilder::new()
+                    .with_file_schema(Arc::clone(&schema))
+                    .try_build(Arc::clone(predicate))
+                {
                     Ok(pp) => pp,
                     Err(e) => {
                         debug!("Ignoring error creating page pruning predicate: {e}");

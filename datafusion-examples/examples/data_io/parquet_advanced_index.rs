@@ -47,7 +47,7 @@ use datafusion::parquet::file::properties::{EnabledStatistics, WriterProperties}
 use datafusion::parquet::schema::types::ColumnPath;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::utils::{Guarantee, LiteralGuarantee};
-use datafusion::physical_optimizer::pruning::PruningPredicate;
+use datafusion::physical_optimizer::pruning::PruningPredicateBuilder;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::prelude::*;
@@ -155,6 +155,7 @@ use url::Url;
 /// ```
 ///
 /// [`ListingTable`]: datafusion::datasource::listing::ListingTable
+/// [`PruningPredicate`]: datafusion::physical_optimizer::pruning::PruningPredicate
 /// [Page Index](https://github.com/apache/parquet-format/blob/master/PageIndex.md)
 pub async fn parquet_advanced_index() -> Result<()> {
     // the object store is used to read the parquet files (in this case, it is
@@ -300,8 +301,9 @@ impl IndexTableProvider {
         // In this example, we use the PruningPredicate's literal guarantees to
         // analyze the predicate. In a real system, using
         // `PruningPredicate::prune` would likely be easier to do.
-        let pruning_predicate =
-            PruningPredicate::try_new(Arc::clone(predicate), self.schema())?;
+        let pruning_predicate = PruningPredicateBuilder::new()
+            .with_file_schema(self.schema())
+            .try_build(Arc::clone(predicate))?;
 
         // The PruningPredicate's guarantees must all be satisfied in order for
         // the predicate to possibly evaluate to true.

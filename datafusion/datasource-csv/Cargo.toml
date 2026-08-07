@@ -30,6 +30,13 @@ version.workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
+[features]
+proto = [
+    "dep:datafusion-proto-models",
+    "datafusion-datasource/proto",
+    "datafusion-physical-plan/proto",
+]
+
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
@@ -41,6 +48,7 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+datafusion-proto-models = { workspace = true, optional = true }
 datafusion-session = { workspace = true }
 futures = { workspace = true }
 object_store = { workspace = true }

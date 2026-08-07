@@ -37,7 +37,8 @@ use arrow::datatypes::{
     BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type,
     DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
     DurationSecondType, Field, Float16Type, Float32Type, Float64Type, Int8Type,
-    Int16Type, Int32Type, Int64Type, Schema, SchemaRef, StringViewType,
+    Int16Type, Int32Type, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType,
+    IntervalUnit, IntervalYearMonthType, Schema, SchemaRef, StringViewType,
     Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
     TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
@@ -967,6 +968,7 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::Time64(TimeUnit::Nanosecond)
             | DataType::Timestamp(_, _)
             | DataType::Duration(_)
+            | DataType::Interval(_)
             | DataType::Utf8View
             | DataType::BinaryView
             | DataType::Boolean
@@ -1061,6 +1063,19 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
             }
             TimeUnit::Nanosecond => {
                 instantiate_primitive!(v, nullable, DurationNanosecondType, data_type)
+            }
+        },
+        // `IntervalUnit` has exactly three variants, so this match is exhaustive
+        // with no fallback arm (unlike Time32 / Time64).
+        DataType::Interval(u) => match u {
+            IntervalUnit::YearMonth => {
+                instantiate_primitive!(v, nullable, IntervalYearMonthType, data_type)
+            }
+            IntervalUnit::DayTime => {
+                instantiate_primitive!(v, nullable, IntervalDayTimeType, data_type)
+            }
+            IntervalUnit::MonthDayNano => {
+                instantiate_primitive!(v, nullable, IntervalMonthDayNanoType, data_type)
             }
         },
         DataType::Decimal128(_, _) => {
@@ -1301,7 +1316,7 @@ mod tests {
 
     use arrow::array::{
         Array, ArrayRef, DurationMicrosecondArray, Float16Array, Int32Array, Int64Array,
-        RecordBatch, StringArray, StringViewArray,
+        PrimitiveArray, RecordBatch, StringArray, StringViewArray,
     };
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::{compute::concat_batches, util::pretty::pretty_format_batches};
@@ -1606,6 +1621,9 @@ mod tests {
             DataType::Duration(arrow::datatypes::TimeUnit::Millisecond),
             DataType::Duration(arrow::datatypes::TimeUnit::Microsecond),
             DataType::Duration(arrow::datatypes::TimeUnit::Nanosecond),
+            DataType::Interval(arrow::datatypes::IntervalUnit::YearMonth),
+            DataType::Interval(arrow::datatypes::IntervalUnit::DayTime),
+            DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
         ];
 
         for dt in &supported_cases {
@@ -1756,6 +1774,65 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .expect("emitted column should be an Int32Array");
         assert_eq!(ids.values().to_vec(), vec![3, 3, 4, 3, 3]);
+    }
+
+    // `(Interval, Int32)` keys for each of the three interval units: null keys
+    // dedup, the Int32 key splits equal intervals, and emit gives back Interval.
+    #[test]
+    fn test_group_values_column_interval() {
+        use arrow::datatypes::{
+            ArrowPrimitiveType, IntervalDayTime, IntervalDayTimeType,
+            IntervalMonthDayNano, IntervalMonthDayNanoType, IntervalUnit,
+            IntervalYearMonthType,
+        };
+
+        fn check<T: ArrowPrimitiveType>(unit: IntervalUnit, value: T::Native) {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("i", DataType::Interval(unit), true),
+                Field::new("n", DataType::Int32, true),
+            ]));
+            assert!(supported_schema(&schema), "{unit:?} schema not supported");
+            let mut group_values =
+                GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+
+            let i: ArrayRef = Arc::new(PrimitiveArray::<T>::from_iter([
+                Some(value),
+                None,
+                Some(value),
+                None,
+                Some(value),
+            ]));
+            let n: ArrayRef = Arc::new(Int32Array::from(vec![3, 3, 3, 3, 4]));
+            let mut groups = Vec::new();
+            group_values.intern(&[i, n], &mut groups).unwrap();
+            assert_eq!(groups, vec![0, 1, 0, 1, 2], "{unit:?}");
+
+            let emitted = group_values.emit(EmitTo::All).unwrap();
+            assert_eq!(emitted.len(), 2);
+            // The emitted key keeps its Interval type, not the bare native.
+            assert_eq!(emitted[0].data_type(), &DataType::Interval(unit));
+            let actual = emitted[0]
+                .as_any()
+                .downcast_ref::<PrimitiveArray<T>>()
+                .unwrap_or_else(|| panic!("emitted column should be a {unit:?} array"));
+            // Three groups in first-seen order: value, null, value (n=4).
+            assert_eq!(actual.len(), 3, "{unit:?}");
+            assert_eq!(actual.value(0), value, "{unit:?}");
+            assert!(actual.is_null(1), "{unit:?}");
+            assert_eq!(actual.value(2), value, "{unit:?}");
+            let ids = emitted[1]
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("emitted column should be an Int32Array");
+            assert_eq!(ids.values().to_vec(), vec![3, 3, 4], "{unit:?}");
+        }
+
+        check::<IntervalYearMonthType>(IntervalUnit::YearMonth, 13);
+        check::<IntervalDayTimeType>(IntervalUnit::DayTime, IntervalDayTime::new(1, 500));
+        check::<IntervalMonthDayNanoType>(
+            IntervalUnit::MonthDayNano,
+            IntervalMonthDayNano::new(1, 0, 0),
+        );
     }
 
     #[test]
