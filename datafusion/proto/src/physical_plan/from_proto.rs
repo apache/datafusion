@@ -28,7 +28,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::FileSinkConfig;
-use datafusion_datasource::{FileRange, ListingTableUrl, PartitionedFile, TableSchema};
+use datafusion_datasource::{FileRange, PartitionedFile, TableSchema};
 use datafusion_datasource_csv::file_format::CsvSink;
 use datafusion_datasource_json::file_format::JsonSink;
 #[cfg(feature = "parquet")]
@@ -36,7 +36,6 @@ use datafusion_datasource_parquet::file_format::ParquetSink;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::WindowFunctionDefinition;
-use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
@@ -621,53 +620,7 @@ impl TryFromProto<&protobuf::FileSinkConfig> for FileSinkConfig {
     type Error = DataFusionError;
 
     fn try_from_proto(conf: &protobuf::FileSinkConfig) -> Result<Self, Self::Error> {
-        let file_group = FileGroup::new(
-            conf.file_groups
-                .iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>>>()?,
-        );
-        let table_paths = conf
-            .table_paths
-            .iter()
-            .map(ListingTableUrl::parse)
-            .collect::<Result<Vec<_>>>()?;
-        let table_partition_cols = conf
-            .table_partition_cols
-            .iter()
-            .map(|protobuf::PartitionColumn { name, arrow_type }| {
-                let data_type = convert_required!(arrow_type)?;
-                Ok((name.clone(), data_type))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let insert_op = match conf.insert_op() {
-            protobuf::InsertOp::Append => InsertOp::Append,
-            protobuf::InsertOp::Overwrite => InsertOp::Overwrite,
-            protobuf::InsertOp::Replace => InsertOp::Replace,
-        };
-        let file_output_mode = match conf.file_output_mode() {
-            protobuf::FileOutputMode::Automatic => {
-                datafusion_datasource::file_sink_config::FileOutputMode::Automatic
-            }
-            protobuf::FileOutputMode::SingleFile => {
-                datafusion_datasource::file_sink_config::FileOutputMode::SingleFile
-            }
-            protobuf::FileOutputMode::Directory => {
-                datafusion_datasource::file_sink_config::FileOutputMode::Directory
-            }
-        };
-        Ok(Self {
-            original_url: String::default(),
-            object_store_url: ObjectStoreUrl::parse(&conf.object_store_url)?,
-            file_group,
-            table_paths,
-            output_schema: Arc::new(convert_required!(conf.output_schema)?),
-            table_partition_cols,
-            insert_op,
-            keep_partition_by_columns: conf.keep_partition_by_columns,
-            file_extension: conf.file_extension.clone(),
-            file_output_mode,
-        })
+        conf.try_into()
     }
 }
 
