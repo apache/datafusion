@@ -34,7 +34,11 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use datafusion_catalog::memory::DataSourceExec;
-use datafusion_common::{JoinType, config::ConfigOptions, tree_node::TreeNodeRecursion};
+use datafusion_common::{
+    JoinType,
+    config::ConfigOptions,
+    tree_node::{TreeNode, TreeNodeRecursion},
+};
 use datafusion_datasource::{
     PartitionedFile, file_groups::FileGroup, file_scan_config::FileScanConfigBuilder,
 };
@@ -2901,19 +2905,30 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
     );
 }
 
-// Not portable to sqllogictest: asserts on `HashJoinExec::dynamic_filter_for_test().is_used()`
-// which is a debug-only API. The observable behavior (probe-side scan
-// receiving the dynamic filter when the data source supports it) is
-// already covered by the simpler CollectLeft port in push_down_filter_parquet.slt;
-// the with_support(false) branch has no SQL analog (parquet always supports
-// pushdown).
-#[tokio::test]
-async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+// Not portable to sqllogictest: verifies whether the optimized probe-side plan
+// retains the HashJoinExec's dynamic filter expression. The with_support(false)
+// branch has no SQL analog because parquet supports filter pushdown.
+#[test]
+fn test_hashjoin_dynamic_filter_pushdown_is_used() {
+    fn contains_expression_id(plan: &Arc<dyn ExecutionPlan>, expression_id: u64) -> bool {
+        let mut found = false;
+        plan.apply(|node| {
+            node.apply_expressions(&mut |root| {
+                root.apply(|expr| {
+                    if expr.expression_id() == Some(expression_id) {
+                        found = true;
+                        Ok(TreeNodeRecursion::Stop)
+                    } else {
+                        Ok(TreeNodeRecursion::Continue)
+                    }
+                })
+            })
+        })
+        .unwrap();
+        found
+    }
 
-    // Test both cases: probe side with and without filter pushdown support
-    for (probe_supports_pushdown, expected_is_used) in [(false, false), (true, true)] {
+    for (probe_supports_pushdown, expected_consumer) in [(false, false), (true, true)] {
         let build_side_schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Utf8, false),
             Field::new("b", DataType::Utf8, false),
@@ -2966,31 +2981,25 @@ async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
             .unwrap(),
         ) as Arc<dyn ExecutionPlan>;
 
-        // Apply filter pushdown optimization
         let mut config = ConfigOptions::default();
         config.execution.parquet.pushdown_filters = true;
         config.optimizer.enable_dynamic_filter_pushdown = true;
         let plan = FilterPushdown::new_post_optimization()
             .optimize(plan, &config)
             .unwrap();
-
-        // Get the HashJoinExec to check the dynamic filter
         let hash_join = plan
             .downcast_ref::<HashJoinExec>()
             .expect("Plan should be HashJoinExec");
-
-        // Verify that a dynamic filter was created
-        let dynamic_filter = hash_join
+        let expression_id = hash_join
             .dynamic_filter_expr()
-            .expect("Dynamic filter should be created");
+            .expect("Dynamic filter should be created")
+            .expression_id()
+            .expect("Dynamic filters always have an expression ID");
 
-        // Verify that is_used() returns the expected value based on probe side support.
-        // When probe_supports_pushdown=false: no consumer holds a reference (is_used=false)
-        // When probe_supports_pushdown=true: probe side holds a reference (is_used=true)
         assert_eq!(
-            dynamic_filter.is_used(),
-            expected_is_used,
-            "is_used() should return {expected_is_used} when probe side support is {probe_supports_pushdown}"
+            contains_expression_id(hash_join.right(), expression_id),
+            expected_consumer,
+            "probe consumer should be {expected_consumer} when pushdown support is {probe_supports_pushdown}"
         );
     }
 }

@@ -940,6 +940,36 @@ where
     Ok(TreeNodeRecursion::Continue)
 }
 
+/// Returns whether `plan` contains a physical expression with `expression_id`.
+///
+/// This traverses both the execution plan and the children of each expression root
+/// reported by [`ExecutionPlan::apply_expressions`].
+pub(crate) fn plan_contains_expression_id(
+    plan: &Arc<dyn ExecutionPlan>,
+    expression_id: u64,
+) -> Result<bool> {
+    let mut found = false;
+    plan.apply(|node| {
+        node.apply_expressions(&mut |root| {
+            root.apply(|expr| {
+                if expr.expression_id() == Some(expression_id) {
+                    found = true;
+                    Ok(TreeNodeRecursion::Stop)
+                } else {
+                    Ok(TreeNodeRecursion::Continue)
+                }
+            })
+        })?;
+
+        Ok(if found {
+            TreeNodeRecursion::Stop
+        } else {
+            TreeNodeRecursion::Continue
+        })
+    })?;
+    Ok(found)
+}
+
 impl dyn ExecutionPlan {
     /// Returns `true` if the plan is of type `T`.
     ///

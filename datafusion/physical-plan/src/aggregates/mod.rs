@@ -156,7 +156,9 @@ use crate::aggregates::{
     partial_reduce_stream::PartialReduceHashAggregateStream,
     single_stream::SingleHashAggregateStream,
 };
-use crate::execution_plan::{CardinalityEffect, EmissionType};
+use crate::execution_plan::{
+    CardinalityEffect, EmissionType, plan_contains_expression_id,
+};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
@@ -176,7 +178,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     Constraint, Constraints, Result, ScalarValue, assert_eq_or_internal_err,
     internal_err, not_impl_err,
@@ -762,32 +764,6 @@ struct AggrDynFilter {
     /// min(a), avg(a), max(b)
     /// And this field stores [PerAccumulatorDynFilter(min(a)), PerAccumulatorDynFilter(min(b))]
     supported_accumulators_info: Vec<PerAccumulatorDynFilter>,
-}
-
-fn plan_contains_expression_id(
-    plan: &Arc<dyn ExecutionPlan>,
-    expression_id: u64,
-) -> Result<bool> {
-    let mut found = false;
-    plan.apply(|node| {
-        node.apply_expressions(&mut |root| {
-            root.apply(|expr| {
-                if expr.expression_id() == Some(expression_id) {
-                    found = true;
-                    Ok(TreeNodeRecursion::Stop)
-                } else {
-                    Ok(TreeNodeRecursion::Continue)
-                }
-            })
-        })?;
-
-        Ok(if found {
-            TreeNodeRecursion::Stop
-        } else {
-            TreeNodeRecursion::Continue
-        })
-    })?;
-    Ok(found)
 }
 
 // ---- Aggregate Dynamic Filter Utility Structs ----

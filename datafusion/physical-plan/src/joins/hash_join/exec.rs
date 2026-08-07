@@ -25,7 +25,7 @@ use std::vec;
 use crate::ExecutionPlanProperties;
 use crate::execution_plan::{
     EmissionType, boundedness_from_children, has_same_children_properties,
-    stub_properties,
+    plan_contains_expression_id, stub_properties,
 };
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
@@ -1392,18 +1392,20 @@ impl ExecutionPlan for HashJoinExec {
              consider using CoalescePartitionsExec or the EnforceDistribution rule"
         );
 
-        // Only enable dynamic filter pushdown if:
-        // - The session config enables dynamic filter pushdown
-        // - A dynamic filter exists
-        // - At least one consumer is holding a reference to it, this avoids expensive filter
-        //   computation when disabled or when no consumer will use it.
-        let enable_dynamic_filter_pushdown = self
+        // Only compute a dynamic filter when the probe subtree contains a consumer.
+        // Searching from `self` would always find the producer expression owned by this join.
+        let enable_dynamic_filter_pushdown = if self
             .allow_join_dynamic_filter_pushdown(context.session_config().options())
-            && self
-                .dynamic_filter
+        {
+            self.dynamic_filter
                 .as_ref()
-                .map(|df| df.filter.is_used())
-                .unwrap_or(false);
+                .and_then(|df| df.filter.expression_id())
+                .map(|id| plan_contains_expression_id(&self.right, id))
+                .transpose()?
+                .unwrap_or(false)
+        } else {
+            false
+        };
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
@@ -2414,6 +2416,7 @@ mod tests {
 
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::execution_plan::Boundedness;
+    use crate::filter::FilterExecBuilder;
     use crate::joins::hash_join::stream::lookup_join_hashmap;
     use crate::test::{TestMemoryExec, assert_join_metrics};
     use crate::{
@@ -2716,6 +2719,8 @@ mod tests {
         mode: PartitionMode,
     ) -> Result<(HashJoinExec, Arc<DynamicFilterPhysicalExpr>)> {
         let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
+        let consumer: Arc<dyn PhysicalExpr> = Arc::clone(&dynamic_filter) as _;
+        let right = Arc::new(FilterExecBuilder::new(consumer, right).build()?);
         let mut join = HashJoinExec::try_new(
             left,
             right,
