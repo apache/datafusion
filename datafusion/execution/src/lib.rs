@@ -27,6 +27,7 @@
 
 //! DataFusion execution configuration and runtime structures
 
+mod async_stream;
 pub mod cache;
 pub mod config;
 pub mod disk_manager;
@@ -38,12 +39,14 @@ pub mod runtime_env;
 pub mod spill_file;
 mod stream;
 mod task;
+
 pub mod registry {
     pub use datafusion_expr::registry::{
         FunctionRegistry, MemoryFunctionRegistry, SerializerRegistry,
     };
 }
 
+pub use async_stream::{Emitter, TryEmitter, async_stream, async_try_stream};
 pub use disk_manager::DiskManager;
 pub use registry::FunctionRegistry;
 pub use spill_file::{SpillFile, SpillWriter, TempFileFactory};

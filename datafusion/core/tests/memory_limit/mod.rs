@@ -62,6 +62,8 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use tokio::fs::File;
 
+use crate::helper::plan_metrics::{plan_spill_count, plan_spilled_bytes};
+
 #[cfg(test)]
 #[ctor::ctor(unsafe)]
 fn init() {
@@ -99,7 +101,8 @@ async fn group_by_row_hash() {
     TestCase::new()
         .with_query("select count(*) from t GROUP BY response_bytes")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  GroupedHashAggregateStream"
+            "Resources exhausted: Additional allocation failed",
+            "for FinalHashAggregateStream[0]",
         ])
         .with_memory_limit(2_000)
         .run()
@@ -112,7 +115,8 @@ async fn group_by_hash() {
         // group by dict column
         .with_query("select count(*) from t GROUP BY service, host, pod, container")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  GroupedHashAggregateStream"
+            "Resources exhausted: Additional allocation failed",
+            "for PartialHashAggregateStream[0]",
         ])
         .with_memory_limit(1_000)
         .run()
@@ -423,7 +427,7 @@ async fn oom_grouped_hash_aggregate() {
         .with_query("SELECT COUNT(*), SUM(request_bytes) FROM t GROUP BY host")
         .with_expected_errors(vec![
             "Failed to allocate additional",
-            "GroupedHashAggregateStream[0] (count(1), sum(t.request_bytes))",
+            "for PartialHashAggregateStream[0]",
         ])
         .with_memory_limit(1_000)
         .run()
@@ -546,8 +550,7 @@ async fn test_external_sort_zero_merge_reservation() {
     let _result = collect(stream).await;
 
     // Ensures the query spilled during execution
-    let metrics = physical_plan.metrics().unwrap();
-    let spill_count = metrics.spill_count().unwrap();
+    let spill_count = plan_spill_count(physical_plan.as_ref());
     assert!(spill_count > 0);
 }
 
@@ -603,9 +606,8 @@ async fn test_sort_skewed_batches_spill() {
 
     // The query must actually spill, otherwise it never reaches the merge path
     // this test is meant to cover.
-    let metrics = physical_plan.metrics().unwrap();
     assert!(
-        metrics.spill_count().unwrap() > 0,
+        plan_spill_count(physical_plan.as_ref()) > 0,
         "expected the sort to spill to disk"
     );
 }
@@ -614,7 +616,7 @@ async fn test_sort_skewed_batches_spill() {
 // ------------------------------------------------------------------
 
 // Create a new `SessionContext` with specified disk limit, memory pool limit, and spill compression codec
-async fn setup_context(
+fn setup_context(
     disk_limit: u64,
     memory_pool_limit: usize,
     spill_compression: SpillCompression,
@@ -655,7 +657,7 @@ async fn setup_context(
 #[tokio::test]
 async fn test_disk_spill_limit_reached() -> Result<()> {
     let spill_compression = SpillCompression::Uncompressed;
-    let ctx = setup_context(1024 * 1024, 1024 * 1024, spill_compression).await?; // 1MB disk limit, 1MB memory limit
+    let ctx = setup_context(1024 * 1024, 1024 * 1024, spill_compression)?; // 1MB disk limit, 1MB memory limit
 
     let df = ctx
         .sql("select * from generate_series(1, 1000000000000) as t1(v1) order by v1 desc")
@@ -683,7 +685,7 @@ async fn test_disk_spill_limit_reached() -> Result<()> {
 async fn test_disk_spill_limit_not_reached() -> Result<()> {
     let disk_spill_limit = 1024 * 1024; // 1MB
     let spill_compression = SpillCompression::Uncompressed;
-    let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression).await?; // 1MB disk limit, 128KB memory limit
+    let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression)?; // 1MB disk limit, 128KB memory limit
 
     let df = ctx
         .sql("select * from generate_series(1, 10000) as t1(v1) order by v1 desc")
@@ -696,8 +698,8 @@ async fn test_disk_spill_limit_not_reached() -> Result<()> {
         .await
         .expect("Query execution failed");
 
-    let spill_count = plan.metrics().unwrap().spill_count().unwrap();
-    let spilled_bytes = plan.metrics().unwrap().spilled_bytes().unwrap();
+    let spill_count = plan_spill_count(plan.as_ref());
+    let spilled_bytes = plan_spilled_bytes(plan.as_ref());
 
     println!("spill count {spill_count}, spill bytes {spilled_bytes}");
     assert!(spill_count > 0);
@@ -719,7 +721,7 @@ async fn test_disk_spill_limit_not_reached() -> Result<()> {
 async fn test_spill_file_compressed_with_zstd() -> Result<()> {
     let disk_spill_limit = 1024 * 1024; // 1MB
     let spill_compression = SpillCompression::Zstd;
-    let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression).await?; // 1MB disk limit, 128KB memory limit, zstd
+    let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression)?; // 1MB disk limit, 128KB memory limit, zstd
 
     let df = ctx
         .sql("select * from generate_series(1, 100000) as t1(v1) order by v1 desc")
@@ -732,8 +734,8 @@ async fn test_spill_file_compressed_with_zstd() -> Result<()> {
         .await
         .expect("Query execution failed");
 
-    let spill_count = plan.metrics().unwrap().spill_count().unwrap();
-    let spilled_bytes = plan.metrics().unwrap().spilled_bytes().unwrap();
+    let spill_count = plan_spill_count(plan.as_ref());
+    let spilled_bytes = plan_spilled_bytes(plan.as_ref());
 
     println!("spill count {spill_count}");
     assert!(spill_count > 0);
@@ -755,7 +757,7 @@ async fn test_spill_file_compressed_with_zstd() -> Result<()> {
 async fn test_spill_file_compressed_with_lz4_frame() -> Result<()> {
     let disk_spill_limit = 1024 * 1024; // 1MB
     let spill_compression = SpillCompression::Lz4Frame;
-    let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression).await?; // 1MB disk limit, 128KB memory limit, lz4_frame
+    let ctx = setup_context(disk_spill_limit, 128 * 1024, spill_compression)?; // 1MB disk limit, 128KB memory limit, lz4_frame
 
     let df = ctx
         .sql("select * from generate_series(1, 100000) as t1(v1) order by v1 desc")
@@ -768,8 +770,8 @@ async fn test_spill_file_compressed_with_lz4_frame() -> Result<()> {
         .await
         .expect("Query execution failed");
 
-    let spill_count = plan.metrics().unwrap().spill_count().unwrap();
-    let spilled_bytes = plan.metrics().unwrap().spilled_bytes().unwrap();
+    let spill_count = plan_spill_count(plan.as_ref());
+    let spilled_bytes = plan_spilled_bytes(plan.as_ref());
 
     println!("spill count {spill_count}");
     assert!(spill_count > 0);

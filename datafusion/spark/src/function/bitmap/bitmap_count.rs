@@ -28,8 +28,8 @@ use arrow::datatypes::{DataType, FieldRef, Int8Type, Int16Type, Int32Type, Int64
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
-    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, EncodingPreservation, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_functions::downcast_arg;
 use datafusion_functions::utils::make_scalar_function;
@@ -49,7 +49,10 @@ impl BitmapCount {
     pub fn new() -> Self {
         Self {
             signature: Signature::coercible(
-                vec![Coercion::new_exact(TypeSignatureClass::Binary)],
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Binary)
+                        .with_encoding_preservation(EncodingPreservation::dictionary()),
+                ],
                 Volatility::Immutable,
             ),
         }

@@ -397,9 +397,9 @@ impl AsyncUpper {
     pub fn new() -> Self {
         Self {
             signature: Signature::new(
-                TypeSignature::Coercible(vec![Coercion::Exact {
-                    desired_type: TypeSignatureClass::Native(logical_string()),
-                }]),
+                TypeSignature::Coercible(vec![Coercion::new_exact(
+                    TypeSignatureClass::Native(logical_string()),
+                )]),
                 Volatility::Volatile,
             ),
         }
@@ -497,9 +497,9 @@ We can now transfer the async UDF into the normal scalar using `into_scalar_udf`
 #     pub fn new() -> Self {
 #         Self {
 #             signature: Signature::new(
-#                 TypeSignature::Coercible(vec![Coercion::Exact {
-#                     desired_type: TypeSignatureClass::Native(logical_string()),
-#                 }]),
+#                 TypeSignature::Coercible(vec![Coercion::new_exact(
+#                     TypeSignatureClass::Native(logical_string()),
+#                 )]),
 #                 Volatility::Volatile,
 #             ),
 #         }

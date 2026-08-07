@@ -173,7 +173,7 @@ fn compact_list<O: OffsetSizeTrait>(
             if values_nulls.is_null(i) {
                 // Null breaks the current batch — flush it
                 if let Some(bs) = batch_start {
-                    mutable.extend(0, bs, i);
+                    mutable.try_extend(0, bs, i)?;
                     batch_start = None;
                 }
             } else if batch_start.is_none() {
@@ -182,7 +182,7 @@ fn compact_list<O: OffsetSizeTrait>(
         }
         // Flush any remaining batch after the loop
         if let Some(bs) = batch_start {
-            mutable.extend(0, bs, end);
+            mutable.try_extend(0, bs, end)?;
         }
 
         offsets.push(offsets[row_index] + O::usize_as(kept));
