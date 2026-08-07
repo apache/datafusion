@@ -1077,13 +1077,17 @@ months are ignored, as in PostgreSQL. The result keeps the input time’s unit
 unit is truncated – so <code class="docutils literal notranslate"><span class="pre">time(s)</span> <span class="pre">+</span> <span class="pre">interval</span> <span class="pre">'1</span> <span class="pre">nanosecond'</span></code> is a no-op.</p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/23279">PR #23279</a> for details.</p>
 </section>
-<section id="scalar-subquery-state-moved-to-an-explicit-physicalplanningcontext">
-<h3>Scalar-subquery state moved to an explicit <code class="docutils literal notranslate"><span class="pre">PhysicalPlanningContext</span></code><a class="headerlink" href="#scalar-subquery-state-moved-to-an-explicit-physicalplanningcontext" title="Link to this heading">#</a></h3>
+<section id="physical-planning-state-moved-to-an-explicit-physicalplanningcontext">
+<h3>Physical-planning state moved to an explicit <code class="docutils literal notranslate"><span class="pre">PhysicalPlanningContext</span></code><a class="headerlink" href="#physical-planning-state-moved-to-an-explicit-physicalplanningcontext" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">subquery_indexes</span></code> and <code class="docutils literal notranslate"><span class="pre">subquery_results</span></code> public fields on
 <code class="docutils literal notranslate"><span class="pre">datafusion_expr::execution_props::ExecutionProps</span></code> have been removed. They were
 added in <code class="docutils literal notranslate"><span class="pre">54.0.0</span></code> as the channel through which the physical planner passed
 uncorrelated scalar-subquery state to functions that create physical
 <code class="docutils literal notranslate"><span class="pre">Arc&lt;dyn</span> <span class="pre">PhysicalExpr&gt;</span></code> values from logical <code class="docutils literal notranslate"><span class="pre">Expr</span></code> values.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">lambda_variable_qualifier</span></code> public field and the
+<code class="docutils literal notranslate"><span class="pre">with_qualified_lambda_variables</span></code> method on <code class="docutils literal notranslate"><span class="pre">ExecutionProps</span></code> have been removed
+for the same reason: they carried the qualifiers of the lambda variables in
+scope while <code class="docutils literal notranslate"><span class="pre">create_physical_expr</span></code> descended into a lambda body.</p>
 <p>That state is now carried by a dedicated
 <code class="docutils literal notranslate"><span class="pre">datafusion_expr::physical_planning_context::PhysicalPlanningContext</span></code> passed explicitly
 through functions and planner traits. Unlike <code class="docutils literal notranslate"><span class="pre">ExecutionProps</span></code>, which applies
@@ -1124,6 +1128,14 @@ subqueries.</p></li>
 parameter and forward it.</p></li>
 <li><p>Code that read or wrote <code class="docutils literal notranslate"><span class="pre">execution_props.subquery_indexes</span></code> /
 <code class="docutils literal notranslate"><span class="pre">execution_props.subquery_results</span></code>: build a <code class="docutils literal notranslate"><span class="pre">PhysicalPlanningContext</span></code> instead.</p></li>
+<li><p>Code that read <code class="docutils literal notranslate"><span class="pre">execution_props.lambda_variable_qualifier</span></code> or called
+<code class="docutils literal notranslate"><span class="pre">ExecutionProps::with_qualified_lambda_variables</span></code>: remove that usage. Callers
+that only plan a <code class="docutils literal notranslate"><span class="pre">HigherOrderFunction</span></code> are not affected –
+<code class="docutils literal notranslate"><span class="pre">create_physical_expr</span></code> populates the lambda qualifiers itself as it descends
+into lambda bodies. Code that needs to read or extend the lambda
+scope should use the equivalents on <code class="docutils literal notranslate"><span class="pre">PhysicalPlanningContext</span></code>:
+<code class="docutils literal notranslate"><span class="pre">PhysicalPlanningContext::lambda_variable_qualifier</span></code> and
+<code class="docutils literal notranslate"><span class="pre">PhysicalPlanningContext::with_qualified_lambda_variables</span></code>.</p></li>
 </ul>
 <p><strong>Migration guide:</strong></p>
 <p>When creating a physical expression outside of physical planning, pass an empty
@@ -1162,7 +1174,8 @@ context:</p>
 <span class="p">}</span>
 </pre></div>
 </div>
-<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/23649">PR #23649</a> for details.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/23649">PR #23649</a> and
+<a class="reference external" href="https://github.com/apache/datafusion/pull/23989">PR #23989</a> for details.</p>
 </section>
 <section id="catalog-planner-and-optimizer-contracts-moved-to-datafusion-session">
 <h3>Catalog, planner, and optimizer contracts moved to <code class="docutils literal notranslate"><span class="pre">datafusion-session</span></code><a class="headerlink" href="#catalog-planner-and-optimizer-contracts-moved-to-datafusion-session" title="Link to this heading">#</a></h3>
@@ -1410,6 +1423,41 @@ subarray and ignored the remaining subarrays. For example:</p>
 <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">4]</span></code>. It now returns a planning error stating that <code class="docutils literal notranslate"><span class="pre">array_distance</span></code> only
 supports one-dimensional arrays.</p>
 </section>
+<section id="parquetobjectreader-parquetobjectwriter-deprecated-upstream">
+<h3><code class="docutils literal notranslate"><span class="pre">ParquetObjectReader</span></code> / <code class="docutils literal notranslate"><span class="pre">ParquetObjectWriter</span></code> deprecated upstream<a class="headerlink" href="#parquetobjectreader-parquetobjectwriter-deprecated-upstream" title="Link to this heading">#</a></h3>
+<p>The <a class="reference external" href="https://crates.io/crates/parquet"><code class="docutils literal notranslate"><span class="pre">parquet</span></code> crate</a> deprecated <a class="reference external" href="https://docs.rs/parquet/59.1.0/parquet/arrow/async_reader/struct.ParquetObjectReader.html"><code class="docutils literal notranslate"><span class="pre">ParquetObjectReader</span></code></a>
+and <a class="reference external" href="https://docs.rs/parquet/59.1.0/parquet/arrow/async_writer/struct.ParquetObjectWriter.html"><code class="docutils literal notranslate"><span class="pre">ParquetObjectWriter</span></code></a> in favor of implementing
+<a class="reference external" href="https://docs.rs/parquet/59.1.0/parquet/arrow/async_reader/trait.AsyncFileReader.html"><code class="docutils literal notranslate"><span class="pre">AsyncFileReader</span></code></a> directly (see the example on the <a class="reference external" href="https://docs.rs/parquet/59.1.0/parquet/arrow/async_reader/trait.AsyncFileReader.html"><code class="docutils literal notranslate"><span class="pre">AsyncFileReader</span></code></a> trait and
+<a class="reference external" href="https://github.com/apache/arrow-rs/blob/main/parquet/examples/object_store.rs"><code class="docutils literal notranslate"><span class="pre">parquet/examples/object_store.rs</span></code></a> in <code class="docutils literal notranslate"><span class="pre">arrow-rs</span></code>) or passing an
+<a class="reference external" href="https://docs.rs/tokio/latest/tokio/io/struct.BufWriter.html"><code class="docutils literal notranslate"><span class="pre">BufWriter</span></code></a> straight to <a class="reference external" href="https://docs.rs/parquet/59.1.0/parquet/arrow/async_writer/struct.AsyncArrowWriter.html"><code class="docutils literal notranslate"><span class="pre">AsyncArrowWriter</span></code></a>.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Custom <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/parquet/trait.ParquetFileReaderFactory.html"><code class="docutils literal notranslate"><span class="pre">ParquetFileReaderFactory</span></code></a> implementations that construct a
+<a class="reference external" href="https://docs.rs/parquet/59.1.0/parquet/arrow/async_reader/struct.ParquetObjectReader.html"><code class="docutils literal notranslate"><span class="pre">ParquetObjectReader</span></code></a> directly and now see a deprecation warning after
+upgrading the <code class="docutils literal notranslate"><span class="pre">parquet</span></code> dependency.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>If your <a class="reference external" href="https://docs.rs/parquet/59.1.0/parquet/arrow/async_reader/trait.AsyncFileReader.html"><code class="docutils literal notranslate"><span class="pre">AsyncFileReader</span></code></a> implementation exists mainly to read from an
+<a class="reference external" href="https://docs.rs/object_store/latest/object_store/trait.ObjectStore.html"><code class="docutils literal notranslate"><span class="pre">ObjectStore</span></code></a> and track metrics, consider using DataFusion’s
+<a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/parquet/struct.ParquetFileReader.html"><code class="docutils literal notranslate"><span class="pre">ParquetFileReader</span></code></a> instead of wrapping a <a class="reference external" href="https://docs.rs/parquet/59.1.0/parquet/arrow/async_reader/struct.ParquetObjectReader.html"><code class="docutils literal notranslate"><span class="pre">ParquetObjectReader</span></code></a>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">inner</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ParquetObjectReader</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">store</span><span class="p">,</span><span class="w"> </span><span class="n">location</span><span class="p">).</span><span class="n">with_file_size</span><span class="p">(</span><span class="n">size</span><span class="p">);</span>
+<span class="nb">Ok</span><span class="p">(</span><span class="nb">Box</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">MyReader</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">inner</span><span class="p">,</span><span class="w"> </span><span class="n">file_metrics</span><span class="p">,</span><span class="w"> </span><span class="n">partitioned_file</span><span class="w"> </span><span class="p">}))</span>
+
+<span class="c1">// After</span>
+<span class="nb">Ok</span><span class="p">(</span><span class="nb">Box</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">ParquetFileReader</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">file_metrics</span><span class="p">,</span>
+<span class="w">    </span><span class="n">store</span><span class="p">,</span>
+<span class="w">    </span><span class="n">metadata_size_hint</span><span class="p">,</span>
+<span class="w">    </span><span class="n">partitioned_file</span><span class="p">,</span>
+<span class="p">}))</span>
+</pre></div>
+</div>
+<p>If you need custom behavior (I/O coalescing, byte caching, a dedicated I/O
+runtime), implement <code class="docutils literal notranslate"><span class="pre">AsyncFileReader</span></code> directly against your <code class="docutils literal notranslate"><span class="pre">ObjectStore</span></code>,
+following the pattern in <a class="reference external" href="https://github.com/apache/arrow-rs/blob/main/parquet/examples/object_store.rs"><code class="docutils literal notranslate"><span class="pre">parquet/examples/object_store.rs</span></code></a></p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/24030">PR #24030</a> for details.</p>
+</section>
 </section>
 </section>
 
@@ -1483,7 +1531,7 @@ supports one-dimensional arrays.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cachedfilemetadata-now-validates-file-schema"><code class="docutils literal notranslate"><span class="pre">CachedFileMetadata</span></code> now validates file schema</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#emptyexecnode-and-placeholderrowexecnode-gained-a-partitions-field"><code class="docutils literal notranslate"><span class="pre">EmptyExecNode</span></code> and <code class="docutils literal notranslate"><span class="pre">PlaceholderRowExecNode</span></code> gained a <code class="docutils literal notranslate"><span class="pre">partitions</span></code> field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#time-interval-now-returns-a-time-instead-of-an-interval"><code class="docutils literal notranslate"><span class="pre">time</span> <span class="pre">±</span> <span class="pre">interval</span></code> now returns a <code class="docutils literal notranslate"><span class="pre">time</span></code> instead of an <code class="docutils literal notranslate"><span class="pre">interval</span></code></a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#scalar-subquery-state-moved-to-an-explicit-physicalplanningcontext">Scalar-subquery state moved to an explicit <code class="docutils literal notranslate"><span class="pre">PhysicalPlanningContext</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-planning-state-moved-to-an-explicit-physicalplanningcontext">Physical-planning state moved to an explicit <code class="docutils literal notranslate"><span class="pre">PhysicalPlanningContext</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#catalog-planner-and-optimizer-contracts-moved-to-datafusion-session">Catalog, planner, and optimizer contracts moved to <code class="docutils literal notranslate"><span class="pre">datafusion-session</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#unused-async-removed-from-several-public-functions">Unused <code class="docutils literal notranslate"><span class="pre">async</span></code> removed from several public functions</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#movingmin-and-movingmax-changed-to-pub-crate"><code class="docutils literal notranslate"><span class="pre">MovingMin</span></code> and <code class="docutils literal notranslate"><span class="pre">MovingMax</span></code> changed to <code class="docutils literal notranslate"><span class="pre">pub(crate)</span></code></a></li>
@@ -1492,6 +1540,7 @@ supports one-dimensional arrays.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#msrv-updated-to-1-94-0"><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.94.0</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cachedparquetfilereader-removed-parquetfilereader-fields-are-now-private"><code class="docutils literal notranslate"><span class="pre">CachedParquetFileReader</span></code> removed; <code class="docutils literal notranslate"><span class="pre">ParquetFileReader</span></code> fields are now private</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#array-distance-scalar-function-now-rejects-multidimensional-arrays"><code class="docutils literal notranslate"><span class="pre">array_distance</span></code> scalar function now rejects multidimensional arrays</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquetobjectreader-parquetobjectwriter-deprecated-upstream"><code class="docutils literal notranslate"><span class="pre">ParquetObjectReader</span></code> / <code class="docutils literal notranslate"><span class="pre">ParquetObjectWriter</span></code> deprecated upstream</a></li>
 </ul>
 </li>
 </ul>
