@@ -355,16 +355,15 @@ async fn run_sort_preserving_merge_peak_memory_with_spilled_input(
     let mut partition_batches: Vec<Vec<RecordBatch>> = Vec::new();
 
     for stream_idx in 0..2usize {
-        // Each stream covers a non-overlapping key range so both are individually
-        // sorted: stream 0 → [0, 1000), stream 1 → [1000, 2000). When
-        // `tied_values` is set, every row of every batch in both streams
-        // instead carries the same sort key, so every comparison between the
-        // two streams is a tie.
+        // When `tied_values` is false, each stream covers a non-overlapping key range so both are
+        // individually sorted:
+        // stream 0 → [[0, 100), [200, 300),...]
+        // stream 1 → [[100, 200), [300, 400), ...]
+        //
+        // When `tied_values` is set, every row of every batch in both streams instead carries the
+        // same sort key, so every comparison between the two streams is a tie.
         let batches: Vec<RecordBatch> = (0..num_batches)
             .map(|b| {
-                // Interleave streams: stream 0 → even slots [0,200,400,...],
-                // stream 1 → odd slots [100,300,500,...] so the merge
-                // alternates between them on every batch.
                 let base = ((b * 2 + stream_idx) * num_rows_per_batch) as i32;
                 let sort_col: Int32Array = if tied_values {
                     std::iter::repeat_n(0, num_rows_per_batch).collect()
