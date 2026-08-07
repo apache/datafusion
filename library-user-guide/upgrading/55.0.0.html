@@ -729,6 +729,21 @@ notified when they do), use the new <code class="docutils literal notranslate"><
 </pre></div>
 </div>
 </section>
+<section id="pruningpredicate-try-new-is-deprecated">
+<h3><code class="docutils literal notranslate"><span class="pre">PruningPredicate::try_new</span></code> is deprecated<a class="headerlink" href="#pruningpredicate-try-new-is-deprecated" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion_pruning::PruningPredicate::try_new</span></code> is deprecated. Use
+<code class="docutils literal notranslate"><span class="pre">PruningPredicateBuilder</span></code> instead. The deprecated constructor remains available
+in DataFusion 55 and preserves its existing behavior.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">predicate</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">PruningPredicate</span><span class="p">::</span><span class="n">try_new</span><span class="p">(</span><span class="n">expr</span><span class="p">,</span><span class="w"> </span><span class="n">schema</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+
+<span class="c1">// After</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">predicate</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">PruningPredicateBuilder</span><span class="p">::</span><span class="n">new</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_file_schema</span><span class="p">(</span><span class="n">schema</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">try_build</span><span class="p">(</span><span class="n">expr</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
 <section id="filepruner-try-new-no-longer-builds-a-pruner-for-static-predicates-without-statistics">
 <h3><code class="docutils literal notranslate"><span class="pre">FilePruner::try_new</span></code> no longer builds a pruner for static predicates without statistics<a class="headerlink" href="#filepruner-try-new-no-longer-builds-a-pruner-for-static-predicates-without-statistics" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">datafusion_pruning::FilePruner::try_new</span></code> now returns <code class="docutils literal notranslate"><span class="pre">None</span></code> when the predicate
@@ -1457,6 +1472,7 @@ supports one-dimensional arrays.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupsaccumulator-merge-batch-no-longer-takes-opt-filter"><code class="docutils literal notranslate"><span class="pre">GroupsAccumulator::merge_batch</span></code> no longer takes <code class="docutils literal notranslate"><span class="pre">opt_filter</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupsaccumulator-convert-to-state-is-now-required"><code class="docutils literal notranslate"><span class="pre">GroupsAccumulator::convert_to_state</span></code> is now required</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#is-dynamic-physical-expr-is-deprecated"><code class="docutils literal notranslate"><span class="pre">is_dynamic_physical_expr</span></code> is deprecated</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pruningpredicate-try-new-is-deprecated"><code class="docutils literal notranslate"><span class="pre">PruningPredicate::try_new</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filepruner-try-new-no-longer-builds-a-pruner-for-static-predicates-without-statistics"><code class="docutils literal notranslate"><span class="pre">FilePruner::try_new</span></code> no longer builds a pruner for static predicates without statistics</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#queryplanner-adds-any-as-a-supertrait"><code class="docutils literal notranslate"><span class="pre">QueryPlanner</span></code> adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionplan-partition-statistics-deprecated-in-favor-of-statistics-from-inputs"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::partition_statistics</span></code> deprecated in favor of <code class="docutils literal notranslate"><span class="pre">statistics_from_inputs</span></code></a></li>
