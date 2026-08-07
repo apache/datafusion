@@ -574,7 +574,17 @@ impl ExecutionPlan for UnionExec {
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
-        let inputs = ctx.encode_children(self.inputs())?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `UnionExec` is a compile error here until it is either serialized or
+        // explicitly documented as not needing to be.
+        let Self {
+            inputs,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+        } = self;
+        let inputs = ctx.encode_children(inputs)?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Union(
@@ -597,8 +607,10 @@ impl UnionExec {
             protobuf::physical_plan_node::PhysicalPlanType::Union,
             "UnionExec",
         );
-        let inputs = union
-            .inputs
+        // Destructure exhaustively so that a new field on `UnionExecNode` is a
+        // compile error here rather than a silently dropped field.
+        let protobuf::UnionExecNode { inputs } = union;
+        let inputs = inputs
             .iter()
             .map(|input| ctx.decode_child(input))
             .collect::<Result<Vec<_>>>()?;
@@ -854,7 +866,17 @@ impl ExecutionPlan for InterleaveExec {
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
-        let inputs = ctx.encode_children(self.inputs())?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `InterleaveExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            inputs,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+        } = self;
+        let inputs = ctx.encode_children(inputs)?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Interleave(
@@ -877,8 +899,10 @@ impl InterleaveExec {
             protobuf::physical_plan_node::PhysicalPlanType::Interleave,
             "InterleaveExec",
         );
-        let inputs = interleave
-            .inputs
+        // Destructure exhaustively so that a new field on `InterleaveExecNode`
+        // is a compile error here rather than a silently dropped field.
+        let protobuf::InterleaveExecNode { inputs } = interleave;
+        let inputs = inputs
             .iter()
             .map(|input| ctx.decode_child(input))
             .collect::<Result<Vec<_>>>()?;
