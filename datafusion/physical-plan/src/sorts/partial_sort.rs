@@ -80,9 +80,9 @@ use log::trace;
 /// Sort execution plan for inputs that are already partially sorted.
 ///
 /// This operator takes input ordered by a prefix of the required ordering, and
-/// produces output ordered by the required ordering. This is useful for
-/// unbounded or large inputs where a [`SortExec`] must buffer all rows before
-/// producing any output.
+/// produces output ordered by the required ordering, emitting rows sooner
+/// (streaming) and using less peak memory than [`SortExec`] which must buffer
+/// all rows before producing any output.
 ///
 /// [`PartialSortExec`] relies on the property that rows with the same sort
 /// prefix are contiguous, so it can sort one prefix group at a time, emitting
@@ -98,13 +98,80 @@ use log::trace;
 /// +---+---+---+                      +---+---+---+
 /// | a | b | c |                      | a | b | c |
 /// +---+---+---+                      +---+---+---+
-/// | 0 | 0 | 3 |  -- same group  -->  | 0 | 0 | 2 |
-/// | 0 | 0 | 2 |                      | 0 | 0 | 3 |
-/// | 0 | 1 | 1 |  -- single row  -->  | 0 | 1 | 1 |
-/// | 0 | 2 | 4 |  -- same group -->   | 0 | 2 | 0 |
+/// | 0 | 0 | 3 |  --  new group  -->  | 0 | 0 | 1 |
+/// | 0 | 0 | 2 |                      | 0 | 0 | 2 |
+/// | 0 | 0 | 1 |                      | 0 | 0 | 3 |
+/// | 0 | 1 | 1 |  --  new group  -->  | 0 | 1 | 1 |
+/// | 0 | 2 | 4 |  --  new group  -->  | 0 | 2 | 0 |
 /// | 0 | 2 | 0 |                      | 0 | 2 | 4 |
-/// | 1 | 0 | 5 |  -- single row  -->  | 1 | 0 | 5 |
+/// | 1 | 0 | 5 |  --  new group  -->  | 1 | 0 | 5 |
 /// +---+---+---+                      +---+---+---+
+/// ```
+///
+/// # Buffering and Emitting Rows
+///
+/// [`PartialSortExec`] buffers rows only until it can *prove* a prefix group
+/// will never be seen again, then sorts and emits buffered rows. A group is
+/// guaranteed to never be seen again once a row with a *different* prefix
+/// value arrives. This relies on the input's existing ordering guarantees.
+///
+/// Using the example from above, rows accumulate in the in-memory buffer in
+/// batches. As long as the `(a, b)` prefix keeps repeating, more rows are
+/// buffered.
+///
+/// ```text
+///            Buffer
+///        +---+---+---+
+///        | a | b | c |
+///        +---+---+---+
+///        | 0 | 0 | 3 |
+///        | 0 | 0 | 2 |
+///        | 0 | 0 | 1 |
+///        +---+---+---+
+/// ```
+///
+/// Once a batch arrives that contains a new `(a, b)` prefix, e.g. `(0, 2)`:
+/// every buffered row for previous prefixes may be emitted:
+///
+/// ```text
+///            Buffer
+///        +---+---+---+
+///        | a | b | c |
+///        +---+---+---+
+///        | 0 | 0 | 3 |
+///        | 0 | 0 | 2 |
+///        | 0 | 0 | 1 |
+///        | 0 | 1 | 1 |  <-- first row of new batch, new prefix
+///        | 0 | 2 | 4 |  <-- new prefix
+///        | 0 | 2 | 0 |
+///        | 1 | 0 | 5 |  <-- last row of new batch, new prefix
+///        +---+---+---+
+/// ```
+///
+/// Once known complete, the buffered rows are sorted by the full `(a, b, c)`
+/// ordering and emitted as a [`RecordBatch`]; Any rows from the most recently
+/// seen prefix remain buffered (as more rows with the same prefix may arrive in
+/// future batches.
+///
+/// ```text
+///          Emitted      <-- fully sorted on (a, b, c)
+///        +---+---+---+
+///        | a | b | c |
+///        +---+---+---+
+///        | 0 | 0 | 1 |   <-- completed group
+///        | 0 | 0 | 2 |
+///        | 0 | 0 | 3 |
+///        | 0 | 2 | 0 |   <-- completed group
+///        | 0 | 2 | 4 |
+///        | 0 | 1 | 1 |   <-- completed group
+///        +---+---+---+
+///
+///            Buffer
+///        +---+---+---+
+///        | a | b | c |
+///        +---+---+---+
+///        | 1 | 0 | 5 |   <-- (possibly) in progress group
+///        +---+---+---+
 /// ```
 ///
 /// [`SortExec`]: crate::sorts::sort::SortExec

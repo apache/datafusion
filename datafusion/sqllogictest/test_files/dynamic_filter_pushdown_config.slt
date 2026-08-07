@@ -457,10 +457,9 @@ ORDER BY l.id LIMIT 2;
 1 left1
 3 left3
 
-# ANTI JOIN with TopK parent: TopK generates a dynamic filter on `id` (join
-# key) that pushes through the LeftAnti join to both the preserved and
-# non-preserved sides. The HashJoin pushes the self-generated filter to the
-# right hand side of the LeftAnti join.
+# ANTI JOIN with TopK parent: the TopK dynamic filter on `id` is pushed only
+# to the preserved output side. Filtering the non-output side can create
+# anti-join output.
 query TT
 EXPLAIN SELECT l.*
 FROM left_parquet l
@@ -479,7 +478,7 @@ physical_plan
 01)SortExec: TopK(fetch=2), expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)], null_aware
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
-04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet
 
 # Correctness check
 query IT
@@ -490,6 +489,40 @@ ORDER BY l.id LIMIT 2;
 ----
 2 left2
 4 left4
+
+# A parent filter must remain when only an anti join's non-output side accepts
+# pushdown; otherwise filtering that side creates incorrect anti-join rows.
+statement ok
+SET datafusion.optimizer.max_passes = 0;
+
+statement ok
+SET datafusion.optimizer.join_reordering = false;
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+query I
+SELECT count(*)
+FROM join_left l LEFT ANTI JOIN right_parquet r USING (id)
+WHERE false;
+----
+0
+
+query I
+SELECT count(*)
+FROM right_parquet r RIGHT ANTI JOIN join_left l USING (id)
+WHERE false;
+----
+0
+
+statement ok
+RESET datafusion.optimizer.max_passes;
+
+statement ok
+RESET datafusion.optimizer.join_reordering;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;
 
 # Test 3: Test independent control
 

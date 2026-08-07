@@ -825,6 +825,105 @@ impl DataSink for CsvSink {
     ) -> Result<u64> {
         FileSink::write_all(self, data, context).await
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        exec: &DataSinkExec,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        use protobuf::physical_plan_node::PhysicalPlanType;
+
+        let input = ctx.encode_child(exec.input())?;
+        let sort_order = exec.encode_sort_order(ctx)?;
+        let sink = protobuf::CsvSink::try_from(self)?;
+        let node = protobuf::CsvSinkExecNode {
+            input: Some(Box::new(input)),
+            sink: Some(sink),
+            sink_schema: Some(exec.schema().as_ref().try_into()?),
+            sort_order,
+        };
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::CsvSink(Box::new(node))),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl TryFrom<&CsvSink> for datafusion_proto_models::protobuf::CsvSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &CsvSink) -> Result<Self> {
+        Ok(Self {
+            config: Some(value.config().try_into()?),
+            writer_options: Some(value.writer_options().try_into()?),
+        })
+    }
+}
+
+#[cfg(feature = "proto")]
+impl TryFrom<&datafusion_proto_models::protobuf::CsvSink> for CsvSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &datafusion_proto_models::protobuf::CsvSink) -> Result<Self> {
+        let config =
+            FileSinkConfig::try_from(value.config.as_ref().ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "CsvSink is missing required field 'config'"
+                )
+            })?)?;
+        let writer_options = value
+            .writer_options
+            .as_ref()
+            .ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "CsvSink is missing required field 'writer_options'"
+                )
+            })?
+            .try_into()?;
+
+        Ok(Self::new(config, writer_options))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl CsvSink {
+    /// Reconstructs a [`DataSinkExec`] containing a `CsvSink` from protobuf.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let sink_node = datafusion_physical_plan::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::CsvSink,
+            "CsvSink",
+        );
+        let input = ctx.decode_required_child(
+            sink_node.input.as_deref(),
+            "CsvSinkExecNode",
+            "input",
+        )?;
+        let proto_sink = sink_node.sink.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "CsvSinkExecNode is missing required field 'sink'"
+            )
+        })?;
+        let data_sink = CsvSink::try_from(proto_sink)?;
+        let sort_order = DataSinkExec::decode_sort_order(
+            sink_node.sort_order.as_ref(),
+            ctx,
+            input.schema().as_ref(),
+        )?;
+
+        Ok(Arc::new(DataSinkExec::new(
+            input,
+            Arc::new(data_sink),
+            sort_order,
+        )))
+    }
 }
 
 #[cfg(test)]

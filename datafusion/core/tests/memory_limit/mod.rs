@@ -101,7 +101,8 @@ async fn group_by_row_hash() {
     TestCase::new()
         .with_query("select count(*) from t GROUP BY response_bytes")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  GroupedHashAggregateStream"
+            "Resources exhausted: Additional allocation failed",
+            "for FinalHashAggregateStream[0]",
         ])
         .with_memory_limit(2_000)
         .run()
@@ -114,7 +115,8 @@ async fn group_by_hash() {
         // group by dict column
         .with_query("select count(*) from t GROUP BY service, host, pod, container")
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed", "with top memory consumers (across reservations) as:\n  GroupedHashAggregateStream"
+            "Resources exhausted: Additional allocation failed",
+            "for PartialHashAggregateStream[0]",
         ])
         .with_memory_limit(1_000)
         .run()
@@ -425,7 +427,7 @@ async fn oom_grouped_hash_aggregate() {
         .with_query("SELECT COUNT(*), SUM(request_bytes) FROM t GROUP BY host")
         .with_expected_errors(vec![
             "Failed to allocate additional",
-            "GroupedHashAggregateStream[0] (count(1), sum(t.request_bytes))",
+            "for PartialHashAggregateStream[0]",
         ])
         .with_memory_limit(1_000)
         .run()

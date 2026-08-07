@@ -24,7 +24,7 @@ use datafusion_common::{
     DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
+use datafusion_datasource::file_sink_config::FileSinkConfig;
 use datafusion_datasource::{FileRange, PartitionedFile};
 use datafusion_datasource_csv::file_format::CsvSink;
 use datafusion_datasource_json::file_format::JsonSink;
@@ -518,10 +518,7 @@ impl TryFromProto<&JsonSink> for protobuf::JsonSink {
     type Error = DataFusionError;
 
     fn try_from_proto(value: &JsonSink) -> Result<Self, Self::Error> {
-        Ok(Self {
-            config: Some(protobuf::FileSinkConfig::try_from_proto(value.config())?),
-            writer_options: Some(value.writer_options().try_into()?),
-        })
+        Self::try_from(value)
     }
 }
 
@@ -529,10 +526,7 @@ impl TryFromProto<&CsvSink> for protobuf::CsvSink {
     type Error = DataFusionError;
 
     fn try_from_proto(value: &CsvSink) -> Result<Self, Self::Error> {
-        Ok(Self {
-            config: Some(protobuf::FileSinkConfig::try_from_proto(value.config())?),
-            writer_options: Some(value.writer_options().try_into()?),
-        })
+        Self::try_from(value)
     }
 }
 
@@ -541,10 +535,7 @@ impl TryFromProto<&ParquetSink> for protobuf::ParquetSink {
     type Error = DataFusionError;
 
     fn try_from_proto(value: &ParquetSink) -> Result<Self, Self::Error> {
-        Ok(Self {
-            config: Some(protobuf::FileSinkConfig::try_from_proto(value.config())?),
-            parquet_options: Some(value.parquet_options().try_into()?),
-        })
+        Self::try_from(value)
     }
 }
 
@@ -552,47 +543,6 @@ impl TryFromProto<&FileSinkConfig> for protobuf::FileSinkConfig {
     type Error = DataFusionError;
 
     fn try_from_proto(conf: &FileSinkConfig) -> Result<Self, Self::Error> {
-        let file_groups = conf
-            .file_group
-            .iter()
-            .map(protobuf::PartitionedFile::try_from_proto)
-            .collect::<Result<Vec<_>>>()?;
-        let table_paths = conf
-            .table_paths
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>();
-        let table_partition_cols = conf
-            .table_partition_cols
-            .iter()
-            .map(|(name, data_type)| {
-                Ok(protobuf::PartitionColumn {
-                    name: name.to_owned(),
-                    arrow_type: Some(data_type.try_into()?),
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let file_output_mode = match conf.file_output_mode {
-            datafusion_datasource::file_sink_config::FileOutputMode::Automatic => {
-                protobuf::FileOutputMode::Automatic
-            }
-            datafusion_datasource::file_sink_config::FileOutputMode::SingleFile => {
-                protobuf::FileOutputMode::SingleFile
-            }
-            datafusion_datasource::file_sink_config::FileOutputMode::Directory => {
-                protobuf::FileOutputMode::Directory
-            }
-        };
-        Ok(Self {
-            object_store_url: conf.object_store_url.to_string(),
-            file_groups,
-            table_paths,
-            output_schema: Some(conf.output_schema.as_ref().try_into()?),
-            table_partition_cols,
-            keep_partition_by_columns: conf.keep_partition_by_columns,
-            insert_op: conf.insert_op as i32,
-            file_extension: conf.file_extension.to_string(),
-            file_output_mode: file_output_mode.into(),
-        })
+        conf.try_into()
     }
 }
