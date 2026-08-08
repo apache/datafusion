@@ -32,6 +32,7 @@ use crate::aggregates::group_values::multi_group_by::{
     row_backed::RowsGroupColumn,
 };
 use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
+use arrow::buffer::BooleanBuffer;
 use arrow::compute::cast;
 use arrow::datatypes::{
     BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
@@ -44,6 +45,7 @@ use arrow::datatypes::{
     TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
     UInt64Type,
 };
+use arrow_ord::cmp::not_distinct;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
@@ -55,6 +57,66 @@ use hashbrown::hash_table::HashTable;
 
 const NON_INLINED_FLAG: u64 = 0x8000000000000000;
 const VALUE_MASK: u64 = 0x7FFFFFFFFFFFFFFF;
+
+/// Minimum fraction of adjacent-hash-equal row pairs (1/16 ≈ 6%) for the
+/// consecutive-keys run mask to be worth computing. Below it, the mask's
+/// per-column comparison passes cost more than the probes they could skip.
+const RUN_MASK_MIN_HINT_DENOMINATOR: usize = 16;
+
+/// Returns a null-safe "row equals the previous row on every group column"
+/// mask when the batch looks run-heavy, `None` otherwise.
+///
+/// `mask[i] == true` means row `i + 1` equals row `i` on all columns, with
+/// `null == null` counting as equal (matching GROUP BY semantics, via
+/// [`not_distinct`]). Rows covered by the mask can reuse the previous row's
+/// group index and skip both the hash-table probe and (for high-cardinality
+/// keys) its likely cache miss — the same "consecutive keys optimization"
+/// ClickHouse ships, and the multi-column analogue of the single-column
+/// caches in `GroupValuesPrimitive` / `ArrowBytesMap`.
+///
+/// Cost control is a two-tier gate:
+/// - A single sequential scan counts adjacent *hash* matches (hash equality
+///   is a necessary condition for row equality). Shuffled inputs — e.g. the
+///   Final aggregation phase after hash repartitioning, where runs cannot
+///   survive — fail this gate and pay nothing beyond the scan itself.
+///   Correctness never rests on the hashes: they only decide whether the
+///   precise mask below is worth building.
+/// - Only run-heavy batches pay for the per-column vectorized
+///   [`not_distinct`] passes that build the precise mask.
+///
+/// Returns `None` (falling back to the normal per-row path) when the batch
+/// is too small, fails the gate, or a column type is not supported by
+/// [`not_distinct`] (e.g. nested types handled by `RowsGroupColumn`).
+fn adjacent_equal_run_mask(cols: &[ArrayRef], hashes: &[u64]) -> Option<BooleanBuffer> {
+    let n = hashes.len();
+    if n < 2 {
+        return None;
+    }
+
+    let run_hint = hashes.windows(2).filter(|w| w[0] == w[1]).count();
+    if run_hint * RUN_MASK_MIN_HINT_DENOMINATOR < n {
+        return None;
+    }
+
+    let mut mask: Option<BooleanBuffer> = None;
+    for col in cols {
+        let head = col.slice(0, n - 1);
+        let tail = col.slice(1, n - 1);
+        let eq = match not_distinct(&head, &tail) {
+            Ok(eq) => eq,
+            // e.g. nested types: fall back to the normal path
+            Err(_) => return None,
+        };
+        // `not_distinct` never returns nulls, so the values buffer is the
+        // complete answer.
+        let (buf, _nulls) = eq.into_parts();
+        mask = Some(match mask {
+            None => buf,
+            Some(acc) => &acc & &buf,
+        });
+    }
+    mask
+}
 
 /// Trait for storing a single column of group values in [`GroupValuesColumn`]
 ///
@@ -365,7 +427,25 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         batch_hashes.resize(n_rows, 0);
         create_hashes(cols, &self.random_state, batch_hashes)?;
 
+        // Consecutive-keys fast path (see `adjacent_equal_run_mask`). The
+        // streaming path benefits the most: sorted-on-group-keys input has
+        // perfect runs, so all but the first row of every group skip the
+        // probe below.
+        let run_mask = adjacent_equal_run_mask(cols, batch_hashes);
+
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
+            if let Some(mask) = &run_mask
+                && row > 0
+                && mask.value(row - 1)
+            {
+                // Same key as the previous row: reuse its group index.
+                let prev_group = *groups
+                    .last()
+                    .expect("row > 0 implies a previous group index");
+                groups.push(prev_group);
+                continue;
+            }
+
             let entry = self
                 .map
                 .find_mut(target_hash, |(exist_hash, group_idx_view)| {
@@ -466,6 +546,11 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         batch_hashes.resize(n_rows, 0);
         create_hashes(cols, &self.random_state, &mut batch_hashes)?;
 
+        // Consecutive-keys fast path: rows equal to their predecessor reuse
+        // its group index (filled in a final pass below) and skip the map
+        // probe entirely. See `adjacent_equal_run_mask` for the gating.
+        let run_mask = adjacent_equal_run_mask(cols, &batch_hashes);
+
         // General steps for one round `vectorized equal_to & append`:
         //   1. Collect vectorized context by checking hash values of `cols` in `map`,
         //      mainly fill `vectorized_append_row_indices`, `vectorized_equal_to_row_indices`
@@ -487,7 +572,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         //
 
         // 1. Collect vectorized context by checking hash values of `cols` in `map`
-        self.collect_vectorized_process_context(&batch_hashes, groups);
+        self.collect_vectorized_process_context(&batch_hashes, groups, run_mask.as_ref());
 
         // 2. Perform `vectorized_append`
         self.vectorized_append(cols)?;
@@ -498,6 +583,20 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         // 4. Perform scalarized inter for remaining rows
         // (about remaining rows, can see comments for `remaining_row_indices`)
         self.scalarized_intern_remaining(cols, &batch_hashes, groups)?;
+
+        // 5. Fill the rows skipped by the consecutive-keys fast path with
+        // their predecessor's group index. Ascending order makes multi-row
+        // runs propagate forward from the run head, which was resolved by
+        // the normal path above.
+        if let Some(mask) = run_mask {
+            for row in 1..n_rows {
+                if mask.value(row - 1) {
+                    debug_assert_eq!(groups[row], usize::MAX);
+                    debug_assert_ne!(groups[row - 1], usize::MAX);
+                    groups[row] = groups[row - 1];
+                }
+            }
+        }
 
         self.hashes_buffer = batch_hashes;
 
@@ -521,6 +620,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         &mut self,
         batch_hashes: &[u64],
         groups: &mut [usize],
+        run_mask: Option<&BooleanBuffer>,
     ) {
         self.vectorized_operation_buffers.append_row_indices.clear();
         self.vectorized_operation_buffers
@@ -531,6 +631,15 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             .clear();
 
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
+            // Consecutive-keys fast path: this row equals its predecessor on
+            // every group column; it reuses the predecessor's group index in
+            // the final fill pass of `vectorized_intern` and needs no probe.
+            if let Some(mask) = run_mask
+                && row > 0
+                && mask.value(row - 1)
+            {
+                continue;
+            }
             let entry = self
                 .map
                 .find(target_hash, |(exist_hash, _)| target_hash == *exist_hash);
@@ -1884,6 +1993,92 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Consecutive-keys fast path on the multi-column paths: a run only
+    /// counts when EVERY column matches its predecessor (with null == null
+    /// being equal, per GROUP BY semantics). Covers both the vectorized
+    /// (`STREAMING = false`) and scalarized (`STREAMING = true`) interns —
+    /// both must produce identical group assignments to a run-free shuffle
+    /// of the same values.
+    #[test]
+    fn test_intern_consecutive_keys_multi_column() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Utf8View, true),
+        ]));
+
+        // Runs designed to hit every interesting case:
+        //   rows 0-1: identical on both cols (run)
+        //   row 2:    `a` continues the run but `b` changes → NOT a run
+        //   row 3:    identical to row 2 (run)
+        //   row 4:    null in both cols
+        //   row 5:    null in both cols again → null == null run
+        //   row 6:    same `a` as 5 is null vs 1 → not a run
+        let col_a: ArrayRef = Arc::new(Int64Array::from(vec![
+            Some(1),
+            Some(1),
+            Some(1),
+            Some(1),
+            None,
+            None,
+            Some(1),
+        ]));
+        let col_b: ArrayRef = Arc::new(StringViewArray::from(vec![
+            Some("x"),
+            Some("x"),
+            Some("y"),
+            Some("y"),
+            None,
+            None,
+            Some("x"),
+        ]));
+        let cols = vec![col_a, col_b];
+
+        // Expected groups: (1,x)=0, (1,y)=1, (null,null)=2, (1,x)=0 again
+        let expected = vec![0, 0, 1, 1, 2, 2, 0];
+
+        // Vectorized path
+        let mut vectorized =
+            GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+        let mut groups = vec![];
+        // Repeat the batch: the second pass exercises "run head found in
+        // existing map" (equal_to path) rather than append.
+        for _ in 0..2 {
+            vectorized.intern(&cols, &mut groups).unwrap();
+            assert_eq!(groups, expected, "vectorized path");
+        }
+        assert_eq!(vectorized.len(), 3);
+
+        // Scalarized (streaming) path
+        let mut scalarized =
+            GroupValuesColumn::<true>::try_new(Arc::clone(&schema)).unwrap();
+        for _ in 0..2 {
+            scalarized.intern(&cols, &mut groups).unwrap();
+            assert_eq!(groups, expected, "scalarized path");
+        }
+        assert_eq!(scalarized.len(), 3);
+    }
+
+    /// The run mask is gated on an adjacent-hash heuristic; a batch with no
+    /// runs at all must take the normal path and still be correct.
+    #[test]
+    fn test_intern_consecutive_keys_no_runs() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Utf8View, true),
+        ]));
+        let col_a: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3, 4, 1, 2, 3, 4]));
+        let col_b: ArrayRef = Arc::new(StringViewArray::from(vec![
+            "p", "q", "r", "s", "p", "q", "r", "s",
+        ]));
+        let cols = vec![col_a, col_b];
+
+        let mut gv = GroupValuesColumn::<false>::try_new(schema).unwrap();
+        let mut groups = vec![];
+        gv.intern(&cols, &mut groups).unwrap();
+        assert_eq!(groups, vec![0, 1, 2, 3, 0, 1, 2, 3]);
+        assert_eq!(gv.len(), 4);
     }
 
     #[test]

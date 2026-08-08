@@ -270,6 +270,20 @@ where
         // Ensure lengths are equivalent
         assert_eq!(values.len(), self.hashes_buffer.len());
 
+        // Consecutive-keys fast path state: real-world data frequently
+        // arrives with runs of identical values (time-ordered logs,
+        // clustered writes), so remembering the previous non-null row's
+        // view and payload lets a run reuse the payload without probing
+        // the hash table. For inline views (len <= 12) the u128 view
+        // comparison is a complete equality check; for longer values the
+        // view still provides the length + 4-byte-prefix guards before a
+        // byte comparison of two adjacent (cache-hot) rows. A miss costs
+        // a couple of well-predicted compares. Same idea as ClickHouse's
+        // "consecutive keys optimization". Intervening nulls don't
+        // invalidate the cached mapping.
+        let mut prev: Option<(u128, usize)> = None;
+        let mut prev_payload = V::default();
+
         for i in 0..values.len() {
             let view_u128 = input_views[i];
             let hash = self.hashes_buffer[i];
@@ -292,6 +306,29 @@ where
 
             // Extract length from the view (first 4 bytes of u128 in little-endian)
             let len = view_u128 as u32;
+
+            // Consecutive-keys fast path (see comment above the loop).
+            if let Some((prev_view, prev_i)) = prev {
+                let equal = if len <= 12 {
+                    // Inline views embed the full value: u128 equality is
+                    // a complete equality check.
+                    view_u128 == prev_view
+                } else if prev_view as u32 == len
+                    && (prev_view >> 32) as u32 == (view_u128 >> 32) as u32
+                {
+                    // Length and 4-byte prefix (read from the views) matched;
+                    // compare the actual bytes of two adjacent, cache-hot rows.
+                    let cur: &[u8] = values.value(i).as_ref();
+                    let prv: &[u8] = values.value(prev_i).as_ref();
+                    cur == prv
+                } else {
+                    false
+                };
+                if equal {
+                    observe_payload_fn(prev_payload);
+                    continue;
+                }
+            }
 
             // Check if value already exists
             let maybe_payload = {
@@ -371,6 +408,8 @@ where
                     .insert_accounted(new_header, |h| h.hash, &mut self.map_size);
                 payload
             };
+            prev = Some((view_u128, i));
+            prev_payload = payload;
             observe_payload_fn(payload);
         }
     }
@@ -527,6 +566,38 @@ where
 mod tests {
     use arrow::array::{GenericByteViewArray, StringViewArray};
     use datafusion_common::HashMap;
+
+    /// Consecutive-keys fast path: runs of inline (<=12B) and non-inline
+    /// (>12B) values, with interleaved nulls, must produce the same
+    /// payload assignment as scattered occurrences.
+    #[test]
+    fn view_map_consecutive_keys_runs() {
+        let mut map: ArrowBytesViewMap<i32> =
+            ArrowBytesViewMap::new(OutputType::Utf8View);
+        let values: ArrayRef = Arc::new(StringViewArray::from(vec![
+            Some("inline"),
+            Some("inline"),
+            None,
+            Some("inline"),
+            Some("this value is longer than twelve bytes"),
+            Some("this value is longer than twelve bytes"),
+            Some("this value is also longer, but different"),
+            Some("inline"),
+        ]));
+        let mut next = 0;
+        let mut seen = vec![];
+        map.insert_if_new(
+            &values,
+            |_| {
+                let id = next;
+                next += 1;
+                id
+            },
+            |id| seen.push(id),
+        );
+        assert_eq!(seen, vec![0, 0, 1, 0, 2, 2, 3, 0]);
+        assert_eq!(next, 4, "make_payload_fn must run once per distinct");
+    }
 
     use super::*;
 
