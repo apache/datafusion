@@ -15,27 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{Result, assert_eq_or_internal_err, internal_datafusion_err};
-
-pub(crate) fn str_to_byte(s: &String, description: &str) -> Result<u8> {
-    assert_eq_or_internal_err!(
-        s.len(),
-        1,
-        "Invalid CSV {description}: expected single character, got {s}"
-    );
-    Ok(s.as_bytes()[0])
-}
-
-pub(crate) fn byte_to_string(b: u8, description: &str) -> Result<String> {
-    let b = &[b];
-    let b = std::str::from_utf8(b).map_err(|_| {
-        internal_datafusion_err!(
-            "Invalid CSV {description}: can not represent {b:0x?} as utf8"
-        )
-    })?;
-    Ok(b.to_owned())
-}
-
 #[macro_export]
 macro_rules! convert_required {
     ($PB:expr) => {{
