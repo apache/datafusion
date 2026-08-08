@@ -65,7 +65,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
 };
-use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
+use datafusion_pruning::{FilePruner, PruningPredicate, PruningPredicateBuilder};
 
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
@@ -289,6 +289,11 @@ pub(super) struct ParquetMorselizer {
     /// Maximum size of the predicate cache, in bytes. If none, uses
     /// the arrow-rs default.
     pub max_predicate_cache_size: Option<usize>,
+    /// Maximum `IN (...)` list size that the pruning predicate will rewrite
+    /// into per-value statistics checks. Lists longer than this skip
+    /// container-level pruning. Sourced from
+    /// `datafusion.execution.parquet.max_in_list_size`.
+    pub max_in_list_size: usize,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
     /// Optional sort order used to reorder row groups by their min/max statistics.
@@ -451,6 +456,7 @@ struct PreparedParquetOpen {
     expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
     predicate_creation_errors: Count,
     max_predicate_cache_size: Option<usize>,
+    max_in_list_size: usize,
     reverse_row_groups: bool,
     sort_order_for_reorder: Option<LexOrdering>,
     preserve_order: bool,
@@ -850,6 +856,7 @@ impl ParquetMorselizer {
             expr_adapter_factory: Arc::clone(&self.expr_adapter_factory),
             predicate_creation_errors,
             max_predicate_cache_size: self.max_predicate_cache_size,
+            max_in_list_size: self.max_in_list_size,
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             preserve_order: self.preserve_order,
@@ -1052,6 +1059,7 @@ impl MetadataLoadedParquetOpen {
             prepared.predicate.as_ref(),
             &physical_file_schema,
             &prepared.predicate_creation_errors,
+            prepared.max_in_list_size,
         );
 
         // Only build page pruning predicate if page index is enabled
@@ -1468,6 +1476,7 @@ impl RowGroupsPrunedParquetOpen {
                     Arc::clone(reader_metadata.metadata()),
                     prepared.predicate_creation_errors.clone(),
                     prepared.file_metrics.predicate_evaluation_errors.clone(),
+                    prepared.max_in_list_size,
                 ))
             }
             _ => None,
@@ -1632,13 +1641,14 @@ pub(crate) fn build_pruning_predicates(
     predicate: Option<&Arc<dyn PhysicalExpr>>,
     file_schema: &SchemaRef,
     predicate_creation_errors: &Count,
+    max_in_list_size: usize,
 ) -> Option<Arc<PruningPredicate>> {
     let predicate = predicate.as_ref()?;
-    build_pruning_predicate(
-        Arc::clone(predicate),
-        file_schema,
-        predicate_creation_errors,
-    )
+    PruningPredicateBuilder::new()
+        .with_file_schema(Arc::clone(file_schema))
+        .with_error_counter(predicate_creation_errors)
+        .with_max_in_list_size(max_in_list_size)
+        .build(Arc::clone(predicate))
 }
 
 /// Returns true if the page index must be loaded for page-level pruning.
@@ -1720,6 +1730,7 @@ mod test {
         DefaultPhysicalExprAdapterFactory, replace_columns_with_literals,
     };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+    use datafusion_pruning::MAX_IN_LIST_SIZE;
     use futures::StreamExt;
     use futures::stream::BoxStream;
     use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
@@ -1752,6 +1763,7 @@ mod test {
         enable_row_group_stats_pruning: bool,
         coerce_int96: Option<TimeUnit>,
         max_predicate_cache_size: Option<usize>,
+        max_in_list_size: usize,
         reverse_row_groups: bool,
         preserve_order: bool,
     }
@@ -1860,6 +1872,7 @@ mod test {
                 enable_row_group_stats_pruning: false,
                 coerce_int96: None,
                 max_predicate_cache_size: None,
+                max_in_list_size: MAX_IN_LIST_SIZE,
                 reverse_row_groups: false,
                 preserve_order: false,
             }
@@ -2037,6 +2050,7 @@ mod test {
                 #[cfg(feature = "parquet_encryption")]
                 encryption_factory: None,
                 max_predicate_cache_size: self.max_predicate_cache_size,
+                max_in_list_size: self.max_in_list_size,
                 reverse_row_groups: self.reverse_row_groups,
                 sort_order_for_reorder: None,
                 virtual_state,
