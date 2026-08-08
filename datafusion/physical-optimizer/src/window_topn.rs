@@ -147,7 +147,6 @@ impl WindowTopN {
 
         // Step 4: Verify col_idx references a supported window function output column
         let window_exec_typed = window_exec.downcast_ref::<BoundedWindowAggExec>()?;
-        let sort_exec = window_exec_typed.input().downcast_ref::<SortExec>()?;
         let input_field_count = window_exec_typed.input().schema().fields().len();
         if col_idx < input_field_count {
             return None; // Filter is on an input column, not a window column
@@ -169,25 +168,24 @@ impl WindowTopN {
             return None;
         }
 
-        let order_by = window_exprs[window_expr_idx].order_by();
-
         // For RANK: an empty ORDER BY makes every row tie at rank 1 —
         // the optimization is degenerate (we'd retain the entire input)
         // and tie storage would be unbounded.
+        let order_by = window_exprs[window_expr_idx].order_by();
         if matches!(fn_kind, WindowFnKind::Rank) && order_by.is_empty() {
             return None;
         }
 
+        // Step 7: Build PartitionedTopKExec using the `partition_by` and `order_by` expressions on the window expr
         let expr_iterator = partition_by
             .iter()
-            .map(|e| PhysicalSortExpr::new_default(*e).asc())
-            .chain(order_by.iter());
+            .map(|e| PhysicalSortExpr::new_default(Arc::clone(e)))
+            .chain(order_by.iter().cloned());
         let expr = LexOrdering::new(expr_iterator)?;
 
-        // Step 7: Build PartitionedTopKExec using SortExec's expressions
         let partitioned_topk = PartitionedTopKExec::try_new(
             Arc::clone(window_exec_typed.input()),
-            sort_exec.expr().clone(),
+            expr,
             partition_prefix_len,
             limit_n,
             fn_kind,

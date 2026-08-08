@@ -109,6 +109,10 @@ impl PhysicalOptimizer {
             // those are handled by the later `FilterPushdown` rule.
             // See `FilterPushdownPhase` for more details.
             Arc::new(FilterPushdown::new()),
+            // WindowTopN: replaces Filter(rn<=K) → Window(ROW_NUMBER)
+            // with Window(ROW_NUMBER) → PartitionedTopKExec(fetch=K).
+            // Must run before ProjectionPushdown (which embeds projections into FilterExec).
+            Arc::new(WindowTopN::new()),
             // Ensures each input plan satisfies the distribution and ordering
             // requirements declared by `ExecutionPlan::required_input_distribution`
             // and `ExecutionPlan::required_input_ordering`.
@@ -132,11 +136,6 @@ impl PhysicalOptimizer {
             Arc::new(CombinePartialFinalAggregate::new()),
             // Run once after the local sorting requirement is changed
             Arc::new(OptimizeAggregateOrder::new()),
-            // WindowTopN: replaces Filter(rn<=K) → Window(ROW_NUMBER) → Sort
-            // with Window(ROW_NUMBER) → PartitionedTopKExec(fetch=K).
-            // Must run after EnsureRequirements (which inserts SortExec) and before
-            // ProjectionPushdown (which embeds projections into FilterExec).
-            Arc::new(WindowTopN::new()),
             // TODO: `try_embed_to_hash_join` in the ProjectionPushdown rule would be block by the CoalesceBatches, so add it before CoalesceBatches. Maybe optimize it in the future.
             Arc::new(ProjectionPushdown::new()),
             // Remove the ancillary output requirement operator since we are done with the planning
