@@ -33,6 +33,7 @@ use tokio::runtime::Handle;
 
 use crate::config::FFI_ConfigOptions;
 use crate::execution::FFI_TaskContext;
+use crate::physical_expr::FFI_PhysicalExpr;
 use crate::physical_expr::metrics::FFI_MetricsSet;
 use crate::plan_properties::FFI_PlanProperties;
 use crate::record_batch_stream::FFI_RecordBatchStream;
@@ -49,6 +50,10 @@ pub struct FFI_ExecutionPlan {
 
     /// Return a vector of children plans
     pub children: unsafe extern "C" fn(plan: &Self) -> SVec<FFI_ExecutionPlan>,
+
+    /// Return the dynamic expressions produced by this plan node.
+    pub dynamic_expressions_produced:
+        unsafe extern "C" fn(plan: &Self) -> SVec<FFI_PhysicalExpr>,
 
     pub with_new_children:
         unsafe extern "C" fn(plan: &Self, children: SVec<Self>) -> FFI_Result<Self>,
@@ -135,6 +140,16 @@ unsafe extern "C" fn children_fn_wrapper(
         .children()
         .into_iter()
         .map(|child| FFI_ExecutionPlan::new(Arc::clone(child), runtime.clone()))
+        .collect()
+}
+
+unsafe extern "C" fn dynamic_expressions_produced_fn_wrapper(
+    plan: &FFI_ExecutionPlan,
+) -> SVec<FFI_PhysicalExpr> {
+    plan.inner()
+        .dynamic_expressions_produced()
+        .into_iter()
+        .map(FFI_PhysicalExpr::from)
         .collect()
 }
 
@@ -306,6 +321,7 @@ impl FFI_ExecutionPlan {
         Self {
             properties: properties_fn_wrapper,
             children: children_fn_wrapper,
+            dynamic_expressions_produced: dynamic_expressions_produced_fn_wrapper,
             with_new_children: with_new_children_fn_wrapper,
             name: name_fn_wrapper,
             execute: execute_fn_wrapper,
@@ -442,6 +458,15 @@ impl ExecutionPlan for ForeignExecutionPlan {
         }
     }
 
+    fn dynamic_expressions_produced(
+        &self,
+    ) -> Vec<Arc<dyn datafusion_physical_plan::PhysicalExpr>> {
+        unsafe { (self.plan.dynamic_expressions_produced)(&self.plan) }
+            .iter()
+            .map(<Arc<dyn datafusion_physical_plan::PhysicalExpr>>::from)
+            .collect()
+    }
+
     fn repartitioned(
         &self,
         target_partitions: usize,
@@ -474,8 +499,9 @@ impl ExecutionPlan for ForeignExecutionPlan {
 
 #[cfg(any(test, feature = "integration-tests"))]
 pub mod tests {
-    use datafusion_physical_plan::Partitioning;
+    use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+    use datafusion_physical_plan::{Partitioning, PhysicalExpr};
 
     use super::*;
 
@@ -483,6 +509,7 @@ pub mod tests {
     pub struct EmptyExec {
         props: Arc<PlanProperties>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        dynamic_expressions: Vec<Arc<dyn PhysicalExpr>>,
         metrics: Option<MetricsSet>,
         statistics: Option<Statistics>,
     }
@@ -497,6 +524,7 @@ pub mod tests {
                     Boundedness::Bounded,
                 )),
                 children: Vec::default(),
+                dynamic_expressions: Vec::default(),
                 metrics: None,
                 statistics: None,
             }
@@ -509,6 +537,14 @@ pub mod tests {
 
         pub fn with_statistics(mut self, statistics: Statistics) -> Self {
             self.statistics = Some(statistics);
+            self
+        }
+
+        pub fn with_dynamic_expressions(
+            mut self,
+            dynamic_expressions: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Self {
+            self.dynamic_expressions = dynamic_expressions;
             self
         }
     }
@@ -543,6 +579,7 @@ pub mod tests {
             Ok(Arc::new(EmptyExec {
                 props: Arc::clone(&self.props),
                 children,
+                dynamic_expressions: self.dynamic_expressions.clone(),
                 metrics: self.metrics.clone(),
                 statistics: self.statistics.clone(),
             }))
@@ -554,6 +591,10 @@ pub mod tests {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
+        }
+
+        fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+            self.dynamic_expressions.iter().map(Arc::clone).collect()
         }
 
         fn metrics(&self) -> Option<MetricsSet> {
@@ -569,6 +610,10 @@ pub mod tests {
                 Statistics::new_unknown(self.props.eq_properties.schema())
             })))
         }
+    }
+
+    pub(crate) fn create_dynamic_filter() -> Arc<DynamicFilterPhysicalExpr> {
+        Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)))
     }
 
     #[test]
@@ -597,6 +642,32 @@ pub mod tests {
             "FFI_ExecutionPlan: empty-exec, number_of_children=0"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_execution_plan_dynamic_expressions_produced() -> Result<()> {
+        let schema = Arc::new(arrow::datatypes::Schema::empty());
+        let dynamic_filter = create_dynamic_filter();
+        let expected_id = dynamic_filter
+            .expression_id()
+            .expect("dynamic filters always have an expression ID");
+        let expression: Arc<dyn PhysicalExpr> = Arc::clone(&dynamic_filter) as _;
+        let original_plan =
+            Arc::new(EmptyExec::new(schema).with_dynamic_expressions(vec![expression]));
+
+        let mut ffi_plan = FFI_ExecutionPlan::new(original_plan, None);
+        ffi_plan.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_plan: Arc<dyn ExecutionPlan> = (&ffi_plan).try_into()?;
+        foreign_plan.check_invariants(
+            datafusion_physical_plan::execution_plan::InvariantLevel::Always,
+        )?;
+
+        let produced = foreign_plan.dynamic_expressions_produced();
+        assert_eq!(produced.len(), 1);
+        assert_eq!(produced[0].expression_id(), Some(expected_id));
+        drop(foreign_plan);
+        assert_eq!(produced[0].expression_id(), Some(expected_id));
         Ok(())
     }
 
