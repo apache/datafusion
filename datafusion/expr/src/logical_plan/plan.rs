@@ -3682,7 +3682,8 @@ pub struct Limit {
 pub enum SkipType {
     /// The skip expression is a literal value.
     Literal(usize),
-    /// Currently only supports expressions that can be folded into constants.
+    //// Currently supports all expressions that can be evaluated.
+    /// UnsupportedExpr means that the expression is not considered by the analyzer/optimizer.
     UnsupportedExpr,
 }
 
@@ -3691,7 +3692,8 @@ pub enum FetchType {
     /// The fetch expression is a literal value.
     /// `Literal(None)` means the fetch expression is not provided.
     Literal(Option<usize>),
-    /// Currently only supports expressions that can be folded into constants.
+    //// Currently supports all expressions that can be evaluated.
+    /// UnsupportedExpr means that the expression is not considered by the analyzer/optimizer.
     UnsupportedExpr,
 }
 
