@@ -35,7 +35,8 @@ use crate::joins::Map;
 use crate::joins::array_map::ArrayMap;
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::shared_bounds::{
-    ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
+    ColumnBounds, DynamicFilterBuildContext, InListMembership, PartitionBounds,
+    PushdownStrategy, SharedBuildAccumulator,
 };
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
@@ -102,6 +103,8 @@ pub(crate) const HASH_JOIN_SEED: SeededRandomState =
     SeededRandomState::with_seed(12210250226015887276);
 
 const ARRAY_MAP_CREATED_COUNT_METRIC_NAME: &str = "array_map_created_count";
+const DYNAMIC_FILTER_MEMBERSHIP_PREDICATES_ELIDED_METRIC_NAME: &str =
+    "dynamic_filter_membership_predicates_elided";
 
 #[expect(clippy::too_many_arguments)]
 fn try_create_array_map(
@@ -1417,14 +1420,24 @@ impl ExecutionPlan for HashJoinExec {
                         .map(|(_, right_expr)| Arc::clone(right_expr))
                         .collect::<Vec<_>>();
                     Some(Arc::clone(df.build_accumulator.get_or_init(|| {
+                        let membership_predicates_elided = MetricBuilder::new(
+                            &self.metrics,
+                        )
+                        .with_category(MetricCategory::Rows)
+                        .global_counter(
+                            DYNAMIC_FILTER_MEMBERSHIP_PREDICATES_ELIDED_METRIC_NAME,
+                        );
                         Arc::new(SharedBuildAccumulator::new_from_partition_mode(
                             self.mode,
                             self.left.as_ref(),
                             self.right.as_ref(),
-                            filter,
-                            on_right,
-                            repartition_random_state,
-                            self.null_aware,
+                            DynamicFilterBuildContext::new(
+                                filter,
+                                on_right,
+                                repartition_random_state,
+                                self.null_aware,
+                                membership_predicates_elided,
+                            ),
                         ))
                     })))
                 })
@@ -2350,7 +2363,7 @@ async fn collect_left_input(
         {
             PushdownStrategy::Map(Arc::clone(&map))
         } else if let Some(in_list_values) = build_struct_inlist_values(&left_values)? {
-            PushdownStrategy::InList(in_list_values)
+            PushdownStrategy::InList(InListMembership::new(in_list_values, map.as_ref()))
         } else {
             PushdownStrategy::Map(Arc::clone(&map))
         }
@@ -6179,6 +6192,17 @@ mod tests {
         // After the join completes, the dynamic filter should be marked as complete
         // wait_complete() should return immediately
         dynamic_filter.wait_complete().await;
+        assert_eq!(
+            join.metrics()
+                .and_then(|metrics| {
+                    metrics.sum_by_name(
+                        DYNAMIC_FILTER_MEMBERSHIP_PREDICATES_ELIDED_METRIC_NAME,
+                    )
+                })
+                .map(|value| value.as_usize()),
+            Some(1),
+            "the contiguous build domain should elide one membership predicate"
+        );
 
         Ok(())
     }
