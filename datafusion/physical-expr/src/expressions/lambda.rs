@@ -31,7 +31,7 @@ use arrow::{
 };
 use datafusion_common::{
     HashMap, plan_err,
-    tree_node::{Transformed, TreeNode, TreeNodeRecursion},
+    tree_node::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor},
 };
 use datafusion_common::{HashSet, Result, internal_err};
 use datafusion_expr::ColumnarValue;
@@ -43,6 +43,15 @@ pub struct LambdaExpr {
     body: Arc<dyn PhysicalExpr>,
     projected_body: Arc<dyn PhysicalExpr>,
     projection: Vec<usize>,
+    /// Subset of `params` (by name) that the body actually references,
+    /// computed with nested-lambda shadow tracking. Empty when no parameter
+    /// is referenced by this lambda's own body.
+    ///
+    /// The higher-order function uses this to only evaluate and push the
+    /// parameters the body actually needs into the merged evaluation batch,
+    /// which keeps the body's compressed column indices aligned with the
+    /// batch layout produced at runtime.
+    used_params: HashSet<String>,
 }
 
 // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808 [https://github.com/apache/datafusion/issues/13196]
@@ -60,7 +69,7 @@ impl Hash for LambdaExpr {
 }
 
 impl LambdaExpr {
-    /// Create a new lambda expression with the given parameters and body
+    /// Create a new lambda expression with the given parameters and body.
     pub fn try_new(params: Vec<String>, body: Arc<dyn PhysicalExpr>) -> Result<Self> {
         if !all_unique(&params) {
             return plan_err!(
@@ -75,27 +84,30 @@ impl LambdaExpr {
     }
 
     fn new(params: Vec<String>, body: Arc<dyn PhysicalExpr>) -> Self {
-        let mut used_column_indices = HashSet::new();
+        let own_params: HashSet<String> = params.iter().cloned().collect();
 
-        body.apply(|node| {
-            if let Some(col) = node.downcast_ref::<Column>() {
-                used_column_indices.insert(col.index());
-            } else if let Some(var) = node.downcast_ref::<LambdaVariable>() {
-                used_column_indices.insert(var.index());
-            }
+        let mut visitor = CollectUsedVisitor {
+            own_params: &own_params,
+            used_indices: HashSet::new(),
+            used_param_names: HashSet::new(),
+            shadow_stack: Vec::new(),
+        };
+        body.visit(&mut visitor).expect("visitor is infallible");
+        let CollectUsedVisitor {
+            used_indices,
+            used_param_names,
+            ..
+        } = visitor;
 
-            Ok(TreeNodeRecursion::Continue)
-        })
-        .expect("closure should be infallible");
-
-        let mut projection = used_column_indices.into_iter().collect::<Vec<_>>();
+        let mut projection = used_indices.into_iter().collect::<Vec<_>>();
 
         projection.sort();
 
         let column_index_map = projection
             .iter()
+            .copied()
             .enumerate()
-            .map(|(projected, original)| (*original, projected))
+            .map(|(new_idx, original)| (original, new_idx))
             .collect::<HashMap<_, _>>();
 
         let projected_body = Arc::clone(&body)
@@ -129,6 +141,7 @@ impl LambdaExpr {
             body,
             projected_body,
             projection,
+            used_params: used_param_names,
         }
     }
 
@@ -169,6 +182,67 @@ impl LambdaExpr {
 
     pub(crate) fn projected_body(&self) -> &Arc<dyn PhysicalExpr> {
         &self.projected_body
+    }
+
+    /// Subset of [`params`](Self::params) (by name) that the body actually
+    /// references, taking nested-lambda shadowing into account. Used by the
+    /// higher-order function evaluator to skip evaluating/pushing parameters
+    /// the lambda body does not need, so that unused declared parameters do
+    /// not shift the merged batch's column positions out of sync with the
+    /// body's compressed indices.
+    pub fn used_params(&self) -> &HashSet<String> {
+        &self.used_params
+    }
+}
+
+/// Walks the body of a [`LambdaExpr`] and collects, on a single pass:
+///
+/// * `used_indices` — every `Column` / `LambdaVariable` index referenced
+///   anywhere in the tree (including inside nested lambdas). This drives
+///   the `projection` used to slice the outer batch.
+/// * `used_param_names` — the subset of *this* lambda's `own_params` that
+///   the body actually references, with nested-lambda parameters shadowing
+///   the outer ones. For example, in
+///   `(k, v) -> func(col, (k, v2) -> k + v2 + v)` the inner `k` shadows the
+///   outer `k`, so only `v` flows up as used.
+///
+/// The shadow stack uses `TreeNodeVisitor`'s `f_down` / `f_up` callbacks
+/// directly: push a frame when entering a nested [`LambdaExpr`], pop it
+/// when leaving.
+struct CollectUsedVisitor<'a> {
+    own_params: &'a HashSet<String>,
+    used_indices: HashSet<usize>,
+    used_param_names: HashSet<String>,
+    shadow_stack: Vec<HashSet<String>>,
+}
+
+impl TreeNodeVisitor<'_> for CollectUsedVisitor<'_> {
+    type Node = Arc<dyn PhysicalExpr>;
+
+    fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
+        if let Some(col) = node.downcast_ref::<Column>() {
+            self.used_indices.insert(col.index());
+        } else if let Some(var) = node.downcast_ref::<LambdaVariable>() {
+            self.used_indices.insert(var.index());
+
+            let name = var.name();
+            let shadowed = self.shadow_stack.iter().any(|frame| frame.contains(name));
+            if !shadowed && self.own_params.contains(name) {
+                self.used_param_names.insert(name.to_string());
+            }
+        } else if let Some(nested) = node.downcast_ref::<LambdaExpr>() {
+            self.shadow_stack
+                .push(nested.params.iter().cloned().collect());
+        }
+
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn f_up(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
+        if node.downcast_ref::<LambdaExpr>().is_some() {
+            self.shadow_stack.pop();
+        }
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -234,7 +308,7 @@ impl PhysicalExpr for LambdaExpr {
     }
 }
 
-/// Create a lambda expression
+/// Create a lambda expression.
 pub fn lambda(
     params: impl IntoIterator<Item = impl Into<String>>,
     body: Arc<dyn PhysicalExpr>,
@@ -273,9 +347,14 @@ fn check_async_udf(body: &Arc<dyn PhysicalExpr>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use crate::expressions::{NoOp, lambda::lambda};
-    use arrow::{array::RecordBatch, datatypes::Schema};
+    use crate::expressions::{Column, LambdaVariable, NoOp, lambda::lambda};
+    use arrow::{
+        array::RecordBatch,
+        datatypes::{DataType, Field, Schema},
+    };
     use std::sync::Arc;
+
+    use super::LambdaExpr;
 
     #[test]
     fn test_lambda_evaluate() {
@@ -287,5 +366,146 @@ mod tests {
     #[test]
     fn test_lambda_duplicate_name() {
         assert!(lambda(["a", "a"], Arc::new(NoOp::new())).is_err());
+    }
+
+    /// A two-parameter lambda whose body only references the second
+    /// parameter (`v`) must report only `v` as used. The higher-order
+    /// function uses this set to push only `v` into the merged batch, so
+    /// the body's compressed `LambdaVariable` index for `v` lines up with
+    /// the batch layout.
+    #[test]
+    fn test_used_params_collects_only_referenced_param() {
+        let v_field = Arc::new(Field::new("v", DataType::Int32, true));
+        let body = Arc::new(LambdaVariable::new(1, Arc::clone(&v_field)));
+
+        let lambda =
+            LambdaExpr::try_new(vec!["k".to_string(), "v".to_string()], body).unwrap();
+
+        assert_eq!(lambda.projection(), &[1]);
+        let used = lambda.used_params();
+        assert!(used.contains("v"));
+        assert!(!used.contains("k"));
+        assert_eq!(used.len(), 1);
+    }
+
+    /// A lambda whose body references neither declared parameter (e.g. a
+    /// constant expression) must report an empty used-params set. This
+    /// exercises the merged-batch path that has no parameter columns to
+    /// push at all.
+    #[test]
+    fn test_used_params_all_unused() {
+        let body = Arc::new(NoOp::new());
+
+        let lambda =
+            LambdaExpr::try_new(vec!["k".to_string(), "v".to_string()], body).unwrap();
+
+        assert!(lambda.projection().is_empty());
+        assert!(lambda.used_params().is_empty());
+    }
+
+    /// A three-parameter lambda whose body skips the middle parameter must
+    /// report only the first and last as used, preserving declaration
+    /// order regardless of how [`Self::used_params`] (a set) reports them.
+    #[test]
+    fn test_used_params_three_params_middle_unused() {
+        let a_field = Arc::new(Field::new("a", DataType::Int32, true));
+        let c_field = Arc::new(Field::new("c", DataType::Int32, true));
+        let body = Arc::new(crate::expressions::BinaryExpr::new(
+            Arc::new(LambdaVariable::new(0, Arc::clone(&a_field))),
+            datafusion_expr::Operator::Plus,
+            Arc::new(LambdaVariable::new(2, Arc::clone(&c_field))),
+        ));
+
+        let lambda = LambdaExpr::try_new(
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            body,
+        )
+        .unwrap();
+
+        let used = lambda.used_params();
+        assert!(used.contains("a"));
+        assert!(!used.contains("b"));
+        assert!(used.contains("c"));
+        assert_eq!(used.len(), 2);
+    }
+
+    /// A two-parameter lambda whose body references both parameters, but in
+    /// the reverse of their declared order (`v` before `k`), must still
+    /// report both as used. Declaration order (not reference order) is what
+    /// downstream code (`LambdaArgument::new`) relies on when it maps these
+    /// names back to positions in the merged batch.
+    #[test]
+    fn test_used_params_both_used_in_reverse_reference_order() {
+        let k_field = Arc::new(Field::new("k", DataType::Int32, true));
+        let v_field = Arc::new(Field::new("v", DataType::Int32, true));
+        let body = Arc::new(crate::expressions::BinaryExpr::new(
+            Arc::new(LambdaVariable::new(1, Arc::clone(&v_field))),
+            datafusion_expr::Operator::Plus,
+            Arc::new(LambdaVariable::new(0, Arc::clone(&k_field))),
+        ));
+
+        let lambda =
+            LambdaExpr::try_new(vec!["k".to_string(), "v".to_string()], body).unwrap();
+
+        assert_eq!(lambda.projection(), &[0, 1]);
+        let used = lambda.used_params();
+        assert!(used.contains("k"));
+        assert!(used.contains("v"));
+        assert_eq!(used.len(), 2);
+    }
+
+    /// Inside a nested lambda that re-declares one of the outer parameter
+    /// names, only the non-shadowed outer references should be reported as
+    /// used by the outer lambda. In
+    /// `(k, v) -> func(col, (k, v2) -> k + v2 + v)` the inner `k` shadows
+    /// the outer `k`, so the outer lambda must only see `v` as used.
+    #[test]
+    fn test_used_params_handles_shadowing_inside_nested_lambda() {
+        let outer_k_field = Arc::new(Field::new("k", DataType::Int32, true));
+        let outer_v_field = Arc::new(Field::new("v", DataType::Int32, true));
+        let inner_v2_field = Arc::new(Field::new("v2", DataType::Int32, true));
+
+        // Inner lambda body references "k" (inner's), "v2" (inner's), and
+        // "v" (outer's). Build it directly with the dense compressed
+        // indices the inner LambdaExpr::new would produce: sorted referenced
+        // indices, so the names alone matter here — what matters for
+        // shadow tracking is the names, not the indices.
+        let inner_body: Arc<dyn crate::PhysicalExpr> =
+            Arc::new(crate::expressions::BinaryExpr::new(
+                Arc::new(crate::expressions::BinaryExpr::new(
+                    Arc::new(LambdaVariable::new(1, Arc::clone(&outer_k_field))),
+                    datafusion_expr::Operator::Plus,
+                    Arc::new(LambdaVariable::new(2, Arc::clone(&inner_v2_field))),
+                )),
+                datafusion_expr::Operator::Plus,
+                Arc::new(LambdaVariable::new(0, Arc::clone(&outer_v_field))),
+            ));
+        let inner_lambda = Arc::new(
+            LambdaExpr::try_new(vec!["k".to_string(), "v2".to_string()], inner_body)
+                .unwrap(),
+        );
+
+        // Outer body wraps the inner lambda in a binary op next to a
+        // regular column reference so the walk has something non-trivial
+        // to descend through. The outer body references the inner lambda
+        // via `inner_lambda`.
+        let outer_body: Arc<dyn crate::PhysicalExpr> =
+            Arc::new(crate::expressions::BinaryExpr::new(
+                Arc::new(Column::new("col", 0)),
+                datafusion_expr::Operator::Plus,
+                inner_lambda,
+            ));
+
+        let outer_lambda =
+            LambdaExpr::try_new(vec!["k".to_string(), "v".to_string()], outer_body)
+                .unwrap();
+
+        let used = outer_lambda.used_params();
+        assert!(used.contains("v"), "outer's `v` should be reported as used");
+        assert!(
+            !used.contains("k"),
+            "outer's `k` is shadowed inside the nested lambda and should not be reported as used"
+        );
+        assert_eq!(used.len(), 1);
     }
 }
