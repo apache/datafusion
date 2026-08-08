@@ -52,7 +52,7 @@ use crate::projection::{
 };
 use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::statistics::{ChildStats, StatisticsArgs};
-use crate::{ChildrenPropertiesHint, ExecutionPlanProperties};
+use crate::{ChildrenPropertiesHint, ExecutionPlanProperties, validate_child_count};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     InputDistributionRequirements, Partitioning, PlanProperties,
@@ -1351,9 +1351,19 @@ impl ExecutionPlan for HashJoinExec {
     fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
-        _: ChildrenPropertiesHint,
+        hint: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.builder().with_new_children(children)?.build_exec()
+        validate_child_count!(self, children);
+        match hint {
+            ChildrenPropertiesHint::SameProperties => {
+                self.builder().with_new_children(children)?.build_exec()
+            }
+            ChildrenPropertiesHint::Recompute => self
+                .builder()
+                .recompute_properties()
+                .with_new_children(children)?
+                .build_exec(),
+        }
     }
 
     fn with_new_children(

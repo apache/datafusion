@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// #[cfg(feature = "integration-tests")]
+#[cfg(feature = "integration-tests")]
 mod tests {
     use arrow::datatypes::Field;
     use arrow::datatypes::Schema;
