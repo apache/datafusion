@@ -58,8 +58,9 @@
 //! would be useful. Wider types have too many possible values for such a
 //! bitmap, so their limits are tuned separately.
 //!
-//! Larger lists use the standard filter strategy, including bitmap filters for
-//! one- and two-byte types.
+//! Larger lists use another filter strategy: bitmap filters for one- and
+//! two-byte types, frozen sets for supported four- and eight-byte types, and
+//! the standard fallback for the remaining types.
 //!
 //! # What about nulls?
 //!
