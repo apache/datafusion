@@ -164,7 +164,7 @@ impl WindowTopN {
         }
         let fn_kind = supported_window_fn(&window_exprs[window_expr_idx])?;
 
-        // Step 6: Determine partition_prefix_len from the window expression
+        // Step 5: Validate PARTITION BY / ORDER BY and collect sort keys from the window expr
         let partition_by = window_exprs[window_expr_idx].partition_by();
         let partition_prefix_len = partition_by.len();
 
@@ -182,7 +182,7 @@ impl WindowTopN {
             return None;
         }
 
-        // Step 7: Build PartitionedTopKExec using the `partition_by` and `order_by` expressions on the window expr
+        // Step 6: Build PartitionedTopKExec from the window's partition/order keys
         let expr_iterator = partition_by
             .iter()
             .map(|e| PhysicalSortExpr::new_default(Arc::clone(e)))
@@ -198,12 +198,12 @@ impl WindowTopN {
         )
         .ok()?;
 
-        // Step 8: Rebuild window with new child
+        // Step 7: Rebuild window with PartitionedTopKExec as its child
         let mut result = window_exec
             .with_new_children(vec![Arc::new(partitioned_topk)])
             .ok()?;
 
-        // Step 9: Rebuild intermediate nodes (ProjectionExec/RepartitionExec)
+        // Step 8: Rebuild intermediate nodes (ProjectionExec/RepartitionExec)
         for node in intermediates.into_iter().rev() {
             result = node.with_new_children(vec![result]).ok()?;
         }
