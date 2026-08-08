@@ -24,10 +24,22 @@ use datafusion::{
 use datafusion_catalog::TableProvider;
 use datafusion_common::ScalarValue;
 use datafusion_common::{error::Result, utils::get_available_parallelism};
+use datafusion_execution::memory_pool::{FairSpillPool, MemoryPool};
+use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_expr::col;
 use rand::{Rng, rng};
 
 use crate::fuzz_cases::aggregation_fuzzer::data_generator::Dataset;
+
+/// Bounded pool sizes, each a fraction of the aggregate's peak reservation:
+/// 2x, 1/2, 2/5, and 1/3 of the peak. 2x is generous and should not spill (the
+/// light end); the smaller ones force a spill, deeper as the pool shrinks. Each
+/// entry is `(numerator, denominator)`.
+const SPILL_POOL_PEAK_FRACTIONS: [(usize, usize); 4] = [(2, 1), (1, 2), (2, 5), (1, 3)];
+
+/// Batch size cap for spilling contexts, so the spill's sort reservation stays
+/// small enough to fit under the pool.
+const SPILL_BATCH_SIZE_CAP: usize = 256;
 
 /// SessionContext generator
 ///
@@ -43,8 +55,7 @@ use crate::fuzz_cases::aggregation_fuzzer::data_generator::Dataset;
 ///   - `skip_partial parameters`
 ///   - `enable_migration_aggregate`
 ///   - hint `sorted` or not
-///   - `spilling` or not (TODO, I think a special `MemoryPool` may be needed
-///     to support this)
+///   - memory limit (bounded pool to force spilling, or unbounded)
 pub struct SessionContextGenerator {
     /// Current testing dataset
     dataset: Arc<Dataset>,
@@ -86,7 +97,11 @@ impl SessionContextGenerator {
 }
 
 impl SessionContextGenerator {
-    /// Generate the `SessionContext` for the baseline run
+    /// Generate the `SessionContext` for the baseline run.
+    ///
+    /// Runs under the default unbounded pool, so it never spills (it is the
+    /// oracle). The caller reads the aggregate's peak from the plan metrics of
+    /// this run (see `run_sql_capturing_peak`) to size the spilling pools.
     pub fn generate_baseline(&self) -> Result<SessionContextWithParams> {
         let schema = self.dataset.batches[0].schema();
         let batches = self.dataset.batches.clone();
@@ -105,6 +120,8 @@ impl SessionContextGenerator {
             skip_partial_params,
             enable_migration_aggregate,
             sort_hint: false,
+            memory_pool: None,
+            memory_limit: None,
             table_name: self.table_name.clone(),
             table_provider: Arc::new(provider),
         };
@@ -112,8 +129,11 @@ impl SessionContextGenerator {
         builder.build()
     }
 
-    /// Randomly generate session context
-    pub fn generate(&self) -> Result<SessionContextWithParams> {
+    /// Randomly generate a session context.
+    ///
+    /// `agg_peak` is the aggregate's peak reservation from the baseline, used to
+    /// size the spilling pool.
+    pub fn generate(&self, agg_peak: usize) -> Result<SessionContextWithParams> {
         let mut rng = rng();
         let schema = self.dataset.batches[0].schema();
         let batches = self.dataset.batches.clone();
@@ -125,10 +145,30 @@ impl SessionContextGenerator {
         //   - `skip_partial`, trigger or not trigger currently for simplicity
         //   - `enable_migration_aggregate`, true or false
         //   - `sorted`, if found a sorted dataset, will or will not push down this information
-        //   - `spilling`(TODO)
-        let batch_size = rng.random_range(1..=self.max_batch_size);
+        //   - memory limit, `None` (unbounded) or a bounded pool that forces spilling
 
-        let target_partitions = rng.random_range(1..=self.max_target_partitions);
+        // Decide spilling first; it constrains batch_size and partitions below.
+        let spilling = agg_peak > 0 && rng.random_bool(0.5);
+
+        // Cap batch_size when spilling. The spill reserves ~2x the emitted batch to sort it, so a large batch
+        // needs a pool bigger than the aggregate's peak and never spills. Large batches stay covered by the unbounded rounds.
+        let batch_size = if spilling {
+            rng.random_range(1..=cmp::min(self.max_batch_size, SPILL_BATCH_SIZE_CAP))
+        } else {
+            rng.random_range(1..=self.max_batch_size)
+        };
+
+        // Single partition when spilling. `FairSpillPool` splits across the  per-partition aggregate consumers,
+        // so with many partitions each share is too small and hits `ResourcesExhausted` before it can spill. Multi
+        // partition stays covered by the unbounded rounds.
+        // Single partition when spilling. `FairSpillPool` splits across the  per-partition aggregate consumers,
+        // so with many partitions each share is too small and hits `ResourcesExhausted` before it can spill. Multi
+        // partition stays covered by the unbounded rounds.
+        let target_partitions = if spilling {
+            1
+        } else {
+            rng.random_range(1..=self.max_target_partitions)
+        };
 
         let skip_partial_params_idx =
             rng.random_range(0..self.candidate_skip_partial_params.len());
@@ -136,6 +176,19 @@ impl SessionContextGenerator {
             self.candidate_skip_partial_params[skip_partial_params_idx];
 
         let enable_migration_aggregate = rng.random_bool(0.5);
+
+        // Pool at a randomly picked fraction of the measured peak, so pressure
+        // ranges from light (above peak, no spill needed) to heavy across
+        // contexts.
+        let memory_limit = if spilling {
+            let (num, den) = SPILL_POOL_PEAK_FRACTIONS
+                [rng.random_range(0..SPILL_POOL_PEAK_FRACTIONS.len())];
+            Some(cmp::max(1, agg_peak.saturating_mul(num) / den))
+        } else {
+            None
+        };
+        let memory_pool = memory_limit
+            .map(|bytes| Arc::new(FairSpillPool::new(bytes)) as Arc<dyn MemoryPool>);
 
         let (provider, sort_hint) =
             if rng.random_bool(0.5) && !self.dataset.sort_keys.is_empty() {
@@ -157,6 +210,8 @@ impl SessionContextGenerator {
             sort_hint,
             skip_partial_params,
             enable_migration_aggregate,
+            memory_pool,
+            memory_limit,
             table_name: self.table_name.clone(),
             table_provider: Arc::new(provider),
         };
@@ -181,6 +236,10 @@ struct GeneratedSessionContextBuilder {
     sort_hint: bool,
     skip_partial_params: SkipPartialParams,
     enable_migration_aggregate: bool,
+    /// Pool to install, or `None` for the default unbounded pool.
+    memory_pool: Option<Arc<dyn MemoryPool>>,
+    /// Bounded pool size in bytes, recorded in the failure report; `None` if unbounded.
+    memory_limit: Option<usize>,
     table_name: String,
     table_provider: Arc<dyn TableProvider>,
 }
@@ -210,7 +269,17 @@ impl GeneratedSessionContextBuilder {
             self.enable_migration_aggregate,
         );
 
-        let ctx = SessionContext::new_with_config(session_config);
+        // Bounded pool forces the spill path; `None` keeps the default unbounded
+        // pool (behavior-preserving).
+        let ctx = match self.memory_pool {
+            Some(pool) => {
+                let runtime = RuntimeEnvBuilder::new()
+                    .with_memory_pool(pool)
+                    .build_arc()?;
+                SessionContext::new_with_config_rt(session_config, runtime)
+            }
+            None => SessionContext::new_with_config(session_config),
+        };
         ctx.register_table(self.table_name, self.table_provider)?;
 
         let params = SessionContextParams {
@@ -219,6 +288,7 @@ impl GeneratedSessionContextBuilder {
             sort_hint: self.sort_hint,
             skip_partial_params: self.skip_partial_params,
             enable_migration_aggregate: self.enable_migration_aggregate,
+            memory_limit: self.memory_limit,
         };
 
         Ok(SessionContextWithParams { ctx, params })
@@ -234,6 +304,14 @@ pub struct SessionContextParams {
     sort_hint: bool,
     skip_partial_params: SkipPartialParams,
     enable_migration_aggregate: bool,
+    memory_limit: Option<usize>, // Bounded pool size in bytes for this run, or `None` for unbounded.
+}
+
+impl SessionContextParams {
+    /// Bounded pool size for this run, or `None` if the pool was unbounded.
+    pub(crate) fn memory_limit(&self) -> Option<usize> {
+        self.memory_limit
+    }
 }
 
 /// Partial skipping parameters
@@ -266,10 +344,14 @@ impl SkipPartialParams {
 
 #[cfg(test)]
 mod test {
-    use arrow::array::{RecordBatch, StringArray, UInt32Array};
+    use arrow::array::{RecordBatch, StringArray, UInt32Array, UInt64Array};
     use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::util::pretty::pretty_format_batches;
+    use datafusion_common::DataFusionError;
 
-    use crate::fuzz_cases::aggregation_fuzzer::check_equality_of_batches;
+    use crate::fuzz_cases::aggregation_fuzzer::{
+        check_equality_of_batches, run_sql_capturing_peak,
+    };
 
     use super::*;
 
@@ -326,31 +408,88 @@ mod test {
 
         let query = "select b, count(a) from fuzz_table group by b";
         let baseline_wrapped_ctx = ctx_generator.generate_baseline().unwrap();
+
+        // Run the baseline first to capture the peak, then size the spilling
+        // contexts from it.
+        let (base_result, agg_peak) =
+            run_sql_capturing_peak(query, &baseline_wrapped_ctx.ctx)
+                .await
+                .unwrap();
+
         let mut random_wrapped_ctxs = Vec::with_capacity(8);
         for _ in 0..8 {
-            let ctx = ctx_generator.generate().unwrap();
+            let ctx = ctx_generator.generate(agg_peak).unwrap();
             random_wrapped_ctxs.push(ctx);
         }
 
-        let base_result = baseline_wrapped_ctx
-            .ctx
-            .sql(query)
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
-
         for wrapped_ctx in random_wrapped_ctxs {
-            let random_result = wrapped_ctx
-                .ctx
-                .sql(query)
-                .await
-                .unwrap()
-                .collect()
-                .await
-                .unwrap();
-            check_equality_of_batches(&base_result, &random_result).unwrap();
+            let memory_limit = wrapped_ctx.params.memory_limit();
+            match wrapped_ctx.ctx.sql(query).await.unwrap().collect().await {
+                Ok(random_result) => {
+                    check_equality_of_batches(&base_result, &random_result).unwrap();
+                }
+                // A bounded pool may be too tight to spill on this tiny dataset;
+                // that is an acceptable skip, matching the fuzzer's behavior.
+                Err(e)
+                    if memory_limit.is_some()
+                        && matches!(
+                            e.find_root(),
+                            DataFusionError::ResourcesExhausted(_)
+                        ) => {}
+                Err(e) => panic!("unexpected error running generated context: {e}"),
+            }
         }
+    }
+
+    /// Guards against the spill knob silently becoming a no-op: a bounded context
+    /// on high-cardinality data must actually reach the spill path. Without this,
+    /// a regression that stopped forcing spills would still pass every other test.
+    #[tokio::test]
+    async fn test_generated_context_spills() {
+        // High cardinality: every row is its own group, so the aggregate builds a
+        // large state and a fraction-of-peak pool is forced to spill. No sort keys,
+        // so this stays on the hash aggregate (spilling) path.
+        let num_rows = 20_000;
+        let k: UInt64Array = (0..num_rows as u64).map(Some).collect();
+        let schema = Schema::new(vec![Field::new("k", DataType::UInt64, true)]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(k)]).unwrap();
+
+        let mut batches = Vec::new();
+        for start in (0..batch.num_rows()).step_by(1024) {
+            let len = cmp::min(1024, batch.num_rows() - start);
+            batches.push(batch.slice(start, len));
+        }
+
+        let dataset = Dataset::new(batches, vec![]);
+        let ctx_generator = SessionContextGenerator::new(Arc::new(dataset), "fuzz_table");
+        let query = "select k, count(*) from fuzz_table group by k";
+
+        // Run the baseline to capture the peak that sizes the spill pools.
+        let baseline = ctx_generator.generate_baseline().unwrap();
+        let (_baseline_result, agg_peak) =
+            run_sql_capturing_peak(query, &baseline.ctx).await.unwrap();
+        assert!(agg_peak > 0, "baseline should have reserved memory");
+
+        // Generate contexts until a bounded one actually spills. Spilling is a
+        // random knob, so loop; on this data a bounded context spills nearly every
+        // time, and exhausted rounds are skipped just like the fuzzer does.
+        let mut spilled = false;
+        for _ in 0..50 {
+            let wrapped = ctx_generator.generate(agg_peak).unwrap();
+            if wrapped.params.memory_limit().is_none() {
+                continue;
+            }
+            let explain = format!("EXPLAIN ANALYZE {query}");
+            let Ok(rows) = wrapped.ctx.sql(&explain).await.unwrap().collect().await
+            else {
+                continue; // pool too tight this round, skip like the fuzzer
+            };
+            let plan = pretty_format_batches(&rows).unwrap().to_string();
+            if plan.contains("spill_count=") && !plan.contains("spill_count=0,") {
+                spilled = true;
+                break;
+            }
+        }
+        assert!(spilled, "a bounded context should have spilled to disk");
     }
 }
