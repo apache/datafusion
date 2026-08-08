@@ -647,6 +647,19 @@ pub struct WindowState {
     pub state: WindowAggState,
     pub window_fn: WindowFn,
 }
+
+impl WindowState {
+    /// `Accumulator::state()` if this window function is an aggregate, `None`
+    /// otherwise (built-in functions like `row_number`, `rank`, `lead`/`lag`
+    /// have no serializable accumulator state).
+    pub fn aggregate_state(&mut self) -> Result<Option<Vec<ScalarValue>>> {
+        match &mut self.window_fn {
+            WindowFn::Aggregate(accumulator) => accumulator.state().map(Some),
+            WindowFn::Builtin(_) => Ok(None),
+        }
+    }
+}
+
 pub type PartitionWindowAggStates = IndexMap<PartitionKey, WindowState, RandomState>;
 
 /// The IndexMap (i.e. an ordered HashMap) where record batches are separated for each partition.
