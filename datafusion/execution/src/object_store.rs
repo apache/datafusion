@@ -263,13 +263,20 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     }
 }
 
-/// Get the key of a url for object store registration.
-/// The credential info will be removed
+/// Get the key of a URL for object store registration.
+///
+/// Userinfo is preserved for ABFS schemes, where it identifies a namespace,
+/// and removed for all other schemes.
 fn get_url_key(url: &Url) -> String {
+    let authority_start = match url.scheme() {
+        "abfs" | "abfss" if !url.username().is_empty() => url::Position::BeforeUsername,
+        _ => url::Position::BeforeHost,
+    };
+
     format!(
         "{}://{}",
         url.scheme(),
-        &url[url::Position::BeforeHost..url::Position::AfterPort],
+        &url[authority_start..url::Position::AfterPort],
     )
 }
 
@@ -330,5 +337,46 @@ mod tests {
         let url = ObjectStoreUrl::parse("s3://username:password@host:123").unwrap();
         let key = get_url_key(&url.url);
         assert_eq!(key.as_str(), "s3://host:123");
+
+        for scheme in ["abfs", "abfss"] {
+            let url = ObjectStoreUrl::parse(format!(
+                "{scheme}://container@account.dfs.core.windows.net"
+            ))
+            .unwrap();
+            let key = get_url_key(&url.url);
+            assert_eq!(
+                key,
+                format!("{scheme}://container@account.dfs.core.windows.net")
+            );
+        }
+    }
+
+    #[test]
+    fn test_abfs_containers_are_registered_separately() {
+        use object_store::memory::InMemory;
+
+        for scheme in ["abfs", "abfss"] {
+            let registry = DefaultObjectStoreRegistry::new();
+            let url_c1 = Url::parse(&format!(
+                "{scheme}://container1@account.dfs.core.windows.net/"
+            ))
+            .unwrap();
+            let url_c2 = Url::parse(&format!(
+                "{scheme}://container2@account.dfs.core.windows.net/"
+            ))
+            .unwrap();
+
+            let store_c1: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let store_c2: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+
+            registry.register_store(&url_c1, Arc::clone(&store_c1));
+            registry.register_store(&url_c2, Arc::clone(&store_c2));
+
+            let actual_c1 = registry.get_store(&url_c1).unwrap();
+            let actual_c2 = registry.get_store(&url_c2).unwrap();
+
+            assert!(Arc::ptr_eq(&actual_c1, &store_c1));
+            assert!(Arc::ptr_eq(&actual_c2, &store_c2));
+        }
     }
 }
