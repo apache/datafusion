@@ -55,7 +55,7 @@ make_udf_expr_and_func!(
 #[user_doc(
     doc_section(label = "Array Functions"),
     description = "Sort array.",
-    syntax_example = "array_sort(array, desc, nulls_first)",
+    syntax_example = "array_sort(array[, desc[, nulls_first]])",
     sql_example = r#"```sql
 > select array_sort([3, 1, 2]);
 +-----------------------------+
