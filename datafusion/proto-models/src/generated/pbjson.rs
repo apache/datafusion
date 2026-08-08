@@ -8783,6 +8783,9 @@ impl serde::Serialize for GlobalLimitExecNode {
         if self.fetch != 0 {
             len += 1;
         }
+        if !self.required_ordering.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.GlobalLimitExecNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
@@ -8794,6 +8797,9 @@ impl serde::Serialize for GlobalLimitExecNode {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("fetch", ToString::to_string(&self.fetch).as_str())?;
+        }
+        if !self.required_ordering.is_empty() {
+            struct_ser.serialize_field("requiredOrdering", &self.required_ordering)?;
         }
         struct_ser.end()
     }
@@ -8808,6 +8814,8 @@ impl<'de> serde::Deserialize<'de> for GlobalLimitExecNode {
             "input",
             "skip",
             "fetch",
+            "required_ordering",
+            "requiredOrdering",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -8815,6 +8823,7 @@ impl<'de> serde::Deserialize<'de> for GlobalLimitExecNode {
             Input,
             Skip,
             Fetch,
+            RequiredOrdering,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -8839,6 +8848,7 @@ impl<'de> serde::Deserialize<'de> for GlobalLimitExecNode {
                             "input" => Ok(GeneratedField::Input),
                             "skip" => Ok(GeneratedField::Skip),
                             "fetch" => Ok(GeneratedField::Fetch),
+                            "requiredOrdering" | "required_ordering" => Ok(GeneratedField::RequiredOrdering),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -8861,6 +8871,7 @@ impl<'de> serde::Deserialize<'de> for GlobalLimitExecNode {
                 let mut input__ = None;
                 let mut skip__ = None;
                 let mut fetch__ = None;
+                let mut required_ordering__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -8885,12 +8896,19 @@ impl<'de> serde::Deserialize<'de> for GlobalLimitExecNode {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::RequiredOrdering => {
+                            if required_ordering__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("requiredOrdering"));
+                            }
+                            required_ordering__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(GlobalLimitExecNode {
                     input: input__,
                     skip: skip__.unwrap_or_default(),
                     fetch: fetch__.unwrap_or_default(),
+                    required_ordering: required_ordering__.unwrap_or_default(),
                 })
             }
         }
@@ -12593,12 +12611,18 @@ impl serde::Serialize for LocalLimitExecNode {
         if self.fetch != 0 {
             len += 1;
         }
+        if !self.required_ordering.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.LocalLimitExecNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
         }
         if self.fetch != 0 {
             struct_ser.serialize_field("fetch", &self.fetch)?;
+        }
+        if !self.required_ordering.is_empty() {
+            struct_ser.serialize_field("requiredOrdering", &self.required_ordering)?;
         }
         struct_ser.end()
     }
@@ -12612,12 +12636,15 @@ impl<'de> serde::Deserialize<'de> for LocalLimitExecNode {
         const FIELDS: &[&str] = &[
             "input",
             "fetch",
+            "required_ordering",
+            "requiredOrdering",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Input,
             Fetch,
+            RequiredOrdering,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -12641,6 +12668,7 @@ impl<'de> serde::Deserialize<'de> for LocalLimitExecNode {
                         match value {
                             "input" => Ok(GeneratedField::Input),
                             "fetch" => Ok(GeneratedField::Fetch),
+                            "requiredOrdering" | "required_ordering" => Ok(GeneratedField::RequiredOrdering),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -12662,6 +12690,7 @@ impl<'de> serde::Deserialize<'de> for LocalLimitExecNode {
             {
                 let mut input__ = None;
                 let mut fetch__ = None;
+                let mut required_ordering__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -12678,11 +12707,18 @@ impl<'de> serde::Deserialize<'de> for LocalLimitExecNode {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::RequiredOrdering => {
+                            if required_ordering__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("requiredOrdering"));
+                            }
+                            required_ordering__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(LocalLimitExecNode {
                     input: input__,
                     fetch: fetch__.unwrap_or_default(),
+                    required_ordering: required_ordering__.unwrap_or_default(),
                 })
             }
         }

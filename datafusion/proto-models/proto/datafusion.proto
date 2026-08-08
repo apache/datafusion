@@ -1472,11 +1472,15 @@ message GlobalLimitExecNode {
   uint32 skip = 2;
   // Maximum number of rows to fetch; negative means no limit
   int64 fetch = 3;
+  // Ordering the limit must preserve; empty means none
+  repeated PhysicalSortExprNode required_ordering = 4;
 }
 
 message LocalLimitExecNode {
   PhysicalPlanNode input = 1;
   uint32 fetch = 2;
+  // Ordering the limit must preserve; empty means none
+  repeated PhysicalSortExprNode required_ordering = 3;
 }
 
 message SortExecNode {

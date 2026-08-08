@@ -56,6 +56,7 @@ use datafusion::physical_expr::{
 };
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
+use datafusion::physical_optimizer::limit_pushdown::LimitPushdown;
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
 };
@@ -437,6 +438,115 @@ fn roundtrip_global_skip_no_limit() -> Result<()> {
         10,
         None, // no limit
     )))
+}
+
+/// A single-column ordering with non-default sort options, so a decode that
+/// falls back to defaults cannot pass the roundtrip assertions.
+fn limit_required_ordering(schema: &Schema) -> Result<Option<LexOrdering>> {
+    Ok(LexOrdering::new(vec![PhysicalSortExpr {
+        expr: col("a", schema)?,
+        options: SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    }]))
+}
+
+#[test]
+fn roundtrip_local_limit_with_required_ordering() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let required_ordering = limit_required_ordering(&schema)?;
+    let mut limit = LocalLimitExec::new(Arc::new(EmptyExec::new(schema)), 25);
+    limit.set_required_ordering(required_ordering.clone());
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let result =
+        roundtrip_test_and_return(Arc::new(limit), &ctx, &codec, &proto_converter)?;
+    let result = result.downcast_ref::<LocalLimitExec>().unwrap();
+    assert_eq!(result.required_ordering(), &required_ordering);
+    Ok(())
+}
+
+#[test]
+fn roundtrip_global_limit_with_required_ordering() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let required_ordering = limit_required_ordering(&schema)?;
+    let mut limit = GlobalLimitExec::new(Arc::new(EmptyExec::new(schema)), 3, Some(25));
+    limit.set_required_ordering(required_ordering.clone());
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let result =
+        roundtrip_test_and_return(Arc::new(limit), &ctx, &codec, &proto_converter)?;
+    let result = result.downcast_ref::<GlobalLimitExec>().unwrap();
+    assert_eq!(result.required_ordering(), &required_ordering);
+    Ok(())
+}
+
+/// A limit's `required_ordering` is the only record that an `ORDER BY ... LIMIT`
+/// whose sort node was optimized away is order-sensitive. Exercise the full
+/// consumer path: decode a plan that still carries the limit, rebuild the
+/// limit's child as optimizer passes do, run `LimitPushdown`, and check that
+/// the scan comes out order-preserving.
+#[test]
+fn roundtrip_limit_required_ordering_reaches_data_source() -> Result<()> {
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Int64, false)]));
+    let make_scan = || {
+        let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
+        let scan_config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file.parquet".to_string(),
+                    1024,
+                )])])
+                .build();
+        DataSourceExec::from_data_source(scan_config)
+    };
+    let scan_after_limit_pushdown = |limit: GlobalLimitExec| -> Result<FileScanConfig> {
+        let ctx = SessionContext::new();
+        let codec = DefaultPhysicalExtensionCodec {};
+        let proto_converter = DefaultPhysicalProtoConverter {};
+        let decoded =
+            roundtrip_test_and_return(Arc::new(limit), &ctx, &codec, &proto_converter)?;
+
+        // An optimizer pass that changes the child subtree rebuilds the
+        // limit around the new child.
+        let rebuilt = decoded.with_new_children(vec![make_scan()])?;
+
+        let optimized =
+            LimitPushdown::new().optimize(rebuilt, &ConfigOptions::default())?;
+        let scan = optimized
+            .downcast_ref::<DataSourceExec>()
+            .expect("limit should be absorbed into the scan");
+        Ok(scan
+            .data_source()
+            .downcast_ref::<FileScanConfig>()
+            .expect("expected FileScanConfig")
+            .clone())
+    };
+
+    let mut limit = GlobalLimitExec::new(make_scan(), 0, Some(10));
+    limit.set_required_ordering(LexOrdering::new(vec![PhysicalSortExpr {
+        expr: Arc::new(Column::new("col", 0)),
+        options: SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    }]));
+    let scan_config = scan_after_limit_pushdown(limit)?;
+    assert_eq!(scan_config.limit, Some(10));
+    assert!(scan_config.preserve_order);
+
+    // Control: with no required ordering the scan must stay order-free.
+    let scan_config =
+        scan_after_limit_pushdown(GlobalLimitExec::new(make_scan(), 0, Some(10)))?;
+    assert_eq!(scan_config.limit, Some(10));
+    assert!(!scan_config.preserve_order);
+    Ok(())
 }
 
 #[test]
