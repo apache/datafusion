@@ -953,7 +953,7 @@ Several queries are included to test hash joins under various workloads.
 
 ## Sort Merge Join
 
-This benchmark focuses on the performance of queries with sort merge joins joins, minimizing other overheads such as scanning data sources or evaluating predicates.
+This benchmark focuses on the performance of queries with sort merge joins, minimizing other overheads such as scanning data sources or evaluating predicates.
 
 Several queries are included to test sort merge joins under various workloads.
 
