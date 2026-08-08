@@ -225,6 +225,38 @@ impl PagePruningAccessPlanFilter {
             return PagePruningResult::new(access_plan, 0);
         };
 
+        // Resolve the statistics converter (which locates the parquet leaf
+        // column via a linear scan of both schemas) once per predicate, rather
+        // than once per (predicate, row group).
+        let predicate_converters: Vec<(&PruningPredicate, StatisticsConverter<'_>)> =
+            page_index_predicates
+                .iter()
+                .filter_map(|predicate| {
+                    let Some(column) = predicate.required_columns().single_column()
+                    else {
+                        debug!(
+                            "Ignoring multi-column page pruning predicate: {:?}",
+                            predicate.predicate_expr()
+                        );
+                        return None;
+                    };
+                    match StatisticsConverter::try_new(
+                        column.name(),
+                        arrow_schema,
+                        parquet_schema,
+                    ) {
+                        Ok(converter) => Some((predicate, converter)),
+                        Err(e) => {
+                            debug!(
+                                "Could not create statistics converter for column {}: {e}",
+                                column.name()
+                            );
+                            None
+                        }
+                    }
+                })
+                .collect();
+
         // track the total number of rows that should be skipped
         let mut total_skip = 0;
         // track the total number of rows that should not be skipped
@@ -262,32 +294,7 @@ impl PagePruningAccessPlanFilter {
             let mut matched_pages_in_group: HashSet<usize> =
                 HashSet::from_iter(0..total_pages_in_group);
 
-            for predicate in page_index_predicates {
-                let Some(column) = predicate.required_columns().single_column() else {
-                    debug!(
-                        "Ignoring multi-column page pruning predicate: {:?}",
-                        predicate.predicate_expr()
-                    );
-                    continue;
-                };
-
-                let converter = StatisticsConverter::try_new(
-                    column.name(),
-                    arrow_schema,
-                    parquet_schema,
-                );
-
-                let converter = match converter {
-                    Ok(converter) => converter,
-                    Err(e) => {
-                        debug!(
-                            "Could not create statistics converter for column {}: {e}",
-                            column.name()
-                        );
-                        continue;
-                    }
-                };
-
+            for (predicate, converter) in &predicate_converters {
                 let selection = prune_pages_in_one_row_group(
                     row_group_index,
                     predicate,
@@ -419,11 +426,11 @@ fn fully_matched_page_count(
 ///
 /// Returns `None` if there is an error evaluating the predicate or the required
 /// page information is not present.
-fn prune_pages_in_one_row_group(
+fn prune_pages_in_one_row_group<'a>(
     row_group_index: usize,
     pruning_predicate: &PruningPredicate,
-    converter: StatisticsConverter<'_>,
-    parquet_metadata: &ParquetMetaData,
+    converter: &'a StatisticsConverter<'a>,
+    parquet_metadata: &'a ParquetMetaData,
     metrics: &ParquetFileMetrics,
 ) -> Option<(RowSelection, Vec<bool>)> {
     let pruning_stats =
@@ -486,7 +493,7 @@ fn prune_pages_in_one_row_group(
 struct PagesPruningStatistics<'a> {
     row_group_index: usize,
     row_group_metadatas: &'a [RowGroupMetaData],
-    converter: StatisticsConverter<'a>,
+    converter: &'a StatisticsConverter<'a>,
     column_index: &'a ParquetColumnIndex,
     offset_index: &'a ParquetOffsetIndex,
     page_offsets: &'a Vec<PageLocation>,
@@ -500,7 +507,7 @@ impl<'a> PagesPruningStatistics<'a> {
     /// information to create the statistics.
     fn try_new(
         row_group_index: usize,
-        converter: StatisticsConverter<'a>,
+        converter: &'a StatisticsConverter<'a>,
         parquet_metadata: &'a ParquetMetaData,
     ) -> Option<Self> {
         let Some(parquet_column_index) = converter.parquet_column_index() else {
