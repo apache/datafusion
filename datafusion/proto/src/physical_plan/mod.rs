@@ -90,11 +90,9 @@ use crate::convert_required;
 use crate::physical_plan::from_proto::{
     parse_physical_expr_with_converter, parse_physical_sort_exprs, parse_record_batches,
 };
-#[cfg(feature = "parquet")]
 use crate::physical_plan::from_proto::{
     parse_protobuf_file_scan_config, parse_table_schema_from_proto,
 };
-#[cfg(feature = "parquet")]
 use crate::physical_plan::to_proto::serialize_file_scan_config;
 use crate::physical_plan::to_proto::{
     serialize_physical_expr_with_converter, serialize_physical_sort_exprs,
