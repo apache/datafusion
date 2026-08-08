@@ -1711,9 +1711,25 @@ impl ExecutionPlan for RepartitionExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
 
-        let input = ctx.encode_child(self.input())?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `RepartitionExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            input,
+            // Execution-time channel state, created on `execute()`.
+            state: _,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            preserve_order,
+            // Derived plan properties. The output partitioning lives here (it is
+            // the plan's own `partitioning`) and *is* serialized below; the rest
+            // is recomputed on decode.
+            cache,
+        } = self;
 
-        let partitioning = self.partitioning().try_to_proto(&ctx.expr_ctx())?;
+        let input = ctx.encode_child(input)?;
+
+        let partitioning = cache.partitioning.try_to_proto(&ctx.expr_ctx())?;
 
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
@@ -1721,7 +1737,7 @@ impl ExecutionPlan for RepartitionExec {
                     protobuf::RepartitionExecNode {
                         input: Some(Box::new(input)),
                         partitioning: Some(partitioning),
-                        preserve_order: self.preserve_order(),
+                        preserve_order: *preserve_order,
                     },
                 )),
             ),
@@ -1743,15 +1759,19 @@ impl RepartitionExec {
             protobuf::physical_plan_node::PhysicalPlanType::Repartition,
             "RepartitionExec",
         );
-        let input = ctx.decode_required_child(
-            repart.input.as_deref(),
-            "RepartitionExec",
-            "input",
-        )?;
+        // Destructure exhaustively so that a new field on
+        // `RepartitionExecNode` is a compile error here rather than a silently
+        // dropped field.
+        let protobuf::RepartitionExecNode {
+            input,
+            partitioning,
+            preserve_order,
+        } = &**repart;
+        let input =
+            ctx.decode_required_child(input.as_deref(), "RepartitionExec", "input")?;
         let input_schema = input.schema();
 
-        let partitioning = repart
-            .partitioning
+        let partitioning = partitioning
             .as_ref()
             .map(|partitioning| {
                 Partitioning::try_from_proto(
@@ -1768,7 +1788,7 @@ impl RepartitionExec {
             })?;
 
         let mut repart_exec = RepartitionExec::try_new(input, partitioning)?;
-        if repart.preserve_order {
+        if *preserve_order {
             repart_exec = repart_exec.with_preserve_order();
         }
         Ok(Arc::new(repart_exec))

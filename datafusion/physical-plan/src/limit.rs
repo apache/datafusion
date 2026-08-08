@@ -251,15 +251,31 @@ impl ExecutionPlan for GlobalLimitExec {
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `GlobalLimitExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            input,
+            skip,
+            fetch,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            // Not serialized: `GlobalLimitExecNode` has no field for it. It is
+            // set by the `enforce_sorting` optimizer rule, so a decoded plan
+            // starts with `None` as `GlobalLimitExec::new` leaves it.
+            required_ordering: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+        } = self;
+        let input = ctx.encode_child(input)?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::GlobalLimit(Box::new(
                     protobuf::GlobalLimitExecNode {
                         input: Some(Box::new(input)),
-                        skip: self.skip() as u32,
-                        fetch: match self.fetch() {
-                            Some(n) => n as i64,
+                        skip: *skip as u32,
+                        fetch: match fetch {
+                            Some(n) => *n as i64,
                             _ => -1, // no limit
                         },
                     },
@@ -281,21 +297,18 @@ impl GlobalLimitExec {
             protobuf::physical_plan_node::PhysicalPlanType::GlobalLimit,
             "GlobalLimitExec",
         );
-        let input = ctx.decode_required_child(
-            limit.input.as_deref(),
-            "GlobalLimitExec",
-            "input",
-        )?;
-        let fetch = if limit.fetch >= 0 {
-            Some(limit.fetch as usize)
+        // Destructure exhaustively so that a new field on
+        // `GlobalLimitExecNode` is a compile error here rather than a silently
+        // dropped field.
+        let protobuf::GlobalLimitExecNode { input, skip, fetch } = &**limit;
+        let input =
+            ctx.decode_required_child(input.as_deref(), "GlobalLimitExec", "input")?;
+        let fetch = if *fetch >= 0 {
+            Some(*fetch as usize)
         } else {
             None
         };
-        Ok(Arc::new(GlobalLimitExec::new(
-            input,
-            limit.skip as usize,
-            fetch,
-        )))
+        Ok(Arc::new(GlobalLimitExec::new(input, *skip as usize, fetch)))
     }
 }
 
@@ -479,13 +492,28 @@ impl ExecutionPlan for LocalLimitExec {
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `LocalLimitExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            input,
+            fetch,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            // Not serialized: `LocalLimitExecNode` has no field for it. It is
+            // set by the `enforce_sorting` optimizer rule, so a decoded plan
+            // starts with `None` as `LocalLimitExec::new` leaves it.
+            required_ordering: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+        } = self;
+        let input = ctx.encode_child(input)?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::LocalLimit(Box::new(
                     protobuf::LocalLimitExecNode {
                         input: Some(Box::new(input)),
-                        fetch: self.fetch() as u32,
+                        fetch: *fetch as u32,
                     },
                 )),
             ),
@@ -505,9 +533,12 @@ impl LocalLimitExec {
             protobuf::physical_plan_node::PhysicalPlanType::LocalLimit,
             "LocalLimitExec",
         );
+        // Destructure exhaustively so that a new field on `LocalLimitExecNode`
+        // is a compile error here rather than a silently dropped field.
+        let protobuf::LocalLimitExecNode { input, fetch } = &**limit;
         let input =
-            ctx.decode_required_child(limit.input.as_deref(), "LocalLimitExec", "input")?;
-        Ok(Arc::new(LocalLimitExec::new(input, limit.fetch as usize)))
+            ctx.decode_required_child(input.as_deref(), "LocalLimitExec", "input")?;
+        Ok(Arc::new(LocalLimitExec::new(input, *fetch as usize)))
     }
 }
 
