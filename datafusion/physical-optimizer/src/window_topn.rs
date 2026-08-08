@@ -58,6 +58,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion_physical_expr::window::StandardWindowExpr;
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::projection::ProjectionExec;
@@ -78,7 +79,6 @@ use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 /// FilterExec(<ranking fn output> <= K)
 ///   [optional ProjectionExec]
 ///     BoundedWindowAggExec(<ranking fn> PARTITION BY ... ORDER BY ...)
-///       SortExec(partition_keys, order_keys)
 /// ```
 ///
 /// # Replacement
@@ -89,7 +89,7 @@ use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 ///     PartitionedTopKExec(fn=<row_number|rank>, partition_keys, order_keys, fetch=K)
 /// ```
 ///
-/// The `FilterExec` is removed entirely. The `SortExec` is replaced by
+/// The `FilterExec` is removed entirely. The child of `BoundedWindowAggExec` is now
 /// `PartitionedTopKExec`, which maintains a per-partition top-K heap (and,
 /// for `RANK`, a sibling ties `Vec`) instead of sorting the whole dataset.
 ///
@@ -104,7 +104,7 @@ use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 ///
 /// All of the following must be true:
 /// - Config flag `enable_window_topn` is `true`
-/// - The plan matches `FilterExec → [ProjectionExec] → BoundedWindowAggExec → SortExec`
+/// - The plan matches `FilterExec → [ProjectionExec] → BoundedWindowAggExec`
 /// - The window function is `ROW_NUMBER` or `RANK` (not `DENSE_RANK`)
 /// - The window function has a `PARTITION BY` clause (global top-K is
 ///   already handled by `SortExec` with `fetch`)
@@ -126,7 +126,7 @@ impl WindowTopN {
     /// Attempt to transform a single plan node.
     ///
     /// Returns `Some(new_plan)` if the node matches the
-    /// `FilterExec → [ProjectionExec] → BoundedWindowAggExec → SortExec`
+    /// `FilterExec → [ProjectionExec] → BoundedWindowAggExec`
     /// pattern and can be rewritten, or `None` if the node should be
     /// left unchanged.
     fn try_transform(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
@@ -159,9 +159,6 @@ impl WindowTopN {
         }
         let fn_kind = supported_window_fn(&window_exprs[window_expr_idx])?;
 
-        // Step 5: child of window is SortExec (verified above)
-        let sort_child = sort_exec.input();
-
         // Step 6: Determine partition_prefix_len from the window expression
         let partition_by = window_exprs[window_expr_idx].partition_by();
         let partition_prefix_len = partition_by.len();
@@ -172,18 +169,24 @@ impl WindowTopN {
             return None;
         }
 
+        let order_by = window_exprs[window_expr_idx].order_by();
+
         // For RANK: an empty ORDER BY makes every row tie at rank 1 —
         // the optimization is degenerate (we'd retain the entire input)
         // and tie storage would be unbounded.
-        if matches!(fn_kind, WindowFnKind::Rank)
-            && window_exprs[window_expr_idx].order_by().is_empty()
-        {
+        if matches!(fn_kind, WindowFnKind::Rank) && order_by.is_empty() {
             return None;
         }
 
+        let expr_iterator = partition_by
+            .iter()
+            .map(|e| PhysicalSortExpr::new_default(*e).asc())
+            .chain(order_by.iter());
+        let expr = LexOrdering::new(expr_iterator)?;
+
         // Step 7: Build PartitionedTopKExec using SortExec's expressions
         let partitioned_topk = PartitionedTopKExec::try_new(
-            Arc::clone(sort_child),
+            Arc::clone(window_exec_typed.input()),
             sort_exec.expr().clone(),
             partition_prefix_len,
             limit_n,
