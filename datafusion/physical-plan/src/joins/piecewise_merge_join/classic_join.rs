@@ -36,7 +36,9 @@ use std::{sync::Arc, task::Poll};
 
 use crate::handle_state;
 use crate::joins::piecewise_merge_join::exec::{BufferedSide, BufferedSideReadyState};
-use crate::joins::piecewise_merge_join::utils::need_produce_result_in_final;
+use crate::joins::piecewise_merge_join::utils::{
+    is_supported_existence_join, need_produce_result_in_final,
+};
 use crate::joins::utils::{BuildProbeJoinMetrics, StatefulStreamResult};
 use crate::joins::utils::{JoinKeyComparator, get_final_indices_from_shared_bitmap};
 use crate::stream::EmptyRecordBatchStream;
@@ -358,14 +360,18 @@ impl ClassicPWMJStream {
             take_record_batch(buffered_data.batch(), &buffered_indices)?;
         let mut buffered_columns = new_buffered_batch.columns().to_vec();
 
-        let streamed_columns: Vec<ArrayRef> = self
-            .streamed_schema
-            .fields()
-            .iter()
-            .map(|f| new_null_array(f.data_type(), new_buffered_batch.num_rows()))
-            .collect();
+        // LeftSemi/LeftAnti emit only the buffered (left) columns; classic outer joins
+        // (Left/Full) additionally emit null-padded streamed columns for unmatched rows.
+        if !is_supported_existence_join(self.join_type) {
+            let streamed_columns: Vec<ArrayRef> = self
+                .streamed_schema
+                .fields()
+                .iter()
+                .map(|f| new_null_array(f.data_type(), new_buffered_batch.num_rows()))
+                .collect();
 
-        buffered_columns.extend(streamed_columns);
+            buffered_columns.extend(streamed_columns);
+        }
 
         let batch = RecordBatch::try_new(Arc::clone(&self.schema), buffered_columns)?;
 
@@ -415,6 +421,14 @@ struct BatchProcessState {
     continue_process: bool,
     // Skip nulls
     processed_null_count: bool,
+    // For existence joins (LeftSemi/LeftAnti): the lowest buffered index marked in the
+    // bitmap so far, across all stream batches processed by this stream. Buffered rows
+    // `[existence_min_marked..len)` are already marked, so later batches only need to mark
+    // the new prefix `[buffer_idx..existence_min_marked)`. This bounds total marking work
+    // to O(buffered) per partition instead of O(num_batches * buffered). `usize::MAX`
+    // means nothing has been marked yet. It intentionally persists across batches and is
+    // not cleared by `reset`.
+    existence_min_marked: usize,
 }
 
 impl BatchProcessState {
@@ -427,6 +441,7 @@ impl BatchProcessState {
             found: false,
             continue_process: true,
             processed_null_count: false,
+            existence_min_marked: usize::MAX,
         }
     }
 
@@ -437,6 +452,7 @@ impl BatchProcessState {
         self.found = false;
         self.continue_process = true;
         self.processed_null_count = false;
+        // `existence_min_marked` is deliberately not reset: it accumulates across batches.
     }
 }
 
@@ -485,67 +501,15 @@ fn resolve_classic_join(
 
     // Our buffer_idx variable allows us to start probing on the buffered side where we last matched
     // in the previous stream row.
-    for row_idx in stream_idx..stream_batch.batch.num_rows() {
+    'stream_rows: for row_idx in stream_idx..stream_batch.batch.num_rows() {
         while buffer_idx < buffered_len {
             let compare = cmp.compare(row_idx, buffer_idx);
 
-            // If we find a match we append all indices and move to the next stream row index
-            match operator {
-                Operator::Gt | Operator::Lt => {
-                    if compare == Ordering::Less {
-                        batch_process_state.found = true;
-                        let count = buffered_len - buffer_idx;
-
-                        let batch = build_matched_indices_and_set_buffered_bitmap(
-                            (buffer_idx, count),
-                            (row_idx, count),
-                            buffered_side,
-                            stream_batch,
-                            join_type,
-                            join_schema,
-                        )?;
-
-                        batch_process_state.output_batches.push_batch(batch)?;
-
-                        // Flush batch and update pointers if we have a completed batch
-                        if let Some(batch) =
-                            batch_process_state.output_batches.next_completed_batch()
-                        {
-                            batch_process_state.found = false;
-                            batch_process_state.start_buffer_idx = buffer_idx;
-                            batch_process_state.start_stream_idx = row_idx + 1;
-                            return Ok(batch);
-                        }
-
-                        break;
-                    }
-                }
+            // Determine whether the current stream row matches the current buffered row.
+            let is_match = match operator {
+                Operator::Gt | Operator::Lt => compare == Ordering::Less,
                 Operator::GtEq | Operator::LtEq => {
-                    if matches!(compare, Ordering::Equal | Ordering::Less) {
-                        batch_process_state.found = true;
-                        let count = buffered_len - buffer_idx;
-                        let batch = build_matched_indices_and_set_buffered_bitmap(
-                            (buffer_idx, count),
-                            (row_idx, count),
-                            buffered_side,
-                            stream_batch,
-                            join_type,
-                            join_schema,
-                        )?;
-
-                        // Flush batch and update pointers if we have a completed batch
-                        batch_process_state.output_batches.push_batch(batch)?;
-                        if let Some(batch) =
-                            batch_process_state.output_batches.next_completed_batch()
-                        {
-                            batch_process_state.found = false;
-                            batch_process_state.start_buffer_idx = buffer_idx;
-                            batch_process_state.start_stream_idx = row_idx + 1;
-                            return Ok(batch);
-                        }
-
-                        break;
-                    }
+                    matches!(compare, Ordering::Equal | Ordering::Less)
                 }
                 _ => {
                     return internal_err!(
@@ -554,6 +518,62 @@ fn resolve_classic_join(
                     );
                 }
             };
+
+            if is_match {
+                batch_process_state.found = true;
+
+                // Existence joins (LeftSemi/LeftAnti) only need to know which buffered
+                // rows have at least one match. `buffer_idx` advances monotonically within
+                // a batch, so the first match sits at the smallest buffered index reached;
+                // because the buffered side is sorted, every row in `[buffer_idx..end]`
+                // matches too. Marking that suffix once therefore covers every match this
+                // batch can produce, so we mark it and stop scanning the batch entirely
+                // (any later stream row would only re-mark a subset). Output is produced
+                // later from the bitmap.
+                //
+                // Across batches we only mark the not-yet-marked prefix
+                // `[buffer_idx..existence_min_marked)`: rows from `existence_min_marked`
+                // onward were already marked by an earlier batch. This keeps total marking
+                // work at O(buffered) per partition even with many stream batches.
+                if is_supported_existence_join(join_type) {
+                    let upper =
+                        batch_process_state.existence_min_marked.min(buffered_len);
+                    if buffer_idx < upper {
+                        let mut bitmap =
+                            buffered_side.buffered_data.visited_indices_bitmap.lock();
+                        for i in buffer_idx..upper {
+                            bitmap.set_bit(i, true);
+                        }
+                        batch_process_state.existence_min_marked = buffer_idx;
+                    }
+                    break 'stream_rows;
+                }
+
+                let count = buffered_len - buffer_idx;
+
+                let batch = build_matched_indices_and_set_buffered_bitmap(
+                    (buffer_idx, count),
+                    (row_idx, count),
+                    buffered_side,
+                    stream_batch,
+                    join_type,
+                    join_schema,
+                )?;
+
+                batch_process_state.output_batches.push_batch(batch)?;
+
+                // Flush batch and update pointers if we have a completed batch
+                if let Some(batch) =
+                    batch_process_state.output_batches.next_completed_batch()
+                {
+                    batch_process_state.found = false;
+                    batch_process_state.start_buffer_idx = buffer_idx;
+                    batch_process_state.start_stream_idx = row_idx + 1;
+                    return Ok(batch);
+                }
+
+                break;
+            }
 
             // Increment buffer_idx after every row
             buffer_idx += 1;
@@ -1541,6 +1561,750 @@ mod tests {
         |                         |                     |                         | 1970-01-01T00:00:00.010 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.080 |
         +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
         ");
+        Ok(())
+    }
+
+    // Builds a table whose middle (`b`) column is nullable so existence-join NULL
+    // semantics can be exercised.
+    fn build_table_nullable_b(
+        a: (&str, &Vec<i32>),
+        b: (&str, &Vec<Option<i32>>),
+        c: (&str, &Vec<i32>),
+    ) -> Arc<dyn ExecutionPlan> {
+        let schema = Schema::new(vec![
+            Field::new(a.0, DataType::Int32, false),
+            Field::new(b.0, DataType::Int32, true),
+            Field::new(c.0, DataType::Int32, false),
+        ]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(a.1.clone())),
+                Arc::new(arrow::array::Int32Array::from(b.1.clone())),
+                Arc::new(arrow::array::Int32Array::from(c.1.clone())),
+            ],
+        )
+        .unwrap();
+        let schema = batch.schema();
+        TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
+    }
+
+    // LeftSemi keeps buffered (left) rows that have at least one match, and outputs only
+    // the left columns. Buffered side is pre-sorted in the operator's required order
+    // (descending for `<`) because these unit tests bypass the optimizer's SortExec.
+    #[tokio::test]
+    async fn join_left_semi_less_than() -> Result<()> {
+        // left.b1 < right.b1 ; left is buffered, sorted descending for `<`
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![5, 2, 1]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![2, 3, 4]),
+            ("c2", &vec![70, 80, 90]),
+        );
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let (_, batches) =
+            join_collect(left, right, on, Operator::Lt, JoinType::LeftSemi).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        | 2  | 2  | 8  |
+        | 3  | 1  | 9  |
+        +----+----+----+
+        ");
+        Ok(())
+    }
+
+    // LeftAnti keeps buffered (left) rows that have NO match.
+    #[tokio::test]
+    async fn join_left_anti_less_than() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![5, 2, 1]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![2, 3, 4]),
+            ("c2", &vec![70, 80, 90]),
+        );
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let (_, batches) =
+            join_collect(left, right, on, Operator::Lt, JoinType::LeftAnti).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        | 1  | 5  | 7  |
+        +----+----+----+
+        ");
+        Ok(())
+    }
+
+    // `>` uses ascending buffered order.
+    #[tokio::test]
+    async fn join_left_semi_greater_than() -> Result<()> {
+        // left.b1 > right.b1 ; left is buffered, sorted ascending for `>`
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![1, 2, 5]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![2, 3, 4]),
+            ("c2", &vec![70, 80, 90]),
+        );
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let (_, batches) =
+            join_collect(left, right, on, Operator::Gt, JoinType::LeftSemi).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        | 3  | 5  | 9  |
+        +----+----+----+
+        ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_left_anti_greater_than() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![1, 2, 5]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![2, 3, 4]),
+            ("c2", &vec![70, 80, 90]),
+        );
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let (_, batches) =
+            join_collect(left, right, on, Operator::Gt, JoinType::LeftAnti).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        | 1  | 1  | 7  |
+        | 2  | 2  | 8  |
+        +----+----+----+
+        ");
+        Ok(())
+    }
+
+    // `<=` includes equal values.
+    #[tokio::test]
+    async fn join_left_semi_less_than_equal() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![5, 4, 2]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![2, 3, 4]),
+            ("c2", &vec![70, 80, 90]),
+        );
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let (_, batches) =
+            join_collect(left, right, on, Operator::LtEq, JoinType::LeftSemi).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        | 2  | 4  | 8  |
+        | 3  | 2  | 9  |
+        +----+----+----+
+        ");
+        Ok(())
+    }
+
+    // `>=` includes equal values (ascending buffered order).
+    #[tokio::test]
+    async fn join_left_semi_greater_than_equal() -> Result<()> {
+        // Keep left rows with some right b1 <= left b1. left b1 = {1,3,5},
+        // right b1 = {3,4}. 1 has none; 3>=3; 5>={3,4}.
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![1, 3, 5]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20]),
+            ("b1", &vec![3, 4]),
+            ("c2", &vec![70, 80]),
+        );
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let (_, batches) =
+            join_collect(left, right, on, Operator::GtEq, JoinType::LeftSemi).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        | 2  | 3  | 8  |
+        | 3  | 5  | 9  |
+        +----+----+----+
+        ");
+        Ok(())
+    }
+
+    // Empty buffered (left) side: LeftSemi produces nothing, LeftAnti produces nothing.
+    #[tokio::test]
+    async fn join_left_semi_empty_left() -> Result<()> {
+        let left = build_table(
+            ("a1", &Vec::<i32>::new()),
+            ("b1", &Vec::<i32>::new()),
+            ("c1", &Vec::<i32>::new()),
+        );
+        let right = build_table(
+            ("a2", &vec![1, 2]),
+            ("b1", &vec![1, 2]),
+            ("c2", &vec![1, 2]),
+        );
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let (_, batches) =
+            join_collect(left, right, on, Operator::Lt, JoinType::LeftSemi).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        +----+----+----+
+        ");
+        Ok(())
+    }
+
+    // Empty streamed (right) side: no right row can satisfy the predicate, so LeftSemi is
+    // empty and LeftAnti returns all buffered rows.
+    #[tokio::test]
+    async fn join_left_anti_empty_right() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![3, 2, 1]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &Vec::<i32>::new()),
+            ("b1", &Vec::<i32>::new()),
+            ("c2", &Vec::<i32>::new()),
+        );
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let (_, batches) =
+            join_collect(left, right, on, Operator::Lt, JoinType::LeftAnti).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        | 1  | 3  | 7  |
+        | 2  | 2  | 8  |
+        | 3  | 1  | 9  |
+        +----+----+----+
+        ");
+        Ok(())
+    }
+
+    // NULL join keys never satisfy a comparison predicate, so a null-keyed left row is
+    // excluded from LeftSemi and included in LeftAnti. Buffered side sorted descending
+    // with nulls first for `<`.
+    #[tokio::test]
+    async fn join_left_semi_less_than_left_nulls() -> Result<()> {
+        let left = build_table_nullable_b(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![None, Some(5), Some(1)]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20]),
+            ("b1", &vec![2, 4]),
+            ("c2", &vec![70, 80]),
+        );
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let (_, batches) =
+            join_collect(left, right, on, Operator::Lt, JoinType::LeftSemi).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        | 3  | 1  | 9  |
+        +----+----+----+
+        ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_left_anti_less_than_left_nulls() -> Result<()> {
+        let left = build_table_nullable_b(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![None, Some(5), Some(1)]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20]),
+            ("b1", &vec![2, 4]),
+            ("c2", &vec![70, 80]),
+        );
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let (_, batches) =
+            join_collect(left, right, on, Operator::Lt, JoinType::LeftAnti).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        | 1  |    | 7  |
+        | 2  | 5  | 8  |
+        +----+----+----+
+        ");
+        Ok(())
+    }
+
+    // Existence join over a streamed side split across multiple partitions: the final
+    // pass that emits the bitmap result runs once, on the last streamed partition to
+    // finish. This exercises that coordination for LeftSemi.
+    #[tokio::test]
+    async fn join_left_semi_multi_partition_stream() -> Result<()> {
+        // Buffered (left) side, sorted ascending for `>`.
+        let left = build_table(
+            ("a1", &vec![1, 2, 3, 4]),
+            ("b1", &vec![1, 3, 5, 7]),
+            ("c1", &vec![10, 20, 30, 40]),
+        );
+
+        // Streamed (right) side split across two partitions.
+        let right_schema = Schema::new(vec![
+            Field::new("a2", DataType::Int32, false),
+            Field::new("b1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ]);
+        let right_p0 = build_table_i32(
+            ("a2", &vec![10, 20]),
+            ("b1", &vec![2, 4]),
+            ("c2", &vec![70, 80]),
+        );
+        let right_p1 =
+            build_table_i32(("a2", &vec![30]), ("b1", &vec![6]), ("c2", &vec![90]));
+        let right = TestMemoryExec::try_new_exec(
+            &[vec![right_p0], vec![right_p1]],
+            Arc::new(right_schema),
+            None,
+        )?;
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        // Keep buffered rows with some smaller streamed b1: streamed b1 = {2,4,6},
+        // buffered b1 = {1,3,5,7}. 3>2, 5>{2,4}, 7>{2,4,6}. 1 has none.
+        let join = PiecewiseMergeJoinExec::try_new(
+            left,
+            right,
+            on,
+            Operator::Gt,
+            JoinType::LeftSemi,
+            2,
+        )?;
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let mut batches = Vec::new();
+        for p in 0..2 {
+            let stream = join.execute(p, Arc::clone(&task_ctx))?;
+            batches.extend(common::collect(stream).await?);
+        }
+        // Sort output for a stable comparison (partitions may interleave).
+        let sorted = arrow::compute::concat_batches(&join.schema(), batches.iter())?;
+        let indices = sort_to_indices(sorted.column(1).as_ref(), None, None)?;
+        let sorted = take_record_batch(&sorted, &indices)?;
+
+        assert_snapshot!(batches_to_string(&[sorted]), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        | 2  | 3  | 20 |
+        | 3  | 5  | 30 |
+        | 4  | 7  | 40 |
+        +----+----+----+
+        ");
+        Ok(())
+    }
+
+    // LeftAnti `>=` — complement of the LeftSemi `>=` case, closes the operator matrix.
+    #[tokio::test]
+    async fn join_left_anti_greater_than_equal() -> Result<()> {
+        // Keep left rows with NO right b1 <= left b1. left b1 = {1,3,5},
+        // right b1 = {3,4}. Only 1 has no smaller-or-equal right value.
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![1, 3, 5]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20]),
+            ("b1", &vec![3, 4]),
+            ("c2", &vec![70, 80]),
+        );
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let (_, batches) =
+            join_collect(left, right, on, Operator::GtEq, JoinType::LeftAnti).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        | 1  | 1  | 7  |
+        +----+----+----+
+        ");
+        Ok(())
+    }
+
+    // Every streamed (right) join key is NULL, so no comparison can ever match:
+    // LeftAnti must return all buffered rows.
+    #[tokio::test]
+    async fn join_left_anti_all_right_nulls() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![3, 2, 1]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table_nullable_b(
+            ("a2", &vec![10, 20]),
+            ("b1", &vec![None, None]),
+            ("c2", &vec![70, 80]),
+        );
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let (_, batches) =
+            join_collect(left, right, on, Operator::Lt, JoinType::LeftAnti).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        | 1  | 3  | 7  |
+        | 2  | 2  | 8  |
+        | 3  | 1  | 9  |
+        +----+----+----+
+        ");
+        Ok(())
+    }
+
+    // Non-integer key type: existence joins reuse the same comparator as classic joins,
+    // so a Date32 key should behave identically.
+    #[tokio::test]
+    async fn join_left_semi_date32_greater_than() -> Result<()> {
+        // left dates > some right date. left b1 = {19100, 19105, 19110},
+        // right b1 = {19102, 19108}. 19100 has none; 19105>19102; 19110>{19102,19108}.
+        let left = build_date_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![19100, 19105, 19110]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_date_table(
+            ("a2", &vec![10, 20]),
+            ("b1", &vec![19102, 19108]),
+            ("c2", &vec![70, 80]),
+        );
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let (_, batches) =
+            join_collect(left, right, on, Operator::Gt, JoinType::LeftSemi).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +------------+------------+------------+
+        | a1         | b1         | c1         |
+        +------------+------------+------------+
+        | 1970-01-03 | 2022-04-23 | 1970-01-09 |
+        | 1970-01-04 | 2022-04-28 | 1970-01-10 |
+        +------------+------------+------------+
+        ");
+        Ok(())
+    }
+
+    // Streamed (right) side delivered as multiple batches within a single partition. The
+    // bitmap must accumulate matches across batches; here the second batch contributes
+    // matches the first did not, so dropping either batch would change the result.
+    #[tokio::test]
+    async fn join_left_semi_multi_batch_stream() -> Result<()> {
+        // Buffered (left) side, sorted ascending for `>`.
+        let left = build_table(
+            ("a1", &vec![1, 2, 3, 4]),
+            ("b1", &vec![1, 3, 5, 7]),
+            ("c1", &vec![10, 20, 30, 40]),
+        );
+
+        let right_schema = Schema::new(vec![
+            Field::new("a2", DataType::Int32, false),
+            Field::new("b1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ]);
+        // Batch 1 (b1=6) marks only b1=7; batch 2 (b1=2) additionally marks b1={3,5,7}.
+        let batch1 =
+            build_table_i32(("a2", &vec![10]), ("b1", &vec![6]), ("c2", &vec![70]));
+        let batch2 =
+            build_table_i32(("a2", &vec![20]), ("b1", &vec![2]), ("c2", &vec![80]));
+        // Single partition containing two batches.
+        let right = TestMemoryExec::try_new_exec(
+            &[vec![batch1, batch2]],
+            Arc::new(right_schema),
+            None,
+        )?;
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let (_, batches) =
+            join_collect(left, right, on, Operator::Gt, JoinType::LeftSemi).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        | 2  | 3  | 20 |
+        | 3  | 5  | 30 |
+        | 4  | 7  | 40 |
+        +----+----+----+
+        ");
+        Ok(())
+    }
+
+    // Exercises the cross-batch low-water mark, including its skip branch. Batch order is
+    // chosen so that:
+    //   batch 1 (b1=2) matches low  -> marks buffered b1={3,5,7}, watermark drops to idx 1
+    //   batch 2 (b1=6) matches high -> would only mark b1=7 (already marked) -> skipped
+    //   batch 3 (b1=0) matches even lower -> marks the remaining b1=1
+    // Result is all four buffered rows; a change that either re-marked greedily or
+    // skipped batch 3 would be caught here.
+    #[tokio::test]
+    async fn join_left_semi_multi_batch_watermark_skip() -> Result<()> {
+        // Buffered (left) side, sorted ascending for `>`.
+        let left = build_table(
+            ("a1", &vec![1, 2, 3, 4]),
+            ("b1", &vec![1, 3, 5, 7]),
+            ("c1", &vec![10, 20, 30, 40]),
+        );
+
+        let right_schema = Schema::new(vec![
+            Field::new("a2", DataType::Int32, false),
+            Field::new("b1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ]);
+        let batch1 =
+            build_table_i32(("a2", &vec![10]), ("b1", &vec![2]), ("c2", &vec![70]));
+        let batch2 =
+            build_table_i32(("a2", &vec![20]), ("b1", &vec![6]), ("c2", &vec![80]));
+        let batch3 =
+            build_table_i32(("a2", &vec![30]), ("b1", &vec![0]), ("c2", &vec![90]));
+        // Single partition, three batches processed in order.
+        let right = TestMemoryExec::try_new_exec(
+            &[vec![batch1, batch2, batch3]],
+            Arc::new(right_schema),
+            None,
+        )?;
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let (_, batches) =
+            join_collect(left, right, on, Operator::Gt, JoinType::LeftSemi).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        | 1  | 1  | 10 |
+        | 2  | 3  | 20 |
+        | 3  | 5  | 30 |
+        | 4  | 7  | 40 |
+        +----+----+----+
+        ");
+        Ok(())
+    }
+
+    // LeftAnti over a streamed side split across multiple partitions AND multiple batches.
+    // Only LeftSemi had multi-partition coverage; the anti final pass emits the *unmarked*
+    // buffered rows, so this exercises the complementary bitmap read plus the multi-partition
+    // final-pass counter. Buffered b1 = {1,3,5,7}; streamed b1 = {2,4,6} spread across two
+    // partitions. For `>`, buffered rows with some smaller streamed value match (3,5,7); only
+    // b1=1 has none, so LeftAnti must return exactly that row.
+    #[tokio::test]
+    async fn join_left_anti_multi_partition_multi_batch_stream() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3, 4]),
+            ("b1", &vec![1, 3, 5, 7]),
+            ("c1", &vec![10, 20, 30, 40]),
+        );
+
+        let right_schema = Schema::new(vec![
+            Field::new("a2", DataType::Int32, false),
+            Field::new("b1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ]);
+        // Partition 0 delivers b1=2 then b1=6 as two separate batches; partition 1 delivers b1=4.
+        let p0_b0 =
+            build_table_i32(("a2", &vec![10]), ("b1", &vec![2]), ("c2", &vec![70]));
+        let p0_b1 =
+            build_table_i32(("a2", &vec![20]), ("b1", &vec![6]), ("c2", &vec![80]));
+        let p1_b0 =
+            build_table_i32(("a2", &vec![30]), ("b1", &vec![4]), ("c2", &vec![90]));
+        let right = TestMemoryExec::try_new_exec(
+            &[vec![p0_b0, p0_b1], vec![p1_b0]],
+            Arc::new(right_schema),
+            None,
+        )?;
+
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let join = PiecewiseMergeJoinExec::try_new(
+            left,
+            right,
+            on,
+            Operator::Gt,
+            JoinType::LeftAnti,
+            2,
+        )?;
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let mut batches = Vec::new();
+        for p in 0..2 {
+            let stream = join.execute(p, Arc::clone(&task_ctx))?;
+            batches.extend(common::collect(stream).await?);
+        }
+        let out = arrow::compute::concat_batches(&join.schema(), batches.iter())?;
+
+        assert_snapshot!(batches_to_string(&[out]), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        | 1  | 1  | 10 |
+        +----+----+----+
+        ");
+        Ok(())
+    }
+
+    // Existence output is produced entirely in the final pass, which runs exactly once on
+    // the last streamed partition to finish. That is coordinated by a counter seeded from
+    // the streamed side's partition count. Here the streamed side is single-partition while
+    // `target_partitions` is 4: `execute` is called once, so the counter must be seeded
+    // from the streamed partition count (1) for the final pass to run — otherwise `LeftSemi`
+    // would emit nothing.
+    #[tokio::test]
+    async fn left_semi_multi_partition_final_pass() -> Result<()> {
+        // left.b1 > right.b1 ; buffered sorted ascending for `>`. Keep left rows with some
+        // smaller right b1: left b1 = {1,3,4}, right b1 = {3,2,1}. 3>{2,1}, 4>{3,2,1}; 1 has none.
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![1, 3, 4]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![3, 2, 1]),
+            ("c2", &vec![70, 80, 90]),
+        );
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+        // target_partitions = 4, but the streamed side is single-partition.
+        let join = PiecewiseMergeJoinExec::try_new(
+            left,
+            right,
+            on,
+            Operator::Gt,
+            JoinType::LeftSemi,
+            4,
+        )?;
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+        let out = arrow::compute::concat_batches(&join.schema(), batches.iter())?;
+        // The two matching left rows (b1=3, b1=4) must be emitted by the final pass.
+        assert_eq!(out.num_rows(), 2);
         Ok(())
     }
 }
