@@ -20,10 +20,12 @@
 mod boolean;
 mod bytes;
 pub mod bytes_view;
+mod list;
 pub mod primitive;
 pub mod row_backed;
 
 use std::mem::{self, size_of};
+use std::sync::Arc;
 
 use crate::aggregates::group_values::GroupValues;
 use crate::aggregates::group_values::multi_group_by::{
@@ -928,17 +930,7 @@ macro_rules! instantiate_primitive {
 /// builder for. The `group_column_supported_type_matches_make_group_column`
 /// test below pins this biconditional.
 fn group_column_supported_type(data_type: &DataType) -> bool {
-    // Nested types (Struct / List / LargeList / FixedSizeList, recursively) have
-    // no type-specialized `GroupColumn`; they are handled by the generic
-    // row-backed fallback in `make_group_column` whenever arrow's row format can
-    // encode them. Gate the fallback to nested types so intentionally-excluded
-    // scalar types (e.g. Float16, Decimal256) stay on `GroupValuesRows` and the
-    // `group_column_supported_type` ⇔ `make_group_column` invariant holds.
-    if data_type.is_nested() {
-        return RowsGroupColumn::supports_type(data_type);
-    }
-    matches!(
-        *data_type,
+    match data_type {
         DataType::Int8
             | DataType::Int16
             | DataType::Int32
@@ -972,8 +964,18 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::Interval(_)
             | DataType::Utf8View
             | DataType::BinaryView
-            | DataType::Boolean
-    )
+            | DataType::Boolean => true,
+        DataType::List(child_field) | DataType::LargeList(child_field)
+            if group_column_supported_type(child_field.data_type()) => true,
+        // Nested types (Struct / List / LargeList / FixedSizeList, recursively)
+        // that have no type-specialized `GroupColumn` as per the above are handled by the generic
+        // row-backed fallback in `make_group_column` whenever arrow's row format can
+        // encode them. Gate the fallback to nested types so intentionally-excluded
+        // scalar types (e.g. Float16, Decimal256) stay on `GroupValuesRows` and the
+        // `group_column_supported_type` ⇔ `make_group_column` invariant holds.
+        dt if dt.is_nested() => RowsGroupColumn::supports_type(dt),
+        _ => false,
+    }
 }
 
 /// Build a [`GroupColumn`] for a single schema field.
@@ -995,7 +997,7 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
     let nullable = field.is_nullable();
     let data_type = field.data_type();
     let mut v: Vec<Box<dyn GroupColumn>> = Vec::with_capacity(1);
-    match *data_type {
+    match data_type {
         DataType::Int8 => instantiate_primitive!(v, nullable, Int8Type, data_type),
         DataType::Int16 => instantiate_primitive!(v, nullable, Int16Type, data_type),
         DataType::Int32 => instantiate_primitive!(v, nullable, Int32Type, data_type),
@@ -1118,12 +1120,28 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
                 v.push(Box::new(BooleanGroupValueBuilder::<false>::new()));
             }
         }
+        DataType::List(child_field)
+            if let Ok(child) = make_group_column(child_field.as_ref()) =>
+        {
+            v.push(Box::new(list::ListGroupValueBuilder::<i32>::new(
+                Arc::clone(child_field),
+                child,
+            )));
+        }
+        DataType::LargeList(child_field)
+            if let Ok(child) = make_group_column(child_field.as_ref()) =>
+        {
+            v.push(Box::new(list::ListGroupValueBuilder::<i64>::new(
+                Arc::clone(child_field),
+                child,
+            )));
+        }
         // Generic fallback for nested types (Struct / List / LargeList /
         // FixedSizeList, recursively) that lack a type-specialized builder but
         // can be encoded by arrow's row format. This is what lets a mixed
         // schema keep the column-wise fast path for its native columns instead
         // of dropping the whole key onto `GroupValuesRows`.
-        ref dt if dt.is_nested() && RowsGroupColumn::supports_type(dt) => {
+        dt if dt.is_nested() && RowsGroupColumn::supports_type(dt) => {
             v.push(Box::new(RowsGroupColumn::try_new(dt.clone())?));
         }
         _ => return not_impl_err!("{data_type} not supported in GroupValuesColumn"),
@@ -1599,6 +1617,24 @@ mod tests {
     /// it should be added to unsupported_cases.
     #[test]
     fn group_column_supported_type_matches_make_group_column() {
+        let utf8 = || Field::new("v", DataType::Utf8, true);
+        let int32 = || Field::new("v", DataType::Int32, true);
+        let f16 = || Field::new("v", DataType::Float16, true);
+        // A leaf that neither has a specialized `GroupColumn` nor is accepted
+        // by the row-backed fallback (`RowsGroupColumn::supports_type` rejects
+        // `RunEndEncoded` anywhere in the subtree), so nesting it keeps the
+        // whole type unsupported.
+        let ree = || {
+            Field::new(
+                "v",
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    Arc::new(Field::new("values", DataType::Int64, true)),
+                ),
+                true,
+            )
+        };
+
         let supported_cases: Vec<DataType> = vec![
             DataType::Int8,
             DataType::Int64,
@@ -1629,6 +1665,17 @@ mod tests {
             DataType::Interval(arrow::datatypes::IntervalUnit::YearMonth),
             DataType::Interval(arrow::datatypes::IntervalUnit::DayTime),
             DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
+            // Nested
+            DataType::List(Arc::new(int32())),
+            DataType::LargeList(Arc::new(int32())),
+            DataType::List(Arc::new(f16())),
+            DataType::LargeList(Arc::new(f16())),
+            DataType::List(Arc::new(utf8())),
+            DataType::List(Arc::new(Field::new(
+                "v",
+                DataType::List(Arc::new(int32())),
+                true,
+            ))),
         ];
 
         for dt in &supported_cases {
@@ -1636,6 +1683,8 @@ mod tests {
                 group_column_supported_type(dt),
                 "expected group_column_supported_type=true for {dt:?}"
             );
+            // Building a top-level Field and feeding it through the factory
+            // must succeed for every supported case.
             let field = Field::new("col", dt.clone(), true);
             make_group_column(&field).unwrap_or_else(|e| {
                 panic!(
@@ -1655,6 +1704,15 @@ mod tests {
             DataType::Time64(arrow::datatypes::TimeUnit::Millisecond),
             DataType::Time32(arrow::datatypes::TimeUnit::Microsecond),
             DataType::Time32(arrow::datatypes::TimeUnit::Nanosecond),
+            // Nested with an unsupported leaf
+            DataType::List(Arc::new(ree())),
+            DataType::LargeList(Arc::new(ree())),
+            // Deeply nested unsupported
+            DataType::List(Arc::new(Field::new(
+                "v",
+                DataType::List(Arc::new(ree())),
+                true,
+            ))),
         ];
 
         for dt in &unsupported_cases {
