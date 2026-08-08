@@ -18,7 +18,9 @@
 //! [`BufferExec`] decouples production and consumption on messages by buffering the input in the
 //! background up to a certain capacity.
 
-use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
+use crate::execution_plan::{
+    CardinalityEffect, EvaluationType, SchedulingType, replace_children_if_necessary,
+};
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
@@ -28,7 +30,7 @@ use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
     ChildrenPropertiesHint, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
-    SortOrderPushdownResult, validate_child_count, with_new_children_if_necessary,
+    SortOrderPushdownResult, validate_child_count,
 };
 use arrow::array::RecordBatch;
 use datafusion_common::config::ConfigOptions;
@@ -273,7 +275,7 @@ impl ExecutionPlan for BufferExec {
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         match self.input.try_swapping_with_projection(projection)? {
-            Some(new_input) => Ok(Some(with_new_children_if_necessary(
+            Some(new_input) => Ok(Some(replace_children_if_necessary(
                 Arc::new(self.clone()),
                 vec![new_input],
             )?)),

@@ -28,7 +28,7 @@ use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
     ChildrenPropertiesHint, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
-    Statistics, validate_child_count, with_new_children_if_necessary,
+    Statistics, validate_child_count,
 };
 
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
@@ -36,7 +36,9 @@ use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
-use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
+use crate::execution_plan::{
+    CardinalityEffect, EvaluationType, SchedulingType, replace_children_if_necessary,
+};
 use log::{debug, trace};
 
 /// Sort preserving merge execution plan
@@ -249,7 +251,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
         self.input
             .with_preserve_order(preserve_order)
             .and_then(|new_input| {
-                with_new_children_if_necessary(Arc::new(self.clone()), vec![new_input])
+                replace_children_if_necessary(Arc::new(self.clone()), vec![new_input])
                     .ok()
             })
     }

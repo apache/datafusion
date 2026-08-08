@@ -72,14 +72,13 @@ use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::utils::combine_limit;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::empty::EmptyExec;
+use datafusion_physical_plan::execution_plan::replace_children_if_necessary;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
-use datafusion_physical_plan::{
-    ExecutionPlan, ExecutionPlanProperties, with_new_children_if_necessary,
-};
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 /// This rule inspects [`ExecutionPlan`]'s and pushes down the fetch limit from
 /// the parent to the child if applicable.
 #[derive(Default, Debug)]
@@ -405,7 +404,7 @@ pub(crate) fn pushdown_limits(
         .collect::<Result<_>>()?;
 
     if changed {
-        with_new_children_if_necessary(new_node.data, new_children)
+        replace_children_if_necessary(new_node.data, new_children)
     } else {
         Ok(new_node.data)
     }

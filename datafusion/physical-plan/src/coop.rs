@@ -88,14 +88,14 @@ use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
     ChildrenPropertiesHint, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, SortOrderPushdownResult,
-    validate_child_count, with_new_children_if_necessary,
+    validate_child_count,
 };
 use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
 use datafusion_common::{Result, Statistics};
 use datafusion_execution::TaskContext;
 
-use crate::execution_plan::SchedulingType;
+use crate::execution_plan::{SchedulingType, replace_children_if_necessary};
 use crate::stream::RecordBatchStreamAdapter;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use futures::{Stream, StreamExt};
@@ -333,7 +333,7 @@ impl ExecutionPlan for CooperativeExec {
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         match self.input.try_swapping_with_projection(projection)? {
-            Some(new_input) => Ok(Some(with_new_children_if_necessary(
+            Some(new_input) => Ok(Some(replace_children_if_necessary(
                 Arc::new(self.clone()),
                 vec![new_input],
             )?)),
@@ -368,12 +368,12 @@ impl ExecutionPlan for CooperativeExec {
         match child.try_pushdown_sort(order)? {
             SortOrderPushdownResult::Exact { inner } => {
                 let new_exec =
-                    with_new_children_if_necessary(Arc::new(self.clone()), vec![inner])?;
+                    replace_children_if_necessary(Arc::new(self.clone()), vec![inner])?;
                 Ok(SortOrderPushdownResult::Exact { inner: new_exec })
             }
             SortOrderPushdownResult::Inexact { inner } => {
                 let new_exec =
-                    with_new_children_if_necessary(Arc::new(self.clone()), vec![inner])?;
+                    replace_children_if_necessary(Arc::new(self.clone()), vec![inner])?;
                 Ok(SortOrderPushdownResult::Inexact { inner: new_exec })
             }
             SortOrderPushdownResult::Unsupported => {

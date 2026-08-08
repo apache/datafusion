@@ -28,6 +28,7 @@ use parking_lot::RwLock;
 use crate::common::spawn_buffered;
 use crate::execution_plan::{
     Boundedness, CardinalityEffect, EmissionType, has_same_children_properties,
+    replace_children_if_necessary,
 };
 use crate::expressions::PhysicalSortExpr;
 use crate::filter::FilterExec;
@@ -54,7 +55,6 @@ use crate::{
     ChildrenPropertiesHint, DisplayAs, DisplayFormatType, Distribution,
     EmptyRecordBatchStream, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream, Statistics,
-    with_new_children_if_necessary,
 };
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
@@ -1319,7 +1319,7 @@ impl ExecutionPlan for SortExec {
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         let children = self.children().into_iter().cloned().collect();
-        let new_sort = with_new_children_if_necessary(self, children)?;
+        let new_sort = replace_children_if_necessary(self, children)?;
         let mut new_sort = new_sort
             .downcast_ref::<SortExec>()
             .expect("rebuilt SortExec with new children")

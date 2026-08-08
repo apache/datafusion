@@ -30,7 +30,7 @@ use super::{
 };
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::common::can_project;
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{CardinalityEffect, replace_children_if_necessary};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDown,
@@ -43,9 +43,7 @@ use crate::projection::{
 };
 use crate::statistics::{ChildStats, StatisticsArgs, StatisticsContext};
 use crate::stream::EmptyRecordBatchStream;
-use crate::{
-    ChildrenPropertiesHint, validate_child_count, with_new_children_if_necessary,
-};
+use crate::{ChildrenPropertiesHint, validate_child_count};
 use crate::{
     DisplayFormatType, ExecutionPlan,
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RatioMetrics},
@@ -827,7 +825,7 @@ impl ExecutionPlan for FilterExec {
         self.input
             .with_preserve_order(preserve_order)
             .and_then(|new_input| {
-                with_new_children_if_necessary(Arc::new(self.clone()), vec![new_input])
+                replace_children_if_necessary(Arc::new(self.clone()), vec![new_input])
                     .ok()
             })
     }

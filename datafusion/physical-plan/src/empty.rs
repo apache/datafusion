@@ -250,8 +250,8 @@ impl EmptyExec {
 mod tests {
     use super::*;
     use crate::common;
+    use crate::execution_plan::replace_children_if_necessary;
     use crate::test;
-    use crate::with_new_children_if_necessary;
 
     #[tokio::test]
     async fn empty() -> Result<()> {
@@ -274,7 +274,7 @@ mod tests {
         let schema = test::aggr_test_schema();
         let empty = Arc::new(EmptyExec::new(Arc::clone(&schema)));
 
-        let empty2 = with_new_children_if_necessary(
+        let empty2 = replace_children_if_necessary(
             Arc::clone(&empty) as Arc<dyn ExecutionPlan>,
             vec![],
         )?;
@@ -282,7 +282,7 @@ mod tests {
 
         let too_many_kids = vec![empty2];
         assert!(
-            with_new_children_if_necessary(empty, too_many_kids).is_err(),
+            replace_children_if_necessary(empty, too_many_kids).is_err(),
             "expected error when providing list of kids"
         );
         Ok(())

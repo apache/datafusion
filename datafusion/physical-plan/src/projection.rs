@@ -27,7 +27,7 @@ use super::{
     SendableRecordBatchStream, SortOrderPushdownResult, Statistics,
 };
 use crate::column_rewriter::PhysicalColumnRewriter;
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{CardinalityEffect, replace_children_if_necessary};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation, FilterRemapper, PushedDownPredicate,
@@ -36,7 +36,7 @@ use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
     ChildrenPropertiesHint, DisplayFormatType, ExecutionPlan, PhysicalExpr,
-    validate_child_count, with_new_children_if_necessary,
+    validate_child_count,
 };
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -518,12 +518,12 @@ impl ExecutionPlan for ProjectionExec {
         match child.try_pushdown_sort(&child_order)? {
             SortOrderPushdownResult::Exact { inner } => {
                 let new_exec =
-                    with_new_children_if_necessary(Arc::new(self.clone()), vec![inner])?;
+                    replace_children_if_necessary(Arc::new(self.clone()), vec![inner])?;
                 Ok(SortOrderPushdownResult::Exact { inner: new_exec })
             }
             SortOrderPushdownResult::Inexact { inner } => {
                 let new_exec =
-                    with_new_children_if_necessary(Arc::new(self.clone()), vec![inner])?;
+                    replace_children_if_necessary(Arc::new(self.clone()), vec![inner])?;
                 Ok(SortOrderPushdownResult::Inexact { inner: new_exec })
             }
             SortOrderPushdownResult::Unsupported => {
@@ -539,7 +539,7 @@ impl ExecutionPlan for ProjectionExec {
         self.input
             .with_preserve_order(preserve_order)
             .and_then(|new_input| {
-                with_new_children_if_necessary(Arc::new(self.clone()), vec![new_input])
+                replace_children_if_necessary(Arc::new(self.clone()), vec![new_input])
                     .ok()
             })
     }

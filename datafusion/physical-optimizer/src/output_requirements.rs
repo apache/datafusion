@@ -32,7 +32,9 @@ use datafusion_common::{Result, Statistics, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::Distribution;
 use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
-use datafusion_physical_plan::execution_plan::Boundedness;
+use datafusion_physical_plan::execution_plan::{
+    Boundedness, replace_children_if_necessary,
+};
 use datafusion_physical_plan::projection::{
     ProjectionExec, make_with_child, update_expr, update_ordering_requirement,
 };
@@ -42,7 +44,6 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::{
     ChildStats, ChildrenPropertiesHint, DisplayAs, DisplayFormatType, ExecutionPlan,
     ExecutionPlanProperties, PlanProperties, SendableRecordBatchStream, StatisticsArgs,
-    with_new_children_if_necessary,
 };
 
 /// This rule either adds or removes [`OutputRequirements`]s to/from the physical
@@ -469,7 +470,7 @@ fn require_top_ordering_helper(
                 require_top_ordering_helper(Arc::clone(&children[idx]))?;
             if is_changed {
                 children[idx] = new_child;
-                return Ok((with_new_children_if_necessary(plan, children)?, true));
+                return Ok((replace_children_if_necessary(plan, children)?, true));
             }
         }
         Ok((plan, false))

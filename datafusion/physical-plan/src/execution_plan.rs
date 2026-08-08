@@ -274,7 +274,7 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
-    /// Fast-path used by [`with_new_children_if_necessary`] when the new
+    /// Fast-path used by [`replace_children_if_necessary`] when the new
     /// `children` are known to have the same [`PlanProperties`] as the current
     /// children. Implementations should swap the children in without
     /// recomputing this plan's `PlanProperties` (typically by cloning `self`
@@ -286,7 +286,7 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// `PlanProperties` (e.g. projection mapping, complex equivalence
     /// classes) should override this method.
     ///
-    /// Callers should route through [`with_new_children_if_necessary`] and
+    /// Callers should route through [`replace_children_if_necessary`] and
     /// not invoke this method directly.
     #[deprecated(
         since = "55.0.0",
@@ -877,7 +877,7 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     }
 }
 
-/// A hint from `with_new_children_if_necessary` to `replace_children` indicating
+/// A hint from `replace_children_if_necessary` to `replace_children` indicating
 /// whether the properties of the new children must be recomputed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChildrenPropertiesHint {
@@ -1416,7 +1416,7 @@ pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
 ///    which recomputes `PlanProperties` from scratch.
 ///
 /// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
-pub fn with_new_children_if_necessary(
+pub fn replace_children_if_necessary(
     plan: Arc<dyn ExecutionPlan>,
     children: Vec<Arc<dyn ExecutionPlan>>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1443,6 +1443,14 @@ pub fn with_new_children_if_necessary(
     }
     // Layer 3: full recompute.
     plan.replace_children(children, ChildrenPropertiesHint::Recompute)
+}
+
+#[deprecated(since = "55.0.0", note = "Use `replace_children_if_necessary`")]
+pub fn with_new_children_if_necessary(
+    plan: Arc<dyn ExecutionPlan>,
+    children: Vec<Arc<dyn ExecutionPlan>>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    replace_children_if_necessary(plan, children)
 }
 
 /// Return a [`DisplayableExecutionPlan`] wrapper around an
@@ -1706,9 +1714,9 @@ pub fn has_same_children_properties(
 /// the same as plan already has. Could be used to implement fast-path for method
 /// [`ExecutionPlan::with_new_children`].
 ///
-/// New call sites should route through [`with_new_children_if_necessary`],
+/// New call sites should route through [`replace_children_if_necessary`],
 /// which applies this check together with the child-pointer short-circuit
-/// (see [`with_new_children_if_necessary`] for the layered policy). This
+/// (see [`replace_children_if_necessary`] for the layered policy). This
 /// macro remains for direct-caller sites that have not been migrated yet.
 #[macro_export]
 macro_rules! check_if_same_properties {
@@ -2220,9 +2228,9 @@ mod tests {
     }
 
     /// Cover the three short-circuit layers of
-    /// [`with_new_children_if_necessary`].
+    /// [`replace_children_if_necessary`].
     #[test]
-    fn test_with_new_children_if_necessary_layers() -> Result<()> {
+    fn test_replace_children_if_necessary_layers() -> Result<()> {
         use std::sync::atomic::Ordering;
 
         // Two leaves that share the same `PlanProperties` Arc but sit behind
@@ -2252,7 +2260,7 @@ mod tests {
         let orig_props = Arc::clone(parent.properties());
 
         // Layer 1: same child pointer → returns the original plan Arc verbatim.
-        let out = with_new_children_if_necessary(
+        let out = replace_children_if_necessary(
             Arc::clone(&parent_dyn),
             vec![Arc::clone(&leaf_a)],
         )?;
@@ -2265,7 +2273,7 @@ mod tests {
         // Arc is reused (not reallocated).
         assert!(!Arc::ptr_eq(&leaf_a, &leaf_b));
         assert!(Arc::ptr_eq(leaf_a.properties(), leaf_b.properties()));
-        let out = with_new_children_if_necessary(
+        let out = replace_children_if_necessary(
             Arc::clone(&parent_dyn),
             vec![Arc::clone(&leaf_b)],
         )?;
@@ -2275,7 +2283,7 @@ mod tests {
 
         // Layer 3: child's `PlanProperties` Arc differs → full recompute.
         assert!(!Arc::ptr_eq(leaf_a.properties(), leaf_c.properties()));
-        let out = with_new_children_if_necessary(
+        let out = replace_children_if_necessary(
             Arc::clone(&parent_dyn),
             vec![Arc::clone(&leaf_c)],
         )?;
@@ -2293,7 +2301,7 @@ mod tests {
     /// `with_new_children`, so downstream / external `ExecutionPlan`
     /// implementations keep the semantics-preserving path.
     #[test]
-    fn test_with_new_children_if_necessary_default_fallback() -> Result<()> {
+    fn test_replace_children_if_necessary_default_fallback() -> Result<()> {
         use std::sync::atomic::Ordering;
 
         let leaf_props = Arc::new(PlanProperties::new(
@@ -2313,8 +2321,9 @@ mod tests {
         let parent_dyn: Arc<dyn ExecutionPlan> = Arc::clone(&parent) as _;
 
         // Using the same child means we return the original plan Arc verbatim, so even when
-        // no override exists for `with_new_children_and_same_properties` we do not recompute.
-        let out = with_new_children_if_necessary(
+        // the `replace_children` `ChildrenPropertiesHint::SameProperties` path is not defined,
+        // we do not recompute.
+        let out = replace_children_if_necessary(
             Arc::clone(&parent_dyn),
             vec![Arc::clone(&leaf_a)],
         )?;
@@ -2322,9 +2331,9 @@ mod tests {
         assert_eq!(parent.recompute_calls.load(Ordering::SeqCst), 0);
 
         // Using a distinct child but the same `PlanProperties` Arc means the helper
-        // enters the "same properties" branch and calls the trait method,
-        // whose default forwards to `with_new_children`, causing recomputation.
-        let out = with_new_children_if_necessary(
+        // attempts to enter the SameProperties branch. If it does not exist, we fall back
+        // to recomputation.
+        let out = replace_children_if_necessary(
             Arc::clone(&parent_dyn),
             vec![Arc::clone(&leaf_b)],
         )?;

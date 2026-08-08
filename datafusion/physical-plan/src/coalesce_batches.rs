@@ -28,7 +28,7 @@ use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
     ChildrenPropertiesHint, DisplayFormatType, ExecutionPlan, RecordBatchStream,
-    SendableRecordBatchStream, validate_child_count, with_new_children_if_necessary,
+    SendableRecordBatchStream, validate_child_count,
 };
 
 use arrow::datatypes::SchemaRef;
@@ -38,7 +38,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{CardinalityEffect, replace_children_if_necessary};
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
@@ -263,7 +263,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         match self.input.try_swapping_with_projection(projection)? {
-            Some(new_input) => Ok(Some(with_new_children_if_necessary(
+            Some(new_input) => Ok(Some(replace_children_if_necessary(
                 Arc::new(self.clone()),
                 vec![new_input],
             )?)),
