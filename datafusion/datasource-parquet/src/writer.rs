@@ -35,17 +35,15 @@ pub async fn plan_to_parquet(
     writer_properties: Option<WriterProperties>,
 ) -> datafusion_common::Result<()> {
     let path = path.as_ref();
-    let parsed = ListingTableUrl::parse(path)?;
-    let object_store_url = parsed.object_store();
-    let store = task_ctx.runtime_env().object_store(&object_store_url)?;
+    let resolved = ListingTableUrl::parse(path)?.resolve(&task_ctx.runtime_env())?;
     let mut join_set = JoinSet::new();
     for i in 0..plan.output_partitioning().partition_count() {
         let plan: Arc<dyn ExecutionPlan> = Arc::clone(&plan);
-        let filename = format!("{}/part-{i}.parquet", parsed.prefix());
+        let filename = format!("{}/part-{i}.parquet", resolved.table_url.prefix());
         let file = Path::parse(filename)?;
         let propclone = writer_properties.clone();
 
-        let storeref = Arc::clone(&store);
+        let storeref = Arc::clone(&resolved.store);
         let buf_writer = BufWriter::with_capacity(
             storeref,
             file.clone(),

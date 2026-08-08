@@ -27,6 +27,7 @@
 use arrow::array::{ArrayRef, Int32Array, RecordBatch};
 use async_trait::async_trait;
 use bytes::Bytes;
+use datafusion::catalog::TableProvider;
 use datafusion::prelude::{
     CsvReadOptions, JsonReadOptions, ParquetReadOptions, SessionContext,
 };
@@ -38,6 +39,7 @@ use futures::stream::BoxStream;
 use insta::assert_snapshot;
 use object_store::memory::InMemory;
 use object_store::path::Path;
+use object_store::prefix::PrefixStore;
 use object_store::{
     CopyOptions, GetOptions, GetRange, GetResult, ListResult, MultipartUpload,
     ObjectMeta, ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload,
@@ -918,6 +920,214 @@ async fn query_single_parquet_file_multi_row_groups_multiple_predicates() {
     - GET  (ranges) path=parquet_table.parquet ranges=1064-1594,1594-2124
     "
     );
+}
+
+/// Build a single-file parquet buffer with two columns `a` and `b`.
+fn single_file_parquet_bytes() -> Vec<u8> {
+    let a: ArrayRef = Arc::new(Int32Array::from_iter_values(0..200));
+    let b: ArrayRef = Arc::new(Int32Array::from_iter_values(1000..1200));
+    let batch = RecordBatch::try_from_iter([("a", a), ("b", b)]).unwrap();
+    let mut buffer = vec![];
+    let mut writer =
+        parquet::arrow::ArrowWriter::try_new(&mut buffer, batch.schema(), None).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    buffer
+}
+
+/// Registering a store under a *path prefix* (as an OpenDAL store rooted at a
+/// specific repo would be) must not double-prefix the object paths handed to it.
+/// The store is registered at `mem://bucket/user/repo` and, like an
+/// OpenDAL operator rooted at the repo, expects/serves *store-relative* paths
+/// (`data/f.parquet`), never the registered prefix.
+///
+/// Regression test for <https://github.com/apache/opendal/issues/7786>.
+#[tokio::test]
+async fn prefixed_store_is_not_double_prefixed() {
+    let store = Arc::new(RequestCountingObjectStore::new());
+
+    // The store serves store-relative paths: the file lives at `data/f.parquet`,
+    // NOT at `user/repo/data/f.parquet`.
+    store
+        .inner
+        .put(
+            &Path::from("data/f.parquet"),
+            PutPayload::from(single_file_parquet_bytes()),
+        )
+        .await
+        .unwrap();
+
+    let ctx = SessionContext::new();
+    ctx.runtime_env().register_object_store(
+        &Url::parse("mem://bucket/user/repo").unwrap(),
+        Arc::clone(&store) as Arc<dyn ObjectStore>,
+    );
+
+    // Register and query through the fully-qualified, prefixed URL.
+    ctx.register_parquet(
+        "t",
+        "mem://bucket/user/repo/data/f.parquet",
+        ParquetReadOptions::new(),
+    )
+    .await
+    .unwrap();
+
+    let batches = ctx
+        .sql("SELECT count(*) as n FROM t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let count = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap()
+        .value(0);
+    assert_eq!(count, 200, "query did not read the file successfully");
+
+    // The store must only ever see store-relative paths. If double-prefixing
+    // regressed, it would see `user/repo/data/f.parquet` instead.
+    let requests = store.recorded_requests();
+    assert!(!requests.is_empty(), "store received no requests");
+    for req in &requests {
+        let rendered = format!("{req}");
+        assert!(
+            !rendered.contains("user/repo"),
+            "store received a double-prefixed path: {rendered}"
+        );
+    }
+}
+
+/// Two stores registered under the *same authority* at different path prefixes
+/// must coexist, each resolving to its own store.
+#[tokio::test]
+async fn two_prefixed_stores_coexist_under_one_authority() {
+    async fn make_repo() -> Arc<RequestCountingObjectStore> {
+        let store = Arc::new(RequestCountingObjectStore::new());
+        store
+            .inner
+            .put(
+                &Path::from("data/f.parquet"),
+                PutPayload::from(single_file_parquet_bytes()),
+            )
+            .await
+            .unwrap();
+        store
+    }
+
+    let repo1 = make_repo().await;
+    let repo2 = make_repo().await;
+
+    let ctx = SessionContext::new();
+    ctx.runtime_env().register_object_store(
+        &Url::parse("mem://bucket/userA/repo1").unwrap(),
+        Arc::clone(&repo1) as Arc<dyn ObjectStore>,
+    );
+    ctx.runtime_env().register_object_store(
+        &Url::parse("mem://bucket/userB/repo2").unwrap(),
+        Arc::clone(&repo2) as Arc<dyn ObjectStore>,
+    );
+
+    ctx.register_parquet(
+        "t1",
+        "mem://bucket/userA/repo1/data/f.parquet",
+        ParquetReadOptions::new(),
+    )
+    .await
+    .unwrap();
+    ctx.register_parquet(
+        "t2",
+        "mem://bucket/userB/repo2/data/f.parquet",
+        ParquetReadOptions::new(),
+    )
+    .await
+    .unwrap();
+
+    // Each query must have gone to its own store, and neither should be
+    // double-prefixed.
+    repo1.clear_requests();
+    repo2.clear_requests();
+    ctx.sql("SELECT count(*) FROM t1")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert!(
+        !repo1.recorded_requests().is_empty(),
+        "repo1 was not queried"
+    );
+    assert!(
+        repo2.recorded_requests().is_empty(),
+        "repo2 was queried for a repo1 table"
+    );
+}
+
+/// A single `ListingTable` whose paths resolve to *different* stores under the
+/// same authority must be rejected: a scan carries a single object store, so
+/// silently reading every path from the first store would drop/duplicate rows.
+#[tokio::test]
+async fn multi_path_table_spanning_two_stores_is_rejected() {
+    let ctx = SessionContext::new();
+    ctx.runtime_env().register_object_store(
+        &Url::parse("mem://bucket/userA/repo1").unwrap(),
+        Arc::new(PrefixStore::new(InMemory::new(), "userA/repo1"))
+            as Arc<dyn ObjectStore>,
+    );
+    ctx.runtime_env().register_object_store(
+        &Url::parse("mem://bucket/userB/repo2").unwrap(),
+        Arc::new(PrefixStore::new(InMemory::new(), "userB/repo2"))
+            as Arc<dyn ObjectStore>,
+    );
+
+    let options = ListingOptions::new(Arc::new(CsvFormat::default()));
+    let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+        arrow::datatypes::Field::new("a", arrow::datatypes::DataType::Int32, false),
+    ]));
+    let config = ListingTableConfig::new_with_multi_paths(vec![
+        ListingTableUrl::parse("mem://bucket/userA/repo1/data/").unwrap(),
+        ListingTableUrl::parse("mem://bucket/userB/repo2/data/").unwrap(),
+    ])
+    .with_listing_options(options)
+    .with_schema(schema);
+    let table = ListingTable::try_new(config).unwrap();
+
+    let state = ctx.state();
+    let err = table.scan(&state, None, &[], None).await.unwrap_err();
+    assert!(
+        err.to_string().contains("multiple object stores"),
+        "unexpected error: {err}"
+    );
+}
+
+/// A single `ListingTable` whose paths all resolve to the *same* store under
+/// one registered path prefix must be accepted, each path correctly rebased
+/// to its store-relative prefix.
+#[tokio::test]
+async fn multi_path_table_spanning_one_prefixed_store_is_accepted() {
+    let ctx = SessionContext::new();
+    ctx.runtime_env().register_object_store(
+        &Url::parse("mem://bucket/user/repo").unwrap(),
+        Arc::new(PrefixStore::new(InMemory::new(), "user/repo")) as Arc<dyn ObjectStore>,
+    );
+
+    let options = ListingOptions::new(Arc::new(CsvFormat::default()));
+    let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+        arrow::datatypes::Field::new("a", arrow::datatypes::DataType::Int32, false),
+    ]));
+    let config = ListingTableConfig::new_with_multi_paths(vec![
+        ListingTableUrl::parse("mem://bucket/user/repo/a/").unwrap(),
+        ListingTableUrl::parse("mem://bucket/user/repo/b/").unwrap(),
+    ])
+    .with_listing_options(options)
+    .with_schema(schema);
+    let table = ListingTable::try_new(config).unwrap();
+
+    let state = ctx.state();
+    // Must not error with "multiple object stores": both paths share one store.
+    table.scan(&state, None, &[], None).await.unwrap();
 }
 
 /// Runs tests with a request counting object store
