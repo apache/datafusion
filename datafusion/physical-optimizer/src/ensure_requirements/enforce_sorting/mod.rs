@@ -444,7 +444,11 @@ pub fn ensure_sorting(
                 );
                 child = update_sort_ctx_children_data(child, true)?;
             }
-        } else if physical_ordering.is_none() || !plan.maintains_input_order()[idx] {
+        } else if !is_limit(plan)
+            && (physical_ordering.is_none() || !plan.maintains_input_order()[idx])
+        {
+            // Limit is excluded because it consumes the input sequence, so
+            // removing a linked sort can change which rows it skips or returns.
             // We have a `SortExec` whose effect may be neutralized by another
             // order-imposing operator, remove this sort:
             child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
