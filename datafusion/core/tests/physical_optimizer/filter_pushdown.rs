@@ -53,7 +53,8 @@ use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr, expressions::col, utils::conjunction,
 };
 use datafusion_physical_expr::{
-    Partitioning, ScalarFunctionExpr, aggregate::AggregateExprBuilder,
+    Partitioning, RangePartitioning, ScalarFunctionExpr, SplitPoint,
+    aggregate::AggregateExprBuilder,
 };
 use datafusion_physical_optimizer::{
     PhysicalOptimizerRule, filter_pushdown::FilterPushdown,
@@ -1171,6 +1172,256 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ]
+    "
+    );
+
+    let result = format!("{}", pretty_format_batches(&batches).unwrap());
+
+    let probe_scan_metrics = probe_scan.metrics().unwrap();
+
+    // The probe side had 4 rows, but after applying the dynamic filter only 2 rows should remain.
+    // The number of output rows from the probe side scan should stay consistent across executions.
+    // Issue: https://github.com/apache/datafusion/issues/17451
+    assert_eq!(probe_scan_metrics.output_rows().unwrap(), 2);
+
+    insta::assert_snapshot!(
+        result,
+        @r"
+    +----+----+-----+----+----+-----+
+    | a  | b  | c   | a  | b  | e   |
+    +----+----+-----+----+----+-----+
+    | ab | bb | 2.0 | ab | bb | 2.0 |
+    | aa | ba | 1.0 | aa | ba | 1.0 |
+    +----+----+-----+----+----+-----+
+    ",
+    );
+}
+
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_pushdown_range_partitioned() {
+    use datafusion_common::JoinType;
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    // Rough sketch of the Range-partitioned MRE we're trying to recreate. The
+    // test hand-wires identical Range repartitioning:
+    //
+    // EXPLAIN
+    // SELECT *
+    // FROM build
+    // JOIN probe
+    //   ON build.a = probe.a AND build.b = probe.b;
+    //
+    // +---------------+------------------------------------------------------------+
+    // | plan_type     | plan                                                       |
+    // +---------------+------------------------------------------------------------+
+    // | physical_plan | ┌───────────────────────────┐                              |
+    // |               | │        HashJoinExec       │                              |
+    // |               | │    --------------------   ├──────────────┐               |
+    // |               | │ on: (a = a), (b = b)      │              │               |
+    // |               | └─────────────┬─────────────┘              │               |
+    // |               | ┌─────────────┴─────────────┐┌─────────────┴─────────────┐ |
+    // |               | │      RepartitionExec      ││      RepartitionExec      │ |
+    // |               | │    --------------------   ││    --------------------   │ |
+    // |               | │ partition_count(in->out): ││ partition_count(in->out): │ |
+    // |               | │           1 -> 2          ││           1 -> 2          │ |
+    // |               | │                           ││                           │ |
+    // |               | │    partitioning_scheme:   ││    partitioning_scheme:   │ |
+    // |               | │ Range([a ASC, b ASC], 2)  ││ Range([a ASC, b ASC], 2)  │ |
+    // |               | │      split: (aa, bb)      ││      split: (aa, bb)      │ |
+    // |               | └─────────────┬─────────────┘└─────────────┬─────────────┘ |
+    // |               | ┌─────────────┴─────────────┐┌─────────────┴─────────────┐ |
+    // |               | │ DataSourceExec (build)    ││ DataSourceExec (probe)    │ |
+    // |               | │    --------------------   ││    --------------------   │ |
+    // |               | │ rows: (aa,ba), (ab,bb)    ││ rows: (aa,ba) ... (ad,bd) │ |
+    // |               | │                           ││ predicate: DynamicFilter  │ |
+    // |               | │                           ││ range CASE -> filter_0/1  │ |
+    // |               | └───────────────────────────┘└───────────────────────────┘ |
+    // |               |                                                            |
+    // +---------------+------------------------------------------------------------+
+
+    // Create build side with limited values
+    let build_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab"]),
+            ("b", Utf8, ["ba", "bb"]),
+            ("c", Float64, [1.0, 2.0]) // Extra column not used in join
+        )
+        .unwrap(),
+    ];
+    let build_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
+        .with_support(true)
+        .with_batches(build_batches)
+        .build();
+
+    // Create probe side with more values
+    let probe_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
+            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
+            ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
+        )
+        .unwrap(),
+    ];
+    let probe_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("e", DataType::Float64, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+
+    let split_points = vec![SplitPoint::new(vec![
+        ScalarValue::Utf8(Some("aa".to_string())),
+        ScalarValue::Utf8(Some("bb".to_string())),
+    ])];
+
+    // Build side: DataSource -> RepartitionExec (Range)
+    let build_range_ordering = LexOrdering::new(vec![
+        PhysicalSortExpr::new(
+            col("a", &build_side_schema).unwrap(),
+            SortOptions::default(),
+        ),
+        PhysicalSortExpr::new(
+            col("b", &build_side_schema).unwrap(),
+            SortOptions::default(),
+        ),
+    ])
+    .unwrap();
+    let build_repartition = Arc::new(
+        RepartitionExec::try_new(
+            build_scan,
+            Partitioning::Range(
+                RangePartitioning::try_new(build_range_ordering, split_points.clone())
+                    .unwrap(),
+            ),
+        )
+        .unwrap(),
+    );
+
+    // Probe side: DataSource -> RepartitionExec (Range)
+    let probe_range_ordering = LexOrdering::new(vec![
+        PhysicalSortExpr::new(
+            col("a", &probe_side_schema).unwrap(),
+            SortOptions::default(),
+        ),
+        PhysicalSortExpr::new(
+            col("b", &probe_side_schema).unwrap(),
+            SortOptions::default(),
+        ),
+    ])
+    .unwrap();
+    let probe_repartition = Arc::new(
+        RepartitionExec::try_new(
+            Arc::clone(&probe_scan),
+            Partitioning::Range(
+                RangePartitioning::try_new(probe_range_ordering, split_points).unwrap(),
+            ),
+        )
+        .unwrap(),
+    );
+
+    // Create HashJoinExec with partitioned inputs
+    let on = vec![
+        (
+            col("a", &build_side_schema).unwrap(),
+            col("a", &probe_side_schema).unwrap(),
+        ),
+        (
+            col("b", &build_side_schema).unwrap(),
+            col("b", &probe_side_schema).unwrap(),
+        ),
+    ];
+    let hash_join = Arc::new(
+        HashJoinExec::try_new(
+            build_repartition,
+            probe_repartition,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    );
+
+    // Top-level CoalescePartitionsExec
+    let cp = Arc::new(CoalescePartitionsExec::new(hash_join)) as Arc<dyn ExecutionPlan>;
+    // Add a sort for deterministic output
+    let plan = Arc::new(SortExec::new(
+        LexOrdering::new(vec![PhysicalSortExpr::new(
+            col("a", &probe_side_schema).unwrap(),
+            SortOptions::new(true, false), // descending, nulls_first
+        )])
+        .unwrap(),
+        cp,
+    )) as Arc<dyn ExecutionPlan>;
+
+    // expect the predicate to be pushed down into the probe side DataSource
+    insta::assert_snapshot!(
+        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new_post_optimization(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+        -   CoalescePartitionsExec
+        -     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+        -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
+        -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
+        -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+          -   CoalescePartitionsExec
+          -     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+          -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
+          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+          -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
+          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+    "
+    );
+
+    // Actually apply the optimization to the plan and execute to see the filter in action
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    config.optimizer.preserve_file_partitions = 1;
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+
+    let config = SessionConfig::from(config).with_batch_size(10);
+    let session_ctx = SessionContext::new_with_config(config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
+        .await
+        .unwrap();
+
+    // Now check what our filter looks like
+    insta::assert_snapshot!(
+        format!("{}", format_plan_for_test(&plan)),
+        @r"
+    - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+    -   CoalescePartitionsExec
+    -     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+    -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+    -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE WHEN a@0 IS NULL OR a@0 < aa OR a@0 = aa AND (b@1 IS NULL OR b@1 < bb) THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) ELSE a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) END ]
     "
     );
 

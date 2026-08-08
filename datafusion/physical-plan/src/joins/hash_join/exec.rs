@@ -891,6 +891,13 @@ impl HashJoinExec {
         // https://github.com/apache/datafusion/issues/20195
         if config.optimizer.preserve_file_partitions > 0
             && self.mode == PartitionMode::Partitioned
+            && !matches!(
+                (
+                    self.left.output_partitioning(),
+                    self.right.output_partitioning()
+                ),
+                (Partitioning::Range(_), Partitioning::Range(_))
+            )
         {
             return false;
         }
@@ -898,9 +905,6 @@ impl HashJoinExec {
         if self.mode == PartitionMode::Partitioned
             && !self.has_partitioned_dynamic_filter_routing()
         {
-            // TODO: support partition-routed dynamic filters for compatible
-            // range co-partitioned joins.
-            // <https://github.com/apache/datafusion/issues/23376>.
             return false;
         }
 
@@ -916,6 +920,14 @@ impl HashJoinExec {
                 Partitioning::Hash(_, left_partition_count),
                 Partitioning::Hash(_, right_partition_count),
             ) => left_partition_count == right_partition_count,
+            (Partitioning::Range(_), Partitioning::Range(_)) => {
+                let children = [self.left.as_ref(), self.right.as_ref()];
+                matches!(
+                    self.input_distribution_requirements()
+                        .unsatisfied_co_partitioned_children(self.name(), &children),
+                    Ok(unsatisfied) if unsatisfied.is_empty()
+                )
+            }
             (left_partitioning, right_partitioning) => {
                 left_partitioning.partition_count() == 1
                     && right_partitioning.partition_count() == 1
@@ -7058,8 +7070,7 @@ mod tests {
     }
 
     #[test]
-    fn test_partitioned_dynamic_filter_pushdown_rejects_range_partitioning() -> Result<()>
-    {
+    fn test_partitioned_dynamic_filter_pushdown_eligibility() -> Result<()> {
         let (left_schema, right_schema, on) = build_schema_and_on()?;
         let left_partitioning = Partitioning::Range(RangePartitioning::try_new(
             [PhysicalSortExpr {
@@ -7082,7 +7093,7 @@ mod tests {
             left_partitioning,
         )?);
         let right = Arc::new(PartitionedTestExec::try_new(
-            right_schema,
+            Arc::clone(&right_schema),
             right_partitioning,
         )?);
 
@@ -7093,8 +7104,57 @@ mod tests {
             .enable_join_dynamic_filter_pushdown = true;
 
         let join = HashJoinExec::try_new(
-            left,
+            Arc::clone(&left) as Arc<dyn ExecutionPlan>,
             right,
+            on.clone(),
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+
+        assert!(join.allow_join_dynamic_filter_pushdown(session_config.options()));
+
+        let hash_join = join
+            .builder()
+            .with_new_children(vec![
+                Arc::new(PartitionedTestExec::try_new(
+                    join.left().schema(),
+                    Partitioning::Hash(vec![Arc::clone(&on[0].0)], 2),
+                )?),
+                Arc::new(PartitionedTestExec::try_new(
+                    join.right().schema(),
+                    Partitioning::Hash(vec![Arc::clone(&on[0].1)], 2),
+                )?),
+            ])?
+            .build()?;
+        assert!(hash_join.allow_join_dynamic_filter_pushdown(session_config.options()));
+
+        session_config
+            .options_mut()
+            .optimizer
+            .preserve_file_partitions = 1;
+        assert!(join.allow_join_dynamic_filter_pushdown(session_config.options()));
+        assert!(!hash_join.allow_join_dynamic_filter_pushdown(session_config.options()));
+
+        let mismatched_right_partitioning =
+            Partitioning::Range(RangePartitioning::try_new(
+                [PhysicalSortExpr {
+                    expr: Arc::clone(&on[0].1),
+                    options: Default::default(),
+                }]
+                .into(),
+                vec![SplitPoint::new(vec![ScalarValue::Int32(Some(11))])],
+            )?);
+        let mismatched_right = Arc::new(PartitionedTestExec::try_new(
+            right_schema,
+            mismatched_right_partitioning,
+        )?);
+        let mismatched_join = HashJoinExec::try_new(
+            left,
+            mismatched_right,
             on,
             None,
             &JoinType::Inner,
@@ -7104,7 +7164,9 @@ mod tests {
             false,
         )?;
 
-        assert!(!join.allow_join_dynamic_filter_pushdown(session_config.options()));
+        assert!(
+            !mismatched_join.allow_join_dynamic_filter_pushdown(session_config.options())
+        );
 
         Ok(())
     }
