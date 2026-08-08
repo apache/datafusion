@@ -183,11 +183,19 @@ impl UnnestExec {
     }
 
     /// Indices of the list-typed columns in the input schema
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `UnnestExec` serializes itself via `UnnestExec::try_to_proto`, which reads the field directly. There is no replacement; please open an issue if you have a use case for it."
+    )]
     pub fn list_column_indices(&self) -> &[ListUnnest] {
         &self.list_column_indices
     }
 
     /// Indices of the struct-typed columns in the input schema
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `UnnestExec` serializes itself via `UnnestExec::try_to_proto`, which reads the field directly. There is no replacement; please open an issue if you have a use case for it."
+    )]
     pub fn struct_column_indices(&self) -> &[usize] {
         &self.struct_column_indices
     }
@@ -291,25 +299,38 @@ impl ExecutionPlan for UnnestExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
 
-        let input = ctx.encode_child(self.input())?;
-        let schema = self.schema().as_ref().try_into()?;
-        let list_type_columns = self
-            .list_column_indices()
+        // Exhaustive destructure: adding a field to `UnnestExec` without
+        // deciding how it is serialized is a compile error, not a silent
+        // round-trip gap.
+        let Self {
+            input,
+            schema,
+            list_column_indices,
+            struct_column_indices,
+            options,
+            // Runtime execution state, rebuilt empty on decode.
+            metrics: _,
+            // Derived at construction by `UnnestExec::compute_properties`.
+            cache: _,
+        } = self;
+
+        let input = ctx.encode_child(input)?;
+        let schema = schema.as_ref().try_into()?;
+        let list_type_columns = list_column_indices
             .iter()
             .map(|column| protobuf::ListUnnest {
                 index_in_input_schema: column.index_in_input_schema as _,
                 depth: column.depth as _,
             })
             .collect();
-        let struct_type_columns = self
-            .struct_column_indices()
+        let struct_type_columns = struct_column_indices
             .iter()
             .map(|index| *index as _)
             .collect();
         let null_handling = {
             use datafusion_common::NullHandling;
             use protobuf::unnest_options::NullHandling as ProtoNullHandling;
-            match self.options().null_handling {
+            match options.null_handling {
                 NullHandling::Preserve => ProtoNullHandling::Preserve,
                 NullHandling::Drop => ProtoNullHandling::Drop,
                 NullHandling::PreserveAndExpandEmpty => {
@@ -319,8 +340,7 @@ impl ExecutionPlan for UnnestExec {
         } as i32;
         let options = protobuf::UnnestOptions {
             null_handling,
-            recursions: self
-                .options()
+            recursions: options
                 .recursions
                 .iter()
                 .map(|recursion| protobuf::RecursionUnnestOption {
@@ -365,10 +385,18 @@ impl UnnestExec {
             protobuf::physical_plan_node::PhysicalPlanType::Unnest,
             "UnnestExec",
         );
-        let input =
-            ctx.decode_required_child(unnest.input.as_deref(), "UnnestExec", "input")?;
-        let schema: Schema = unnest
-            .schema
+        // Exhaustive destructure: a new field on `UnnestExecNode` is a compile
+        // error here rather than a silently ignored wire field.
+        let protobuf::UnnestExecNode {
+            input,
+            schema,
+            list_type_columns,
+            struct_type_columns,
+            options,
+        } = unnest.as_ref();
+
+        let input = ctx.decode_required_child(input.as_deref(), "UnnestExec", "input")?;
+        let schema: Schema = schema
             .as_ref()
             .ok_or_else(|| {
                 datafusion_common::internal_datafusion_err!(
@@ -376,20 +404,18 @@ impl UnnestExec {
                 )
             })?
             .try_into()?;
-        let list_column_indices = unnest
-            .list_type_columns
+        let list_column_indices = list_type_columns
             .iter()
             .map(|column| ListUnnest {
                 index_in_input_schema: column.index_in_input_schema as _,
                 depth: column.depth as _,
             })
             .collect();
-        let struct_column_indices = unnest
-            .struct_type_columns
+        let struct_column_indices = struct_type_columns
             .iter()
             .map(|index| *index as _)
             .collect();
-        let options = unnest.options.as_ref().ok_or_else(|| {
+        let options = options.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "UnnestExec is missing required field 'options'"
             )

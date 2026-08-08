@@ -2011,6 +2011,9 @@ fn roundtrip_like() -> Result<()> {
 }
 
 #[test]
+// `AnalyzeExec::verbose`/`show_statistics` are deprecated but still the clearest
+// way to assert the round-tripped plan preserved those fields.
+#[expect(deprecated)]
 fn roundtrip_analyze() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("plan_type", DataType::Utf8, false),
