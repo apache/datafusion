@@ -37,8 +37,8 @@ use datafusion::datasource::listing::{
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     ArrowSource, CsvSource, FileGroup, FileOutputMode, FileScanConfig,
-    FileScanConfigBuilder, FileSinkConfig, ParquetSource, wrap_partition_type_in_dict,
-    wrap_partition_value_in_dict,
+    FileScanConfigBuilder, FileSinkConfig, JsonSource, ParquetSource,
+    wrap_partition_type_in_dict, wrap_partition_value_in_dict,
 };
 use datafusion::datasource::sink::{DataSink, DataSinkExec};
 use datafusion::datasource::source::DataSourceExec;
@@ -1364,6 +1364,21 @@ fn roundtrip_arrow_scan() -> Result<()> {
 }
 
 #[test]
+fn roundtrip_json_scan() -> Result<()> {
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let file_source = Arc::new(JsonSource::new(TableSchema::from(&file_schema)));
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.json".to_string(),
+                1024,
+            )])])
+            .build();
+    roundtrip_test(DataSourceExec::from_data_source(scan_config))
+}
+
+#[test]
 fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
     use datafusion::common::config::CsvOptions;
 
@@ -1418,7 +1433,6 @@ fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
     assert!(csv_source.truncate_rows());
     Ok(())
 }
-
 #[tokio::test]
 async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
     let mut file_group =
