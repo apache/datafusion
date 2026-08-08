@@ -152,7 +152,6 @@ fn instantiate_standard_filter(in_array: ArrayRef) -> Result<StaticFilterRef> {
         DataType::Int64 => Ok(Arc::new(Int64StaticFilter::try_new(&in_array)?)),
         DataType::UInt32 => Ok(Arc::new(UInt32StaticFilter::try_new(&in_array)?)),
         DataType::UInt64 => Ok(Arc::new(UInt64StaticFilter::try_new(&in_array)?)),
-        // Float primitive types (use ordered wrappers for Hash/Eq)
         DataType::Float32 => Ok(Arc::new(Float32StaticFilter::try_new(&in_array)?)),
         DataType::Float64 => Ok(Arc::new(Float64StaticFilter::try_new(&in_array)?)),
         _ => {

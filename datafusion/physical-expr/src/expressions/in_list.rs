@@ -40,6 +40,7 @@ mod array_static_filter;
 mod branchless_filter;
 mod byte_view_filter;
 mod fixed_size_binary_filter;
+mod integer_set;
 mod primitive_filter;
 mod result;
 mod static_filter;
