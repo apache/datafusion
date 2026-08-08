@@ -35,7 +35,7 @@ use crate::{
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
+use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
 
 use datafusion_physical_expr::LexOrdering;
@@ -54,8 +54,8 @@ pub struct GlobalLimitExec {
     fetch: Option<usize>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Does the limit have to preserve the order of its input, and if so what is it?
-    /// Some optimizations may reorder the input if no particular sort is required
+    /// Input ordering that must be preserved so limit pushdown does not change
+    /// which rows are returned.
     required_ordering: Option<LexOrdering>,
     cache: Arc<PlanProperties>,
 }
@@ -172,11 +172,10 @@ impl ExecutionPlan for GlobalLimitExec {
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         check_if_same_properties!(self, children);
-        Ok(Arc::new(GlobalLimitExec::new(
-            children.swap_remove(0),
-            self.skip,
-            self.fetch,
-        )))
+        let mut new_limit =
+            GlobalLimitExec::new(children.swap_remove(0), self.skip, self.fetch);
+        new_limit.set_required_ordering(self.required_ordering.clone());
+        Ok(Arc::new(new_limit))
     }
 
     fn with_new_children_and_same_properties(
@@ -250,8 +249,13 @@ impl ExecutionPlan for GlobalLimitExec {
         &self,
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_physical_expr_common::sort_expr::optional_ordering_try_to_proto;
         use datafusion_proto_models::protobuf;
         let input = ctx.encode_child(self.input())?;
+        let required_ordering = optional_ordering_try_to_proto(
+            self.required_ordering.as_ref(),
+            &ctx.expr_ctx(),
+        )?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::GlobalLimit(Box::new(
@@ -262,6 +266,7 @@ impl ExecutionPlan for GlobalLimitExec {
                             Some(n) => n as i64,
                             _ => -1, // no limit
                         },
+                        required_ordering,
                     },
                 )),
             ),
@@ -275,6 +280,7 @@ impl GlobalLimitExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_physical_expr_common::sort_expr::optional_ordering_try_from_proto;
         use datafusion_proto_models::protobuf;
         let limit = crate::expect_plan_variant!(
             node,
@@ -291,11 +297,13 @@ impl GlobalLimitExec {
         } else {
             None
         };
-        Ok(Arc::new(GlobalLimitExec::new(
-            input,
-            limit.skip as usize,
-            fetch,
-        )))
+        let required_ordering = optional_ordering_try_from_proto(
+            &limit.required_ordering,
+            &ctx.expr_ctx(input.schema().as_ref()),
+        )?;
+        let mut exec = GlobalLimitExec::new(input, limit.skip as usize, fetch);
+        exec.set_required_ordering(required_ordering);
+        Ok(Arc::new(exec))
     }
 }
 
@@ -308,8 +316,8 @@ pub struct LocalLimitExec {
     fetch: usize,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// If the child plan is a sort node, after the sort node is removed during
-    /// physical optimization, we should add the required ordering to the limit node
+    /// Input ordering that must be preserved so limit pushdown does not change
+    /// which rows are returned.
     required_ordering: Option<LexOrdering>,
     cache: Arc<PlanProperties>,
 }
@@ -400,16 +408,12 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         check_if_same_properties!(self, children);
-        match children.len() {
-            1 => Ok(Arc::new(LocalLimitExec::new(
-                Arc::clone(&children[0]),
-                self.fetch,
-            ))),
-            _ => internal_err!("LocalLimitExec wrong number of children"),
-        }
+        let mut new_limit = LocalLimitExec::new(children.swap_remove(0), self.fetch);
+        new_limit.set_required_ordering(self.required_ordering.clone());
+        Ok(Arc::new(new_limit))
     }
 
     fn with_new_children_and_same_properties(
@@ -478,14 +482,20 @@ impl ExecutionPlan for LocalLimitExec {
         &self,
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_physical_expr_common::sort_expr::optional_ordering_try_to_proto;
         use datafusion_proto_models::protobuf;
         let input = ctx.encode_child(self.input())?;
+        let required_ordering = optional_ordering_try_to_proto(
+            self.required_ordering.as_ref(),
+            &ctx.expr_ctx(),
+        )?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::LocalLimit(Box::new(
                     protobuf::LocalLimitExecNode {
                         input: Some(Box::new(input)),
                         fetch: self.fetch() as u32,
+                        required_ordering,
                     },
                 )),
             ),
@@ -499,6 +509,7 @@ impl LocalLimitExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_physical_expr_common::sort_expr::optional_ordering_try_from_proto;
         use datafusion_proto_models::protobuf;
         let limit = crate::expect_plan_variant!(
             node,
@@ -507,7 +518,13 @@ impl LocalLimitExec {
         );
         let input =
             ctx.decode_required_child(limit.input.as_deref(), "LocalLimitExec", "input")?;
-        Ok(Arc::new(LocalLimitExec::new(input, limit.fetch as usize)))
+        let required_ordering = optional_ordering_try_from_proto(
+            &limit.required_ordering,
+            &ctx.expr_ctx(input.schema().as_ref()),
+        )?;
+        let mut exec = LocalLimitExec::new(input, limit.fetch as usize);
+        exec.set_required_ordering(required_ordering);
+        Ok(Arc::new(exec))
     }
 }
 
@@ -646,10 +663,11 @@ mod tests {
 
     use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use arrow::array::RecordBatchOptions;
+    use arrow::compute::SortOptions;
     use arrow::datatypes::Schema;
     use datafusion_common::stats::Precision;
-    use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
     #[tokio::test]
     async fn limit() -> Result<()> {
@@ -836,6 +854,35 @@ mod tests {
         // There are total of 400 rows, we skipped 401 rows (offset = 3)
         let row_count = skip_and_fetch(401, None).await?;
         assert_eq!(row_count, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn with_new_children_preserves_required_ordering() -> Result<()> {
+        let source = test::scan_partitioned(1);
+        let schema = source.schema();
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr {
+            expr: col("i", &schema)?,
+            options: SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        }]);
+
+        let mut global = GlobalLimitExec::new(Arc::clone(&source), 0, Some(10));
+        global.set_required_ordering(ordering.clone());
+        let rebuilt =
+            Arc::new(global).with_new_children(vec![test::scan_partitioned(1)])?;
+        let rebuilt = rebuilt.downcast_ref::<GlobalLimitExec>().unwrap();
+        assert_eq!(rebuilt.required_ordering(), &ordering);
+
+        let mut local = LocalLimitExec::new(source, 10);
+        local.set_required_ordering(ordering.clone());
+        let rebuilt =
+            Arc::new(local).with_new_children(vec![test::scan_partitioned(1)])?;
+        let rebuilt = rebuilt.downcast_ref::<LocalLimitExec>().unwrap();
+        assert_eq!(rebuilt.required_ordering(), &ordering);
+
         Ok(())
     }
 
