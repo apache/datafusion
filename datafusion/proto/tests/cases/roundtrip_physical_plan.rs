@@ -440,11 +440,20 @@ fn roundtrip_global_skip_no_limit() -> Result<()> {
     )))
 }
 
-/// A single-column ordering with non-default sort options, so a decode that
-/// falls back to defaults cannot pass the roundtrip assertions.
+/// Sort key at index 1, so a decoder that misbinds column name vs index
+/// cannot pass.
+fn limit_test_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, false),
+        Field::new("b", DataType::Int64, false),
+    ]))
+}
+
+/// Non-default sort options, so a decode that falls back to defaults cannot
+/// pass.
 fn limit_required_ordering(schema: &Schema) -> Result<Option<LexOrdering>> {
     Ok(LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("a", schema)?,
+        expr: col("b", schema)?,
         options: SortOptions {
             descending: true,
             nulls_first: false,
@@ -453,48 +462,27 @@ fn limit_required_ordering(schema: &Schema) -> Result<Option<LexOrdering>> {
 }
 
 #[test]
-fn roundtrip_local_limit_with_required_ordering() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+fn roundtrip_limit_with_required_ordering() -> Result<()> {
+    let schema = limit_test_schema();
     let required_ordering = limit_required_ordering(&schema)?;
-    let mut limit = LocalLimitExec::new(Arc::new(EmptyExec::new(schema)), 25);
-    limit.set_required_ordering(required_ordering.clone());
 
-    let ctx = SessionContext::new();
-    let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter {};
-    let result =
-        roundtrip_test_and_return(Arc::new(limit), &ctx, &codec, &proto_converter)?;
-    let result = result.downcast_ref::<LocalLimitExec>().unwrap();
-    assert_eq!(result.required_ordering(), &required_ordering);
-    Ok(())
-}
+    // `roundtrip_test`'s `Debug` equality covers `required_ordering`.
+    let mut global =
+        GlobalLimitExec::new(Arc::new(EmptyExec::new(Arc::clone(&schema))), 3, Some(25));
+    global.set_required_ordering(required_ordering.clone());
+    roundtrip_test(Arc::new(global))?;
 
-#[test]
-fn roundtrip_global_limit_with_required_ordering() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
-    let required_ordering = limit_required_ordering(&schema)?;
-    let mut limit = GlobalLimitExec::new(Arc::new(EmptyExec::new(schema)), 3, Some(25));
-    limit.set_required_ordering(required_ordering.clone());
-
-    let ctx = SessionContext::new();
-    let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter {};
-    let result =
-        roundtrip_test_and_return(Arc::new(limit), &ctx, &codec, &proto_converter)?;
-    let result = result.downcast_ref::<GlobalLimitExec>().unwrap();
-    assert_eq!(result.required_ordering(), &required_ordering);
-    Ok(())
+    let mut local = LocalLimitExec::new(Arc::new(EmptyExec::new(schema)), 25);
+    local.set_required_ordering(required_ordering);
+    roundtrip_test(Arc::new(local))
 }
 
 /// A limit's `required_ordering` is the only record that an `ORDER BY ... LIMIT`
-/// whose sort node was optimized away is order-sensitive. Exercise the full
-/// consumer path: decode a plan that still carries the limit, rebuild the
-/// limit's child as optimizer passes do, run `LimitPushdown`, and check that
-/// the scan comes out order-preserving.
+/// whose sort node was optimized away is order-sensitive, so it must survive
+/// serde all the way into the scan's `preserve_order` flag.
 #[test]
 fn roundtrip_limit_required_ordering_reaches_data_source() -> Result<()> {
-    let file_schema =
-        Arc::new(Schema::new(vec![Field::new("col", DataType::Int64, false)]));
+    let file_schema = limit_test_schema();
     let make_scan = || {
         let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
         let scan_config =
@@ -513,8 +501,7 @@ fn roundtrip_limit_required_ordering_reaches_data_source() -> Result<()> {
         let decoded =
             roundtrip_test_and_return(Arc::new(limit), &ctx, &codec, &proto_converter)?;
 
-        // An optimizer pass that changes the child subtree rebuilds the
-        // limit around the new child.
+        // Rebuild the limit as an optimizer pass replacing its child would.
         let rebuilt = decoded.with_new_children(vec![make_scan()])?;
 
         let optimized =
@@ -530,13 +517,7 @@ fn roundtrip_limit_required_ordering_reaches_data_source() -> Result<()> {
     };
 
     let mut limit = GlobalLimitExec::new(make_scan(), 0, Some(10));
-    limit.set_required_ordering(LexOrdering::new(vec![PhysicalSortExpr {
-        expr: Arc::new(Column::new("col", 0)),
-        options: SortOptions {
-            descending: true,
-            nulls_first: false,
-        },
-    }]));
+    limit.set_required_ordering(limit_required_ordering(&file_schema)?);
     let scan_config = scan_after_limit_pushdown(limit)?;
     assert_eq!(scan_config.limit, Some(10));
     assert!(scan_config.preserve_order);
