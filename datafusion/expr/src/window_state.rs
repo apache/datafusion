@@ -101,6 +101,31 @@ impl WindowAggState {
         Ok(())
     }
 
+    /// Returns true when this state is fully up to date with the partition's
+    /// buffered batch, meaning another evaluation pass over the partition could
+    /// not produce any new results or change any state:
+    ///
+    /// - `last_calculated_index` has reached the end of the partition's
+    ///   buffered batch, so every row of this partition that has arrived so
+    ///   far already has a result.
+    /// - When a partition ends, a final evaluation pass is needed to bring
+    ///   derived state up to date.
+    #[inline]
+    pub fn is_up_to_date_with(
+        &self,
+        partition_batch_state: &PartitionBatchState,
+    ) -> bool {
+        let all_rows_have_results =
+            self.last_calculated_index == partition_batch_state.record_batch.num_rows();
+        if all_rows_have_results {
+            debug_assert_eq!(self.n_row_result_missing, 0);
+        }
+
+        // `self.is_end` holds the flag as of the previous evaluation pass.
+        let partition_just_ended = !self.is_end && partition_batch_state.is_end;
+        all_rows_have_results && !partition_just_ended
+    }
+
     pub fn new(out_type: &DataType) -> Result<Self> {
         let empty_out_col = ScalarValue::try_from(out_type)?.to_array_of_size(0)?;
         Ok(Self {

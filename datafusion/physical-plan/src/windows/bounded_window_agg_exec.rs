@@ -1194,6 +1194,18 @@ impl BoundedWindowAggStream {
     /// Prunes the sections of the record batch (for each partition)
     /// that we no longer need to calculate the window function result.
     fn prune_partition_batches(&mut self) {
+        // Check that per-state and per-partition end-flags are consistent;
+        // otherwise, the pruning code below might produce inconsistent state.
+        #[cfg(debug_assertions)]
+        for window_agg_state in self.window_agg_states.iter() {
+            for (partition_row, WindowState { state, .. }) in window_agg_state.iter() {
+                debug_assert_eq!(
+                    state.is_end, self.partition_buffers[partition_row].is_end,
+                    "window state's recorded end flag is out of sync with its partition"
+                );
+            }
+        }
+
         // Remove partitions which we know already ended (is_end flag is true).
         // Since the retain method preserves insertion order, we still have
         // ordering in between partitions after removal.
@@ -1395,6 +1407,7 @@ mod tests {
         WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
     };
     use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_functions_aggregate::sum::sum_udaf;
     use datafusion_functions_window::nth_value::last_value_udwf;
     use datafusion_functions_window::nth_value::nth_value_udwf;
     use datafusion_physical_expr::expressions::{Column, Literal, col};
@@ -1830,6 +1843,108 @@ mod tests {
         | 2 | 2    | 2             | 1             |
         | 3 | 3    | 3             | 2             |
         +---+------+---------------+---------------+
+        ");
+        Ok(())
+    }
+
+    // In `Linear` mode, a partition may receive no new rows for several
+    // input batches while other partitions keep growing. Once all of a
+    // partition's buffered rows have results, the evaluation sweep skips
+    // it until it receives rows again, so this test drives a partition
+    // through quiet batches and then resumes it: the results after the
+    // gap must continue from the retained accumulator state. Both frames
+    // are causal, so results finalize in the batch their row arrives in
+    // and the quiet partition is fully calculated while it waits.
+    #[tokio::test]
+    async fn bounded_window_linear_quiet_partition_resume() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("pk", DataType::UInt64, false),
+            Field::new("ts", DataType::UInt64, false),
+        ]));
+        let make_batch = |rows: &[(u64, u64)]| -> Result<RecordBatch> {
+            let mut pk = UInt64Builder::with_capacity(rows.len());
+            let mut ts = UInt64Builder::with_capacity(rows.len());
+            for (p, t) in rows {
+                pk.append_value(*p);
+                ts.append_value(*t);
+            }
+            Ok(RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(pk.finish()), Arc::new(ts.finish())],
+            )?)
+        };
+        // `ts` ascends globally; partition 0 is absent from the middle batches.
+        let batches = vec![
+            make_batch(&[(0, 0), (0, 1), (1, 2)])?,
+            make_batch(&[(1, 3), (1, 4)])?,
+            make_batch(&[(1, 5)])?,
+            make_batch(&[(0, 6), (1, 7)])?,
+        ];
+        let memory_exec =
+            TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+
+        let partition_by = vec![col("pk", &schema)?];
+        let order_by = [PhysicalSortExpr {
+            expr: col("ts", &schema)?,
+            options: SortOptions::default(),
+        }];
+        // A running COUNT (plain aggregate) and a SUM over the previous and
+        // current row (sliding aggregate).
+        let count_expr = create_window_expr(
+            &WindowFunctionDefinition::AggregateUDF(count_udaf()),
+            "count".to_string(),
+            &[col("ts", &schema)?],
+            &partition_by,
+            &order_by,
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            )),
+            Arc::clone(&schema),
+            false,
+            false,
+            None,
+        )?;
+        let sum_expr = create_window_expr(
+            &WindowFunctionDefinition::AggregateUDF(sum_udaf()),
+            "sum".to_string(),
+            &[col("ts", &schema)?],
+            &partition_by,
+            &order_by,
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))),
+                WindowFrameBound::CurrentRow,
+            )),
+            Arc::clone(&schema),
+            false,
+            false,
+            None,
+        )?;
+        let physical_plan = BoundedWindowAggExec::try_new(
+            vec![count_expr, sum_expr],
+            memory_exec,
+            InputOrderMode::Linear,
+            true,
+        )
+        .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>)?;
+
+        let batches = collect(physical_plan.execute(0, task_context())?).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+-------+-----+
+        | pk | ts | count | sum |
+        +----+----+-------+-----+
+        | 0  | 0  | 1     | 0   |
+        | 0  | 1  | 2     | 1   |
+        | 1  | 2  | 1     | 2   |
+        | 1  | 3  | 2     | 5   |
+        | 1  | 4  | 3     | 7   |
+        | 1  | 5  | 4     | 9   |
+        | 0  | 6  | 3     | 7   |
+        | 1  | 7  | 5     | 12  |
+        +----+----+-------+-----+
         ");
         Ok(())
     }

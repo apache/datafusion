@@ -263,6 +263,12 @@ pub trait AggregateWindowExpr: WindowExpr {
             let state = &mut window_state.state;
             let record_batch = &partition_batch_state.record_batch;
 
+            // Skip partitions that cannot produce anything new until they
+            // either receive rows or reach their end.
+            if state.is_up_to_date_with(partition_batch_state) {
+                continue;
+            }
+
             // If there is no window state context, initialize it.
             let window_frame_ctx = state.window_frame_ctx.get_or_insert_with(|| {
                 let sort_options = self.order_by().iter().map(|o| o.options).collect();
