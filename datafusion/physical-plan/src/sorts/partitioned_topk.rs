@@ -24,9 +24,9 @@
 //! ```
 //!
 //! Instead of sorting the entire dataset, this operator delegates to a
-//! per-partition heap-of-K implementation (one variant for `ROW_NUMBER`
-//! and a sibling variant for `RANK`), both of which maintain one heap per
-//! distinct partition key while sharing a single [`arrow::row::RowConverter`],
+//! per-partition top-K implementation — one variant each for `ROW_NUMBER`,
+//! `RANK`, and `DENSE_RANK` — all of which keep per-partition state while
+//! sharing a single [`arrow::row::RowConverter`],
 //! [`MemoryReservation`](datafusion_execution::memory_pool::MemoryReservation),
 //! and metrics set across all partitions, and emit only the top-K rows
 //! per partition in sorted order `(partition_keys, order_keys)`.
@@ -46,7 +46,9 @@ use futures::TryStreamExt;
 
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::metrics::ExecutionPlanMetricsSet;
-use crate::topk::{PartitionedTopK, PartitionedTopKRank, build_sort_fields};
+use crate::topk::{
+    PartitionedTopK, PartitionedTopKDenseRank, PartitionedTopKRank, build_sort_fields,
+};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, SendableRecordBatchStream, stream::RecordBatchStreamAdapter,
@@ -59,12 +61,19 @@ use crate::{
 /// - [`Rank`](Self::Rank): K rows plus any rows tied at the boundary
 ///   ORDER BY value (RANK semantics — `WHERE rk <= K` may keep more
 ///   than K rows when ties straddle the boundary).
+/// - [`DenseRank`](Self::DenseRank): every row whose ORDER BY value is
+///   among the K distinct-smallest ORDER BY values in the partition
+///   (DENSE_RANK semantics — total kept rows is unbounded in
+///   rows-per-distinct-value).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowFnKind {
     /// `ROW_NUMBER()` — keep exactly K rows per partition.
     RowNumber,
     /// `RANK()` — keep K rows plus any rows tied at the boundary.
     Rank,
+    /// `DENSE_RANK()` — keep every row whose ob value is among the K
+    /// distinct-smallest ob values seen in the partition.
+    DenseRank,
 }
 
 /// Per-partition Top-K operator for window function queries.
@@ -108,9 +117,10 @@ pub enum WindowFnKind {
 /// ```
 ///
 /// Instead of sorting the entire dataset, this operator reads unsorted input
-/// and delegates to a per-partition heap-of-K implementation (`PartitionedTopK`
-/// for `ROW_NUMBER` and `PartitionedTopKRank` for `RANK`), each maintaining
-/// one heap per distinct partition key while sharing a single
+/// and delegates to a per-partition top-K implementation (`PartitionedTopK`
+/// for `ROW_NUMBER`, `PartitionedTopKRank` for `RANK`, and
+/// `PartitionedTopKDenseRank` for `DENSE_RANK`), each maintaining
+/// per-partition state while sharing a single
 /// [`arrow::row::RowConverter`] /
 /// [`MemoryReservation`](datafusion_execution::memory_pool::MemoryReservation)
 /// across all partitions, and emits only the top-K rows per partition in
@@ -162,11 +172,12 @@ pub enum WindowFnKind {
 ///
 /// # Limitations
 ///
-/// - Only activated when the window function is `ROW_NUMBER` or `RANK` with
-///   a `PARTITION BY` clause. `RANK` additionally requires a non-empty
-///   `ORDER BY` (with an empty `ORDER BY`, every row ties at rank 1 and the
-///   heap-of-K rewrite doesn't apply). Global top-K (no `PARTITION BY`) is
-///   already handled efficiently by `SortExec` with `fetch`.
+/// - Only activated when the window function is `ROW_NUMBER`, `RANK`, or
+///   `DENSE_RANK` with a `PARTITION BY` clause. `RANK` and `DENSE_RANK`
+///   additionally require a non-empty `ORDER BY` (with an empty `ORDER BY`
+///   every row ties at rank 1 and the rewrite doesn't apply). Global top-K
+///   (no `PARTITION BY`) is already handled efficiently by `SortExec` with
+///   `fetch`.
 /// - For very high cardinality partition keys (millions of distinct values),
 ///   both memory usage and runtime overhead can become significant. In such
 ///   cases, the sort-based plan is more robust. Therefore, this optimization
@@ -210,7 +221,8 @@ impl PartitionedTopKExec {
     ///   that form the partition key. Must be >= 1.
     /// * `fetch` - Maximum rows to retain per partition (the K in "top-K").
     /// * `fn_kind` - Which ranking window function this operator optimizes
-    ///   ([`WindowFnKind::RowNumber`] or [`WindowFnKind::Rank`]).
+    ///   ([`WindowFnKind::RowNumber`], [`WindowFnKind::Rank`], or
+    ///   [`WindowFnKind::DenseRank`]).
     ///
     /// # Example
     ///
@@ -295,6 +307,7 @@ impl DisplayAs for PartitionedTopKExec {
         let fn_label = match self.fn_kind {
             WindowFnKind::RowNumber => "row_number",
             WindowFnKind::Rank => "rank",
+            WindowFnKind::DenseRank => "dense_rank",
         };
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
@@ -430,9 +443,9 @@ impl ExecutionPlan for PartitionedTopKExec {
 }
 
 /// Read all input, feed each batch into a per-partition top-K state
-/// (either [`PartitionedTopK`] for `ROW_NUMBER` or
-/// [`PartitionedTopKRank`] for `RANK`), then emit results ordered by
-/// `(partition_keys, order_keys)`.
+/// ([`PartitionedTopK`] for `ROW_NUMBER`, [`PartitionedTopKRank`] for
+/// `RANK`, or [`PartitionedTopKDenseRank`] for `DENSE_RANK`), then emit
+/// results ordered by `(partition_keys, order_keys)`.
 ///
 /// # Phases
 ///
@@ -442,10 +455,11 @@ impl ExecutionPlan for PartitionedTopKExec {
 ///    `TopKMetrics` are shared across all distinct partition keys for
 ///    this operator instance.
 ///
-/// 2. **Emission** — `emit` drains all per-partition heaps in sorted
+/// 2. **Emission** — `emit` drains all per-partition state in sorted
 ///    partition-key order, returning a coalesced batch stream. For
 ///    `RANK`, boundary-tied rows are materialized and emitted after
-///    each partition's heap rows.
+///    each partition's heap rows. For `DENSE_RANK`, rows are emitted
+///    from a K-bounded map of distinct ob keys, sorted ascending.
 ///
 /// # Cost
 ///
@@ -487,6 +501,24 @@ async fn do_partitioned_topk(
         }
         WindowFnKind::Rank => {
             let mut state = PartitionedTopKRank::try_new(
+                partition_id,
+                schema,
+                partition_exprs,
+                partition_sort_fields,
+                order_expr,
+                fetch,
+                batch_size,
+                &runtime,
+                &metrics_set,
+            )?;
+            while let Some(batch) = input.next().await {
+                state.insert_batch(&batch?)?;
+            }
+            drop(input);
+            state.emit()
+        }
+        WindowFnKind::DenseRank => {
+            let mut state = PartitionedTopKDenseRank::try_new(
                 partition_id,
                 schema,
                 partition_exprs,

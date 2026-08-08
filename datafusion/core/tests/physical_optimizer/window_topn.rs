@@ -488,8 +488,12 @@ fn build_ranking_topn_plan(
     Ok(filter)
 }
 
-/// Build a RANK plan with NO ORDER BY: every row ties at rank 1 — degenerate.
-fn build_rank_no_order_by_plan(limit_value: i64) -> Result<Arc<dyn ExecutionPlan>> {
+/// Build a RANK / DENSE_RANK plan with NO ORDER BY: every row ties at rank 1 — degenerate.
+fn build_no_order_by_plan(
+    udwf_factory: fn() -> Arc<datafusion_expr::WindowUDF>,
+    udwf_name: &str,
+    limit_value: i64,
+) -> Result<Arc<dyn ExecutionPlan>> {
     let s = schema();
     let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
 
@@ -503,7 +507,7 @@ fn build_rank_no_order_by_plan(limit_value: i64) -> Result<Arc<dyn ExecutionPlan
     let partition_by = vec![col("pk", &s)?];
 
     let window_expr = Arc::new(StandardWindowExpr::new(
-        create_udwf_window_expr(&rank_udwf(), &[], &s, "rank".to_string(), false)?,
+        create_udwf_window_expr(&udwf_factory(), &[], &s, udwf_name.to_string(), false)?,
         &partition_by,
         &[], // empty ORDER BY
         Arc::new(WindowFrame::new_bounds(
@@ -520,7 +524,7 @@ fn build_rank_no_order_by_plan(limit_value: i64) -> Result<Arc<dyn ExecutionPlan
         true,
     )?);
 
-    let rk_col = Arc::new(Column::new("rank", 2));
+    let rk_col = Arc::new(Column::new(udwf_name, 2));
     let limit_lit = lit(ScalarValue::UInt64(Some(limit_value as u64)));
     let predicate = Arc::new(BinaryExpr::new(rk_col, Operator::LtEq, limit_lit));
     let filter: Arc<dyn ExecutionPlan> =
@@ -582,7 +586,7 @@ fn rank_no_order_by_no_change() -> Result<()> {
     // Without ORDER BY, every row ties at rank 1 — the optimization is
     // degenerate (entire input would be retained, ties storage unbounded).
     // The rule must skip.
-    let plan = build_rank_no_order_by_plan(3)?;
+    let plan = build_no_order_by_plan(rank_udwf, "rank", 3)?;
     let before = plan_str(plan.as_ref());
     let optimized = optimize(plan)?;
     let after = plan_str(optimized.as_ref());
@@ -593,17 +597,98 @@ fn rank_no_order_by_no_change() -> Result<()> {
     Ok(())
 }
 
+// ----------------------------------------------------------------------
+// DENSE_RANK rule tests
+// ----------------------------------------------------------------------
+
 #[test]
-fn dense_rank_no_change() -> Result<()> {
-    // DENSE_RANK is not yet supported by the rule. The plan must pass
-    // through unchanged.
+fn basic_dense_rank_dr_lteq_3() -> Result<()> {
     let plan = build_ranking_topn_plan(dense_rank_udwf, "dense_rank", 3, Operator::LtEq)?;
+    let optimized = optimize(plan)?;
+    assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+    BoundedWindowAggExec: wdw=[dense_rank: Field { "dense_rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
+        PlaceholderRowExec
+    "#);
+    Ok(())
+}
+
+#[test]
+fn dense_rank_dr_lt_4_becomes_fetch_3() -> Result<()> {
+    let plan = build_ranking_topn_plan(dense_rank_udwf, "dense_rank", 4, Operator::Lt)?;
+    let optimized = optimize(plan)?;
+    assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+    BoundedWindowAggExec: wdw=[dense_rank: Field { "dense_rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
+        PlaceholderRowExec
+    "#);
+    Ok(())
+}
+
+#[test]
+fn dense_rank_flipped_3_gteq_dr() -> Result<()> {
+    let plan = build_ranking_topn_plan(dense_rank_udwf, "dense_rank", 3, Operator::GtEq)?;
+    let optimized = optimize(plan)?;
+    assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+    BoundedWindowAggExec: wdw=[dense_rank: Field { "dense_rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
+        PlaceholderRowExec
+    "#);
+    Ok(())
+}
+
+#[test]
+fn dense_rank_flipped_4_gt_dr_becomes_fetch_3() -> Result<()> {
+    let plan = build_ranking_topn_plan(dense_rank_udwf, "dense_rank", 4, Operator::Gt)?;
+    let optimized = optimize(plan)?;
+    assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+    BoundedWindowAggExec: wdw=[dense_rank: Field { "dense_rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
+        PlaceholderRowExec
+    "#);
+    Ok(())
+}
+
+#[test]
+fn dense_rank_no_order_by_no_change() -> Result<()> {
+    // Without ORDER BY, every row ties at dense_rank 1 — the optimization
+    // is degenerate (entire input would be retained). The rule must skip.
+    let plan = build_no_order_by_plan(dense_rank_udwf, "dense_rank", 3)?;
     let before = plan_str(plan.as_ref());
     let optimized = optimize(plan)?;
     let after = plan_str(optimized.as_ref());
     assert_eq!(
         before, after,
-        "DENSE_RANK is unsupported and must not be rewritten"
+        "DENSE_RANK with empty ORDER BY must not be rewritten"
     );
+    Ok(())
+}
+
+// ----------------------------------------------------------------------
+// Shared guard: `fn < 1` keeps nothing
+// ----------------------------------------------------------------------
+
+#[test]
+fn predicate_lt_1_no_change() -> Result<()> {
+    // `fn < 1` (and the flipped `1 > fn`) yields limit_n = 0. Since
+    // ROW_NUMBER / RANK / DENSE_RANK are always >= 1, the predicate keeps
+    // nothing and the rule must skip — a fetch=0 PartitionedTopK* would
+    // otherwise panic on its `k > 0` assertion at execution time.
+    type UdwfFactory = fn() -> Arc<datafusion_expr::WindowUDF>;
+    let cases: [(UdwfFactory, &str); 3] = [
+        (row_number_udwf, "row_number"),
+        (rank_udwf, "rank"),
+        (dense_rank_udwf, "dense_rank"),
+    ];
+    for (factory, name) in cases {
+        let plan = build_ranking_topn_plan(factory, name, 1, Operator::Lt)?;
+        let before = plan_str(plan.as_ref());
+        let optimized = optimize(plan)?;
+        let after = plan_str(optimized.as_ref());
+        assert_eq!(
+            before, after,
+            "`{name} < 1` (limit 0) must not be rewritten"
+        );
+    }
     Ok(())
 }
