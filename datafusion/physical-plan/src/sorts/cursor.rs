@@ -164,15 +164,34 @@ impl<T: CursorValues> Ord for Cursor<T> {
 
 /// Implements [`CursorValues`] for [`Rows`]
 ///
-/// Used for sorting when there are multiple columns in the sort key
+/// Used for sorting when there are multiple columns in the sort key.
+///
+/// Caches `(ptr, len)` for the current row's serialized bytes so the merge hot
+/// path compares two `&[u8]` slices directly rather than paying a
+/// `Rows::row(idx)` offset lookup for each side of each compare. The pointer
+/// is into `rows`'s Arc-owned buffer heap, so it stays valid even when this
+/// struct is moved (e.g. written into a `Vec<Option<Cursor<..>>>` slot).
 #[derive(Debug)]
 pub struct RowValues {
     rows: Arc<Rows>,
+
+    /// Number of rows — snapshot of `rows.num_rows()`. Read on every
+    /// `Cursor::is_finished` / `advance` call.
+    len: usize,
+    /// Cached byte slice pointer for the current row.
+    current_ptr: *const u8,
+    /// Cached byte length for the current row.
+    current_len: usize,
 
     /// Tracks for the memory used by in the `Rows` of this
     /// cursor. Freed on drop
     _reservation: MemoryReservation,
 }
+
+// SAFETY: `current_ptr` points into `rows`'s Arc-owned buffer heap. `Rows`
+// is `Send + Sync`; the referenced bytes are read-only after construction.
+unsafe impl Send for RowValues {}
+unsafe impl Sync for RowValues {}
 
 impl RowValues {
     /// Create a new [`RowValues`] from `rows` and a `reservation`
@@ -186,24 +205,45 @@ impl RowValues {
             reservation.size(),
             "memory reservation mismatch"
         );
-        assert!(rows.num_rows() > 0);
+        let len = rows.num_rows();
+        assert!(len > 0);
+        // Extract raw ptr + length while the temporary `Row` is still alive.
+        // The pointer is into `rows`'s Arc buffer heap and stays valid.
+        let (current_ptr, current_len) = {
+            let row = rows.row(0);
+            let bytes: &[u8] = row.as_ref();
+            (bytes.as_ptr(), bytes.len())
+        };
         Self {
             rows,
+            len,
+            current_ptr,
+            current_len,
             _reservation: reservation,
         }
+    }
+
+    #[inline(always)]
+    fn current_slice(&self) -> &[u8] {
+        // SAFETY: `set_offset` (or `new` for offset 0) populated `current_ptr`
+        // / `current_len` from `rows.row(offset).as_ref()`, and the ptr is
+        // into `rows`'s Arc heap that stays alive as long as `self` does.
+        unsafe { std::slice::from_raw_parts(self.current_ptr, self.current_len) }
     }
 }
 
 impl CursorValues for RowValues {
     #[inline]
     fn len(&self) -> usize {
-        self.rows.num_rows()
+        self.len
     }
 
     // No inline hint on purpose: for the heavyweight `Rows` byte comparison the
     // compiler's own choice wins — both `#[inline]` and `#[inline(never)]`
     // measurably regress the multi-column merge path.
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
+        // Arbitrary indices (cross-batch); can't use the cache which only
+        // holds the current offset.
         l.rows.row(l_idx) == r.rows.row(r_idx)
     }
 
@@ -213,7 +253,26 @@ impl CursorValues for RowValues {
     }
 
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
-        l.rows.row(l_idx).cmp(&r.rows.row(r_idx))
+        // Merge callers always compare at current offsets; the cache is up
+        // to date. (Debug-only: verify the invariant.)
+        debug_assert!(l_idx < l.len && r_idx < r.len);
+        let _ = (l_idx, r_idx);
+        l.current_slice().cmp(r.current_slice())
+    }
+
+    #[inline(always)]
+    fn set_offset(&mut self, offset: usize) {
+        // Refresh the cached byte-slice for the new row. Caller guarantees
+        // `offset < len`. `Rows::row(idx).as_ref()` returns `&[u8]` into the
+        // Arc-owned buffer heap, so the pointer we stow stays valid after
+        // the temporary `Row` drops.
+        let (ptr, len) = {
+            let row = self.rows.row(offset);
+            let bytes: &[u8] = row.as_ref();
+            (bytes.as_ptr(), bytes.len())
+        };
+        self.current_ptr = ptr;
+        self.current_len = len;
     }
 }
 
@@ -303,9 +362,33 @@ impl<T: ArrowNativeTypeOp> CursorValues for PrimitiveValues<T> {
 pub struct ByteArrayValues<T: OffsetSizeTrait> {
     offsets: OffsetBuffer<T>,
     values: Buffer,
+    /// Cached start offset of the current row. Refreshed by
+    /// [`CursorValues::set_offset`] so the hot merge compare path avoids two
+    /// `OffsetBuffer::get_unchecked` loads per compare.
+    current_start: usize,
+    /// Cached end offset of the current row (same lifecycle as `current_start`).
+    current_end: usize,
 }
 
 impl<T: OffsetSizeTrait> ByteArrayValues<T> {
+    fn new(offsets: OffsetBuffer<T>, values: Buffer) -> Self {
+        // Cache row 0 up-front so the first compare (before any `set_offset`)
+        // reads a valid slice. If the array is empty, offsets[0] and offsets[1]
+        // both equal 0.
+        let start = offsets.first().map(|v| v.as_usize()).unwrap_or(0);
+        let end = if offsets.len() >= 2 {
+            offsets[1].as_usize()
+        } else {
+            start
+        };
+        Self {
+            offsets,
+            values,
+            current_start: start,
+            current_end: end,
+        }
+    }
+
     #[inline]
     fn value(&self, idx: usize) -> &[u8] {
         assert!(idx < self.len());
@@ -314,6 +397,19 @@ impl<T: OffsetSizeTrait> ByteArrayValues<T> {
             let start = self.offsets.get_unchecked(idx).as_usize();
             let end = self.offsets.get_unchecked(idx + 1).as_usize();
             self.values.get_unchecked(start..end)
+        }
+    }
+
+    /// Slice for the current row (`self.current_start..self.current_end`).
+    /// Cached at construction and refreshed on `set_offset`.
+    #[inline(always)]
+    fn current_value(&self) -> &[u8] {
+        // SAFETY: `set_offset` keeps `current_start`/`current_end` within
+        // bounds of `values` for a well-formed offsets buffer, and the merge
+        // hot path never reads a stale cache past a cursor's length.
+        unsafe {
+            self.values
+                .get_unchecked(self.current_start..self.current_end)
         }
     }
 }
@@ -326,6 +422,7 @@ impl<T: OffsetSizeTrait> CursorValues for ByteArrayValues<T> {
 
     #[inline]
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
+        // Arbitrary indices (cross-batch comparison), so index directly.
         l.value(l_idx) == r.value(r_idx)
     }
 
@@ -335,9 +432,29 @@ impl<T: OffsetSizeTrait> CursorValues for ByteArrayValues<T> {
         cursor.value(idx) == cursor.value(idx - 1)
     }
 
-    #[inline]
+    #[inline(always)]
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
-        l.value(l_idx).cmp(r.value(r_idx))
+        // For merge callers, l_idx / r_idx are guaranteed to be the current
+        // cursor offsets that `set_offset` cached.
+        debug_assert_eq!(
+            (l.current_start, l.current_end),
+            (l.offsets[l_idx].as_usize(), l.offsets[l_idx + 1].as_usize())
+        );
+        debug_assert_eq!(
+            (r.current_start, r.current_end),
+            (r.offsets[r_idx].as_usize(), r.offsets[r_idx + 1].as_usize())
+        );
+        l.current_value().cmp(r.current_value())
+    }
+
+    #[inline(always)]
+    fn set_offset(&mut self, offset: usize) {
+        // Caller (`Cursor::advance`) guarantees `offset < len()`, so both
+        // `offset` and `offset + 1` are valid indices into `offsets`.
+        unsafe {
+            self.current_start = self.offsets.get_unchecked(offset).as_usize();
+            self.current_end = self.offsets.get_unchecked(offset + 1).as_usize();
+        }
     }
 }
 
@@ -345,82 +462,235 @@ impl<T: ByteArrayType> CursorArray for GenericByteArray<T> {
     type Values = ByteArrayValues<T::Offset>;
 
     fn values(&self) -> Self::Values {
-        ByteArrayValues {
-            offsets: self.offsets().clone(),
-            values: self.values().clone(),
-        }
+        ByteArrayValues::new(self.offsets().clone(), self.values().clone())
     }
 }
 
 impl CursorArray for StringViewArray {
-    type Values = StringViewArray;
-    fn values(&self) -> Self {
-        self.gc()
+    type Values = StringViewCursorValues;
+    fn values(&self) -> Self::Values {
+        StringViewCursorValues::new(self.gc())
     }
 }
 
-impl CursorValues for StringViewArray {
+/// [`CursorValues`] for [`StringViewArray`] that caches the byte slice for the
+/// current row.
+///
+/// The merge hot loop calls `compare(l, l_idx, r, r_idx)` for cursors at their
+/// current offset; without a cache each compare pays a `views()` load plus a
+/// `data_buffers()[buffer_id]` lookup (for non-inline views). By storing a raw
+/// `(ptr, len)` for the current row we skip both.
+///
+/// The cached pointer is always into an Arc-owned heap allocation — either the
+/// `views` scalar buffer (for inline rows, addressing bytes `4..16` of the
+/// 16-byte view) or a `data_buffers[i]` (for external rows). Neither moves
+/// when the enclosing [`StringViewCursorValues`] struct itself is moved (e.g.
+/// when a new cursor is written into a `Vec<Option<Cursor<..>>>` slot), so the
+/// cached pointer remains valid across such moves.
+#[derive(Debug)]
+pub struct StringViewCursorValues {
+    array: StringViewArray,
+    /// Snapshot of `array.views().len()` — read on every `Cursor::is_finished`
+    /// / `Cursor::advance` call, so caching it locally avoids two extra field
+    /// derefs through `array` per row (measurable on low-cardinality inline
+    /// keys where the merge steps through millions of rows).
+    len: usize,
+    /// Snapshot of the `views()` scalar-buffer base pointer — the `compare`
+    /// fast path indexes into it per compare, so keeping the pointer next to
+    /// the cursor state avoids re-walking `array → views → ScalarBuffer` for
+    /// each read.
+    views_ptr: *const u128,
+    /// Pointer to the bytes of the current row's value (into Arc-owned heap).
+    /// Only read by the non-inline compare path.
+    current_ptr: *const u8,
+    /// Length in bytes of the current row's value.
+    current_len: u32,
+    /// `inline_key_fast` of the current row's view. Only maintained (and read
+    /// by `compare`) when `all_inline` — computing it once per row here beats
+    /// recomputing it per loser-tree comparison (log2(streams) per row).
+    current_inline_key: u128,
+    /// `true` when every row is inline (`data_buffers().is_empty()`). Selects
+    /// which of the two caches above `set_offset` maintains and `compare`
+    /// reads.
+    all_inline: bool,
+}
+
+// SAFETY: `current_ptr` points into `array`'s Arc-owned buffer heap. Since
+// `StringViewArray` is `Send + Sync`, any thread holding this struct can
+// safely dereference the ptr for reads.
+unsafe impl Send for StringViewCursorValues {}
+unsafe impl Sync for StringViewCursorValues {}
+
+impl StringViewCursorValues {
+    fn new(array: StringViewArray) -> Self {
+        let all_inline = array.data_buffers().is_empty();
+        let len = array.views().len();
+        let views_ptr = array.views().as_ptr();
+        let mut this = Self {
+            array,
+            len,
+            views_ptr,
+            current_ptr: std::ptr::NonNull::<u8>::dangling().as_ptr(),
+            current_len: 0,
+            current_inline_key: 0,
+            all_inline,
+        };
+        if len != 0 {
+            this.refresh_cache(0);
+        }
+        this
+    }
+
+    /// Refresh the current-row cache from `views()[offset]`: the
+    /// `inline_key_fast` key when `all_inline`, the `(ptr, len)` slice
+    /// otherwise.
+    #[inline(always)]
+    fn refresh_cache(&mut self, offset: usize) {
+        // SAFETY: caller guarantees `offset < len`.
+        let view = unsafe { *self.views_ptr.add(offset) };
+        if self.all_inline {
+            self.current_inline_key = StringViewArray::inline_key_fast(view);
+            return;
+        }
+        let len = view as u32;
+        self.current_len = len;
+        if len <= 12 {
+            // Inline: bytes are in the view at offset [4, 4+len). Point into
+            // the views buffer's Arc heap (stable across struct moves).
+            let views_bytes = self.views_ptr as *const u8;
+            self.current_ptr = unsafe { views_bytes.add(offset * 16 + 4) };
+        } else {
+            // External: extract buffer_id + offset_in_buffer from the view.
+            //   bits [ 0.. 32] = length
+            //   bits [32.. 64] = 4-byte prefix (unused here)
+            //   bits [64.. 96] = buffer_id
+            //   bits [96..128] = offset_in_buffer
+            let buffer_id = (view >> 64) as u32 as usize;
+            let offset_in_buffer = (view >> 96) as u32 as usize;
+            let buffer = unsafe { self.array.data_buffers().get_unchecked(buffer_id) };
+            self.current_ptr = unsafe { buffer.as_ptr().add(offset_in_buffer) };
+        }
+    }
+
+    #[inline(always)]
+    fn current_slice(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.current_ptr, self.current_len as usize) }
+    }
+
+    /// Resolve the byte slice for an arbitrary row. Used only on the rare
+    /// mixed path where one side is all-inline (so it has no slice cache) and
+    /// the other is not.
+    #[inline]
+    fn value_slice(&self, idx: usize) -> &[u8] {
+        debug_assert!(idx < self.len);
+        let view = unsafe { *self.views_ptr.add(idx) };
+        let len = (view as u32) as usize;
+        if len <= 12 {
+            let views_bytes = self.views_ptr as *const u8;
+            unsafe { std::slice::from_raw_parts(views_bytes.add(idx * 16 + 4), len) }
+        } else {
+            let buffer_id = (view >> 64) as u32 as usize;
+            let offset_in_buffer = (view >> 96) as u32 as usize;
+            unsafe {
+                let buffer = self.array.data_buffers().get_unchecked(buffer_id);
+                std::slice::from_raw_parts(buffer.as_ptr().add(offset_in_buffer), len)
+            }
+        }
+    }
+}
+
+impl CursorValues for StringViewCursorValues {
+    #[inline(always)]
     fn len(&self) -> usize {
-        self.views().len()
+        self.len
     }
 
     #[inline(always)]
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
-        // SAFETY: Both l_idx and r_idx are guaranteed to be within bounds,
-        // and any null-checks are handled in the outer layers.
-        // Fast path: Compare the lengths before full byte comparison.
-        let l_view = unsafe { l.views().get_unchecked(l_idx) };
-        let r_view = unsafe { r.views().get_unchecked(r_idx) };
+        // Arbitrary indices (cross-batch): read raw views rather than the
+        // current-row cache.
+        let l_view = unsafe { *l.views_ptr.add(l_idx) };
+        let r_view = unsafe { *r.views_ptr.add(r_idx) };
 
-        if l.data_buffers().is_empty() && r.data_buffers().is_empty() {
+        if l.all_inline && r.all_inline {
             return l_view == r_view;
         }
 
-        let l_len = *l_view as u32;
-        let r_len = *r_view as u32;
-        if l_len != r_len {
-            return false;
-        }
-
-        unsafe { GenericByteViewArray::compare_unchecked(l, l_idx, r, r_idx).is_eq() }
-    }
-
-    #[inline(always)]
-    fn eq_to_previous(cursor: &Self, idx: usize) -> bool {
-        // SAFETY: The caller guarantees that idx > 0 and the indices are valid.
-        // Already checked it in is_eq_to_prev_one function
-        // Fast path: Compare the lengths of the current and previous views.
-        let l_view = unsafe { cursor.views().get_unchecked(idx) };
-        let r_view = unsafe { cursor.views().get_unchecked(idx - 1) };
-        if cursor.data_buffers().is_empty() {
-            return l_view == r_view;
-        }
-
-        let l_len = *l_view as u32;
-        let r_len = *r_view as u32;
-
+        let l_len = l_view as u32;
+        let r_len = r_view as u32;
         if l_len != r_len {
             return false;
         }
 
         unsafe {
-            GenericByteViewArray::compare_unchecked(cursor, idx, cursor, idx - 1).is_eq()
+            GenericByteViewArray::compare_unchecked(&l.array, l_idx, &r.array, r_idx)
+                .is_eq()
+        }
+    }
+
+    #[inline(always)]
+    fn eq_to_previous(cursor: &Self, idx: usize) -> bool {
+        let l_view = unsafe { *cursor.views_ptr.add(idx) };
+        let r_view = unsafe { *cursor.views_ptr.add(idx - 1) };
+        if cursor.all_inline {
+            return l_view == r_view;
+        }
+
+        let l_len = l_view as u32;
+        let r_len = r_view as u32;
+        if l_len != r_len {
+            return false;
+        }
+
+        unsafe {
+            GenericByteViewArray::compare_unchecked(
+                &cursor.array,
+                idx,
+                &cursor.array,
+                idx - 1,
+            )
+            .is_eq()
         }
     }
 
     #[inline(always)]
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
-        // SAFETY: Prior assertions guarantee that l_idx and r_idx are valid indices.
-        // Null-checks are assumed to have been handled in the wrapper (e.g., ArrayValues).
-        // And the bound is checked in is_finished, it is safe to call get_unchecked
-        if l.data_buffers().is_empty() && r.data_buffers().is_empty() {
-            let l_view = unsafe { l.views().get_unchecked(l_idx) };
-            let r_view = unsafe { r.views().get_unchecked(r_idx) };
-            return StringViewArray::inline_key_fast(*l_view)
-                .cmp(&StringViewArray::inline_key_fast(*r_view));
+        debug_assert!(l_idx < l.len && r_idx < r.len);
+        // The merge hot loop always compares cursors at their current offsets
+        // (the invariant behind the caches; see `Cursor::cmp`).
+        //
+        // All-inline vs all-inline: compare the cached `inline_key_fast` keys
+        // — one u128 comparison, no memory access beyond the two cursor
+        // structs. `set_offset` computed the key once per row instead of the
+        // baseline's twice per comparison.
+        if l.all_inline && r.all_inline {
+            return l.current_inline_key.cmp(&r.current_inline_key);
         }
+        // Mixed: an all-inline side maintains no slice cache; resolve on the
+        // fly. Rare (only when some batches of the column have long values
+        // and others don't).
+        if l.all_inline || r.all_inline {
+            let l_slice = if l.all_inline {
+                l.value_slice(l_idx)
+            } else {
+                l.current_slice()
+            };
+            let r_slice = if r.all_inline {
+                r.value_slice(r_idx)
+            } else {
+                r.current_slice()
+            };
+            return l_slice.cmp(r_slice);
+        }
+        // Both have data buffers: the cached `(ptr, len)` populated by
+        // `set_offset` skips a `views()` load and the
+        // `data_buffers()[buffer_id]` lookup per compare.
+        l.current_slice().cmp(r.current_slice())
+    }
 
-        unsafe { GenericByteViewArray::compare_unchecked(l, l_idx, r, r_idx) }
+    #[inline(always)]
+    fn set_offset(&mut self, offset: usize) {
+        self.refresh_cache(offset);
     }
 }
 
@@ -434,6 +704,10 @@ pub struct ArrayValues<T: CursorValues> {
     // Otherwise, the first null index
     null_threshold: usize,
     options: SortOptions,
+    /// `true` when this array has at least one null. When `false`, the hot
+    /// `compare` / `eq` paths skip the two `is_null(idx)` checks entirely
+    /// (sort keys are usually null-free, so this branch is common).
+    has_nulls: bool,
 
     /// Tracks the memory used by the values array,
     /// freed on drop.
@@ -451,15 +725,17 @@ impl<T: CursorValues> ArrayValues<T> {
         reservation: MemoryReservation,
     ) -> Self {
         assert!(array.len() > 0, "Empty array passed to FieldCursor");
+        let null_count = array.null_count();
         let null_threshold = match options.nulls_first {
-            true => array.null_count(),
-            false => array.len() - array.null_count(),
+            true => null_count,
+            false => array.len() - null_count,
         };
 
         Self {
             values: array.values(),
             null_threshold,
             options,
+            has_nulls: null_count > 0,
             _reservation: reservation,
         }
     }
@@ -478,6 +754,11 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
 
     #[inline(always)]
     fn eq(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> bool {
+        // Fast path: neither array has nulls → the `is_null` match below
+        // would take the (false, false) arm every time.
+        if !l.has_nulls && !r.has_nulls {
+            return T::eq(&l.values, l_idx, &r.values, r_idx);
+        }
         match (l.is_null(l_idx), r.is_null(r_idx)) {
             (true, true) => true,
             (false, false) => T::eq(&l.values, l_idx, &r.values, r_idx),
@@ -488,6 +769,9 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
     #[inline(always)]
     fn eq_to_previous(cursor: &Self, idx: usize) -> bool {
         assert!(idx > 0);
+        if !cursor.has_nulls {
+            return T::eq_to_previous(&cursor.values, idx);
+        }
         match (cursor.is_null(idx), cursor.is_null(idx - 1)) {
             (true, true) => true,
             // Delegate to inner `eq_to_previous` so a caching cursor can answer
@@ -499,6 +783,13 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
 
     #[inline(always)]
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
+        // Fast path: neither array has nulls → skip both is_null checks.
+        if !l.has_nulls && !r.has_nulls {
+            return match l.options.descending {
+                true => T::compare(&r.values, r_idx, &l.values, l_idx),
+                false => T::compare(&l.values, l_idx, &r.values, r_idx),
+            };
+        }
         match (l.is_null(l_idx), r.is_null(r_idx)) {
             (true, true) => Ordering::Equal,
             (true, false) => match l.options.nulls_first {
@@ -549,6 +840,7 @@ mod tests {
             values: PrimitiveValues::new(values),
             null_threshold,
             options,
+            has_nulls: null_count > 0,
             _reservation: reservation,
         };
 
@@ -687,5 +979,220 @@ mod tests {
         // 6 < -3
         b.advance();
         assert_eq!(a.cmp(&b), Ordering::Less);
+    }
+
+    fn new_byte_array(
+        options: SortOptions,
+        strings: &[&str],
+    ) -> Cursor<ArrayValues<ByteArrayValues<i32>>> {
+        use arrow::array::StringArray;
+        let array = StringArray::from(strings.to_vec());
+        let byte_values = <StringArray as CursorArray>::values(&array);
+        let memory_pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(10000));
+        let consumer = MemoryConsumer::new("test");
+        let reservation = consumer.register(&memory_pool);
+        let values = ArrayValues {
+            values: byte_values,
+            null_threshold: strings.len(),
+            options,
+            has_nulls: false,
+            _reservation: reservation,
+        };
+        Cursor::new(values)
+    }
+
+    /// Verifies the ByteArrayValues per-row `(current_start, current_end)`
+    /// cache stays in sync with the cursor's offset across `advance` calls,
+    /// so `compare` reads the right slice each time.
+    #[test]
+    fn test_byte_array_compare_across_advance() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        let mut a = new_byte_array(options, &["apple", "banana", "cherry"]);
+        let mut b = new_byte_array(options, &["apricot", "blueberry", "date"]);
+
+        // apple < apricot (differ at second byte)
+        assert_eq!(a.cmp(&b), Ordering::Less);
+
+        // advance both to their next heads
+        a.advance();
+        b.advance();
+
+        // banana < blueberry
+        assert_eq!(a.cmp(&b), Ordering::Less);
+
+        a.advance();
+        b.advance();
+
+        // cherry < date
+        assert_eq!(a.cmp(&b), Ordering::Less);
+    }
+
+    /// Verifies ByteArrayValues equality against the raw-index `eq` path
+    /// (which does NOT use the current-row cache — it takes arbitrary
+    /// indices for cross-batch tie comparison).
+    #[test]
+    fn test_byte_array_eq_arbitrary_indices() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        let a = new_byte_array(options, &["dog", "cat", "cat", "bird"]);
+        let inner = &a.values.values;
+
+        // eq at same index → true
+        assert!(<ByteArrayValues<i32> as CursorValues>::eq(
+            inner, 1, inner, 1
+        ));
+        // eq of "cat"@1 vs "cat"@2 → true (across-batch style call)
+        assert!(<ByteArrayValues<i32> as CursorValues>::eq(
+            inner, 1, inner, 2
+        ));
+        // eq of "dog"@0 vs "cat"@1 → false
+        assert!(!<ByteArrayValues<i32> as CursorValues>::eq(
+            inner, 0, inner, 1
+        ));
+
+        // eq_to_previous: cat at idx 2 vs cat at idx 1 → true
+        assert!(<ByteArrayValues<i32> as CursorValues>::eq_to_previous(
+            inner, 2
+        ));
+        // eq_to_previous: bird at idx 3 vs cat at idx 2 → false
+        assert!(!<ByteArrayValues<i32> as CursorValues>::eq_to_previous(
+            inner, 3
+        ));
+    }
+
+    fn new_string_view(
+        options: SortOptions,
+        strings: &[&str],
+    ) -> Cursor<ArrayValues<StringViewCursorValues>> {
+        use arrow::array::StringViewArray;
+        let array = StringViewArray::from(strings.to_vec());
+        let view_values = <StringViewArray as CursorArray>::values(&array);
+        let memory_pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(10000));
+        let consumer = MemoryConsumer::new("test");
+        let reservation = consumer.register(&memory_pool);
+        let values = ArrayValues {
+            values: view_values,
+            null_threshold: strings.len(),
+            options,
+            has_nulls: false,
+            _reservation: reservation,
+        };
+        Cursor::new(values)
+    }
+
+    /// Batch where every string is ≤ 12 chars → `all_inline` fast path.
+    /// Exercises the cached `current_inline_key: u128` route in `compare`.
+    #[test]
+    fn test_string_view_all_inline_fast_path() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        let mut a = new_string_view(options, &["AIR", "MAIL", "TRUCK"]);
+        let mut b = new_string_view(options, &["FOB", "RAIL", "SHIP"]);
+
+        // AIR < FOB
+        assert_eq!(a.cmp(&b), Ordering::Less);
+
+        a.advance();
+        b.advance();
+        // MAIL < RAIL
+        assert_eq!(a.cmp(&b), Ordering::Less);
+
+        a.advance();
+        b.advance();
+        // TRUCK > SHIP
+        assert_eq!(a.cmp(&b), Ordering::Greater);
+    }
+
+    /// Batch where strings are > 12 chars → external data-buffer route.
+    /// Exercises the cached `(current_ptr, current_len)` slice compare.
+    #[test]
+    fn test_string_view_external_slice_cache() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        let mut a = new_string_view(
+            options,
+            &[
+                "aardvark and antelope",
+                "banana and blackberry",
+                "carrot and cabbage",
+            ],
+        );
+        let mut b = new_string_view(
+            options,
+            &[
+                "aardvark and armadillo",
+                "banana and blueberry",
+                "carrot and celery",
+            ],
+        );
+
+        // aardvark and antelope < aardvark and armadillo
+        assert_eq!(a.cmp(&b), Ordering::Less);
+
+        a.advance();
+        b.advance();
+        // banana and blackberry < banana and blueberry
+        assert_eq!(a.cmp(&b), Ordering::Less);
+
+        a.advance();
+        b.advance();
+        // carrot and cabbage < carrot and celery
+        assert_eq!(a.cmp(&b), Ordering::Less);
+    }
+
+    /// Empty and single-row batches should not blow up — the cache
+    /// constructors have to handle these edge cases without indexing
+    /// past the end.
+    #[test]
+    fn test_byte_array_single_row_batch() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        let cursor = new_byte_array(options, &["solo"]);
+        assert!(!cursor.is_finished());
+    }
+
+    /// Verifies the `ArrayValues::has_nulls` fast path is actually taken
+    /// (all null-free cursors) and produces the same ordering as the
+    /// null-aware slow path.
+    #[test]
+    fn test_array_values_has_nulls_fast_path_agrees_with_slow_path() {
+        let options = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+
+        // Two null-free cursors — compare should take the has_nulls
+        // fast path.
+        let buf_a = ScalarBuffer::from(vec![1i32, 2, 3, 4]);
+        let a = new_primitive(options, buf_a, 0);
+        let buf_b = ScalarBuffer::from(vec![2i32, 3, 4, 5]);
+        let b = new_primitive(options, buf_b, 0);
+
+        assert!(!a.values.has_nulls);
+        assert!(!b.values.has_nulls);
+        assert_eq!(a.cmp(&b), Ordering::Less);
+
+        // A null-containing cursor forces the slow (null-aware) path.
+        let buf_c = ScalarBuffer::from(vec![i32::MAX, 3i32, 4]);
+        let c = new_primitive(options, buf_c, 1);
+        assert!(c.values.has_nulls);
+        // 1 < 3 (real values, ignoring positional NULL slot)
+        assert_eq!(a.cmp(&c), Ordering::Less);
     }
 }
