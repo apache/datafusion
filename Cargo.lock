@@ -1866,6 +1866,7 @@ dependencies = [
  "ctor",
  "datafusion",
  "datafusion-common",
+ "datafusion-spark",
  "dirs",
  "env_logger",
  "futures",
