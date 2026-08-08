@@ -5041,11 +5041,6 @@ async fn bitwise_spill_with_filter() -> Result<()> {
 /// inner key group for filter evaluation. When that buffer exhausts the memory
 /// pool and the `DiskManager` has spilling disabled, the stream must surface a
 /// clear "Disk spilling disabled" error instead of spilling or panicking.
-///
-/// The `overallocation_*_no_spill` tests cover this contract for the
-/// Inner/Left/Right/Full `MaterializingSortMergeJoinStream`; this is the
-/// mirror for the bitwise stream, whose disk-disabled error path was otherwise
-/// untested (only the successful `bitwise_spill_with_filter` spill path was).
 #[tokio::test]
 async fn bitwise_filtered_no_spill() -> Result<()> {
     let FilteredBitwiseSpillFixture {
@@ -5115,7 +5110,9 @@ async fn bitwise_filtered_no_spill() -> Result<()> {
 /// A single inner key group spanning several inner batches can spill more
 /// than once under memory pressure. Every spilled slice must still be
 /// evaluated against the outer rows — an earlier spill file must not be
-/// dropped when a later slice of the same group spills.
+/// dropped when a later slice of the same group spills. A dropped slice
+/// surfaces differently per join type: semi loses its row, anti resurrects
+/// it, and mark flips to `false`.
 #[tokio::test]
 async fn bitwise_multi_spill_inner_key_group() -> Result<()> {
     // Outer: one row with key 1, c1 = 5.
@@ -5123,10 +5120,119 @@ async fn bitwise_multi_spill_inner_key_group() -> Result<()> {
 
     // Inner: one key group (b2 = 1) spanning two batches. Only the first
     // batch satisfies the filter c1 < c2 (5 < 10); the second (5 < 0) does
-    // not, so dropping the first spilled slice flips the semi-join result.
+    // not, so the outcome depends on the group's first spilled slice.
     let right_batches = vec![
         build_table_i32(("a2", &vec![10]), ("b2", &vec![1]), ("c2", &vec![10])),
         build_table_i32(("a2", &vec![20]), ("b2", &vec![1]), ("c2", &vec![0])),
+    ];
+    let right = build_table_from_batches(right_batches);
+
+    let on: JoinOn = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+    let filter = build_c1_lt_c2_filter(left.schema().as_ref(), right.schema().as_ref());
+
+    // 100-byte pool: every buffered slice fails its reservation, so each
+    // inner batch of the key group spills separately.
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(100, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    for (join_type, expected_rows) in [(LeftSemi, 1), (LeftAnti, 0), (LeftMark, 1)] {
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::default().with_batch_size(1))
+                .with_runtime(Arc::clone(&runtime)),
+        );
+
+        let join = SortMergeJoinExec::try_new(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            Some(filter.clone()),
+            join_type,
+            sort_options.clone(),
+            NullEquality::NullEqualsNothing,
+        )?;
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        let output_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(
+            output_rows, expected_rows,
+            "unexpected output rows for {join_type:?}",
+        );
+        if matches!(join_type, LeftMark) {
+            let batch = batches.iter().find(|b| b.num_rows() > 0).unwrap();
+            let mark = batch
+                .column_by_name("mark")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .unwrap();
+            assert!(
+                mark.value(0),
+                "mark must be true: the row matches the group's first spilled slice",
+            );
+        }
+
+        let metrics = join.metrics().expect("must have metrics");
+        assert_eq!(
+            metrics.spill_count(),
+            Some(1),
+            "all overflows of one key group must share a single spill file for {join_type:?}",
+        );
+        assert_eq!(
+            metrics.spilled_rows(),
+            Some(2),
+            "both inner slices of the group must be spilled for {join_type:?}",
+        );
+    }
+    Ok(())
+}
+
+/// Under `NullEqualsNull`, a NULL-key inner group spanning a batch boundary
+/// must behave like any equal-key group through the spill path: one group,
+/// one spill file, matched by a NULL-key outer row.
+#[tokio::test]
+async fn bitwise_spill_null_key_group() -> Result<()> {
+    // Outer: one row whose join key is NULL, c1 = 5.
+    let left = build_table_i32_nullable(
+        ("a1", &vec![Some(1)]),
+        ("b1", &vec![None]),
+        ("c1", &vec![Some(5)]),
+    );
+
+    // Inner: one NULL-key group spanning two batches; only the first batch
+    // satisfies the filter (5 < 10), so the result depends on the group's
+    // first spilled slice.
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("a2", DataType::Int32, true),
+        Field::new("b2", DataType::Int32, true),
+        Field::new("c2", DataType::Int32, true),
+    ]));
+    let right_batches = vec![
+        RecordBatch::try_new(
+            Arc::clone(&right_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(10)])),
+                Arc::new(Int32Array::from(vec![None::<i32>])),
+                Arc::new(Int32Array::from(vec![Some(10)])),
+            ],
+        )?,
+        RecordBatch::try_new(
+            Arc::clone(&right_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(20)])),
+                Arc::new(Int32Array::from(vec![None::<i32>])),
+                Arc::new(Int32Array::from(vec![Some(0)])),
+            ],
+        )?,
     ];
     let right = build_table_from_batches(right_batches);
 
@@ -5137,8 +5243,6 @@ async fn bitwise_multi_spill_inner_key_group() -> Result<()> {
     let sort_options = vec![SortOptions::default(); on.len()];
     let filter = build_c1_lt_c2_filter(left.schema().as_ref(), right.schema().as_ref());
 
-    // 100-byte pool: every buffered slice fails its reservation, so each
-    // inner batch of the key group spills separately.
     let runtime = RuntimeEnvBuilder::new()
         .with_memory_limit(100, 1.0)
         .with_disk_manager_builder(
@@ -5158,7 +5262,7 @@ async fn bitwise_multi_spill_inner_key_group() -> Result<()> {
         Some(filter),
         LeftSemi,
         sort_options,
-        NullEquality::NullEqualsNothing,
+        NullEquality::NullEqualsNull,
     )?;
     let stream = join.execute(0, task_ctx)?;
     let batches = common::collect(stream).await?;
@@ -5166,19 +5270,19 @@ async fn bitwise_multi_spill_inner_key_group() -> Result<()> {
     let output_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
     assert_eq!(
         output_rows, 1,
-        "left row must match the group's first (spilled) inner slice",
+        "NULL-key outer row must match the spilled NULL-key group under NullEqualsNull",
     );
 
     let metrics = join.metrics().expect("must have metrics");
     assert_eq!(
         metrics.spill_count(),
         Some(1),
-        "all overflows of one key group must share a single spill file",
+        "the NULL-key group must span the batch boundary as one group with one spill file",
     );
     assert_eq!(
         metrics.spilled_rows(),
         Some(2),
-        "both inner slices of the group must be spilled",
+        "both NULL-key slices must be spilled",
     );
     Ok(())
 }
