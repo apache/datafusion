@@ -28,6 +28,7 @@ pub mod access_plan;
 mod bloom_filter;
 mod decoder_projection;
 pub mod file_format;
+mod leaf_resolver;
 pub mod metadata;
 mod metrics;
 mod nested_schema_pruning;
