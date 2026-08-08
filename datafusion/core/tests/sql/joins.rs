@@ -299,3 +299,60 @@ async fn unparse_cross_join() -> Result<()> {
 
     Ok(())
 }
+
+// Issue #23434: https://github.com/apache/datafusion/issues/23434
+// CrossJoinExec used to merge schema metadata right-wins while the logical
+// plan merges left-wins, so an aggregate over a pure cross join of two tables
+// carrying the same schema-metadata key failed with "Physical input schema
+// should be the same as the one converted from logical input schema".
+#[tokio::test]
+async fn cross_join_with_conflicting_schema_metadata() -> Result<()> {
+    use std::collections::HashMap;
+
+    let ctx = SessionContext::new();
+
+    let left_schema = Arc::new(
+        Schema::new(vec![Field::new("a", DataType::Int32, false)]).with_metadata(
+            HashMap::from([("pandas".to_string(), "LEFT-SCHEMA".to_string())]),
+        ),
+    );
+    let right_schema = Arc::new(
+        Schema::new(vec![Field::new("b", DataType::Int32, false)]).with_metadata(
+            HashMap::from([("pandas".to_string(), "RIGHT-SCHEMA".to_string())]),
+        ),
+    );
+
+    let left_batch = RecordBatch::try_new(
+        Arc::clone(&left_schema),
+        vec![Arc::new(Int32Array::from(vec![1, 2]))],
+    )?;
+    let right_batch = RecordBatch::try_new(
+        Arc::clone(&right_schema),
+        vec![Arc::new(Int32Array::from(vec![10]))],
+    )?;
+
+    ctx.register_table(
+        "t1",
+        Arc::new(MemTable::try_new(left_schema, vec![vec![left_batch]])?),
+    )?;
+    ctx.register_table(
+        "t2",
+        Arc::new(MemTable::try_new(right_schema, vec![vec![right_batch]])?),
+    )?;
+
+    let df = ctx.sql("SELECT count(*) FROM t1 CROSS JOIN t2").await?;
+    let results = df.collect().await?;
+
+    assert_batches_eq!(
+        [
+            "+----------+",
+            "| count(*) |",
+            "+----------+",
+            "| 2        |",
+            "+----------+",
+        ],
+        &results
+    );
+
+    Ok(())
+}
