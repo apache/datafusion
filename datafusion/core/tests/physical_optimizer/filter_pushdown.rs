@@ -18,7 +18,7 @@
 use std::sync::{Arc, LazyLock};
 
 use arrow::{
-    array::record_batch,
+    array::{RecordBatch, record_batch},
     datatypes::{DataType, Field, Schema, SchemaRef},
     util::pretty::pretty_format_batches,
 };
@@ -939,6 +939,67 @@ async fn test_topk_filter_passes_through_coalesce_partitions() {
     );
 }
 
+fn hashjoin_pushdown_scans() -> (
+    SchemaRef,
+    Arc<dyn ExecutionPlan>,
+    SchemaRef,
+    Arc<dyn ExecutionPlan>,
+) {
+    let build_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
+        .with_support(true)
+        .with_batches(vec![
+            record_batch!(
+                ("a", Utf8, ["aa", "ab"]),
+                ("b", Utf8, ["ba", "bb"]),
+                ("c", Float64, [1.0, 2.0])
+            )
+            .unwrap(),
+        ])
+        .build();
+
+    let probe_side_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("e", DataType::Float64, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
+        .with_support(true)
+        .with_batches(vec![
+            record_batch!(
+                ("a", Utf8, ["aa", "ab", "ac", "ad"]),
+                ("b", Utf8, ["ba", "bb", "bc", "bd"]),
+                ("e", Float64, [1.0, 2.0, 3.0, 4.0])
+            )
+            .unwrap(),
+        ])
+        .build();
+
+    (build_side_schema, build_scan, probe_side_schema, probe_scan)
+}
+
+async fn optimize_and_collect_pushdown_plan(
+    plan: Arc<dyn ExecutionPlan>,
+    config: ConfigOptions,
+) -> (Arc<dyn ExecutionPlan>, Vec<RecordBatch>) {
+    let plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    let session_ctx =
+        SessionContext::new_with_config(SessionConfig::from(config).with_batch_size(10));
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let task_ctx = session_ctx.state().task_ctx();
+    let batches = collect(Arc::clone(&plan), task_ctx).await.unwrap();
+    (plan, batches)
+}
+
 // Not portable to sqllogictest: this test pins `PartitionMode::Partitioned`
 // by hand-wiring `RepartitionExec(Hash, 12)` on both join sides. A SQL
 // INNER JOIN over small parquet inputs plans as `CollectLeft`, so the
@@ -988,43 +1049,8 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     // |               |                                                            |
     // +---------------+------------------------------------------------------------+
 
-    // Create build side with limited values
-    let build_batches = vec![
-        record_batch!(
-            ("a", Utf8, ["aa", "ab"]),
-            ("b", Utf8, ["ba", "bb"]),
-            ("c", Float64, [1.0, 2.0]) // Extra column not used in join
-        )
-        .unwrap(),
-    ];
-    let build_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("c", DataType::Float64, false),
-    ]));
-    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
-        .with_support(true)
-        .with_batches(build_batches)
-        .build();
-
-    // Create probe side with more values
-    let probe_batches = vec![
-        record_batch!(
-            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
-            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
-            ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
-        )
-        .unwrap(),
-    ];
-    let probe_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("e", DataType::Float64, false),
-    ]));
-    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
-        .with_support(true)
-        .with_batches(probe_batches)
-        .build();
+    let (build_side_schema, build_scan, probe_side_schema, probe_scan) =
+        hashjoin_pushdown_scans();
 
     // Create RepartitionExec nodes for both sides with hash partitioning on join keys
     let partition_count = 12;
@@ -1122,20 +1148,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
-        .unwrap();
-    let config = SessionConfig::new().with_batch_size(10);
-    let session_ctx = SessionContext::new_with_config(config);
-    session_ctx.register_object_store(
-        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
-        Arc::new(InMemory::new()),
-    );
-    let state = session_ctx.state();
-    let task_ctx = state.task_ctx();
-    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
-        .await
-        .unwrap();
+    let (plan, batches) = optimize_and_collect_pushdown_plan(plan, config).await;
 
     // Now check what our filter looks like
     #[cfg(not(feature = "force_hash_collisions"))]
@@ -1234,43 +1247,8 @@ async fn test_hashjoin_dynamic_filter_pushdown_range_partitioned() {
     // |               |                                                            |
     // +---------------+------------------------------------------------------------+
 
-    // Create build side with limited values
-    let build_batches = vec![
-        record_batch!(
-            ("a", Utf8, ["aa", "ab"]),
-            ("b", Utf8, ["ba", "bb"]),
-            ("c", Float64, [1.0, 2.0]) // Extra column not used in join
-        )
-        .unwrap(),
-    ];
-    let build_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("c", DataType::Float64, false),
-    ]));
-    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
-        .with_support(true)
-        .with_batches(build_batches)
-        .build();
-
-    // Create probe side with more values
-    let probe_batches = vec![
-        record_batch!(
-            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
-            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
-            ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
-        )
-        .unwrap(),
-    ];
-    let probe_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("e", DataType::Float64, false),
-    ]));
-    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
-        .with_support(true)
-        .with_batches(probe_batches)
-        .build();
+    let (build_side_schema, build_scan, probe_side_schema, probe_scan) =
+        hashjoin_pushdown_scans();
 
     let split_points = vec![SplitPoint::new(vec![
         ScalarValue::Utf8(Some("aa".to_string())),
@@ -1390,21 +1368,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_range_partitioned() {
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
     config.optimizer.preserve_file_partitions = 1;
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
-        .unwrap();
-
-    let config = SessionConfig::from(config).with_batch_size(10);
-    let session_ctx = SessionContext::new_with_config(config);
-    session_ctx.register_object_store(
-        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
-        Arc::new(InMemory::new()),
-    );
-    let state = session_ctx.state();
-    let task_ctx = state.task_ctx();
-    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
-        .await
-        .unwrap();
+    let (plan, batches) = optimize_and_collect_pushdown_plan(plan, config).await;
 
     // Now check what our filter looks like
     insta::assert_snapshot!(
@@ -1453,42 +1417,8 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
     use datafusion_common::JoinType;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
-    let build_batches = vec![
-        record_batch!(
-            ("a", Utf8, ["aa", "ab"]),
-            ("b", Utf8, ["ba", "bb"]),
-            ("c", Float64, [1.0, 2.0]) // Extra column not used in join
-        )
-        .unwrap(),
-    ];
-    let build_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("c", DataType::Float64, false),
-    ]));
-    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
-        .with_support(true)
-        .with_batches(build_batches)
-        .build();
-
-    // Create probe side with more values
-    let probe_batches = vec![
-        record_batch!(
-            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
-            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
-            ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
-        )
-        .unwrap(),
-    ];
-    let probe_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("e", DataType::Float64, false),
-    ]));
-    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
-        .with_support(true)
-        .with_batches(probe_batches)
-        .build();
+    let (build_side_schema, build_scan, probe_side_schema, probe_scan) =
+        hashjoin_pushdown_scans();
 
     // Create RepartitionExec nodes for both sides with hash partitioning on join keys
     let partition_count = 12;
@@ -1570,20 +1500,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
     let mut config = ConfigOptions::default();
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, &config)
-        .unwrap();
-    let config = SessionConfig::new().with_batch_size(10);
-    let session_ctx = SessionContext::new_with_config(config);
-    session_ctx.register_object_store(
-        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
-        Arc::new(InMemory::new()),
-    );
-    let state = session_ctx.state();
-    let task_ctx = state.task_ctx();
-    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
-        .await
-        .unwrap();
+    let (plan, batches) = optimize_and_collect_pushdown_plan(plan, config).await;
 
     // Now check what our filter looks like
     insta::assert_snapshot!(
@@ -2857,43 +2774,8 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
     use datafusion_common::JoinType;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
-    // Create build side with limited values
-    let build_batches = vec![
-        record_batch!(
-            ("a", Utf8, ["aa", "ab"]),
-            ("b", Utf8, ["ba", "bb"]),
-            ("c", Float64, [1.0, 2.0]) // Extra column not used in join
-        )
-        .unwrap(),
-    ];
-    let build_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("c", DataType::Float64, false),
-    ]));
-    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
-        .with_support(true)
-        .with_batches(build_batches)
-        .build();
-
-    // Create probe side with more values
-    let probe_batches = vec![
-        record_batch!(
-            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
-            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
-            ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
-        )
-        .unwrap(),
-    ];
-    let probe_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("e", DataType::Float64, false),
-    ]));
-    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
-        .with_support(true)
-        .with_batches(probe_batches)
-        .build();
+    let (build_side_schema, build_scan, probe_side_schema, probe_scan) =
+        hashjoin_pushdown_scans();
 
     // Create RepartitionExec nodes for both sides with hash partitioning on join keys
     let partition_count = 12;
@@ -2963,24 +2845,11 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
     )) as Arc<dyn ExecutionPlan>;
 
     // Apply the optimization with config setting that forces HashTable strategy
-    let session_config = SessionConfig::default()
-        .with_batch_size(10)
-        .set_usize("datafusion.optimizer.hash_join_inlist_pushdown_max_size", 1)
-        .set_bool("datafusion.execution.parquet.pushdown_filters", true)
-        .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", true);
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, session_config.options())
-        .unwrap();
-    let session_ctx = SessionContext::new_with_config(session_config);
-    session_ctx.register_object_store(
-        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
-        Arc::new(InMemory::new()),
-    );
-    let state = session_ctx.state();
-    let task_ctx = state.task_ctx();
-    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
-        .await
-        .unwrap();
+    let mut config = ConfigOptions::default();
+    config.optimizer.hash_join_inlist_pushdown_max_size = 1;
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let (plan, batches) = optimize_and_collect_pushdown_plan(plan, config).await;
 
     // Verify that hash_lookup is used instead of IN (SET)
     let plan_str = format_plan_for_test(&plan).to_string();
@@ -3023,42 +2892,8 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
     use datafusion_common::JoinType;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
-    let build_batches = vec![
-        record_batch!(
-            ("a", Utf8, ["aa", "ab"]),
-            ("b", Utf8, ["ba", "bb"]),
-            ("c", Float64, [1.0, 2.0]) // Extra column not used in join
-        )
-        .unwrap(),
-    ];
-    let build_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("c", DataType::Float64, false),
-    ]));
-    let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
-        .with_support(true)
-        .with_batches(build_batches)
-        .build();
-
-    // Create probe side with more values
-    let probe_batches = vec![
-        record_batch!(
-            ("a", Utf8, ["aa", "ab", "ac", "ad"]),
-            ("b", Utf8, ["ba", "bb", "bc", "bd"]),
-            ("e", Float64, [1.0, 2.0, 3.0, 4.0]) // Extra column not used in join
-        )
-        .unwrap(),
-    ];
-    let probe_side_schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Utf8, false),
-        Field::new("b", DataType::Utf8, false),
-        Field::new("e", DataType::Float64, false),
-    ]));
-    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
-        .with_support(true)
-        .with_batches(probe_batches)
-        .build();
+    let (build_side_schema, build_scan, probe_side_schema, probe_scan) =
+        hashjoin_pushdown_scans();
 
     // Create RepartitionExec nodes for both sides with hash partitioning on join keys
     let partition_count = 12;
@@ -3114,24 +2949,11 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
     )) as Arc<dyn ExecutionPlan>;
 
     // Apply the optimization with config setting that forces HashTable strategy
-    let session_config = SessionConfig::default()
-        .with_batch_size(10)
-        .set_usize("datafusion.optimizer.hash_join_inlist_pushdown_max_size", 1)
-        .set_bool("datafusion.execution.parquet.pushdown_filters", true)
-        .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", true);
-    let plan = FilterPushdown::new_post_optimization()
-        .optimize(plan, session_config.options())
-        .unwrap();
-    let session_ctx = SessionContext::new_with_config(session_config);
-    session_ctx.register_object_store(
-        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
-        Arc::new(InMemory::new()),
-    );
-    let state = session_ctx.state();
-    let task_ctx = state.task_ctx();
-    let batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
-        .await
-        .unwrap();
+    let mut config = ConfigOptions::default();
+    config.optimizer.hash_join_inlist_pushdown_max_size = 1;
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let (plan, batches) = optimize_and_collect_pushdown_plan(plan, config).await;
 
     // Verify that hash_lookup is used instead of IN (SET)
     let plan_str = format_plan_for_test(&plan).to_string();
