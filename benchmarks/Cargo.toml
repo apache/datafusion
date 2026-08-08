@@ -65,11 +65,6 @@ tokio-util = { version = "0.7.17" }
 toml = "0.9.8"
 
 [dev-dependencies]
-# `pool`/`arrow_buffer_pool` are enabled only for tests, so the benchmark
-# binaries are built exactly as before. They let `memory_pool`'s tests cover
-# Arrow-side reservations reaching the pool via `ArrowMemoryPool`.
-arrow-buffer = { workspace = true, features = ["pool"] }
-datafusion-execution = { workspace = true, features = ["arrow_buffer_pool"] }
 datafusion-proto = { workspace = true, features = ["parquet"] }
 tempfile = { workspace = true }
 

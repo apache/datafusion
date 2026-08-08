@@ -542,6 +542,70 @@ fn roundtrip_hash_join_projection_states() -> Result<()> {
     Ok(())
 }
 
+/// Regression: `HashJoinExecNode` had no `fetch` field, so the row limit that
+/// the `limit_pushdown` physical optimizer rule pushes into the join via
+/// `ExecutionPlan::with_fetch` was silently dropped by serde. Because that rule
+/// also removes the enclosing `GlobalLimitExec` once the join absorbs the limit,
+/// a round-tripped plan had no limit left at all and a distributed executor
+/// returned more rows than the query asked for.
+///
+/// Note this cannot be covered by `roundtrip_test`: that helper compares
+/// `format!("{plan:?}")`, and `HashJoinExec`'s `Debug` output does not include
+/// `fetch`, so the before/after strings match even when the value is lost. The
+/// assertions below therefore inspect `fetch()` directly.
+#[test]
+fn roundtrip_hash_join_fetch() -> Result<()> {
+    let field_a = Field::new("col", DataType::Int64, false);
+    let schema_left = Arc::new(Schema::new(vec![field_a.clone()]));
+    let schema_right = Arc::new(Schema::new(vec![field_a]));
+    let on = vec![(
+        Arc::new(Column::new("col", schema_left.index_of("col")?)) as _,
+        Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
+    )];
+
+    // `usize::MAX` and `u32::MAX as usize` pin the decode-side `u64 -> usize`
+    // conversion: it is a checked `usize::try_from`, and a large fetch must
+    // survive the round trip exactly rather than being truncated or clamped.
+    // Both are representable on every target (on a 32-bit target `usize::MAX`
+    // is simply `u32::MAX`), so this stays portable. The truncating case
+    // itself -- a `u64` fetch above `usize::MAX` -- is only reachable on a
+    // 32-bit target and so is not exercised by this test on a 64-bit host.
+    for fetch in [None, Some(7), Some(u32::MAX as usize), Some(usize::MAX)] {
+        let join = HashJoinExec::try_new(
+            Arc::new(EmptyExec::new(Arc::clone(&schema_left))),
+            Arc::new(EmptyExec::new(Arc::clone(&schema_right))),
+            on.clone(),
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+
+        let plan: Arc<dyn ExecutionPlan> = match fetch {
+            // This is how `limit_pushdown` installs the limit.
+            Some(fetch) => join
+                .with_fetch(Some(fetch))
+                .expect("HashJoinExec supports fetch"),
+            None => Arc::new(join),
+        };
+        assert_eq!(plan.fetch(), fetch);
+
+        let ctx = SessionContext::new();
+        let codec = DefaultPhysicalExtensionCodec {};
+        let proto_converter = DefaultPhysicalProtoConverter {};
+        let deserialized =
+            roundtrip_test_and_return(plan, &ctx, &codec, &proto_converter)?;
+
+        let deserialized_join = deserialized
+            .downcast_ref::<HashJoinExec>()
+            .expect("should be a HashJoinExec");
+        assert_eq!(deserialized_join.fetch(), fetch);
+    }
+    Ok(())
+}
+
 /// Same regression coverage for `NestedLoopJoinExec`, which shares the
 /// `repeated uint32 projection` proto field shape with `HashJoinExec`.
 #[test]
@@ -4557,7 +4621,9 @@ fn test_hash_join_with_dynamic_filter_roundtrip() -> Result<()> {
         .downcast_ref::<HashJoinExec>()
         .expect("Should be HashJoinExec");
     let deserialized_hash_join_df = deserialized_join
-        .dynamic_filter_expr()
+        .dynamic_expressions_produced()
+        .into_iter()
+        .next()
         .expect("HashJoinExec should have a dynamic filter after roundtrip");
 
     // Extract the dynamic filter pushed down to the probe side's ParquetSource.
@@ -4565,7 +4631,7 @@ fn test_hash_join_with_dynamic_filter_roundtrip() -> Result<()> {
 
     // The HashJoinExec's dynamic filter and the probe side's predicate should
     // refer to the same underlying expression.
-    let plan_df: Arc<dyn PhysicalExpr> = deserialized_hash_join_df.clone();
+    let plan_df = deserialized_hash_join_df;
     assert_dynamic_filters_equal(&plan_df, &deserialized_predicate);
     assert_dynamic_filter_update_is_visible(&plan_df, &deserialized_predicate)?;
 
@@ -4710,7 +4776,9 @@ fn test_aggregate_with_dynamic_filter_roundtrip() -> Result<()> {
         .downcast_ref::<AggregateExec>()
         .expect("Should be AggregateExec");
     let deserialized_agg_df = deserialized_agg
-        .dynamic_filter_expr()
+        .dynamic_expressions_produced()
+        .into_iter()
+        .next()
         .expect("AggregateExec should have a dynamic filter after roundtrip");
 
     // Extract the dynamic filter pushed down to the child ParquetSource.
@@ -4718,7 +4786,7 @@ fn test_aggregate_with_dynamic_filter_roundtrip() -> Result<()> {
 
     // The AggregateExec's dynamic filter and the child's predicate should
     // refer to the same underlying expression.
-    let plan_df: Arc<dyn PhysicalExpr> = deserialized_agg_df.clone();
+    let plan_df = deserialized_agg_df;
     assert_dynamic_filters_equal(&plan_df, &deserialized_predicate);
     assert_dynamic_filter_update_is_visible(&plan_df, &deserialized_predicate)?;
 
@@ -4778,7 +4846,9 @@ fn test_sort_topk_with_dynamic_filter_roundtrip() -> Result<()> {
         .downcast_ref::<SortExec>()
         .expect("Should be SortExec");
     let deserialized_sort_df = deserialized_sort
-        .dynamic_filter_expr()
+        .dynamic_expressions_produced()
+        .into_iter()
+        .next()
         .expect("SortExec should have a dynamic filter after roundtrip");
 
     // Extract the dynamic filter pushed down to the child ParquetSource.
@@ -4786,7 +4856,7 @@ fn test_sort_topk_with_dynamic_filter_roundtrip() -> Result<()> {
 
     // The SortExec's dynamic filter and the child's predicate should
     // refer to the same underlying expression.
-    let plan_df: Arc<dyn PhysicalExpr> = deserialized_sort_df;
+    let plan_df = deserialized_sort_df;
     assert_dynamic_filters_equal(&plan_df, &deserialized_predicate);
     assert_dynamic_filter_update_is_visible(&plan_df, &deserialized_predicate)?;
 
