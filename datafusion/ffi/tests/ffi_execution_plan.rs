@@ -15,16 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[cfg(feature = "integration-tests")]
+// #[cfg(feature = "integration-tests")]
 mod tests {
     use arrow::datatypes::Field;
     use arrow::datatypes::Schema;
     use arrow_schema::DataType;
     use datafusion_common::DataFusionError;
-    use datafusion_ffi::execution_plan::FFI_ExecutionPlan;
-    use datafusion_ffi::execution_plan::ForeignExecutionPlan;
-    use datafusion_ffi::execution_plan::{ExecutionPlanPrivateData, tests::EmptyExec};
+    use datafusion_ffi::execution_plan::{
+        ExecutionPlanPrivateData, FFI_ExecutionPlan, ForeignExecutionPlan,
+        tests::EmptyExec,
+    };
     use datafusion_ffi::tests::utils::get_module;
+    use datafusion_physical_plan::execution_plan::InvariantLevel;
     use datafusion_physical_plan::{ChildrenPropertiesHint, ExecutionPlan};
     use std::sync::Arc;
 
@@ -60,6 +62,23 @@ mod tests {
         let observed_part = with_stats.partition_statistics(Some(0))?;
         assert_eq!(observed_part.as_ref(), &expected);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_execution_plan_dynamic_expressions_cross_library()
+    -> Result<(), DataFusionError> {
+        let module = get_module()?;
+        let plan = (module.create_exec_with_dynamic_expressions)();
+        let plan: Arc<dyn ExecutionPlan> = (&plan).try_into()?;
+        assert!(plan.is::<ForeignExecutionPlan>());
+        plan.check_invariants(InvariantLevel::Always)?;
+
+        let produced = plan.dynamic_expressions_produced();
+        assert_eq!(produced.len(), 1);
+        assert!(produced[0].expression_id().is_some());
+        drop(plan);
+        assert!(produced[0].expression_id().is_some());
         Ok(())
     }
 

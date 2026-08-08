@@ -23,6 +23,7 @@ use std::vec;
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
+use async_trait::async_trait;
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, SchemaRef};
@@ -35,11 +36,11 @@ use datafusion::datasource::listing::{
 };
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
-    ArrowSource, FileGroup, FileOutputMode, FileScanConfig, FileScanConfigBuilder,
-    FileSinkConfig, ParquetSource, wrap_partition_type_in_dict,
-    wrap_partition_value_in_dict,
+    ArrowSource, CsvSource, FileGroup, FileOutputMode, FileScanConfig,
+    FileScanConfigBuilder, FileSinkConfig, JsonSource, ParquetSource,
+    wrap_partition_type_in_dict, wrap_partition_value_in_dict,
 };
-use datafusion::datasource::sink::DataSinkExec;
+use datafusion::datasource::sink::{DataSink, DataSinkExec};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::TaskContext;
 use datafusion::functions_aggregate::count::count_udaf;
@@ -81,6 +82,7 @@ use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::metrics::MetricCategory;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion::physical_plan::proto::ExecutionPlanEncodeCtx;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::scalar_subquery::{
     ScalarSubqueryExec, ScalarSubqueryLink,
@@ -546,6 +548,70 @@ fn roundtrip_hash_join_projection_states() -> Result<()> {
             NullEquality::NullEqualsNothing,
             false,
         )?))?;
+    }
+    Ok(())
+}
+
+/// Regression: `HashJoinExecNode` had no `fetch` field, so the row limit that
+/// the `limit_pushdown` physical optimizer rule pushes into the join via
+/// `ExecutionPlan::with_fetch` was silently dropped by serde. Because that rule
+/// also removes the enclosing `GlobalLimitExec` once the join absorbs the limit,
+/// a round-tripped plan had no limit left at all and a distributed executor
+/// returned more rows than the query asked for.
+///
+/// Note this cannot be covered by `roundtrip_test`: that helper compares
+/// `format!("{plan:?}")`, and `HashJoinExec`'s `Debug` output does not include
+/// `fetch`, so the before/after strings match even when the value is lost. The
+/// assertions below therefore inspect `fetch()` directly.
+#[test]
+fn roundtrip_hash_join_fetch() -> Result<()> {
+    let field_a = Field::new("col", DataType::Int64, false);
+    let schema_left = Arc::new(Schema::new(vec![field_a.clone()]));
+    let schema_right = Arc::new(Schema::new(vec![field_a]));
+    let on = vec![(
+        Arc::new(Column::new("col", schema_left.index_of("col")?)) as _,
+        Arc::new(Column::new("col", schema_right.index_of("col")?)) as _,
+    )];
+
+    // `usize::MAX` and `u32::MAX as usize` pin the decode-side `u64 -> usize`
+    // conversion: it is a checked `usize::try_from`, and a large fetch must
+    // survive the round trip exactly rather than being truncated or clamped.
+    // Both are representable on every target (on a 32-bit target `usize::MAX`
+    // is simply `u32::MAX`), so this stays portable. The truncating case
+    // itself -- a `u64` fetch above `usize::MAX` -- is only reachable on a
+    // 32-bit target and so is not exercised by this test on a 64-bit host.
+    for fetch in [None, Some(7), Some(u32::MAX as usize), Some(usize::MAX)] {
+        let join = HashJoinExec::try_new(
+            Arc::new(EmptyExec::new(Arc::clone(&schema_left))),
+            Arc::new(EmptyExec::new(Arc::clone(&schema_right))),
+            on.clone(),
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+
+        let plan: Arc<dyn ExecutionPlan> = match fetch {
+            // This is how `limit_pushdown` installs the limit.
+            Some(fetch) => join
+                .with_fetch(Some(fetch))
+                .expect("HashJoinExec supports fetch"),
+            None => Arc::new(join),
+        };
+        assert_eq!(plan.fetch(), fetch);
+
+        let ctx = SessionContext::new();
+        let codec = DefaultPhysicalExtensionCodec {};
+        let proto_converter = DefaultPhysicalProtoConverter {};
+        let deserialized =
+            roundtrip_test_and_return(plan, &ctx, &codec, &proto_converter)?;
+
+        let deserialized_join = deserialized
+            .downcast_ref::<HashJoinExec>()
+            .expect("should be a HashJoinExec");
+        assert_eq!(deserialized_join.fetch(), fetch);
     }
     Ok(())
 }
@@ -1307,6 +1373,76 @@ fn roundtrip_arrow_scan() -> Result<()> {
     roundtrip_test(DataSourceExec::from_data_source(scan_config))
 }
 
+#[test]
+fn roundtrip_json_scan() -> Result<()> {
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let file_source = Arc::new(JsonSource::new(TableSchema::from(&file_schema)));
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.json".to_string(),
+                1024,
+            )])])
+            .build();
+    roundtrip_test(DataSourceExec::from_data_source(scan_config))
+}
+
+#[test]
+fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
+    use datafusion::common::config::CsvOptions;
+
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let table_schema = TableSchema::from(&file_schema);
+    let file_source =
+        Arc::new(CsvSource::new(table_schema).with_csv_options(CsvOptions {
+            has_header: Some(false),
+            delimiter: b'|',
+            quote: b'\'',
+            escape: Some(b'\\'),
+            comment: Some(b'#'),
+            newlines_in_values: Some(true),
+            truncated_rows: Some(true),
+            ..Default::default()
+        }));
+
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.csv".to_string(),
+                1024,
+            )])])
+            .build();
+
+    let ctx = SessionContext::new();
+    let roundtripped = roundtrip_test_and_return(
+        DataSourceExec::from_data_source(scan_config),
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let data_source = roundtripped
+        .downcast_ref::<DataSourceExec>()
+        .ok_or_else(|| internal_datafusion_err!("Expected DataSourceExec"))?;
+    let file_scan = data_source
+        .data_source()
+        .downcast_ref::<FileScanConfig>()
+        .ok_or_else(|| internal_datafusion_err!("Expected FileScanConfig"))?;
+    let csv_source = file_scan
+        .file_source()
+        .downcast_ref::<CsvSource>()
+        .ok_or_else(|| internal_datafusion_err!("Expected CsvSource"))?;
+
+    assert!(!csv_source.has_header());
+    assert_eq!(csv_source.delimiter(), b'|');
+    assert_eq!(csv_source.quote(), b'\'');
+    assert_eq!(csv_source.escape(), Some(b'\\'));
+    assert_eq!(csv_source.comment(), Some(b'#'));
+    assert!(csv_source.newlines_in_values());
+    assert!(csv_source.truncate_rows());
+    Ok(())
+}
 #[tokio::test]
 async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
     let mut file_group =
@@ -2061,6 +2197,150 @@ fn roundtrip_explain() -> Result<()> {
     assert_eq!(roundtripped.schema(), schema);
     assert_eq!(roundtripped.stringified_plans(), stringified_plans);
     assert!(roundtripped.verbose());
+    Ok(())
+}
+
+#[derive(Debug)]
+struct ProtoHookSink {
+    schema: SchemaRef,
+}
+
+impl DisplayAs for ProtoHookSink {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "ProtoHookSink")
+    }
+}
+
+#[async_trait]
+impl DataSink for ProtoHookSink {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    async fn write_all(
+        &self,
+        _data: SendableRecordBatchStream,
+        _context: &Arc<TaskContext>,
+    ) -> Result<u64> {
+        unreachable!("serialization test does not execute the sink")
+    }
+
+    fn try_to_proto(
+        &self,
+        exec: &DataSinkExec,
+        ctx: &ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<PhysicalPlanNode>> {
+        let input = ctx.encode_child(exec.input())?;
+        let sort_order = exec.encode_sort_order(ctx)?;
+        assert!(matches!(
+            input.physical_plan_type,
+            Some(protobuf::physical_plan_node::PhysicalPlanType::PlaceholderRow(_))
+        ));
+        assert_eq!(
+            sort_order
+                .as_ref()
+                .map(|ordering| ordering.physical_sort_expr_nodes.len()),
+            Some(1)
+        );
+        assert_eq!(exec.schema().fields().len(), 1);
+
+        Ok(Some(PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Empty(
+                    protobuf::EmptyExecNode {
+                        schema: Some(exec.schema().as_ref().try_into()?),
+                        partitions: 1,
+                    },
+                ),
+            ),
+        }))
+    }
+}
+
+#[test]
+fn data_sink_exec_delegates_to_sink_proto_hook() -> Result<()> {
+    let input_schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int64,
+        false,
+    )]));
+    let input = Arc::new(PlaceholderRowExec::new(Arc::clone(&input_schema)));
+    let sink = Arc::new(ProtoHookSink {
+        schema: Arc::clone(&input_schema),
+    });
+    let sort_order = [PhysicalSortRequirement::new(
+        Arc::new(Column::new("value", 0)),
+        Some(SortOptions::default()),
+    )]
+    .into();
+    let plan = Arc::new(DataSinkExec::new(input, sink, Some(sort_order)));
+
+    let node = PhysicalPlanNode::try_from_physical_plan(
+        plan,
+        &DefaultPhysicalExtensionCodec {},
+    )?;
+
+    assert!(matches!(
+        node.physical_plan_type,
+        Some(protobuf::physical_plan_node::PhysicalPlanType::Empty(_))
+    ));
+    Ok(())
+}
+
+#[test]
+fn file_sink_config_roundtrip_preserves_fields() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "partition",
+        DataType::Utf8,
+        false,
+    )]));
+    let config = FileSinkConfig {
+        original_url: "file:///tmp/output".to_string(),
+        object_store_url: ObjectStoreUrl::local_filesystem(),
+        file_group: FileGroup::new(vec![PartitionedFile::new("/tmp/output", 1)]),
+        table_paths: vec![ListingTableUrl::parse("file:///tmp/output")?],
+        output_schema: schema,
+        table_partition_cols: vec![("partition".to_string(), DataType::Utf8)],
+        insert_op: InsertOp::Overwrite,
+        keep_partition_by_columns: true,
+        file_extension: "parquet".to_string(),
+        file_output_mode: FileOutputMode::Directory,
+    };
+
+    let encoded = protobuf::FileSinkConfig::try_from(&config)?;
+    assert_eq!(encoded.insert_op(), protobuf::InsertOp::Overwrite);
+    assert_eq!(
+        encoded.file_output_mode(),
+        protobuf::FileOutputMode::Directory
+    );
+
+    let decoded = FileSinkConfig::try_from(&encoded)?;
+    assert_eq!(decoded.object_store_url, config.object_store_url);
+    assert_eq!(decoded.table_paths, config.table_paths);
+    assert_eq!(
+        decoded.output_schema.as_ref(),
+        config.output_schema.as_ref()
+    );
+    assert_eq!(decoded.table_partition_cols, config.table_partition_cols);
+    assert_eq!(decoded.insert_op, config.insert_op);
+    assert_eq!(
+        decoded.keep_partition_by_columns,
+        config.keep_partition_by_columns
+    );
+    assert_eq!(decoded.file_extension, config.file_extension);
+    assert_eq!(decoded.file_output_mode, config.file_output_mode);
+
+    let [decoded_file] = decoded.file_group.files() else {
+        panic!("expected one decoded output file");
+    };
+    let [config_file] = config.file_group.files() else {
+        panic!("expected one configured output file");
+    };
+    assert_eq!(
+        decoded_file.object_meta.location,
+        config_file.object_meta.location
+    );
+    assert_eq!(decoded_file.object_meta.size, config_file.object_meta.size);
     Ok(())
 }
 
@@ -4421,7 +4701,9 @@ fn test_hash_join_with_dynamic_filter_roundtrip() -> Result<()> {
         .downcast_ref::<HashJoinExec>()
         .expect("Should be HashJoinExec");
     let deserialized_hash_join_df = deserialized_join
-        .dynamic_filter_expr()
+        .dynamic_expressions_produced()
+        .into_iter()
+        .next()
         .expect("HashJoinExec should have a dynamic filter after roundtrip");
 
     // Extract the dynamic filter pushed down to the probe side's ParquetSource.
@@ -4429,7 +4711,7 @@ fn test_hash_join_with_dynamic_filter_roundtrip() -> Result<()> {
 
     // The HashJoinExec's dynamic filter and the probe side's predicate should
     // refer to the same underlying expression.
-    let plan_df: Arc<dyn PhysicalExpr> = deserialized_hash_join_df.clone();
+    let plan_df = deserialized_hash_join_df;
     assert_dynamic_filters_equal(&plan_df, &deserialized_predicate);
     assert_dynamic_filter_update_is_visible(&plan_df, &deserialized_predicate)?;
 
@@ -4574,7 +4856,9 @@ fn test_aggregate_with_dynamic_filter_roundtrip() -> Result<()> {
         .downcast_ref::<AggregateExec>()
         .expect("Should be AggregateExec");
     let deserialized_agg_df = deserialized_agg
-        .dynamic_filter_expr()
+        .dynamic_expressions_produced()
+        .into_iter()
+        .next()
         .expect("AggregateExec should have a dynamic filter after roundtrip");
 
     // Extract the dynamic filter pushed down to the child ParquetSource.
@@ -4582,7 +4866,7 @@ fn test_aggregate_with_dynamic_filter_roundtrip() -> Result<()> {
 
     // The AggregateExec's dynamic filter and the child's predicate should
     // refer to the same underlying expression.
-    let plan_df: Arc<dyn PhysicalExpr> = deserialized_agg_df.clone();
+    let plan_df = deserialized_agg_df;
     assert_dynamic_filters_equal(&plan_df, &deserialized_predicate);
     assert_dynamic_filter_update_is_visible(&plan_df, &deserialized_predicate)?;
 
@@ -4642,7 +4926,9 @@ fn test_sort_topk_with_dynamic_filter_roundtrip() -> Result<()> {
         .downcast_ref::<SortExec>()
         .expect("Should be SortExec");
     let deserialized_sort_df = deserialized_sort
-        .dynamic_filter_expr()
+        .dynamic_expressions_produced()
+        .into_iter()
+        .next()
         .expect("SortExec should have a dynamic filter after roundtrip");
 
     // Extract the dynamic filter pushed down to the child ParquetSource.
@@ -4650,7 +4936,7 @@ fn test_sort_topk_with_dynamic_filter_roundtrip() -> Result<()> {
 
     // The SortExec's dynamic filter and the child's predicate should
     // refer to the same underlying expression.
-    let plan_df: Arc<dyn PhysicalExpr> = deserialized_sort_df;
+    let plan_df = deserialized_sort_df;
     assert_dynamic_filters_equal(&plan_df, &deserialized_predicate);
     assert_dynamic_filter_update_is_visible(&plan_df, &deserialized_predicate)?;
 

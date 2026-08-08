@@ -59,7 +59,7 @@ pub use crate::visitor::{ExecutionPlanVisitor, accept, visit_execution_plan};
 pub use crate::work_table::WorkTable;
 pub use spill::spill_manager::SpillManager;
 
-#[allow(deprecated)]
+#[expect(deprecated)]
 pub use crate::execution_plan::with_new_children_if_necessary;
 
 mod ordering;

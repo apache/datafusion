@@ -120,6 +120,8 @@ pub struct FFI_PhysicalExpr {
 
     pub is_volatile_node: unsafe extern "C" fn(&Self) -> bool,
 
+    pub expression_id: unsafe extern "C" fn(&Self) -> FFI_Option<u64>,
+
     // Display trait
     pub display: unsafe extern "C" fn(&Self) -> SString,
 
@@ -387,6 +389,13 @@ unsafe extern "C" fn is_volatile_node_fn_wrapper(expr: &FFI_PhysicalExpr) -> boo
     let expr = expr.inner();
     expr.is_volatile_node()
 }
+
+unsafe extern "C" fn expression_id_fn_wrapper(
+    expr: &FFI_PhysicalExpr,
+) -> FFI_Option<u64> {
+    expr.inner().expression_id().into()
+}
+
 unsafe extern "C" fn display_fn_wrapper(expr: &FFI_PhysicalExpr) -> SString {
     let expr = expr.inner();
     format!("{expr}").into()
@@ -434,6 +443,7 @@ unsafe extern "C" fn clone_fn_wrapper(expr: &FFI_PhysicalExpr) -> FFI_PhysicalEx
             snapshot: snapshot_fn_wrapper,
             snapshot_generation: snapshot_generation_fn_wrapper,
             is_volatile_node: is_volatile_node_fn_wrapper,
+            expression_id: expression_id_fn_wrapper,
             display: display_fn_wrapper,
             hash: hash_fn_wrapper,
             clone: clone_fn_wrapper,
@@ -477,6 +487,7 @@ impl From<Arc<dyn PhysicalExpr>> for FFI_PhysicalExpr {
             snapshot: snapshot_fn_wrapper,
             snapshot_generation: snapshot_generation_fn_wrapper,
             is_volatile_node: is_volatile_node_fn_wrapper,
+            expression_id: expression_id_fn_wrapper,
             display: display_fn_wrapper,
             hash: hash_fn_wrapper,
             clone: clone_fn_wrapper,
@@ -712,6 +723,10 @@ impl PhysicalExpr for ForeignPhysicalExpr {
 
     fn is_volatile_node(&self) -> bool {
         unsafe { (self.expr.is_volatile_node)(&self.expr) }
+    }
+
+    fn expression_id(&self) -> Option<u64> {
+        unsafe { (self.expr.expression_id)(&self.expr).into() }
     }
 }
 
