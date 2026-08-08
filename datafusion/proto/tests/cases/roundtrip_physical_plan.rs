@@ -465,16 +465,29 @@ fn limit_required_ordering(schema: &Schema) -> Result<Option<LexOrdering>> {
 fn roundtrip_limit_with_required_ordering() -> Result<()> {
     let schema = limit_test_schema();
     let required_ordering = limit_required_ordering(&schema)?;
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
 
-    // `roundtrip_test`'s `Debug` equality covers `required_ordering`.
     let mut global =
         GlobalLimitExec::new(Arc::new(EmptyExec::new(Arc::clone(&schema))), 3, Some(25));
     global.set_required_ordering(required_ordering.clone());
-    roundtrip_test(Arc::new(global))?;
+    let decoded =
+        roundtrip_test_and_return(Arc::new(global), &ctx, &codec, &proto_converter)?;
+    let decoded = decoded
+        .downcast_ref::<GlobalLimitExec>()
+        .expect("expected GlobalLimitExec");
+    assert_eq!(decoded.required_ordering(), &required_ordering);
 
     let mut local = LocalLimitExec::new(Arc::new(EmptyExec::new(schema)), 25);
-    local.set_required_ordering(required_ordering);
-    roundtrip_test(Arc::new(local))
+    local.set_required_ordering(required_ordering.clone());
+    let decoded =
+        roundtrip_test_and_return(Arc::new(local), &ctx, &codec, &proto_converter)?;
+    let decoded = decoded
+        .downcast_ref::<LocalLimitExec>()
+        .expect("expected LocalLimitExec");
+    assert_eq!(decoded.required_ordering(), &required_ordering);
+    Ok(())
 }
 
 /// A limit's `required_ordering` is the only record that an `ORDER BY ... LIMIT`
@@ -501,7 +514,7 @@ fn roundtrip_limit_required_ordering_reaches_data_source() -> Result<()> {
         let decoded =
             roundtrip_test_and_return(Arc::new(limit), &ctx, &codec, &proto_converter)?;
 
-        // Rebuild the limit as an optimizer pass replacing its child would.
+        // Child replacement must not erase the decoded ordering before pushdown.
         let rebuilt = decoded.with_new_children(vec![make_scan()])?;
 
         let optimized =
@@ -522,7 +535,6 @@ fn roundtrip_limit_required_ordering_reaches_data_source() -> Result<()> {
     assert_eq!(scan_config.limit, Some(10));
     assert!(scan_config.preserve_order);
 
-    // Control: with no required ordering the scan must stay order-free.
     let scan_config =
         scan_after_limit_pushdown(GlobalLimitExec::new(make_scan(), 0, Some(10)))?;
     assert_eq!(scan_config.limit, Some(10));

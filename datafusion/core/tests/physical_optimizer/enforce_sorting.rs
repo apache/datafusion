@@ -2300,27 +2300,6 @@ async fn test_remove_unnecessary_spm2() -> Result<()> {
 }
 
 #[test]
-fn test_spm_fetch_replacement_context_integrity() -> Result<()> {
-    let schema = create_test_schema()?;
-    let ordering: LexOrdering = [sort_expr("non_nullable_col", &schema)].into();
-    let source = parquet_exec_with_sort(Arc::clone(&schema), vec![ordering.clone()]);
-    let plan = sort_preserving_merge_exec_with_fetch(ordering.clone(), source, 100);
-
-    let optimized = PlanWithCorrespondingSort::new_default(plan)
-        .transform_up(ensure_sorting)?
-        .data;
-    let optimized = check_integrity(optimized)?;
-    let limit = optimized
-        .plan
-        .downcast_ref::<LocalLimitExec>()
-        .expect("SPM fetch should become a local limit");
-    assert_eq!(limit.fetch(), 100);
-    assert_eq!(limit.required_ordering().as_ref(), Some(&ordering));
-
-    Ok(())
-}
-
-#[test]
 fn test_spm_fetch_preserves_ordering_through_child_rewrite() -> Result<()> {
     let schema = create_test_schema()?;
     let ordering: LexOrdering = [sort_expr("non_nullable_col", &schema)].into();
@@ -2344,6 +2323,7 @@ fn test_spm_fetch_preserves_ordering_through_child_rewrite() -> Result<()> {
     let limit = optimized
         .downcast_ref::<LocalLimitExec>()
         .expect("SPM fetch should become a local limit");
+    assert_eq!(limit.fetch(), 100);
     assert_eq!(limit.required_ordering().as_ref(), Some(&ordering));
 
     let config = ConfigOptions::new();
