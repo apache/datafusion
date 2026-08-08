@@ -45,6 +45,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::{evaluate_partition_ranges, transpose};
 use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
@@ -212,6 +213,21 @@ impl ExecutionPlan for WindowAggExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let expressions = self.window_expr.iter().flat_map(|window_expr| {
+            let expressions = window_expr.all_expressions();
+            expressions
+                .args
+                .into_iter()
+                .chain(expressions.partition_by_exprs)
+                .chain(expressions.order_by_exprs)
+        });
+        crate::apply_expression_roots(expressions, f)
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

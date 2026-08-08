@@ -24,7 +24,7 @@
 use insta::assert_snapshot;
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{TransformedResult, TreeNode};
+use datafusion_common::tree_node::{TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::ensure_requirements::enforce_sorting::{
@@ -129,6 +129,12 @@ impl ExecutionPlan for MockMultiPartitionExec {
     }
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
+    }
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
     fn with_new_children(
         self: Arc<Self>,
@@ -992,6 +998,27 @@ impl ExecutionPlan for MockReqExec {
     }
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        #[expect(deprecated)]
+        let distribution = if let Distribution::HashPartitioned(exprs)
+        | Distribution::KeyPartitioned(exprs) = &self.dist
+        {
+            exprs.as_slice()
+        } else {
+            &[]
+        };
+        datafusion_physical_plan::apply_expression_roots(
+            self.ord
+                .iter()
+                .flatten()
+                .map(|sort_expr| &sort_expr.expr)
+                .chain(distribution),
+            f,
+        )
     }
     fn input_distribution_requirements(
         &self,

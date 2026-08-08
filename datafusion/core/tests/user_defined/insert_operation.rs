@@ -25,6 +25,7 @@ use datafusion::{
 };
 use datafusion_catalog::{Session, TableProvider};
 use datafusion_common::config::Dialect;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_expr::{Expr, TableType, dml::InsertOp};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_plan::execution_plan::SchedulingType;
@@ -175,6 +176,22 @@ impl ExecutionPlan for TestInsertExec {
         _context: Arc<datafusion_execution::TaskContext>,
     ) -> Result<datafusion_execution::SendableRecordBatchStream> {
         unimplemented!("TestInsertExec is a stub for testing.")
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        datafusion_physical_plan::apply_expression_roots(
+            self.plan_properties
+                .output_ordering()
+                .into_iter()
+                .flatten()
+                .map(|sort_expr| &sort_expr.expr),
+            f,
+        )
     }
 }
 
