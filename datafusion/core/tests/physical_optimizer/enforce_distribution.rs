@@ -20,10 +20,10 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    bounded_window_exec_with_can_repartition, check_integrity, coalesce_partitions_exec,
-    parquet_exec_with_sort, parquet_exec_with_stats, repartition_exec, schema, sort_exec,
-    sort_exec_with_preserve_partitioning, sort_merge_join_exec,
-    sort_preserving_merge_exec, union_exec,
+    RequirementsTestExec, bounded_window_exec_with_can_repartition, check_integrity,
+    coalesce_partitions_exec, parquet_exec_with_sort, parquet_exec_with_stats,
+    repartition_exec, schema, sort_exec, sort_exec_with_preserve_partitioning,
+    sort_merge_join_exec, sort_preserving_merge_exec, union_exec,
 };
 
 use arrow::array::{RecordBatch, UInt8Array, UInt64Array};
@@ -745,6 +745,93 @@ impl TestConfig {
     ) -> Arc<dyn ExecutionPlan> {
         self.try_to_plan(plan, optimizers_to_run).unwrap()
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ExpectedPlan {
+    Reuse,
+    Hash,
+}
+
+#[test]
+fn range_satisfaction_config_matrix() -> Result<()> {
+    const INPUT_PARTITIONS: usize = 4;
+    const MET: usize = INPUT_PARTITIONS;
+    const NOT_MET: usize = INPUT_PARTITIONS + 1;
+    const DISABLED: usize = 0;
+    const EQUAL: usize = INPUT_PARTITIONS;
+    const GREATER: usize = INPUT_PARTITIONS + 1;
+    use ExpectedPlan::{Hash, Reuse};
+
+    let config_cases = [
+        // subset  preserve  target   exact  subset  incompatible
+        (NOT_MET, DISABLED, EQUAL, [Reuse, Hash, Hash]),
+        (NOT_MET, DISABLED, GREATER, [Hash, Hash, Hash]),
+        (NOT_MET, NOT_MET, EQUAL, [Reuse, Hash, Hash]),
+        (NOT_MET, NOT_MET, GREATER, [Hash, Hash, Hash]),
+        (NOT_MET, MET, EQUAL, [Reuse, Hash, Hash]),
+        (NOT_MET, MET, GREATER, [Reuse, Reuse, Hash]),
+        (MET, DISABLED, EQUAL, [Reuse, Reuse, Hash]),
+        (MET, DISABLED, GREATER, [Reuse, Reuse, Hash]),
+        (MET, NOT_MET, EQUAL, [Reuse, Reuse, Hash]),
+        (MET, NOT_MET, GREATER, [Reuse, Reuse, Hash]),
+        (MET, MET, EQUAL, [Reuse, Reuse, Hash]),
+        (MET, MET, GREATER, [Reuse, Reuse, Hash]),
+    ];
+    for (subset_threshold, preserve_file_partitions, target_partitions, expected) in
+        config_cases
+    {
+        let key_cases = [
+            ("exact", vec![col("a", &schema())?], expected[0]),
+            (
+                "subset",
+                vec![col("a", &schema())?, col("b", &schema())?],
+                expected[1],
+            ),
+            ("incompatible", vec![col("b", &schema())?], expected[2]),
+        ];
+        for (key_match, partition_keys, expected_plan) in key_cases {
+            let input = parquet_exec_with_output_partitioning(range_partitioning(
+                "a",
+                [10, 20, 30],
+                SortOptions::default(),
+            )?);
+            let requirement = RequirementsTestExec::new(input)
+                .with_required_input_distribution(Distribution::KeyPartitioned(
+                    partition_keys,
+                ))
+                .into_arc();
+
+            let mut config =
+                TestConfig::default().with_query_execution_partitions(target_partitions);
+            config.config.optimizer.subset_repartition_threshold = subset_threshold;
+            config.config.optimizer.preserve_file_partitions = preserve_file_partitions;
+
+            let plan = config.to_plan(requirement, &DISTRIB_DISTRIB_SORT);
+            let plan = displayable(plan.as_ref()).indent(true).to_string();
+            let repartitions = plan
+                .lines()
+                .filter(|line| line.contains("RepartitionExec:"))
+                .collect::<Vec<_>>();
+
+            let matches_expected = match expected_plan {
+                Reuse => repartitions.is_empty(),
+                Hash => matches!(
+                    repartitions.as_slice(),
+                    [repartition] if repartition.contains("partitioning=Hash")
+                ),
+            };
+            assert!(
+                matches_expected,
+                "unexpected optimized plan for key_match={key_match}, \
+                 subset_threshold={subset_threshold}, \
+                 preserve_file_partitions={preserve_file_partitions}, \
+                 target_partitions={target_partitions}:\n{plan}"
+            );
+        }
+    }
+
+    Ok(())
 }
 
 #[test]

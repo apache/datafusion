@@ -427,7 +427,9 @@ impl Statistics {
     }
 
     /// Calculates `total_byte_size` based on the schema and `num_rows`.
-    /// If any of the columns has non-primitive width, `total_byte_size` is set to inexact.
+    /// If any of the columns has non-primitive width, or `num_rows` is unknown,
+    /// the previous `total_byte_size` is kept but downgraded to inexact rather
+    /// than discarded.
     pub fn calculate_total_byte_size(&mut self, schema: &Schema) {
         let mut row_size = Some(0);
         for field in schema.fields() {
@@ -441,11 +443,11 @@ impl Statistics {
                 }
             }
         }
-        match row_size {
-            None => {
+        match (row_size, &self.num_rows) {
+            (None, _) | (Some(_), Precision::Absent) => {
                 self.total_byte_size = self.total_byte_size.to_inexact();
             }
-            Some(size) => {
+            (Some(size), _) => {
                 self.total_byte_size = self.num_rows.multiply(&Precision::Exact(size));
             }
         }
@@ -3344,5 +3346,34 @@ mod tests {
         let mut lhs = Precision::Exact(ScalarValue::Int64(Some(10)));
         precision_add_for_sum_in_place(&mut lhs, &Precision::Absent);
         assert_eq!(lhs, Precision::Absent);
+    }
+
+    #[test]
+    fn test_calculate_total_byte_size() {
+        let primitive_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let non_primitive_schema =
+            Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+
+        // All-primitive schema with a known row count computes an exact size.
+        let mut stats = Statistics::new_unknown(&primitive_schema);
+        stats.num_rows = Precision::Exact(10);
+        stats.calculate_total_byte_size(&primitive_schema);
+        assert_eq!(stats.total_byte_size, Precision::Exact(40));
+
+        // All-primitive schema with an unknown row count keeps a previously
+        // known `total_byte_size`, downgraded to inexact, instead of
+        // discarding it to `Absent`.
+        let mut stats = Statistics::new_unknown(&primitive_schema);
+        stats.total_byte_size = Precision::Exact(1234);
+        stats.calculate_total_byte_size(&primitive_schema);
+        assert_eq!(stats.total_byte_size, Precision::Inexact(1234));
+
+        // Non-primitive schema always downgrades any existing
+        // `total_byte_size` to inexact, regardless of `num_rows`.
+        let mut stats = Statistics::new_unknown(&non_primitive_schema);
+        stats.num_rows = Precision::Exact(10);
+        stats.total_byte_size = Precision::Exact(999);
+        stats.calculate_total_byte_size(&non_primitive_schema);
+        assert_eq!(stats.total_byte_size, Precision::Inexact(999));
     }
 }

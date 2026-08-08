@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::execution::memory_pool::MemoryPool;
-
-use super::PeakRecordingPool;
+use datafusion::execution::memory_pool::{MemoryPool, PeakRecordingPool};
 
 /// Print Peak RSS, Peak Commit, Page Faults based on mimalloc api, followed by
 /// the peak reservation of `memory_pool` when a memory limit was configured.
