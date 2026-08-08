@@ -545,6 +545,11 @@ SELECT reverse(arrow_cast('abcde', 'Dictionary(Int32, Utf8)'))
 edcba
 
 query T
+SELECT arrow_typeof(reverse(arrow_cast('abcde', 'Dictionary(Int32, Utf8)')))
+----
+Dictionary(Int32, Utf8)
+
+query T
 SELECT reverse('loẅks')
 ----
 sk̈wol
@@ -1048,6 +1053,16 @@ query I
 SELECT find_in_set(arrow_cast('', 'Utf8View'), arrow_cast('a,b,c,d,a', 'Utf8View'))
 ----
 0
+
+# invalid scalar argument count and type
+query error 'find_in_set' does not support zero arguments
+SELECT find_in_set();
+
+query error Failed to coerce arguments to satisfy a call to 'find_in_set' function
+SELECT find_in_set('a');
+
+query error Failed to coerce arguments to satisfy a call to 'find_in_set' function
+SELECT find_in_set('a', 'a,b', 'extra');
 
 
 query T

@@ -964,8 +964,11 @@ impl HashJoinExec {
         self.null_equality
     }
 
-    /// Get the dynamic filter expression for testing purposes.
-    /// Returns the dynamic filter expression for this hash join, if set.
+    /// Returns the dynamic filter expression produced by this hash join, if set.
+    #[deprecated(
+        since = "55.0.0",
+        note = "Use ExecutionPlan::dynamic_expressions_produced instead"
+    )]
     pub fn dynamic_filter_expr(&self) -> Option<&Arc<DynamicFilterPhysicalExpr>> {
         self.dynamic_filter.as_ref().map(|df| &df.filter)
     }
@@ -1330,6 +1333,16 @@ impl ExecutionPlan for HashJoinExec {
         vec![&self.left, &self.right]
     }
 
+    fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.dynamic_filter
+            .iter()
+            .map(|dynamic_filter| {
+                Arc::<DynamicFilterPhysicalExpr>::clone(&dynamic_filter.filter)
+                    as Arc<dyn PhysicalExpr>
+            })
+            .collect()
+    }
+
     /// Creates a new HashJoinExec with different children while preserving configuration.
     ///
     /// This method is called during query optimization when the optimizer creates new
@@ -1645,14 +1658,11 @@ impl ExecutionPlan for HashJoinExec {
                 };
             });
 
-        // For semi/anti joins, the non-preserved side's columns are not in the
-        // output, but filters on join key columns can still be pushed there.
-        // We find output columns that are join keys on the preserved side and
-        // add their output indices to the non-preserved side's allowed set.
-        // The name-based remap in FilterRemapper will then match them to the
-        // corresponding column in the non-preserved child's schema.
+        // For semi joins, filters on output join keys can also be pushed to the
+        // non-output side: every emitted row has an equal key there. This is not
+        // true for anti joins, whose emitted rows have no match.
         match self.join_type {
-            JoinType::LeftSemi | JoinType::LeftAnti => {
+            JoinType::LeftSemi => {
                 let left_key_indices: HashSet<usize> = self
                     .on
                     .iter()
@@ -1666,7 +1676,7 @@ impl ExecutionPlan for HashJoinExec {
                     }
                 }
             }
-            JoinType::RightSemi | JoinType::RightAnti => {
+            JoinType::RightSemi => {
                 let right_key_indices: HashSet<usize> = self
                     .on
                     .iter()
@@ -1811,12 +1821,10 @@ impl ExecutionPlan for HashJoinExec {
             .transpose()?;
 
         let dynamic_filter = self
-            .dynamic_filter_expr()
-            .map(|df| {
-                let df_expr: Arc<dyn PhysicalExpr> =
-                    Arc::clone(df) as Arc<dyn PhysicalExpr>;
-                ctx.encode_expr(&df_expr)
-            })
+            .dynamic_expressions_produced()
+            .into_iter()
+            .next()
+            .map(|expr| ctx.encode_expr(&expr))
             .transpose()?;
 
         Ok(Some(protobuf::PhysicalPlanNode {
@@ -1844,6 +1852,7 @@ impl ExecutionPlan for HashJoinExec {
                         },
                         null_aware: self.null_aware,
                         dynamic_filter,
+                        fetch: self.fetch.map(|f| f as u64),
                     },
                 )),
             ),
@@ -1858,7 +1867,7 @@ impl HashJoinExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        use datafusion_common::internal_datafusion_err;
+        use datafusion_common::{internal_datafusion_err, plan_datafusion_err};
         use datafusion_proto_models::protobuf;
         use std::any::Any;
 
@@ -1935,17 +1944,35 @@ impl HashJoinExec {
             indices => Some(indices.iter().map(|i| *i as usize).collect()),
         };
 
-        let mut hash_join = HashJoinExec::try_new(
-            left,
-            right,
-            on,
-            filter,
-            &join_type,
-            projection,
-            partition_mode,
-            null_equality,
-            hashjoin.null_aware,
-        )?;
+        // Restore the row limit that `limit_pushdown` may have pushed into the
+        // join. The field is presence-tracked, so a message written before it
+        // existed decodes to `None` (no limit) rather than to `Some(0)`.
+        //
+        // The conversion is checked, not `as usize`: `fetch` is a `u64` on the
+        // wire but a `usize` in the plan, and on a 32-bit target `as usize`
+        // truncates. A fetch of `1 << 32` would become `0` -- not merely a
+        // wrong limit but the worst one, silently turning the query into an
+        // empty result. Report the out-of-range value instead. Please do not
+        // "simplify" this back to `as usize`.
+        let fetch = hashjoin
+            .fetch
+            .map(|f| {
+                usize::try_from(f).map_err(|_| {
+                    plan_datafusion_err!(
+                        "HashJoinExec: fetch value {f} cannot be represented as usize on this target"
+                    )
+                })
+            })
+            .transpose()?;
+
+        let mut hash_join = HashJoinExecBuilder::new(left, right, on, join_type)
+            .with_filter(filter)
+            .with_projection(projection)
+            .with_partition_mode(partition_mode)
+            .with_null_equality(null_equality)
+            .with_null_aware(hashjoin.null_aware)
+            .with_fetch(fetch)
+            .build()?;
 
         if let Some(dynamic_filter_proto) = &hashjoin.dynamic_filter {
             // The dynamic filter is a `DynamicFilterPhysicalExpr` over the probe
@@ -1969,21 +1996,18 @@ impl HashJoinExec {
 /// Determines which sides of a join are "preserved" for filter pushdown.
 ///
 /// A preserved side means filters on that side's columns can be safely pushed
-/// below the join. This mirrors the logic in the logical optimizer's
-/// `lr_is_preserved` in `datafusion/optimizer/src/push_down_filter.rs`.
+/// below the join. This mostly mirrors the logical optimizer's `lr_is_preserved`;
+/// semi joins additionally allow join-key filters on the non-output side.
 fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     match join_type {
         JoinType::Inner => (true, true),
         JoinType::Left => (true, false),
         JoinType::Right => (false, true),
         JoinType::Full => (false, false),
-        // Filters in semi/anti joins are either on the preserved side, or on join keys,
-        // as all output columns come from the preserved side. Join key filters can be
-        // safely pushed down into the other side.
-        JoinType::LeftSemi | JoinType::LeftAnti => (true, true),
-        JoinType::RightSemi | JoinType::RightAnti => (true, true),
-        JoinType::LeftMark => (true, false),
-        JoinType::RightMark => (false, true),
+        // Callers restrict the non-output side of semi joins to join-key columns.
+        JoinType::LeftSemi | JoinType::RightSemi => (true, true),
+        JoinType::LeftAnti | JoinType::LeftMark => (true, false),
+        JoinType::RightAnti | JoinType::RightMark => (false, true),
     }
 }
 
@@ -6848,10 +6872,10 @@ mod tests {
         assert_eq!(lr_is_preserved(JoinType::Right), (false, true));
         assert_eq!(lr_is_preserved(JoinType::Full), (false, false));
         assert_eq!(lr_is_preserved(JoinType::LeftSemi), (true, true));
-        assert_eq!(lr_is_preserved(JoinType::LeftAnti), (true, true));
+        assert_eq!(lr_is_preserved(JoinType::LeftAnti), (true, false));
         assert_eq!(lr_is_preserved(JoinType::LeftMark), (true, false));
         assert_eq!(lr_is_preserved(JoinType::RightSemi), (true, true));
-        assert_eq!(lr_is_preserved(JoinType::RightAnti), (true, true));
+        assert_eq!(lr_is_preserved(JoinType::RightAnti), (false, true));
         assert_eq!(lr_is_preserved(JoinType::RightMark), (false, true));
     }
 
@@ -6872,7 +6896,7 @@ mod tests {
             NullEquality::NullEqualsNothing,
             false,
         )?;
-        assert!(join.dynamic_filter_expr().is_none());
+        assert!(join.dynamic_expressions_produced().is_empty());
 
         let df = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![Arc::new(Column::new("b1", 1)) as _],
@@ -6880,11 +6904,10 @@ mod tests {
         ));
         let join = join.with_dynamic_filter_expr(Arc::clone(&df))?;
 
-        let restored = join
-            .dynamic_filter_expr()
-            .expect("should have dynamic filter");
+        let produced = join.dynamic_expressions_produced();
+        assert_eq!(produced.len(), 1);
         assert_eq!(
-            restored
+            produced[0]
                 .expression_id()
                 .expect("DynamicFilterPhysicalExpr always has an expression_id"),
             df.expression_id()
