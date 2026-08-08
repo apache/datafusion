@@ -2663,7 +2663,12 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right_schema).unwrap()) as _,
         )];
         let right: Arc<dyn ExecutionPlan> = Arc::new(
-            MockExec::new(vec![Ok(right_batch), err], right_schema).with_use_task(false),
+            MockExec::new(vec![Ok(right_batch), err], right_schema)
+                .with_use_task(false)
+                // The planted error must only surface if the probe side is
+                // polled, not when a parent node computes statistics during
+                // planning.
+                .with_unknown_statistics(),
         );
 
         (left, right, on)
