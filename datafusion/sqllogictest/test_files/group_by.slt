@@ -5765,3 +5765,19 @@ FROM interval_group_test GROUP BY column1, column2 ORDER BY column1, count(*);
 
 statement ok
 DROP TABLE interval_group_test;
+
+# Test multi group by int + Decimal256
+statement ok
+create table decimal256_multi_group (k int, d decimal(50, 2)) as values
+  (1, 100.00), (1, 100.00), (1, 250.00), (2, 100.00), (2, NULL);
+
+query IRI
+select k, d, count(*) from decimal256_multi_group group by k, d order by k, d;
+----
+1 100 2
+1 250 1
+2 100 1
+2 NULL 1
+
+statement ok
+drop table decimal256_multi_group;
