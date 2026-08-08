@@ -47,7 +47,6 @@
 //!
 //! [`PartitionedTopKExec`]: datafusion_physical_plan::sorts::partitioned_topk::PartitionedTopKExec
 //! [`WindowFnKind`]: datafusion_physical_plan::sorts::partitioned_topk::WindowFnKind
-//! [`EnsureRequirements`]: crate::ensure_requirements::EnsureRequirements
 
 use std::sync::Arc;
 
