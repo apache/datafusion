@@ -461,13 +461,18 @@ pub fn ensure_sorting(
     } else if is_sort_preserving_merge(&requirements.plan)
         && child_node.plan.output_partitioning().partition_count() <= 1
     {
-        // This `SortPreservingMergeExec` is unnecessary, input already has a
-        // single partition and no fetch is required.
-        let mut child_node = requirements.children.swap_remove(0);
+        // This `SortPreservingMergeExec` is unnecessary because its input has a
+        // single partition.
+        let child_node = requirements.children.swap_remove(0);
         if let Some(fetch) = requirements.plan.fetch() {
-            // Add the limit exec if the original SPM had a fetch:
-            child_node.plan =
-                Arc::new(LocalLimitExec::new(Arc::clone(&child_node.plan), fetch));
+            // Preserve both the fetch and its ordering requirement.
+            let mut limit = LocalLimitExec::new(Arc::clone(&child_node.plan), fetch);
+            limit.set_required_ordering(requirements.plan.output_ordering().cloned());
+            return Ok(Transformed::yes(PlanContext::new(
+                Arc::new(limit),
+                false,
+                vec![child_node],
+            )));
         }
         return Ok(Transformed::yes(child_node));
     }
