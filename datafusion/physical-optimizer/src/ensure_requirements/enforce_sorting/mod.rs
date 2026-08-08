@@ -465,7 +465,6 @@ pub fn ensure_sorting(
         // single partition.
         let child_node = requirements.children.swap_remove(0);
         if let Some(fetch) = requirements.plan.fetch() {
-            // Preserve both the fetch and its ordering requirement.
             let mut limit = LocalLimitExec::new(Arc::clone(&child_node.plan), fetch);
             limit.set_required_ordering(requirements.plan.output_ordering().cloned());
             return Ok(Transformed::yes(PlanContext::new(

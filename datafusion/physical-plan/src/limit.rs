@@ -55,8 +55,8 @@ pub struct GlobalLimitExec {
     fetch: Option<usize>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Does the limit have to preserve the order of its input, and if so what is it?
-    /// Some optimizations may reorder the input if no particular sort is required
+    /// Input ordering that must be preserved so limit pushdown does not change
+    /// which rows are returned.
     required_ordering: Option<LexOrdering>,
     cache: Arc<PlanProperties>,
 }
@@ -324,8 +324,8 @@ pub struct LocalLimitExec {
     fetch: usize,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// If the child plan is a sort node, after the sort node is removed during
-    /// physical optimization, we should add the required ordering to the limit node
+    /// Input ordering that must be preserved so limit pushdown does not change
+    /// which rows are returned.
     required_ordering: Option<LexOrdering>,
     cache: Arc<PlanProperties>,
 }
@@ -425,7 +425,6 @@ impl ExecutionPlan for LocalLimitExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // `check_if_same_properties!` has already verified the child count.
         check_if_same_properties!(self, children);
         let mut new_limit = LocalLimitExec::new(children.swap_remove(0), self.fetch);
         new_limit.set_required_ordering(self.required_ordering.clone());
@@ -885,8 +884,6 @@ mod tests {
             },
         }]);
 
-        // Fresh children force the reconstruction path rather than the
-        // same-properties fast path.
         let mut global = GlobalLimitExec::new(Arc::clone(&source), 0, Some(10));
         global.set_required_ordering(ordering.clone());
         let rebuilt =
