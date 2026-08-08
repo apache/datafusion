@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::regex::{compile_and_cache_regex, compile_regex};
+use crate::regex::{compile_and_cache_regex, compile_regex, start_to_byte_offset};
 use arrow::array::{Array, ArrayRef, AsArray, Datum, Int64Array, StringArrayType};
 use arrow::datatypes::{DataType, Int64Type};
 use arrow::datatypes::{
@@ -565,27 +565,10 @@ fn count_matches(
             ));
         }
 
-        let char_len = value.chars().count();
-        let start_index = (start as usize).saturating_sub(1);
-
-        if start_index > char_len {
+        let Some(byte_offset) = start_to_byte_offset(value, start) else {
             return Ok(0);
-        }
-
-        // Find the byte offset for the start position (1-based character index)
-        let byte_offset = if start_index == char_len {
-            value.len()
-        } else {
-            value
-                .char_indices()
-                .nth(start_index)
-                .map(|(idx, _)| idx)
-                .unwrap_or(value.len())
         };
-
-        // Use string slicing instead of collecting chars into a new String
-        let find_slice = &value[byte_offset..];
-        let count = pattern.find_iter(find_slice).count();
+        let count = pattern.find_iter(&value[byte_offset..]).count();
         Ok(count as i64)
     } else {
         let count = pattern.find_iter(value).count();
