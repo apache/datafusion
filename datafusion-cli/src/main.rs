@@ -144,6 +144,12 @@ struct Args {
     color: bool,
 
     #[clap(
+        long,
+        help = "Enable Apache Spark-compatible functions, overriding DataFusion functions with the same name"
+    )]
+    spark: bool,
+
+    #[clap(
         short = 'd',
         long,
         help = "Available disk space for spilling queries (e.g. '10g'), default to None (uses DataFusion's default value of '100g')",
@@ -244,8 +250,11 @@ async fn main_inner() -> Result<()> {
     let runtime_env = rt_builder.build_arc()?;
 
     // enable dynamic file query
-    let ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
+    let mut ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
         .enable_url_table();
+    if args.spark {
+        datafusion_spark::register_all(&mut ctx)?;
+    }
     ctx.refresh_catalogs().await?;
     // install dynamic catalog provider that can register required object stores
     ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
