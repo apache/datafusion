@@ -21,7 +21,10 @@ use clap::Args;
 use datafusion::{
     execution::{
         disk_manager::DiskManagerBuilder,
-        memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool},
+        memory_pool::{
+            FairSpillPool, GreedyMemoryPool, MemoryPool, PeakRecordingPool,
+            TrackConsumersPool,
+        },
         object_store::ObjectStoreUrl,
         runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
     },
@@ -30,7 +33,7 @@ use datafusion::{
 use datafusion_common::{DataFusionError, Result};
 use object_store::local::LocalFileSystem;
 
-use super::{latency_object_store::LatencyObjectStore, memory_pool::PeakRecordingPool};
+use super::latency_object_store::LatencyObjectStore;
 
 // Common benchmark options (don't use doc comments otherwise this doc
 // shows up in help files)
