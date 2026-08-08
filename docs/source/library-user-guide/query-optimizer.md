@@ -42,7 +42,7 @@ For a deeper background on optimizer architecture and rule types and predicates,
 [part 2]: https://datafusion.apache.org/blog/2025/06/15/optimizing-sql-dataframes-part-two
 [using ordering for better plans in apache datafusion]: https://datafusion.apache.org/blog/2025/03/11/ordering-analysis
 [dynamic filters: passing information between operators during execution for 25x faster queries]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
-[optimizer rule reference]: https://docs.rs/datafusion/latest/datafusion/index.html#built-in-optimizer-rules
+[optimizer rule reference]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/optimizer/trait.OptimizerRule.html
 [`logicalplan`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.LogicalPlan.html
 
 ## Running the Optimizer
