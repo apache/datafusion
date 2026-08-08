@@ -32,7 +32,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::DataSinkExec;
-use datafusion_datasource::source::{DataSource, DataSourceExec};
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource_arrow::source::ArrowSource;
 #[cfg(feature = "avro")]
 use datafusion_datasource_avro::source::AvroSource;
@@ -54,7 +54,6 @@ use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::{
     Empty, GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, TimestampValue,
 };
-use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
 use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
 use datafusion_physical_plan::aggregates::AggregateExec;
@@ -97,12 +96,11 @@ use prost::bytes::BufMut;
 use crate::common::{byte_to_string, str_to_byte};
 use crate::convert_required;
 use crate::physical_plan::from_proto::{
-    parse_physical_expr_with_converter, parse_physical_sort_exprs,
-    parse_protobuf_file_scan_config, parse_record_batches, parse_table_schema_from_proto,
+    parse_physical_expr_with_converter, parse_protobuf_file_scan_config,
+    parse_table_schema_from_proto,
 };
 use crate::physical_plan::to_proto::{
     serialize_file_scan_config, serialize_physical_expr_with_converter,
-    serialize_physical_sort_exprs, serialize_record_batches,
 };
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::{self, SortMergeJoinExecNode, proto_error};
@@ -1096,8 +1094,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::AvroScan(scan) => {
                 self.try_into_avro_scan_physical_plan(scan, ctx, proto_converter)
             }
-            PhysicalPlanType::MemoryScan(scan) => {
-                self.try_into_memory_scan_physical_plan(scan, ctx, proto_converter)
+            PhysicalPlanType::MemoryScan(_) => {
+                MemorySourceConfig::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::ArrowScan(scan) => {
                 self.try_into_arrow_scan_physical_plan(scan, ctx, proto_converter)
@@ -1536,48 +1534,25 @@ pub trait PhysicalPlanNodeExt: Sized {
         panic!("Unable to process a Avro PhysicalPlan when `avro` feature is not enabled")
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `MemorySourceConfig` deserializes itself via `MemorySourceConfig::try_from_proto`"
+    )]
     fn try_into_memory_scan_physical_plan(
         &self,
         scan: &protobuf::MemoryScanExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let partitions = scan
-            .partitions
-            .iter()
-            .map(|p| parse_record_batches(p))
-            .collect::<Result<Vec<_>>>()?;
-
-        let proto_schema = scan.schema.as_ref().ok_or_else(|| {
-            internal_datafusion_err!("schema in MemoryScanExecNode is missing.")
-        })?;
-        let schema: SchemaRef = SchemaRef::new(proto_schema.try_into()?);
-
-        // Preserve the empty-projection sentinel written by `try_from_data_source_exec`.
-        let projection = match scan.projection.as_slice() {
-            [] => None,
-            [u32::MAX] => Some(Vec::new()),
-            indices => Some(indices.iter().map(|i| *i as usize).collect()),
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::MemoryScan(scan.clone())),
         };
-
-        let mut sort_information = vec![];
-        for ordering in &scan.sort_information {
-            let sort_exprs = parse_physical_sort_exprs(
-                &ordering.physical_sort_expr_nodes,
-                ctx,
-                &schema,
-                proto_converter,
-            )?;
-            sort_information.extend(LexOrdering::new(sort_exprs));
-        }
-
-        let source = MemorySourceConfig::try_new(&partitions, schema, projection)?
-            .with_limit(scan.fetch.map(|f| f as usize))
-            .with_show_sizes(scan.show_sizes);
-
-        let source = source.try_with_sort_information(sort_information)?;
-
-        Ok(DataSourceExec::from_data_source(source))
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        MemorySourceConfig::try_from_proto(&node, &decode_ctx)
     }
 
     #[deprecated(
@@ -2676,53 +2651,6 @@ pub trait PhysicalPlanNodeExt: Sized {
                     )),
                 }));
             }
-        }
-
-        if let Some(source_conf) = data_source.downcast_ref::<MemorySourceConfig>() {
-            let proto_partitions = source_conf
-                .partitions()
-                .iter()
-                .map(|p| serialize_record_batches(p))
-                .collect::<Result<Vec<_>>>()?;
-
-            let proto_schema: protobuf::Schema =
-                source_conf.original_schema().as_ref().try_into()?;
-
-            // Proto3 can't tell `None` from `Some(vec![])`; encode the latter
-            // as the `[u32::MAX]` sentinel, matching the join/filter nodes.
-            let proto_projection = match source_conf.projection().as_ref() {
-                None => Vec::new(),
-                Some(v) if v.is_empty() => vec![u32::MAX],
-                Some(v) => v.iter().map(|x| *x as u32).collect(),
-            };
-
-            let proto_sort_information = source_conf
-                .sort_information()
-                .iter()
-                .map(|ordering| {
-                    let sort_exprs = serialize_physical_sort_exprs(
-                        ordering.to_owned(),
-                        codec,
-                        proto_converter,
-                    )?;
-                    Ok::<_, DataFusionError>(protobuf::PhysicalSortExprNodeCollection {
-                        physical_sort_expr_nodes: sort_exprs,
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-
-            return Ok(Some(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::MemoryScan(
-                    protobuf::MemoryScanExecNode {
-                        partitions: proto_partitions,
-                        schema: Some(proto_schema),
-                        projection: proto_projection,
-                        sort_information: proto_sort_information,
-                        show_sizes: source_conf.show_sizes(),
-                        fetch: source_conf.fetch().map(|f| f as u32),
-                    },
-                )),
-            }));
         }
 
         Ok(None)
