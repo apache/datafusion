@@ -31,6 +31,7 @@ version.workspace = true
 all-features = true
 
 [features]
+# Enables protobuf serialization hooks for CSV sources and sinks.
 proto = [
     "dep:datafusion-proto-models",
     "datafusion-datasource/proto",
