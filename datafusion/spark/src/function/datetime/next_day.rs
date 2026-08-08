@@ -89,7 +89,8 @@ impl ScalarUDFImpl for SparkNextDay {
                         if let Some(days) = days {
                             if let Some(day_of_week) = day_of_week {
                                 Ok(ColumnarValue::Scalar(ScalarValue::Date32(
-                                    spark_next_day(*days, day_of_week.as_str()),
+                                    parse_day_of_week(day_of_week)
+                                        .and_then(|dow| spark_next_day(*days, dow)),
                                 )))
                             } else {
                                 // TODO: if spark.sql.ansi.enabled is false,
@@ -114,11 +115,16 @@ impl ScalarUDFImpl for SparkNextDay {
                         | ScalarValue::Utf8View(day_of_week),
                     ) => {
                         if let Some(day_of_week) = day_of_week {
+                            // The day name is the same for every row, so parse it
+                            // once here rather than on each call below.
+                            let Some(day_of_week) = parse_day_of_week(day_of_week) else {
+                                return Ok(ColumnarValue::Scalar(ScalarValue::Date32(
+                                    None,
+                                )));
+                            };
                             let result: Date32Array = date_array
                                 .as_primitive::<Date32Type>()
-                                .unary_opt(|days| {
-                                    spark_next_day(days, day_of_week.as_str())
-                                })
+                                .unary_opt(|days| spark_next_day(days, day_of_week))
                                 .with_data_type(DataType::Date32);
                             Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
                         } else {
@@ -193,7 +199,8 @@ where
         .map(|(days, day_of_week)| {
             if let Some(days) = days {
                 if let Some(day_of_week) = day_of_week {
-                    spark_next_day(days, day_of_week)
+                    parse_day_of_week(day_of_week)
+                        .and_then(|dow| spark_next_day(days, dow))
                 } else {
                     // TODO: if spark.sql.ansi.enabled is false,
                     //  returns NULL instead of an error for a malformed dayOfWeek.
@@ -207,42 +214,53 @@ where
     Ok(Arc::new(result) as ArrayRef)
 }
 
-fn spark_next_day(days: i32, day_of_week: &str) -> Option<i32> {
+/// Longest day name accepted by Spark, `"WEDNESDAY"`.
+const MAX_DAY_NAME_LEN: usize = 9;
+
+/// Maps an already-upper-cased day name to its [`Weekday`].
+fn weekday_from_upper(name: &[u8]) -> Option<Weekday> {
+    match name {
+        b"MO" | b"MON" | b"MONDAY" => Some(Weekday::Mon),
+        b"TU" | b"TUE" | b"TUESDAY" => Some(Weekday::Tue),
+        b"WE" | b"WED" | b"WEDNESDAY" => Some(Weekday::Wed),
+        b"TH" | b"THU" | b"THURSDAY" => Some(Weekday::Thu),
+        b"FR" | b"FRI" | b"FRIDAY" => Some(Weekday::Fri),
+        b"SA" | b"SAT" | b"SATURDAY" => Some(Weekday::Sat),
+        b"SU" | b"SUN" | b"SUNDAY" => Some(Weekday::Sun),
+        // TODO: if spark.sql.ansi.enabled is false,
+        //  returns NULL instead of an error for a malformed dayOfWeek.
+        _ => None,
+    }
+}
+
+/// Parses a Spark day-of-week name, without allocating for ASCII input.
+fn parse_day_of_week(day_of_week: &str) -> Option<Weekday> {
+    let bytes = day_of_week.as_bytes();
+    if day_of_week.is_ascii() {
+        // No accepted name is longer than `MAX_DAY_NAME_LEN`, so anything longer
+        // cannot match and the upper-casing fits in a stack buffer.
+        if bytes.len() > MAX_DAY_NAME_LEN {
+            return None;
+        }
+        let mut buf = [0u8; MAX_DAY_NAME_LEN];
+        let buf = &mut buf[..bytes.len()];
+        buf.copy_from_slice(bytes);
+        buf.make_ascii_uppercase();
+        weekday_from_upper(buf)
+    } else {
+        // `str::to_uppercase` is Unicode-aware, matching Spark's
+        // `toUpperCase(Locale.ROOT)`. Handling non-ASCII input on the branch
+        // above would change which strings match, so it keeps the allocation.
+        weekday_from_upper(day_of_week.to_uppercase().as_bytes())
+    }
+}
+
+fn spark_next_day(days: i32, day_of_week: Weekday) -> Option<i32> {
     let date = Date32Type::to_naive_date_opt(days)?;
 
-    let day_of_week = day_of_week.to_uppercase();
-    let day_of_week = match day_of_week.as_str() {
-        "MO" | "MON" | "MONDAY" => Some("MONDAY"),
-        "TU" | "TUE" | "TUESDAY" => Some("TUESDAY"),
-        "WE" | "WED" | "WEDNESDAY" => Some("WEDNESDAY"),
-        "TH" | "THU" | "THURSDAY" => Some("THURSDAY"),
-        "FR" | "FRI" | "FRIDAY" => Some("FRIDAY"),
-        "SA" | "SAT" | "SATURDAY" => Some("SATURDAY"),
-        "SU" | "SUN" | "SUNDAY" => Some("SUNDAY"),
-        _ => {
-            // TODO: if spark.sql.ansi.enabled is false,
-            //  returns NULL instead of an error for a malformed dayOfWeek.
-            None
-        }
-    };
-
-    if let Some(day_of_week) = day_of_week {
-        let day_of_week = day_of_week.parse::<Weekday>();
-        match day_of_week {
-            Ok(day_of_week) => Some(Date32Type::from_naive_date(
-                date + Duration::days(
-                    (7 - date.weekday().days_since(day_of_week)) as i64,
-                ),
-            )),
-            Err(_) => {
-                // TODO: if spark.sql.ansi.enabled is false,
-                //  returns NULL instead of an error for a malformed dayOfWeek.
-                None
-            }
-        }
-    } else {
-        None
-    }
+    Some(Date32Type::from_naive_date(
+        date + Duration::days((7 - date.weekday().days_since(day_of_week)) as i64),
+    ))
 }
 
 #[cfg(test)]
@@ -282,7 +300,38 @@ mod tests {
 
     #[test]
     fn next_day_rejects_whitespace_padded_day_names() {
-        let monday = 19723; // 2024-01-01
-        assert_eq!(spark_next_day(monday, " MO "), None);
+        assert_eq!(parse_day_of_week(" MO "), None);
+    }
+
+    #[test]
+    fn parse_day_of_week_is_case_insensitive() {
+        for (input, expected) in [
+            ("mon", Weekday::Mon),
+            ("MONDAY", Weekday::Mon),
+            ("Tu", Weekday::Tue),
+            ("wEdNeSdAy", Weekday::Wed),
+            ("THU", Weekday::Thu),
+            ("fri", Weekday::Fri),
+            ("Sat", Weekday::Sat),
+            ("su", Weekday::Sun),
+        ] {
+            assert_eq!(parse_day_of_week(input), Some(expected), "input: {input}");
+        }
+    }
+
+    #[test]
+    fn parse_day_of_week_rejects_unknown_names() {
+        for input in ["", "M", "MOND", "WEDNESDAYS", "funday", "🙂"] {
+            assert_eq!(parse_day_of_week(input), None, "input: {input}");
+        }
+    }
+
+    /// The ASCII fast path must accept exactly what the Unicode-aware
+    /// `to_uppercase` accepts, since Spark upper-cases with `Locale.ROOT`.
+    #[test]
+    fn parse_day_of_week_matches_unicode_uppercasing() {
+        // U+017F LATIN SMALL LETTER LONG S upper-cases to 'S'.
+        assert_eq!(parse_day_of_week("\u{17f}un"), Some(Weekday::Sun));
+        assert_eq!(parse_day_of_week("\u{17f}unday"), Some(Weekday::Sun));
     }
 }
