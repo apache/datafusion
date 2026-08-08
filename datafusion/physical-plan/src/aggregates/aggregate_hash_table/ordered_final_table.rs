@@ -27,10 +27,9 @@ use datafusion_common::Result;
 
 use crate::InputOrderMode;
 use crate::aggregates::aggregate_hash_table::FinalMarker;
-use crate::aggregates::group_values::GroupByMetrics;
 use crate::aggregates::{AggregateExec, AggregateMode};
 
-use super::common_ordered::OrderedAggregateTable;
+use super::common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics};
 
 /// Implementation specific to final aggregation, where the table stores partial
 /// aggregate states and the input rows are also partial states.
@@ -48,7 +47,7 @@ impl OrderedAggregateTable<FinalMarker> {
         output_schema: SchemaRef,
         batch_size: usize,
         input_order_mode: &InputOrderMode,
-        group_by_metrics: GroupByMetrics,
+        metrics: OrderedAggregateTableMetrics,
     ) -> Result<Self> {
         Self::new_for_mode(
             agg,
@@ -59,7 +58,7 @@ impl OrderedAggregateTable<FinalMarker> {
             input_order_mode,
             &AggregateMode::Final,
             vec![None; agg.aggr_expr.len()],
-            group_by_metrics,
+            metrics,
         )
     }
 

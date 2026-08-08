@@ -28,4 +28,4 @@ pub(super) use common::{
     AggregateHashTable, FinalMarker, PartialMarker, PartialReduceMarker,
     PartialSkipMarker, SingleMarker,
 };
-pub(super) use common_ordered::OrderedAggregateTable;
+pub(super) use common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics};
