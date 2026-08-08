@@ -207,6 +207,10 @@ name = "push_down_filter"
 
 [[bench]]
 harness = false
+name = "pwmj_semi_anti_sql"
+
+[[bench]]
+harness = false
 name = "sort_limit_query_sql"
 
 [[bench]]
