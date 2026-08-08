@@ -44,14 +44,14 @@
 //! | Utf8View length-12 cases | Utf8View | 12-byte strings | 16, 64 |
 //! | Utf8View long-string cases | Utf8View | 24-byte strings | 4, 16, 64, 256 |
 //! | Shared-prefix string cases | Utf8, Utf8View | same prefix, different suffix | 16, 32, 64 |
-//! | Fixed-size binary cases | FixedSizeBinary(16) | fixed-width binary values | 4, 64, 256, 10000 |
+//! | Fixed-size binary cases | FixedSizeBinary(1), FixedSizeBinary(2), FixedSizeBinary(16) | fixed-width binary values | 16 (1 byte), 64 (2 bytes), 4/64/256/10000 (16 bytes) |
 
 use arrow::array::types::IntervalMonthDayNano;
 use arrow::array::*;
 use arrow::datatypes::{Field, Int32Type, IntervalMonthDayNanoType, Schema};
 use arrow::record_batch::RecordBatch;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use datafusion_common::ScalarValue;
+use datafusion_common::{HashSet, ScalarValue};
 use datafusion_physical_expr::expressions::{col, in_list, lit};
 use half::f16;
 use rand::distr::Alphanumeric;
@@ -996,32 +996,48 @@ fn bench_nulls(c: &mut Criterion) {
 }
 
 // =============================================================================
-// FIXED SIZE BINARY BENCHMARKS (FixedSizeBinary<16>, e.g. UUIDs)
+// FIXED SIZE BINARY BENCHMARKS
 // =============================================================================
 
-/// Generates a random 16-byte value (UUID-sized).
-fn random_fixed_binary_16(rng: &mut StdRng) -> Vec<u8> {
-    let mut buf = vec![0u8; 16];
+fn random_fixed_binary(rng: &mut StdRng, width: i32) -> Vec<u8> {
+    let mut buf = vec![0u8; width as usize];
     rng.fill(&mut buf[..]);
     buf
 }
 
-/// Benchmarks FixedSizeBinary(16) IN list evaluation.
 /// FixedSizeBinary doesn't use the generic numeric helpers since its array
 /// construction differs from primitive types.
 fn bench_fixed_size_binary_inner(
     c: &mut Criterion,
-    name: &str,
+    width: i32,
     list_size: usize,
-    match_rate: f64,
+    match_pct: u32,
 ) {
-    let seed = 0xF1ED_B1A7_u64.wrapping_add(list_size as u64 * 0x6666);
+    assert!(match_pct <= 100);
+    if let Some(domain_size) = match width {
+        1 => Some(1_usize << 8),
+        2 => Some(1_usize << 16),
+        _ => None,
+    } {
+        // The input generator needs at least one value outside the list.
+        assert!(list_size < domain_size);
+    }
+    let match_rate = f64::from(match_pct) / 100.0;
+
+    let seed = 0xF1ED_B1A7_u64
+        .wrapping_add(list_size as u64 * 0x6666)
+        .wrapping_add(width as u64 * 0x7777);
     let mut rng = StdRng::seed_from_u64(seed);
 
-    // Generate IN list values (16-byte each)
-    let haystack: Vec<Vec<u8>> = (0..list_size)
-        .map(|_| random_fixed_binary_16(&mut rng))
-        .collect();
+    // Keep the number of distinct values equal to the configured list size.
+    let mut haystack_set = HashSet::with_capacity(list_size);
+    let mut haystack = Vec::with_capacity(list_size);
+    while haystack.len() < list_size {
+        let value = random_fixed_binary(&mut rng, width);
+        if haystack_set.insert(value.clone()) {
+            haystack.push(value);
+        }
+    }
 
     // Generate array with controlled match rate
     let values: Vec<Vec<u8>> = (0..ARRAY_SIZE)
@@ -1029,7 +1045,12 @@ fn bench_fixed_size_binary_inner(
             if !haystack.is_empty() && rng.random_bool(match_rate) {
                 haystack.choose(&mut rng).unwrap().clone()
             } else {
-                random_fixed_binary_16(&mut rng)
+                loop {
+                    let value = random_fixed_binary(&mut rng, width);
+                    if !haystack_set.contains(&value) {
+                        break value;
+                    }
+                }
             }
         })
         .collect();
@@ -1040,28 +1061,28 @@ fn bench_fixed_size_binary_inner(
     let schema = Schema::new(vec![Field::new("a", array.data_type().clone(), true)]);
     let exprs: Vec<_> = haystack
         .iter()
-        .map(|v| lit(ScalarValue::FixedSizeBinary(16, Some(v.clone()))))
+        .map(|v| lit(ScalarValue::FixedSizeBinary(width, Some(v.clone()))))
         .collect();
     let expr = in_list(col("a", &schema).unwrap(), exprs, &false, &schema).unwrap();
     let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array) as ArrayRef])
         .unwrap();
 
     c.bench_with_input(
-        BenchmarkId::new("fixed_size_binary", name),
+        BenchmarkId::new(
+            "fixed_size_binary",
+            format!("fsb{width}/list={list_size}/match={match_pct}%"),
+        ),
         &batch,
         |b, batch| b.iter(|| expr.evaluate(batch).unwrap()),
     );
 }
 
 fn bench_fixed_size_binary(c: &mut Criterion) {
-    for list_size in [4, 64, 256, 10000] {
+    for (width, list_size) in
+        [(1, 16), (2, 64), (16, 4), (16, 64), (16, 256), (16, 10000)]
+    {
         for match_pct in MATCH_RATES {
-            bench_fixed_size_binary_inner(
-                c,
-                &format!("fsb16/list={list_size}/match={match_pct}%"),
-                list_size,
-                match_pct as f64 / 100.0,
-            );
+            bench_fixed_size_binary_inner(c, width, list_size, match_pct);
         }
     }
 }

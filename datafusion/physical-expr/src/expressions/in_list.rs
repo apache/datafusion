@@ -38,6 +38,9 @@ use datafusion_expr::{ColumnarValue, expr_vec_fmt};
 
 mod array_static_filter;
 mod branchless_filter;
+mod byte_view_filter;
+mod fixed_size_binary_filter;
+mod integer_set;
 mod primitive_filter;
 mod result;
 mod static_filter;
@@ -215,7 +218,7 @@ impl InListExpr {
             expr,
             list,
             negated,
-            Some(instantiate_static_filter(array)?),
+            Some(instantiate_static_filter(array, &expr_data_type)?),
         ))
     }
 
@@ -242,7 +245,7 @@ impl InListExpr {
 
         // Try to create a static filter if all list expressions are constants
         let static_filter = match try_evaluate_constant_list(&list, schema)? {
-            Some(in_array) => Some(instantiate_static_filter(in_array)?),
+            Some(in_array) => Some(instantiate_static_filter(in_array, &expr_data_type)?),
             None => None, // Non-constant expressions, fall back to dynamic evaluation
         };
 
@@ -3548,6 +3551,39 @@ mod tests {
             );
         }
 
+        // FixedSizeBinary in_array, FixedSizeBinary and Dictionary needles
+        let fsb_in = Arc::new(FixedSizeBinaryArray::try_from_iter(
+            [
+                [1, 2, 3, 4].as_slice(),
+                [5, 6, 7, 8].as_slice(),
+                [9, 10, 11, 12].as_slice(),
+            ]
+            .into_iter(),
+        )?) as ArrayRef;
+        let fsb_needle = Arc::new(FixedSizeBinaryArray::try_from_iter(
+            [
+                [1, 2, 3, 4].as_slice(),
+                [13, 14, 15, 16].as_slice(),
+                [5, 6, 7, 8].as_slice(),
+            ]
+            .into_iter(),
+        )?) as ArrayRef;
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(Arc::clone(&fsb_needle), Arc::clone(&fsb_in))?
+        );
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(
+                wrap_in_dict(Arc::clone(&fsb_needle)),
+                Arc::clone(&fsb_in),
+            )?
+        );
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(wrap_in_dict(fsb_needle), wrap_in_dict(fsb_in))?
+        );
+
         // Utf8 (falls through to ArrayStaticFilter)
         let utf8_in = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
         let utf8_needle = Arc::new(StringArray::from(vec!["a", "d", "b"])) as ArrayRef;
@@ -3574,6 +3610,23 @@ mod tests {
                 wrap_in_dict(Arc::clone(&utf8_needle)),
                 wrap_in_dict(Arc::clone(&utf8_in)),
             )?
+        );
+
+        // Utf8View in_array, Utf8View and Dict(Utf8View) needles
+        let utf8view_in =
+            Arc::new(StringViewArray::from(vec!["a", "b", "c", "d", "e"])) as ArrayRef;
+        let utf8view_needle =
+            Arc::new(StringViewArray::from(vec!["a", "missing", "b"])) as ArrayRef;
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(
+                Arc::clone(&utf8view_needle),
+                Arc::clone(&utf8view_in),
+            )?
+        );
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(wrap_in_dict(utf8view_needle), utf8view_in)?
         );
 
         // Struct in_array, Struct needle: multi-column join

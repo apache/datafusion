@@ -20,13 +20,14 @@
 //! This module provides membership tests for Arrow primitive types.
 
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
-use arrow::buffer::{BooleanBuffer, NullBuffer};
+use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::*;
 use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::{HashSet, Result, exec_datafusion_err};
-use std::hash::{Hash, Hasher};
+use std::iter::FromIterator;
 
-use super::result::build_in_list_result;
+use super::integer_set::IntegerSet;
+use super::result::{build_in_list_result, build_result_from_contains};
 use super::static_filter::{StaticFilter, handle_dictionary};
 
 /// Storage for the bits used by [`BitmapFilter`].
@@ -222,70 +223,29 @@ where
     }
 }
 
-/// Wrapper for f32 that implements Hash and Eq using bit comparison.
-/// This treats NaN values as equal to each other when they have the same bit pattern.
-#[derive(Clone, Copy)]
-struct OrderedFloat32(f32);
-
-impl Hash for OrderedFloat32 {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.to_ne_bytes().hash(state);
-    }
-}
-
-impl PartialEq for OrderedFloat32 {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.to_bits() == other.0.to_bits()
-    }
-}
-
-impl Eq for OrderedFloat32 {}
-
-impl From<f32> for OrderedFloat32 {
-    fn from(v: f32) -> Self {
-        Self(v)
-    }
-}
-
-/// Wrapper for f64 that implements Hash and Eq using bit comparison.
-/// This treats NaN values as equal to each other when they have the same bit pattern.
-#[derive(Clone, Copy)]
-struct OrderedFloat64(f64);
-
-impl Hash for OrderedFloat64 {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.to_ne_bytes().hash(state);
-    }
-}
-
-impl PartialEq for OrderedFloat64 {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.to_bits() == other.0.to_bits()
-    }
-}
-
-impl Eq for OrderedFloat64 {}
-
-impl From<f64> for OrderedFloat64 {
-    fn from(v: f64) -> Self {
-        Self(v)
-    }
-}
-
 // Macro to generate specialized StaticFilter implementations for primitive types
 macro_rules! primitive_static_filter {
     ($Name:ident, $ArrowType:ty) => {
         primitive_static_filter!(
             $Name,
             $ArrowType,
-            <$ArrowType as ArrowPrimitiveType>::Native,
-            |v| v
+            |v| v,
+            IntegerSet<<$ArrowType as ArrowPrimitiveType>::Native>,
+            IntegerSet::new,
+            IntegerSet::contains_values
         );
     };
-    ($Name:ident, $ArrowType:ty, $SetValueType:ty, $to_set_value:expr) => {
+    (
+        $Name:ident,
+        $ArrowType:ty,
+        $to_set_value:expr,
+        $SetType:ty,
+        $new_set:expr,
+        $contains_values:expr
+    ) => {
         pub(super) struct $Name {
             null_count: usize,
-            values: HashSet<$SetValueType>,
+            values: $SetType,
         }
 
         impl $Name {
@@ -298,12 +258,8 @@ macro_rules! primitive_static_filter {
                         )
                     })?;
 
-                let mut values = HashSet::with_capacity(in_array.len());
                 let null_count = in_array.null_count();
-
-                for v in in_array.iter().flatten() {
-                    values.insert(($to_set_value)(v));
-                }
+                let values = ($new_set)(in_array.iter().flatten().map($to_set_value));
 
                 Ok(Self { null_count, values })
             }
@@ -324,84 +280,14 @@ macro_rules! primitive_static_filter {
                     )
                 })?;
 
-                let haystack_has_nulls = self.null_count > 0;
                 let needle_values = v.values();
-                let needle_nulls = v.nulls();
-                let needle_has_nulls = v.null_count() > 0;
-
-                // Truth table for `value [NOT] IN (set)` with SQL three-valued logic:
-                // ("-" means the value doesn't affect the result)
-                //
-                // | needle_null | haystack_null | negated | in set? | result |
-                // |-------------|---------------|---------|---------|--------|
-                // | true        | -             | false   | -       | null   |
-                // | true        | -             | true    | -       | null   |
-                // | false       | true          | false   | yes     | true   |
-                // | false       | true          | false   | no      | null   |
-                // | false       | true          | true    | yes     | false  |
-                // | false       | true          | true    | no      | null   |
-                // | false       | false         | false   | yes     | true   |
-                // | false       | false         | false   | no      | false  |
-                // | false       | false         | true    | yes     | false  |
-                // | false       | false         | true    | no      | true   |
-
-                // Compute the "contains" result using collect_bool (fast batched approach)
-                // This ignores nulls - we handle them separately
-                let contains_buffer = if negated {
-                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
-                        !self.values.contains(&($to_set_value)(needle_values[i]))
-                    })
-                } else {
-                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
-                        self.values.contains(&($to_set_value)(needle_values[i]))
-                    })
-                };
-
-                // Compute the null mask
-                // Output is null when:
-                // 1. needle value is null, OR
-                // 2. needle value is not in set AND haystack has nulls
-                let result_nulls = match (needle_has_nulls, haystack_has_nulls) {
-                    (false, false) => {
-                        // No nulls anywhere
-                        None
-                    }
-                    (true, false) => {
-                        // Only needle has nulls - just use needle's null mask
-                        needle_nulls.cloned()
-                    }
-                    (false, true) => {
-                        // Only haystack has nulls - result is null when value not in set
-                        // Valid (not null) when original "in set" is true
-                        // For NOT IN: contains_buffer = !original, so validity = !contains_buffer
-                        let validity = if negated {
-                            !&contains_buffer
-                        } else {
-                            contains_buffer.clone()
-                        };
-                        Some(NullBuffer::new(validity))
-                    }
-                    (true, true) => {
-                        // Both have nulls - combine needle nulls with haystack-induced nulls
-                        let needle_validity =
-                            needle_nulls.map(|n| n.inner().clone()).unwrap_or_else(
-                                || BooleanBuffer::new_set(needle_values.len()),
-                            );
-
-                        // Valid when original "in set" is true (see above)
-                        let haystack_validity = if negated {
-                            !&contains_buffer
-                        } else {
-                            contains_buffer.clone()
-                        };
-
-                        // Combined validity: valid only where both are valid
-                        let combined_validity = &needle_validity & &haystack_validity;
-                        Some(NullBuffer::new(combined_validity))
-                    }
-                };
-
-                Ok(BooleanArray::new(contains_buffer, result_nulls))
+                let contains = ($contains_values)(&self.values, needle_values);
+                Ok(build_result_from_contains(
+                    v.nulls(),
+                    self.null_count > 0,
+                    negated,
+                    contains,
+                ))
             }
         }
     };
@@ -412,17 +298,36 @@ primitive_static_filter!(Int64StaticFilter, Int64Type);
 primitive_static_filter!(UInt32StaticFilter, UInt32Type);
 primitive_static_filter!(UInt64StaticFilter, UInt64Type);
 
-// Macro to generate specialized StaticFilter implementations for float types
-// Floats require a wrapper type (OrderedFloat*) to implement Hash/Eq due to NaN semantics
-macro_rules! float_static_filter {
-    ($Name:ident, $ArrowType:ty, $OrderedType:ty) => {
-        primitive_static_filter!($Name, $ArrowType, $OrderedType, <$OrderedType>::from);
-    };
+#[inline]
+fn float32_contains(values: &HashSet<[u8; 4]>, needles: &[f32]) -> BooleanBuffer {
+    BooleanBuffer::collect_bool(needles.len(), |i| {
+        values.contains(&needles[i].to_ne_bytes())
+    })
 }
 
-// Generate specialized filters for float types using ordered wrappers
-float_static_filter!(Float32StaticFilter, Float32Type, OrderedFloat32);
-float_static_filter!(Float64StaticFilter, Float64Type, OrderedFloat64);
+#[inline]
+fn float64_contains(values: &HashSet<[u8; 8]>, needles: &[f64]) -> BooleanBuffer {
+    BooleanBuffer::collect_bool(needles.len(), |i| {
+        values.contains(&needles[i].to_ne_bytes())
+    })
+}
+
+primitive_static_filter!(
+    Float32StaticFilter,
+    Float32Type,
+    f32::to_ne_bytes,
+    HashSet<[u8; 4]>,
+    HashSet::from_iter,
+    float32_contains
+);
+primitive_static_filter!(
+    Float64StaticFilter,
+    Float64Type,
+    f64::to_ne_bytes,
+    HashSet<[u8; 8]>,
+    HashSet::from_iter,
+    float64_contains
+);
 
 #[cfg(test)]
 mod tests {
@@ -430,7 +335,8 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{
-        DictionaryArray, Float16Array, Int8Array, Int16Array, UInt8Array, UInt16Array,
+        DictionaryArray, Float16Array, Float32Array, Int8Array, Int16Array, UInt8Array,
+        UInt16Array, UInt32Array,
     };
     use half::f16;
 
@@ -583,5 +489,40 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn static_filter_handles_slices_nulls_and_dictionaries() -> Result<()> {
+        let mut values = (0..36).map(Some).collect::<Vec<_>>();
+        values[2] = None;
+        let haystack: ArrayRef = Arc::new(UInt32Array::from(values).slice(1, 34));
+        let filter = UInt32StaticFilter::try_new(&haystack)?;
+
+        let keys = Int8Array::from(vec![Some(0), Some(1), None, Some(2)]);
+        let values = Arc::new(UInt32Array::from(vec![1, 35, 34]));
+        let needles = DictionaryArray::try_new(keys, values)?;
+        assert_contains(&filter, &needles, vec![Some(true), None, None, Some(true)])?;
+        assert_eq!(
+            filter.contains(&needles, true)?,
+            BooleanArray::from(vec![Some(false), None, None, Some(false)])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn static_filter_floats_use_bit_equality() -> Result<()> {
+        let nan_a = f32::from_bits(0x7fc0_0001);
+        let nan_b = f32::from_bits(0x7fc0_0002);
+        let haystack: ArrayRef =
+            Arc::new(Float32Array::from(vec![Some(-0.0), Some(nan_a)]));
+        let filter = Float32StaticFilter::try_new(&haystack)?;
+        let needles =
+            Float32Array::from(vec![Some(0.0), Some(-0.0), Some(nan_a), Some(nan_b)]);
+
+        assert_contains(
+            &filter,
+            &needles,
+            vec![Some(false), Some(true), Some(true), Some(false)],
+        )
     }
 }
