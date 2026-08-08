@@ -1504,6 +1504,13 @@ fn select_aggregate_with_group_by_with_having_using_count_star_not_in_select() {
     );
 }
 
+/// Asserts that placeholder `id` (e.g. `"$1"`) was inferred as `expected` type
+/// somewhere in `plan`.
+fn assert_placeholder_type(plan: &LogicalPlan, id: &str, expected: DataType) {
+    let param_types = plan.get_parameter_types().unwrap();
+    assert_eq!(param_types.get(id), Some(&Some(expected)));
+}
+
 /// An expression containing a placeholder, written in both the SELECT list and
 /// the GROUP BY, has to be recognised as one expression the way its literal
 /// equivalent is. Otherwise the columns inside it read as ungrouped, because the
@@ -1522,6 +1529,7 @@ fn select_aggregate_with_group_by_placeholder_expression() {
         TableScan: person
     "#
     );
+    assert_placeholder_type(&plan, "$1", DataType::Int32);
 }
 
 /// The same, for a grouping expression repeated in HAVING.
@@ -1541,6 +1549,7 @@ fn select_aggregate_with_having_placeholder_expression() {
           TableScan: person
     "#
     );
+    assert_placeholder_type(&plan, "$1", DataType::Int32);
 }
 
 /// The same, for a grouping expression repeated in ORDER BY.
@@ -1560,6 +1569,7 @@ fn select_aggregate_with_order_by_placeholder_expression() {
           TableScan: person
     "#
     );
+    assert_placeholder_type(&plan, "$1", DataType::Int32);
 }
 
 /// The same, for a window expression repeated in QUALIFY. Here the two spellings
@@ -1581,6 +1591,24 @@ fn select_window_with_qualify_placeholder_expression() {
           TableScan: person
     "#
     );
+    assert_placeholder_type(&plan, "$1", DataType::Int32);
+}
+
+#[test]
+fn select_distinct_on_with_order_by_placeholder_expression() {
+    let sql =
+        "SELECT DISTINCT ON (CASE WHEN age < $1 THEN 'young' ELSE 'old' END) first_name
+                   FROM person
+                   ORDER BY CASE WHEN age < $1 THEN 'young' ELSE 'old' END";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    DistinctOn: on_expr=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], select_expr=[[person.first_name]], sort_expr=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END ASC NULLS LAST]]
+      TableScan: person
+    "#
+    );
+    assert_placeholder_type(&plan, "$1", DataType::Int32);
 }
 
 #[test]

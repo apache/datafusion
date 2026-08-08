@@ -191,7 +191,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // ON expression is a bare identifier. `b` resolves to the
                 // alias; `b + 0` keeps `b` as the input column.
                 let expr = substitute_top_level_alias(expr, &alias_map);
-                normalize_col(expr, &projected_plan)
+                let expr = normalize_col(expr, &projected_plan)?;
+                let (expr, _) = expr.infer_placeholder_types(&on_expr_schema)?;
+                Ok(expr)
             })
             .collect::<Result<Vec<Expr>>>()?;
 
