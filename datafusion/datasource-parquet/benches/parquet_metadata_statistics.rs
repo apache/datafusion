@@ -71,7 +71,10 @@ fn parquet_metadata_statistics(c: &mut Criterion) {
         MetadataState::Mixed,
         MetadataState::None,
     ];
-    let column_counts = [8, 64, 256];
+    // 1024 is included because the per-field parquet leaf lookup used to be
+    // O(N), making the whole per-file statistics pass O(N²) — a term that only
+    // becomes obvious past a few hundred columns.
+    let column_counts = [8, 64, 256, 1024];
     let row_group_counts = [1, 32, 128];
 
     let mut group = c.benchmark_group("parquet_metadata_statistics");
