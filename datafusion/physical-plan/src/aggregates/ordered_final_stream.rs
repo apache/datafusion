@@ -97,6 +97,9 @@ struct OrderedFinalSpillContext {
 enum OrderedFinalAggregateState {
     ReadingInput {
         table: OrderedAggregateTable<FinalMarker>,
+        /// None if either
+        /// - Disk Manager doesn't enable temporary file creation
+        /// - The group keys are fully ordered, it's expected to use bounded memory
         spill_context: Option<Box<OrderedFinalSpillContext>>,
     },
     Spilling {
@@ -227,6 +230,10 @@ impl OrderedFinalSpillContext {
         } = self;
 
         let spill_schema = Arc::clone(spill_manager.schema());
+        // The merge and replay table are two components of the same aggregate
+        // operator. Keep them under one consumer registration so a fair memory
+        // pool does not divide this operator's quota between its own phases.
+        let merge_reservation = reservation.new_empty();
         let merged = StreamingMergeBuilder::new()
             .with_schema(spill_schema)
             .with_spill_manager(spill_manager)
@@ -234,7 +241,7 @@ impl OrderedFinalSpillContext {
             .with_expressions(&spill_expr)
             .with_metrics(baseline_metrics.intermediate())
             .with_batch_size(batch_size)
-            .with_reservation(reservation)
+            .with_reservation(merge_reservation)
             .build()?;
         let replay = OrderedFinalAggregateStream::new_with_input_and_metrics(
             &agg,
@@ -245,6 +252,7 @@ impl OrderedFinalSpillContext {
             baseline_metrics.clone(),
             group_by_metrics,
             None,
+            reservation,
         )?;
         Ok(Box::pin(replay))
     }
@@ -276,6 +284,15 @@ impl OrderedFinalAggregateStream {
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
         let spill_metrics = SpillMetrics::new(&agg.metrics, partition);
+        let reservation =
+            MemoryConsumer::new(format!("OrderedFinalAggregateStream[{partition}]"))
+                // HACK: Technically, fully ordered aggregate is a non-spillable
+                // consumer, since it uses bounded memory. There is a known race
+                // condition bug, and we set it to spillable to let it have larger
+                // memory budget to suppress the bug.
+                // Bug issue: https://github.com/apache/datafusion/issues/17334
+                .with_can_spill(true)
+                .register(context.memory_pool());
         Self::new_with_input_and_metrics(
             agg,
             context,
@@ -285,6 +302,7 @@ impl OrderedFinalAggregateStream {
             baseline_metrics,
             group_by_metrics,
             Some(spill_metrics),
+            reservation,
         )
     }
 
@@ -292,7 +310,10 @@ impl OrderedFinalAggregateStream {
         clippy::too_many_arguments,
         reason = "keeps replay metric reuse explicit"
     )]
-    fn new_with_input_and_metrics(
+    /// Builds the stream with the reservation of its logical aggregate operator.
+    /// Replay callers pass a sibling of the reservation used by the merge input,
+    /// keeping both components under one memory-consumer registration.
+    pub(in crate::aggregates) fn new_with_input_and_metrics(
         agg: &AggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
@@ -301,6 +322,7 @@ impl OrderedFinalAggregateStream {
         baseline_metrics: BaselineMetrics,
         group_by_metrics: GroupByMetrics,
         spill_metrics: Option<SpillMetrics>,
+        reservation: MemoryReservation,
     ) -> Result<Self> {
         debug_assert!(matches!(
             agg.mode,
@@ -339,11 +361,6 @@ impl OrderedFinalAggregateStream {
             input_order_mode,
             group_by_metrics,
         )?;
-        let reservation =
-            MemoryConsumer::new(format!("OrderedFinalAggregateStream[{partition}]"))
-                .with_can_spill(can_spill)
-                .register(context.memory_pool());
-
         Ok(Self {
             schema,
             input,
@@ -440,6 +457,8 @@ impl OrderedFinalAggregateStream {
                     Ok(()) => {}
                     Err(e @ DataFusionError::ResourcesExhausted(_)) => {
                         let Some(spill_context) = spill_context else {
+                            // `None` means spilling is not supported, see comments
+                            // at `OrderedFinalAggregateState` for details.
                             return ControlFlow::Break((
                                 Poll::Ready(Some(Err(e))),
                                 OrderedFinalAggregateState::Done,
