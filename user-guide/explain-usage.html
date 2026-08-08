@@ -583,7 +583,7 @@ debugging to see why and when DataFusion added and removed operators from a plan
 <h2>Execution Counters: <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span></code><a class="headerlink" href="#execution-counters-explain-analyze" title="Link to this heading">#</a></h2>
 <p>During execution, DataFusion operators collect detailed metrics. You can access
 them programmatically via <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#method.metrics"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::metrics</span></code></a> as well as with the
-<code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span></code> command. For example here is the same query query as
+<code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span></code> command. For example here is the same query as
 above but with <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span></code> (note the output is edited for clarity)</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">EXPLAIN</span><span class="w"> </span><span class="k">ANALYZE</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="ss">&quot;WatchID&quot;</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">wid</span><span class="p">,</span><span class="w"> </span><span class="ss">&quot;hits.parquet&quot;</span><span class="p">.</span><span class="ss">&quot;ClientIP&quot;</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">ip</span>
 <span class="k">FROM</span><span class="w"> </span><span class="s1">&#39;hits.parquet&#39;</span>
@@ -827,7 +827,7 @@ number of hits:</p>
 </li>
 <li><p><code class="docutils literal notranslate"><span class="pre">RepartitionExec</span></code></p>
 <ul>
-<li><p><code class="docutils literal notranslate"><span class="pre">partitioning=Hash([UserID&#64;0],</span> <span class="pre">10)</span></code>: Divides the input into into 10 (new) output partitions based on the value of <code class="docutils literal notranslate"><span class="pre">hash(UserID)</span></code>. You can read more about this in the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/physical_plan/repartition/struct.RepartitionExec.html">partitioning</a> documentation.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">partitioning=Hash([UserID&#64;0],</span> <span class="pre">10)</span></code>: Divides the input into 10 (new) output partitions based on the value of <code class="docutils literal notranslate"><span class="pre">hash(UserID)</span></code>. You can read more about this in the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/physical_plan/repartition/struct.RepartitionExec.html">partitioning</a> documentation.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">input_partitions=10</span></code>: Number of input partitions.</p></li>
 </ul>
 </li>
