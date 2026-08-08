@@ -2338,7 +2338,8 @@ async fn collect_left_input(
         bounds = None;
     }
 
-    let build_has_null = !left_values.is_empty() && left_values[0].null_count() > 0;
+    let build_has_null =
+        !left_values.is_empty() && left_values[0].logical_null_count() > 0;
 
     let data = JoinLeftData {
         map,

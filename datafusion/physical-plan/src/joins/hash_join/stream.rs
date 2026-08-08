@@ -774,7 +774,7 @@ impl HashJoinStream {
                     // Check if probe side (RIGHT) contains NULL
                     // Since null_aware validation ensures single column join, we only check the first column
                     let probe_key_column = &state.values[0];
-                    if probe_key_column.null_count() > 0 {
+                    if probe_key_column.logical_null_count() > 0 {
                         // Found NULL in probe side - set shared flag to prevent any output
                         build_side
                             .left_data
@@ -923,25 +923,19 @@ impl HashJoinStream {
         // If null-aware RightAnti join, we don't want to emit NULL probe keys
         if self.join_type == JoinType::RightAnti && self.null_aware {
             let probe_key = &state.values[0];
+            // if the valid_keys mask is available, use that, else use the probe key
+            let mask = state
+                .valid_keys
+                .clone()
+                .or_else(|| probe_key.logical_nulls());
             // we only need this copy if there are NULLs
-            if probe_key.null_count() > 0 {
-                // if the valid_keys mask is available, use that, else use the probe key
-                let filtered_right_indices = if let Some(mask) = &state.valid_keys {
-                    right_indices
-                        .values()
-                        .iter()
-                        .copied()
-                        .filter(|idx| !mask.is_null(*idx as usize))
-                        .collect::<Vec<_>>()
-                } else {
-                    right_indices
-                        .values()
-                        .iter()
-                        .copied()
-                        .filter(|idx| !probe_key.is_null(*idx as usize))
-                        .collect::<Vec<_>>()
-                };
-
+            if let Some(mask) = mask.filter(|m| m.null_count() > 0) {
+                let filtered_right_indices = right_indices
+                    .values()
+                    .iter()
+                    .copied()
+                    .filter(|idx| !mask.is_null(*idx as usize))
+                    .collect::<Vec<_>>();
                 right_indices = UInt32Array::from(filtered_right_indices);
             }
         }
