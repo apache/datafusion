@@ -2029,6 +2029,15 @@ pub struct HashJoinExecNode {
     /// Optional dynamic filter expression for pushing down to the probe side.
     #[prost(message, optional, tag = "11")]
     pub dynamic_filter: ::core::option::Option<PhysicalExprNode>,
+    /// Optional row limit pushed into the join by the `limit_pushdown` rule.
+    ///
+    /// This is presence-tracked (`optional`) on purpose: messages produced by
+    /// versions predating this field carry no `fetch` at all, and a plain proto3
+    /// scalar would decode that absence as `0`, i.e. "fetch 0 rows", silently
+    /// turning old plans into empty results. With `optional`, absent decodes to
+    /// `None`, which is the correct reading of an older message.
+    #[prost(uint64, optional, tag = "12")]
+    pub fetch: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SymmetricHashJoinExecNode {
