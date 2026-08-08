@@ -3322,6 +3322,7 @@ mod tests {
     use datafusion_functions_aggregate::count::{count_all, count_udaf};
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
+    use datafusion_physical_plan::ChildrenPropertiesHint;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
     use datafusion_session::QueryPlanner;
 
@@ -4932,15 +4933,23 @@ mod tests {
             vec![]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
+            _: ChildrenPropertiesHint,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             if children.is_empty() {
                 Ok(self)
             } else {
                 exec_err!("NoOpExecutionPlan does not support children")
             }
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(children, ChildrenPropertiesHint::Recompute)
         }
 
         fn execute(
@@ -5095,11 +5104,18 @@ digraph {
         fn name(&self) -> &str {
             "always ok"
         }
+        fn replace_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+            _: ChildrenPropertiesHint,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(Arc::new(Self(children)))
+        }
         fn with_new_children(
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            Ok(Arc::new(Self(children)))
+            self.replace_children(children, ChildrenPropertiesHint::Recompute)
         }
         fn schema(&self) -> SchemaRef {
             Arc::new(Schema::empty())
@@ -5144,11 +5160,18 @@ digraph {
         fn schema(&self) -> SchemaRef {
             Arc::new(Schema::empty())
         }
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
-            _children: Vec<Arc<dyn ExecutionPlan>>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ChildrenPropertiesHint,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(children, ChildrenPropertiesHint::Recompute)
         }
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             unimplemented!()
@@ -5197,10 +5220,16 @@ digraph {
         // ok plan
         let ok_node: Arc<dyn ExecutionPlan> = Arc::new(OkExtensionNode(vec![]));
         let child = Arc::clone(&ok_node);
-        let ok_plan = Arc::clone(&ok_node).with_new_children(vec![
-            Arc::clone(&child).with_new_children(vec![Arc::clone(&child)])?,
-            Arc::clone(&child),
-        ])?;
+        let ok_plan = Arc::clone(&ok_node).replace_children(
+            vec![
+                Arc::clone(&child).replace_children(
+                    vec![Arc::clone(&child)],
+                    ChildrenPropertiesHint::Recompute,
+                )?,
+                Arc::clone(&child),
+            ],
+            ChildrenPropertiesHint::Recompute,
+        )?;
 
         // Test: check should pass with same schema
         let equal_schema = ok_plan.schema();
@@ -5232,10 +5261,16 @@ digraph {
 
         // Test: should fail when descendent extension node fails
         let failing_node: Arc<dyn ExecutionPlan> = Arc::new(InvariantFailsExtensionNode);
-        let invalid_plan = ok_node.with_new_children(vec![
-            Arc::clone(&child).with_new_children(vec![Arc::clone(&failing_node)])?,
-            Arc::clone(&child),
-        ])?;
+        let invalid_plan = ok_node.replace_children(
+            vec![
+                Arc::clone(&child).replace_children(
+                    vec![Arc::clone(&failing_node)],
+                    ChildrenPropertiesHint::Recompute,
+                )?,
+                Arc::clone(&child),
+            ],
+            ChildrenPropertiesHint::Recompute,
+        )?;
         let result = OptimizationInvariantChecker::new(&rule)
             .check(&invalid_plan, &ok_plan.schema());
         if cfg!(debug_assertions) {
@@ -5268,11 +5303,18 @@ digraph {
         fn schema(&self) -> SchemaRef {
             Arc::new(Schema::empty())
         }
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
-            _children: Vec<Arc<dyn ExecutionPlan>>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ChildrenPropertiesHint,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(children, ChildrenPropertiesHint::Recompute)
         }
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
@@ -5314,10 +5356,16 @@ digraph {
         let failing_node: Arc<dyn ExecutionPlan> = Arc::new(ExecutableInvariantFails);
         let ok_node: Arc<dyn ExecutionPlan> = Arc::new(OkExtensionNode(vec![]));
         let child = Arc::clone(&ok_node);
-        let plan = ok_node.with_new_children(vec![
-            Arc::clone(&child).with_new_children(vec![Arc::clone(&failing_node)])?,
-            Arc::clone(&child),
-        ])?;
+        let plan = ok_node.replace_children(
+            vec![
+                Arc::clone(&child).replace_children(
+                    vec![Arc::clone(&failing_node)],
+                    ChildrenPropertiesHint::Recompute,
+                )?,
+                Arc::clone(&child),
+            ],
+            ChildrenPropertiesHint::Recompute,
+        )?;
         let expected_err = InvariantChecker(InvariantLevel::Executable)
             .check(&plan)
             .unwrap_err();

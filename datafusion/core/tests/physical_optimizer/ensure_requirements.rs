@@ -45,8 +45,8 @@ use datafusion_physical_plan::limit::GlobalLimitExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
-    PlanProperties, SendableRecordBatchStream,
+    ChildrenPropertiesHint, DisplayAs, DisplayFormatType, ExecutionPlan,
+    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
 };
 
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
@@ -130,11 +130,18 @@ impl ExecutionPlan for MockMultiPartitionExec {
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
     }
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
     fn execute(
         &self,
@@ -1010,16 +1017,23 @@ impl ExecutionPlan for MockReqExec {
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![true]
     }
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
-        mut c: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        assert_eq!(c.len(), 1);
+        assert_eq!(children.len(), 1);
         Ok(Arc::new(MockReqExec::new(
-            c.pop().expect("1 child"),
+            children.pop().expect("1 child"),
             self.dist.clone(),
             self.ord.clone(),
         )))
+    }
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
     fn execute(
         &self,

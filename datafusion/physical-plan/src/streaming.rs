@@ -30,7 +30,9 @@ use crate::projection::{
     ProjectionExec, all_alias_free_columns, new_projections_for_columns, update_ordering,
 };
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
+use crate::{
+    ChildrenPropertiesHint, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+};
 
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{Result, internal_err, plan_err};
@@ -271,15 +273,23 @@ impl ExecutionPlan for StreamingTableExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.is_empty() {
             Ok(self)
         } else {
             internal_err!("Children cannot be replaced in {self:?}")
         }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn execute(

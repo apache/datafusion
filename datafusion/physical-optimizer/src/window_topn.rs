@@ -59,6 +59,7 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion_physical_expr::window::StandardWindowExpr;
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::execution_plan::replace_children_if_necessary;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -192,13 +193,13 @@ impl WindowTopN {
         .ok()?;
 
         // Step 8: Rebuild window with new child
-        let mut result = window_exec
-            .with_new_children(vec![Arc::new(partitioned_topk)])
-            .ok()?;
+        let mut result =
+            replace_children_if_necessary(window_exec, vec![Arc::new(partitioned_topk)])
+                .ok()?;
 
         // Step 9: Rebuild intermediate nodes (ProjectionExec/RepartitionExec)
         for node in intermediates.into_iter().rev() {
-            result = node.with_new_children(vec![result]).ok()?;
+            result = replace_children_if_necessary(node, vec![result]).ok()?;
         }
 
         Some(result)

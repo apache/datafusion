@@ -21,12 +21,13 @@ mod tests {
     use arrow::datatypes::Schema;
     use arrow_schema::DataType;
     use datafusion_common::DataFusionError;
-    use datafusion_ffi::execution_plan::FFI_ExecutionPlan;
-    use datafusion_ffi::execution_plan::ForeignExecutionPlan;
-    use datafusion_ffi::execution_plan::{ExecutionPlanPrivateData, tests::EmptyExec};
+    use datafusion_ffi::execution_plan::{
+        ExecutionPlanPrivateData, FFI_ExecutionPlan, ForeignExecutionPlan,
+        tests::EmptyExec,
+    };
     use datafusion_ffi::tests::utils::get_module;
-    use datafusion_physical_plan::ExecutionPlan;
     use datafusion_physical_plan::execution_plan::InvariantLevel;
+    use datafusion_physical_plan::{ChildrenPropertiesHint, ExecutionPlan};
     use std::sync::Arc;
 
     #[test]
@@ -110,7 +111,8 @@ mod tests {
 
         let grandchild_plan = generate_local_plan();
 
-        let child_plan = child_plan.with_new_children(vec![grandchild_plan])?;
+        let child_plan = child_plan
+            .replace_children(vec![grandchild_plan], ChildrenPropertiesHint::Recompute)?;
 
         unsafe {
             // Originally the runtime is not set. We go through the unsafe casting
@@ -125,7 +127,8 @@ mod tests {
             assert!((*grandchild_private_data).runtime.is_none());
         }
 
-        let parent_plan = generate_local_plan().with_new_children(vec![child_plan])?;
+        let parent_plan = generate_local_plan()
+            .replace_children(vec![child_plan], ChildrenPropertiesHint::Recompute)?;
 
         // Adding the grandchild beneath this FFI plan should get the runtime passed down.
         let runtime = tokio::runtime::Builder::new_current_thread()

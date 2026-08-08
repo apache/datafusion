@@ -96,6 +96,7 @@ use datafusion_common::{ScalarValue, assert_eq_or_internal_err, assert_or_intern
 use datafusion_expr::{FetchType, InvariantLevel, Projection, SortExpr};
 use datafusion_optimizer::AnalyzerRule;
 use datafusion_optimizer::optimizer::ApplyOrder;
+use datafusion_physical_plan::ChildrenPropertiesHint;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 use async_trait::async_trait;
@@ -723,11 +724,19 @@ impl ExecutionPlan for TopKExec {
         vec![&self.input]
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(TopKExec::new(children[0].clone(), self.k)))
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(TopKExec::new(children[0].clone(), self.k)))
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     /// Execute one partition and return an iterator over RecordBatch

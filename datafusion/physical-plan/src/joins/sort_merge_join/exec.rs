@@ -40,9 +40,9 @@ use crate::projection::{
 use crate::spill::spill_manager::SpillManager;
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    InputDistributionRequirements, PlanProperties, SendableRecordBatchStream, Statistics,
-    check_if_same_properties,
+    ChildrenPropertiesHint, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, InputDistributionRequirements, PlanProperties,
+    SendableRecordBatchStream, Statistics, validate_child_count,
 };
 
 use arrow::compute::SortOptions;
@@ -439,37 +439,50 @@ impl ExecutionPlan for SortMergeJoinExec {
         vec![&self.left, &self.right]
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        hint: ChildrenPropertiesHint,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        match hint {
+            ChildrenPropertiesHint::SameProperties => {
+                let left = children.swap_remove(0);
+                let right = children.swap_remove(0);
+                Ok(Arc::new(Self {
+                    left,
+                    right,
+                    metrics: ExecutionPlanMetricsSet::new(),
+                    ..Self::clone(&*self)
+                }))
+            }
+            ChildrenPropertiesHint::Recompute => match &children[..] {
+                [left, right] => Ok(Arc::new(SortMergeJoinExec::try_new(
+                    Arc::clone(left),
+                    Arc::clone(right),
+                    self.on.clone(),
+                    self.filter.clone(),
+                    self.join_type,
+                    self.sort_options.clone(),
+                    self.null_equality,
+                )?)),
+                _ => internal_err!("SortMergeJoin wrong number of children"),
+            },
+        }
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        match &children[..] {
-            [left, right] => Ok(Arc::new(SortMergeJoinExec::try_new(
-                Arc::clone(left),
-                Arc::clone(right),
-                self.on.clone(),
-                self.filter.clone(),
-                self.join_type,
-                self.sort_options.clone(),
-                self.null_equality,
-            )?)),
-            _ => internal_err!("SortMergeJoin wrong number of children"),
-        }
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let left = children.swap_remove(0);
-        let right = children.swap_remove(0);
-        Ok(Arc::new(Self {
-            left,
-            right,
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(children, ChildrenPropertiesHint::SameProperties)
     }
 
     fn execute(

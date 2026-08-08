@@ -1508,7 +1508,7 @@ mod tests {
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 
     use crate::statistics::StatisticsArgs;
-    use crate::{DisplayAs, ExecutionPlan, PlanProperties};
+    use crate::{ChildrenPropertiesHint, DisplayAs, ExecutionPlan, PlanProperties};
 
     use super::DisplayableExecutionPlan;
 
@@ -1542,11 +1542,19 @@ mod tests {
             vec![]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ChildrenPropertiesHint,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(children, ChildrenPropertiesHint::Recompute)
         }
 
         fn execute(
@@ -1626,10 +1634,11 @@ mod tests {
         use crate::empty::EmptyExec;
         use crate::filter::FilterExec;
         use crate::projection::ProjectionExec;
+        use crate::{ChildrenPropertiesHint, ExecutionPlan};
         use datafusion_physical_expr::expressions::{binary, col, lit};
         use datafusion_physical_expr::{Partitioning, PhysicalExpr};
 
-        fn sample_plan() -> Arc<dyn crate::ExecutionPlan> {
+        fn sample_plan() -> Arc<dyn ExecutionPlan> {
             let schema = Arc::new(Schema::new(vec![
                 Field::new("a", DataType::Int32, false),
                 Field::new("b", DataType::Int32, false),
@@ -1706,11 +1715,18 @@ mod tests {
                 fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
                     vec![&self.inner]
                 }
-                fn with_new_children(
+                fn replace_children(
                     self: Arc<Self>,
                     _: Vec<Arc<dyn ExecutionPlan>>,
+                    _: ChildrenPropertiesHint,
                 ) -> Result<Arc<dyn ExecutionPlan>> {
                     unimplemented!()
+                }
+                fn with_new_children(
+                    self: Arc<Self>,
+                    children: Vec<Arc<dyn ExecutionPlan>>,
+                ) -> Result<Arc<dyn ExecutionPlan>> {
+                    self.replace_children(children, ChildrenPropertiesHint::Recompute)
                 }
                 fn execute(
                     &self,

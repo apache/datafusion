@@ -27,7 +27,7 @@ use super::{
 use crate::display::DisplayableExecutionPlan;
 use crate::execution_plan::EvaluationType;
 use crate::metrics::{MetricCategory, MetricType};
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
+use crate::{ChildrenPropertiesHint, DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::format::ExplainFormat;
@@ -219,9 +219,10 @@ impl ExecutionPlan for AnalyzeExec {
         ])
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(
             AnalyzeExec::builder(
@@ -235,6 +236,13 @@ impl ExecutionPlan for AnalyzeExec {
             .with_format(self.format.clone())
             .build(),
         ))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn execute(

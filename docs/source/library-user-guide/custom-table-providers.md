@@ -247,12 +247,20 @@ impl ExecutionPlan for MyExecPlan {
         vec![]  // Leaf node -- no children
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert!(children.is_empty());
+        Ok(self)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        assert!(children.is_empty());
-        Ok(self)
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn execute(
@@ -655,7 +663,7 @@ and reading files that cannot possibly match the query.
 # use datafusion::execution::context::TaskContext;
 # use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 # use datafusion::physical_expr::EquivalenceProperties;
-# use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr, PlanProperties};
+# use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr, PlanProperties, ChildrenPropertiesHint};
 # use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 #
 /// A table provider backed by date-partitioned directories.
@@ -764,7 +772,15 @@ impl DatePartitionedTable {
 #     fn name(&self) -> &str { "DatePartitionedExec" }
 #     fn properties(&self) -> &Arc<PlanProperties> { &self.properties }
 #     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> { vec![] }
-#     fn with_new_children(self: Arc<Self>, _: Vec<Arc<dyn ExecutionPlan>>) -> Result<Arc<dyn ExecutionPlan>> { Ok(self) }
+#     fn replace_children(self: Arc<Self>, _: Vec<Arc<dyn ExecutionPlan>>, _: ChildrenPropertiesHint) -> Result<Arc<dyn ExecutionPlan>> { Ok(self) }
+#
+#     fn with_new_children(
+#         self: Arc<Self>,
+#         children: Vec<Arc<dyn ExecutionPlan>>,
+#     ) -> Result<Arc<dyn ExecutionPlan>> {
+#         self.replace_children(children, ChildrenPropertiesHint::Recompute)
+#     }
+#
 #     fn execute(&self, _: usize, _: Arc<TaskContext>) -> Result<SendableRecordBatchStream> { todo!() }
 # }
 ```
@@ -800,10 +816,8 @@ use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-#     DisplayAs, DisplayFormatType,
-    ExecutionPlan, Partitioning,
-#     PhysicalExpr,
-    PlanProperties,
+#     DisplayAs, DisplayFormatType, PhysicalExpr,
+    ChildrenPropertiesHint, ExecutionPlan, Partitioning, PlanProperties,
 };
 use futures::stream;
 
@@ -873,11 +887,19 @@ impl ExecutionPlan for CountingExec {
     fn properties(&self) -> &Arc<PlanProperties> { &self.properties }
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> { vec![] }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ChildrenPropertiesHint,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ChildrenPropertiesHint::Recompute)
     }
 
     fn execute(

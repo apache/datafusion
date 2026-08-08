@@ -55,7 +55,9 @@ use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion_physical_plan::execution_plan::EmissionType;
+use datafusion_physical_plan::execution_plan::{
+    EmissionType, replace_children_if_necessary,
+};
 use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, PartitionMode, SortMergeJoinExec,
 };
@@ -69,7 +71,7 @@ use datafusion_physical_plan::windows::WindowAggExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, get_best_fitting_window};
 use datafusion_physical_plan::{
     ChildSatisfactionOptions, Distribution, ExecutionPlan, InputDistributionRequirements,
-    Partitioning, with_new_children_if_necessary,
+    Partitioning,
 };
 
 use itertools::izip;
@@ -760,8 +762,10 @@ fn preserving_order_enables_streaming(
         return Ok(false);
     }
     // Build parent with the ordered child
-    let with_ordered =
-        Arc::clone(parent).with_new_children(vec![Arc::clone(ordered_child)])?;
+    let with_ordered = replace_children_if_necessary(
+        Arc::clone(parent),
+        vec![Arc::clone(ordered_child)],
+    )?;
     if with_ordered.pipeline_behavior() == EmissionType::Final {
         // Parent is blocking even with ordering — no benefit
         return Ok(false);
@@ -769,7 +773,8 @@ fn preserving_order_enables_streaming(
     // Build parent with an unordered child via CoalescePartitionsExec.
     let unordered_child: Arc<dyn ExecutionPlan> =
         Arc::new(CoalescePartitionsExec::new(Arc::clone(ordered_child)));
-    let without_ordered = Arc::clone(parent).with_new_children(vec![unordered_child])?;
+    let without_ordered =
+        replace_children_if_necessary(Arc::clone(parent), vec![unordered_child])?;
     Ok(without_ordered.pipeline_behavior() == EmissionType::Final)
 }
 
@@ -1517,16 +1522,16 @@ pub fn ensure_distribution(
         //           Data
         Arc::new(InterleaveExec::try_new(children_plans)?)
     } else {
-        // Route through `with_new_children_if_necessary` so the common
+        // Route through `replace_children_if_necessary` so the common
         // case where no child was replaced above skips the expensive
-        // `with_new_children` rebuild. For nodes like `ProjectionExec`,
-        // `with_new_children` recomputes schema / equivalence properties /
+        // `replace_children` rebuild. For nodes like `ProjectionExec`,
+        // `replace_children` recomputes schema / equivalence properties /
         // output ordering via `try_new` even when the input Arcs are
         // identical, which dominates `ensure_distribution` time on deep
         // projection stacks over plans where no distribution change
         // applies (point queries with no join / aggregate / unmet
         // ordering).
-        with_new_children_if_necessary(plan, children_plans)?
+        replace_children_if_necessary(plan, children_plans)?
     };
 
     Ok(Transformed::yes(DistributionContext::new(
