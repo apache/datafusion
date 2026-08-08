@@ -69,8 +69,8 @@ use datafusion::physical_plan::coop::CooperativeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::explain::ExplainExec;
 use datafusion::physical_plan::expressions::{
-    BinaryExpr, Column, DynamicFilterPhysicalExpr, NotExpr, PhysicalSortExpr, binary,
-    cast, col, in_list, like, lit,
+    BinaryExpr, Column, DynamicFilterPhysicalExpr, NotExpr, PhysicalSortExpr,
+    SqlSimilarToPattern, binary, cast, col, in_list, like, lit,
 };
 use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
@@ -3807,6 +3807,24 @@ fn custom_proto_converter_intercepts() -> Result<()> {
     assert_eq!(*proto_converter.num_proto_plans.read().unwrap(), 2);
     assert_eq!(*proto_converter.num_physical_plans.read().unwrap(), 2);
 
+    Ok(())
+}
+
+#[test]
+fn roundtrip_sql_similar_to_pattern() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
+    let expr: Arc<dyn PhysicalExpr> =
+        Arc::new(SqlSimilarToPattern::new(col("a", &schema)?));
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DefaultPhysicalProtoConverter {};
+    let proto = converter.physical_expr_to_proto(&expr, &codec)?;
+    let ctx = SessionContext::new();
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
+    let decoded = converter.proto_to_physical_expr(&proto, &schema, &decode_ctx)?;
+
+    assert_eq!(format!("{expr:?}"), format!("{decoded:?}"));
     Ok(())
 }
 
