@@ -39,12 +39,6 @@
 //! `BoundedWindowAggExec → PartitionedTopKExec(fetch=K)`, removing the
 //! `FilterExec` and inserting `PartitionedTopKExec` under the window.
 //!
-//! This rule runs before [`EnsureRequirements`] so it does not need to
-//! pattern-match through a `SortExec` that would otherwise be inserted to
-//! satisfy the window's ordering requirement. `PartitionedTopKExec`
-//! advertises the required ordering, so later enforcement leaves that edge
-//! alone.
-//!
 //! The appropriate [`WindowFnKind`] is forwarded to `PartitionedTopKExec`.
 //! RANK requires a non-empty `ORDER BY` clause (otherwise all rows tie at
 //! rank 1 and the optimization is degenerate).
