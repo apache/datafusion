@@ -427,7 +427,7 @@ pub fn parse_protobuf_partitioning(
 }
 #[deprecated(
     since = "55.0.0",
-    note = "unused by DataFusion; `ParquetSource::try_from_proto` parses the schema itself"
+    note = "unused by DataFusion; use `FileScanConfig::parse_table_schema_from_proto` to reconstruct the full table schema"
 )]
 pub fn parse_protobuf_file_scan_schema(
     proto: &protobuf::FileScanExecConf,
