@@ -1557,8 +1557,8 @@ mod tests {
         #[test]
         fn test_distinct_count_from_real_parquet_file() {
             // Path to test file created by DuckDB with distinct_count statistics
-            let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            path.push("src/test_data/ndv_test.parquet");
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("src/test_data/ndv_test.parquet");
 
             let file = File::open(&path).expect("Failed to open test parquet file");
             let reader =

@@ -284,7 +284,7 @@ impl ExecutionPlan for AnalyzeExec {
             }
             drop(input_stream);
 
-            let duration = Instant::now() - start;
+            let duration = start.elapsed();
             create_output_batch(
                 verbose,
                 show_statistics,
