@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::sort::reverse_row_selection;
+use arrow::array::BooleanBufferBuilder;
 use arrow::datatypes::Schema;
 use datafusion_common::{Result, assert_eq_or_internal_err, exec_err};
 use datafusion_physical_expr::expressions::Column;
@@ -203,11 +204,6 @@ impl OverallRowSelectionCursor {
             skip: sel.skip,
         })
     }
-
-    fn remaining_rows(self) -> usize {
-        self.current.map_or(0, |s| s.row_count)
-            + self.selector_iter.map(|s| s.row_count).sum::<usize>()
-    }
 }
 
 /// Accumulates the selector fragments that belong to one row group.
@@ -256,6 +252,21 @@ impl RowGroupAccessBuilder {
     }
 }
 
+/// Convert `selection` to a bitmap-backed [`RowSelection`].
+///
+/// No-op if the selection is already bitmap-backed.
+fn into_mask_backed(selection: RowSelection) -> RowSelection {
+    if selection.as_mask().is_some() {
+        return selection;
+    }
+    let total_rows = selection.row_count() + selection.skipped_row_count();
+    let mut mask = BooleanBufferBuilder::new(total_rows);
+    for selector in selection.iter() {
+        mask.append_n(selector.row_count, !selector.skip);
+    }
+    RowSelection::from_boolean_buffer(mask.finish())
+}
+
 impl ParquetAccessPlan {
     /// Create a new `ParquetAccessPlan` that scans all row groups
     pub fn new_all(row_group_count: usize) -> Self {
@@ -295,42 +306,65 @@ impl ParquetAccessPlan {
     /// Returns an error if the selection does not specify exactly the same
     /// number of rows as the file metadata.
     pub fn try_new_from_overall_row_selection(
-        selection: RowSelection,
+        mut selection: RowSelection,
         row_group_meta_data: &[RowGroupMetaData],
     ) -> Result<Self> {
-        // Keep this as a single pass over the selector stream rather than
-        // repeatedly calling `RowSelection::split_off` per row group. The
-        // `split_off` version is simpler, but it clones/retains substantially
-        // more selector buffer capacity for highly fragmented selections.
-        let mut cursor = OverallRowSelectionCursor::new(selection);
-
-        let mut selection_rows = 0usize;
-        let mut file_rows = 0usize;
-
-        let mut row_groups = Vec::with_capacity(row_group_meta_data.len());
-        for rg_meta in row_group_meta_data {
-            let rg_rows = rg_meta.num_rows() as usize;
-            file_rows += rg_rows;
-
-            let mut builder = RowGroupAccessBuilder::new(rg_rows);
-            while builder.remaining > 0 {
-                let Some(selector) = cursor.take(builder.remaining) else {
-                    break;
-                };
-                selection_rows += selector.row_count;
-                builder.push(selector);
-            }
-
-            row_groups.push(builder.into_access());
-        }
-
-        selection_rows += cursor.remaining_rows();
+        let selection_rows = selection.row_count() + selection.skipped_row_count();
+        let file_rows = row_group_meta_data
+            .iter()
+            .map(|rg| rg.num_rows() as usize)
+            .sum::<usize>();
 
         if selection_rows != file_rows {
             return exec_err!(
                 "Invalid Parquet RowSelection. File has {file_rows} rows, \
                 but selection specifies {selection_rows} rows."
             );
+        }
+
+        // `split_off` slices bitmap-backed selections without converting them
+        // to selectors. Keep partially selected row groups bitmap-backed so
+        // they can reach the parquet reader without an intermediate RLE.
+        if selection.as_mask().is_some() {
+            let row_groups = row_group_meta_data
+                .iter()
+                .map(|rg_meta| {
+                    let rg_rows = rg_meta.num_rows() as usize;
+                    let rg_selection = selection.split_off(rg_rows);
+                    let selected_rows = rg_selection.row_count();
+
+                    if selected_rows == 0 {
+                        RowGroupAccess::Skip
+                    } else if selected_rows == rg_rows {
+                        RowGroupAccess::Scan
+                    } else {
+                        RowGroupAccess::Selection(rg_selection)
+                    }
+                })
+                .collect();
+
+            return Ok(Self::new(row_groups));
+        }
+
+        // Keep this as a single pass over the selector stream rather than
+        // repeatedly calling `RowSelection::split_off` per row group. The
+        // `split_off` version is simpler, but it clones/retains substantially
+        // more selector buffer capacity for highly fragmented selections.
+        let mut cursor = OverallRowSelectionCursor::new(selection);
+
+        let mut row_groups = Vec::with_capacity(row_group_meta_data.len());
+        for rg_meta in row_group_meta_data {
+            let rg_rows = rg_meta.num_rows() as usize;
+
+            let mut builder = RowGroupAccessBuilder::new(rg_rows);
+            while builder.remaining > 0 {
+                let Some(selector) = cursor.take(builder.remaining) else {
+                    break;
+                };
+                builder.push(selector);
+            }
+
+            row_groups.push(builder.into_access());
         }
 
         Ok(Self::new(row_groups))
@@ -392,6 +426,16 @@ impl ParquetAccessPlan {
             RowGroupAccess::Skip => RowGroupAccess::Skip,
             RowGroupAccess::Scan => RowGroupAccess::Selection(selection),
             RowGroupAccess::Selection(existing_selection) => {
+                // `RowSelection::intersection` only stays bitmap-backed when
+                // both sides are bitmap-backed, so promote the incoming
+                // selection (e.g. from page index pruning) to match an
+                // existing bitmap: the intersection is then a bitwise AND
+                // instead of a selector merge.
+                let selection = if existing_selection.as_mask().is_some() {
+                    into_mask_backed(selection)
+                } else {
+                    selection
+                };
                 RowGroupAccess::Selection(existing_selection.intersection(&selection))
             }
         }
@@ -418,6 +462,11 @@ impl ParquetAccessPlan {
     /// If there are any [`RowGroupAccess::Selection`], an overall row selection
     /// is returned for *all* the rows in the row groups that are not skipped.
     /// Thus it includes a `Select` selection for any [`RowGroupAccess::Scan`].
+    ///
+    /// If any [`RowGroupAccess::Selection`] is bitmap-backed
+    /// ([`RowSelection::as_mask`] returns `Some`), the overall selection is
+    /// bitmap-backed as well and any selector-backed selections are promoted
+    /// to bitmaps; otherwise the overall selection is selector-backed.
     ///
     /// # Errors
     ///
@@ -494,10 +543,7 @@ impl ParquetAccessPlan {
             let RowGroupAccess::Selection(selection) = rg else {
                 continue;
             };
-            let rows_in_selection = selection
-                .iter()
-                .map(|selection| selection.row_count)
-                .sum::<usize>();
+            let rows_in_selection = selection.row_count() + selection.skipped_row_count();
 
             let row_group_row_count = rg_meta.num_rows();
             assert_eq_or_internal_err!(
@@ -509,24 +555,61 @@ impl ParquetAccessPlan {
             );
         }
 
-        let total_selection: RowSelection = self
-            .row_groups
-            .into_iter()
-            .zip(row_group_meta_data.iter())
-            .flat_map(|(rg, rg_meta)| {
+        // A bitmap-backed group selection signals the plan originated from a
+        // bitmap (e.g. a mask-backed `ParquetRowSelection`), even if later
+        // pruning such as the page index intersected some groups back to
+        // selectors. Promote the selector-backed groups in that case so the
+        // reader still receives a bitmap-backed selection.
+        let any_selection_mask_backed = self.row_groups.iter().any(|rg| {
+            matches!(rg, RowGroupAccess::Selection(selection) if selection.as_mask().is_some())
+        });
+
+        let total_selection = if any_selection_mask_backed {
+            let total_rows = self
+                .row_groups
+                .iter()
+                .zip(row_group_meta_data.iter())
+                .filter(|(rg, _)| rg.should_scan())
+                .map(|(_, rg_meta)| rg_meta.num_rows() as usize)
+                .sum();
+            let mut mask = BooleanBufferBuilder::new(total_rows);
+
+            for (rg, rg_meta) in self.row_groups.into_iter().zip(row_group_meta_data) {
                 match rg {
+                    // Skipped row groups are not passed to the parquet reader.
+                    RowGroupAccess::Skip => {}
+                    // Represent scanned row groups as all-set bitmap ranges.
+                    RowGroupAccess::Scan => {
+                        mask.append_n(rg_meta.num_rows() as usize, true)
+                    }
+                    RowGroupAccess::Selection(selection) => match selection.as_mask() {
+                        Some(buffer) => mask.append_buffer(buffer),
+                        // Promote selector-backed groups to bitmap ranges.
+                        None => {
+                            for selector in selection.iter() {
+                                mask.append_n(selector.row_count, !selector.skip);
+                            }
+                        }
+                    },
+                }
+            }
+
+            RowSelection::from_boolean_buffer(mask.finish())
+        } else {
+            // Preserve the existing selector path when no row group
+            // selection is bitmap-backed.
+            self.row_groups
+                .into_iter()
+                .zip(row_group_meta_data.iter())
+                .flat_map(|(rg, rg_meta)| match rg {
                     RowGroupAccess::Skip => vec![],
                     RowGroupAccess::Scan => {
-                        // need a row group access to scan the entire row group (need row group counts)
                         vec![RowSelector::select(rg_meta.num_rows() as usize)]
                     }
-                    RowGroupAccess::Selection(selection) => {
-                        let selection: Vec<RowSelector> = selection.into();
-                        selection
-                    }
-                }
-            })
-            .collect();
+                    RowGroupAccess::Selection(selection) => selection.into(),
+                })
+                .collect()
+        };
 
         Ok(Some(total_selection))
     }
@@ -787,6 +870,7 @@ impl PreparedAccessPlan {
 #[cfg(test)]
 mod test {
     use super::*;
+    use arrow::buffer::BooleanBuffer;
     use datafusion_common::assert_contains;
     use parquet::basic::LogicalType;
     use parquet::file::metadata::ColumnChunkMetaData;
@@ -911,6 +995,63 @@ mod test {
     }
 
     #[test]
+    fn test_mixed_backings_promote_to_mask() {
+        // One bitmap-backed group next to a selector-backed group (e.g. one
+        // that page index pruning intersected): the overall selection is
+        // promoted to a bitmap so the caller-provided mask backing survives
+        // to the reader.
+        let access_plan = ParquetAccessPlan::new(vec![
+            RowGroupAccess::Selection(RowSelection::from_boolean_buffer(
+                BooleanBuffer::from(vec![
+                    true, false, false, false, false, false, false, false, false, false,
+                ]),
+            )),
+            RowGroupAccess::Selection(RowSelection::from(vec![
+                RowSelector::select(10),
+                RowSelector::skip(10),
+            ])),
+            RowGroupAccess::Skip,
+            RowGroupAccess::Skip,
+        ]);
+
+        let row_selection = access_plan
+            .into_overall_row_selection(&ROW_GROUP_METADATA)
+            .unwrap()
+            .unwrap();
+
+        let mut expected = vec![true];
+        expected.extend(vec![false; 9]);
+        expected.extend(vec![true; 10]);
+        expected.extend(vec![false; 10]);
+        let expected = BooleanBuffer::from(expected);
+        assert_eq!(row_selection.as_mask(), Some(&expected));
+    }
+
+    #[test]
+    fn test_scan_selection_preserves_mask_backing() {
+        let mut access_plan = ParquetAccessPlan::new(vec![RowGroupAccess::Selection(
+            RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![
+                true, true, false, false, true, true, false, false, true, true,
+            ])),
+        )]);
+
+        // Intersect with a selector-backed selection, as produced by page
+        // index pruning.
+        access_plan.scan_selection(
+            0,
+            RowSelection::from(vec![RowSelector::select(5), RowSelector::skip(5)]),
+        );
+
+        let RowGroupAccess::Selection(selection) = &access_plan.inner()[0] else {
+            panic!("expected a selection for row group 0");
+        };
+        let expected = BooleanBuffer::from(vec![
+            true, true, false, false, true, false, false, false, false, false,
+        ]);
+        assert_eq!(selection.as_mask(), Some(&expected));
+    }
+
+    #[test]
     fn test_new_from_overall_row_selection() {
         let row_selection = RowSelection::from(vec![
             RowSelector::select(10),
@@ -991,6 +1132,63 @@ mod test {
                 ),
                 RowGroupAccess::Skip,
             ])
+        );
+    }
+
+    #[test]
+    fn test_new_from_overall_mask_preserves_bitmap_backing() {
+        let partial_mask = vec![
+            false, true, false, true, false, true, false, true, false, true, false, true,
+            false, true, false, true, false, true, false, true, false, true, false, true,
+            false, true, false, true, false, true,
+        ];
+        let mut file_mask = vec![true; 10];
+        file_mask.extend(vec![false; 20]);
+        file_mask.extend(&partial_mask);
+        file_mask.extend(vec![true; 40]);
+
+        let access_plan = ParquetAccessPlan::try_new_from_overall_row_selection(
+            RowSelection::from_boolean_buffer(BooleanBuffer::from(file_mask)),
+            &ROW_GROUP_METADATA,
+        )
+        .unwrap();
+
+        assert!(matches!(access_plan.inner()[0], RowGroupAccess::Scan));
+        assert!(matches!(access_plan.inner()[1], RowGroupAccess::Skip));
+        let RowGroupAccess::Selection(selection) = &access_plan.inner()[2] else {
+            panic!("expected a partial selection for row group 2");
+        };
+        let expected_partial_mask = BooleanBuffer::from(partial_mask.clone());
+        assert_eq!(selection.as_mask(), Some(&expected_partial_mask));
+        assert!(matches!(access_plan.inner()[3], RowGroupAccess::Scan));
+
+        // The fully skipped row group is omitted from the reader selection;
+        // scanned groups are represented as all-set bitmap ranges.
+        let overall = access_plan
+            .into_overall_row_selection(&ROW_GROUP_METADATA)
+            .unwrap()
+            .unwrap();
+        let mut expected_overall = vec![true; 10];
+        expected_overall.extend(partial_mask);
+        expected_overall.extend(vec![true; 40]);
+        let expected_overall = BooleanBuffer::from(expected_overall);
+        assert_eq!(overall.as_mask(), Some(&expected_overall));
+    }
+
+    #[test]
+    fn test_new_from_overall_mask_invalid_row_count() {
+        let row_selection = RowSelection::from_boolean_buffer(BooleanBuffer::new_set(99));
+
+        let err = ParquetAccessPlan::try_new_from_overall_row_selection(
+            row_selection,
+            &ROW_GROUP_METADATA,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert_contains!(
+            err,
+            "Invalid Parquet RowSelection. File has 100 rows, but selection specifies 99 rows"
         );
     }
 
