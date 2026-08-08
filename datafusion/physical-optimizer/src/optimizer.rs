@@ -111,7 +111,9 @@ impl PhysicalOptimizer {
             Arc::new(FilterPushdown::new()),
             // WindowTopN: replaces Filter(rn<=K) → Window(ROW_NUMBER)
             // with Window(ROW_NUMBER) → PartitionedTopKExec(fetch=K).
-            // Must run before ProjectionPushdown (which embeds projections into FilterExec).
+            // Must run before EnsureRequirements (so it can rewrite against the
+            // window's declared ordering without pattern-matching a SortExec)
+            // and before ProjectionPushdown (which embeds projections into FilterExec).
             Arc::new(WindowTopN::new()),
             // Ensures each input plan satisfies the distribution and ordering
             // requirements declared by `ExecutionPlan::required_input_distribution`

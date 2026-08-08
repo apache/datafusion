@@ -35,9 +35,15 @@
 //! ) WHERE rk <= K;
 //! ```
 //!
-//! And replaces the `FilterExec → BoundedWindowAggExec → SortExec` pipeline
-//! with `BoundedWindowAggExec → PartitionedTopKExec(fetch=K)`, removing both
-//! the `FilterExec` and `SortExec`.
+//! And replaces the `FilterExec → BoundedWindowAggExec` pipeline with
+//! `BoundedWindowAggExec → PartitionedTopKExec(fetch=K)`, removing the
+//! `FilterExec` and inserting `PartitionedTopKExec` under the window.
+//!
+//! This rule runs before [`EnsureRequirements`] so it does not need to
+//! pattern-match through a `SortExec` that would otherwise be inserted to
+//! satisfy the window's ordering requirement. `PartitionedTopKExec`
+//! advertises the required ordering, so later enforcement leaves that edge
+//! alone.
 //!
 //! The appropriate [`WindowFnKind`] is forwarded to `PartitionedTopKExec`.
 //! RANK requires a non-empty `ORDER BY` clause (otherwise all rows tie at
@@ -47,6 +53,7 @@
 //!
 //! [`PartitionedTopKExec`]: datafusion_physical_plan::sorts::partitioned_topk::PartitionedTopKExec
 //! [`WindowFnKind`]: datafusion_physical_plan::sorts::partitioned_topk::WindowFnKind
+//! [`EnsureRequirements`]: crate::ensure_requirements::EnsureRequirements
 
 use std::sync::Arc;
 
@@ -66,7 +73,6 @@ use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partitioned_topk::{
     PartitionedTopKExec, WindowFnKind,
 };
-use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 
 /// Physical optimizer rule that converts per-partition `ROW_NUMBER` and
