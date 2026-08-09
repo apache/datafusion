@@ -309,15 +309,12 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// ```
     ///
     /// ## Node with no expressions (e.g., EmptyExec, MemoryExec)
-    ///
-    /// Use [`apply_no_expressions`] to implement this method without handling
-    /// [`TreeNodeRecursion`] directly.
     /// ```ignore
     /// fn apply_expressions(
     ///     &self,
-    ///     f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ///     _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     /// ) -> Result<TreeNodeRecursion> {
-    ///     apply_no_expressions(f)
+    ///     Ok(TreeNodeRecursion::Continue)
     /// }
     /// ```
     fn apply_expressions(
@@ -928,13 +925,6 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         Ok(None)
     }
-}
-
-/// Implements [`ExecutionPlan::apply_expressions`] for a node with no expressions.
-pub fn apply_no_expressions(
-    _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
-) -> Result<TreeNodeRecursion> {
-    Ok(TreeNodeRecursion::Continue)
 }
 
 /// Applies `f` to a shallow sequence of physical expression roots.

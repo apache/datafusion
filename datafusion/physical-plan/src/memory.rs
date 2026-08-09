@@ -314,9 +314,9 @@ impl ExecutionPlan for LazyMemoryExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        crate::apply_no_expressions(f)
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
