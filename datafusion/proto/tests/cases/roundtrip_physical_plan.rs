@@ -1378,6 +1378,24 @@ fn roundtrip_json_scan() -> Result<()> {
     roundtrip_test(DataSourceExec::from_data_source(scan_config))
 }
 
+#[cfg(feature = "avro")]
+#[test]
+fn roundtrip_avro_scan() -> Result<()> {
+    use datafusion_datasource_avro::source::AvroSource;
+
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let file_source = Arc::new(AvroSource::new(TableSchema::from(&file_schema)));
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.avro".to_string(),
+                1024,
+            )])])
+            .build();
+    roundtrip_test(DataSourceExec::from_data_source(scan_config))
+}
+
 #[test]
 fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
     use datafusion::common::config::CsvOptions;
