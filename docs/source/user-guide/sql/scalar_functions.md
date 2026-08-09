@@ -4562,14 +4562,14 @@ array_slice(array, begin, end[, stride])
 Sort array.
 
 ```sql
-array_sort(array[, desc[, nulls_first]])
+array_sort(array[, order[, nulls_order]])
 ```
 
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **desc**: Whether to sort in ascending (`ASC`) or descending (`DESC`) order. The default is `ASC`.
-- **nulls_first**: Whether to sort nulls first (`NULLS FIRST`) or last (`NULLS LAST`). The default is `NULLS FIRST`.
+- **order**: Whether to sort in ascending (`ASC`) or descending (`DESC`) order. The default is `ASC`.
+- **nulls_order**: Whether to sort nulls first (`NULLS FIRST`) or last (`NULLS LAST`). The default is `NULLS FIRST`.
 
 #### Example
 

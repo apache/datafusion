@@ -55,7 +55,7 @@ make_udf_expr_and_func!(
 #[user_doc(
     doc_section(label = "Array Functions"),
     description = "Sort array.",
-    syntax_example = "array_sort(array[, desc[, nulls_first]])",
+    syntax_example = "array_sort(array[, order[, nulls_order]])",
     sql_example = r#"```sql
 > select array_sort([3, 1, 2]);
 +-----------------------------+
@@ -69,11 +69,11 @@ make_udf_expr_and_func!(
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     ),
     argument(
-        name = "desc",
+        name = "order",
         description = "Whether to sort in ascending (`ASC`) or descending (`DESC`) order. The default is `ASC`."
     ),
     argument(
-        name = "nulls_first",
+        name = "nulls_order",
         description = "Whether to sort nulls first (`NULLS FIRST`) or last (`NULLS LAST`). The default is `NULLS FIRST`."
     )
 )]
