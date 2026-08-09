@@ -889,7 +889,7 @@ impl HashJoinExec {
         // because the metadata cannot distinguish those scans from a real hash
         // repartition. Compatible Range inputs remain safe because matching
         // ordering and split points align each build filter with its probe
-        // partition. Other unsupported layouts are rejected. 
+        // partition. Other unsupported layouts are rejected.
         // Follow-up work: enable dynamic filtering for preserve_file_partitioned scans (issue #20195).
         // https://github.com/apache/datafusion/issues/20195
         if config.optimizer.preserve_file_partitions > 0
