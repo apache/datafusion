@@ -570,8 +570,8 @@ struct CrossJoinStream<T> {
     left_index: usize,
     /// Join execution metrics
     join_metrics: BuildProbeJoinMetrics,
-    /// State of the stream
-    state: CrossJoinStreamState,
+    /// Currently processed right side batch
+    state: Option<RecordBatch>,
     /// Left data (copy of the entire buffered left side)
     left_data: RecordBatch,
     /// Batch transformer
@@ -581,25 +581,6 @@ struct CrossJoinStream<T> {
 impl<T: BatchTransformer + Unpin + Send> RecordBatchStream for CrossJoinStream<T> {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
-    }
-}
-
-/// Represents states of CrossJoinStream
-enum CrossJoinStreamState {
-    WaitBuildSide,
-    FetchProbeBatch,
-    /// Holds the currently processed right side batch
-    BuildBatches(RecordBatch),
-}
-
-impl CrossJoinStreamState {
-    /// Tries to extract RecordBatch from CrossJoinStreamState enum.
-    /// Returns an error if state is not BuildBatches state.
-    fn try_as_record_batch(&mut self) -> Result<&RecordBatch> {
-        match self {
-            CrossJoinStreamState::BuildBatches(rb) => Ok(rb),
-            _ => internal_err!("Expected RecordBatch in BuildBatches state"),
-        }
     }
 }
 
