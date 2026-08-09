@@ -369,26 +369,27 @@ impl SessionState {
         table_ref: impl Into<TableReference>,
     ) -> datafusion_common::Result<Arc<dyn SchemaProvider>> {
         let resolved_ref = self.resolve_table_ref(table_ref);
-        if self.config.information_schema() && *resolved_ref.schema == *INFORMATION_SCHEMA
-        {
-            return Ok(Arc::new(
-                InformationSchemaProvider::new(Arc::clone(&self.catalog_list))
-                    .with_table_functions(self.table_functions.clone()),
-            ));
-        }
-
-        self.catalog_list
+        let catalog = self
+            .catalog_list
             .catalog(&resolved_ref.catalog)
             .ok_or_else(|| {
                 plan_datafusion_err!(
                     "failed to resolve catalog: {}",
                     resolved_ref.catalog
                 )
-            })?
-            .schema(&resolved_ref.schema)
-            .ok_or_else(|| {
-                plan_datafusion_err!("failed to resolve schema: {}", resolved_ref.schema)
-            })
+            })?;
+
+        if self.config.information_schema() && *resolved_ref.schema == *INFORMATION_SCHEMA
+        {
+            return Ok(Arc::new(
+                InformationSchemaProvider::new(resolved_ref.catalog.to_string(), catalog)
+                    .with_table_functions(self.table_functions.clone()),
+            ));
+        }
+
+        catalog.schema(&resolved_ref.schema).ok_or_else(|| {
+            plan_datafusion_err!("failed to resolve schema: {}", resolved_ref.schema)
+        })
     }
 
     /// Add `analyzer_rule` to the end of the list of
