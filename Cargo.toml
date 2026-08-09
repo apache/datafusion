@@ -296,3 +296,27 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
+
+# TEMPORARY — DO NOT MERGE WITH THIS PRESENT.
+# Builds against a throwaway branch that is the parquet 59.2.0 release tag plus
+# the four commits from https://github.com/apache/arrow-rs/pull/9882, which this
+# PR depends on. Remove once #9882 has merged and DataFusion has bumped to a
+# parquet release containing it.
+[patch.crates-io]
+arrow = { git = "https://github.com/pydantic/arrow-rs.git", branch = "claude/9882-on-v59.2.0" }
+arrow-arith = { git = "https://github.com/pydantic/arrow-rs.git", branch = "claude/9882-on-v59.2.0" }
+arrow-array = { git = "https://github.com/pydantic/arrow-rs.git", branch = "claude/9882-on-v59.2.0" }
+arrow-avro = { git = "https://github.com/pydantic/arrow-rs.git", branch = "claude/9882-on-v59.2.0" }
+arrow-buffer = { git = "https://github.com/pydantic/arrow-rs.git", branch = "claude/9882-on-v59.2.0" }
+arrow-cast = { git = "https://github.com/pydantic/arrow-rs.git", branch = "claude/9882-on-v59.2.0" }
+arrow-csv = { git = "https://github.com/pydantic/arrow-rs.git", branch = "claude/9882-on-v59.2.0" }
+arrow-data = { git = "https://github.com/pydantic/arrow-rs.git", branch = "claude/9882-on-v59.2.0" }
+arrow-flight = { git = "https://github.com/pydantic/arrow-rs.git", branch = "claude/9882-on-v59.2.0" }
+arrow-ipc = { git = "https://github.com/pydantic/arrow-rs.git", branch = "claude/9882-on-v59.2.0" }
+arrow-json = { git = "https://github.com/pydantic/arrow-rs.git", branch = "claude/9882-on-v59.2.0" }
+arrow-ord = { git = "https://github.com/pydantic/arrow-rs.git", branch = "claude/9882-on-v59.2.0" }
+arrow-row = { git = "https://github.com/pydantic/arrow-rs.git", branch = "claude/9882-on-v59.2.0" }
+arrow-schema = { git = "https://github.com/pydantic/arrow-rs.git", branch = "claude/9882-on-v59.2.0" }
+arrow-select = { git = "https://github.com/pydantic/arrow-rs.git", branch = "claude/9882-on-v59.2.0" }
+arrow-string = { git = "https://github.com/pydantic/arrow-rs.git", branch = "claude/9882-on-v59.2.0" }
+parquet = { git = "https://github.com/pydantic/arrow-rs.git", branch = "claude/9882-on-v59.2.0" }
