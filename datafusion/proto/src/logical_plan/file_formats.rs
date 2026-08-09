@@ -18,7 +18,6 @@
 use std::sync::Arc;
 
 use super::LogicalExtensionCodec;
-use crate::convert::FromProto;
 use crate::protobuf::{CsvOptions as CsvOptionsProto, JsonOptions as JsonOptionsProto};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{TableReference, exec_datafusion_err, exec_err, not_impl_err};
@@ -31,48 +30,6 @@ use prost::Message;
 
 #[derive(Debug)]
 pub struct CsvLogicalExtensionCodec;
-
-impl FromProto<&CsvFormatFactory> for CsvOptionsProto {
-    fn from_proto(factory: &CsvFormatFactory) -> Self {
-        if let Some(options) = &factory.options {
-            CsvOptionsProto {
-                has_header: options.has_header.map_or(vec![], |v| vec![v as u8]),
-                delimiter: vec![options.delimiter],
-                quote: vec![options.quote],
-                terminator: options.terminator.map_or(vec![], |v| vec![v]),
-                escape: options.escape.map_or(vec![], |v| vec![v]),
-                double_quote: options.double_quote.map_or(vec![], |v| vec![v as u8]),
-                compression: options.compression as i32,
-                schema_infer_max_rec: options.schema_infer_max_rec.map(|v| v as u64),
-                date_format: options.date_format.clone().unwrap_or_default(),
-                datetime_format: options.datetime_format.clone().unwrap_or_default(),
-                timestamp_format: options.timestamp_format.clone().unwrap_or_default(),
-                timestamp_tz_format: options
-                    .timestamp_tz_format
-                    .clone()
-                    .unwrap_or_default(),
-                time_format: options.time_format.clone().unwrap_or_default(),
-                null_value: options.null_value.clone().unwrap_or_default(),
-                null_regex: options.null_regex.clone().unwrap_or_default(),
-                comment: options.comment.map_or(vec![], |v| vec![v]),
-                newlines_in_values: options
-                    .newlines_in_values
-                    .map_or(vec![], |v| vec![v as u8]),
-                truncated_rows: options.truncated_rows.map_or(vec![], |v| vec![v as u8]),
-                compression_level: options.compression_level,
-                quote_style: options.quote_style as i32,
-                ignore_leading_whitespace: options
-                    .ignore_leading_whitespace
-                    .map_or(vec![], |v| vec![v as u8]),
-                ignore_trailing_whitespace: options
-                    .ignore_trailing_whitespace
-                    .map_or(vec![], |v| vec![v as u8]),
-            }
-        } else {
-            CsvOptionsProto::default()
-        }
-    }
-}
 
 // TODO! This is a placeholder for now and needs to be implemented for real.
 impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
@@ -137,7 +94,7 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
             return exec_err!("{}", "Unsupported FileFormatFactory type".to_string());
         };
 
-        let proto = CsvOptionsProto::from_proto(&CsvFormatFactory {
+        let proto = CsvOptionsProto::from(&CsvFormatFactory {
             options: Some(options),
         });
 
@@ -146,21 +103,6 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
             .map_err(|e| exec_datafusion_err!("Failed to encode CsvOptions: {e:?}"))?;
 
         Ok(())
-    }
-}
-
-impl FromProto<&JsonFormatFactory> for JsonOptionsProto {
-    fn from_proto(factory: &JsonFormatFactory) -> Self {
-        if let Some(options) = &factory.options {
-            JsonOptionsProto {
-                compression: options.compression as i32,
-                schema_infer_max_rec: options.schema_infer_max_rec.map(|v| v as u64),
-                compression_level: options.compression_level,
-                newline_delimited: Some(options.newline_delimited),
-            }
-        } else {
-            JsonOptionsProto::default()
-        }
     }
 }
 
@@ -231,7 +173,7 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
             return exec_err!("Unsupported FileFormatFactory type");
         };
 
-        let proto = JsonOptionsProto::from_proto(&JsonFormatFactory {
+        let proto = JsonOptionsProto::from(&JsonFormatFactory {
             options: Some(options),
         });
 
@@ -247,132 +189,9 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
 mod parquet {
     use super::*;
 
-    use crate::protobuf::{
-        ParquetCdcOptions as ParquetCdcOptionsProto,
-        ParquetColumnOptions as ParquetColumnOptionsProto, ParquetColumnSpecificOptions,
-        ParquetOptions as ParquetOptionsProto,
-        TableParquetOptions as TableParquetOptionsProto, parquet_column_options,
-        parquet_options,
-    };
+    use crate::protobuf::TableParquetOptions as TableParquetOptionsProto;
     use datafusion_common::config::TableParquetOptions;
     use datafusion_datasource_parquet::file_format::ParquetFormatFactory;
-
-    impl FromProto<&ParquetFormatFactory> for TableParquetOptionsProto {
-        fn from_proto(factory: &ParquetFormatFactory) -> Self {
-            let global_options = if let Some(ref options) = factory.options {
-                options.clone()
-            } else {
-                return TableParquetOptionsProto::default();
-            };
-
-            let column_specific_options = global_options.column_specific_options;
-            TableParquetOptionsProto {
-            global: Some(ParquetOptionsProto {
-                enable_page_index: global_options.global.enable_page_index,
-                pruning: global_options.global.pruning,
-                skip_metadata: global_options.global.skip_metadata,
-                metadata_size_hint_opt: global_options.global.metadata_size_hint.map(|size| {
-                    parquet_options::MetadataSizeHintOpt::MetadataSizeHint(size as u64)
-                }),
-                pushdown_filters: global_options.global.pushdown_filters,
-                reorder_filters: global_options.global.reorder_filters,
-                force_filter_selections: global_options.global.force_filter_selections,
-                data_pagesize_limit: global_options.global.data_pagesize_limit as u64,
-                write_batch_size: global_options.global.write_batch_size as u64,
-                writer_version: global_options.global.writer_version.to_string(),
-                compression_opt: global_options.global.compression.map(|compression| {
-                    parquet_options::CompressionOpt::Compression(compression)
-                }),
-                dictionary_enabled_opt: global_options.global.dictionary_enabled.map(|enabled| {
-                    parquet_options::DictionaryEnabledOpt::DictionaryEnabled(enabled)
-                }),
-                dictionary_page_size_limit: global_options.global.dictionary_page_size_limit as u64,
-                statistics_enabled_opt: global_options.global.statistics_enabled.map(|enabled| {
-                    parquet_options::StatisticsEnabledOpt::StatisticsEnabled(enabled)
-                }),
-                max_row_group_size: global_options.global.max_row_group_size as u64,
-                max_in_list_size: global_options.global.max_in_list_size as u64,
-                created_by: global_options.global.created_by.clone(),
-                column_index_truncate_length_opt: global_options.global.column_index_truncate_length.map(|length| {
-                    parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(length as u64)
-                }),
-                statistics_truncate_length_opt: global_options.global.statistics_truncate_length.map(|length| {
-                    parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(length as u64)
-                }),
-                data_page_row_count_limit: global_options.global.data_page_row_count_limit as u64,
-                encoding_opt: global_options.global.encoding.map(|encoding| {
-                    parquet_options::EncodingOpt::Encoding(encoding)
-                }),
-                bloom_filter_on_read: global_options.global.bloom_filter_on_read,
-                bloom_filter_on_write: global_options.global.bloom_filter_on_write,
-                bloom_filter_fpp_opt: global_options.global.bloom_filter_fpp.map(|fpp| {
-                    parquet_options::BloomFilterFppOpt::BloomFilterFpp(fpp)
-                }),
-                bloom_filter_ndv_opt: global_options.global.bloom_filter_ndv.map(|ndv| {
-                    parquet_options::BloomFilterNdvOpt::BloomFilterNdv(ndv)
-                }),
-                allow_single_file_parallelism: global_options.global.allow_single_file_parallelism,
-                maximum_parallel_row_group_writers: global_options.global.maximum_parallel_row_group_writers as u64,
-                maximum_buffered_record_batches_per_stream: global_options.global.maximum_buffered_record_batches_per_stream as u64,
-                schema_force_view_types: global_options.global.schema_force_view_types,
-                binary_as_string: global_options.global.binary_as_string,
-                skip_arrow_metadata: global_options.global.skip_arrow_metadata,
-                coerce_int96_opt: global_options.global.coerce_int96.map(|compression| {
-                    parquet_options::CoerceInt96Opt::CoerceInt96(compression)
-                }),
-                coerce_int96_tz_opt: global_options.global.coerce_int96_tz.map(|tz| {
-                    parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz)
-                }),
-                max_predicate_cache_size_opt: global_options.global.max_predicate_cache_size.map(|size| {
-                    parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(size as u64)
-                }),
-                max_row_group_bytes_opt: global_options.global.max_row_group_bytes.map(|size| {
-                    parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(size.get() as u64)
-                }),
-                content_defined_chunking: Some(ParquetCdcOptionsProto {
-                    enabled: global_options.global.content_defined_chunking.enabled,
-                    min_chunk_size: global_options.global.content_defined_chunking.min_chunk_size as u64,
-                    max_chunk_size: global_options.global.content_defined_chunking.max_chunk_size as u64,
-                    norm_level: global_options.global.content_defined_chunking.norm_level,
-                }),
-            }),
-            column_specific_options: column_specific_options.into_iter().map(|(column_name, options)| {
-                ParquetColumnSpecificOptions {
-                    column_name,
-                    options: Some(ParquetColumnOptionsProto {
-                        bloom_filter_enabled_opt: options.bloom_filter_enabled.map(|enabled| {
-                            parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled(enabled)
-                        }),
-                        encoding_opt: options.encoding.map(|encoding| {
-                            parquet_column_options::EncodingOpt::Encoding(encoding)
-                        }),
-                        dictionary_enabled_opt: options.dictionary_enabled.map(|enabled| {
-                            parquet_column_options::DictionaryEnabledOpt::DictionaryEnabled(enabled)
-                        }),
-                        compression_opt: options.compression.map(|compression| {
-                            parquet_column_options::CompressionOpt::Compression(compression)
-                        }),
-                        statistics_enabled_opt: options.statistics_enabled.map(|enabled| {
-                            parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled(enabled)
-                        }),
-                        bloom_filter_fpp_opt: options.bloom_filter_fpp.map(|fpp| {
-                            parquet_column_options::BloomFilterFppOpt::BloomFilterFpp(fpp)
-                        }),
-                        bloom_filter_ndv_opt: options.bloom_filter_ndv.map(|ndv| {
-                            parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv(ndv)
-                        }),
-                    })
-                }
-            }).collect(),
-            key_value_metadata: global_options.key_value_metadata
-                .iter()
-                .filter_map(|(key, value)| {
-                    value.as_ref().map(|v| (key.clone(), v.clone()))
-                })
-                .collect(),
-        }
-        }
-    }
 
     #[derive(Debug)]
     pub struct ParquetLogicalExtensionCodec;
@@ -445,7 +264,7 @@ mod parquet {
                 return exec_err!("Unsupported FileFormatFactory type");
             };
 
-            let proto = TableParquetOptionsProto::from_proto(&ParquetFormatFactory {
+            let proto = TableParquetOptionsProto::from(&ParquetFormatFactory {
                 options: Some(options),
             });
 
@@ -460,6 +279,7 @@ mod parquet {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use crate::protobuf::ParquetOptions as ParquetOptionsProto;
         use datafusion_common::config::ParquetOptions;
 
         fn encode_table_options(proto: TableParquetOptionsProto) -> Vec<u8> {
