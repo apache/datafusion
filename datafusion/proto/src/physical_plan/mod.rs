@@ -26,7 +26,6 @@ use datafusion_catalog::memory::MemorySourceConfig;
 use datafusion_common::{
     DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
 };
-use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource_arrow::source::ArrowSource;
@@ -86,13 +85,8 @@ use prost::Message;
 use prost::bytes::BufMut;
 
 use crate::convert_required;
-use crate::physical_plan::from_proto::{
-    parse_physical_expr_with_converter, parse_protobuf_file_scan_config,
-    parse_table_schema_from_proto,
-};
-use crate::physical_plan::to_proto::{
-    serialize_file_scan_config, serialize_physical_expr_with_converter,
-};
+use crate::physical_plan::from_proto::parse_physical_expr_with_converter;
+use crate::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::{self, SortMergeJoinExecNode, proto_error};
 
@@ -115,7 +109,9 @@ mod file_scan_config_serde {
     use datafusion_common::{Constraint, Constraints, ScalarValue, Statistics};
     use datafusion_datasource::file::FileSource;
     use datafusion_datasource::file_groups::FileGroup;
-    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+    use datafusion_datasource::file_scan_config::{
+        FileScanConfig, FileScanConfigBuilder,
+    };
     use datafusion_datasource::file_stream::FileOpener;
     use datafusion_datasource::{PartitionedFile, TableSchema};
     use datafusion_execution::object_store::ObjectStoreUrl;
@@ -1103,8 +1099,8 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::MemoryScan(_) => {
                 MemorySourceConfig::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::ArrowScan(scan) => {
-                self.try_into_arrow_scan_physical_plan(scan, ctx, proto_converter)
+            PhysicalPlanType::ArrowScan(_) => {
+                ArrowSource::try_from_proto(self.node(), &decode_ctx)
             }
             #[expect(
                 deprecated,
@@ -1230,16 +1226,6 @@ pub trait PhysicalPlanNodeExt: Sized {
         };
         let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
         if let Some(node) = plan.try_to_proto(&encode_ctx)? {
-            return Ok(node);
-        }
-
-        if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>()
-            && let Some(node) = protobuf::PhysicalPlanNode::try_from_data_source_exec(
-                data_source_exec,
-                codec,
-                proto_converter,
-            )?
-        {
             return Ok(node);
         }
 
@@ -1386,23 +1372,25 @@ pub trait PhysicalPlanNodeExt: Sized {
         JsonSource::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `ArrowSource` deserializes itself via `ArrowSource::try_from_proto`"
+    )]
     fn try_into_arrow_scan_physical_plan(
         &self,
         scan: &protobuf::ArrowScanExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
-            internal_datafusion_err!("base_conf in ArrowScanExecNode is missing.")
-        })?;
-        let table_schema = parse_table_schema_from_proto(base_conf)?;
-        let scan_conf = parse_protobuf_file_scan_config(
-            base_conf,
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::ArrowScan(scan.clone())),
+        };
+        let decoder = ConverterPlanDecoder {
             ctx,
             proto_converter,
-            Arc::new(ArrowSource::new_file_source(table_schema)),
-        )?;
-        Ok(DataSourceExec::from_data_source(scan_conf))
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        ArrowSource::try_from_proto(&node, &decode_ctx)
     }
 
     #[cfg_attr(not(feature = "parquet"), expect(unused_variables))]
@@ -2459,31 +2447,21 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `DataSourceExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_data_source_exec(
         data_source_exec: &DataSourceExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Option<protobuf::PhysicalPlanNode>> {
-        let data_source = data_source_exec.data_source();
-
-        if let Some(scan_conf) = data_source.downcast_ref::<FileScanConfig>() {
-            let source = scan_conf.file_source();
-            if let Some(_arrow_source) = source.downcast_ref::<ArrowSource>() {
-                return Ok(Some(protobuf::PhysicalPlanNode {
-                    physical_plan_type: Some(PhysicalPlanType::ArrowScan(
-                        protobuf::ArrowScanExecNode {
-                            base_conf: Some(serialize_file_scan_config(
-                                scan_conf,
-                                codec,
-                                proto_converter,
-                            )?),
-                        },
-                    )),
-                }));
-            }
-        }
-
-        Ok(None)
+        let encoder = ConverterPlanEncoder {
+            codec,
+            proto_converter,
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        data_source_exec.try_to_proto(&encode_ctx)
     }
 
     #[deprecated(
