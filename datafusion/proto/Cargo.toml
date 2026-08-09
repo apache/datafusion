@@ -62,7 +62,7 @@ datafusion-catalog = { workspace = true }
 datafusion-catalog-listing = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-datasource = { workspace = true, features = ["proto"] }
-datafusion-datasource-arrow = { workspace = true }
+datafusion-datasource-arrow = { workspace = true, features = ["proto"] }
 datafusion-datasource-avro = { workspace = true, optional = true, features = ["proto"] }
 datafusion-datasource-csv = { workspace = true, features = ["proto"] }
 datafusion-datasource-json = { workspace = true, features = ["proto"] }
