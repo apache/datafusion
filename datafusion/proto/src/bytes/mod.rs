@@ -192,6 +192,10 @@ pub fn physical_plan_to_bytes(plan: Arc<dyn ExecutionPlan>) -> Result<Bytes> {
 
 /// Serialize a PhysicalPlan as JSON
 #[cfg(feature = "json")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Preserve the existing public API"
+)]
 pub fn physical_plan_to_json(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
     let extension_codec = DefaultPhysicalExtensionCodec {};
     let proto_converter = DefaultPhysicalProtoConverter {};

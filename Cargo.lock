@@ -1981,6 +1981,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
+ "datafusion-proto-models",
  "datafusion-session",
  "futures",
  "itertools 0.15.0",
@@ -2000,6 +2001,7 @@ dependencies = [
  "datafusion-datasource",
  "datafusion-physical-expr-adapter",
  "datafusion-physical-plan",
+ "datafusion-proto-models",
  "datafusion-session",
  "futures",
  "object_store",
@@ -2549,6 +2551,7 @@ dependencies = [
  "object_store",
  "pretty_assertions",
  "prost",
+ "recursive",
  "serde_json",
  "tokio",
 ]
