@@ -51,8 +51,9 @@ use datafusion_common::{
 use datafusion_expr::preimage::PreimageResult;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
-    ScalarUDFImpl, Signature, TypeSignature, Volatility, interval_arithmetic,
+    ArgumentConstraint, ColumnarValue, Documentation, Expr, ReturnFieldArgs,
+    ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    interval_arithmetic,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
@@ -147,7 +148,11 @@ impl DatePartFunc {
                     ]),
                 ],
                 Volatility::Immutable,
-            ),
+            )
+            .with_type_signature_constraints(vec![
+                ArgumentConstraint::Literal,
+                ArgumentConstraint::Any,
+            ]),
             aliases: vec![String::from("datepart")],
         }
     }

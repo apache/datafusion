@@ -27,8 +27,8 @@ use datafusion_common::{
 
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
-    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
+    ArgumentConstraint, Coercion, ColumnarValue, Documentation, Expr, ReturnFieldArgs,
+    ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -108,7 +108,11 @@ impl ArrowCastFunc {
                     Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
                 ],
                 Volatility::Immutable,
-            ),
+            )
+            .with_type_signature_constraints(vec![
+                ArgumentConstraint::Any,
+                ArgumentConstraint::Literal,
+            ]),
         }
     }
 }

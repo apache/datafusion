@@ -25,7 +25,9 @@ use crate::expr::{
 use crate::expr::{FieldMetadata, LambdaVariable};
 use crate::higher_order_function::HigherOrderReturnFieldArgs;
 use crate::type_coercion::functions::value_fields_with_higher_order_udf_and_lambdas;
-use crate::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
+use crate::type_coercion::functions::{
+    UDFCoercionExt, fields_with_udf, validate_argument_constraints,
+};
 use crate::udf::ReturnFieldArgs;
 use crate::{LogicalPlan, Projection, Subquery, WindowFunctionDefinition, utils};
 use arrow::compute::can_cast_types;
@@ -581,6 +583,11 @@ impl ExprSchemable for Expr {
                 func.return_field(&new_fields)
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                validate_argument_constraints(
+                    func.name(),
+                    args,
+                    &func.signature().type_signature,
+                )?;
                 let fields = args
                     .iter()
                     .map(|e| e.to_field(schema).map(|(_, f)| f))

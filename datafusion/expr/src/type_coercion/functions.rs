@@ -17,7 +17,7 @@
 
 use super::binary::binary_numeric_coercion;
 use crate::{
-    AggregateUDF, HigherOrderTypeSignature, HigherOrderUDF, ScalarUDF, Signature,
+    AggregateUDF, Expr, HigherOrderTypeSignature, HigherOrderUDF, ScalarUDF, Signature,
     TypeSignature, ValueOrLambda, WindowUDF,
 };
 use arrow::datatypes::{Field, FieldRef};
@@ -34,7 +34,7 @@ use datafusion_common::{
     Result, exec_err, internal_err, plan_err, types::NativeType, utils::list_ndims,
 };
 use datafusion_expr_common::signature::{
-    ArrayFunctionArgument, EncodingPreservation, TypeSignatureClass,
+    ArgumentConstraint, ArrayFunctionArgument, EncodingPreservation, TypeSignatureClass,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 use datafusion_expr_common::{
@@ -44,6 +44,55 @@ use datafusion_expr_common::{
 };
 use itertools::Itertools as _;
 use std::sync::Arc;
+
+/// Validates expression constraints declared by a [`TypeSignature`].
+pub fn validate_argument_constraints(
+    function_name: &str,
+    expressions: &[Expr],
+    signature: &TypeSignature,
+) -> Result<()> {
+    match signature {
+        TypeSignature::Constrained(signature, constraints) => {
+            if constraints.len() != expressions.len() {
+                return internal_err!(
+                    "Function '{function_name}' declares {} argument constraints for {} arguments",
+                    constraints.len(),
+                    expressions.len()
+                );
+            }
+            for (index, (expression, constraint)) in
+                expressions.iter().zip(constraints).enumerate()
+            {
+                if *constraint == ArgumentConstraint::Literal
+                    && !matches!(expression, Expr::Literal(..))
+                {
+                    return plan_err!(
+                        "Function '{function_name}' expects argument {} to be a literal",
+                        index + 1
+                    );
+                }
+            }
+            validate_argument_constraints(function_name, expressions, signature)
+        }
+        TypeSignature::OneOf(signatures) => {
+            let constrained = signatures
+                .iter()
+                .filter(|signature| matches!(signature, TypeSignature::Constrained(..)))
+                .collect::<Vec<_>>();
+            if constrained.is_empty()
+                || constrained.iter().any(|signature| {
+                    validate_argument_constraints(function_name, expressions, signature)
+                        .is_ok()
+                })
+            {
+                Ok(())
+            } else {
+                validate_argument_constraints(function_name, expressions, constrained[0])
+            }
+        }
+        _ => Ok(()),
+    }
+}
 
 /// Extension trait to unify common functionality between [`ScalarUDF`], [`AggregateUDF`]
 /// and [`WindowUDF`] for use by signature coercion functions.
@@ -473,6 +522,9 @@ pub fn data_types(
 
 fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
     match type_signature {
+        TypeSignature::Constrained(signature, _) => {
+            is_well_supported_signature(signature)
+        }
         TypeSignature::OneOf(type_signatures) => {
             type_signatures.iter().all(is_well_supported_signature)
         }
@@ -749,6 +801,9 @@ fn get_valid_types(
     }
 
     let valid_types = match signature {
+        TypeSignature::Constrained(signature, _) => {
+            get_valid_types(function_name, signature, current_types)?
+        }
         TypeSignature::Variadic(valid_types) => valid_types
             .iter()
             .map(|valid_type| vec![valid_type.clone(); current_types.len()])
@@ -1266,13 +1321,38 @@ mod tests {
     use super::*;
     use arrow::datatypes::IntervalUnit;
     use datafusion_common::{
-        assert_contains,
+        ScalarValue, assert_contains,
         types::{logical_binary, logical_int64, logical_string},
     };
     use datafusion_expr_common::{
         columnar_value::ColumnarValue,
         signature::{Coercion, EncodingPreservation, TypeSignatureClass},
     };
+
+    #[test]
+    fn test_validate_literal_argument_constraint() {
+        let signature = TypeSignature::Any(2)
+            .with_constraints(vec![ArgumentConstraint::Any, ArgumentConstraint::Literal]);
+        let literal = Expr::Literal(ScalarValue::Utf8(Some("Int64".into())), None);
+
+        validate_argument_constraints(
+            "test",
+            &[Expr::Column("value".into()), literal.clone()],
+            &signature,
+        )
+        .unwrap();
+
+        let error = validate_argument_constraints(
+            "test",
+            &[literal, Expr::Column("type_name".into())],
+            &signature,
+        )
+        .unwrap_err();
+        assert_contains!(
+            error.to_string(),
+            "Function 'test' expects argument 2 to be a literal"
+        );
+    }
 
     #[test]
     fn test_string_conversion() {

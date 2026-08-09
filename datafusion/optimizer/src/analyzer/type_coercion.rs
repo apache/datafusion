@@ -46,7 +46,8 @@ use datafusion_expr::type_coercion::binary::{
     comparison_coercion, like_coercion, regex_coercion, type_union_coercion,
 };
 use datafusion_expr::type_coercion::functions::{
-    UDFCoercionExt, fields_with_udf, value_fields_with_higher_order_udf_and_lambdas,
+    UDFCoercionExt, fields_with_udf, validate_argument_constraints,
+    value_fields_with_higher_order_udf_and_lambdas,
 };
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_case_when,
@@ -1133,6 +1134,11 @@ fn coerce_arguments_for_signature<F: UDFCoercionExt>(
     schema: &DFSchema,
     func: &F,
 ) -> Result<Vec<Expr>> {
+    validate_argument_constraints(
+        func.name(),
+        &expressions,
+        &func.signature().type_signature,
+    )?;
     let current_fields = expressions
         .iter()
         .map(|e| e.to_field(schema).map(|(_, f)| f))

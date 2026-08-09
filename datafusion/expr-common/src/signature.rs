@@ -96,6 +96,18 @@ pub enum Arity {
     Variable,
 }
 
+/// A value constraint on a function argument.
+///
+/// Unlike type coercion, argument constraints describe the expression passed
+/// to a function rather than its [`DataType`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ArgumentConstraint {
+    /// The argument can be any expression.
+    Any,
+    /// The argument must be a literal value.
+    Literal,
+}
+
 /// The types of arguments for which a function has implementations.
 ///
 /// [`TypeSignature`] **DOES NOT** define the types that a user query could call the
@@ -155,6 +167,12 @@ pub enum Arity {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum TypeSignature {
+    /// A type signature with a constraint for each argument.
+    ///
+    /// This variant can be nested inside [`TypeSignature::OneOf`] when
+    /// different alternatives require different argument constraints.
+    /// The number of constraints must match the arity of `signature`.
+    Constrained(Box<TypeSignature>, Vec<ArgumentConstraint>),
     /// One or more arguments of a common type out of a list of valid types.
     ///
     /// For functions that take no arguments (e.g. `random()`), see [`TypeSignature::Nullary`].
@@ -278,6 +296,7 @@ impl TypeSignature {
     /// ```
     pub fn arity(&self) -> Arity {
         match self {
+            TypeSignature::Constrained(signature, _) => signature.arity(),
             TypeSignature::Exact(types) => Arity::Fixed(types.len()),
             TypeSignature::Uniform(count, _) => Arity::Fixed(*count),
             TypeSignature::Numeric(count) => Arity::Fixed(*count),
@@ -325,6 +344,16 @@ impl TypeSignature {
 impl Display for TypeSignature {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            TypeSignature::Constrained(signature, constraints) => {
+                write!(f, "Constrained({signature}; ")?;
+                for (i, constraint) in constraints.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{constraint:?}")?;
+                }
+                write!(f, ")")
+            }
             TypeSignature::Variadic(types) => {
                 write!(f, "Variadic({})", types.iter().join(", "))
             }
@@ -610,8 +639,14 @@ static NUMERICS: &[DataType] = &[
 ];
 
 impl TypeSignature {
+    /// Adds positional argument constraints to this type signature.
+    pub fn with_constraints(self, constraints: Vec<ArgumentConstraint>) -> Self {
+        Self::Constrained(Box::new(self), constraints)
+    }
+
     pub fn to_string_repr(&self) -> Vec<String> {
         match self {
+            TypeSignature::Constrained(signature, _) => signature.to_string_repr(),
             TypeSignature::Nullary => {
                 vec!["NullAry()".to_string()]
             }
@@ -690,6 +725,9 @@ impl TypeSignature {
         parameter_names: Option<&[String]>,
     ) -> Vec<String> {
         match self {
+            TypeSignature::Constrained(signature, _) => {
+                signature.to_string_repr_with_names(parameter_names)
+            }
             TypeSignature::Exact(types) => {
                 if let Some(names) = parameter_names {
                     vec![
@@ -862,6 +900,9 @@ impl TypeSignature {
     /// Check whether 0 input argument is valid for given `TypeSignature`
     pub fn supports_zero_argument(&self) -> bool {
         match &self {
+            TypeSignature::Constrained(signature, _) => {
+                signature.supports_zero_argument()
+            }
             TypeSignature::Exact(vec) => vec.is_empty(),
             TypeSignature::Nullary => true,
             TypeSignature::OneOf(types) => types
@@ -888,6 +929,7 @@ impl TypeSignature {
     /// documentation or error messages.
     pub fn get_example_types(&self) -> Vec<Vec<DataType>> {
         match self {
+            TypeSignature::Constrained(signature, _) => signature.get_example_types(),
             TypeSignature::Exact(types) => vec![types.clone()],
             TypeSignature::OneOf(types) => types
                 .iter()
@@ -1293,6 +1335,15 @@ impl Signature {
             volatility,
             parameter_names: None,
         }
+    }
+
+    /// Adds positional argument constraints to this signature's type signature.
+    pub fn with_type_signature_constraints(
+        mut self,
+        constraints: Vec<ArgumentConstraint>,
+    ) -> Self {
+        self.type_signature = self.type_signature.with_constraints(constraints);
+        self
     }
     /// An arbitrary number of arguments with the same type, from those listed in `common_types`.
     pub fn variadic(common_types: Vec<DataType>, volatility: Volatility) -> Self {
