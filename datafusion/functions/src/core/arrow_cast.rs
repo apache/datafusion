@@ -105,14 +105,11 @@ impl ArrowCastFunc {
             signature: Signature::coercible(
                 vec![
                     Coercion::new_exact(TypeSignatureClass::Any),
-                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string()))
+                        .with_argument_constraint(ArgumentConstraint::Literal),
                 ],
                 Volatility::Immutable,
-            )
-            .with_type_signature_constraints(vec![
-                ArgumentConstraint::Any,
-                ArgumentConstraint::Literal,
-            ]),
+            ),
         }
     }
 }

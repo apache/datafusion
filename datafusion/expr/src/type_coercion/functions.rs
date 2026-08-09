@@ -52,18 +52,12 @@ pub fn validate_argument_constraints(
     signature: &TypeSignature,
 ) -> Result<()> {
     match signature {
-        TypeSignature::Constrained(signature, constraints) => {
-            if constraints.len() != expressions.len() {
-                return internal_err!(
-                    "Function '{function_name}' declares {} argument constraints for {} arguments",
-                    constraints.len(),
-                    expressions.len()
-                );
-            }
-            for (index, (expression, constraint)) in
-                expressions.iter().zip(constraints).enumerate()
+        TypeSignature::Coercible(coercions) => {
+            for (index, (expression, coercion)) in
+                expressions.iter().zip(coercions).enumerate()
             {
-                if *constraint == ArgumentConstraint::Literal
+                if coercion.encoding_preservation().argument_constraint()
+                    == ArgumentConstraint::Literal
                     && !matches!(expression, Expr::Literal(..))
                 {
                     return plan_err!(
@@ -72,22 +66,16 @@ pub fn validate_argument_constraints(
                     );
                 }
             }
-            validate_argument_constraints(function_name, expressions, signature)
+            Ok(())
         }
         TypeSignature::OneOf(signatures) => {
-            let constrained = signatures
-                .iter()
-                .filter(|signature| matches!(signature, TypeSignature::Constrained(..)))
-                .collect::<Vec<_>>();
-            if constrained.is_empty()
-                || constrained.iter().any(|signature| {
-                    validate_argument_constraints(function_name, expressions, signature)
-                        .is_ok()
-                })
-            {
+            if signatures.iter().any(|signature| {
+                validate_argument_constraints(function_name, expressions, signature)
+                    .is_ok()
+            }) {
                 Ok(())
             } else {
-                validate_argument_constraints(function_name, expressions, constrained[0])
+                validate_argument_constraints(function_name, expressions, &signatures[0])
             }
         }
         _ => Ok(()),
@@ -522,9 +510,6 @@ pub fn data_types(
 
 fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
     match type_signature {
-        TypeSignature::Constrained(signature, _) => {
-            is_well_supported_signature(signature)
-        }
         TypeSignature::OneOf(type_signatures) => {
             type_signatures.iter().all(is_well_supported_signature)
         }
@@ -801,9 +786,6 @@ fn get_valid_types(
     }
 
     let valid_types = match signature {
-        TypeSignature::Constrained(signature, _) => {
-            get_valid_types(function_name, signature, current_types)?
-        }
         TypeSignature::Variadic(valid_types) => valid_types
             .iter()
             .map(|valid_type| vec![valid_type.clone(); current_types.len()])
@@ -1331,8 +1313,11 @@ mod tests {
 
     #[test]
     fn test_validate_literal_argument_constraint() {
-        let signature = TypeSignature::Any(2)
-            .with_constraints(vec![ArgumentConstraint::Any, ArgumentConstraint::Literal]);
+        let signature = TypeSignature::Coercible(vec![
+            Coercion::new_exact(TypeSignatureClass::Any),
+            Coercion::new_exact(TypeSignatureClass::Any)
+                .with_argument_constraint(ArgumentConstraint::Literal),
+        ]);
         let literal = Expr::Literal(ScalarValue::Utf8(Some("Int64".into())), None);
 
         validate_argument_constraints(

@@ -98,7 +98,7 @@ SELECT arrow_cast('1')
 query error DataFusion error: Error during planning: Function 'arrow_cast' requires String, but received Int64 \(DataType: Int64\)
 SELECT arrow_cast('1', 43)
 
-query error DataFusion error: Execution error: arrow_cast requires its second argument to be a non\-empty constant string
+query error DataFusion error: Error during planning: Function 'arrow_cast' expects argument 2 to be a literal
 SELECT arrow_cast('1', arrow_cast('Utf8', 'Utf8'))
 
 query error DataFusion error: Execution error: Unsupported type 'unknown'\. Must be a supported arrow type name such as 'Int32' or 'Timestamp\(ns\)'\. Error unknown token: unknown
