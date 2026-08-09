@@ -54,9 +54,7 @@ pub fn reverse_row_selection(
 ) -> Result<RowSelection> {
     let rg_metadata = parquet_metadata.row_groups();
 
-    // Splitting a bitmap-backed selection slices its BooleanBuffer without
-    // materializing selectors. Collecting the reversed slices concatenates
-    // them back into a bitmap-backed selection.
+    // Reverse bitmap slices without materializing selectors.
     if row_selection.as_mask().is_some() {
         let mut remaining = row_selection.clone();
         let mut row_group_selections = Vec::with_capacity(row_groups_to_scan.len());
@@ -66,8 +64,7 @@ pub fn reverse_row_selection(
             row_group_selections.push(remaining.split_off(num_rows));
         }
 
-        // `split_off` silently returns short slices when the selection runs
-        // out early, which would misalign the reversed row group boundaries.
+        // No rows should remain after splitting all row groups.
         debug_assert_eq!(
             remaining.row_count() + remaining.skipped_row_count(),
             0,
@@ -412,8 +409,7 @@ mod tests {
         assert_eq!(reversed_plan.row_group_indexes, vec![3, 2, 0]);
         let reversed_selection = reversed_plan.row_selection.unwrap();
 
-        // The fully scanned row group 3 becomes an all-set range at the
-        // front of the reversed selection.
+        // Fully scanned row group 3 becomes the leading set bits.
         let expected = BooleanBuffer::from(
             [true, true]
                 .into_iter()

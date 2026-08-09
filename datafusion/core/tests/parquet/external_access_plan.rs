@@ -221,9 +221,7 @@ async fn row_selection_extension_spanning_row_groups() {
 
 #[tokio::test]
 async fn bitmap_row_selection_extension_spanning_row_groups() {
-    // Keep the same cross-row-group pattern as the selector-backed test, but
-    // provide it as a packed bitmap. The bitmap should remain packed through
-    // ParquetAccessPlan and reach the parquet reader unchanged.
+    // Repeat the cross-row-group case with a bitmap-backed selection.
     let parquet_metrics = TestFull {
         access_plan: None,
         row_selection: Some(ParquetRowSelection::new(RowSelection::from_boolean_buffer(
@@ -253,10 +251,7 @@ async fn bitmap_row_selection_extension_spanning_row_groups() {
 
 #[tokio::test]
 async fn bitmap_row_selection_extension_with_predicate() {
-    // The bitmap selects rows 2 (c) and 4 (null) in row group 0 and rows 5
-    // and 6 (e, f) in row group 1. The predicate `utf8 = 'e'` prunes row
-    // group 0 via statistics (its max value "d" sorts before "e"), so only
-    // the bitmap-selected rows of row group 1 are returned.
+    // Pruning removes row group 0, leaving the bitmap-selected rows in group 1.
     let parquet_metrics = TestFull {
         access_plan: None,
         row_selection: Some(ParquetRowSelection::new(RowSelection::from_boolean_buffer(
@@ -279,8 +274,7 @@ async fn bitmap_row_selection_extension_with_predicate() {
     .await
     .unwrap();
 
-    // Row group 0 was pruned by statistics even though the bitmap selected
-    // rows in it.
+    // Verify that statistics pruned row group 0.
     let row_groups_pruned_statistics = parquet_metrics
         .sum_by_name("row_groups_pruned_statistics")
         .unwrap();
