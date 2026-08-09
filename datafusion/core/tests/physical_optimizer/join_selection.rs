@@ -589,10 +589,15 @@ async fn test_null_aware_left_anti_respects_disabled_join_reordering() -> Result
     Ok(())
 }
 
+/// A null-aware anti join can no longer carry a join filter: the null-aware
+/// NULL checks run before the filter, so the two cannot be combined correctly.
+/// `JoinSelection` therefore never has to reason about swapping a filtered
+/// null-aware join because the operator refuses to construct one in the first
+/// place.
 #[tokio::test]
-async fn test_null_aware_left_anti_with_filter_does_not_swap() -> Result<()> {
+async fn test_null_aware_left_anti_with_filter_is_rejected() -> Result<()> {
     let (big, small) = create_big_and_small();
-    let join = HashJoinExec::try_new(
+    let result = HashJoinExec::try_new(
         Arc::clone(&big),
         Arc::clone(&small),
         vec![(
@@ -605,20 +610,15 @@ async fn test_null_aware_left_anti_with_filter_does_not_swap() -> Result<()> {
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNothing,
         true,
-    )?;
+    );
 
-    let optimized_join =
-        JoinSelection::new().optimize(Arc::new(join), &ConfigOptions::new())?;
-    let unswapped_join = optimized_join
-        .downcast_ref::<HashJoinExec>()
-        .expect("filtered null-aware anti join should not swap");
-
-    assert_eq!(*unswapped_join.join_type(), JoinType::LeftAnti);
-    assert_eq!(*unswapped_join.partition_mode(), PartitionMode::CollectLeft);
-    assert!(unswapped_join.null_aware);
-    assert!(unswapped_join.filter().is_some());
-    assert_eq!(unswapped_join.left().schema().field(0).name(), "big_col");
-    assert_eq!(unswapped_join.right().schema().field(0).name(), "small_col");
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("null_aware anti join does not support a join filter")
+    );
 
     Ok(())
 }
