@@ -19,17 +19,9 @@ use std::sync::Arc;
 
 use super::LogicalExtensionCodec;
 use crate::convert::FromProto;
-#[cfg(feature = "parquet")]
-use crate::convert::TryFromProto;
-use crate::protobuf::{
-    CsvOptions as CsvOptionsProto, CsvQuoteStyle as CsvQuoteStyleProto,
-    JsonOptions as JsonOptionsProto,
-};
+use crate::protobuf::{CsvOptions as CsvOptionsProto, JsonOptions as JsonOptionsProto};
 use datafusion_common::config::{CsvOptions, JsonOptions};
-use datafusion_common::{
-    TableReference, exec_datafusion_err, exec_err, not_impl_err,
-    parsers::{CompressionTypeVariant, CsvQuoteStyle},
-};
+use datafusion_common::{TableReference, exec_datafusion_err, exec_err, not_impl_err};
 use datafusion_datasource::file_format::FileFormatFactory;
 use datafusion_datasource_arrow::file_format::ArrowFormatFactory;
 use datafusion_datasource_csv::file_format::CsvFormatFactory;
@@ -82,111 +74,6 @@ impl FromProto<&CsvFormatFactory> for CsvOptionsProto {
     }
 }
 
-impl FromProto<&CsvOptionsProto> for CsvOptions {
-    fn from_proto(proto: &CsvOptionsProto) -> Self {
-        CsvOptions {
-            has_header: if !proto.has_header.is_empty() {
-                Some(proto.has_header[0] != 0)
-            } else {
-                None
-            },
-            delimiter: proto.delimiter.first().copied().unwrap_or(b','),
-            quote: proto.quote.first().copied().unwrap_or(b'"'),
-            terminator: if !proto.terminator.is_empty() {
-                Some(proto.terminator[0])
-            } else {
-                None
-            },
-            escape: if !proto.escape.is_empty() {
-                Some(proto.escape[0])
-            } else {
-                None
-            },
-            double_quote: if !proto.double_quote.is_empty() {
-                Some(proto.double_quote[0] != 0)
-            } else {
-                None
-            },
-            compression: match proto.compression {
-                0 => CompressionTypeVariant::GZIP,
-                1 => CompressionTypeVariant::BZIP2,
-                2 => CompressionTypeVariant::XZ,
-                3 => CompressionTypeVariant::ZSTD,
-                _ => CompressionTypeVariant::UNCOMPRESSED,
-            },
-            schema_infer_max_rec: proto.schema_infer_max_rec.map(|v| v as usize),
-            date_format: if proto.date_format.is_empty() {
-                None
-            } else {
-                Some(proto.date_format.clone())
-            },
-            datetime_format: if proto.datetime_format.is_empty() {
-                None
-            } else {
-                Some(proto.datetime_format.clone())
-            },
-            timestamp_format: if proto.timestamp_format.is_empty() {
-                None
-            } else {
-                Some(proto.timestamp_format.clone())
-            },
-            timestamp_tz_format: if proto.timestamp_tz_format.is_empty() {
-                None
-            } else {
-                Some(proto.timestamp_tz_format.clone())
-            },
-            time_format: if proto.time_format.is_empty() {
-                None
-            } else {
-                Some(proto.time_format.clone())
-            },
-            null_value: if proto.null_value.is_empty() {
-                None
-            } else {
-                Some(proto.null_value.clone())
-            },
-            null_regex: if proto.null_regex.is_empty() {
-                None
-            } else {
-                Some(proto.null_regex.clone())
-            },
-            comment: if !proto.comment.is_empty() {
-                Some(proto.comment[0])
-            } else {
-                None
-            },
-            newlines_in_values: if proto.newlines_in_values.is_empty() {
-                None
-            } else {
-                Some(proto.newlines_in_values[0] != 0)
-            },
-            truncated_rows: if proto.truncated_rows.is_empty() {
-                None
-            } else {
-                Some(proto.truncated_rows[0] != 0)
-            },
-            compression_level: proto.compression_level,
-            quote_style: match CsvQuoteStyleProto::try_from(proto.quote_style) {
-                Ok(CsvQuoteStyleProto::Always) => CsvQuoteStyle::Always,
-                Ok(CsvQuoteStyleProto::NonNumeric) => CsvQuoteStyle::NonNumeric,
-                Ok(CsvQuoteStyleProto::Never) => CsvQuoteStyle::Never,
-                Ok(CsvQuoteStyleProto::Necessary) => CsvQuoteStyle::Necessary,
-                _ => CsvQuoteStyle::Necessary,
-            },
-            ignore_leading_whitespace: if proto.ignore_leading_whitespace.is_empty() {
-                None
-            } else {
-                Some(proto.ignore_leading_whitespace[0] != 0)
-            },
-            ignore_trailing_whitespace: if proto.ignore_trailing_whitespace.is_empty() {
-                None
-            } else {
-                Some(proto.ignore_trailing_whitespace[0] != 0)
-            },
-        }
-    }
-}
-
 // TODO! This is a placeholder for now and needs to be implemented for real.
 impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
     fn try_decode(
@@ -233,7 +120,7 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         let proto = CsvOptionsProto::decode(buf).map_err(|e| {
             exec_datafusion_err!("Failed to decode CsvOptionsProto: {e:?}")
         })?;
-        let options = CsvOptions::from_proto(&proto);
+        let options = CsvOptions::from(&proto);
         Ok(Arc::new(CsvFormatFactory {
             options: Some(options),
         }))
@@ -273,23 +160,6 @@ impl FromProto<&JsonFormatFactory> for JsonOptionsProto {
             }
         } else {
             JsonOptionsProto::default()
-        }
-    }
-}
-
-impl FromProto<&JsonOptionsProto> for JsonOptions {
-    fn from_proto(proto: &JsonOptionsProto) -> Self {
-        JsonOptions {
-            compression: match proto.compression {
-                0 => CompressionTypeVariant::GZIP,
-                1 => CompressionTypeVariant::BZIP2,
-                2 => CompressionTypeVariant::XZ,
-                3 => CompressionTypeVariant::ZSTD,
-                _ => CompressionTypeVariant::UNCOMPRESSED,
-            },
-            schema_infer_max_rec: proto.schema_infer_max_rec.map(|v| v as usize),
-            compression_level: proto.compression_level,
-            newline_delimited: proto.newline_delimited.unwrap_or(true),
         }
     }
 }
@@ -343,7 +213,7 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
         let proto = JsonOptionsProto::decode(buf).map_err(|e| {
             exec_datafusion_err!("Failed to decode JsonOptionsProto: {e:?}")
         })?;
-        let options = JsonOptions::from_proto(&proto);
+        let options = JsonOptions::from(&proto);
         Ok(Arc::new(JsonFormatFactory {
             options: Some(options),
         }))
@@ -384,10 +254,7 @@ mod parquet {
         TableParquetOptions as TableParquetOptionsProto, parquet_column_options,
         parquet_options,
     };
-    use datafusion_common::config::{
-        MaxRowGroupBytes, ParquetCdcOptions, ParquetColumnOptions, ParquetOptions,
-        TableParquetOptions,
-    };
+    use datafusion_common::config::TableParquetOptions;
     use datafusion_datasource_parquet::file_format::ParquetFormatFactory;
 
     impl FromProto<&ParquetFormatFactory> for TableParquetOptionsProto {
@@ -507,217 +374,6 @@ mod parquet {
         }
     }
 
-    impl FromProto<ParquetCdcOptionsProto> for ParquetCdcOptions {
-        fn from_proto(value: ParquetCdcOptionsProto) -> Self {
-            ParquetCdcOptions {
-                enabled: value.enabled,
-                min_chunk_size: value.min_chunk_size as usize,
-                max_chunk_size: value.max_chunk_size as usize,
-                norm_level: value.norm_level,
-            }
-        }
-    }
-
-    impl TryFromProto<&ParquetOptionsProto> for ParquetOptions {
-        type Error = datafusion_common::DataFusionError;
-
-        fn try_from_proto(
-            proto: &ParquetOptionsProto,
-        ) -> datafusion_common::Result<Self, Self::Error> {
-            let writer_version = match proto.writer_version.as_str() {
-                // Proto3 decodes an omitted string field as the empty string. The
-                // schema documents writer_version's logical default as "1.0", so
-                // preserve that default when the field is absent on the wire.
-                "" => ParquetOptions::default().writer_version,
-                version => version.parse()?,
-            };
-
-            Ok(ParquetOptions {
-                enable_page_index: proto.enable_page_index,
-                pruning: proto.pruning,
-                skip_metadata: proto.skip_metadata,
-                metadata_size_hint: proto
-                    .metadata_size_hint_opt
-                    .as_ref()
-                    .map(|opt| match opt {
-                        parquet_options::MetadataSizeHintOpt::MetadataSizeHint(size) => {
-                            *size as usize
-                        }
-                    }),
-                pushdown_filters: proto.pushdown_filters,
-                reorder_filters: proto.reorder_filters,
-                force_filter_selections: proto.force_filter_selections,
-                data_pagesize_limit: proto.data_pagesize_limit as usize,
-                write_batch_size: proto.write_batch_size as usize,
-                writer_version,
-                compression: proto.compression_opt.as_ref().map(|opt| match opt {
-                    parquet_options::CompressionOpt::Compression(compression) => {
-                        compression.clone()
-                    }
-                }),
-                dictionary_enabled: proto.dictionary_enabled_opt.as_ref().map(|opt| {
-                    match opt {
-                        parquet_options::DictionaryEnabledOpt::DictionaryEnabled(
-                            enabled,
-                        ) => *enabled,
-                    }
-                }),
-                dictionary_page_size_limit: proto.dictionary_page_size_limit as usize,
-                statistics_enabled: proto.statistics_enabled_opt.as_ref().map(
-                    |opt| match opt {
-                        parquet_options::StatisticsEnabledOpt::StatisticsEnabled(
-                            statistics,
-                        ) => statistics.clone(),
-                    },
-                ),
-                max_row_group_size: proto.max_row_group_size as usize,
-                max_in_list_size: proto.max_in_list_size as usize,
-                created_by: proto.created_by.clone(),
-                column_index_truncate_length: proto
-                    .column_index_truncate_length_opt
-                    .as_ref()
-                    .map(|opt| match opt {
-                        parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(length) => *length as usize,
-                    }),
-                statistics_truncate_length: proto
-                    .statistics_truncate_length_opt
-                    .as_ref()
-                    .map(|opt| match opt {
-                        parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(length) => *length as usize,
-                    }),
-                data_page_row_count_limit: proto.data_page_row_count_limit as usize,
-                encoding: proto.encoding_opt.as_ref().map(|opt| match opt {
-                    parquet_options::EncodingOpt::Encoding(encoding) => {
-                        encoding.clone()
-                    }
-                }),
-                bloom_filter_on_read: proto.bloom_filter_on_read,
-                bloom_filter_on_write: proto.bloom_filter_on_write,
-                bloom_filter_fpp: proto
-                    .bloom_filter_fpp_opt
-                    .as_ref()
-                    .map(|opt| match opt {
-                        parquet_options::BloomFilterFppOpt::BloomFilterFpp(fpp) => *fpp,
-                    }),
-                bloom_filter_ndv: proto
-                    .bloom_filter_ndv_opt
-                    .as_ref()
-                    .map(|opt| match opt {
-                        parquet_options::BloomFilterNdvOpt::BloomFilterNdv(ndv) => *ndv,
-                    }),
-                allow_single_file_parallelism: proto.allow_single_file_parallelism,
-                maximum_parallel_row_group_writers: proto
-                    .maximum_parallel_row_group_writers
-                    as usize,
-                maximum_buffered_record_batches_per_stream: proto
-                    .maximum_buffered_record_batches_per_stream
-                    as usize,
-                schema_force_view_types: proto.schema_force_view_types,
-                binary_as_string: proto.binary_as_string,
-                skip_arrow_metadata: proto.skip_arrow_metadata,
-                coerce_int96: proto.coerce_int96_opt.as_ref().map(|opt| match opt {
-                    parquet_options::CoerceInt96Opt::CoerceInt96(coerce_int96) => {
-                        coerce_int96.clone()
-                    }
-                }),
-                coerce_int96_tz: proto
-                    .coerce_int96_tz_opt
-                    .as_ref()
-                    .map(|opt| match opt {
-                        parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz) => {
-                            tz.clone()
-                        }
-                    }),
-                max_predicate_cache_size: proto
-                    .max_predicate_cache_size_opt
-                    .as_ref()
-                    .map(|opt| match opt {
-                        parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(
-                            size,
-                        ) => *size as usize,
-                    }),
-                max_row_group_bytes: proto
-                    .max_row_group_bytes_opt
-                    .as_ref()
-                    .and_then(|opt| match opt {
-                        parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(size) => {
-                            MaxRowGroupBytes::try_new(*size as usize).ok()
-                        }
-                    }),
-                content_defined_chunking: proto
-                    .content_defined_chunking
-                    .map(ParquetCdcOptions::from_proto)
-                    .unwrap_or_default(),
-            })
-        }
-    }
-
-    impl FromProto<ParquetColumnOptionsProto> for ParquetColumnOptions {
-        fn from_proto(proto: ParquetColumnOptionsProto) -> Self {
-            ParquetColumnOptions {
-            bloom_filter_enabled: proto.bloom_filter_enabled_opt.map(
-                |parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v)| v,
-            ),
-            encoding: proto
-                .encoding_opt
-                .map(|parquet_column_options::EncodingOpt::Encoding(v)| v),
-            dictionary_enabled: proto.dictionary_enabled_opt.map(
-                |parquet_column_options::DictionaryEnabledOpt::DictionaryEnabled(v)| v,
-            ),
-            compression: proto
-                .compression_opt
-                .map(|parquet_column_options::CompressionOpt::Compression(v)| v),
-            statistics_enabled: proto.statistics_enabled_opt.map(
-                |parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled(v)| v,
-            ),
-            bloom_filter_fpp: proto
-                .bloom_filter_fpp_opt
-                .map(|parquet_column_options::BloomFilterFppOpt::BloomFilterFpp(v)| v),
-            bloom_filter_ndv: proto
-                .bloom_filter_ndv_opt
-                .map(|parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv(v)| v),
-        }
-        }
-    }
-
-    impl TryFromProto<&TableParquetOptionsProto> for TableParquetOptions {
-        type Error = datafusion_common::DataFusionError;
-
-        fn try_from_proto(
-            proto: &TableParquetOptionsProto,
-        ) -> datafusion_common::Result<Self, Self::Error> {
-            Ok(TableParquetOptions {
-                global: proto
-                    .global
-                    .as_ref()
-                    .map(ParquetOptions::try_from_proto)
-                    .transpose()?
-                    .unwrap_or_default(),
-                column_specific_options: proto
-                    .column_specific_options
-                    .iter()
-                    .map(|parquet_column_options| {
-                        (
-                            parquet_column_options.column_name.clone(),
-                            ParquetColumnOptions::from_proto(
-                                parquet_column_options
-                                    .options
-                                    .clone()
-                                    .unwrap_or_default(),
-                            ),
-                        )
-                    })
-                    .collect(),
-                key_value_metadata: proto
-                    .key_value_metadata
-                    .iter()
-                    .map(|(k, v)| (k.clone(), Some(v.clone())))
-                    .collect(),
-                ..Default::default()
-            })
-        }
-    }
-
     #[derive(Debug)]
     pub struct ParquetLogicalExtensionCodec;
 
@@ -768,7 +424,7 @@ mod parquet {
             let proto = TableParquetOptionsProto::decode(buf).map_err(|e| {
                 exec_datafusion_err!("Failed to decode TableParquetOptionsProto: {e:?}")
             })?;
-            let options = TableParquetOptions::try_from_proto(&proto)?;
+            let options = TableParquetOptions::try_from(&proto)?;
             Ok(Arc::new(ParquetFormatFactory {
                 options: Some(options),
             }))
@@ -804,6 +460,7 @@ mod parquet {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use datafusion_common::config::ParquetOptions;
 
         fn encode_table_options(proto: TableParquetOptionsProto) -> Vec<u8> {
             let mut buf = Vec::new();

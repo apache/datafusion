@@ -19,7 +19,7 @@
 //! DataFusion logical plans to be serialized and transmitted between
 //! processes.
 
-use datafusion_common::{NullEquality, SplitPoint, TableReference, UnnestOptions};
+use datafusion_common::SplitPoint;
 use datafusion_expr::dml::{MergeIntoAction, MergeIntoClause, MergeIntoOp};
 use datafusion_expr::expr::{
     self, AggregateFunctionParams, Alias, Between, BinaryExpr, Cast, GroupingSet,
@@ -27,115 +27,15 @@ use datafusion_expr::expr::{
     ScalarFunction, Unnest,
 };
 use datafusion_expr::logical_plan::Subquery;
-use datafusion_expr::{
-    Expr, JoinConstraint, JoinType, SortExpr, TryCast, WindowFunctionDefinition,
-    logical_plan::PlanType, logical_plan::StringifiedPlan,
-};
+use datafusion_expr::{Expr, SortExpr, TryCast, WindowFunctionDefinition};
 
-use crate::protobuf::RecursionUnnestOption;
 use crate::protobuf::{
-    self, AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode,
-    LogicalExprList, OptimizedLogicalPlanType, OptimizedPhysicalPlanType,
-    PlaceholderNode, RollupNode, ToProtoError as Error,
-    plan_type::PlanTypeEnum::{
-        AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
-        FinalPhysicalPlan, FinalPhysicalPlanWithSchema, FinalPhysicalPlanWithStats,
-        InitialLogicalPlan, InitialPhysicalPlan, InitialPhysicalPlanWithSchema,
-        InitialPhysicalPlanWithStats, OptimizedLogicalPlan, OptimizedPhysicalPlan,
-        PhysicalPlanError,
-    },
+    self, CubeNode, GroupingSetNode, LogicalExprList, PlaceholderNode, RollupNode,
+    ToProtoError as Error,
 };
 
 use super::{AsLogicalPlan, LogicalExtensionCodec};
-use crate::convert::FromProto;
 use crate::protobuf::LogicalPlanNode;
-
-impl FromProto<&UnnestOptions> for protobuf::UnnestOptions {
-    fn from_proto(opts: &UnnestOptions) -> Self {
-        use datafusion_common::NullHandling;
-        use protobuf::unnest_options::NullHandling as ProtoNullHandling;
-        let null_handling = match opts.null_handling {
-            NullHandling::Preserve => ProtoNullHandling::Preserve,
-            NullHandling::Drop => ProtoNullHandling::Drop,
-            NullHandling::PreserveAndExpandEmpty => {
-                ProtoNullHandling::PreserveAndExpandEmpty
-            }
-        } as i32;
-        Self {
-            null_handling,
-            recursions: opts
-                .recursions
-                .iter()
-                .map(|r| RecursionUnnestOption {
-                    input_column: Some((&r.input_column).into()),
-                    output_column: Some((&r.output_column).into()),
-                    depth: r.depth as u32,
-                })
-                .collect(),
-        }
-    }
-}
-
-impl FromProto<&StringifiedPlan> for protobuf::StringifiedPlan {
-    fn from_proto(stringified_plan: &StringifiedPlan) -> Self {
-        Self {
-            plan_type: match stringified_plan.clone().plan_type {
-                PlanType::InitialLogicalPlan => Some(protobuf::PlanType {
-                    plan_type_enum: Some(InitialLogicalPlan(EmptyMessage {})),
-                }),
-                PlanType::AnalyzedLogicalPlan { analyzer_name } => {
-                    Some(protobuf::PlanType {
-                        plan_type_enum: Some(AnalyzedLogicalPlan(
-                            AnalyzedLogicalPlanType { analyzer_name },
-                        )),
-                    })
-                }
-                PlanType::FinalAnalyzedLogicalPlan => Some(protobuf::PlanType {
-                    plan_type_enum: Some(FinalAnalyzedLogicalPlan(EmptyMessage {})),
-                }),
-                PlanType::OptimizedLogicalPlan { optimizer_name } => {
-                    Some(protobuf::PlanType {
-                        plan_type_enum: Some(OptimizedLogicalPlan(
-                            OptimizedLogicalPlanType { optimizer_name },
-                        )),
-                    })
-                }
-                PlanType::FinalLogicalPlan => Some(protobuf::PlanType {
-                    plan_type_enum: Some(FinalLogicalPlan(EmptyMessage {})),
-                }),
-                PlanType::InitialPhysicalPlan => Some(protobuf::PlanType {
-                    plan_type_enum: Some(InitialPhysicalPlan(EmptyMessage {})),
-                }),
-                PlanType::OptimizedPhysicalPlan { optimizer_name } => {
-                    Some(protobuf::PlanType {
-                        plan_type_enum: Some(OptimizedPhysicalPlan(
-                            OptimizedPhysicalPlanType { optimizer_name },
-                        )),
-                    })
-                }
-                PlanType::FinalPhysicalPlan => Some(protobuf::PlanType {
-                    plan_type_enum: Some(FinalPhysicalPlan(EmptyMessage {})),
-                }),
-                PlanType::InitialPhysicalPlanWithStats => Some(protobuf::PlanType {
-                    plan_type_enum: Some(InitialPhysicalPlanWithStats(EmptyMessage {})),
-                }),
-                PlanType::InitialPhysicalPlanWithSchema => Some(protobuf::PlanType {
-                    plan_type_enum: Some(InitialPhysicalPlanWithSchema(EmptyMessage {})),
-                }),
-                PlanType::FinalPhysicalPlanWithStats => Some(protobuf::PlanType {
-                    plan_type_enum: Some(FinalPhysicalPlanWithStats(EmptyMessage {})),
-                }),
-                PlanType::FinalPhysicalPlanWithSchema => Some(protobuf::PlanType {
-                    plan_type_enum: Some(FinalPhysicalPlanWithSchema(EmptyMessage {})),
-                }),
-                PlanType::PhysicalPlanError => Some(protobuf::PlanType {
-                    plan_type_enum: Some(PhysicalPlanError(EmptyMessage {})),
-                }),
-            },
-            plan: stringified_plan.plan.to_string(),
-        }
-    }
-}
 
 pub fn serialize_exprs<'a, I>(
     exprs: I,
@@ -170,7 +70,7 @@ pub fn serialize_expr(
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
                 relation: relation
                     .to_owned()
-                    .map(|r| vec![protobuf::TableReference::from_proto(r)])
+                    .map(|r| vec![protobuf::TableReference::from(r)])
                     .unwrap_or(vec![]),
                 alias: name.to_owned(),
                 metadata: metadata
@@ -552,9 +452,7 @@ pub fn serialize_expr(
         #[expect(deprecated)]
         Expr::Wildcard { qualifier, .. } => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::Wildcard(protobuf::Wildcard {
-                qualifier: qualifier
-                    .to_owned()
-                    .map(protobuf::TableReference::from_proto),
+                qualifier: qualifier.to_owned().map(protobuf::TableReference::from),
             })),
         },
         Expr::ScalarSubquery(subquery) => protobuf::LogicalExprNode {
@@ -678,73 +576,6 @@ pub(super) fn serialize_range_split_point(
             .map(TryInto::<datafusion_proto_common::ScalarValue>::try_into)
             .collect::<Result<_, Error>>()?,
     })
-}
-
-impl FromProto<TableReference> for protobuf::TableReference {
-    fn from_proto(t: TableReference) -> Self {
-        use protobuf::table_reference::TableReferenceEnum;
-        let table_reference_enum = match t {
-            TableReference::Bare { table } => {
-                TableReferenceEnum::Bare(protobuf::BareTableReference {
-                    table: table.to_string(),
-                })
-            }
-            TableReference::Partial { schema, table } => {
-                TableReferenceEnum::Partial(protobuf::PartialTableReference {
-                    schema: schema.to_string(),
-                    table: table.to_string(),
-                })
-            }
-            TableReference::Full {
-                catalog,
-                schema,
-                table,
-            } => TableReferenceEnum::Full(protobuf::FullTableReference {
-                catalog: catalog.to_string(),
-                schema: schema.to_string(),
-                table: table.to_string(),
-            }),
-        };
-
-        protobuf::TableReference {
-            table_reference_enum: Some(table_reference_enum),
-        }
-    }
-}
-
-impl FromProto<JoinType> for protobuf::JoinType {
-    fn from_proto(t: JoinType) -> Self {
-        match t {
-            JoinType::Inner => protobuf::JoinType::Inner,
-            JoinType::Left => protobuf::JoinType::Left,
-            JoinType::Right => protobuf::JoinType::Right,
-            JoinType::Full => protobuf::JoinType::Full,
-            JoinType::LeftSemi => protobuf::JoinType::Leftsemi,
-            JoinType::RightSemi => protobuf::JoinType::Rightsemi,
-            JoinType::LeftAnti => protobuf::JoinType::Leftanti,
-            JoinType::RightAnti => protobuf::JoinType::Rightanti,
-            JoinType::LeftMark => protobuf::JoinType::Leftmark,
-            JoinType::RightMark => protobuf::JoinType::Rightmark,
-        }
-    }
-}
-
-impl FromProto<JoinConstraint> for protobuf::JoinConstraint {
-    fn from_proto(t: JoinConstraint) -> Self {
-        match t {
-            JoinConstraint::On => protobuf::JoinConstraint::On,
-            JoinConstraint::Using => protobuf::JoinConstraint::Using,
-        }
-    }
-}
-
-impl FromProto<NullEquality> for protobuf::NullEquality {
-    fn from_proto(t: NullEquality) -> Self {
-        match t {
-            NullEquality::NullEqualsNothing => protobuf::NullEquality::NullEqualsNothing,
-            NullEquality::NullEqualsNull => protobuf::NullEquality::NullEqualsNull,
-        }
-    }
 }
 
 pub fn serialize_merge_into_op(

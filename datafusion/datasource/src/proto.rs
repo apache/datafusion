@@ -265,6 +265,25 @@ mod tests {
     }
 
     #[test]
+    fn file_group_from_slice_matches_file_group() -> Result<()> {
+        // `protobuf::FileGroup: TryFrom<&[T]>` lives in `datafusion-proto-models`,
+        // generic over the element so that crate never names `PartitionedFile`.
+        // This is the caller-visible half: the bound resolves via
+        // `TryFrom<&PartitionedFile> for protobuf::PartitionedFile` above.
+        let files = vec![
+            PartitionedFile::new("a.parquet", 1),
+            PartitionedFile::new("b.parquet", 2),
+        ];
+
+        let from_slice = protobuf::FileGroup::try_from(&files[..])?;
+        let from_group = protobuf::FileGroup::try_from(&FileGroup::new(files))?;
+
+        assert_eq!(from_slice, from_group);
+        assert_eq!(from_slice.files.len(), 2);
+        Ok(())
+    }
+
+    #[test]
     fn file_group_roundtrip() -> Result<()> {
         let group = FileGroup::new(vec![
             PartitionedFile::new("a.parquet", 1),

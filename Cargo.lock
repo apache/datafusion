@@ -2574,6 +2574,7 @@ dependencies = [
 name = "datafusion-proto-models"
 version = "54.1.0"
 dependencies = [
+ "datafusion-common",
  "datafusion-proto-common",
  "pbjson 0.9.0",
  "prost",
