@@ -21,7 +21,7 @@ use datafusion_common::{
 };
 
 use crate::{
-    Aggregate, Expr, Filter, Join, JoinType, LogicalPlan, Window,
+    Aggregate, DmlStatement, Expr, Filter, Join, JoinType, LogicalPlan, Window, WriteOp,
     expr::{Exists, InSubquery, SetComparison},
     expr_rewriter::strip_outer_reference,
     utils::{collect_subquery_cols, split_conjunction},
@@ -253,7 +253,11 @@ pub fn check_subquery_expr(
             | LogicalPlan::TableScan(_)
             | LogicalPlan::Window(_)
             | LogicalPlan::Aggregate(_)
-            | LogicalPlan::Join(_) => Ok(()),
+            | LogicalPlan::Join(_)
+            | LogicalPlan::Dml(DmlStatement {
+                op: WriteOp::MergeInto(_),
+                ..
+            }) => Ok(()),
             _ => plan_err!(
                 "In/Exist/SetComparison subquery can only be used in \
                 Projection, Filter, TableScan, Window functions, Aggregate and Join plan nodes, \

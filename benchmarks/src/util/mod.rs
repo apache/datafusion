@@ -18,11 +18,9 @@
 //! Shared benchmark utilities
 pub mod latency_object_store;
 mod memory;
-mod memory_pool;
 mod options;
 mod run;
 
 pub use memory::print_memory_stats;
-pub use memory_pool::PeakRecordingPool;
 pub use options::CommonOpt;
 pub use run::{BenchQuery, BenchmarkRun, QueryResult};

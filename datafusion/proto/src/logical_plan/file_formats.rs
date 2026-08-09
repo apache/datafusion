@@ -424,6 +424,7 @@ mod parquet {
                     parquet_options::StatisticsEnabledOpt::StatisticsEnabled(enabled)
                 }),
                 max_row_group_size: global_options.global.max_row_group_size as u64,
+                max_in_list_size: global_options.global.max_in_list_size as u64,
                 created_by: global_options.global.created_by.clone(),
                 column_index_truncate_length_opt: global_options.global.column_index_truncate_length.map(|length| {
                     parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(length as u64)
@@ -570,6 +571,7 @@ mod parquet {
                     },
                 ),
                 max_row_group_size: proto.max_row_group_size as usize,
+                max_in_list_size: proto.max_in_list_size as usize,
                 created_by: proto.created_by.clone(),
                 column_index_truncate_length: proto
                     .column_index_truncate_length_opt
@@ -767,11 +769,9 @@ mod parquet {
                 exec_datafusion_err!("Failed to decode TableParquetOptionsProto: {e:?}")
             })?;
             let options = TableParquetOptions::try_from_proto(&proto)?;
-            Ok(Arc::new(
-                datafusion_datasource_parquet::file_format::ParquetFormatFactory {
-                    options: Some(options),
-                },
-            ))
+            Ok(Arc::new(ParquetFormatFactory {
+                options: Some(options),
+            }))
         }
 
         fn try_encode_file_format(
