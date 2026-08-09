@@ -1097,6 +1097,10 @@ impl SortExec {
     }
 
     /// Returns the dynamic filter expression for this sort (TopK), if set.
+    #[deprecated(
+        since = "55.0.0",
+        note = "Use ExecutionPlan::dynamic_expressions_produced instead"
+    )]
     pub fn dynamic_filter_expr(&self) -> Option<Arc<DynamicFilterPhysicalExpr>> {
         self.filter.as_ref().map(|f| f.read().expr())
     }
@@ -1272,6 +1276,13 @@ impl ExecutionPlan for SortExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.filter
+            .iter()
+            .map(|filter| filter.read().expr() as Arc<dyn PhysicalExpr>)
+            .collect()
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -1575,13 +1586,12 @@ impl ExecutionPlan for SortExec {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let dynamic_filter = match self.dynamic_filter_expr() {
-            Some(df) => {
-                let df_expr: Arc<dyn PhysicalExpr> = df;
-                Some(ctx.encode_expr(&df_expr)?)
-            }
-            None => None,
-        };
+        let dynamic_filter = self
+            .dynamic_expressions_produced()
+            .into_iter()
+            .next()
+            .map(|expr| ctx.encode_expr(&expr))
+            .transpose()?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Sort(Box::new(
@@ -3189,9 +3199,9 @@ mod tests {
         .with_fetch(Some(10));
 
         // SortExec with fetch creates a dynamic filter automatically.
-        let original_id = sort
-            .dynamic_filter_expr()
-            .expect("should have dynamic filter with fetch")
+        let produced = sort.dynamic_expressions_produced();
+        assert_eq!(produced.len(), 1);
+        let original_id = produced[0]
             .expression_id()
             .expect("DynamicFilterPhysicalExpr always has an expression_id");
 
@@ -3204,9 +3214,9 @@ mod tests {
             .expression_id()
             .expect("DynamicFilterPhysicalExpr always has an expression_id");
         let sort = sort.with_dynamic_filter_expr(Arc::clone(&new_df))?;
-        let restored_id = sort
-            .dynamic_filter_expr()
-            .expect("should still have dynamic filter")
+        let produced = sort.dynamic_expressions_produced();
+        assert_eq!(produced.len(), 1);
+        let restored_id = produced[0]
             .expression_id()
             .expect("DynamicFilterPhysicalExpr always has an expression_id");
         assert_eq!(restored_id, new_id);
@@ -3236,6 +3246,19 @@ mod tests {
         );
     }
 
+    fn dynamic_filter_produced(
+        plan: &dyn ExecutionPlan,
+    ) -> Arc<DynamicFilterPhysicalExpr> {
+        let expr = plan
+            .dynamic_expressions_produced()
+            .into_iter()
+            .next()
+            .expect("plan should produce a dynamic filter");
+        (expr as Arc<dyn std::any::Any + Send + Sync>)
+            .downcast::<DynamicFilterPhysicalExpr>()
+            .expect("produced expression should be a DynamicFilterPhysicalExpr")
+    }
+
     #[tokio::test]
     async fn test_preserved_topk_filter_waits_for_all_sort_partitions() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
@@ -3259,9 +3282,7 @@ mod tests {
         .with_fetch(Some(2))
         .with_preserve_partitioning(true);
 
-        let dynamic_filter = sort
-            .dynamic_filter_expr()
-            .expect("fetch sort should create a dynamic filter");
+        let dynamic_filter = dynamic_filter_produced(&sort);
         let sort = Arc::new(sort);
         let task_ctx = Arc::new(TaskContext::default());
 
@@ -3308,9 +3329,7 @@ mod tests {
         .with_preserve_partitioning(true)
         .with_fetch(Some(2));
 
-        let dynamic_filter = sort
-            .dynamic_filter_expr()
-            .expect("fetch sort should keep the dynamic filter");
+        let dynamic_filter = dynamic_filter_produced(&sort);
         assert_eq!(
             dynamic_filter
                 .expression_id()

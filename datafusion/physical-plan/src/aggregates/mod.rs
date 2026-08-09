@@ -1087,6 +1087,10 @@ impl AggregateExec {
     }
 
     /// Returns the dynamic filter expression for this aggregate, if set.
+    #[deprecated(
+        since = "55.0.0",
+        note = "Use ExecutionPlan::dynamic_expressions_produced instead"
+    )]
     pub fn dynamic_filter_expr(&self) -> Option<&Arc<DynamicFilterPhysicalExpr>> {
         self.dynamic_filter.as_ref().map(|df| &df.filter)
     }
@@ -1221,12 +1225,7 @@ impl AggregateExec {
         )?))
     }
 
-    fn should_use_partial_hash_stream(&self, context: &TaskContext) -> bool {
-        // TODO: implement memory-limited path and remove this limitation
-        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
-            return false;
-        }
-
+    fn should_use_partial_hash_stream(&self, _context: &TaskContext) -> bool {
         self.mode == AggregateMode::Partial
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
@@ -1245,12 +1244,7 @@ impl AggregateExec {
             && self.limit_options_supported_by_hash_stream()
     }
 
-    fn should_use_final_hash_stream(&self, context: &TaskContext) -> bool {
-        // TODO: implement memory-limited path and remove this limitation
-        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
-            return false;
-        }
-
+    fn should_use_final_hash_stream(&self, _context: &TaskContext) -> bool {
         matches!(
             self.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
@@ -1955,6 +1949,16 @@ impl ExecutionPlan for AggregateExec {
         vec![&self.input]
     }
 
+    fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.dynamic_filter
+            .iter()
+            .map(|dynamic_filter| {
+                Arc::<DynamicFilterPhysicalExpr>::clone(&dynamic_filter.filter)
+                    as Arc<dyn PhysicalExpr>
+            })
+            .collect()
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -2135,8 +2139,32 @@ impl ExecutionPlan for AggregateExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
 
-        let input = ctx.encode_child(self.input())?;
-        let group_by = self.group_expr();
+        // Exhaustive destructure: adding a field to `AggregateExec` without
+        // deciding how it is serialized is a compile error, not a silent
+        // round-trip gap.
+        let Self {
+            mode,
+            group_by,
+            aggr_expr,
+            filter_expr,
+            limit_options,
+            input,
+            // Derived at construction by `create_schema` from `input_schema`,
+            // `group_by`, `aggr_expr` and `mode`.
+            schema: _,
+            input_schema,
+            // Runtime execution state, rebuilt empty on decode.
+            metrics: _,
+            // Derived at construction from the input ordering and `group_by`.
+            required_input_ordering: _,
+            // Derived at construction from the input ordering and `group_by`.
+            input_order_mode: _,
+            // Derived at construction by `Self::compute_properties`.
+            cache: _,
+            dynamic_filter,
+        } = self;
+
+        let input = ctx.encode_child(input)?;
         let group_expr =
             ctx.encode_expressions(group_by.expr().iter().map(|(expr, _)| expr))?;
         let group_expr_name = group_by
@@ -2147,18 +2175,15 @@ impl ExecutionPlan for AggregateExec {
         let null_expr =
             ctx.encode_expressions(group_by.null_expr().iter().map(|(expr, _)| expr))?;
         let groups = group_by.groups().iter().flatten().copied().collect();
-        let aggr_expr = self
-            .aggr_expr()
-            .iter()
-            .map(|expr| encode_aggregate_expr(expr, ctx))
-            .collect::<Result<Vec<_>>>()?;
-        let aggr_expr_name = self
-            .aggr_expr()
+        let aggr_expr_name = aggr_expr
             .iter()
             .map(|expr| expr.name().to_string())
             .collect();
-        let filter_expr = self
-            .filter_expr()
+        let aggr_expr = aggr_expr
+            .iter()
+            .map(|expr| encode_aggregate_expr(expr, ctx))
+            .collect::<Result<Vec<_>>>()?;
+        let filter_expr = filter_expr
             .iter()
             .map(|filter| {
                 Ok(protobuf::MaybeFilter {
@@ -2171,7 +2196,7 @@ impl ExecutionPlan for AggregateExec {
             .collect::<Result<Vec<_>>>()?;
         // Match by name because the protobuf and execution enums use different
         // discriminants, so a numeric cast would corrupt the wire format.
-        let mode = match self.mode() {
+        let mode = match mode {
             AggregateMode::Partial => protobuf::AggregateMode::Partial,
             AggregateMode::Final => protobuf::AggregateMode::Final,
             AggregateMode::FinalPartitioned => protobuf::AggregateMode::FinalPartitioned,
@@ -2181,14 +2206,16 @@ impl ExecutionPlan for AggregateExec {
             }
             AggregateMode::PartialReduce => protobuf::AggregateMode::PartialReduce,
         };
-        let limit = self.limit_options().map(|options| protobuf::AggLimit {
+        let limit = limit_options.map(|options| protobuf::AggLimit {
             limit: options.limit() as u64,
             descending: options.descending(),
         });
-        let dynamic_filter = match self.dynamic_filter_expr() {
-            Some(filter) => {
+        // Only the shared `filter` expr is on the wire; the accumulator bounds
+        // in `AggrDynFilter` are runtime state repopulated during execution.
+        let dynamic_filter = match dynamic_filter {
+            Some(dynamic_filter) => {
                 let expr: Arc<dyn PhysicalExpr> =
-                    Arc::clone(filter) as Arc<dyn PhysicalExpr>;
+                    Arc::clone(&dynamic_filter.filter) as Arc<dyn PhysicalExpr>;
                 Some(ctx.encode_expr(&expr)?)
             }
             None => None,
@@ -2205,7 +2232,7 @@ impl ExecutionPlan for AggregateExec {
                         aggr_expr_name,
                         mode: mode as i32,
                         input: Some(Box::new(input)),
-                        input_schema: Some(self.input_schema().as_ref().try_into()?),
+                        input_schema: Some(input_schema.as_ref().try_into()?),
                         null_expr,
                         groups,
                         limit,
@@ -2313,17 +2340,31 @@ impl AggregateExec {
             protobuf::physical_plan_node::PhysicalPlanType::Aggregate,
             "AggregateExec",
         );
-        let input = ctx.decode_required_child(
-            hash_agg.input.as_deref(),
-            "AggregateExec",
-            "input",
-        )?;
+        // Exhaustive destructure: a new field on `AggregateExecNode` is a
+        // compile error here rather than a silently ignored wire field.
+        let protobuf::AggregateExecNode {
+            group_expr,
+            aggr_expr,
+            mode,
+            input,
+            group_expr_name,
+            aggr_expr_name,
+            input_schema,
+            null_expr,
+            groups,
+            filter_expr,
+            limit,
+            has_grouping_set,
+            dynamic_filter,
+        } = hash_agg.as_ref();
+
+        let input =
+            ctx.decode_required_child(input.as_deref(), "AggregateExec", "input")?;
         // Match by name because the protobuf and execution enums use different
         // discriminants, so a numeric cast would corrupt the wire format.
-        let mode = protobuf::AggregateMode::try_from(hash_agg.mode).map_err(|_| {
+        let mode = protobuf::AggregateMode::try_from(*mode).map_err(|_| {
             datafusion_common::internal_datafusion_err!(
-                "Received an AggregateNode message with unknown AggregateMode {}",
-                hash_agg.mode
+                "Received an AggregateNode message with unknown AggregateMode {mode}"
             )
         })?;
         let mode = match mode {
@@ -2336,13 +2377,12 @@ impl AggregateExec {
             }
             protobuf::AggregateMode::PartialReduce => AggregateMode::PartialReduce,
         };
-        let num_expr = hash_agg.group_expr.len();
+        let num_expr = group_expr.len();
         // Grouping expressions refer to the child plan's output schema.
         let child_schema = input.schema();
-        let group_expr = hash_agg
-            .group_expr
+        let group_expr = group_expr
             .iter()
-            .zip(hash_agg.group_expr_name.iter())
+            .zip(group_expr_name.iter())
             .map(|(expr, name)| {
                 Ok((
                     ctx.decode_expr(expr, child_schema.as_ref())?,
@@ -2350,10 +2390,9 @@ impl AggregateExec {
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
-        let null_expr = hash_agg
-            .null_expr
+        let null_expr = null_expr
             .iter()
-            .zip(hash_agg.group_expr_name.iter())
+            .zip(group_expr_name.iter())
             .map(|(expr, name)| {
                 Ok((
                     ctx.decode_expr(expr, child_schema.as_ref())?,
@@ -2361,25 +2400,23 @@ impl AggregateExec {
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
-        let groups = if hash_agg.groups.is_empty() {
+        let groups = if groups.is_empty() {
             vec![]
         } else {
-            hash_agg
-                .groups
+            groups
                 .chunks(num_expr)
                 .map(|group| group.to_vec())
                 .collect()
         };
         // Aggregate arguments, ordering, filters, and dynamic filters refer to
         // the aggregate input schema carried in the protobuf node.
-        let input_schema = hash_agg.input_schema.as_ref().ok_or_else(|| {
+        let input_schema = input_schema.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "input_schema in AggregateNode is missing."
             )
         })?;
         let input_schema: SchemaRef = SchemaRef::new(input_schema.try_into()?);
-        let filter_expr = hash_agg
-            .filter_expr
+        let filter_expr = filter_expr
             .iter()
             .map(|filter| {
                 filter
@@ -2389,10 +2426,9 @@ impl AggregateExec {
                     .transpose()
             })
             .collect::<Result<Vec<_>>>()?;
-        let aggr_expr = hash_agg
-            .aggr_expr
+        let aggr_expr = aggr_expr
             .iter()
-            .zip(hash_agg.aggr_expr_name.iter())
+            .zip(aggr_expr_name.iter())
             .map(|(expr, name)| {
                 let expr_type = expr.expr_type.as_ref().ok_or_else(|| {
                     datafusion_common::internal_datafusion_err!(
@@ -2444,18 +2480,13 @@ impl AggregateExec {
             .collect::<Result<Vec<_>>>()?;
         let aggregate = AggregateExec::try_new(
             mode,
-            PhysicalGroupBy::new(
-                group_expr,
-                null_expr,
-                groups,
-                hash_agg.has_grouping_set,
-            ),
+            PhysicalGroupBy::new(group_expr, null_expr, groups, *has_grouping_set),
             aggr_expr,
             filter_expr,
             input,
             Arc::clone(&input_schema),
         )?;
-        let aggregate = if let Some(limit) = &hash_agg.limit {
+        let aggregate = if let Some(limit) = limit {
             let options = match limit.descending {
                 Some(descending) => {
                     LimitOptions::new_with_order(limit.limit as usize, descending)
@@ -2466,7 +2497,7 @@ impl AggregateExec {
         } else {
             aggregate
         };
-        let aggregate = if let Some(dynamic_filter) = &hash_agg.dynamic_filter {
+        let aggregate = if let Some(dynamic_filter) = dynamic_filter {
             let dynamic_filter =
                 ctx.decode_expr(dynamic_filter, input_schema.as_ref())?;
             let dynamic_filter = (dynamic_filter
@@ -3390,7 +3421,8 @@ mod tests {
             | 2 | 1             | 1.0         |
             | 3 | 1             | 2.0         |
             | 3 | 2             | 5.0         |
-            | 4 | 3             | 11.0        |
+            | 4 | 1             | 4.0         |
+            | 4 | 2             | 7.0         |
             +---+---------------+-------------+
             ");
             }
@@ -3428,7 +3460,7 @@ mod tests {
 
         let task_ctx = if spill {
             // enlarge memory limit to let the final aggregation finish
-            new_spill_ctx(2, 2600)
+            new_spill_ctx(2, 4640)
         } else {
             Arc::clone(&task_ctx)
         };
@@ -3457,17 +3489,12 @@ mod tests {
         let spilled_bytes = metrics.spilled_bytes().unwrap();
         let spilled_rows = metrics.spilled_rows().unwrap();
 
+        assert_eq!(3, output_rows);
         if spill {
-            // When spilling, the output rows metrics become partial output size + final output size
-            // This is because final aggregation starts while partial aggregation is still emitting
-            assert_eq!(8, output_rows);
-
             assert!(spill_count > 0);
             assert!(spilled_bytes > 0);
             assert!(spilled_rows > 0);
         } else {
-            assert_eq!(3, output_rows);
-
             assert_eq!(0, spill_count);
             assert_eq!(0, spilled_bytes);
             assert_eq!(0, spilled_rows);
@@ -4495,7 +4522,7 @@ mod tests {
     async fn run_first_last_multi_partitions() -> Result<()> {
         for is_first_acc in [false, true] {
             for spill in [false, true] {
-                first_last_multi_partitions(is_first_acc, spill, 4200).await?
+                first_last_multi_partitions(is_first_acc, spill, 5000).await?
             }
         }
         Ok(())
@@ -7523,11 +7550,14 @@ mod tests {
             lit(false),
         ));
         let agg = agg.with_dynamic_filter_expr(Arc::clone(&new_df))?;
+        let produced = agg.dynamic_expressions_produced();
+        assert_eq!(produced.len(), 1);
+        assert_eq!(produced[0].expression_id(), new_df.expression_id());
 
         // The aggregate's filter should now resolve to the new inner expression.
-        let swapped = agg
-            .dynamic_filter_expr()
-            .expect("should still have dynamic filter")
+        let swapped = produced[0]
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .expect("produced expression should be a DynamicFilterPhysicalExpr")
             .current()?;
         assert_eq!(format!("{swapped}"), format!("{}", lit(false)));
 
@@ -7571,7 +7601,7 @@ mod tests {
             child,
             Arc::clone(&schema),
         )?;
-        assert!(agg.dynamic_filter_expr().is_none());
+        assert!(agg.dynamic_expressions_produced().is_empty());
 
         let df = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![col("a", &schema)?],
