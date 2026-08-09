@@ -571,17 +571,11 @@ struct CrossJoinStream<T> {
     /// Join execution metrics
     join_metrics: BuildProbeJoinMetrics,
     /// Currently processed right side batch
-    state: Option<RecordBatch>,
+    processed_right_data: Option<RecordBatch>,
     /// Left data (copy of the entire buffered left side)
     left_data: RecordBatch,
     /// Batch transformer
     batch_transformer: T,
-}
-
-impl<T: BatchTransformer + Unpin + Send> RecordBatchStream for CrossJoinStream<T> {
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
-    }
 }
 
 fn build_batch(
@@ -610,18 +604,6 @@ fn build_batch(
         &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
     )
     .map_err(Into::into)
-}
-
-#[async_trait]
-impl<T: BatchTransformer + Unpin + Send> Stream for CrossJoinStream<T> {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        self.poll_next_impl(cx)
-    }
 }
 
 impl<T: BatchTransformer> CrossJoinStream<T> {
