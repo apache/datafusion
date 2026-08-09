@@ -1378,6 +1378,24 @@ fn roundtrip_json_scan() -> Result<()> {
     roundtrip_test(DataSourceExec::from_data_source(scan_config))
 }
 
+#[cfg(feature = "avro")]
+#[test]
+fn roundtrip_avro_scan() -> Result<()> {
+    use datafusion_datasource_avro::source::AvroSource;
+
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let file_source = Arc::new(AvroSource::new(TableSchema::from(&file_schema)));
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.avro".to_string(),
+                1024,
+            )])])
+            .build();
+    roundtrip_test(DataSourceExec::from_data_source(scan_config))
+}
+
 #[test]
 fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
     use datafusion::common::config::CsvOptions;
@@ -3524,6 +3542,59 @@ async fn roundtrip_memory_source() -> Result<()> {
         .create_physical_plan()
         .await?;
     roundtrip_test(plan)
+}
+
+#[tokio::test]
+async fn roundtrip_memory_source_sort_information_and_fetch() -> Result<()> {
+    use datafusion::datasource::memory::MemorySourceConfig;
+    use datafusion::datasource::source::DataSource as _;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Int64, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(arrow::array::StringArray::from(vec!["Tom", "Bob"])),
+            Arc::new(arrow::array::Int64Array::from(vec![18i64, 21i64])),
+        ],
+    )?;
+    let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+        col("b", &schema)?,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )])
+    .unwrap();
+    let source = MemorySourceConfig::try_new(&[vec![batch]], Arc::clone(&schema), None)?
+        .with_limit(Some(1))
+        .with_show_sizes(false)
+        .try_with_sort_information(vec![ordering])?;
+    let exec_plan = DataSourceExec::from_data_source(source.clone());
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let decoded = roundtrip_test_and_return(exec_plan, &ctx, &codec, &proto_converter)?;
+
+    // The string representation does not include every field; check the
+    // decoded source directly.
+    let decoded = decoded
+        .downcast_ref::<DataSourceExec>()
+        .expect("expected DataSourceExec");
+    let decoded_source = decoded
+        .data_source()
+        .downcast_ref::<MemorySourceConfig>()
+        .expect("expected MemorySourceConfig");
+    assert_eq!(decoded_source.partitions(), source.partitions());
+    assert_eq!(decoded_source.original_schema(), source.original_schema());
+    assert_eq!(decoded_source.projection(), source.projection());
+    assert_eq!(decoded_source.sort_information(), source.sort_information());
+    assert_eq!(decoded_source.fetch(), Some(1));
+    assert!(!decoded_source.show_sizes());
+    Ok(())
 }
 
 #[tokio::test]
