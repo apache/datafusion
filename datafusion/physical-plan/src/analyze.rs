@@ -143,10 +143,6 @@ impl AnalyzeExec {
     }
 
     /// Access to show_statistics
-    #[deprecated(
-        since = "55.0.0",
-        note = "unused by DataFusion; `AnalyzeExec` serializes itself via `AnalyzeExec::try_to_proto`, which reads the field directly. There is no replacement; please open an issue if you have a use case for it."
-    )]
     pub fn show_statistics(&self) -> bool {
         self.show_statistics
     }

@@ -183,19 +183,11 @@ impl UnnestExec {
     }
 
     /// Indices of the list-typed columns in the input schema
-    #[deprecated(
-        since = "55.0.0",
-        note = "unused by DataFusion; `UnnestExec` serializes itself via `UnnestExec::try_to_proto`, which reads the field directly. There is no replacement; please open an issue if you have a use case for it."
-    )]
     pub fn list_column_indices(&self) -> &[ListUnnest] {
         &self.list_column_indices
     }
 
     /// Indices of the struct-typed columns in the input schema
-    #[deprecated(
-        since = "55.0.0",
-        note = "unused by DataFusion; `UnnestExec` serializes itself via `UnnestExec::try_to_proto`, which reads the field directly. There is no replacement; please open an issue if you have a use case for it."
-    )]
     pub fn struct_column_indices(&self) -> &[usize] {
         &self.struct_column_indices
     }
