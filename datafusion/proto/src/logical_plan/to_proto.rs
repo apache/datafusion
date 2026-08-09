@@ -20,19 +20,16 @@
 //! processes.
 
 use datafusion_common::{NullEquality, SplitPoint, TableReference, UnnestOptions};
-use datafusion_expr::dml::{
-    MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
-};
+use datafusion_expr::dml::{MergeIntoAction, MergeIntoClause, MergeIntoOp};
 use datafusion_expr::expr::{
     self, AggregateFunctionParams, Alias, Between, BinaryExpr, Cast, GroupingSet,
-    HigherOrderFunction, InList, Lambda, LambdaVariable, Like, NullTreatment,
-    Placeholder, ScalarFunction, Unnest,
+    HigherOrderFunction, InList, Lambda, LambdaVariable, Like, Placeholder,
+    ScalarFunction, Unnest,
 };
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::{
-    Expr, JoinConstraint, JoinType, SortExpr, TryCast, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, WindowFunctionDefinition, logical_plan::PlanType,
-    logical_plan::StringifiedPlan,
+    Expr, JoinConstraint, JoinType, SortExpr, TryCast, WindowFunctionDefinition,
+    logical_plan::PlanType, logical_plan::StringifiedPlan,
 };
 
 use crate::protobuf::RecursionUnnestOption;
@@ -50,7 +47,7 @@ use crate::protobuf::{
 };
 
 use super::{AsLogicalPlan, LogicalExtensionCodec};
-use crate::convert::{FromProto, TryFromProto};
+use crate::convert::FromProto;
 use crate::protobuf::LogicalPlanNode;
 
 impl FromProto<&UnnestOptions> for protobuf::UnnestOptions {
@@ -137,55 +134,6 @@ impl FromProto<&StringifiedPlan> for protobuf::StringifiedPlan {
             },
             plan: stringified_plan.plan.to_string(),
         }
-    }
-}
-
-impl FromProto<WindowFrameUnits> for protobuf::WindowFrameUnits {
-    fn from_proto(units: WindowFrameUnits) -> Self {
-        match units {
-            WindowFrameUnits::Rows => Self::Rows,
-            WindowFrameUnits::Range => Self::Range,
-            WindowFrameUnits::Groups => Self::Groups,
-        }
-    }
-}
-
-impl TryFromProto<&WindowFrameBound> for protobuf::WindowFrameBound {
-    type Error = Error;
-
-    fn try_from_proto(bound: &WindowFrameBound) -> Result<Self, Self::Error> {
-        Ok(match bound {
-            WindowFrameBound::CurrentRow => Self {
-                window_frame_bound_type: protobuf::WindowFrameBoundType::CurrentRow
-                    .into(),
-                bound_value: None,
-            },
-            WindowFrameBound::Preceding(v) => Self {
-                window_frame_bound_type: protobuf::WindowFrameBoundType::Preceding.into(),
-                bound_value: Some(v.try_into()?),
-            },
-            WindowFrameBound::Following(v) => Self {
-                window_frame_bound_type: protobuf::WindowFrameBoundType::Following.into(),
-                bound_value: Some(v.try_into()?),
-            },
-        })
-    }
-}
-
-impl TryFromProto<&WindowFrame> for protobuf::WindowFrame {
-    type Error = Error;
-
-    fn try_from_proto(window: &WindowFrame) -> Result<Self, Self::Error> {
-        Ok(Self {
-            window_frame_units: protobuf::WindowFrameUnits::from_proto(window.units)
-                .into(),
-            start_bound: Some(protobuf::WindowFrameBound::try_from_proto(
-                &window.start_bound,
-            )?),
-            end_bound: Some(protobuf::window_frame::EndBound::Bound(
-                protobuf::WindowFrameBound::try_from_proto(&window.end_bound)?,
-            )),
-        })
     }
 }
 
@@ -352,7 +300,7 @@ pub fn serialize_expr(
             let partition_by = serialize_exprs(partition_by, codec)?;
             let order_by = serialize_sorts(order_by, codec)?;
 
-            let window_frame = Some(protobuf::WindowFrame::try_from_proto(window_frame)?);
+            let window_frame = Some(protobuf::WindowFrame::try_from(window_frame)?);
 
             let window_expr = protobuf::WindowExprNode {
                 exprs: serialize_exprs(args, codec)?,
@@ -366,7 +314,7 @@ pub fn serialize_expr(
                     None => None,
                 },
                 null_treatment: null_treatment
-                    .map(|nt| protobuf::NullTreatment::from_proto(nt).into()),
+                    .map(|nt| protobuf::NullTreatment::from(nt).into()),
                 fun_definition,
             };
             protobuf::LogicalExprNode {
@@ -399,7 +347,7 @@ pub fn serialize_expr(
                         order_by: serialize_sorts(order_by, codec)?,
                         fun_definition: (!buf.is_empty()).then_some(buf),
                         null_treatment: null_treatment
-                            .map(|nt| protobuf::NullTreatment::from_proto(nt).into()),
+                            .map(|nt| protobuf::NullTreatment::from(nt).into()),
                     },
                 ))),
             }
@@ -799,25 +747,6 @@ impl FromProto<NullEquality> for protobuf::NullEquality {
     }
 }
 
-impl FromProto<MergeIntoClauseKind> for protobuf::merge_into_clause_node::Kind {
-    fn from_proto(k: MergeIntoClauseKind) -> Self {
-        match k {
-            MergeIntoClauseKind::Matched => {
-                protobuf::merge_into_clause_node::Kind::Matched
-            }
-            MergeIntoClauseKind::NotMatched => {
-                protobuf::merge_into_clause_node::Kind::NotMatched
-            }
-            MergeIntoClauseKind::NotMatchedByTarget => {
-                protobuf::merge_into_clause_node::Kind::NotMatchedByTarget
-            }
-            MergeIntoClauseKind::NotMatchedBySource => {
-                protobuf::merge_into_clause_node::Kind::NotMatchedBySource
-            }
-        }
-    }
-}
-
 pub fn serialize_merge_into_op(
     op: &MergeIntoOp,
     codec: &dyn LogicalExtensionCodec,
@@ -836,7 +765,7 @@ fn serialize_merge_into_clause(
     clause: &MergeIntoClause,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<protobuf::MergeIntoClauseNode, Error> {
-    let kind = protobuf::merge_into_clause_node::Kind::from_proto(clause.kind);
+    let kind = protobuf::merge_into_clause_node::Kind::from(clause.kind);
     let predicate = clause
         .predicate
         .as_ref()
@@ -883,13 +812,4 @@ fn serialize_merge_into_action(
     Ok(protobuf::MergeIntoActionNode {
         action: Some(action),
     })
-}
-
-impl FromProto<NullTreatment> for protobuf::NullTreatment {
-    fn from_proto(t: NullTreatment) -> Self {
-        match t {
-            NullTreatment::RespectNulls => protobuf::NullTreatment::RespectNulls,
-            NullTreatment::IgnoreNulls => protobuf::NullTreatment::IgnoreNulls,
-        }
-    }
 }

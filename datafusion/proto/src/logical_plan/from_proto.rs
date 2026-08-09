@@ -36,8 +36,7 @@ use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::{
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet,
     GroupingSet::GroupingSets,
-    JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
-    WindowFrameUnits,
+    JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame,
     expr::{self, InList, WindowFunction},
     logical_plan::{PlanType, StringifiedPlan},
 };
@@ -87,16 +86,6 @@ impl FromProto<&protobuf::UnnestOptions> for UnnestOptions {
                     depth: r.depth as usize,
                 })
                 .collect::<Vec<_>>(),
-        }
-    }
-}
-
-impl FromProto<protobuf::WindowFrameUnits> for WindowFrameUnits {
-    fn from_proto(units: protobuf::WindowFrameUnits) -> Self {
-        match units {
-            protobuf::WindowFrameUnits::Rows => Self::Rows,
-            protobuf::WindowFrameUnits::Range => Self::Range,
-            protobuf::WindowFrameUnits::Groups => Self::Groups,
         }
     }
 }
@@ -170,56 +159,6 @@ impl FromProto<&protobuf::StringifiedPlan> for StringifiedPlan {
     }
 }
 
-impl TryFromProto<protobuf::WindowFrame> for WindowFrame {
-    type Error = Error;
-
-    fn try_from_proto(window: protobuf::WindowFrame) -> Result<Self, Self::Error> {
-        let units = WindowFrameUnits::from_proto(
-            protobuf::WindowFrameUnits::try_from(window.window_frame_units).map_err(
-                |_| Error::unknown("WindowFrameUnits", window.window_frame_units),
-            )?,
-        );
-        let start_bound = WindowFrameBound::try_from_proto(
-            window
-                .start_bound
-                .ok_or_else(|| Error::required("start_bound"))?,
-        )?;
-        let end_bound = window
-            .end_bound
-            .map(|end_bound| match end_bound {
-                protobuf::window_frame::EndBound::Bound(end_bound) => {
-                    WindowFrameBound::try_from_proto(end_bound)
-                }
-            })
-            .transpose()?
-            .unwrap_or(WindowFrameBound::CurrentRow);
-        Ok(WindowFrame::new_bounds(units, start_bound, end_bound))
-    }
-}
-
-impl TryFromProto<protobuf::WindowFrameBound> for WindowFrameBound {
-    type Error = Error;
-
-    fn try_from_proto(bound: protobuf::WindowFrameBound) -> Result<Self, Self::Error> {
-        let bound_type =
-            protobuf::WindowFrameBoundType::try_from(bound.window_frame_bound_type)
-                .map_err(|_| {
-                    Error::unknown("WindowFrameBoundType", bound.window_frame_bound_type)
-                })?;
-        match bound_type {
-            protobuf::WindowFrameBoundType::CurrentRow => Ok(Self::CurrentRow),
-            protobuf::WindowFrameBoundType::Preceding => match bound.bound_value {
-                Some(x) => Ok(Self::Preceding(ScalarValue::try_from(&x)?)),
-                None => Ok(Self::Preceding(ScalarValue::UInt64(None))),
-            },
-            protobuf::WindowFrameBoundType::Following => match bound.bound_value {
-                Some(x) => Ok(Self::Following(ScalarValue::try_from(&x)?)),
-                None => Ok(Self::Following(ScalarValue::UInt64(None))),
-            },
-        }
-    }
-}
-
 impl FromProto<protobuf::JoinType> for JoinType {
     fn from_proto(t: protobuf::JoinType) -> Self {
         match t {
@@ -251,25 +190,6 @@ impl FromProto<protobuf::NullEquality> for NullEquality {
         match t {
             protobuf::NullEquality::NullEqualsNothing => NullEquality::NullEqualsNothing,
             protobuf::NullEquality::NullEqualsNull => NullEquality::NullEqualsNull,
-        }
-    }
-}
-
-impl FromProto<protobuf::merge_into_clause_node::Kind> for MergeIntoClauseKind {
-    fn from_proto(k: protobuf::merge_into_clause_node::Kind) -> Self {
-        match k {
-            protobuf::merge_into_clause_node::Kind::Matched => {
-                MergeIntoClauseKind::Matched
-            }
-            protobuf::merge_into_clause_node::Kind::NotMatched => {
-                MergeIntoClauseKind::NotMatched
-            }
-            protobuf::merge_into_clause_node::Kind::NotMatchedByTarget => {
-                MergeIntoClauseKind::NotMatchedByTarget
-            }
-            protobuf::merge_into_clause_node::Kind::NotMatchedBySource => {
-                MergeIntoClauseKind::NotMatchedBySource
-            }
         }
     }
 }
@@ -331,7 +251,7 @@ fn parse_merge_into_clause(
                 clause.kind
             ))
         })
-        .map(MergeIntoClauseKind::from_proto)?;
+        .map(MergeIntoClauseKind::from)?;
     let predicate = clause
         .predicate
         .as_ref()
@@ -382,15 +302,6 @@ fn parse_merge_into_action(
     })
 }
 
-impl FromProto<protobuf::NullTreatment> for NullTreatment {
-    fn from_proto(t: protobuf::NullTreatment) -> Self {
-        match t {
-            protobuf::NullTreatment::RespectNulls => NullTreatment::RespectNulls,
-            protobuf::NullTreatment::IgnoreNulls => NullTreatment::IgnoreNulls,
-        }
-    }
-}
-
 pub fn parse_expr(
     proto: &protobuf::LogicalExprNode,
     ctx: &TaskContext,
@@ -439,7 +350,7 @@ pub fn parse_expr(
                 .window_frame
                 .as_ref()
                 .map::<Result<WindowFrame, _>, _>(|window_frame| {
-                    let window_frame = WindowFrame::try_from_proto(window_frame.clone())?;
+                    let window_frame = WindowFrame::try_from(window_frame.clone())?;
                     window_frame
                         .regularize_order_bys(&mut order_by)
                         .map(|_| window_frame)
@@ -457,7 +368,7 @@ pub fn parse_expr(
                             "Received a WindowExprNode message with unknown NullTreatment {null_treatment}",
                         ))
                     })?;
-                    Some(NullTreatment::from_proto(null_treatment))
+                    Some(NullTreatment::from(null_treatment))
                 }
                 None => None,
             };
@@ -766,7 +677,7 @@ pub fn parse_expr(
                             "Received an AggregateUdfExprNode message with unknown NullTreatment {null_treatment}",
                         ))
                     })?;
-                    Some(NullTreatment::from_proto(null_treatment))
+                    Some(NullTreatment::from(null_treatment))
                 }
                 None => None,
             };
