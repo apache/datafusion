@@ -3743,6 +3743,20 @@ fn plan_merge_into_preserves_target_qualifier_and_quoted_columns() {
     };
     assert_eq!(columns, &["id".to_string(), "Age".to_string()]);
     assert_eq!(values[0].to_string(), "s.j2_id");
+
+    let display = plan.display_indent().to_string();
+    assert_contains!(
+        &display,
+        "Dml: op=[MergeInto] table=[person_quoted_cols] on=[t.id = s.j2_id] clauses=[WHEN MATCHED THEN UPDATE SET First Name = s.j2_string, WHEN NOT MATCHED THEN INSERT (id, Age) VALUES (s.j2_id, Int64(42))]"
+    );
+
+    let json = plan.display_pg_json().to_string();
+    assert_contains!(&json, r#""Node Type": "Dml""#);
+    assert_contains!(&json, r#""On": "t.id = s.j2_id""#);
+    assert_contains!(
+        &json,
+        r#""WHEN MATCHED THEN UPDATE SET First Name = s.j2_string""#
+    );
 }
 
 #[rstest]
