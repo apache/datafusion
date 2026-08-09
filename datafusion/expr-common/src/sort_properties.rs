@@ -50,11 +50,12 @@ impl SortProperties {
             (Self::Singleton, _) => *rhs,
             (_, Self::Singleton) => *self,
             (Self::Ordered(lhs), Self::Ordered(rhs))
-                if lhs.descending == rhs.descending =>
+                if lhs.descending == rhs.descending
+                    && lhs.nulls_first == rhs.nulls_first =>
             {
                 Self::Ordered(SortOptions {
                     descending: lhs.descending,
-                    nulls_first: lhs.nulls_first || rhs.nulls_first,
+                    nulls_first: lhs.nulls_first,
                 })
             }
             _ => Self::Unordered,
@@ -70,11 +71,12 @@ impl SortProperties {
             }),
             (_, Self::Singleton) => *self,
             (Self::Ordered(lhs), Self::Ordered(rhs))
-                if lhs.descending != rhs.descending =>
+                if lhs.descending != rhs.descending
+                    && lhs.nulls_first == rhs.nulls_first =>
             {
                 Self::Ordered(SortOptions {
                     descending: lhs.descending,
-                    nulls_first: lhs.nulls_first || rhs.nulls_first,
+                    nulls_first: lhs.nulls_first,
                 })
             }
             _ => Self::Unordered,
@@ -89,7 +91,8 @@ impl SortProperties {
             }),
             (_, Self::Singleton) => *self,
             (Self::Ordered(lhs), Self::Ordered(rhs))
-                if lhs.descending != rhs.descending =>
+                if lhs.descending != rhs.descending
+                    && lhs.nulls_first == rhs.nulls_first =>
             {
                 *self
             }
@@ -100,11 +103,12 @@ impl SortProperties {
     pub fn and_or(&self, rhs: &Self) -> Self {
         match (self, rhs) {
             (Self::Ordered(lhs), Self::Ordered(rhs))
-                if lhs.descending == rhs.descending =>
+                if lhs.descending == rhs.descending
+                    && lhs.nulls_first == rhs.nulls_first =>
             {
                 Self::Ordered(SortOptions {
                     descending: lhs.descending,
-                    nulls_first: lhs.nulls_first || rhs.nulls_first,
+                    nulls_first: lhs.nulls_first,
                 })
             }
             (Self::Ordered(opt), Self::Singleton)
