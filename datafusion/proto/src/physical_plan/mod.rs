@@ -1082,8 +1082,8 @@ pub trait PhysicalPlanNodeExt: Sized {
                     ParquetSource::try_from_proto(self.node(), &decode_ctx)
                 }
                 #[cfg(not(feature = "parquet"))]
-                panic!(
-                    "Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled"
+                not_impl_err!(
+                    "Unable to process a Parquet PhysicalPlan when the `parquet` feature is not enabled"
                 )
             }
             PhysicalPlanType::AvroScan(_) => {
@@ -1418,8 +1418,8 @@ pub trait PhysicalPlanNodeExt: Sized {
         }
 
         #[cfg(not(feature = "parquet"))]
-        panic!(
-            "Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled"
+        not_impl_err!(
+            "Unable to process a Parquet PhysicalPlan when the `parquet` feature is not enabled"
         )
     }
 
@@ -1448,7 +1448,9 @@ pub trait PhysicalPlanNodeExt: Sized {
         }
 
         #[cfg(not(feature = "avro"))]
-        panic!("Unable to process a Avro PhysicalPlan when `avro` feature is not enabled")
+        not_impl_err!(
+            "Unable to process an Avro PhysicalPlan when the `avro` feature is not enabled"
+        )
     }
 
     #[deprecated(
