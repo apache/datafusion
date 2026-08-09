@@ -329,29 +329,11 @@ impl ExecutionPlan for OutputRequirementExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(
+        _f: &mut dyn FnMut(
             &Arc<dyn datafusion_physical_expr_common::physical_expr::PhysicalExpr>,
         ) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        #[expect(deprecated)]
-        let distribution = if let Distribution::HashPartitioned(exprs)
-        | Distribution::KeyPartitioned(exprs) =
-            &self.dist_requirement
-        {
-            exprs.as_slice()
-        } else {
-            &[]
-        };
-        let ordering = self
-            .order_requirement
-            .iter()
-            .flat_map(|requirements| match requirements {
-                OrderingRequirements::Hard(alternatives)
-                | OrderingRequirements::Soft(alternatives) => alternatives,
-            })
-            .flatten()
-            .map(|sort_expr| &sort_expr.expr);
-        datafusion_physical_plan::apply_expression_roots(ordering.chain(distribution), f)
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

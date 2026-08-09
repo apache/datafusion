@@ -267,8 +267,17 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// joins).
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>>;
 
-    /// Apply a closure `f` to each expression in the current physical plan node. `f`
-    /// should not be called in any child expressions nor in any expressions of child nodes.
+    /// Apply a closure `f` to each root expression that this node owns and uses
+    /// during execution, either by evaluating it or updating it dynamically.
+    ///
+    /// An expression must not be visited solely because it describes an input or
+    /// output property, such as cached ordering, partitioning, or equivalence
+    /// metadata. However, these may be traversed indirectly. For example,
+    /// `RepartitionExec` visits the partitioning expressions it evaluates  and
+    /// `SortExec` visits the sort expressions it evaluates to order rows.
+    ///
+    /// This method is shallow: it must not visit expression children or expressions
+    /// owned by child execution plans.
     ///
     /// Similarly to other [`TreeNode`] APIs, the closure can return
     /// [`TreeNodeRecursion::Stop`] to stop iteration, otherwise iteration

@@ -207,16 +207,9 @@ impl ExecutionPlan for SortRequiredExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        datafusion_physical_plan::apply_expression_roots(
-            self.cache
-                .output_ordering()
-                .into_iter()
-                .flatten()
-                .map(|sort_expr| &sort_expr.expr),
-            f,
-        )
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn execute(

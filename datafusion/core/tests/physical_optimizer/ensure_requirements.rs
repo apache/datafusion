@@ -1001,24 +1001,9 @@ impl ExecutionPlan for MockReqExec {
     }
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        #[expect(deprecated)]
-        let distribution = if let Distribution::HashPartitioned(exprs)
-        | Distribution::KeyPartitioned(exprs) = &self.dist
-        {
-            exprs.as_slice()
-        } else {
-            &[]
-        };
-        datafusion_physical_plan::apply_expression_roots(
-            self.ord
-                .iter()
-                .flatten()
-                .map(|sort_expr| &sort_expr.expr)
-                .chain(distribution),
-            f,
-        )
+        Ok(TreeNodeRecursion::Continue)
     }
     fn input_distribution_requirements(
         &self,

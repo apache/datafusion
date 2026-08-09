@@ -754,18 +754,11 @@ impl ExecutionPlan for TopKExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(
+        _f: &mut dyn FnMut(
             &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
         ) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        datafusion::physical_plan::apply_expression_roots(
-            self.cache
-                .output_ordering()
-                .into_iter()
-                .flatten()
-                .map(|sort_expr| &sort_expr.expr),
-            f,
-        )
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

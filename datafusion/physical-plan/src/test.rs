@@ -143,15 +143,9 @@ impl ExecutionPlan for TestMemoryExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        crate::apply_expression_roots(
-            self.sort_information
-                .iter()
-                .flatten()
-                .map(|sort_expr| &sort_expr.expr),
-            f,
-        )
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
