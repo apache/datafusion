@@ -3484,7 +3484,7 @@ async fn roundtrip_memory_source_sort_information_and_fetch() -> Result<()> {
         .with_limit(Some(1))
         .with_show_sizes(false)
         .try_with_sort_information(vec![ordering])?;
-    let exec_plan = DataSourceExec::from_data_source(source);
+    let exec_plan = DataSourceExec::from_data_source(source.clone());
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
@@ -3500,9 +3500,12 @@ async fn roundtrip_memory_source_sort_information_and_fetch() -> Result<()> {
         .data_source()
         .downcast_ref::<MemorySourceConfig>()
         .expect("expected MemorySourceConfig");
+    assert_eq!(decoded_source.partitions(), source.partitions());
+    assert_eq!(decoded_source.original_schema(), source.original_schema());
+    assert_eq!(decoded_source.projection(), source.projection());
+    assert_eq!(decoded_source.sort_information(), source.sort_information());
     assert_eq!(decoded_source.fetch(), Some(1));
     assert!(!decoded_source.show_sizes());
-    assert_eq!(decoded_source.sort_information().len(), 1);
     Ok(())
 }
 
