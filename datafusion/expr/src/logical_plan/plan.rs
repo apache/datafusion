@@ -2027,7 +2027,11 @@ impl LogicalPlan {
                         Ok(())
                     }
                     LogicalPlan::Dml(DmlStatement { table_name, op, .. }) => {
-                        write!(f, "Dml: op=[{op}] table=[{table_name}]")
+                        write!(f, "Dml: op=[{op}] table=[{table_name}]")?;
+                        if let WriteOp::MergeInto(merge_op) = op {
+                            write!(f, " {merge_op}")?;
+                        }
+                        Ok(())
                     }
                     LogicalPlan::Copy(CopyTo {
                         input: _,

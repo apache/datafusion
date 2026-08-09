@@ -241,6 +241,17 @@ async fn assert_merge_physical_error(ctx: &SessionContext, sql: &str, expected: 
     );
 }
 
+async fn assert_merge_physical_plan(ctx: &SessionContext, sql: &str) {
+    ctx.sql(sql)
+        .await
+        .unwrap_or_else(|error| panic!("failed to plan MERGE SQL:\n{sql}\n{error}"))
+        .create_physical_plan()
+        .await
+        .unwrap_or_else(|error| {
+            panic!("failed to create MERGE physical plan:\n{sql}\n{error}")
+        });
+}
+
 async fn merge_operation(ctx: &SessionContext, sql: &str) -> Box<MergeIntoOp> {
     let plan = ctx.state().create_logical_plan(sql).await.unwrap();
     let LogicalPlan::Dml(dml) = plan else {
@@ -296,13 +307,12 @@ async fn merge_into_distinguishes_target_alias_from_source_qualifier() {
         "\"Target\"",
         "\"CaseSchema\".\"Target\"",
     ] {
-        assert_merge_physical_error(
+        assert_merge_physical_plan(
             &ctx,
             &format!(
                 "MERGE INTO {target_ref} AS t USING source AS target \
                  ON t.id = target.id WHEN MATCHED THEN DELETE"
             ),
-            "MERGE INTO not supported for Base table",
         )
         .await;
     }
@@ -312,13 +322,12 @@ async fn merge_into_distinguishes_target_alias_from_source_qualifier() {
         ("\"T\"", "\"T\".id"),
         ("\"public.target\"", "\"public.target\".id"),
     ] {
-        assert_merge_physical_error(
+        assert_merge_physical_plan(
             &ctx,
             &format!(
                 "MERGE INTO target AS {target_alias} USING source AS target \
                  ON {target_column} = target.id WHEN MATCHED THEN DELETE"
             ),
-            "MERGE INTO not supported for Base table",
         )
         .await;
     }
@@ -327,13 +336,12 @@ async fn merge_into_distinguishes_target_alias_from_source_qualifier() {
         "(SELECT id FROM source) AS target",
         "target AS source_target",
     ] {
-        assert_merge_physical_error(
+        assert_merge_physical_plan(
             &ctx,
             &format!(
                 "MERGE INTO target AS t USING {source} \
                  ON true WHEN MATCHED THEN DELETE"
             ),
-            "MERGE INTO not supported for Base table",
         )
         .await;
     }
@@ -356,12 +364,7 @@ async fn merge_into_distinguishes_target_alias_from_source_qualifier() {
         );
         let merge_op = merge_operation(&ctx, &sql).await;
         assert_eq!(merge_op.target_qualifier(), &expected_qualifier);
-        assert_merge_physical_error(
-            &ctx,
-            &sql,
-            "MERGE INTO not supported for Base table",
-        )
-        .await;
+        assert_merge_physical_plan(&ctx, &sql).await;
     }
 }
 
@@ -453,6 +456,8 @@ async fn merge_into_preserves_target_alias_in_correlated_subquery() {
         &TableReference::bare("t")
     ));
 
+    // These subqueries remain supported through logical optimization, but basic
+    // MemTable MERGE execution does not yet evaluate subquery predicates.
     for sql in [
         // Direct and deeply nested target correlation.
         direct_exists,
@@ -499,8 +504,12 @@ async fn merge_into_preserves_target_alias_in_correlated_subquery() {
            source AS x CROSS JOIN LATERAL (SELECT t.id) AS l\
          )) WHEN MATCHED THEN DELETE",
     ] {
-        assert_merge_physical_error(&ctx, sql, "MERGE INTO not supported for Base table")
-            .await;
+        assert_merge_physical_error(
+            &ctx,
+            sql,
+            "Physical plan does not support logical expression",
+        )
+        .await;
     }
 
     // LIMIT expressions intentionally use an empty local scope. The nested
@@ -531,14 +540,19 @@ async fn merge_into_requires_boolean_conditions() {
              WHEN MATCHED AND 1 THEN DELETE",
             "MERGE WHEN condition must be boolean type, but got Int64",
         ),
-        (
-            "MERGE INTO target USING source ON NULL \
-             WHEN MATCHED AND NULL THEN DELETE",
-            "MERGE INTO not supported for Base table",
-        ),
     ] {
         assert_merge_physical_error(&ctx, sql, expected).await;
     }
+
+    ctx.sql(
+        "MERGE INTO target USING source ON NULL \
+         WHEN MATCHED AND NULL THEN DELETE",
+    )
+    .await
+    .unwrap()
+    .create_physical_plan()
+    .await
+    .unwrap();
 }
 
 #[tokio::test]

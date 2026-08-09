@@ -136,3 +136,59 @@ INSERT INTO <i><b>table_name</i></b> { VALUES ( <i><b>expression</i></b> [, ...]
 | 2     |
 +-------+
 ```
+
+## MERGE INTO
+
+Merges rows from a source relation into a target table. Each target row may
+match at most one source row. DataFusion applies only the first matching
+`WHEN` clause for each row and returns the number of rows inserted, updated, or
+deleted.
+
+<pre>
+MERGE INTO <i><b>target_table</i></b> [ AS <i><b>target_alias</i></b> ]
+USING { <i><b>source_table</i></b> | ( <i><b>query</i></b> ) } [ AS <i><b>source_alias</i></b> ]
+ON <i><b>condition</i></b>
+<i><b>merge_clause</i></b> [ ... ]
+</pre>
+
+`merge_clause` can be:
+
+```sql
+WHEN MATCHED [ AND condition ] THEN UPDATE SET column = expression [, ...]
+WHEN MATCHED [ AND condition ] THEN DELETE
+WHEN NOT MATCHED [ BY TARGET ] [ AND condition ] THEN INSERT [(column [, ...])] VALUES (expression [, ...])
+WHEN NOT MATCHED BY SOURCE [ AND condition ] THEN UPDATE SET column = expression [, ...]
+WHEN NOT MATCHED BY SOURCE [ AND condition ] THEN DELETE
+```
+
+### Examples
+
+```sql
+> MERGE INTO inventory AS t
+  USING updates AS s
+  ON t.id = s.id
+  WHEN MATCHED AND s.deleted THEN DELETE
+  WHEN MATCHED THEN UPDATE SET qty = s.qty
+  WHEN NOT MATCHED THEN INSERT (id, qty) VALUES (s.id, s.qty);
++-------+
+| count |
++-------+
+| 3     |
++-------+
+```
+
+### Provider support
+
+`MERGE INTO` execution depends on the target table provider. DataFusion's
+in-memory `MemTable` supports basic `MERGE INTO` execution. Other providers
+must implement `TableProvider::merge_into`; otherwise planning the statement
+returns an unsupported-operation error.
+
+The SQL planner currently rejects these `MERGE INTO` forms:
+
+- target table modifiers, such as `MERGE INTO target PARTITION (...)`
+- target alias column lists, such as `MERGE INTO target AS t(a, b)`
+- `UPDATE ... WHERE` and `UPDATE ... DELETE WHERE` predicates inside a merge
+  action
+- `INSERT ... WHERE` predicates inside a merge action
+- `INSERT ROW`
