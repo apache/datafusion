@@ -20,7 +20,7 @@
 use crate::aggregates::{
     AccumulatorItem, AggrDynFilter, AggregateInputMode, AggregateMode,
     DynamicFilterAggregateType, aggregate_expressions, create_accumulators,
-    finalize_aggregation, new_batch_conforming_schema,
+    finalize_aggregation,
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::stream::EmptyRecordBatchStream;
@@ -381,10 +381,11 @@ impl AggregateStream {
                                     prepend_grouping_id_column(columns, None)
                                 })
                                 .and_then(|columns| {
-                                    new_batch_conforming_schema(
+                                    RecordBatch::try_new(
                                         Arc::clone(&this.schema),
                                         columns,
                                     )
+                                    .map_err(Into::into)
                                 })
                                 .record_output(&this.baseline_metrics);
 

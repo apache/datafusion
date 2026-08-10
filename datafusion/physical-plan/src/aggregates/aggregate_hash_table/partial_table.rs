@@ -26,9 +26,7 @@ use datafusion_common::{Result, assert_eq_or_internal_err};
 
 use crate::aggregates::group_values::new_group_values;
 use crate::aggregates::order::GroupOrdering;
-use crate::aggregates::{
-    AggregateExec, group_id_array, max_duplicate_ordinal, new_batch_conforming_schema,
-};
+use crate::aggregates::{AggregateExec, group_id_array, max_duplicate_ordinal};
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
@@ -213,6 +211,9 @@ impl AggregateHashTable<PartialSkipMarker> {
             output.extend(acc.convert_to_state(values)?);
         }
 
-        new_batch_conforming_schema(Arc::clone(&self.output_schema), output)
+        Ok(RecordBatch::try_new(
+            Arc::clone(&self.output_schema),
+            output,
+        )?)
     }
 }

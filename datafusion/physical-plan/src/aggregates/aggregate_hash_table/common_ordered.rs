@@ -35,7 +35,7 @@ use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
-    evaluate_group_by, new_batch_conforming_schema,
+    evaluate_group_by,
 };
 
 use super::common::{AggregateAccumulator, EvaluatedAggregateBatch};
@@ -273,7 +273,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             output.extend(acc.state(EmitTo::All)?);
         }
 
-        let batch = new_batch_conforming_schema(Arc::clone(&self.state_schema), output)?;
+        let batch = RecordBatch::try_new(Arc::clone(&self.state_schema), output)?;
         debug_assert!(batch.num_rows() > 0);
 
         // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
@@ -402,7 +402,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         }
         drop(timer);
 
-        let batch = new_batch_conforming_schema(Arc::clone(&self.output_schema), output)?;
+        let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
         debug_assert!(batch.num_rows() > 0);
 
         Ok(Some(batch))

@@ -29,7 +29,7 @@ use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
     AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
     create_schema, evaluate_group_by, evaluate_many, evaluate_optional, group_id_array,
-    max_duplicate_ordinal, new_batch_conforming_schema,
+    max_duplicate_ordinal,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
@@ -1047,7 +1047,7 @@ impl GroupedHashAggregateStream {
         // emit reduces the memory usage. Ignore Err from update_memory_reservation. Even if it is
         // over the target memory size after emission, we can emit again rather than returning Err.
         let _ = self.update_memory_reservation();
-        let batch = new_batch_conforming_schema(schema, output)?;
+        let batch = RecordBatch::try_new(schema, output)?;
         debug_assert!(batch.num_rows() > 0);
 
         Ok(Some(batch))
@@ -1389,7 +1389,7 @@ impl GroupedHashAggregateStream {
             output.extend(acc.convert_to_state(values, opt_filter)?);
         }
 
-        let states_batch = new_batch_conforming_schema(self.schema(), output)?;
+        let states_batch = RecordBatch::try_new(self.schema(), output)?;
 
         Ok(states_batch)
     }
