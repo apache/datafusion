@@ -244,10 +244,12 @@ where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
 {
     pub fn new(output_type: OutputType) -> Self {
+        let map = hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY);
+        let map_size = map.allocation_size();
         Self {
             output_type,
-            map: hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY),
-            map_size: 0,
+            map,
+            map_size,
             buffer: Vec::with_capacity(INITIAL_BUFFER_CAPACITY),
             offsets: vec![O::default()], // first offset is always 0
             random_state: RandomState::default(),
@@ -262,6 +264,21 @@ where
         let mut new_self = Self::new(self.output_type);
         swap(self, &mut new_self);
         new_self
+    }
+
+    fn insert_entry(
+        map: &mut hashbrown::hash_table::HashTable<Entry<O, V>>,
+        map_size: &mut usize,
+        entry: Entry<O, V>,
+    ) {
+        let capacity = map.capacity();
+        map.insert_accounted(entry, |entry| entry.hash, map_size);
+
+        // `insert_accounted` estimates growth from capacity. Keep `map_size`
+        // consistent with the exact allocation recorded by `new` after a resize.
+        if map.capacity() != capacity {
+            *map_size = map.allocation_size();
+        }
     }
 
     /// Inserts each value from `values` into the map, invoking `payload_fn` for
@@ -414,11 +431,7 @@ where
                         offset_or_inline: inline,
                         payload,
                     };
-                    self.map.insert_accounted(
-                        new_header,
-                        |header| header.hash,
-                        &mut self.map_size,
-                    );
+                    Self::insert_entry(&mut self.map, &mut self.map_size, new_header);
                     payload
                 }
             }
@@ -456,11 +469,7 @@ where
                         offset_or_inline: offset,
                         payload,
                     };
-                    self.map.insert_accounted(
-                        new_header,
-                        |header| header.hash,
-                        &mut self.map_size,
-                    );
+                    Self::insert_entry(&mut self.map, &mut self.map_size, new_header);
                     payload
                 }
             };
@@ -872,6 +881,33 @@ mod tests {
         let size_after_values2 = set.size();
         assert!(size_after_values2 > size_after_values1);
         assert!(size_after_values2 > total_strings1_len + total_strings2_len);
+    }
+
+    #[test]
+    fn test_size_includes_hash_table_allocation() {
+        fn allocated_size(map: &ArrowBytesMap<i32, ()>) -> usize {
+            map.map.allocation_size()
+                + map.buffer.capacity()
+                + map.offsets.allocated_size()
+                + map.hashes_buffer.allocated_size()
+        }
+
+        let mut set = ArrowBytesSet::<i32>::new(OutputType::Utf8);
+        assert_eq!(set.size(), allocated_size(&set.0));
+
+        let initial_capacity = set.0.map.capacity();
+        let values = (0..=initial_capacity)
+            .map(|index| format!("value-{index}"))
+            .collect::<Vec<_>>();
+        let values: ArrayRef = Arc::new(StringArray::from(values));
+        set.insert(&values);
+
+        assert!(set.0.map.capacity() > initial_capacity);
+        assert_eq!(set.size(), allocated_size(&set.0));
+
+        let populated = set.take();
+        assert_eq!(populated.size(), allocated_size(&populated.0));
+        assert_eq!(set.size(), allocated_size(&set.0));
     }
 
     #[test]

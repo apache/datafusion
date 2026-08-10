@@ -155,10 +155,12 @@ where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
 {
     pub fn new(output_type: OutputType) -> Self {
+        let map = hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY);
+        let map_size = map.allocation_size();
         Self {
             output_type,
-            map: hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY),
-            map_size: 0,
+            map,
+            map_size,
             views: Vec::new(),
             in_progress: Vec::new(),
             completed: Vec::new(),
@@ -175,6 +177,21 @@ where
         let mut new_self = Self::new(self.output_type);
         std::mem::swap(self, &mut new_self);
         new_self
+    }
+
+    fn insert_entry(
+        map: &mut hashbrown::hash_table::HashTable<Entry<V>>,
+        map_size: &mut usize,
+        entry: Entry<V>,
+    ) {
+        let capacity = map.capacity();
+        map.insert_accounted(entry, |entry| entry.hash, map_size);
+
+        // `insert_accounted` estimates growth from capacity. Keep `map_size`
+        // consistent with the exact allocation recorded by `new` after a resize.
+        if map.capacity() != capacity {
+            *map_size = map.allocation_size();
+        }
     }
 
     /// Inserts each value from `values` into the map, invoking `payload_fn` for
@@ -367,8 +384,7 @@ where
                     payload,
                 };
 
-                self.map
-                    .insert_accounted(new_header, |h| h.hash, &mut self.map_size);
+                Self::insert_entry(&mut self.map, &mut self.map_size, new_header);
                 payload
             };
             observe_payload_fn(payload);
@@ -713,6 +729,39 @@ mod tests {
         assert!(size_after_values2 > size_after_values1);
 
         assert_eq!(set.len(), 10);
+    }
+
+    #[test]
+    fn test_size_includes_hash_table_allocation() {
+        fn allocated_size(map: &ArrowBytesViewMap<()>) -> usize {
+            map.map.allocation_size()
+                + map.views.len() * size_of::<u128>()
+                + map.in_progress.capacity()
+                + map
+                    .completed
+                    .iter()
+                    .map(|buffer| buffer.len())
+                    .sum::<usize>()
+                + map.nulls.allocated_size()
+                + map.hashes_buffer.allocated_size()
+        }
+
+        let mut set = ArrowBytesViewSet::new(OutputType::Utf8View);
+        assert_eq!(set.size(), allocated_size(&set.0));
+
+        let initial_capacity = set.0.map.capacity();
+        let values = (0..=initial_capacity)
+            .map(|index| format!("value-{index}"))
+            .collect::<Vec<_>>();
+        let values: ArrayRef = Arc::new(StringViewArray::from(values));
+        set.insert(&values);
+
+        assert!(set.0.map.capacity() > initial_capacity);
+        assert_eq!(set.size(), allocated_size(&set.0));
+
+        let populated = set.take();
+        assert_eq!(populated.size(), allocated_size(&populated.0));
+        assert_eq!(set.size(), allocated_size(&set.0));
     }
 
     #[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
