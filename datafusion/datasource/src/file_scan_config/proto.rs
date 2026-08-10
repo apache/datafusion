@@ -27,8 +27,8 @@
 //! `FileSource::try_to_proto` hook (CSV, JSON, Arrow, Parquet, Avro) builds its
 //! `*ScanExecNode` around [`FileScanConfig::try_to_proto`] and decodes with
 //! [`FileScanConfig::try_from_proto`], keeping a single copy of the shared
-//! wire logic. The wire format is byte-for-byte identical to the old central
-//! serializer.
+//! wire logic. Existing fields remain wire-compatible with the old central
+//! serializer; new options use optional fields with legacy defaults.
 //!
 //! Child physical expressions (sort orderings, hash/range partitioning, and
 //! projection expressions) are (de)serialized through `ctx.encode_expr` /
@@ -38,6 +38,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
+use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
@@ -46,9 +47,11 @@ use datafusion_physical_expr_common::sort_expr::{
     sort_exprs_try_from_proto, sort_exprs_try_to_proto,
 };
 use datafusion_physical_plan::proto::{ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx};
+use datafusion_proto_models::datafusion_common::CompressionTypeVariant as ProtoCompressionTypeVariant;
 use datafusion_proto_models::protobuf;
 
 use crate::file::FileSource;
+use crate::file_compression_type::FileCompressionType;
 use crate::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use crate::table_schema::TableSchema;
 
@@ -57,8 +60,9 @@ impl FileScanConfig {
     /// [`protobuf::FileScanExecConf`].
     ///
     /// Each concrete [`FileSource::try_to_proto`]
-    /// wraps the returned value in its own `*ScanExecNode`. Byte-compatible with
-    /// the former `serialize_file_scan_config` in `datafusion-proto`.
+    /// wraps the returned value in its own `*ScanExecNode`. Existing fields are
+    /// byte-compatible with the former `serialize_file_scan_config` in
+    /// `datafusion-proto`.
     pub fn try_to_proto(
         &self,
         ctx: &ExecutionPlanEncodeCtx<'_>,
@@ -114,6 +118,13 @@ impl FileScanConfig {
             })
             .transpose()?;
 
+        let file_compression_type =
+            self.file_compression_type.is_compressed().then(|| {
+                let compression: ProtoCompressionTypeVariant =
+                    (*self.file_compression_type.get_variant()).into();
+                compression as i32
+            });
+
         Ok(protobuf::FileScanExecConf {
             file_groups,
             statistics: Some((&self.statistics()).into()),
@@ -131,6 +142,7 @@ impl FileScanConfig {
             batch_size: self.batch_size.map(|s| s as u64),
             projection_exprs,
             output_partitioning,
+            file_compression_type,
         })
     }
 
@@ -138,7 +150,8 @@ impl FileScanConfig {
     /// and a `file_source` the caller has already rebuilt (typically from the
     /// table schema via [`FileScanConfig::parse_table_schema_from_proto`]).
     ///
-    /// Byte-compatible with the former `parse_protobuf_file_scan_config`.
+    /// Existing fields are byte-compatible with the former
+    /// `parse_protobuf_file_scan_config`.
     pub fn try_from_proto(
         conf: &protobuf::FileScanExecConf,
         ctx: &ExecutionPlanDecodeCtx<'_>,
@@ -194,6 +207,19 @@ impl FileScanConfig {
             .transpose()?
             .flatten();
 
+        let file_compression_type = conf
+            .file_compression_type
+            .map(|value| {
+                let compression =
+                    ProtoCompressionTypeVariant::try_from(value).map_err(|_| {
+                        internal_datafusion_err!("Unknown file compression type: {value}")
+                    })?;
+                let compression: CompressionTypeVariant = compression.into();
+                Ok::<_, DataFusionError>(FileCompressionType::from(compression))
+            })
+            .transpose()?
+            .unwrap_or(FileCompressionType::UNCOMPRESSED);
+
         // Parse projection expressions if present and apply to the file source.
         let file_source = if let Some(proto_projection_exprs) = &conf.projection_exprs {
             let projection_exprs: Vec<ProjectionExpr> = proto_projection_exprs
@@ -226,7 +252,8 @@ impl FileScanConfig {
             .with_limit(conf.limit.as_ref().map(|sl| sl.limit as usize))
             .with_output_ordering(output_ordering)
             .with_output_partitioning(output_partitioning)
-            .with_batch_size(conf.batch_size.map(|s| s as usize));
+            .with_batch_size(conf.batch_size.map(|s| s as usize))
+            .with_file_compression_type(file_compression_type);
         Ok(config_builder.build())
     }
 

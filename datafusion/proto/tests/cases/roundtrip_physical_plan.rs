@@ -116,6 +116,7 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::{TableSchema, TableSchemaBuilder};
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::dml::InsertOp;
@@ -1631,18 +1632,69 @@ fn roundtrip_arrow_scan() -> Result<()> {
 }
 
 #[test]
-fn roundtrip_json_scan() -> Result<()> {
+fn roundtrip_json_scan_preserves_format_options() -> Result<()> {
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
-    let file_source = Arc::new(JsonSource::new(TableSchema::from(&file_schema)));
+    let file_source = Arc::new(
+        JsonSource::new(TableSchema::from(&file_schema)).with_newline_delimited(false),
+    );
     let scan_config =
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
-                "/path/to/file.json".to_string(),
+                "/path/to/file.json.gz".to_string(),
                 1024,
             )])])
+            .with_file_compression_type(FileCompressionType::GZIP)
             .build();
-    roundtrip_test(DataSourceExec::from_data_source(scan_config))
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(scan_config);
+    let roundtripped = roundtrip_test_and_return(
+        Arc::clone(&plan),
+        &ctx,
+        &codec,
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let file_scan = roundtripped
+        .downcast_ref::<DataSourceExec>()
+        .and_then(|exec| exec.data_source().downcast_ref::<FileScanConfig>())
+        .ok_or_else(|| internal_datafusion_err!("Expected FileScanConfig"))?;
+    let json_source = file_scan
+        .file_source()
+        .downcast_ref::<JsonSource>()
+        .ok_or_else(|| internal_datafusion_err!("Expected JsonSource"))?;
+    assert!(!json_source.is_newline_delimited());
+    assert_eq!(file_scan.file_compression_type, FileCompressionType::GZIP);
+
+    // Payloads written before these fields existed must keep their historical
+    // defaults: newline-delimited JSON without compression.
+    let mut node = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
+    match node.physical_plan_type.as_mut() {
+        Some(protobuf::physical_plan_node::PhysicalPlanType::JsonScan(scan)) => {
+            scan.newline_delimited = None;
+            scan.base_conf
+                .as_mut()
+                .expect("JSON scan has a base config")
+                .file_compression_type = None;
+        }
+        other => return internal_err!("Expected JsonScan node, got {other:?}"),
+    }
+    let decoded = node.try_into_physical_plan(ctx.task_ctx().as_ref(), &codec)?;
+    let file_scan = decoded
+        .downcast_ref::<DataSourceExec>()
+        .and_then(|exec| exec.data_source().downcast_ref::<FileScanConfig>())
+        .ok_or_else(|| internal_datafusion_err!("Expected FileScanConfig"))?;
+    let json_source = file_scan
+        .file_source()
+        .downcast_ref::<JsonSource>()
+        .ok_or_else(|| internal_datafusion_err!("Expected JsonSource"))?;
+    assert!(json_source.is_newline_delimited());
+    assert_eq!(
+        file_scan.file_compression_type,
+        FileCompressionType::UNCOMPRESSED
+    );
+    Ok(())
 }
 
 #[cfg(feature = "avro")]
@@ -1677,6 +1729,7 @@ fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
             quote: b'\'',
             escape: Some(b'\\'),
             comment: Some(b'#'),
+            terminator: Some(b'\r'),
             newlines_in_values: Some(true),
             truncated_rows: Some(true),
             ..Default::default()
@@ -1685,9 +1738,10 @@ fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
     let scan_config =
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
-                "/path/to/file.csv".to_string(),
+                "/path/to/file.csv.gz".to_string(),
                 1024,
             )])])
+            .with_file_compression_type(FileCompressionType::GZIP)
             .build();
 
     let ctx = SessionContext::new();
@@ -1714,8 +1768,10 @@ fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
     assert_eq!(csv_source.quote(), b'\'');
     assert_eq!(csv_source.escape(), Some(b'\\'));
     assert_eq!(csv_source.comment(), Some(b'#'));
+    assert_eq!(csv_source.terminator(), Some(b'\r'));
     assert!(csv_source.newlines_in_values());
     assert!(csv_source.truncate_rows());
+    assert_eq!(file_scan.file_compression_type, FileCompressionType::GZIP);
     Ok(())
 }
 #[tokio::test]

@@ -4364,6 +4364,9 @@ impl serde::Serialize for CsvScanExecNode {
         if self.truncate_rows {
             len += 1;
         }
+        if self.terminator.is_some() {
+            len += 1;
+        }
         if self.optional_escape.is_some() {
             len += 1;
         }
@@ -4388,6 +4391,9 @@ impl serde::Serialize for CsvScanExecNode {
         }
         if self.truncate_rows {
             struct_ser.serialize_field("truncateRows", &self.truncate_rows)?;
+        }
+        if let Some(v) = self.terminator.as_ref() {
+            struct_ser.serialize_field("terminator", v)?;
         }
         if let Some(v) = self.optional_escape.as_ref() {
             match v {
@@ -4423,6 +4429,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
             "newlinesInValues",
             "truncate_rows",
             "truncateRows",
+            "terminator",
             "escape",
             "comment",
         ];
@@ -4435,6 +4442,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
             Quote,
             NewlinesInValues,
             TruncateRows,
+            Terminator,
             Escape,
             Comment,
         }
@@ -4464,6 +4472,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                             "quote" => Ok(GeneratedField::Quote),
                             "newlinesInValues" | "newlines_in_values" => Ok(GeneratedField::NewlinesInValues),
                             "truncateRows" | "truncate_rows" => Ok(GeneratedField::TruncateRows),
+                            "terminator" => Ok(GeneratedField::Terminator),
                             "escape" => Ok(GeneratedField::Escape),
                             "comment" => Ok(GeneratedField::Comment),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -4491,6 +4500,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                 let mut quote__ = None;
                 let mut newlines_in_values__ = None;
                 let mut truncate_rows__ = None;
+                let mut terminator__ = None;
                 let mut optional_escape__ = None;
                 let mut optional_comment__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -4531,6 +4541,12 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                             }
                             truncate_rows__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Terminator => {
+                            if terminator__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("terminator"));
+                            }
+                            terminator__ = map_.next_value()?;
+                        }
                         GeneratedField::Escape => {
                             if optional_escape__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("escape"));
@@ -4552,6 +4568,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                     quote: quote__.unwrap_or_default(),
                     newlines_in_values: newlines_in_values__.unwrap_or_default(),
                     truncate_rows: truncate_rows__.unwrap_or_default(),
+                    terminator: terminator__,
                     optional_escape: optional_escape__,
                     optional_comment: optional_comment__,
                 })
@@ -7002,6 +7019,9 @@ impl serde::Serialize for FileScanExecConf {
         if self.output_partitioning.is_some() {
             len += 1;
         }
+        if self.file_compression_type.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.FileScanExecConf", len)?;
         if !self.file_groups.is_empty() {
             struct_ser.serialize_field("fileGroups", &self.file_groups)?;
@@ -7041,6 +7061,11 @@ impl serde::Serialize for FileScanExecConf {
         if let Some(v) = self.output_partitioning.as_ref() {
             struct_ser.serialize_field("outputPartitioning", v)?;
         }
+        if let Some(v) = self.file_compression_type.as_ref() {
+            let v = super::datafusion_common::CompressionTypeVariant::try_from(*v)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", *v)))?;
+            struct_ser.serialize_field("fileCompressionType", &v)?;
+        }
         struct_ser.end()
     }
 }
@@ -7070,6 +7095,8 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
             "projectionExprs",
             "output_partitioning",
             "outputPartitioning",
+            "file_compression_type",
+            "fileCompressionType",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -7086,6 +7113,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
             BatchSize,
             ProjectionExprs,
             OutputPartitioning,
+            FileCompressionType,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -7119,6 +7147,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                             "batchSize" | "batch_size" => Ok(GeneratedField::BatchSize),
                             "projectionExprs" | "projection_exprs" => Ok(GeneratedField::ProjectionExprs),
                             "outputPartitioning" | "output_partitioning" => Ok(GeneratedField::OutputPartitioning),
+                            "fileCompressionType" | "file_compression_type" => Ok(GeneratedField::FileCompressionType),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -7150,6 +7179,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                 let mut batch_size__ = None;
                 let mut projection_exprs__ = None;
                 let mut output_partitioning__ = None;
+                let mut file_compression_type__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::FileGroups => {
@@ -7229,6 +7259,12 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                             }
                             output_partitioning__ = map_.next_value()?;
                         }
+                        GeneratedField::FileCompressionType => {
+                            if file_compression_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("fileCompressionType"));
+                            }
+                            file_compression_type__ = map_.next_value::<::std::option::Option<super::datafusion_common::CompressionTypeVariant>>()?.map(|x| x as i32);
+                        }
                     }
                 }
                 Ok(FileScanExecConf {
@@ -7244,6 +7280,7 @@ impl<'de> serde::Deserialize<'de> for FileScanExecConf {
                     batch_size: batch_size__,
                     projection_exprs: projection_exprs__,
                     output_partitioning: output_partitioning__,
+                    file_compression_type: file_compression_type__,
                 })
             }
         }
@@ -11175,9 +11212,15 @@ impl serde::Serialize for JsonScanExecNode {
         if self.base_conf.is_some() {
             len += 1;
         }
+        if self.newline_delimited.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.JsonScanExecNode", len)?;
         if let Some(v) = self.base_conf.as_ref() {
             struct_ser.serialize_field("baseConf", v)?;
+        }
+        if let Some(v) = self.newline_delimited.as_ref() {
+            struct_ser.serialize_field("newlineDelimited", v)?;
         }
         struct_ser.end()
     }
@@ -11191,11 +11234,14 @@ impl<'de> serde::Deserialize<'de> for JsonScanExecNode {
         const FIELDS: &[&str] = &[
             "base_conf",
             "baseConf",
+            "newline_delimited",
+            "newlineDelimited",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             BaseConf,
+            NewlineDelimited,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -11218,6 +11264,7 @@ impl<'de> serde::Deserialize<'de> for JsonScanExecNode {
                     {
                         match value {
                             "baseConf" | "base_conf" => Ok(GeneratedField::BaseConf),
+                            "newlineDelimited" | "newline_delimited" => Ok(GeneratedField::NewlineDelimited),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -11238,6 +11285,7 @@ impl<'de> serde::Deserialize<'de> for JsonScanExecNode {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut base_conf__ = None;
+                let mut newline_delimited__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::BaseConf => {
@@ -11246,10 +11294,17 @@ impl<'de> serde::Deserialize<'de> for JsonScanExecNode {
                             }
                             base_conf__ = map_.next_value()?;
                         }
+                        GeneratedField::NewlineDelimited => {
+                            if newline_delimited__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("newlineDelimited"));
+                            }
+                            newline_delimited__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(JsonScanExecNode {
                     base_conf: base_conf__,
+                    newline_delimited: newline_delimited__,
                 })
             }
         }

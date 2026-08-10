@@ -159,6 +159,11 @@ impl JsonSource {
         self.newline_delimited = newline_delimited;
         self
     }
+
+    /// Returns whether this source reads newline-delimited JSON.
+    pub fn is_newline_delimited(&self) -> bool {
+        self.newline_delimited
+    }
 }
 
 impl From<JsonSource> for Arc<dyn FileSource> {
@@ -260,6 +265,11 @@ impl FileSource for JsonSource {
 
         let node = protobuf::JsonScanExecNode {
             base_conf: Some(base.try_to_proto(ctx)?),
+            newline_delimited: if self.newline_delimited {
+                None
+            } else {
+                Some(false)
+            },
         };
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::JsonScan(node)),
@@ -271,7 +281,7 @@ impl FileSource for JsonSource {
 impl JsonSource {
     /// Reconstructs a `DataSourceExec` from a protobuf `JsonScan`.
     ///
-    /// Defaults to newline-delimited JSON because protobuf does not encode the mode.
+    /// Payloads without a mode default to newline-delimited JSON.
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
@@ -296,7 +306,10 @@ impl JsonSource {
         })?;
 
         let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
-        let source = Arc::new(JsonSource::new(table_schema));
+        let source = Arc::new(
+            JsonSource::new(table_schema)
+                .with_newline_delimited(scan.newline_delimited.unwrap_or(true)),
+        );
 
         let conf = FileScanConfig::try_from_proto(base_conf, ctx, source)?;
         Ok(DataSourceExec::from_data_source(conf))
