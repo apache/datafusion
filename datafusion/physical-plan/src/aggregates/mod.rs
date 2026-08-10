@@ -2645,6 +2645,48 @@ fn create_schema(
     ))
 }
 
+/// Creates a [`RecordBatch`] from an aggregation output `schema` and
+/// `columns`, tolerating columns whose data types are stricter than the
+/// corresponding schema fields declare.
+///
+/// Group and accumulator output columns are derived from the actual input
+/// data, and input batches may carry types that are stricter than the plan
+/// schema declares: most commonly a nested struct field that is
+/// non-nullable even though the schema declares it nullable (see
+/// [`Field::contains`]). [`RecordBatch::try_new`] requires exact data type
+/// equality, so such columns are first cast to the declared field type,
+/// which only rewrites nested type metadata and does not copy data
+/// buffers.
+///
+/// See <https://github.com/apache/datafusion/issues/24069>
+pub(crate) fn new_batch_conforming_schema(
+    schema: SchemaRef,
+    columns: Vec<ArrayRef>,
+) -> Result<RecordBatch> {
+    let columns = if schema.fields().len() == columns.len() {
+        schema
+            .fields()
+            .iter()
+            .zip(columns)
+            .map(|(field, column)| {
+                if field.data_type() != column.data_type()
+                    && field.data_type().contains(column.data_type())
+                {
+                    Ok(arrow::compute::cast(&column, field.data_type())?)
+                } else {
+                    // Matching or incompatible types are passed through
+                    // unchanged; `RecordBatch::try_new` reports incompatible
+                    // types as an error below
+                    Ok(column)
+                }
+            })
+            .collect::<Result<Vec<_>>>()?
+    } else {
+        columns
+    };
+    Ok(RecordBatch::try_new(schema, columns)?)
+}
+
 /// Determines the lexical ordering requirement for an aggregate expression.
 ///
 /// # Parameters
@@ -3123,7 +3165,7 @@ mod tests {
         Int64Array, StructArray, UInt32Array, UInt64Array,
     };
     use arrow::compute::{SortOptions, concat_batches};
-    use arrow::datatypes::Int32Type;
+    use arrow::datatypes::{Fields, Int32Type};
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{DataFusionError, internal_err};
     use datafusion_execution::config::SessionConfig;
@@ -5838,6 +5880,117 @@ mod tests {
         run_test_with_spill_pool_if_necessary(20_000, true).await?;
         // test without spill
         run_test_with_spill_pool_if_necessary(200_000, false).await?;
+        Ok(())
+    }
+
+    /// Reproducer for <https://github.com/apache/datafusion/issues/24069>:
+    /// `array_agg` / `array_agg(DISTINCT)` over a struct whose batches carry
+    /// a stricter (non-nullable) nested field than the plan schema declares
+    /// must not error, in particular when the aggregation spills.
+    async fn run_array_agg_of_struct_with_non_nullable_field(
+        distinct: bool,
+        enable_migration_aggregate: bool,
+    ) -> Result<()> {
+        // The plan schema declares the struct field as nullable ...
+        let nullable_struct_fields =
+            Fields::from(vec![Field::new("colA", DataType::Boolean, true)]);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::Struct(nullable_struct_fields), false),
+        ]));
+
+        // ... but the batches contain a stricter, non-nullable struct field,
+        // which is allowed by `Field::contains`
+        let non_nullable_struct_fields =
+            Fields::from(vec![Field::new("colA", DataType::Boolean, false)]);
+        let batch_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new(
+                "b",
+                DataType::Struct(non_nullable_struct_fields.clone()),
+                false,
+            ),
+        ]));
+
+        let num_rows = 10_000_u32;
+        let batch = RecordBatch::try_new(
+            batch_schema,
+            vec![
+                Arc::new(UInt32Array::from_iter_values(0..num_rows)),
+                Arc::new(StructArray::new(
+                    non_nullable_struct_fields,
+                    vec![Arc::new(BooleanArray::from_iter(
+                        (0..num_rows).map(|i| Some(i % 2 == 0)),
+                    ))],
+                    None,
+                )),
+            ],
+        )?;
+
+        let plan: Arc<dyn ExecutionPlan> =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+
+        let grouping_set =
+            PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![Arc::new(
+            AggregateExprBuilder::new(array_agg_udaf(), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("array_agg(b)")
+                .with_distinct(distinct)
+                .build()?,
+        )];
+
+        let single_aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            grouping_set,
+            aggregates,
+            vec![None],
+            plan,
+            Arc::clone(&schema),
+        )?);
+
+        // A small memory pool forces the aggregation to spill. The distinct
+        // accumulator makes larger individual allocations, so give it more
+        // room to avoid failing outright instead of spilling.
+        let pool_size = if distinct { 600_000 } else { 200_000 };
+        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
+        let mut session_config = SessionConfig::new().with_batch_size(100);
+        session_config
+            .options_mut()
+            .execution
+            .enable_migration_aggregate = enable_migration_aggregate;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(Arc::new(
+                    RuntimeEnvBuilder::new()
+                        .with_memory_pool(memory_pool)
+                        .build()?,
+                )),
+        );
+
+        let result = collect(single_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
+
+        assert_spill_count_metric(true, single_aggregate);
+        assert_eq!(
+            result.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+            num_rows as usize
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_spill_array_agg_of_struct_with_non_nullable_field() -> Result<()> {
+        for distinct in [false, true] {
+            for enable_migration_aggregate in [false, true] {
+                run_array_agg_of_struct_with_non_nullable_field(
+                    distinct,
+                    enable_migration_aggregate,
+                )
+                .await?;
+            }
+        }
         Ok(())
     }
 

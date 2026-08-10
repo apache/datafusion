@@ -722,7 +722,13 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
         }
 
         let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
-        let field = Arc::new(Field::new_list_field(self.datatype.clone(), true));
+        // Use the values' actual data type rather than `self.datatype`: input
+        // batches may carry a type that is stricter than the plan schema
+        // declares (e.g. a non-nullable nested struct field where the schema
+        // allows nulls), and `ListArray::new` requires the item field to
+        // match the values exactly.
+        let field =
+            Arc::new(Field::new_list_field(flat_values.data_type().clone(), true));
         let result = ListArray::new(field, offsets, flat_values, nulls_builder.finish());
 
         Ok(Arc::new(result))
@@ -792,7 +798,9 @@ impl GroupsAccumulator for ArrayAggGroupsAccumulator {
             filter_nulls
         };
 
-        let field = Arc::new(Field::new_list_field(self.datatype.clone(), true));
+        // As in `evaluate`, use the input's actual data type, which may be
+        // stricter than `self.datatype`
+        let field = Arc::new(Field::new_list_field(input.data_type().clone(), true));
         let list_array = ListArray::new(field, offsets, Arc::clone(input), nulls);
 
         Ok(vec![Arc::new(list_array)])

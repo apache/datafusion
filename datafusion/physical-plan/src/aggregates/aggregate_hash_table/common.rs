@@ -32,6 +32,7 @@ use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
+    new_batch_conforming_schema,
 };
 
 /// Marker for raw rows -> partial state aggregation.
@@ -246,7 +247,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                     }
                     drop(timer);
 
-                    let batch = RecordBatch::try_new(output_schema, columns)?;
+                    let batch = new_batch_conforming_schema(output_schema, columns)?;
                     debug_assert!(batch.num_rows() > 0);
                     MaterializedAggregateOutput::new(batch)
                 }
@@ -317,7 +318,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             output.extend(acc.state(EmitTo::All)?);
         }
 
-        let batch = RecordBatch::try_new(state_schema, output)?;
+        let batch = new_batch_conforming_schema(state_schema, output)?;
         debug_assert!(batch.num_rows() > 0);
 
         // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
