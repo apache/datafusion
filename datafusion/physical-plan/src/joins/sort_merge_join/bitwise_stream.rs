@@ -127,6 +127,7 @@ use crate::joins::utils::{JoinFilter, JoinKeyComparator, compare_join_arrays};
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, Time,
 };
+use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch};
@@ -236,6 +237,13 @@ pub(crate) struct BitwiseSortMergeJoinStream {
     // with many inner rows will buffer them all. See "Degenerate cases"
     // in exec.rs. Spilled to disk when memory reservation fails.
     inner_key_buffer: Vec<RecordBatch>,
+    // Spill target for the key group currently being buffered. One key group
+    // can exceed the memory budget more than once (each spill empties the
+    // buffer and resets the reservation, then buffering resumes), so all of
+    // its spills are appended to this one file. Finalized into
+    // `inner_key_spill` once the group is fully buffered.
+    inner_key_spill_file: Option<InProgressSpillFile>,
+    // The finalized spill file for the fully buffered key group, if it spilled.
     inner_key_spill: Option<Arc<dyn SpillFile>>,
 
     // Join ON expressions, evaluated against each new batch to produce
@@ -339,6 +347,7 @@ impl BitwiseSortMergeJoinStream {
             inner_key_arrays: vec![],
             matched: BooleanBufferBuilder::new(0),
             inner_key_buffer: vec![],
+            inner_key_spill_file: None,
             inner_key_spill: None,
             on_outer,
             on_inner,
@@ -443,20 +452,53 @@ impl BitwiseSortMergeJoinStream {
         Ok(self.inner_self_cmp.as_ref().unwrap())
     }
 
-    /// Spill the in-memory inner key buffer to disk and clear it.
+    /// Append the in-memory inner key buffer to this key group's spill file
+    /// and clear it, creating the file on the first spill.
+    ///
+    /// Buffering one key group can spill repeatedly: each spill empties
+    /// `inner_key_buffer` and resets the reservation to zero, after which
+    /// buffering resumes and can exhaust the budget again. Every spill must
+    /// therefore be appended rather than replace its predecessor — a spill
+    /// file is deleted from disk once the last reference to it is dropped, so
+    /// replacing one discards those inner rows and they are silently never
+    /// evaluated against the filter.
     fn spill_inner_key_buffer(&mut self) -> Result<()> {
+        if self.inner_key_spill_file.is_none() {
+            self.inner_key_spill_file = Some(
+                self.spill_manager
+                    .create_in_progress_file("semi_anti_smj_inner_key_spill")?,
+            );
+        }
+        // Split borrows: `&mut inner_key_spill_file` and `&inner_key_buffer`
+        // are disjoint fields.
         let spill_file = self
-            .spill_manager
-            .spill_record_batch_and_finish(
-                &self.inner_key_buffer,
-                "semi_anti_smj_inner_key_spill",
-            )?
-            .expect("inner_key_buffer is non-empty when spilling");
+            .inner_key_spill_file
+            .as_mut()
+            .expect("spill file was just created if absent");
+        for batch in &self.inner_key_buffer {
+            spill_file.append_batch(batch)?;
+        }
         self.inner_key_buffer.clear();
         self.inner_buffer_size = 0;
-        self.inner_key_spill = Some(spill_file);
         // Should succeed now — inner buffer has been spilled.
         self.try_resize_reservation()
+    }
+
+    /// Finalize this key group's spill file, if it spilled, so it can be read
+    /// back. Called once the key group is fully buffered.
+    fn finish_inner_key_spill(&mut self) -> Result<()> {
+        let Some(mut spill_file) = self.inner_key_spill_file.take() else {
+            return Ok(());
+        };
+        let Some(finished) = spill_file.finish()? else {
+            // The file is only created immediately before appending a
+            // non-empty buffer, so it always holds at least one batch.
+            return internal_err!(
+                "inner key spill file was created but no batches were appended"
+            );
+        };
+        self.inner_key_spill = Some(finished);
+        Ok(())
     }
 
     /// Clear inner key group state after processing. Does not resize the
@@ -465,6 +507,7 @@ impl BitwiseSortMergeJoinStream {
     /// pool interactions (see apache/datafusion#20729).
     fn clear_inner_key_group(&mut self) {
         self.inner_key_buffer.clear();
+        self.inner_key_spill_file = None;
         self.inner_key_spill = None;
         self.inner_buffer_size = 0;
     }
@@ -642,10 +685,9 @@ impl BitwiseSortMergeJoinStream {
     async fn buffer_inner_key_group(&mut self) -> Result<()> {
         self.clear_inner_key_group();
 
-        loop {
-            let Some(inner_batch) = &self.inner_batch else {
-                return Ok(());
-            };
+        // Every exit from this loop breaks rather than returns, so the spill
+        // file is finalized on exactly one path.
+        while let Some(inner_batch) = &self.inner_batch {
             let num_inner = inner_batch.num_rows();
             let from = self.inner_offset;
             let group_end =
@@ -673,7 +715,7 @@ impl BitwiseSortMergeJoinStream {
 
             if group_end < num_inner {
                 self.inner_offset = group_end;
-                return Ok(());
+                break;
             }
 
             // Key group extends to the end of the batch — it may continue
@@ -682,7 +724,7 @@ impl BitwiseSortMergeJoinStream {
 
             if !self.next_inner_batch().await? {
                 self.inner_batch = None;
-                return Ok(());
+                break;
             }
             if !keys_match(
                 &saved_inner_keys,
@@ -690,9 +732,11 @@ impl BitwiseSortMergeJoinStream {
                 &self.sort_options,
                 self.null_equality,
             )? {
-                return Ok(());
+                break;
             }
         }
+
+        self.finish_inner_key_spill()
     }
 
     /// Process a key match with a filter. For each inner row in the buffered

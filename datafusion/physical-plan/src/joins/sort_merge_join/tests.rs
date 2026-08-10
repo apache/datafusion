@@ -4892,6 +4892,127 @@ async fn bitwise_spill_with_filter() -> Result<()> {
     Ok(())
 }
 
+/// A single inner key group can exhaust the memory budget more than once:
+/// each spill empties the in-memory buffer and resets the reservation to zero,
+/// after which buffering resumes and can exhaust it again. Every spill must be
+/// retained — a spill file is deleted from disk once its last reference is
+/// dropped, so if a later spill replaces an earlier one those inner rows are
+/// silently never evaluated against the filter.
+///
+/// Setup:
+/// - Outer: 1 row, key=1, c1=10
+/// - Inner: two 64-row batches, both key=1, with c2=10 then c2=20, followed by
+///   a key=2 batch that closes the group. With a 100-byte limit each batch
+///   spills on its own, so the group spills twice.
+/// - Filter: c1 == c2, so the *only* match lives in the first spill
+///
+/// Expected: the outer row matches (semi=1 row, anti=0 rows, mark=true). Before
+/// the fix the first spill was discarded, so semi returned 0 rows, anti
+/// returned 1, and mark reported false.
+#[tokio::test]
+async fn bitwise_multiple_spills_in_one_key_group() -> Result<()> {
+    let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![10]));
+    let right = build_table_from_batches(vec![
+        build_table_i32(
+            ("a2", &vec![100; 64]),
+            ("b1", &vec![1; 64]),
+            ("c2", &vec![10; 64]),
+        ),
+        build_table_i32(
+            ("a2", &vec![200; 64]),
+            ("b1", &vec![1; 64]),
+            ("c2", &vec![20; 64]),
+        ),
+        build_table_i32(("a2", &vec![300]), ("b1", &vec![2]), ("c2", &vec![30])),
+    ]);
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+    )];
+    let sort_options = vec![SortOptions::default(); on.len()];
+
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("c1", 0)),
+            Operator::Eq,
+            Arc::new(Column::new("c2", 1)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ])),
+    );
+
+    for join_type in [LeftSemi, LeftAnti, LeftMark] {
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(100, 1.0)
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+            )
+            .build_arc()?;
+        let spilled_join = SortMergeJoinExec::try_new(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            Some(filter.clone()),
+            join_type,
+            sort_options.clone(),
+            NullEquality::NullEqualsNothing,
+        )?;
+        let spilled = common::collect(
+            spilled_join
+                .execute(0, Arc::new(TaskContext::default().with_runtime(runtime)))?,
+        )
+        .await?;
+
+        // Guards against this test going vacuous: both 64-row batches of the
+        // key group must reach disk, which only happens if the group spilled
+        // more than once.
+        let metrics = spilled_join.metrics().unwrap();
+        assert!(
+            metrics.spilled_rows().unwrap() >= 128,
+            "expected the whole key group to spill for {join_type:?}, got {:?} rows",
+            metrics.spilled_rows()
+        );
+
+        let in_memory_join = SortMergeJoinExec::try_new(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            Some(filter.clone()),
+            join_type,
+            sort_options.clone(),
+            NullEquality::NullEqualsNothing,
+        )?;
+        let in_memory =
+            common::collect(in_memory_join.execute(0, Arc::new(TaskContext::default()))?)
+                .await?;
+        assert_eq!(
+            in_memory_join.metrics().unwrap().spill_count(),
+            Some(0),
+            "unexpected spill for {join_type:?} without a memory limit"
+        );
+
+        assert_eq!(
+            batches_to_sort_string(&spilled),
+            batches_to_sort_string(&in_memory),
+            "spilled vs non-spilled results differ for {join_type:?}"
+        );
+    }
+
+    Ok(())
+}
+
 /// Once the inner key group has spilled, an outer key group spanning a batch
 /// boundary must still be evaluated against the spilled inner rows — the
 /// second outer batch's rows must not be treated as having no inner group to
