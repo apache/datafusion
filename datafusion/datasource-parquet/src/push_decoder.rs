@@ -39,6 +39,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
+use arrow::compute::filter_record_batch;
 use arrow::datatypes::SchemaRef;
 use futures::StreamExt;
 use futures::stream::BoxStream;
@@ -322,11 +323,17 @@ impl PushDecoderStreamState {
                         // Apply the in-scan post-scan filter (if any) before
                         // limit slicing and projection. The decoder's
                         // projection mask already covers the predicate's
-                        // columns.
+                        // columns; those the projector does not also read are
+                        // dropped by `narrow` before the filter kernel runs,
+                        // so we never filter a column just to discard it.
                         let batch = if let Some(filter) =
                             self.decoder_projection.post_scan_filter()
                         {
-                            match filter.filter(&batch) {
+                            let filtered = filter.evaluate(&batch).and_then(|mask| {
+                                let narrowed = self.decoder_projection.narrow(batch)?;
+                                Ok(filter_record_batch(&narrowed, &mask)?)
+                            });
+                            match filtered {
                                 Ok(b) => b,
                                 Err(e) => {
                                     timer.stop();

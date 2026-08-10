@@ -33,15 +33,15 @@
 
 use std::sync::Arc;
 
-use arrow::array::{RecordBatch, RecordBatchOptions};
-use arrow::compute::filter_record_batch;
+use arrow::array::{Array, BooleanArray, RecordBatch, RecordBatchOptions};
+use arrow::compute::kernels::filter::prep_null_mask_filter;
 use arrow::datatypes::SchemaRef;
 
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{Result, internal_err};
 use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr::projection::{ProjectionExprs, Projector};
-use datafusion_physical_expr::utils::reassign_expr_columns;
+use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::{Count, Time};
@@ -52,6 +52,29 @@ use parquet::schema::types::SchemaDescriptor;
 use crate::ParquetFileMetrics;
 use crate::opener::{VirtualColumnsState, append_fields};
 use crate::projection_read_plan::build_projection_read_plan;
+
+/// Stream-schema column indices referenced by `projection`, in ascending
+/// order, or `None` when the projection already reads every column of
+/// `stream_schema` (so narrowing to them would be an identity).
+///
+/// `projection` must already be rebased onto `stream_schema`.
+fn projector_input_indices(
+    projection: &ProjectionExprs,
+    stream_schema: &SchemaRef,
+) -> Option<Vec<usize>> {
+    let mut indices: Vec<usize> = projection
+        .expr_iter()
+        .flat_map(|expr| collect_columns(&expr))
+        .map(|col| col.index())
+        .collect();
+    indices.sort_unstable();
+    indices.dedup();
+
+    // Nothing to drop: keep the batch (and the projector) as-is. This is the
+    // no-post-scan-filter case, where the decoder mask is already exactly the
+    // projection.
+    (indices.len() < stream_schema.fields().len()).then_some(indices)
+}
 
 /// Predicate applied to decoded record batches inside the parquet scan.
 ///
@@ -72,10 +95,13 @@ pub(crate) struct PostScanFilter {
 }
 
 impl PostScanFilter {
-    /// Evaluate the predicate on `batch` and return the surviving rows. May
-    /// return an empty batch — callers should skip empty batches rather than
-    /// yield them downstream.
-    pub(crate) fn filter(&self, batch: &RecordBatch) -> Result<RecordBatch> {
+    /// Evaluate the predicate on `batch` and return the selection mask.
+    ///
+    /// The mask is returned rather than applied so the caller can drop the
+    /// filter-only columns *before* paying for the filter kernel — see
+    /// [`DecoderProjection::narrow`]. Rows where the predicate is not `true`
+    /// (including `NULL`) are excluded, matching `FilterExec`.
+    pub(crate) fn evaluate(&self, batch: &RecordBatch) -> Result<BooleanArray> {
         // Scoped timer: stops on drop, so the early-return paths still record.
         let _timer = self.eval_time.timer();
 
@@ -86,12 +112,18 @@ impl PostScanFilter {
                 "post-scan filter predicate did not evaluate to a BooleanArray"
             );
         };
-        let filtered = filter_record_batch(batch, mask)?;
+        // `filter_record_batch` treats a null mask entry as false, so the
+        // surviving-row count is the number of entries that are `true` and
+        // non-null — exactly `true_count()` on the mask with nulls excluded.
+        let mask = match mask.nulls() {
+            Some(_) => prep_null_mask_filter(mask),
+            None => mask.clone(),
+        };
 
-        let kept = filtered.num_rows();
+        let kept = mask.true_count();
         self.rows_matched.add(kept);
         self.rows_pruned.add(input_rows - kept);
-        Ok(filtered)
+        Ok(mask)
     }
 }
 
@@ -118,6 +150,12 @@ pub(crate) struct DecoderProjection {
     /// evaluation, in which case the decoder mask covers exactly the user
     /// projection and there is no extra per-batch work.
     post_scan_filter: Option<PostScanFilter>,
+    /// Stream-schema column indices the [`Projector`] reads, used by
+    /// [`narrow`](Self::narrow) to drop filter-only columns before the filter
+    /// kernel runs. `None` when the projector already reads every stream
+    /// column — always the case without a post-scan filter, where the decoder
+    /// mask covers exactly the projection and narrowing would be an identity.
+    narrow_indices: Option<Vec<usize>>,
 }
 
 impl DecoderProjection {
@@ -210,7 +248,25 @@ impl DecoderProjection {
         let rebased_projection = projection
             .clone()
             .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
-        let projector = rebased_projection.make_projector(&stream_schema)?;
+
+        // When the mask was widened for post-scan filter columns, the stream
+        // batch carries columns the projector never reads. Filtering those
+        // through the (expensive) filter kernel only to drop them afterwards
+        // is pure waste, so narrow the batch to the projector's inputs first
+        // and rebase the projector onto that narrower schema — the same
+        // project-then-filter order `FilterExec::filter_and_project` uses.
+        let narrow_indices = projector_input_indices(&rebased_projection, &stream_schema);
+        let (projector, narrow_indices) = match narrow_indices {
+            Some(indices) => {
+                let narrowed = Arc::new(stream_schema.project(&indices)?);
+                let renarrowed = rebased_projection
+                    .clone()
+                    .try_map_exprs(|expr| reassign_expr_columns(expr, &narrowed))?;
+                let projector = renarrowed.make_projector(&narrowed)?;
+                (projector, Some(indices))
+            }
+            None => (rebased_projection.make_projector(&stream_schema)?, None),
+        };
 
         // Compare against the projector's *output* schema rather than the
         // (possibly widened) stream schema, so widening the mask for post-scan
@@ -240,6 +296,7 @@ impl DecoderProjection {
             output_schema: Arc::clone(output_schema),
             replace_schema,
             post_scan_filter,
+            narrow_indices,
         })
     }
 
@@ -253,6 +310,20 @@ impl DecoderProjection {
     /// (after any row-level `RowFilter`, before the projector).
     pub(crate) fn post_scan_filter(&self) -> Option<&PostScanFilter> {
         self.post_scan_filter.as_ref()
+    }
+
+    /// Drop the columns only the post-scan filter needed, leaving just what
+    /// the [`Projector`] reads.
+    ///
+    /// Call this *before* applying the filter mask: `RecordBatch::project` is
+    /// a cheap `Arc` reslice, so narrowing first keeps the filter kernel off
+    /// columns that would be discarded immediately afterwards. Returns the
+    /// batch unchanged when the projector already reads every stream column.
+    pub(crate) fn narrow(&self, batch: RecordBatch) -> Result<RecordBatch> {
+        match &self.narrow_indices {
+            Some(indices) => Ok(batch.project(indices)?),
+            None => Ok(batch),
+        }
     }
 
     /// Whether this file has a post-scan filter. Used by the opener to decide
