@@ -638,7 +638,7 @@ mod tests {
         //Test correct plan structure
         assert_snapshot!(plan_str,
           @r"
-        Projection: a, b, (a OR b) AND NOT a AND b AS result
+        Projection: a, b, (a OR b) AND NOT (a AND b) AS result
           Values: (Boolean(true), Boolean(true)), (Boolean(true), Boolean(false)), (Boolean(false), Boolean(true)), (Boolean(false), Boolean(false))
         "
         );

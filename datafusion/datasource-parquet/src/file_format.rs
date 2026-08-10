@@ -297,6 +297,7 @@ async fn get_file_decryption_properties(
 }
 
 #[cfg(not(feature = "parquet_encryption"))]
+#[expect(clippy::unused_async)]
 async fn get_file_decryption_properties(
     _state: &dyn Session,
     _options: &TableParquetOptions,
@@ -367,7 +368,13 @@ impl FileFormat for ParquetFormat {
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
             // fetch schemas concurrently, if requested
-            .buffer_unordered(state.config_options().execution.meta_fetch_concurrency)
+            .buffer_unordered(
+                state
+                    .config_options()
+                    .execution
+                    .meta_fetch_concurrency
+                    .get(),
+            )
             .try_collect()
             .await?;
 

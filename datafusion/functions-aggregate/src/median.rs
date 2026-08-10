@@ -39,10 +39,11 @@ use arrow::datatypes::{
     ArrowNativeType, ArrowPrimitiveType, Decimal32Type, Decimal64Type, FieldRef,
 };
 
+use datafusion_common::hash_utils::RandomState;
 use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, assert_eq_or_internal_err, exec_datafusion_err,
-    internal_datafusion_err,
+    internal_datafusion_err, internal_err,
 };
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
@@ -52,6 +53,7 @@ use datafusion_expr::{
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
+use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 use datafusion_functions_aggregate_common::utils::{GenericDistinctBuffer, Hashable};
 use datafusion_macros::user_doc;
 use std::collections::HashMap;
@@ -137,6 +139,17 @@ impl AggregateUDFImpl for Median {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        if args.input_fields[0].data_type().is_null() {
+            return Ok(vec![
+                Field::new(
+                    format_state_name(args.name, self.name()),
+                    DataType::Null,
+                    true,
+                )
+                .into(),
+            ]);
+        }
+
         //Intermediate state is a list of the elements we have collected so far
         let field = Field::new_list_field(args.input_fields[0].data_type().clone(), true);
         let state_name = if args.is_distinct {
@@ -173,6 +186,10 @@ impl AggregateUDFImpl for Median {
         }
 
         let dt = acc_args.expr_fields[0].data_type().clone();
+        if dt.is_null() {
+            return Ok(Box::new(NoopAccumulator::default()));
+        }
+
         downcast_integer! {
             dt => (helper, dt),
             DataType::Float16 => helper!(Float16Type, dt),
@@ -191,7 +208,7 @@ impl AggregateUDFImpl for Median {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
-        !args.is_distinct
+        !args.is_distinct && !args.expr_fields[0].data_type().is_null()
     }
 
     fn create_groups_accumulator(
@@ -288,7 +305,12 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
                 "failed to reserve {additional} values for median accumulator: {e}"
             )
         })?;
-        self.all_values.extend(values.iter().flatten());
+        if values.null_count() > 0 {
+            self.all_values.extend(values.iter().flatten());
+        } else {
+            // Fast path: no nulls, so the values buffer can be appended wholesale.
+            self.all_values.extend_from_slice(values.values());
+        }
         Ok(())
     }
 
@@ -310,11 +332,19 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let mut to_remove: HashMap<Hashable<T::Native>, usize> = HashMap::new();
+        let mut to_remove: HashMap<Hashable<T::Native>, usize, RandomState> =
+            HashMap::default();
 
         let arr = values[0].as_primitive::<T>();
-        for value in arr.iter().flatten() {
-            *to_remove.entry(Hashable(value)).or_default() += 1;
+        if arr.null_count() > 0 {
+            for value in arr.iter().flatten() {
+                *to_remove.entry(Hashable(value)).or_default() += 1;
+            }
+        } else {
+            // Fast path: no nulls, so skip the per-element validity check.
+            for value in arr.values().iter() {
+                *to_remove.entry(Hashable(*value)).or_default() += 1;
+            }
         }
 
         let mut i = 0;
@@ -334,6 +364,15 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
             } else {
                 i += 1;
             }
+        }
+
+        // Retracting values that are not tracked means the accumulator state
+        // has diverged from the window frame; continuing would silently
+        // produce wrong results, so surface it as an error.
+        if !to_remove.is_empty() {
+            return internal_err!(
+                "median retract_batch: retracted value(s) not present in the window"
+            );
         }
         Ok(())
     }
@@ -535,18 +574,14 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
 
         Ok(vec![Arc::new(converted_list_array)])
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn size(&self) -> usize {
         self.group_values
             .iter()
-            .map(|values| values.capacity() * size_of::<T>())
+            .map(|values| values.capacity() * size_of::<T::Native>())
             .sum::<usize>()
-            // account for size of self.grou_values too
-            + self.group_values.capacity() * size_of::<Vec<T>>()
+            // account for size of self.group_values too
+            + self.group_values.capacity() * size_of::<Vec<T::Native>>()
+            + size_of::<Vec<Vec<T::Native>>>()
     }
 }
 
@@ -629,5 +664,60 @@ fn calculate_median<T: ArrowNumericType>(values: &mut [T::Native]) -> Option<T::
     } else {
         let (_, median, _) = values.select_nth_unstable_by(len / 2, cmp);
         Some(*median)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Float64Array;
+
+    fn median_accumulator() -> MedianAccumulator<Float64Type> {
+        MedianAccumulator {
+            data_type: DataType::Float64,
+            all_values: vec![],
+        }
+    }
+
+    #[test]
+    fn retract_batch_errors_on_untracked_value() {
+        let mut acc = median_accumulator();
+        let values: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0]));
+        acc.update_batch(std::slice::from_ref(&values)).unwrap();
+
+        let retract: ArrayRef = Arc::new(Float64Array::from(vec![3.0]));
+        let err = acc
+            .retract_batch(std::slice::from_ref(&retract))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("not present in the window"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn update_batch_with_and_without_nulls_agree() {
+        // The null-free fast path must accumulate the same values as the
+        // general path.
+        let dense: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0]));
+        let sparse: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(1.0),
+            None,
+            Some(2.0),
+            None,
+            Some(3.0),
+        ]));
+
+        let mut dense_acc = median_accumulator();
+        dense_acc
+            .update_batch(std::slice::from_ref(&dense))
+            .unwrap();
+        let mut sparse_acc = median_accumulator();
+        sparse_acc
+            .update_batch(std::slice::from_ref(&sparse))
+            .unwrap();
+
+        assert_eq!(dense_acc.all_values, sparse_acc.all_values);
     }
 }

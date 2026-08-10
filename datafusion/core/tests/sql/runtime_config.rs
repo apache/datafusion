@@ -31,6 +31,8 @@ use datafusion_execution::cache::default_cache::DefaultCache;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_physical_plan::common::collect;
 
+use crate::helper::plan_metrics::plan_spill_count;
+
 #[tokio::test]
 async fn test_memory_limit_with_spill() {
     let ctx = SessionContext::new();
@@ -57,8 +59,7 @@ async fn test_memory_limit_with_spill() {
     let stream = plan.execute(0, task_ctx).unwrap();
 
     let _results = collect(stream).await;
-    let metrics = plan.metrics().unwrap();
-    let spill_count = metrics.spill_count().unwrap();
+    let spill_count = plan_spill_count(plan.as_ref());
     assert!(spill_count > 0, "Expected spills but none occurred");
 }
 
@@ -87,8 +88,7 @@ async fn test_no_spill_with_adequate_memory() {
     let stream = plan.execute(0, task_ctx).unwrap();
 
     let _results = collect(stream).await;
-    let metrics = plan.metrics().unwrap();
-    let spill_count = metrics.spill_count().unwrap();
+    let spill_count = plan_spill_count(plan.as_ref());
     assert_eq!(spill_count, 0, "Expected no spills but some occurred");
 }
 

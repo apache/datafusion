@@ -19,8 +19,9 @@ use insta::assert_snapshot;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    bounded_window_exec, global_limit_exec, local_limit_exec, memory_exec,
-    projection_exec, repartition_exec, sort_exec, sort_expr, sort_expr_options,
+    bounded_window_exec, bounded_window_exec_with_can_repartition, global_limit_exec,
+    hash_join_exec, local_limit_exec, memory_exec, projection_exec, repartition_exec,
+    sort_exec, sort_exec_with_preserve_partitioning, sort_expr, sort_expr_options,
     sort_merge_join_exec, sort_preserving_merge_exec, union_exec,
 };
 
@@ -29,12 +30,13 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use datafusion::prelude::{CsvReadOptions, SessionContext};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{JoinType, Result, ScalarValue};
-use datafusion_physical_expr::Partitioning;
+use datafusion_common::{JoinType, NullEquality, Result, ScalarValue};
 use datafusion_physical_expr::expressions::{Literal, col};
+use datafusion_physical_expr::{Partitioning, RangePartitioning, SplitPoint};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
+use datafusion_physical_plan::joins::{StreamJoinPartitionMode, SymmetricHashJoinExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::{ExecutionPlan, displayable};
 
@@ -400,6 +402,146 @@ fn assert_sanity_check(plan: &Arc<dyn ExecutionPlan>, is_sane: bool) {
     );
 }
 
+fn range_partitioned_exec(
+    schema: &SchemaRef,
+    key: &str,
+    split_points: impl IntoIterator<Item = i32>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let split_points = split_points
+        .into_iter()
+        .map(|value| SplitPoint::new(vec![ScalarValue::Int32(Some(value))]))
+        .collect();
+    let partitioning = Partitioning::Range(RangePartitioning::try_new(
+        [sort_expr(key, schema)].into(),
+        split_points,
+    )?);
+    RepartitionExec::try_new(memory_exec(schema), partitioning)
+        .map(|exec| Arc::new(exec) as Arc<dyn ExecutionPlan>)
+}
+
+#[test]
+fn test_partitioned_hash_join_requires_co_partitioned_children() -> Result<()> {
+    let schema = create_test_schema2();
+    let join_on = vec![(col("a", &schema)?, col("a", &schema)?)];
+
+    let compatible_join = hash_join_exec(
+        range_partitioned_exec(&schema, "a", [10])?,
+        range_partitioned_exec(&schema, "a", [10])?,
+        join_on.clone(),
+        None,
+        &JoinType::Inner,
+    )?;
+    assert_sanity_check(&compatible_join, true);
+
+    let incompatible_join = hash_join_exec(
+        range_partitioned_exec(&schema, "a", [10])?,
+        range_partitioned_exec(&schema, "a", [20])?,
+        join_on,
+        None,
+        &JoinType::Inner,
+    )?;
+    assert_sanity_check(&incompatible_join, false);
+
+    Ok(())
+}
+
+#[test]
+fn test_partitioned_right_hash_join_requires_co_partitioned_children() -> Result<()> {
+    let schema = create_test_schema2();
+    let join_on = vec![(col("a", &schema)?, col("a", &schema)?)];
+
+    let compatible_join = hash_join_exec(
+        range_partitioned_exec(&schema, "a", [10])?,
+        range_partitioned_exec(&schema, "a", [10])?,
+        join_on.clone(),
+        None,
+        &JoinType::Right,
+    )?;
+    assert_sanity_check(&compatible_join, true);
+
+    let incompatible_join = hash_join_exec(
+        range_partitioned_exec(&schema, "a", [10])?,
+        range_partitioned_exec(&schema, "a", [20])?,
+        join_on,
+        None,
+        &JoinType::Right,
+    )?;
+    assert_sanity_check(&incompatible_join, false);
+
+    Ok(())
+}
+
+#[test]
+fn test_sort_merge_join_requires_co_partitioned_children() -> Result<()> {
+    let schema = create_test_schema2();
+    let join_on = vec![(col("a", &schema)?, col("a", &schema)?)];
+    let ordering: LexOrdering = [sort_expr("a", &schema)].into();
+
+    let compatible_join = sort_merge_join_exec(
+        sort_exec_with_preserve_partitioning(
+            ordering.clone(),
+            range_partitioned_exec(&schema, "a", [10])?,
+        ),
+        sort_exec_with_preserve_partitioning(
+            ordering.clone(),
+            range_partitioned_exec(&schema, "a", [10])?,
+        ),
+        &join_on,
+        &JoinType::Inner,
+    );
+    assert_sanity_check(&compatible_join, true);
+
+    let incompatible_join = sort_merge_join_exec(
+        sort_exec_with_preserve_partitioning(
+            ordering.clone(),
+            range_partitioned_exec(&schema, "a", [10])?,
+        ),
+        sort_exec_with_preserve_partitioning(
+            ordering,
+            range_partitioned_exec(&schema, "a", [20])?,
+        ),
+        &join_on,
+        &JoinType::Inner,
+    );
+    assert_sanity_check(&incompatible_join, false);
+
+    Ok(())
+}
+
+#[test]
+fn test_symmetric_hash_join_requires_co_partitioned_children() -> Result<()> {
+    let schema = create_test_schema2();
+    let join_on = vec![(col("a", &schema)?, col("a", &schema)?)];
+
+    let compatible_join = Arc::new(SymmetricHashJoinExec::try_new(
+        range_partitioned_exec(&schema, "a", [10])?,
+        range_partitioned_exec(&schema, "a", [10])?,
+        join_on.clone(),
+        None,
+        &JoinType::Inner,
+        NullEquality::NullEqualsNothing,
+        None,
+        None,
+        StreamJoinPartitionMode::Partitioned,
+    )?) as Arc<dyn ExecutionPlan>;
+    assert_sanity_check(&compatible_join, true);
+
+    let incompatible_join = Arc::new(SymmetricHashJoinExec::try_new(
+        range_partitioned_exec(&schema, "a", [10])?,
+        range_partitioned_exec(&schema, "a", [20])?,
+        join_on,
+        None,
+        &JoinType::Inner,
+        NullEquality::NullEqualsNothing,
+        None,
+        None,
+        StreamJoinPartitionMode::Partitioned,
+    )?) as Arc<dyn ExecutionPlan>;
+    assert_sanity_check(&incompatible_join, false);
+
+    Ok(())
+}
+
 #[tokio::test]
 /// Tests that plan is valid when the sort requirements are satisfied.
 async fn test_bounded_window_agg_sort_requirement() -> Result<()> {
@@ -454,6 +596,76 @@ async fn test_bounded_window_agg_no_sort_requirement() -> Result<()> {
     "#
     );
     // Order requirement of the `BoundedWindowAggExec` is not satisfied. We expect to receive error during sanity check.
+    assert_sanity_check(&bw, false);
+    Ok(())
+}
+
+#[tokio::test]
+/// Tests that a window over a compatible range-partitioned input satisfies
+/// the window's key distribution requirement without a hash repartition.
+async fn test_bounded_window_agg_range_partitioning() -> Result<()> {
+    let schema = create_test_schema2();
+    let source = range_partitioned_exec(&schema, "a", [10, 20, 30])?;
+    let ordering: LexOrdering = [sort_expr_options(
+        "a",
+        &schema,
+        SortOptions {
+            descending: false,
+            nulls_first: false,
+        },
+    )]
+    .into();
+    let partition_by = vec![col("a", &schema)?];
+    let sort = sort_exec_with_preserve_partitioning(ordering, source);
+    let bw =
+        bounded_window_exec_with_can_repartition("a", vec![], &partition_by, sort, true);
+    let plan_str = displayable(bw.as_ref()).indent(true).to_string();
+    let actual = plan_str.trim();
+    assert_snapshot!(
+        actual,
+        @r#"
+    BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+        RepartitionExec: partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), input_partitions=1
+          DataSourceExec: partitions=1, partition_sizes=[0]
+    "#
+    );
+    assert_sanity_check(&bw, true);
+    Ok(())
+}
+
+#[tokio::test]
+/// Tests that a window over an incompatible range-partitioned input fails
+/// the window's key distribution requirement.
+async fn test_bounded_window_agg_incompatible_range_partitioning() -> Result<()> {
+    let schema = create_test_schema2();
+    let source = range_partitioned_exec(&schema, "a", [10, 20, 30])?;
+    let ordering: LexOrdering = [sort_expr_options(
+        "b",
+        &schema,
+        SortOptions {
+            descending: false,
+            nulls_first: false,
+        },
+    )]
+    .into();
+    let partition_by = vec![col("b", &schema)?];
+    let sort = sort_exec_with_preserve_partitioning(ordering, source);
+    let bw =
+        bounded_window_exec_with_can_repartition("b", vec![], &partition_by, sort, true);
+    let plan_str = displayable(bw.as_ref()).indent(true).to_string();
+    let actual = plan_str.trim();
+    assert_snapshot!(
+        actual,
+        @r#"
+    BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[true]
+        RepartitionExec: partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), input_partitions=1
+          DataSourceExec: partitions=1, partition_sizes=[0]
+    "#
+    );
+    // Range([a]) does not colocate `b` values, so the window's key
+    // distribution requirement is not satisfied.
     assert_sanity_check(&bw, false);
     Ok(())
 }

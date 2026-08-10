@@ -16,9 +16,9 @@
 // under the License.
 
 use crate::fuzz_cases::equivalence::utils::{
-    TestScalarUDF, create_random_schema, create_test_params, create_test_schema_2,
-    generate_table_for_eq_properties, generate_table_for_orderings,
-    is_table_same_after_sort,
+    TestScalarUDF, contains_overflowable_arithmetic, create_random_schema,
+    create_test_params, create_test_schema_2, generate_table_for_eq_properties,
+    generate_table_for_orderings, is_table_same_after_sort,
 };
 use arrow::compute::SortOptions;
 use datafusion_common::Result;
@@ -144,14 +144,27 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
                 let err_msg = format!(
                     "Error in test case requirement:{ordering:?}, expected: {expected:?}, eq_properties: {eq_properties}",
                 );
-                // Check whether ordering_satisfy API result and
-                // experimental result matches.
-
-                assert_eq!(
-                    eq_properties.ordering_satisfy(ordering)?,
-                    (expected | false),
-                    "{err_msg}"
+                // A rejection turns inconclusive only from the first `+`/`-`
+                // key onwards, since possible overflow makes an ordering
+                // underivable even when the sample happens to be sorted. A
+                // table sorted by the full ordering is sorted by every prefix
+                // of it, so a rejected arithmetic-free prefix still proves
+                // the rejection is genuine.
+                let conclusive_prefix = LexOrdering::new(
+                    ordering
+                        .iter()
+                        .take_while(|sort_expr| {
+                            !contains_overflowable_arithmetic(&sort_expr.expr)
+                        })
+                        .cloned(),
                 );
+                if eq_properties.ordering_satisfy(ordering)? {
+                    assert!(expected, "{err_msg}");
+                } else if let Some(prefix) = conclusive_prefix
+                    && !eq_properties.ordering_satisfy(prefix)?
+                {
+                    assert!(!expected, "{err_msg}");
+                }
             }
         }
     }

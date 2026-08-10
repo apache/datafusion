@@ -16,6 +16,7 @@
 // under the License.
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
+use crate::distribution_requirements::InputDistributionRequirements;
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
@@ -38,6 +39,7 @@ pub use datafusion_physical_expr::{
 };
 
 use std::any::Any;
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, LazyLock};
 
@@ -47,7 +49,7 @@ use crate::metrics::MetricsSet;
 use crate::projection::ProjectionExec;
 use crate::repartition::RepartitionExec;
 use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use crate::statistics::StatisticsArgs;
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
 
 use arrow::array::{Array, RecordBatch};
@@ -164,10 +166,44 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         check_default_invariants(self, check)
     }
 
-    /// Specifies the data distribution requirements for all the
-    /// children for this `ExecutionPlan`, By default it's [[Distribution::UnspecifiedDistribution]] for each child,
+    /// Returns the dynamic expressions produced by this plan node.
+    ///
+    /// A dynamic expression is produced when this node updates or completes its
+    /// runtime state during execution. Expressions that this node only consumes
+    /// must not be returned. This method is shallow and does not include dynamic
+    /// expressions produced by child plans.
+    ///
+    /// Each returned expression must have a [`PhysicalExpr::expression_id`]
+    /// since all dynamic expressions such as [`DynamicFilterPhysicalExpr`]
+    /// have an expression id.
+    ///
+    /// [`DynamicFilterPhysicalExpr`]: datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr
+    fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        Vec::new()
+    }
+
+    /// Specifies simple per-child input distribution requirements.
+    ///
+    /// Deprecated: override [`Self::input_distribution_requirements`] instead.
+    ///
+    /// By default, each child has [`Distribution::UnspecifiedDistribution`].
+    #[deprecated(since = "55.0.0", note = "Use input_distribution_requirements")]
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::UnspecifiedDistribution; self.children().len()]
+    }
+
+    /// Specifies the input distribution requirements for this plan.
+    ///
+    /// The default implementation wraps [`Self::required_input_distribution`].
+    /// Override this method for richer requirements, such as allowing alternate
+    /// satisfaction policies or requiring multiple children to be co-partitioned.
+    /// See [`InputDistributionRequirements`] for details.
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        #[expect(
+            deprecated,
+            reason = "compatibility shim for external ExecutionPlan implementations"
+        )]
+        InputDistributionRequirements::new(self.required_input_distribution())
     }
 
     /// Specifies the ordering required for all of the children of this
@@ -216,8 +252,8 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         // By default try to maximize parallelism with more CPUs if
         // possible
-        self.required_input_distribution()
-            .into_iter()
+        self.input_distribution_requirements()
+            .per_child_distributions()
             .map(|dist| !matches!(dist, Distribution::SinglePartition))
             .collect()
     }
@@ -234,6 +270,27 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Fast-path used by [`with_new_children_if_necessary`] when the new
+    /// `children` are known to have the same [`PlanProperties`] as the current
+    /// children. Implementations should swap the children in without
+    /// recomputing this plan's `PlanProperties` (typically by cloning `self`
+    /// and replacing the child pointers).
+    ///
+    /// The default implementation falls back to
+    /// [`ExecutionPlan::with_new_children`] which is always correct but
+    /// forfeits the fast-path: implementations that own an expensive
+    /// `PlanProperties` (e.g. projection mapping, complex equivalence
+    /// classes) should override this method.
+    ///
+    /// Callers should route through [`with_new_children_if_necessary`] and
+    /// not invoke this method directly.
+    fn with_new_children_and_same_properties(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
+    }
 
     /// Reset any internal state within this [`ExecutionPlan`].
     ///
@@ -498,10 +555,10 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
 
     /// Returns statistics for a specific partition of this `ExecutionPlan` node.
     ///
-    /// Deprecated: use [`Self::statistics_with_args`] instead,
-    /// which accepts a [`StatisticsArgs`] carrying pre-computed child
-    /// statistics.
-    #[deprecated(since = "55.0.0", note = "Use statistics_with_args instead")]
+    /// Deprecated: use [`StatisticsContext::compute`] instead.
+    ///
+    /// [`StatisticsContext::compute`]: crate::statistics::StatisticsContext::compute
+    #[deprecated(since = "55.0.0", note = "Use StatisticsContext::compute instead")]
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if let Some(idx) = partition {
             // Validate partition index
@@ -516,19 +573,45 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         Ok(Arc::new(Statistics::new_unknown(&self.schema())))
     }
 
-    /// Returns statistics for a specific partition of this `ExecutionPlan` node.
+    /// Returns statistics for a specific partition of this `ExecutionPlan` node,
+    /// given pre-computed child statistics.
+    ///
     /// If statistics are not available, should return [`Statistics::new_unknown`]
     /// (the default), not an error.
-    /// If `partition` is `None`, it returns statistics for all partitions.
+    /// If `args.partition()` is `None`, it returns statistics for all partitions.
     ///
-    /// [`StatisticsArgs`] carries the partition index and a shared cache.
-    /// Create one with [`StatisticsArgs::new`] and pass it to this method.
+    /// Implementations should not call [`StatisticsContext::compute`] from within
+    /// this method; child statistics are provided via `input_stats`.
     ///
-    /// [`StatisticsArgs`]: crate::statistics::StatisticsArgs
-    /// [`StatisticsArgs::new`]: crate::statistics::StatisticsArgs::new
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+    /// Use [`StatisticsContext::compute`] to initiate a full plan-tree walk.
+    ///
+    /// [`StatisticsContext::compute`]: crate::statistics::StatisticsContext::compute
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
         #[expect(deprecated)]
         self.partition_statistics(args.partition())
+    }
+
+    /// Returns, per child, which statistics the [`StatisticsContext`] should resolve
+    /// before calling [`Self::statistics_from_inputs`].
+    ///
+    /// One entry per child (same order as [`Self::children`]): [`ChildStats::At`]
+    /// requests the child's statistics at a partition (`None` = overall);
+    /// [`ChildStats::Skip`] omits a child whose statistics this node does not need
+    /// (a `Statistics::new_unknown` placeholder fills its `input_stats` slot).
+    ///
+    /// The default skips every child, so a node that derives nothing from its
+    /// children (for example one that only overrides the deprecated
+    /// [`Self::partition_statistics`]) triggers no child traversal. A node that reads
+    /// `input_stats` in [`Self::statistics_from_inputs`] must override this to declare
+    /// the children it uses.
+    ///
+    /// [`StatisticsContext`]: crate::statistics::StatisticsContext
+    fn child_stats_requests(&self, _partition: Option<usize>) -> Vec<ChildStats> {
+        self.children().iter().map(|_| ChildStats::Skip).collect()
     }
 
     /// Returns `true` if a limit can be safely pushed down through this
@@ -598,6 +681,12 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// There are two different phases in filter pushdown, which some operators may handle the same and some differently.
     /// Depending on the phase the operator may or may not be allowed to modify the plan.
     /// See [`FilterPushdownPhase`] for more details.
+    ///
+    /// Implementations must preserve the order of `parent_filters` in the
+    /// returned child [`FilterDescription`]: each child parent-filter result is
+    /// matched back to the corresponding input parent filter by position.
+    /// Unsupported filters should therefore be marked unsupported in place,
+    /// rather than removed or appended after supported filters.
     fn gather_filters_for_pushdown(
         &self,
         _phase: FilterPushdownPhase,
@@ -756,6 +845,27 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         _preserve_order: bool,
     ) -> Option<Arc<dyn ExecutionPlan>> {
         None
+    }
+
+    /// Serialize this plan to its protobuf representation, if it knows how.
+    ///
+    /// This is the `ExecutionPlan` analog of
+    /// [`PhysicalExpr::try_to_proto`].
+    ///
+    /// * `Ok(None)` (the default) — "I don't serialize myself"; the caller
+    ///   (`datafusion-proto`) falls back to the central downcast chain. Every
+    ///   un-migrated plan keeps its existing behavior.
+    /// * `Ok(Some(node))` — fully serialized; the caller must not fall back.
+    /// * `Err(_)` — a real failure (e.g. a child failed to serialize).
+    ///
+    /// Only *self-contained* plans should override this — see [`crate::proto`]
+    /// for the session-dependency boundary.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        Ok(None)
     }
 }
 
@@ -1224,18 +1334,41 @@ macro_rules! check_len {
     };
 }
 
+/// All dynamic expressions must have an expression id.
+fn check_dynamic_expression_invariants<P: ExecutionPlan + ?Sized>(
+    plan: &P,
+) -> Result<()> {
+    let mut produced_ids = HashSet::new();
+    for expr in plan.dynamic_expressions_produced() {
+        let Some(expression_id) = expr.expression_id() else {
+            return internal_err!(
+                "{}::dynamic_expressions_produced returned an expression without an expression ID",
+                plan.name()
+            );
+        };
+        assert_or_internal_err!(
+            produced_ids.insert(expression_id),
+            "{}::dynamic_expressions_produced returned duplicate expression ID {expression_id}",
+            plan.name()
+        );
+    }
+    Ok(())
+}
+
 /// Checks a set of invariants that apply to all ExecutionPlan implementations.
 /// Returns an error if the given node does not conform.
 pub fn check_default_invariants<P: ExecutionPlan + ?Sized>(
     plan: &P,
-    _check: InvariantLevel,
+    check: InvariantLevel,
 ) -> Result<(), DataFusionError> {
     let children_len = plan.children().len();
 
     check_len!(plan, maintains_input_order, children_len);
     check_len!(plan, required_input_ordering, children_len);
-    check_len!(plan, required_input_distribution, children_len);
     check_len!(plan, benefits_from_input_partitioning, children_len);
+    plan.input_distribution_requirements()
+        .check_invariants(plan, check)?;
+    check_dynamic_expression_invariants(plan)?;
 
     Ok(())
 }
@@ -1267,7 +1400,25 @@ pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
     }
 }
 
-/// Returns a copy of this plan if we change any child according to the pointer comparison.
+/// Returns a plan with the given children, skipping as much work as possible.
+///
+/// This helper is the single entry point for "rebuild a plan from new
+/// children" and applies three layers of short-circuits, from cheapest to
+/// most expensive:
+///
+/// 1. **Same child pointers** — if every `children[i]` is `Arc::ptr_eq` to the
+///    corresponding existing child, the original `plan` is returned
+///    unchanged (no allocation, no [`ExecutionPlan::with_new_children`]
+///    call).
+/// 2. **Same child properties** — if the children's `PlanProperties` Arcs
+///    match (via [`has_same_children_properties`]), the plan's own
+///    `PlanProperties` cache can be reused. This calls
+///    [`ExecutionPlan::with_new_children_and_same_properties`], which
+///    swaps the child pointers without recomputing `PlanProperties`.
+/// 3. **Full recompute** — otherwise, delegate to
+///    [`ExecutionPlan::with_new_children`], which recomputes
+///    `PlanProperties` from scratch.
+///
 /// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
 pub fn with_new_children_if_necessary(
     plan: Arc<dyn ExecutionPlan>,
@@ -1279,16 +1430,22 @@ pub fn with_new_children_if_necessary(
         old_children.len(),
         "Wrong number of children"
     );
-    if children.is_empty()
-        || children
+    if !children.is_empty() {
+        // Layer 1: same child pointers → return the plan unchanged.
+        if children
             .iter()
             .zip(old_children.iter())
-            .any(|(c1, c2)| !Arc::ptr_eq(c1, c2))
-    {
-        plan.with_new_children(children)
-    } else {
-        Ok(plan)
+            .all(|(c1, c2)| Arc::ptr_eq(c1, c2))
+        {
+            return Ok(plan);
+        }
+        // Layer 2: same child properties → reuse `PlanProperties` cache.
+        if has_same_children_properties(plan.as_ref(), &children)? {
+            return plan.with_new_children_and_same_properties(children);
+        }
     }
+    // Layer 3: full recompute.
+    plan.with_new_children(children)
 }
 
 /// Return a [`DisplayableExecutionPlan`] wrapper around an
@@ -1531,7 +1688,7 @@ pub fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn Executi
 /// replace is requested.
 /// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
 pub fn has_same_children_properties(
-    plan: &impl ExecutionPlan,
+    plan: &dyn ExecutionPlan,
     children: &[Arc<dyn ExecutionPlan>],
 ) -> Result<bool> {
     let old_children = plan.children();
@@ -1551,6 +1708,11 @@ pub fn has_same_children_properties(
 /// Helper macro to avoid properties re-computation if passed children properties
 /// the same as plan already has. Could be used to implement fast-path for method
 /// [`ExecutionPlan::with_new_children`].
+///
+/// New call sites should route through [`with_new_children_if_necessary`],
+/// which applies this check together with the child-pointer short-circuit
+/// (see [`with_new_children_if_necessary`] for the layered policy). This
+/// macro remains for direct-caller sites that have not been migrated yet.
 #[macro_export]
 macro_rules! check_if_same_properties {
     ($plan: expr, $children: expr) => {
@@ -1558,8 +1720,8 @@ macro_rules! check_if_same_properties {
             $plan.as_ref(),
             &$children,
         )? {
-            let plan = $plan.with_new_children_and_same_properties($children);
-            return Ok(::std::sync::Arc::new(plan));
+            return ::std::sync::Arc::clone(&$plan)
+                .with_new_children_and_same_properties($children);
         }
     };
 }
@@ -1609,13 +1771,26 @@ mod tests {
 
     use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
 
     #[derive(Debug)]
-    pub struct EmptyExec;
+    pub struct EmptyExec {
+        dynamic_expressions: Vec<Arc<dyn PhysicalExpr>>,
+    }
 
     impl EmptyExec {
         pub fn new(_schema: SchemaRef) -> Self {
-            Self
+            Self {
+                dynamic_expressions: vec![],
+            }
+        }
+
+        fn with_dynamic_expressions(
+            mut self,
+            dynamic_expressions: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Self {
+            self.dynamic_expressions = dynamic_expressions;
+            self
         }
     }
 
@@ -1649,6 +1824,10 @@ mod tests {
             unimplemented!()
         }
 
+        fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+            self.dynamic_expressions.iter().map(Arc::clone).collect()
+        }
+
         fn execute(
             &self,
             _partition: usize,
@@ -1657,12 +1836,39 @@ mod tests {
             unimplemented!()
         }
 
-        fn statistics_with_args(
+        fn statistics_from_inputs(
             &self,
+            _input_stats: &[Arc<Statistics>],
             _args: &StatisticsArgs,
         ) -> Result<Arc<Statistics>> {
             unimplemented!()
         }
+    }
+
+    #[test]
+    fn test_dynamic_expression_invariants() -> Result<()> {
+        let schema = Arc::new(Schema::empty());
+        let dynamic: Arc<dyn PhysicalExpr> =
+            Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
+        let valid = EmptyExec::new(Arc::clone(&schema))
+            .with_dynamic_expressions(vec![Arc::clone(&dynamic)]);
+        check_default_invariants(&valid, InvariantLevel::Always)?;
+
+        let missing_id =
+            EmptyExec::new(Arc::clone(&schema)).with_dynamic_expressions(vec![lit(true)]);
+        let error = check_default_invariants(&missing_id, InvariantLevel::Always)
+            .unwrap_err()
+            .strip_backtrace();
+        assert!(error.contains("without an expression ID"), "{error}");
+
+        let duplicate = EmptyExec::new(schema)
+            .with_dynamic_expressions(vec![Arc::clone(&dynamic), dynamic]);
+        let error = check_default_invariants(&duplicate, InvariantLevel::Always)
+            .unwrap_err()
+            .strip_backtrace();
+        assert!(error.contains("duplicate expression ID"), "{error}");
+
+        Ok(())
     }
 
     #[derive(Debug)]
@@ -1719,8 +1925,9 @@ mod tests {
             unimplemented!()
         }
 
-        fn statistics_with_args(
+        fn statistics_from_inputs(
             &self,
+            _input_stats: &[Arc<Statistics>],
             _args: &StatisticsArgs,
         ) -> Result<Arc<Statistics>> {
             unimplemented!()
@@ -1779,6 +1986,334 @@ mod tests {
             unimplemented!()
         }
     }
+    /// Test leaf plan with a real [`PlanProperties`] cache. Different instances
+    /// can share the same cache Arc by cloning `cache`.
+    #[derive(Debug, Clone)]
+    struct WithChildrenTestLeaf {
+        cache: Arc<PlanProperties>,
+    }
+
+    impl WithChildrenTestLeaf {
+        fn new(cache: Arc<PlanProperties>) -> Self {
+            Self { cache }
+        }
+    }
+
+    impl DisplayAs for WithChildrenTestLeaf {
+        fn fmt_as(
+            &self,
+            _t: DisplayFormatType,
+            _f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            unimplemented!()
+        }
+    }
+
+    impl ExecutionPlan for WithChildrenTestLeaf {
+        fn name(&self) -> &'static str {
+            "WithChildrenTestLeaf"
+        }
+        fn properties(&self) -> &Arc<PlanProperties> {
+            &self.cache
+        }
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(self)
+        }
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unimplemented!()
+        }
+    }
+
+    /// Test unary plan that counts which of `with_new_children` (full
+    /// recompute) vs `with_new_children_and_same_properties` (fast path) is
+    /// taken.
+    #[derive(Debug, Clone)]
+    struct WithChildrenTestParent {
+        input: Arc<dyn ExecutionPlan>,
+        cache: Arc<PlanProperties>,
+        recompute_calls: Arc<std::sync::atomic::AtomicUsize>,
+        fast_path_calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl WithChildrenTestParent {
+        fn new(input: Arc<dyn ExecutionPlan>) -> Self {
+            let cache = Arc::new(PlanProperties::new(
+                EquivalenceProperties::new(Arc::new(Schema::empty())),
+                Partitioning::UnknownPartitioning(1),
+                EmissionType::Final,
+                Boundedness::Bounded,
+            ));
+            Self {
+                input,
+                cache,
+                recompute_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                fast_path_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            }
+        }
+    }
+
+    impl DisplayAs for WithChildrenTestParent {
+        fn fmt_as(
+            &self,
+            _t: DisplayFormatType,
+            _f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            unimplemented!()
+        }
+    }
+
+    impl ExecutionPlan for WithChildrenTestParent {
+        fn name(&self) -> &'static str {
+            "WithChildrenTestParent"
+        }
+        fn properties(&self) -> &Arc<PlanProperties> {
+            &self.cache
+        }
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![&self.input]
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            mut children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.recompute_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            // Full recompute: allocate a fresh `PlanProperties` Arc so this
+            // path is observable via `Arc::ptr_eq` on properties.
+            let new_input = children.swap_remove(0);
+            let cache = Arc::new(PlanProperties::new(
+                EquivalenceProperties::new(Arc::new(Schema::empty())),
+                Partitioning::UnknownPartitioning(1),
+                EmissionType::Final,
+                Boundedness::Bounded,
+            ));
+            Ok(Arc::new(Self {
+                input: new_input,
+                cache,
+                recompute_calls: Arc::clone(&self.recompute_calls),
+                fast_path_calls: Arc::clone(&self.fast_path_calls),
+            }))
+        }
+        fn with_new_children_and_same_properties(
+            self: Arc<Self>,
+            mut children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.fast_path_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                ..Self::clone(&*self)
+            }))
+        }
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unimplemented!()
+        }
+    }
+
+    /// Test unary plan that does **not** override
+    /// `with_new_children_and_same_properties`. Used to verify the default
+    /// trait fallback still routes through `with_new_children` (which is
+    /// the semantics-preserving path for downstream / external
+    /// `ExecutionPlan` implementations that haven't opted into the
+    /// fast path yet).
+    #[derive(Debug, Clone)]
+    struct WithChildrenTestParentDefault {
+        input: Arc<dyn ExecutionPlan>,
+        cache: Arc<PlanProperties>,
+        recompute_calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl WithChildrenTestParentDefault {
+        fn new(input: Arc<dyn ExecutionPlan>) -> Self {
+            let cache = Arc::new(PlanProperties::new(
+                EquivalenceProperties::new(Arc::new(Schema::empty())),
+                Partitioning::UnknownPartitioning(1),
+                EmissionType::Final,
+                Boundedness::Bounded,
+            ));
+            Self {
+                input,
+                cache,
+                recompute_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            }
+        }
+    }
+
+    impl DisplayAs for WithChildrenTestParentDefault {
+        fn fmt_as(
+            &self,
+            _t: DisplayFormatType,
+            _f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            unimplemented!()
+        }
+    }
+
+    impl ExecutionPlan for WithChildrenTestParentDefault {
+        fn name(&self) -> &'static str {
+            "WithChildrenTestParentDefault"
+        }
+        fn properties(&self) -> &Arc<PlanProperties> {
+            &self.cache
+        }
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![&self.input]
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            mut children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.recompute_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let new_input = children.swap_remove(0);
+            let cache = Arc::new(PlanProperties::new(
+                EquivalenceProperties::new(Arc::new(Schema::empty())),
+                Partitioning::UnknownPartitioning(1),
+                EmissionType::Final,
+                Boundedness::Bounded,
+            ));
+            Ok(Arc::new(Self {
+                input: new_input,
+                cache,
+                recompute_calls: Arc::clone(&self.recompute_calls),
+            }))
+        }
+        // Intentionally does **not** override
+        // `with_new_children_and_same_properties` — relies on the trait
+        // default that falls back to `with_new_children`.
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unimplemented!()
+        }
+    }
+
+    /// Cover the three short-circuit layers of
+    /// [`with_new_children_if_necessary`].
+    #[test]
+    fn test_with_new_children_if_necessary_layers() -> Result<()> {
+        use std::sync::atomic::Ordering;
+
+        // Two leaves that share the same `PlanProperties` Arc but sit behind
+        // distinct `Arc<dyn ExecutionPlan>` pointers.
+        let leaf_props = Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(Arc::new(Schema::empty())),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Final,
+            Boundedness::Bounded,
+        ));
+        let leaf_a: Arc<dyn ExecutionPlan> =
+            Arc::new(WithChildrenTestLeaf::new(Arc::clone(&leaf_props)));
+        let leaf_b: Arc<dyn ExecutionPlan> =
+            Arc::new(WithChildrenTestLeaf::new(Arc::clone(&leaf_props)));
+        // A third leaf with a *different* `PlanProperties` Arc — for layer 3.
+        let leaf_c_props = Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(Arc::new(Schema::empty())),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Final,
+            Boundedness::Bounded,
+        ));
+        let leaf_c: Arc<dyn ExecutionPlan> =
+            Arc::new(WithChildrenTestLeaf::new(leaf_c_props));
+
+        let parent = Arc::new(WithChildrenTestParent::new(Arc::clone(&leaf_a)));
+        let parent_dyn: Arc<dyn ExecutionPlan> = Arc::clone(&parent) as _;
+        let orig_props = Arc::clone(parent.properties());
+
+        // Layer 1: same child pointer → returns the original plan Arc verbatim.
+        let out = with_new_children_if_necessary(
+            Arc::clone(&parent_dyn),
+            vec![Arc::clone(&leaf_a)],
+        )?;
+        assert!(Arc::ptr_eq(&out, &parent_dyn));
+        assert_eq!(parent.recompute_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(parent.fast_path_calls.load(Ordering::SeqCst), 0);
+
+        // Layer 2: distinct child Arc, but children share the same
+        // `PlanProperties` Arc → fast path, parent's `PlanProperties` cache
+        // Arc is reused (not reallocated).
+        assert!(!Arc::ptr_eq(&leaf_a, &leaf_b));
+        assert!(Arc::ptr_eq(leaf_a.properties(), leaf_b.properties()));
+        let out = with_new_children_if_necessary(
+            Arc::clone(&parent_dyn),
+            vec![Arc::clone(&leaf_b)],
+        )?;
+        assert!(Arc::ptr_eq(out.properties(), &orig_props));
+        assert_eq!(parent.recompute_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(parent.fast_path_calls.load(Ordering::SeqCst), 1);
+
+        // Layer 3: child's `PlanProperties` Arc differs → full recompute.
+        assert!(!Arc::ptr_eq(leaf_a.properties(), leaf_c.properties()));
+        let out = with_new_children_if_necessary(
+            Arc::clone(&parent_dyn),
+            vec![Arc::clone(&leaf_c)],
+        )?;
+        assert!(!Arc::ptr_eq(out.properties(), &orig_props));
+        assert_eq!(parent.recompute_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(parent.fast_path_calls.load(Ordering::SeqCst), 1);
+
+        Ok(())
+    }
+
+    /// A plan that does not override `with_new_children_and_same_properties`
+    /// (per @kosiew's review on #23332) must still be routed through
+    /// `with_new_children` when the helper hits the "same properties"
+    /// branch. The default trait implementation forwards to
+    /// `with_new_children`, so downstream / external `ExecutionPlan`
+    /// implementations keep the semantics-preserving path.
+    #[test]
+    fn test_with_new_children_if_necessary_default_fallback() -> Result<()> {
+        use std::sync::atomic::Ordering;
+
+        let leaf_props = Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(Arc::new(Schema::empty())),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Final,
+            Boundedness::Bounded,
+        ));
+        let leaf_a: Arc<dyn ExecutionPlan> =
+            Arc::new(WithChildrenTestLeaf::new(Arc::clone(&leaf_props)));
+        let leaf_b: Arc<dyn ExecutionPlan> =
+            Arc::new(WithChildrenTestLeaf::new(Arc::clone(&leaf_props)));
+        assert!(!Arc::ptr_eq(&leaf_a, &leaf_b));
+        assert!(Arc::ptr_eq(leaf_a.properties(), leaf_b.properties()));
+
+        let parent = Arc::new(WithChildrenTestParentDefault::new(Arc::clone(&leaf_a)));
+        let parent_dyn: Arc<dyn ExecutionPlan> = Arc::clone(&parent) as _;
+
+        // Distinct child Arc but same `PlanProperties` Arc — the helper
+        // enters the "same properties" branch and calls the trait method,
+        // whose default forwards to `with_new_children`.
+        let out = with_new_children_if_necessary(
+            Arc::clone(&parent_dyn),
+            vec![Arc::clone(&leaf_b)],
+        )?;
+        // `with_new_children` was invoked exactly once via the default.
+        assert_eq!(parent.recompute_calls.load(Ordering::SeqCst), 1);
+        // The returned plan has a freshly-recomputed `PlanProperties` Arc,
+        // so it differs from the parent's original cache. This confirms
+        // the fallback ran and did not short-circuit.
+        assert!(!Arc::ptr_eq(out.properties(), parent.properties()));
+
+        Ok(())
+    }
+
     #[test]
     fn test_execution_plan_name() {
         let schema1 = Arc::new(Schema::empty());

@@ -340,7 +340,7 @@ impl FileSource for ArrowSource {
                 // The Arrow IPC stream format doesn't support range-based parallel reading
                 // because it lacks a footer with the information that would be needed to
                 // make range-based parallel reading practical. Without the data in the
-                // footer you would either need to read the the entire file and record the
+                // footer you would either need to read the entire file and record the
                 // offsets of the record batches and dictionaries, essentially recreating
                 // the footer's contents, or else each partition would need to read the
                 // entire file up to the correct offset which is a lot of duplicate I/O.
@@ -391,6 +391,64 @@ impl FileSource for ArrowSource {
 
     fn projection(&self) -> Option<&ProjectionExprs> {
         Some(&self.projection.source)
+    }
+
+    /// Emit an `ArrowScan` node wrapping the shared base config.
+    ///
+    /// Decoding defaults to the IPC file format because protobuf does not
+    /// distinguish it from the IPC stream format.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        base: &FileScanConfig,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        use protobuf::physical_plan_node::PhysicalPlanType;
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::ArrowScan(
+                protobuf::ArrowScanExecNode {
+                    base_conf: Some(base.try_to_proto(ctx)?),
+                },
+            )),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl ArrowSource {
+    /// Reconstructs a `DataSourceExec` from a protobuf `ArrowScan`.
+    ///
+    /// Defaults to the IPC file format because protobuf does not distinguish it
+    /// from the IPC stream format.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>> {
+        use datafusion_datasource::file_scan_config::FileScanConfig;
+        use datafusion_datasource::source::DataSourceExec;
+        use datafusion_proto_models::protobuf;
+
+        let scan = match &node.physical_plan_type {
+            Some(protobuf::physical_plan_node::PhysicalPlanType::ArrowScan(scan)) => scan,
+            _ => {
+                return datafusion_common::internal_err!(
+                    "PhysicalPlanNode is not an ArrowScan"
+                );
+            }
+        };
+
+        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "ArrowScanExecNode is missing required field 'base_conf'"
+            )
+        })?;
+
+        let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
+        let source = Arc::new(ArrowSource::new_file_source(table_schema));
+        let scan_conf = FileScanConfig::try_from_proto(base_conf, ctx, source)?;
+        Ok(DataSourceExec::from_data_source(scan_conf))
     }
 }
 

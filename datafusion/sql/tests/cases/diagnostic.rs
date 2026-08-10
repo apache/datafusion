@@ -16,6 +16,7 @@
 // under the License.
 
 use datafusion_functions::string;
+use datafusion_functions_aggregate::sum::sum_udaf;
 use insta::assert_snapshot;
 use std::{collections::HashMap, ops::ControlFlow, sync::Arc};
 
@@ -44,7 +45,8 @@ fn do_query(sql: &'static str) -> Diagnostic {
         ..ParserOptions::default()
     };
     let state = MockSessionState::default()
-        .with_scalar_function(Arc::new(string::concat().as_ref().clone()));
+        .with_scalar_function(Arc::new(string::concat().as_ref().clone()))
+        .with_aggregate_function(sum_udaf());
     let context = MockContextProvider { state };
     let sql_to_rel = SqlToRel::new_with_options(&context, options);
     match sql_to_rel.statement_to_plan(statement) {
@@ -669,5 +671,42 @@ fn test_multiple_null_comparison_warnings() -> Result<()> {
         warnings[1].message,
         @"comparison with NULL using `<>` always evaluates to NULL"
     );
+    Ok(())
+}
+
+#[test]
+fn test_nested_aggregate() -> Result<()> {
+    let query = "SELECT sum(sum(/*a*/age/*a*/)) FROM person";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @"Aggregate function calls cannot be nested");
+    assert_eq!(diag.span, Some(spans["a"]));
+    assert_snapshot!(
+        diag.helps[0].message,
+        @"Compute 'sum(person.age)' in an inner query and aggregate its result"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_window_function_inside_aggregate() -> Result<()> {
+    let query = "SELECT sum(sum(/*a*/age/*a*/) OVER ()) FROM person";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(
+        diag.message,
+        @"Aggregate function calls cannot contain window function calls"
+    );
+    assert_eq!(diag.span, Some(spans["a"]));
+    Ok(())
+}
+
+#[test]
+fn test_nested_window_function() -> Result<()> {
+    let query = "SELECT sum(sum(/*a*/age/*a*/) OVER ()) OVER () FROM person";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @"Window function calls cannot be nested");
+    assert_eq!(diag.span, Some(spans["a"]));
     Ok(())
 }

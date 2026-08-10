@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, Datum, Int64Array, PrimitiveArray, StringArrayType,
+    Array, ArrayRef, AsArray, Datum, Int64Array, Int64Builder, StringArrayType,
 };
 use arrow::datatypes::{DataType, Int64Type};
 use arrow::datatypes::{
@@ -29,12 +29,12 @@ use datafusion_expr::{
     TypeSignature::Exact, TypeSignature::Uniform, Volatility,
 };
 use datafusion_macros::user_doc;
-use itertools::izip;
 use regex::Regex;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
-use crate::regex::compile_and_cache_regex;
+use crate::regex::compile_regex;
 
 #[user_doc(
     doc_section(label = "Regular Expression Functions"),
@@ -52,20 +52,15 @@ use crate::regex::compile_and_cache_regex;
     standard_argument(name = "regexp", prefix = "Regular"),
     argument(
         name = "start",
-        description = "- **start**: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function. Defaults to 1"
+        description = "Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function. Defaults to 1"
     ),
     argument(
         name = "N",
-        description = "- **N**: Optional The N-th occurrence of pattern to find. Defaults to 1 (first match). Can be a constant, column, or function."
+        description = "Optional The N-th occurrence of pattern to find. Defaults to 1 (first match). Can be a constant, column, or function."
     ),
     argument(
         name = "flags",
-        description = r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
-  - **i**: case-insensitive: letters match both upper and lower case
-  - **m**: multi-line mode: ^ and $ match begin/end of line
-  - **s**: allow . to match \n
-  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-  - **U**: swap the meaning of x* and x*?"#
+        description = r#"Optional regular expression flags that control the behavior of the regular expression. Refer to the flags reference above for supported flags."#
     ),
     argument(
         name = "subexpr",
@@ -240,7 +235,7 @@ fn regexp_instr(
             &regex_array.as_string::<i32>(),
             start_array.map(|start| start.as_primitive::<Int64Type>()),
             nth_array.map(|nth| nth.as_primitive::<Int64Type>()),
-            Some(flags_array.as_string::<i32>()),
+            Some(&flags_array.as_string::<i32>()),
             subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
         ),
         (LargeUtf8, LargeUtf8, None) => regexp_instr_inner(
@@ -256,7 +251,7 @@ fn regexp_instr(
             &regex_array.as_string::<i64>(),
             start_array.map(|start| start.as_primitive::<Int64Type>()),
             nth_array.map(|nth| nth.as_primitive::<Int64Type>()),
-            Some(flags_array.as_string::<i64>()),
+            Some(&flags_array.as_string::<i64>()),
             subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
         ),
         (Utf8View, Utf8View, None) => regexp_instr_inner(
@@ -272,7 +267,7 @@ fn regexp_instr(
             &regex_array.as_string_view(),
             start_array.map(|start| start.as_primitive::<Int64Type>()),
             nth_array.map(|nth| nth.as_primitive::<Int64Type>()),
-            Some(flags_array.as_string_view()),
+            Some(&flags_array.as_string_view()),
             subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
         ),
         _ => Err(ArrowError::ComputeError(
@@ -286,120 +281,96 @@ fn regexp_instr_inner<'a, S>(
     regex_array: &S,
     start_array: Option<&Int64Array>,
     nth_array: Option<&Int64Array>,
-    flags_array: Option<S>,
+    flags_array: Option<&S>,
     subexp_array: Option<&Int64Array>,
 ) -> Result<ArrayRef, ArrowError>
 where
     S: StringArrayType<'a>,
 {
     let len = values.len();
+    let mut regex_cache = RegexCache::default();
+    let mut result = Int64Builder::with_capacity(len);
 
-    let default_start_array = PrimitiveArray::<Int64Type>::from(vec![1; len]);
-    let start_array = start_array.unwrap_or(&default_start_array);
-    let start_input: Vec<i64> = (0..start_array.len())
-        .map(|i| start_array.value(i)) // handle nulls as 0
-        .collect();
+    for i in 0..len {
+        if regex_array.is_null(i) {
+            result.append_null();
+            continue;
+        }
+        let regex = regex_array.value(i);
 
-    let default_nth_array = PrimitiveArray::<Int64Type>::from(vec![1; len]);
-    let nth_array = nth_array.unwrap_or(&default_nth_array);
-    let nth_input: Vec<i64> = (0..nth_array.len())
-        .map(|i| nth_array.value(i)) // handle nulls as 0
-        .collect();
+        if values.is_null(i) {
+            result.append_null();
+            continue;
+        }
+        let value = values.value(i);
 
-    let flags_input = match flags_array {
-        Some(flags) => flags.iter().collect(),
-        None => vec![None; len],
-    };
+        let flags = match flags_array {
+            Some(flags) if !flags.is_null(i) => Some(flags.value(i)),
+            _ => None,
+        };
+        let pattern = regex_cache.get_or_compile(regex, flags)?;
 
-    let default_subexp_array = PrimitiveArray::<Int64Type>::from(vec![0; len]);
-    let subexp_array = subexp_array.unwrap_or(&default_subexp_array);
-    let subexp_input: Vec<i64> = (0..subexp_array.len())
-        .map(|i| subexp_array.value(i)) // handle nulls as 0
-        .collect();
+        // The defaults apply when the optional argument was not supplied at
+        // all. A supplied but null slot reads through as its raw buffer value.
+        let start = start_array.map_or(1, |array| array.value(i));
+        let nth = nth_array.map_or(1, |array| array.value(i));
+        let subexp = subexp_array.map_or(0, |array| array.value(i));
 
-    let mut regex_cache = HashMap::new();
-
-    let result: Result<Vec<Option<i64>>, ArrowError> = izip!(
-        values.iter(),
-        regex_array.iter(),
-        start_input.iter(),
-        nth_input.iter(),
-        flags_input.iter(),
-        subexp_input.iter()
-    )
-    .map(|(value, regex, start, nth, flags, subexp)| match regex {
-        None => Ok(None),
-        Some("") => Ok(Some(0)),
-        Some(regex) => get_index(
-            value,
-            regex,
-            *start,
-            *nth,
-            *subexp,
-            *flags,
-            &mut regex_cache,
-        ),
-    })
-    .collect();
-    Ok(Arc::new(Int64Array::from(result?)))
-}
-
-fn handle_subexp(
-    pattern: &Regex,
-    search_slice: &str,
-    subexpr: i64,
-    value: &str,
-    byte_start_offset: usize,
-) -> Result<Option<i64>, ArrowError> {
-    if let Some(captures) = pattern.captures(search_slice)
-        && let Some(matched) = captures.get(subexpr as usize)
-    {
-        // Convert byte offset relative to search_slice back to 1-based character offset
-        // relative to the original `value` string.
-        let start_char_offset =
-            value[..byte_start_offset + matched.start()].chars().count() as i64 + 1;
-        return Ok(Some(start_char_offset));
+        result.append_value(get_index(value, pattern, start, nth, subexp)?);
     }
-    Ok(Some(0)) // Return 0 if the subexpression was not found
+
+    Ok(Arc::new(result.finish()))
 }
 
-fn get_nth_match(
-    pattern: &Regex,
-    search_slice: &str,
-    n: i64,
-    byte_start_offset: usize,
-    value: &str,
-) -> Result<Option<i64>, ArrowError> {
-    if let Some(mat) = pattern.find_iter(search_slice).nth((n - 1) as usize) {
-        // Convert byte offset relative to search_slice back to 1-based character offset
-        // relative to the original `value` string.
-        let match_start_byte_offset = byte_start_offset + mat.start();
-        let match_start_char_offset =
-            value[..match_start_byte_offset].chars().count() as i64 + 1;
-        Ok(Some(match_start_char_offset))
-    } else {
-        Ok(Some(0)) // Return 0 if the N-th match was not found
+/// Compiles the patterns seen so far, keyed by `(pattern, flags)`.
+///
+/// Patterns are addressed by index rather than by reference so that `last` can
+/// memoize the previous row's pattern without holding a borrow of `indices`
+/// across rows. A literal pattern yields the same string on every row, so that
+/// memo means the common case never hashes a key.
+#[derive(Default)]
+struct RegexCache<'a> {
+    compiled: Vec<Regex>,
+    indices: HashMap<(&'a str, Option<&'a str>), usize>,
+    last: Option<((&'a str, Option<&'a str>), usize)>,
+}
+
+impl<'a> RegexCache<'a> {
+    fn get_or_compile(
+        &mut self,
+        regex: &'a str,
+        flags: Option<&'a str>,
+    ) -> Result<&Regex, ArrowError> {
+        let key = (regex, flags);
+        let index = match self.last {
+            Some((last_key, index)) if last_key == key => index,
+            _ => {
+                let index = match self.indices.entry(key) {
+                    Entry::Occupied(entry) => *entry.get(),
+                    Entry::Vacant(entry) => {
+                        self.compiled.push(compile_regex(regex, flags)?);
+                        *entry.insert(self.compiled.len() - 1)
+                    }
+                };
+                self.last = Some((key, index));
+                index
+            }
+        };
+        Ok(&self.compiled[index])
     }
 }
-fn get_index<'strings, 'cache>(
-    value: Option<&str>,
-    pattern: &'strings str,
+
+/// Returns the 1-based character position of the `n`-th match of `pattern` in
+/// `value`, or 0 if there is no such match. The search begins at the 1-based
+/// character position `start`. A positive `subexpr` selects that capture group
+/// of the first match instead of the `n`-th match.
+fn get_index(
+    value: &str,
+    pattern: &Regex,
     start: i64,
     n: i64,
     subexpr: i64,
-    flags: Option<&'strings str>,
-    regex_cache: &'cache mut HashMap<(&'strings str, Option<&'strings str>), Regex>,
-) -> Result<Option<i64>, ArrowError>
-where
-    'strings: 'cache,
-{
-    let value = match value {
-        None => return Ok(None),
-        Some("") => return Ok(Some(0)),
-        Some(value) => value,
-    };
-    let pattern: &Regex = compile_and_cache_regex(pattern, flags, regex_cache)?;
-    // println!("get_index: value = {}, pattern = {}, start = {}, n = {}, subexpr = {}, flags = {:?}", value, pattern, start, n, subexpr, flags);
+) -> Result<i64, ArrowError> {
     if start < 1 {
         return Err(ArrowError::ComputeError(
             "regexp_instr() requires start to be 1-based".to_string(),
@@ -412,31 +383,40 @@ where
         ));
     }
 
-    // --- Simplified byte_start_offset calculation ---
-    let total_chars = value.chars().count() as i64;
-    let byte_start_offset: usize = if start > total_chars {
-        // If start is beyond the total characters, it means we start searching
-        // after the string effectively. No matches possible.
-        return Ok(Some(0));
-    } else {
-        // Get the byte offset for the (start - 1)-th character (0-based)
-        value
-            .char_indices()
-            .nth((start - 1) as usize)
-            .map(|(idx, _)| idx)
-            .unwrap_or(0) // Should not happen if start is valid and <= total_chars
+    let Ok(start_index) = usize::try_from(start - 1) else {
+        return Ok(0);
     };
-    // --- End simplified calculation ---
-
+    // Include the terminal byte boundary so an empty pattern can match after
+    // the last character, including in an empty string.
+    let Some(byte_start_offset) = value
+        .char_indices()
+        .map(|(offset, _)| offset)
+        .chain(std::iter::once(value.len()))
+        .nth(start_index)
+    else {
+        return Ok(0);
+    };
     let search_slice = &value[byte_start_offset..];
 
-    // Handle subexpression capturing first, as it takes precedence
-    if subexpr > 0 {
-        return handle_subexp(pattern, search_slice, subexpr, value, byte_start_offset);
-    }
+    // A subexpression, when requested, takes precedence over the N-th match.
+    let match_start = if subexpr > 0 {
+        pattern
+            .captures(search_slice)
+            .and_then(|captures| captures.get(subexpr as usize))
+            .map(|matched| matched.start())
+    } else {
+        // `n` is 1-based, `nth` is 0-based.
+        pattern
+            .find_iter(search_slice)
+            .nth((n - 1) as usize)
+            .map(|matched| matched.start())
+    };
 
-    // Use nth to get the N-th match (n is 1-based, nth is 0-based)
-    get_nth_match(pattern, search_slice, n, byte_start_offset, value)
+    // Convert the byte offset within `search_slice` back to a 1-based character
+    // offset within `value`.
+    Ok(match_start.map_or(0, |offset| {
+        value[..byte_start_offset + offset].chars().count() as i64 + 1
+    }))
 }
 
 #[cfg(test)]
@@ -445,6 +425,7 @@ mod tests {
     use arrow::array::{GenericStringArray, StringViewArray};
     use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;
+    use itertools::izip;
     #[test]
     fn test_regexp_instr() {
         test_case_sensitive_regexp_instr_nulls();
@@ -464,6 +445,14 @@ mod tests {
         test_case_sensitive_regexp_instr_array_nth::<GenericStringArray<i32>>();
         test_case_sensitive_regexp_instr_array_nth::<GenericStringArray<i64>>();
         test_case_sensitive_regexp_instr_array_nth::<StringViewArray>();
+
+        test_case_sensitive_regexp_instr_empty_pattern::<GenericStringArray<i32>>();
+        test_case_sensitive_regexp_instr_empty_pattern::<GenericStringArray<i64>>();
+        test_case_sensitive_regexp_instr_empty_pattern::<StringViewArray>();
+
+        test_case_sensitive_regexp_instr_zero_width_pattern::<GenericStringArray<i32>>();
+        test_case_sensitive_regexp_instr_zero_width_pattern::<GenericStringArray<i64>>();
+        test_case_sensitive_regexp_instr_zero_width_pattern::<StringViewArray>();
     }
 
     fn regexp_instr_with_scalar_values(args: &[ScalarValue]) -> Result<ColumnarValue> {
@@ -492,7 +481,7 @@ mod tests {
     fn test_case_sensitive_regexp_instr_nulls() {
         let v = "";
         let r = "";
-        let expected = 0;
+        let expected = 1;
         let regex_sv = ScalarValue::Utf8(Some(r.to_string()));
         let re = regexp_instr_with_scalar_values(&[v.to_string().into(), regex_sv]);
         // let res_exp = re.unwrap();
@@ -501,6 +490,29 @@ mod tests {
                 assert_eq!(v, Some(expected), "regexp_instr scalar test failed");
             }
             _ => panic!("Unexpected result"),
+        }
+
+        for (value, regex) in [
+            (
+                ScalarValue::Utf8(None),
+                ScalarValue::Utf8(Some(String::new())),
+            ),
+            (
+                ScalarValue::LargeUtf8(None),
+                ScalarValue::LargeUtf8(Some(String::new())),
+            ),
+            (
+                ScalarValue::Utf8View(None),
+                ScalarValue::Utf8View(Some(String::new())),
+            ),
+        ] {
+            let re = regexp_instr_with_scalar_values(&[value, regex]);
+            match re {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
+                    assert_eq!(v, None, "regexp_instr NULL scalar test failed");
+                }
+                _ => panic!("Unexpected result"),
+            }
         }
     }
     fn test_case_sensitive_regexp_instr_scalar() {
@@ -811,6 +823,40 @@ mod tests {
             Arc::new(nth),
         ])
         .unwrap();
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    fn test_case_sensitive_regexp_instr_empty_pattern<A>()
+    where
+        A: From<Vec<&'static str>> + Array + 'static,
+    {
+        let values = A::from(vec!["abc", "", "abc", "abc", "😀"]);
+        let regex = A::from(vec!["", "", "", "", ""]);
+        let start = Int64Array::from(vec![1, 1, 4, 5, 1]);
+        let nth = Int64Array::from(vec![1, 1, 1, 1, 2]);
+        let expected = Int64Array::from(vec![1, 1, 4, 0, 2]);
+
+        let re = regexp_instr_func(&[
+            Arc::new(values),
+            Arc::new(regex),
+            Arc::new(start),
+            Arc::new(nth),
+        ])
+        .unwrap();
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    fn test_case_sensitive_regexp_instr_zero_width_pattern<A>()
+    where
+        A: From<Vec<&'static str>> + Array + 'static,
+    {
+        let values = A::from(vec!["abc"]);
+        let regex = A::from(vec!["x*"]);
+        let start = Int64Array::from(vec![4]);
+        let expected = Int64Array::from(vec![4]);
+
+        let re = regexp_instr_func(&[Arc::new(values), Arc::new(regex), Arc::new(start)])
+            .unwrap();
         assert_eq!(re.as_ref(), &expected);
     }
 }

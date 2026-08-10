@@ -34,15 +34,24 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use datafusion_catalog::memory::DataSourceExec;
-use datafusion_common::config::ConfigOptions;
+use datafusion_common::{
+    JoinType,
+    config::ConfigOptions,
+    tree_node::{TreeNode, TreeNodeRecursion},
+};
 use datafusion_datasource::{
     PartitionedFile, file_groups::FileGroup, file_scan_config::FileScanConfigBuilder,
 };
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::math::random::RandomFunc;
-use datafusion_functions_aggregate::{count::count_udaf, min_max::min_udaf};
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, expressions::col};
+use datafusion_functions_aggregate::{
+    count::count_udaf,
+    min_max::{max_udaf, min_udaf},
+};
+use datafusion_physical_expr::{
+    LexOrdering, PhysicalSortExpr, expressions::col, utils::conjunction,
+};
 use datafusion_physical_expr::{
     Partitioning, ScalarFunctionExpr, aggregate::AggregateExprBuilder,
 };
@@ -55,6 +64,7 @@ use datafusion_physical_plan::{
     coalesce_partitions::CoalescePartitionsExec,
     collect,
     filter::{FilterExec, FilterExecBuilder},
+    joins::{HashJoinExec, PartitionMode},
     projection::ProjectionExec,
     repartition::RepartitionExec,
     sorts::sort::SortExec,
@@ -734,6 +744,65 @@ fn test_pushdown_through_aggregates_on_grouping_columns() {
         Ok:
           - AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=Sorted
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo AND b@1 = bar
+    "
+    );
+}
+
+#[test]
+fn test_pushdown_through_aggregates_preserves_parent_filter_order() {
+    // AggregateExec may push filters on grouping columns to its input, but must
+    // keep filters on aggregate outputs above itself. The parent-filter result
+    // order must match the incoming filter order, otherwise an unsupported
+    // aggregate-output filter can be reported as pushed down and removed.
+    let scan = TestScanBuilder::new(schema()).with_support(true).build();
+
+    let aggregate_expr = vec![
+        AggregateExprBuilder::new(count_udaf(), vec![col("a", &schema()).unwrap()])
+            .schema(schema())
+            .alias("cnt")
+            .build()
+            .map(Arc::new)
+            .unwrap(),
+    ];
+    let group_by = PhysicalGroupBy::new_single(vec![
+        (col("a", &schema()).unwrap(), "a".to_string()),
+        (col("b", &schema()).unwrap(), "b".to_string()),
+    ]);
+    let aggregate = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by,
+            aggregate_expr,
+            vec![None],
+            scan,
+            schema(),
+        )
+        .unwrap(),
+    );
+
+    let aggregate_schema = aggregate.schema();
+    let aggregate_output_filter = col_lit_predicate(
+        "cnt",
+        ScalarValue::Int64(Some(1)),
+        aggregate_schema.as_ref(),
+    );
+    let grouping_key_filter = col_lit_predicate("b", "bar", aggregate_schema.as_ref());
+    let predicate = conjunction(vec![aggregate_output_filter, grouping_key_filter]);
+    let plan = Arc::new(FilterExec::try_new(predicate, aggregate).unwrap());
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, FilterPushdown::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - FilterExec: cnt@2 = 1 AND b@1 = bar
+        -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt]
+        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+      output:
+        Ok:
+          - FilterExec: cnt@2 = 1
+          -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=PartiallySorted([1])
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar
     "
     );
 }
@@ -1442,10 +1511,8 @@ fn test_hashjoin_parent_filter_pushdown_mark_join() {
     );
 }
 
-/// Test that filters on join key columns are pushed to both sides of semi/anti joins.
-/// For LeftSemi/LeftAnti, the output only contains left columns, but filters on
-/// join key columns can also be pushed to the right (non-preserved) side because
-/// the equijoin condition guarantees the key values match.
+/// Semi-join key filters can be pushed to both sides, but anti-join filters must
+/// only rely on the output side to preserve their semantics.
 #[test]
 fn test_hashjoin_parent_filter_pushdown_semi_anti_join() {
     use datafusion_common::JoinType;
@@ -1475,8 +1542,8 @@ fn test_hashjoin_parent_filter_pushdown_semi_anti_join() {
     let join = Arc::new(
         HashJoinExec::try_new(
             left_scan,
-            right_scan,
-            on,
+            Arc::clone(&right_scan),
+            on.clone(),
             None,
             &JoinType::LeftSemi,
             None,
@@ -1515,6 +1582,24 @@ fn test_hashjoin_parent_filter_pushdown_semi_anti_join() {
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, w], file_type=test, pushdown_supported=true, predicate=k@0 = x
     "
     );
+
+    let join = Arc::new(
+        HashJoinExec::try_new(
+            TestScanBuilder::new(Arc::clone(&left_schema)).build(),
+            right_scan,
+            on,
+            None,
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::Partitioned,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    );
+    let predicate = Arc::new(Literal::new(ScalarValue::Boolean(Some(false))));
+    let plan = Arc::new(FilterExec::try_new(predicate, join).unwrap());
+    assert_parent_filter_remains(plan);
 }
 
 #[test]
@@ -1751,6 +1836,16 @@ fn col_lit_predicate(
         Operator::Eq,
         Arc::new(Literal::new(scalar_value)),
     ))
+}
+
+fn assert_parent_filter_remains(plan: Arc<dyn ExecutionPlan>) {
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    let optimized = FilterPushdown::new().optimize(plan, &config).unwrap();
+    assert!(
+        optimized.downcast_ref::<FilterExec>().is_some(),
+        "parent filter must remain"
+    );
 }
 
 // ==== Aggregate Dynamic Filter tests ====
@@ -1997,13 +2092,65 @@ fn test_pushdown_grouping_sets_filter_on_common_column() {
     );
 }
 
-#[test]
-fn test_pushdown_with_empty_group_by() {
-    // Test that filters can be pushed down when GROUP BY is empty (no grouping columns)
-    // SELECT count(*) as cnt FROM table WHERE a = 'foo'
-    // There are no grouping columns, so the filter should still push down
-    let scan = TestScanBuilder::new(schema()).with_support(true).build();
+#[tokio::test]
+async fn test_no_pushdown_through_global_aggregate_with_name_collision() {
+    let input_schema =
+        Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let scan = TestScanBuilder::new(Arc::clone(&input_schema))
+        .with_support(true)
+        .with_batches(vec![record_batch!(("a", Int64, [1, 20])).unwrap()])
+        .build();
+    let aggregate_expr = vec![
+        AggregateExprBuilder::new(max_udaf(), vec![col("a", &input_schema).unwrap()])
+            .schema(Arc::clone(&input_schema))
+            .alias("a")
+            .build()
+            .map(Arc::new)
+            .unwrap(),
+    ];
+    let aggregate = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new_single(vec![]),
+            aggregate_expr,
+            vec![None],
+            scan,
+            input_schema,
+        )
+        .unwrap(),
+    );
 
+    // This is a physical filter above the aggregate, not a SQL WHERE clause.
+    // Pushing it through would evaluate input `a` instead of MAX(a).
+    let predicate = Arc::new(BinaryExpr::new(
+        col("a", aggregate.schema().as_ref()).unwrap(),
+        Operator::Lt,
+        Arc::new(Literal::new(ScalarValue::Int64(Some(10)))),
+    ));
+    let plan = Arc::new(FilterExec::try_new(predicate, aggregate).unwrap());
+
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    let optimized = FilterPushdown::new().optimize(plan, &config).unwrap();
+    assert!(optimized.downcast_ref::<FilterExec>().is_some());
+
+    let session_ctx = SessionContext::new();
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let batches = collect(optimized, session_ctx.state().task_ctx())
+        .await
+        .unwrap();
+    assert!(
+        batches.is_empty(),
+        "MAX(a) = 20 must be filtered out instead of applying a < 10 to input rows"
+    );
+}
+
+#[test]
+fn test_no_pushdown_constant_false_through_global_aggregate() {
+    let scan = TestScanBuilder::new(schema()).with_support(true).build();
     let aggregate_expr = vec![
         AggregateExprBuilder::new(count_udaf(), vec![col("c", &schema()).unwrap()])
             .schema(schema())
@@ -2012,41 +2159,58 @@ fn test_pushdown_with_empty_group_by() {
             .map(Arc::new)
             .unwrap(),
     ];
-
-    // Empty GROUP BY - no grouping columns
-    let group_by = PhysicalGroupBy::new_single(vec![]);
-
     let aggregate = Arc::new(
         AggregateExec::try_new(
             AggregateMode::Final,
-            group_by,
-            aggregate_expr.clone(),
+            PhysicalGroupBy::new_single(vec![]),
+            aggregate_expr,
             vec![None],
             scan,
             schema(),
         )
         .unwrap(),
     );
-
-    // Filter on 'a'
-    let predicate = col_lit_predicate("a", "foo", &schema());
+    let predicate = Arc::new(Literal::new(ScalarValue::Boolean(Some(false))));
     let plan = Arc::new(FilterExec::try_new(predicate, aggregate).unwrap());
 
-    // The filter should be pushed down even with empty GROUP BY
-    insta::assert_snapshot!(
-        OptimizationTest::new(plan, FilterPushdown::new(), true),
-        @r"
-    OptimizationTest:
-      input:
-        - FilterExec: a@0 = foo
-        -   AggregateExec: mode=Final, gby=[], aggr=[cnt]
-        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
-      output:
-        Ok:
-          - AggregateExec: mode=Final, gby=[], aggr=[cnt]
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
-    "
+    assert_parent_filter_remains(plan);
+}
+
+#[test]
+fn test_no_pushdown_constant_false_through_empty_grouping_set() {
+    let scan = TestScanBuilder::new(schema()).with_support(true).build();
+    let group_by = PhysicalGroupBy::new(
+        vec![(col("a", &schema()).unwrap(), "a".to_string())],
+        vec![(
+            Arc::new(Literal::new(ScalarValue::Utf8(None))),
+            "a".to_string(),
+        )],
+        vec![vec![true]],
+        true,
     );
+    let aggregate_expr = vec![
+        AggregateExprBuilder::new(count_udaf(), vec![col("c", &schema()).unwrap()])
+            .schema(schema())
+            .alias("cnt")
+            .build()
+            .map(Arc::new)
+            .unwrap(),
+    ];
+    let aggregate = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by,
+            aggregate_expr,
+            vec![None],
+            scan,
+            schema(),
+        )
+        .unwrap(),
+    );
+    let predicate = Arc::new(Literal::new(ScalarValue::Boolean(Some(false))));
+    let plan = Arc::new(FilterExec::try_new(predicate, aggregate).unwrap());
+
+    assert_parent_filter_remains(plan);
 }
 
 #[test]
@@ -2755,12 +2919,16 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
     );
 }
 
-// Not portable to sqllogictest: asserts on `HashJoinExec::dynamic_filter_for_test().is_used()`
-// which is a debug-only API. The observable behavior (probe-side scan
+// Not portable to sqllogictest: asserts on the dynamic filter's Arc ownership.
+// The observable behavior (probe-side scan
 // receiving the dynamic filter when the data source supports it) is
 // already covered by the simpler CollectLeft port in push_down_filter_parquet.slt;
 // the with_support(false) branch has no SQL analog (parquet always supports
 // pushdown).
+#[expect(
+    deprecated,
+    reason = "the borrowed getter avoids adding a producer Arc that is_used would count"
+)]
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
     use datafusion_common::JoinType;
@@ -2940,6 +3108,72 @@ async fn test_filter_with_projection_pushdown() {
         "+------+", "| size |", "+------+", "| 10   |", "| 20   |", "+------+",
     ];
     assert_batches_eq!(expected, &result);
+}
+
+#[test]
+fn test_discover_dynamic_expression_producers() {
+    fn producer_count(plan: &Arc<dyn ExecutionPlan>) -> usize {
+        let mut count = 0;
+        plan.apply(|node| {
+            count += node.dynamic_expressions_produced().len();
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .expect("plan traversal should succeed");
+        count
+    }
+
+    let build_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_schema))
+        .with_support(true)
+        .with_batches(vec![
+            record_batch!(("a", Utf8, ["foo", "bar"]), ("b", Int32, [1, 2])).unwrap(),
+        ])
+        .build();
+
+    let probe_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_schema))
+        .with_support(true)
+        .with_batches(vec![
+            record_batch!(
+                ("a", Utf8, ["foo", "bar", "baz", "qux"]),
+                ("c", Float64, [1.0, 2.0, 3.0, 4.0])
+            )
+            .unwrap(),
+        ])
+        .build();
+
+    let plan = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            probe_scan,
+            vec![(
+                col("a", &build_schema).unwrap(),
+                col("a", &probe_schema).unwrap(),
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+    assert_eq!(producer_count(&plan), 0);
+
+    let mut config = ConfigOptions::default();
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    config.execution.parquet.pushdown_filters = true;
+    let optimized_plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    assert_eq!(producer_count(&optimized_plan), 1);
 }
 
 // ==== Filter pushdown through SortExec tests ====

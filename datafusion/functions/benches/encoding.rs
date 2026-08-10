@@ -27,10 +27,35 @@ use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let decode = encoding::decode();
+    let encode = encoding::encode();
     let config_options = Arc::new(ConfigOptions::default());
 
     for size in [1024, 4096, 8192] {
         let bin_array = Arc::new(create_binary_array::<i32>(size, 0.2));
+
+        c.bench_function(&format!("hex_encode/{size}"), |b| {
+            let method = ColumnarValue::Scalar("hex".into());
+            let arg_fields = vec![
+                Field::new("a", bin_array.data_type().to_owned(), true).into(),
+                Field::new("b", method.data_type().to_owned(), true).into(),
+            ];
+            let args = vec![ColumnarValue::Array(bin_array.clone()), method];
+            let return_field = Field::new("f", DataType::Utf8, true).into();
+
+            b.iter(|| {
+                black_box(
+                    encode
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: args.clone(),
+                            arg_fields: arg_fields.clone(),
+                            number_rows: size,
+                            return_field: Arc::clone(&return_field),
+                            config_options: Arc::clone(&config_options),
+                        })
+                        .unwrap(),
+                )
+            })
+        });
         c.bench_function(&format!("base64_decode/{size}"), |b| {
             let method = ColumnarValue::Scalar("base64".into());
             let encoded = encoding::encode()

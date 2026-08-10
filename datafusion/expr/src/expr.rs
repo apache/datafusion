@@ -671,22 +671,43 @@ pub fn intersect_metadata_for_union<'a>(
 }
 
 /// UNNEST expression.
+///
+/// When `outer` is `true`, the unnest should preserve `NULL` and empty input
+/// lists by emitting a single `NULL` output row for each. When `false` (the
+/// historical default), the behavior is identical to the plain `UNNEST(col)`
+/// SQL form: `NULL` and empty input lists are dropped from the output.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Unnest {
     pub expr: Box<Expr>,
+    /// Outer-unnest behavior: also expand empty input lists into a single
+    /// `NULL` output row (in addition to preserving `NULL` input rows).
+    pub outer: bool,
 }
 
 impl Unnest {
-    /// Create a new Unnest expression.
+    /// Create a new Unnest expression with default (non-outer) semantics.
     pub fn new(expr: Expr) -> Self {
         Self {
             expr: Box::new(expr),
+            outer: false,
         }
     }
 
-    /// Create a new Unnest expression.
+    /// Create a new Unnest expression with default (non-outer) semantics.
     pub fn new_boxed(boxed: Box<Expr>) -> Self {
-        Self { expr: boxed }
+        Self {
+            expr: boxed,
+            outer: false,
+        }
+    }
+
+    /// Create a new Unnest expression with outer-unnest semantics: `NULL`
+    /// and empty input lists each produce a single `NULL` output row.
+    pub fn new_outer(expr: Expr) -> Self {
+        Self {
+            expr: Box::new(expr),
+            outer: true,
+        }
     }
 }
 
@@ -2191,26 +2212,23 @@ impl Expr {
                     subquery,
                     negated: _,
                 }) => {
-                    let subquery_schema = subquery.subquery.schema();
-                      match &subquery_schema.fields()[..] {
-                          [subquery_field] => {
-                              let column = Expr::Column(Column::new_unqualified(
-                                  subquery_field.name().clone(),
-                              ));
-                              rewrite_placeholder(
-                                  expr.as_mut(),
-                                  &column,
-                                  subquery_schema,
-                              )?;
-                          }
-                          _ => {
-                              return plan_err!(
-                                  "InSubquery should only return one column, but found {}: {}",
-                                  subquery_schema.fields().len(),
-                                  subquery_schema.field_names().join(", ")
-                              );
-                          }
-                      }
+                    rewrite_placeholder_from_subquery(
+                        "InSubquery",
+                        expr.as_mut(),
+                        subquery,
+                    )?;
+                }
+                Expr::SetComparison(SetComparison {
+                    expr,
+                    subquery,
+                    op: _,
+                    quantifier: _,
+                }) => {
+                    rewrite_placeholder_from_subquery(
+                        "SetComparison",
+                        expr.as_mut(),
+                        subquery,
+                    )?;
                 }
                 Expr::Like(Like { expr, pattern, .. })
                 | Expr::SimilarTo(Like { expr, pattern, .. }) => {
@@ -2434,11 +2452,19 @@ impl NormalizeEq for Expr {
             | (Expr::IsNotTrue(self_expr), Expr::IsNotTrue(other_expr))
             | (Expr::IsNotFalse(self_expr), Expr::IsNotFalse(other_expr))
             | (Expr::IsNotUnknown(self_expr), Expr::IsNotUnknown(other_expr))
-            | (Expr::Negative(self_expr), Expr::Negative(other_expr))
-            | (
-                Expr::Unnest(Unnest { expr: self_expr }),
-                Expr::Unnest(Unnest { expr: other_expr }),
-            ) => self_expr.normalize_eq(other_expr),
+            | (Expr::Negative(self_expr), Expr::Negative(other_expr)) => {
+                self_expr.normalize_eq(other_expr)
+            }
+            (
+                Expr::Unnest(Unnest {
+                    expr: self_expr,
+                    outer: self_outer,
+                }),
+                Expr::Unnest(Unnest {
+                    expr: other_expr,
+                    outer: other_outer,
+                }),
+            ) => self_outer == other_outer && self_expr.normalize_eq(other_expr),
             (
                 Expr::Between(Between {
                     expr: self_expr,
@@ -2886,7 +2912,9 @@ impl HashNode for Expr {
                 field.hash(state);
                 column.hash(state);
             }
-            Expr::Unnest(Unnest { expr: _expr }) => {}
+            Expr::Unnest(Unnest { expr: _expr, outer }) => {
+                outer.hash(state);
+            }
             Expr::HigherOrderFunction(HigherOrderFunction { func, args: _args }) => {
                 func.hash(state);
             }
@@ -2938,6 +2966,26 @@ macro_rules! expr_vec_fmt {
             .join(", ")
     }};
 }
+/// Infer an untyped placeholder on the left of a single-column subquery predicate from the subquery projection
+fn rewrite_placeholder_from_subquery(
+    kind: &str,
+    expr: &mut Expr,
+    subquery: &Subquery,
+) -> Result<()> {
+    let subquery_schema = subquery.subquery.schema();
+    match &subquery_schema.fields()[..] {
+        [subquery_field] => {
+            let column =
+                Expr::Column(Column::new_unqualified(subquery_field.name().clone()));
+            rewrite_placeholder(expr, &column, subquery_schema)
+        }
+        _ => plan_err!(
+            "{kind} should only return one column, but found {}: {}",
+            subquery_schema.fields().len(),
+            subquery_schema.field_names().join(", ")
+        ),
+    }
+}
 
 struct SchemaDisplay<'a>(&'a Expr);
 
@@ -2945,11 +2993,15 @@ fn write_schema_display_binary_child(
     f: &mut Formatter<'_>,
     expr: &Expr,
     precedence: u8,
+    is_right: bool,
 ) -> fmt::Result {
     match expr {
         Expr::BinaryExpr(child) => {
             let child_precedence = child.op.precedence();
-            if child_precedence == 0 || child_precedence < precedence {
+            if child_precedence == 0
+                || child_precedence < precedence
+                || (is_right && child_precedence == precedence)
+            {
                 write!(f, "({})", SchemaDisplay(expr))
             } else {
                 write!(f, "{}", SchemaDisplay(expr))
@@ -3021,9 +3073,9 @@ impl Display for SchemaDisplay<'_> {
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let precedence = op.precedence();
-                write_schema_display_binary_child(f, left, precedence)?;
+                write_schema_display_binary_child(f, left, precedence, false)?;
                 write!(f, " {op} ")?;
-                write_schema_display_binary_child(f, right, precedence)
+                write_schema_display_binary_child(f, right, precedence, true)
             }
             Expr::Case(Case {
                 expr,
@@ -3142,8 +3194,9 @@ impl Display for SchemaDisplay<'_> {
                 write!(f, "NOT ")?;
                 write_schema_display_unary_child(f, expr)
             }
-            Expr::Unnest(Unnest { expr }) => {
-                write!(f, "UNNEST({})", SchemaDisplay(expr))
+            Expr::Unnest(Unnest { expr, outer }) => {
+                let name = if *outer { "UNNEST_OUTER" } else { "UNNEST" };
+                write!(f, "{name}({})", SchemaDisplay(expr))
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 match func.schema_name(args) {
@@ -3285,11 +3338,15 @@ fn write_sql_display_binary_child(
     f: &mut Formatter<'_>,
     expr: &Expr,
     precedence: u8,
+    is_right: bool,
 ) -> fmt::Result {
     match expr {
         Expr::BinaryExpr(child) => {
             let child_precedence = child.op.precedence();
-            if child_precedence == 0 || child_precedence < precedence {
+            if child_precedence == 0
+                || child_precedence < precedence
+                || (is_right && child_precedence == precedence)
+            {
                 write!(f, "({})", SqlDisplay(expr))
             } else {
                 write!(f, "{}", SqlDisplay(expr))
@@ -3337,9 +3394,9 @@ impl Display for SqlDisplay<'_> {
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let precedence = op.precedence();
-                write_sql_display_binary_child(f, left, precedence)?;
+                write_sql_display_binary_child(f, left, precedence, false)?;
                 write!(f, " {op} ")?;
-                write_sql_display_binary_child(f, right, precedence)
+                write_sql_display_binary_child(f, right, precedence, true)
             }
             Expr::Case(Case {
                 expr,
@@ -3452,8 +3509,9 @@ impl Display for SqlDisplay<'_> {
                 write!(f, "NOT ")?;
                 write_sql_display_unary_child(f, expr)
             }
-            Expr::Unnest(Unnest { expr }) => {
-                write!(f, "UNNEST({})", SqlDisplay(expr))
+            Expr::Unnest(Unnest { expr, outer }) => {
+                let name = if *outer { "UNNEST_OUTER" } else { "UNNEST" };
+                write!(f, "{name}({})", SqlDisplay(expr))
             }
             Expr::SimilarTo(Like {
                 negated,
@@ -3820,7 +3878,7 @@ impl Display for Expr {
                 }
             },
             Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
-            Expr::Unnest(Unnest { expr }) => {
+            Expr::Unnest(Unnest { expr, .. }) => {
                 write!(f, "{UNNEST_COLUMN_PREFIX}({expr})")
             }
             Expr::HigherOrderFunction(fun) => {
@@ -4032,6 +4090,112 @@ mod test {
     }
 
     #[test]
+    fn infer_placeholder_set_comparison_any() {
+        // WHERE $1 = ANY (SELECT a FROM t) -- parallel to infer_placeholder_in_subquery
+        let subquery_field = Field::new("a", DataType::Int32, false);
+        let subquery_schema = Arc::new(
+            DFSchema::from_unqualified_fields(
+                vec![subquery_field].into(),
+                Default::default(),
+            )
+            .unwrap(),
+        );
+        let subquery = Subquery {
+            subquery: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: subquery_schema,
+            })),
+            outer_ref_columns: vec![],
+            spans: Spans::new(),
+        };
+
+        let set_cmp = Expr::SetComparison(SetComparison {
+            expr: Box::new(Expr::Placeholder(Placeholder {
+                id: "$1".to_string(),
+                field: None,
+            })),
+            subquery,
+            op: Operator::Eq,
+            quantifier: SetQuantifier::Any,
+        });
+
+        let outer_schema = DFSchema::empty();
+        let (inferred_expr, contains_placeholder) =
+            set_cmp.infer_placeholder_types(&outer_schema).unwrap();
+
+        assert!(contains_placeholder);
+
+        match inferred_expr {
+            Expr::SetComparison(sc) => {
+                assert_eq!(sc.quantifier, SetQuantifier::Any);
+                match *sc.expr {
+                    Expr::Placeholder(p) => {
+                        let inferred =
+                            p.field.expect("placeholder field should be Int32");
+                        assert_eq!(inferred.data_type(), &DataType::Int32);
+                        assert!(inferred.is_nullable());
+                    }
+                    _ => panic!("Expected Placeholder expression in SetComparison"),
+                }
+            }
+            _ => panic!("Expected SetComparison expression"),
+        }
+    }
+
+    #[test]
+    fn infer_placeholder_set_comparison_all() {
+        // WHERE $1 <> ALL (SELECT a FROM t)
+        let subquery_field = Field::new("a", DataType::Int32, false);
+        let subquery_schema = Arc::new(
+            DFSchema::from_unqualified_fields(
+                vec![subquery_field].into(),
+                Default::default(),
+            )
+            .unwrap(),
+        );
+        let subquery = Subquery {
+            subquery: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: subquery_schema,
+            })),
+            outer_ref_columns: vec![],
+            spans: Spans::new(),
+        };
+
+        let set_cmp = Expr::SetComparison(SetComparison {
+            expr: Box::new(Expr::Placeholder(Placeholder {
+                id: "$1".to_string(),
+                field: None,
+            })),
+            subquery,
+            op: Operator::NotEq,
+            quantifier: SetQuantifier::All,
+        });
+
+        let outer_schema = DFSchema::empty();
+        let (inferred_expr, contains_placeholder) =
+            set_cmp.infer_placeholder_types(&outer_schema).unwrap();
+
+        assert!(contains_placeholder);
+
+        match inferred_expr {
+            Expr::SetComparison(sc) => {
+                assert_eq!(sc.quantifier, SetQuantifier::All);
+                match *sc.expr {
+                    Expr::Placeholder(p) => {
+                        let inferred =
+                            p.field.expect("placeholder field should be Int32");
+                        assert_eq!(inferred.data_type(), &DataType::Int32);
+                        assert!(inferred.is_nullable());
+                    }
+                    _ => panic!("Expected Placeholder expression in SetComparison"),
+                }
+            }
+            _ => panic!("Expected SetComparison expression"),
+        }
+    }
+
+    #[test]
     fn infer_placeholder_like_and_similar_to() {
         // name LIKE $1
         let schema =
@@ -4168,6 +4332,34 @@ mod test {
             expr.schema_name().to_string()
         );
         assert_eq!("(1 + 2) * 3", expr.human_display().to_string());
+
+        let nested_subtraction = binary_expr(
+            lit(1i64),
+            Operator::Minus,
+            binary_expr(lit(2i64), Operator::Minus, lit(3i64)),
+        );
+        assert_eq!(
+            "Int64(1) - (Int64(2) - Int64(3))",
+            nested_subtraction.schema_name().to_string()
+        );
+        assert_eq!(
+            "1 - (2 - 3)",
+            nested_subtraction.human_display().to_string()
+        );
+
+        let nested_multiplication = binary_expr(
+            lit(6i64),
+            Operator::Divide,
+            binary_expr(lit(2i64), Operator::Multiply, lit(3i64)),
+        );
+        assert_eq!(
+            "Int64(6) / (Int64(2) * Int64(3))",
+            nested_multiplication.schema_name().to_string()
+        );
+        assert_eq!(
+            "6 / (2 * 3)",
+            nested_multiplication.human_display().to_string()
+        );
 
         let negative_expr = Expr::Negative(Box::new(one_plus_two.clone()));
         assert_eq!(

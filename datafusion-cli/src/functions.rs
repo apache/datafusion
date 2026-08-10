@@ -813,6 +813,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
                 DataType::List(Arc::new(metadata_field.clone())),
                 true,
             ),
+            Field::new("hits", DataType::UInt64, false),
         ]));
 
         let mut table_arr = vec![];
@@ -826,6 +827,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
         let mut etag_arr = vec![];
         let mut version_arr = vec![];
         let mut offsets: Vec<i32> = vec![0];
+        let mut hits_arr = vec![];
 
         if let Some(list_files_cache) = self.cache_manager.get_list_files_cache() {
             let now = Instant::now();
@@ -851,6 +853,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
                 }
                 current_offset += entry.value.files.len() as i32;
                 offsets.push(current_offset);
+                hits_arr.push(entry.hits as u64);
             }
         }
 
@@ -882,6 +885,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
                     Arc::new(struct_arr),
                     None,
                 )),
+                Arc::new(UInt64Array::from(hits_arr)),
             ],
         )?;
 

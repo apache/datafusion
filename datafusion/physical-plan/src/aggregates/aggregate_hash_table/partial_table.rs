@@ -22,8 +22,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, BooleanArray, new_null_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
-use datafusion_expr::EmitTo;
+use datafusion_common::{Result, assert_eq_or_internal_err};
 
 use crate::aggregates::group_values::new_group_values;
 use crate::aggregates::order::GroupOrdering;
@@ -31,8 +30,7 @@ use crate::aggregates::{AggregateExec, group_id_array, max_duplicate_ordinal};
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
-    EvaluatedAccumulatorArgs, HashAggregateAccumulator, MaterializedAggregateOutput,
-    PartialMarker, PartialSkipMarker,
+    EvaluatedAccumulatorArgs, HashAggregateAccumulator, PartialMarker, PartialSkipMarker,
 };
 
 /// Implementation specific to partial aggregation, where the table stores
@@ -52,6 +50,7 @@ impl AggregateHashTable<PartialMarker> {
         Self::new_with_filters(
             agg,
             partition,
+            Arc::clone(&output_schema),
             output_schema,
             batch_size,
             agg.filter_expr.iter().cloned().collect(),
@@ -67,68 +66,7 @@ impl AggregateHashTable<PartialMarker> {
     pub(in crate::aggregates) fn next_output_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        let output_schema = Arc::clone(&self.output_schema);
-        let batch_size = self.batch_size;
-        // Take ownership of the output state. `emit_next_materialized_batch`
-        // restores `self.state` to `OutputtingMaterialized` or `Done`.
-        match std::mem::replace(&mut self.state, AggregateHashTableState::Done) {
-            AggregateHashTableState::Outputting(state) => {
-                if state.group_values.is_empty() {
-                    return Ok(None);
-                }
-
-                let output = self.materialize_partial_output(state, output_schema)?;
-                Ok(self.emit_next_materialized_batch(output, batch_size))
-            }
-            AggregateHashTableState::OutputtingMaterialized(output) => {
-                Ok(self.emit_next_materialized_batch(output, batch_size))
-            }
-            AggregateHashTableState::Done => Ok(None),
-            AggregateHashTableState::Building(_) => {
-                internal_err!("next_output_batch must be called in the outputting state")
-            }
-        }
-    }
-
-    fn materialize_partial_output(
-        &self,
-        mut state: AggregateHashTableBuffer,
-        output_schema: SchemaRef,
-    ) -> Result<MaterializedAggregateOutput> {
-        let emit_to = EmitTo::All;
-        let timer = self.group_by_metrics.emitting_time.timer();
-        let mut output = state.group_values.emit(emit_to)?;
-
-        for acc in state.accumulators.iter_mut() {
-            output.extend(acc.state(emit_to)?);
-        }
-        drop(timer);
-
-        let batch = RecordBatch::try_new(output_schema, output)?;
-        debug_assert!(batch.num_rows() > 0);
-        Ok(MaterializedAggregateOutput::new(batch))
-    }
-
-    fn emit_next_materialized_batch(
-        &mut self,
-        mut output: MaterializedAggregateOutput,
-        batch_size: usize,
-    ) -> Option<RecordBatch> {
-        let batch = output.next_batch(batch_size);
-        if output.is_exhausted() {
-            self.state = AggregateHashTableState::Done;
-        } else {
-            self.state = AggregateHashTableState::OutputtingMaterialized(output);
-        }
-        batch
-    }
-
-    pub(in crate::aggregates) fn can_skip_aggregation(&self) -> bool {
-        self.state
-            .building()
-            .accumulators
-            .iter()
-            .all(|acc| acc.supports_convert_to_state())
+        self.next_output_batch_inner(HashAggregateAccumulator::state)
     }
 
     /// In skip-partial-aggregation optimization, when a decision has been made to skip
@@ -150,6 +88,7 @@ impl AggregateHashTable<PartialMarker> {
             group_by_metrics: self.group_by_metrics.clone(),
             input_schema: Arc::clone(&self.input_schema),
             output_schema: Arc::clone(&self.output_schema),
+            state_schema: Arc::clone(&self.state_schema),
             batch_size: self.batch_size,
             state: AggregateHashTableState::Building(AggregateHashTableBuffer {
                 group_by: Arc::clone(&state.group_by),
@@ -161,31 +100,13 @@ impl AggregateHashTable<PartialMarker> {
         })
     }
 
+    /// Partial aggregation consumes raw input rows and updates the table's
+    /// partial-state accumulators.
     pub(in crate::aggregates) fn aggregate_batch(
         &mut self,
         batch: &RecordBatch,
     ) -> Result<()> {
-        let evaluated_batch = self.evaluate_batch(batch)?;
-        let state = self.state.building_mut();
-
-        let _timer = self.group_by_metrics.aggregation_time.timer();
-        for group_values in &evaluated_batch.grouping_set_args {
-            state
-                .group_values
-                .intern(group_values, &mut state.batch_group_indices)?;
-            let group_indices = &state.batch_group_indices;
-            let total_num_groups = state.group_values.len();
-
-            for (acc, values) in state
-                .accumulators
-                .iter_mut()
-                .zip(evaluated_batch.accumulator_args.iter())
-            {
-                acc.update_batch(values, group_indices, total_num_groups)?;
-            }
-        }
-
-        Ok(())
+        self.aggregate_batch_inner(batch, HashAggregateAccumulator::update_batch)
     }
 
     pub(in crate::aggregates) fn start_output(&mut self) -> Result<()> {
