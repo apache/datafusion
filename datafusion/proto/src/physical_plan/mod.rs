@@ -26,9 +26,8 @@ use datafusion_catalog::memory::MemorySourceConfig;
 use datafusion_common::{
     DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
 };
-use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::sink::DataSinkExec;
-use datafusion_datasource::source::{DataSource, DataSourceExec};
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource_arrow::source::ArrowSource;
 #[cfg(feature = "avro")]
 use datafusion_datasource_avro::source::AvroSource;
@@ -46,7 +45,6 @@ use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::{
     Empty, GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, TimestampValue,
 };
-use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
 use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
 use datafusion_physical_plan::aggregates::AggregateExec;
@@ -87,14 +85,8 @@ use prost::Message;
 use prost::bytes::BufMut;
 
 use crate::convert_required;
-use crate::physical_plan::from_proto::{
-    parse_physical_expr_with_converter, parse_physical_sort_exprs,
-    parse_protobuf_file_scan_config, parse_record_batches, parse_table_schema_from_proto,
-};
-use crate::physical_plan::to_proto::{
-    serialize_file_scan_config, serialize_physical_expr_with_converter,
-    serialize_physical_sort_exprs, serialize_record_batches,
-};
+use crate::physical_plan::from_proto::parse_physical_expr_with_converter;
+use crate::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::{self, SortMergeJoinExecNode, proto_error};
 
@@ -117,7 +109,9 @@ mod file_scan_config_serde {
     use datafusion_common::{Constraint, Constraints, ScalarValue, Statistics};
     use datafusion_datasource::file::FileSource;
     use datafusion_datasource::file_groups::FileGroup;
-    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+    use datafusion_datasource::file_scan_config::{
+        FileScanConfig, FileScanConfigBuilder,
+    };
     use datafusion_datasource::file_stream::FileOpener;
     use datafusion_datasource::{PartitionedFile, TableSchema};
     use datafusion_execution::object_store::ObjectStoreUrl;
@@ -175,6 +169,22 @@ mod file_scan_config_serde {
 
         fn file_type(&self) -> &str {
             "serde-test"
+        }
+
+        fn apply_expressions(
+            &self,
+            f: &mut dyn FnMut(
+                &Arc<dyn PhysicalExpr>,
+            )
+                -> Result<datafusion_common::tree_node::TreeNodeRecursion>,
+        ) -> Result<datafusion_common::tree_node::TreeNodeRecursion> {
+            datafusion_physical_plan::apply_expression_roots(
+                self.projection
+                    .iter()
+                    .flatten()
+                    .map(|proj_expr| &proj_expr.expr),
+                f,
+            )
         }
 
         fn try_pushdown_projection(
@@ -1088,18 +1098,25 @@ pub trait PhysicalPlanNodeExt: Sized {
                     ParquetSource::try_from_proto(self.node(), &decode_ctx)
                 }
                 #[cfg(not(feature = "parquet"))]
-                panic!(
-                    "Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled"
+                not_impl_err!(
+                    "Unable to process a Parquet PhysicalPlan when the `parquet` feature is not enabled"
                 )
             }
-            PhysicalPlanType::AvroScan(scan) => {
-                self.try_into_avro_scan_physical_plan(scan, ctx, proto_converter)
+            PhysicalPlanType::AvroScan(_) => {
+                #[cfg(feature = "avro")]
+                {
+                    AvroSource::try_from_proto(self.node(), &decode_ctx)
+                }
+                #[cfg(not(feature = "avro"))]
+                panic!(
+                    "Unable to process a Avro PhysicalPlan when `avro` feature is not enabled"
+                )
             }
-            PhysicalPlanType::MemoryScan(scan) => {
-                self.try_into_memory_scan_physical_plan(scan, ctx, proto_converter)
+            PhysicalPlanType::MemoryScan(_) => {
+                MemorySourceConfig::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::ArrowScan(scan) => {
-                self.try_into_arrow_scan_physical_plan(scan, ctx, proto_converter)
+            PhysicalPlanType::ArrowScan(_) => {
+                ArrowSource::try_from_proto(self.node(), &decode_ctx)
             }
             #[expect(
                 deprecated,
@@ -1225,16 +1242,6 @@ pub trait PhysicalPlanNodeExt: Sized {
         };
         let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
         if let Some(node) = plan.try_to_proto(&encode_ctx)? {
-            return Ok(node);
-        }
-
-        if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>()
-            && let Some(node) = protobuf::PhysicalPlanNode::try_from_data_source_exec(
-                data_source_exec,
-                codec,
-                proto_converter,
-            )?
-        {
             return Ok(node);
         }
 
@@ -1381,23 +1388,25 @@ pub trait PhysicalPlanNodeExt: Sized {
         JsonSource::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `ArrowSource` deserializes itself via `ArrowSource::try_from_proto`"
+    )]
     fn try_into_arrow_scan_physical_plan(
         &self,
         scan: &protobuf::ArrowScanExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
-            internal_datafusion_err!("base_conf in ArrowScanExecNode is missing.")
-        })?;
-        let table_schema = parse_table_schema_from_proto(base_conf)?;
-        let scan_conf = parse_protobuf_file_scan_config(
-            base_conf,
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::ArrowScan(scan.clone())),
+        };
+        let decoder = ConverterPlanDecoder {
             ctx,
             proto_converter,
-            Arc::new(ArrowSource::new_file_source(table_schema)),
-        )?;
-        Ok(DataSourceExec::from_data_source(scan_conf))
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        ArrowSource::try_from_proto(&node, &decode_ctx)
     }
 
     #[cfg_attr(not(feature = "parquet"), expect(unused_variables))]
@@ -1425,12 +1434,16 @@ pub trait PhysicalPlanNodeExt: Sized {
         }
 
         #[cfg(not(feature = "parquet"))]
-        panic!(
-            "Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled"
+        not_impl_err!(
+            "Unable to process a Parquet PhysicalPlan when the `parquet` feature is not enabled"
         )
     }
 
     #[cfg_attr(not(feature = "avro"), expect(unused_variables))]
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `AvroSource` deserializes itself via `AvroSource::try_from_proto`"
+    )]
     fn try_into_avro_scan_physical_plan(
         &self,
         scan: &protobuf::AvroScanExecNode,
@@ -1439,63 +1452,42 @@ pub trait PhysicalPlanNodeExt: Sized {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         #[cfg(feature = "avro")]
         {
-            let table_schema =
-                parse_table_schema_from_proto(scan.base_conf.as_ref().unwrap())?;
-            let conf = parse_protobuf_file_scan_config(
-                scan.base_conf.as_ref().unwrap(),
+            let node = protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::AvroScan(scan.clone())),
+            };
+            let decoder = ConverterPlanDecoder {
                 ctx,
                 proto_converter,
-                Arc::new(AvroSource::new(table_schema)),
-            )?;
-            Ok(DataSourceExec::from_data_source(conf))
+            };
+            let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+            AvroSource::try_from_proto(&node, &decode_ctx)
         }
 
         #[cfg(not(feature = "avro"))]
-        panic!("Unable to process a Avro PhysicalPlan when `avro` feature is not enabled")
+        not_impl_err!(
+            "Unable to process an Avro PhysicalPlan when the `avro` feature is not enabled"
+        )
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `MemorySourceConfig` deserializes itself via `MemorySourceConfig::try_from_proto`"
+    )]
     fn try_into_memory_scan_physical_plan(
         &self,
         scan: &protobuf::MemoryScanExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let partitions = scan
-            .partitions
-            .iter()
-            .map(|p| parse_record_batches(p))
-            .collect::<Result<Vec<_>>>()?;
-
-        let proto_schema = scan.schema.as_ref().ok_or_else(|| {
-            internal_datafusion_err!("schema in MemoryScanExecNode is missing.")
-        })?;
-        let schema: SchemaRef = SchemaRef::new(proto_schema.try_into()?);
-
-        // Preserve the empty-projection sentinel written by `try_from_data_source_exec`.
-        let projection = match scan.projection.as_slice() {
-            [] => None,
-            [u32::MAX] => Some(Vec::new()),
-            indices => Some(indices.iter().map(|i| *i as usize).collect()),
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::MemoryScan(scan.clone())),
         };
-
-        let mut sort_information = vec![];
-        for ordering in &scan.sort_information {
-            let sort_exprs = parse_physical_sort_exprs(
-                &ordering.physical_sort_expr_nodes,
-                ctx,
-                &schema,
-                proto_converter,
-            )?;
-            sort_information.extend(LexOrdering::new(sort_exprs));
-        }
-
-        let source = MemorySourceConfig::try_new(&partitions, schema, projection)?
-            .with_limit(scan.fetch.map(|f| f as usize))
-            .with_show_sizes(scan.show_sizes);
-
-        let source = source.try_with_sort_information(sort_information)?;
-
-        Ok(DataSourceExec::from_data_source(source))
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        MemorySourceConfig::try_from_proto(&node, &decode_ctx)
     }
 
     #[deprecated(
@@ -2473,96 +2465,21 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `DataSourceExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_data_source_exec(
         data_source_exec: &DataSourceExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Option<protobuf::PhysicalPlanNode>> {
-        let data_source = data_source_exec.data_source();
-
-        if let Some(scan_conf) = data_source.downcast_ref::<FileScanConfig>() {
-            let source = scan_conf.file_source();
-            if let Some(_arrow_source) = source.downcast_ref::<ArrowSource>() {
-                return Ok(Some(protobuf::PhysicalPlanNode {
-                    physical_plan_type: Some(PhysicalPlanType::ArrowScan(
-                        protobuf::ArrowScanExecNode {
-                            base_conf: Some(serialize_file_scan_config(
-                                scan_conf,
-                                codec,
-                                proto_converter,
-                            )?),
-                        },
-                    )),
-                }));
-            }
-        }
-
-        #[cfg(feature = "avro")]
-        if let Some(maybe_avro) = data_source.downcast_ref::<FileScanConfig>() {
-            let source = maybe_avro.file_source();
-            if source.downcast_ref::<AvroSource>().is_some() {
-                return Ok(Some(protobuf::PhysicalPlanNode {
-                    physical_plan_type: Some(PhysicalPlanType::AvroScan(
-                        protobuf::AvroScanExecNode {
-                            base_conf: Some(serialize_file_scan_config(
-                                maybe_avro,
-                                codec,
-                                proto_converter,
-                            )?),
-                        },
-                    )),
-                }));
-            }
-        }
-
-        if let Some(source_conf) = data_source.downcast_ref::<MemorySourceConfig>() {
-            let proto_partitions = source_conf
-                .partitions()
-                .iter()
-                .map(|p| serialize_record_batches(p))
-                .collect::<Result<Vec<_>>>()?;
-
-            let proto_schema: protobuf::Schema =
-                source_conf.original_schema().as_ref().try_into()?;
-
-            // Proto3 can't tell `None` from `Some(vec![])`; encode the latter
-            // as the `[u32::MAX]` sentinel, matching the join/filter nodes.
-            let proto_projection = match source_conf.projection().as_ref() {
-                None => Vec::new(),
-                Some(v) if v.is_empty() => vec![u32::MAX],
-                Some(v) => v.iter().map(|x| *x as u32).collect(),
-            };
-
-            let proto_sort_information = source_conf
-                .sort_information()
-                .iter()
-                .map(|ordering| {
-                    let sort_exprs = serialize_physical_sort_exprs(
-                        ordering.to_owned(),
-                        codec,
-                        proto_converter,
-                    )?;
-                    Ok::<_, DataFusionError>(protobuf::PhysicalSortExprNodeCollection {
-                        physical_sort_expr_nodes: sort_exprs,
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-
-            return Ok(Some(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::MemoryScan(
-                    protobuf::MemoryScanExecNode {
-                        partitions: proto_partitions,
-                        schema: Some(proto_schema),
-                        projection: proto_projection,
-                        sort_information: proto_sort_information,
-                        show_sizes: source_conf.show_sizes(),
-                        fetch: source_conf.fetch().map(|f| f as u32),
-                    },
-                )),
-            }));
-        }
-
-        Ok(None)
+        let encoder = ConverterPlanEncoder {
+            codec,
+            proto_converter,
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        data_source_exec.try_to_proto(&encode_ctx)
     }
 
     #[deprecated(

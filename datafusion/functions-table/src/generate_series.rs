@@ -27,7 +27,7 @@ use async_trait::async_trait;
 use datafusion_catalog::TableFunctionImpl;
 use datafusion_catalog::TableProvider;
 use datafusion_catalog::{Session, TableFunctionArgs};
-use datafusion_common::{Result, ScalarValue, plan_err};
+use datafusion_common::{Result, ScalarValue, plan_datafusion_err, plan_err};
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::expressions::Column;
@@ -79,8 +79,17 @@ pub trait SeriesValue: fmt::Debug + Clone + Send + Sync + 'static {
     /// Check if we've reached the end of the series
     fn should_stop(&self, end: Self, step: &Self::StepType, include_end: bool) -> bool;
 
-    /// Advance to the next value in the series
+    /// Advance to the next value in the series.
     fn advance(&mut self, step: &Self::StepType) -> Result<()>;
+
+    /// Advance to the next value, adjusting the end of the series if needed.
+    ///
+    /// The default implementation preserves the behavior of [`Self::advance`].
+    /// Implementations can override this method when they need to handle an
+    /// overflow by terminating the series after the current value.
+    fn advance_with_end(&mut self, _end: &mut Self, step: &Self::StepType) -> Result<()> {
+        self.advance(step)
+    }
 
     /// Create an Arrow array from a vector of values
     fn create_array(&self, values: Vec<Self::ValueType>) -> Result<ArrayRef>;
@@ -102,6 +111,22 @@ impl SeriesValue for i64 {
 
     fn advance(&mut self, step: &Self::StepType) -> Result<()> {
         *self += step;
+        Ok(())
+    }
+
+    fn advance_with_end(&mut self, end: &mut Self, step: &Self::StepType) -> Result<()> {
+        if let Some(next) = self.checked_add(*step) {
+            *self = next;
+        } else {
+            // Advancing would overflow: clamp `end` so the series stops after
+            // the current (last reachable) value instead of panicking or
+            // wrapping around.
+            *end = if *step > 0 {
+                self.saturating_sub(1)
+            } else {
+                self.saturating_add(1)
+            };
+        }
         Ok(())
     }
 
@@ -169,6 +194,27 @@ impl SeriesValue for TimestampValue {
             );
         };
         self.value = next_ts;
+        Ok(())
+    }
+
+    fn advance_with_end(&mut self, end: &mut Self, step: &Self::StepType) -> Result<()> {
+        let tz = self
+            .parsed_tz
+            .unwrap_or_else(|| Tz::from_str("+00:00").unwrap());
+        if let Some(next_ts) =
+            TimestampNanosecondType::add_month_day_nano(self.value, *step, tz)
+        {
+            self.value = next_ts;
+        } else {
+            // Advancing would exceed the timestamp range. Clamp `end` so the
+            // series terminates after the current (last reachable) value.
+            let step_negative = step.months < 0 || step.days < 0 || step.nanoseconds < 0;
+            end.value = if step_negative {
+                self.value.saturating_add(1)
+            } else {
+                self.value.saturating_sub(1)
+            };
+        }
         Ok(())
     }
 
@@ -259,6 +305,7 @@ impl GenerateSeriesTable {
                 end: *end,
                 step: *step,
                 current: *start,
+                finished: false,
                 batch_size,
                 include_end: *include_end,
                 name,
@@ -299,6 +346,7 @@ impl GenerateSeriesTable {
                         parsed_tz: Some(parsed_tz),
                         tz_str: tz.clone(),
                     },
+                    finished: false,
                     batch_size,
                     include_end: *include_end,
                     name,
@@ -328,6 +376,7 @@ impl GenerateSeriesTable {
                     parsed_tz: None,
                     tz_str: None,
                 },
+                finished: false,
                 batch_size,
                 include_end: *include_end,
                 name,
@@ -369,6 +418,7 @@ pub struct GenericSeriesState<T: SeriesValue> {
     step: T::StepType,
     batch_size: usize,
     current: T,
+    finished: bool,
     include_end: bool,
     name: &'static str,
 }
@@ -409,6 +459,10 @@ impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
     }
 
     fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
+        if self.finished {
+            return Ok(None);
+        }
+
         let mut buf = Vec::with_capacity(self.batch_size);
 
         while buf.len() < self.batch_size
@@ -417,7 +471,24 @@ impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
                 .should_stop(self.end.clone(), &self.step, self.include_end)
         {
             buf.push(self.current.to_value_type());
-            self.current.advance(&self.step)?;
+            if self
+                .current
+                .should_stop(self.end.clone(), &self.step, false)
+            {
+                self.finished = true;
+                break;
+            }
+
+            let original_end = self.end.clone();
+            self.current.advance_with_end(&mut self.end, &self.step)?;
+            if self
+                .current
+                .should_stop(self.end.clone(), &self.step, self.include_end)
+            {
+                self.end = original_end;
+                self.finished = true;
+                break;
+            }
         }
 
         if buf.is_empty() {
@@ -432,6 +503,7 @@ impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
     fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>> {
         let mut new = self.clone();
         new.current = new.start.clone();
+        new.finished = false;
         Arc::new(RwLock::new(new))
     }
 }
@@ -740,8 +812,20 @@ impl GenerateSeriesFuncImpl {
         // Date32 is days since 1970-01-01, so multiply by nanoseconds per day
         const NANOS_PER_DAY: i64 = 24 * 60 * 60 * 1_000_000_000;
 
-        let start_ts = start_date as i64 * NANOS_PER_DAY;
-        let end_ts = end_date as i64 * NANOS_PER_DAY;
+        // Dates outside the nanosecond timestamp range (1677-09-21 to
+        // 2262-04-11) cannot be represented; return an error instead of
+        // panicking (debug) or silently wrapping (release).
+        let date_to_ts_nanos = |date: i32, arg: &str| {
+            (date as i64).checked_mul(NANOS_PER_DAY).ok_or_else(|| {
+                plan_datafusion_err!(
+                    "{arg} for {} is out of range of nanosecond timestamps",
+                    self.name
+                )
+            })
+        };
+
+        let start_ts = date_to_ts_nanos(start_date, "First argument")?;
+        let end_ts = date_to_ts_nanos(end_date, "Second argument")?;
 
         // Validate step interval
         validate_interval_step(step_interval)?;
@@ -804,11 +888,40 @@ mod generate_series_tests {
             end: 5,
             step: 1,
             current: 1,
+            finished: false,
             batch_size: 8192,
             include_end: true,
             name: "test",
         };
         let batch = state.generate_next_batch()?.expect("missing batch");
+
+        let state_reset = state.reset_state();
+        let reset_batch = state_reset
+            .write()
+            .generate_next_batch()?
+            .expect("missing reset batch");
+
+        assert_eq!(batch, reset_batch);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_generic_series_state_reset_after_overflow() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let mut state = GenericSeriesState::<i64> {
+            schema,
+            start: i64::MAX - 1,
+            end: i64::MAX,
+            step: 2,
+            current: i64::MAX - 1,
+            finished: false,
+            batch_size: 8192,
+            include_end: true,
+            name: "test",
+        };
+        let batch = state.generate_next_batch()?.expect("missing batch");
+        assert!(state.generate_next_batch()?.is_none());
 
         let state_reset = state.reset_state();
         let reset_batch = state_reset
