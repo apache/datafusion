@@ -47,6 +47,7 @@ use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::joins::piecewise_merge_join::classic_join::{
     ClassicPWMJStream, PiecewiseMergeJoinStreamState,
 };
+use crate::joins::piecewise_merge_join::existence_join::ExistencePWMJStream;
 use crate::joins::piecewise_merge_join::utils::{
     build_visited_indices_map, is_existence_join, is_right_existence_join,
     is_supported_existence_join,
@@ -165,33 +166,14 @@ use crate::{
 ///
 /// ## Existence Joins (Semi, Anti, Mark)
 /// Currently only `LeftSemi` and `LeftAnti` are supported. For these the marked side is
-/// already the left (buffered) side, so no input swap is needed. `RightSemi`/`RightAnti`
-/// and `Mark` joins are not yet implemented and are rejected in [`Self::try_new`].
+/// already the left (buffered) side, so no input swap is needed. The rest are rejected in
+/// [`Self::try_new`]: `RightSemi`/`RightAnti`/`RightMark` mark the right side and need an
+/// input swap, and `LeftMark` needs an extra boolean column rather than a filtered slice.
 ///
-/// Existence joins reuse the classic-join scan (see above) rather than a dedicated
-/// algorithm: for each streamed row we advance the pointer on the sorted buffered side to
-/// the first match, and because the buffered side is sorted, every buffered row from that
-/// position onward also matches. Instead of materializing the joined output, we simply
-/// mark those buffered rows in the visited-indices bitmap and continue. Once all streamed
-/// partitions are processed, the final pass emits the result directly from the bitmap:
-/// `LeftSemi` emits the marked buffered rows, `LeftAnti` emits the unmarked ones (rows
-/// whose join key is NULL are never marked, so they are correctly excluded from `Semi`
-/// and included in `Anti`). Only the buffered (left) columns are produced.
-///
-/// Reusing the classic scan keeps a single code path and works for the same predicates
-/// classic joins support, at the cost of still sorting the streamed side.
-///
-/// The pseudocode looks like this:
-///
-/// ```text
-/// for stream_row in sorted_stream_batch:
-///     advance buffer_idx to the first buffered row that matches stream_row
-///     if a match is found:
-///         mark buffered[buffer_idx..end] in the bitmap
-/// // final pass, once all partitions finish:
-/// //   LeftSemi -> emit buffered rows where bit == 1
-/// //   LeftAnti -> emit buffered rows where bit == 0
-/// ```
+/// `LeftSemi`/`LeftAnti` are served by a dedicated stream, `ExistencePWMJStream` (see
+/// `existence_join.rs`). Instead of materializing row pairs it records the matched set as a
+/// single index -- the start of the matched suffix of the buffered side -- and slices the
+/// buffered batch at that index once every streamed partition has been consumed.
 ///
 /// ```text
 /// // Using the example of a less than `<` operation
@@ -313,9 +295,9 @@ impl PiecewiseMergeJoinExec {
         join_type: JoinType,
         num_partitions: usize,
     ) -> Result<Self> {
-        // Left Semi/Anti reuse the classic scan (marked side is already the buffered
-        // side, no input swap needed). Right existence joins and Mark joins are not yet
-        // supported.
+        // Left Semi/Anti are handled by `ExistencePWMJStream` (the marked side is
+        // already the buffered side, so no input swap is needed). Right existence joins
+        // and Mark joins are not yet supported.
         if is_existence_join(join_type) && !is_supported_existence_join(join_type) {
             return not_impl_err!(
                 "Existence join {join_type} is currently not supported for PiecewiseMergeJoin"
@@ -525,7 +507,12 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         // Existence joins don't need to be sorted on one side.
         if is_right_existence_join(self.join_type) {
-            unimplemented!()
+            // Unreachable: `try_new` rejects right existence joins, and this signature
+            // cannot return `Result`. They swap the inputs, so whoever implements them
+            // must require the order on the streamed side instead.
+            unimplemented!(
+                "required_input_ordering for right existence joins; guarded by try_new"
+            )
         } else {
             // Sort the right side in memory, so we do not need to enforce any sorting
             vec![
@@ -625,15 +612,26 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
 
         let batch_size = context.session_config().batch_size();
 
-        // Right existence joins and Mark joins are rejected in `try_new`; every other
-        // join type (classic + supported Left Semi/Anti existence) runs the classic scan,
-        // which marks the buffered bitmap and emits the existence result from it.
-        if is_existence_join(self.join_type())
-            && !is_supported_existence_join(self.join_type())
-        {
+        let buffered_side =
+            BufferedSide::Initial(BufferedSideInitialState { buffered_fut });
+
+        if is_supported_existence_join(self.join_type) {
+            Ok(Box::pin(ExistencePWMJStream::try_new(
+                Arc::clone(&self.schema),
+                on_streamed,
+                self.join_type,
+                self.operator,
+                streamed,
+                buffered_side,
+                self.sort_options,
+                metrics,
+                batch_size,
+            )))
+        } else if is_existence_join(self.join_type) {
+            // Right existence joins and Mark joins are rejected in `try_new`.
             internal_err!(
                 "PiecewiseMergeJoin does not support existence join {} (should have been rejected in try_new)",
-                self.join_type()
+                self.join_type
             )
         } else {
             Ok(Box::pin(ClassicPWMJStream::try_new(
@@ -642,7 +640,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                 self.join_type,
                 self.operator,
                 streamed,
-                BufferedSide::Initial(BufferedSideInitialState { buffered_fut }),
+                buffered_side,
                 PiecewiseMergeJoinStreamState::WaitBufferedSide,
                 self.sort_options,
                 metrics,
@@ -755,6 +753,11 @@ pub(super) struct BufferedSideData {
     values: ArrayRef,
     pub(super) visited_indices_bitmap: SharedBitmapBuilder,
     pub(super) remaining_partitions: AtomicUsize,
+    /// Existence joins only: the start of the matched suffix of the buffered side, or
+    /// `usize::MAX` before the first match. `[existence_min_marked, len)` *is* the matched
+    /// set -- no bitmap is allocated. Shared so each partition benefits from what the
+    /// others have marked; it only ever decreases, so a stale read is safe.
+    pub(super) existence_min_marked: AtomicUsize,
     _reservation: MemoryReservation,
 }
 
@@ -771,6 +774,7 @@ impl BufferedSideData {
             values,
             visited_indices_bitmap,
             remaining_partitions: AtomicUsize::new(remaining_partitions),
+            existence_min_marked: AtomicUsize::new(usize::MAX),
             _reservation: reservation,
         }
     }
