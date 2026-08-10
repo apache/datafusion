@@ -37,7 +37,9 @@ use datafusion_common::{Result, exec_err};
 use datafusion_execution::RecordBatchStream;
 use datafusion_expr::Expr;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion_physical_plan::{ChildrenPropertiesHint, ExecutionPlan};
+use datafusion_physical_plan::{
+    ChildrenPropertiesMode, ExecutionPlan, ReplaceChildrenOptions,
+};
 use datafusion_session::Session;
 use futures::Stream;
 use tokio::runtime::Handle;
@@ -214,7 +216,7 @@ impl ExecutionPlan for AsyncTestExecutionPlan {
     fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
-        _: ChildrenPropertiesHint,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
     }
@@ -223,7 +225,12 @@ impl ExecutionPlan for AsyncTestExecutionPlan {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn execute(

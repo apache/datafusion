@@ -45,7 +45,9 @@ use datafusion_physical_plan::joins::utils::JoinFilter;
 use datafusion_physical_plan::joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::{ChildrenPropertiesHint, ExecutionPlanProperties};
+use datafusion_physical_plan::{
+    ChildrenPropertiesMode, ExecutionPlanProperties, ReplaceChildrenOptions,
+};
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, StatisticsArgs,
     StatisticsContext,
@@ -1111,7 +1113,7 @@ impl ExecutionPlan for UnboundedExec {
     fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
-        _: ChildrenPropertiesHint,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
     }
@@ -1120,7 +1122,12 @@ impl ExecutionPlan for UnboundedExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn execute(
@@ -1223,7 +1230,7 @@ impl ExecutionPlan for StatisticsExec {
     fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
-        _: ChildrenPropertiesHint,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
     }
@@ -1232,7 +1239,12 @@ impl ExecutionPlan for StatisticsExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn execute(

@@ -32,9 +32,9 @@ use datafusion_physical_expr_common::sort_expr::{LexRequirement, OrderingRequire
 use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion_physical_plan::{
-    ChildrenPropertiesHint, DisplayAs, DisplayFormatType, ExecutionPlan,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
     ExecutionPlanProperties, InputDistributionRequirements, Partitioning, PlanProperties,
-    SendableRecordBatchStream, execute_input_stream,
+    ReplaceChildrenOptions, SendableRecordBatchStream, execute_input_stream,
 };
 
 use async_trait::async_trait;
@@ -308,7 +308,7 @@ impl ExecutionPlan for DataSinkExec {
     fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
-        _: ChildrenPropertiesHint,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self::new(
             Arc::clone(&children[0]),
@@ -321,7 +321,12 @@ impl ExecutionPlan for DataSinkExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn apply_expressions(

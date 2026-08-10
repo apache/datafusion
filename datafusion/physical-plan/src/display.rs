@@ -1511,7 +1511,10 @@ mod tests {
     use datafusion_physical_expr::PhysicalExpr;
 
     use crate::statistics::StatisticsArgs;
-    use crate::{ChildrenPropertiesHint, DisplayAs, ExecutionPlan, PlanProperties};
+    use crate::{
+        ChildrenPropertiesMode, DisplayAs, ExecutionPlan, PlanProperties,
+        ReplaceChildrenOptions,
+    };
 
     use super::DisplayableExecutionPlan;
 
@@ -1548,7 +1551,7 @@ mod tests {
         fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
-            _: ChildrenPropertiesHint,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
         }
@@ -1564,7 +1567,12 @@ mod tests {
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.replace_children(children, ChildrenPropertiesHint::Recompute)
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions {
+                    children_properties: ChildrenPropertiesMode::Recompute,
+                },
+            )
         }
 
         fn execute(
@@ -1644,7 +1652,7 @@ mod tests {
         use crate::empty::EmptyExec;
         use crate::filter::FilterExec;
         use crate::projection::ProjectionExec;
-        use crate::{ChildrenPropertiesHint, ExecutionPlan};
+        use crate::{ChildrenPropertiesMode, ExecutionPlan, ReplaceChildrenOptions};
         use datafusion_physical_expr::expressions::{binary, col, lit};
         use datafusion_physical_expr::{Partitioning, PhysicalExpr};
 
@@ -1740,7 +1748,7 @@ mod tests {
                 fn replace_children(
                     self: Arc<Self>,
                     _: Vec<Arc<dyn ExecutionPlan>>,
-                    _: ChildrenPropertiesHint,
+                    _: ReplaceChildrenOptions,
                 ) -> Result<Arc<dyn ExecutionPlan>> {
                     unimplemented!()
                 }
@@ -1748,7 +1756,12 @@ mod tests {
                     self: Arc<Self>,
                     children: Vec<Arc<dyn ExecutionPlan>>,
                 ) -> Result<Arc<dyn ExecutionPlan>> {
-                    self.replace_children(children, ChildrenPropertiesHint::Recompute)
+                    self.replace_children(
+                        children,
+                        ReplaceChildrenOptions {
+                            children_properties: ChildrenPropertiesMode::Recompute,
+                        },
+                    )
                 }
                 fn execute(
                     &self,

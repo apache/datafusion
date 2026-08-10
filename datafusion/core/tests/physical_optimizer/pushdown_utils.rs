@@ -28,9 +28,9 @@ use datafusion_datasource::{
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::ChildrenPropertiesHint;
 use datafusion_physical_plan::filter::batch_filter;
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
+use datafusion_physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, displayable,
     filter::FilterExec,
@@ -493,7 +493,7 @@ impl ExecutionPlan for TestNode {
     fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
-        _: ChildrenPropertiesHint,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert!(children.len() == 1);
         Ok(Arc::new(TestNode::new(
@@ -507,7 +507,12 @@ impl ExecutionPlan for TestNode {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn execute(

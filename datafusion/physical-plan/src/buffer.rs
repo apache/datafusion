@@ -29,8 +29,8 @@ use crate::projection::ProjectionExec;
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
-    ChildrenPropertiesHint, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
-    SortOrderPushdownResult, validate_child_count,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    ReplaceChildrenOptions, SortOrderPushdownResult, validate_child_count,
 };
 use arrow::array::RecordBatch;
 use datafusion_common::config::ConfigOptions;
@@ -172,16 +172,16 @@ impl ExecutionPlan for BufferExec {
     fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
-        hint: ChildrenPropertiesHint,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
-        match hint {
-            ChildrenPropertiesHint::SameProperties => Ok(Arc::new(Self {
+        match options.children_properties {
+            ChildrenPropertiesMode::SameProperties => Ok(Arc::new(Self {
                 input: children.swap_remove(0),
                 metrics: ExecutionPlanMetricsSet::new(),
                 ..Self::clone(&*self)
             })),
-            ChildrenPropertiesHint::Recompute => {
+            ChildrenPropertiesMode::Recompute => {
                 Ok(Arc::new(Self::new(children.swap_remove(0), self.capacity)))
             }
         }
@@ -191,14 +191,24 @@ impl ExecutionPlan for BufferExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::SameProperties)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::SameProperties,
+            },
+        )
     }
 
     fn execute(

@@ -35,8 +35,8 @@ use crate::filter_pushdown::{
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
-    ChildrenPropertiesHint, DisplayFormatType, ExecutionPlan, PhysicalExpr,
-    validate_child_count,
+    ChildrenPropertiesMode, DisplayFormatType, ExecutionPlan, PhysicalExpr,
+    ReplaceChildrenOptions, validate_child_count,
 };
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -350,16 +350,16 @@ impl ExecutionPlan for ProjectionExec {
     fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
-        hint: ChildrenPropertiesHint,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
-        match hint {
-            ChildrenPropertiesHint::SameProperties => Ok(Arc::new(Self {
+        match options.children_properties {
+            ChildrenPropertiesMode::SameProperties => Ok(Arc::new(Self {
                 input: children.swap_remove(0),
                 metrics: ExecutionPlanMetricsSet::new(),
                 ..Self::clone(&*self)
             })),
-            ChildrenPropertiesHint::Recompute => ProjectionExec::try_from_projector(
+            ChildrenPropertiesMode::Recompute => ProjectionExec::try_from_projector(
                 self.projector.clone(),
                 children.swap_remove(0),
             )
@@ -371,14 +371,24 @@ impl ExecutionPlan for ProjectionExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::SameProperties)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::SameProperties,
+            },
+        )
     }
 
     fn execute(

@@ -268,18 +268,18 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>>;
 
     /// Returns a clone of the existing plan with the children replaced, skipping
-    /// recomputation of plan properties if possible as indicated by the hint.
+    /// recomputation of plan properties if possible as indicated by the options.
     #[expect(deprecated)]
     fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
-        hint: ChildrenPropertiesHint,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        match hint {
-            ChildrenPropertiesHint::SameProperties => {
+        match options.children_properties {
+            ChildrenPropertiesMode::SameProperties => {
                 self.with_new_children_and_same_properties(children)
             }
-            ChildrenPropertiesHint::Recompute => self.with_new_children(children),
+            ChildrenPropertiesMode::Recompute => self.with_new_children(children),
         }
     }
 
@@ -351,7 +351,7 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// by the `children`, in order
     #[deprecated(
         since = "55.0.0",
-        note = "Use `ExecutionPlan::replace_children` with ChildrenPropertiesHint::Recompute"
+        note = "Use `ExecutionPlan::replace_children` with `ReplaceChildrenOptions`"
     )]
     fn with_new_children(
         self: Arc<Self>,
@@ -374,7 +374,7 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// not invoke this method directly.
     #[deprecated(
         since = "55.0.0",
-        note = "Use `ExecutionPlan::replace_children` with ChildrenPropertiesHint::SameProperties"
+        note = "Use `ExecutionPlan::replace_children` with `ReplaceChildrenOptions`"
     )]
     #[expect(deprecated)]
     fn with_new_children_and_same_properties(
@@ -406,7 +406,12 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// [`DynamicFilterPhysicalExpr`]: datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         let children = self.children().into_iter().cloned().collect();
-        self.replace_children(children, ChildrenPropertiesHint::SameProperties)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::SameProperties,
+            },
+        )
     }
 
     /// If supported, attempt to increase the partitioning of this `ExecutionPlan` to
@@ -961,15 +966,22 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     }
 }
 
-/// A hint from `replace_children_if_necessary` to `replace_children` indicating
-/// whether the properties of the new children must be recomputed.
+/// Options used when replacing children.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChildrenPropertiesHint {
-    /// The properties of the new children are identical to the properties of the
-    /// existing children, so we can skip recomputation of plan properties.
+pub struct ReplaceChildrenOptions {
+    /// Describes how plan properties should be handled for the replacement
+    /// children.
+    pub children_properties: ChildrenPropertiesMode,
+}
+
+/// Indicates whether the plan properties of the new children must be recomputed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildrenPropertiesMode {
+    /// The plan properties of the new children are identical to the properties
+    /// of the existing children, so we can skip recomputation.
     SameProperties,
-    /// The properties of the new children are different from the properties of the
-    /// existing children, so we must recompute the properties from scratch.
+    /// The plan properties of the new children are different from the properties
+    /// of the existing children, so we must recompute the properties from scratch.
     Recompute,
 }
 
@@ -1567,10 +1579,10 @@ pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
 /// 2. **Same child properties** — if the children's `PlanProperties` Arcs
 ///    match (via [`has_same_children_properties`]), the plan's own
 ///    `PlanProperties` cache can be reused. This calls
-///    [`ExecutionPlan::replace_children`] with [`ChildrenPropertiesHint::SameProperties`],
+///    [`ExecutionPlan::replace_children`] with [`ChildrenPropertiesMode::SameProperties`],
 ///    which swaps the child pointers without recomputing `PlanProperties`.
 /// 3. **Full recompute** — otherwise, delegate to
-///    [`ExecutionPlan::replace_children`] with [`ChildrenPropertiesHint::Recompute`],
+///    [`ExecutionPlan::replace_children`] with [`ChildrenPropertiesMode::Recompute`],
 ///    which recomputes `PlanProperties` from scratch.
 ///
 /// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
@@ -1595,12 +1607,21 @@ pub fn replace_children_if_necessary(
         }
         // Layer 2: same child properties → reuse `PlanProperties` cache.
         if has_same_children_properties(plan.as_ref(), &children)? {
-            return plan
-                .replace_children(children, ChildrenPropertiesHint::SameProperties);
+            return plan.replace_children(
+                children,
+                ReplaceChildrenOptions {
+                    children_properties: ChildrenPropertiesMode::SameProperties,
+                },
+            );
         }
     }
     // Layer 3: full recompute.
-    plan.replace_children(children, ChildrenPropertiesHint::Recompute)
+    plan.replace_children(
+        children,
+        ReplaceChildrenOptions {
+            children_properties: ChildrenPropertiesMode::Recompute,
+        },
+    )
 }
 
 #[deprecated(since = "55.0.0", note = "Use `replace_children_if_necessary`")]
@@ -1999,7 +2020,7 @@ mod tests {
         fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
-            _: ChildrenPropertiesHint,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
         }
@@ -2015,7 +2036,12 @@ mod tests {
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.replace_children(children, ChildrenPropertiesHint::Recompute)
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions {
+                    children_properties: ChildrenPropertiesMode::Recompute,
+                },
+            )
         }
 
         fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -2114,7 +2140,7 @@ mod tests {
         fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
-            _: ChildrenPropertiesHint,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
         }
@@ -2123,7 +2149,12 @@ mod tests {
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.replace_children(children, ChildrenPropertiesHint::Recompute)
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions {
+                    children_properties: ChildrenPropertiesMode::Recompute,
+                },
+            )
         }
 
         fn execute(
@@ -2179,7 +2210,7 @@ mod tests {
         fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
-            _: ChildrenPropertiesHint,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
         }
@@ -2188,7 +2219,12 @@ mod tests {
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.replace_children(children, ChildrenPropertiesHint::Recompute)
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions {
+                    children_properties: ChildrenPropertiesMode::Recompute,
+                },
+            )
         }
 
         fn downcast_delegate(&self) -> Option<&dyn ExecutionPlan> {
@@ -2253,7 +2289,7 @@ mod tests {
         fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
-            _: ChildrenPropertiesHint,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(self)
         }
@@ -2261,7 +2297,12 @@ mod tests {
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.replace_children(children, ChildrenPropertiesHint::Recompute)
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions {
+                    children_properties: ChildrenPropertiesMode::Recompute,
+                },
+            )
         }
         fn execute(
             &self,
@@ -2330,10 +2371,10 @@ mod tests {
         fn replace_children(
             self: Arc<Self>,
             mut children: Vec<Arc<dyn ExecutionPlan>>,
-            hint: ChildrenPropertiesHint,
+            options: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            match hint {
-                ChildrenPropertiesHint::SameProperties => {
+            match options.children_properties {
+                ChildrenPropertiesMode::SameProperties => {
                     self.fast_path_calls
                         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     Ok(Arc::new(Self {
@@ -2341,7 +2382,7 @@ mod tests {
                         ..Self::clone(&*self)
                     }))
                 }
-                ChildrenPropertiesHint::Recompute => {
+                ChildrenPropertiesMode::Recompute => {
                     self.recompute_calls
                         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     // Full recompute: allocate a fresh `PlanProperties` Arc so this
@@ -2366,13 +2407,23 @@ mod tests {
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.replace_children(children, ChildrenPropertiesHint::Recompute)
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions {
+                    children_properties: ChildrenPropertiesMode::Recompute,
+                },
+            )
         }
         fn with_new_children_and_same_properties(
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.replace_children(children, ChildrenPropertiesHint::SameProperties)
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions {
+                    children_properties: ChildrenPropertiesMode::SameProperties,
+                },
+            )
         }
         fn execute(
             &self,
@@ -2563,7 +2614,7 @@ mod tests {
         let parent_dyn: Arc<dyn ExecutionPlan> = Arc::clone(&parent) as _;
 
         // Using the same child means we return the original plan Arc verbatim, so even when
-        // the `replace_children` `ChildrenPropertiesHint::SameProperties` path is not defined,
+        // the `replace_children` `ChildrenPropertiesMode::SameProperties` path is not defined,
         // we do not recompute.
         let out = replace_children_if_necessary(
             Arc::clone(&parent_dyn),

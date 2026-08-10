@@ -52,7 +52,10 @@ use crate::projection::{
 };
 use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::statistics::{ChildStats, StatisticsArgs};
-use crate::{ChildrenPropertiesHint, ExecutionPlanProperties, validate_child_count};
+use crate::{
+    ChildrenPropertiesMode, ExecutionPlanProperties, ReplaceChildrenOptions,
+    validate_child_count,
+};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     InputDistributionRequirements, Partitioning, PlanProperties,
@@ -1363,14 +1366,14 @@ impl ExecutionPlan for HashJoinExec {
     fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
-        hint: ChildrenPropertiesHint,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
-        match hint {
-            ChildrenPropertiesHint::SameProperties => {
+        match options.children_properties {
+            ChildrenPropertiesMode::SameProperties => {
                 self.builder().with_new_children(children)?.build_exec()
             }
-            ChildrenPropertiesHint::Recompute => self
+            ChildrenPropertiesMode::Recompute => self
                 .builder()
                 .recompute_properties()
                 .with_new_children(children)?
@@ -1382,7 +1385,12 @@ impl ExecutionPlan for HashJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
@@ -2449,12 +2457,12 @@ mod tests {
         Ok((left_schema, right_schema, on))
     }
 
-    use crate::ChildrenPropertiesHint;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::execution_plan::Boundedness;
     use crate::filter::FilterExecBuilder;
     use crate::joins::hash_join::stream::lookup_join_hashmap;
     use crate::test::{TestMemoryExec, assert_join_metrics};
+    use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions};
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
         test::exec::MockExec,
@@ -2530,7 +2538,7 @@ mod tests {
         fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
-            _: ChildrenPropertiesHint,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(self)
         }
@@ -2539,7 +2547,12 @@ mod tests {
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.replace_children(children, ChildrenPropertiesHint::Recompute)
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions {
+                    children_properties: ChildrenPropertiesMode::Recompute,
+                },
+            )
         }
 
         fn execute(

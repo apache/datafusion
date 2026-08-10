@@ -45,10 +45,10 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::StreamExt;
 use futures::TryStreamExt;
 
-use crate::ChildrenPropertiesHint;
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::metrics::ExecutionPlanMetricsSet;
 use crate::topk::{PartitionedTopK, PartitionedTopKRank, build_sort_fields};
+use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, SendableRecordBatchStream, stream::RecordBatchStreamAdapter,
@@ -370,7 +370,7 @@ impl ExecutionPlan for PartitionedTopKExec {
     fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
-        _: ChildrenPropertiesHint,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert_eq!(children.len(), 1);
         Ok(Arc::new(PartitionedTopKExec::try_new(
@@ -396,7 +396,12 @@ impl ExecutionPlan for PartitionedTopKExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn execute(

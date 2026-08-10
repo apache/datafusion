@@ -134,7 +134,7 @@ use datafusion_functions_aggregate::string_agg::string_agg_udaf;
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
 use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
-use datafusion_physical_plan::ChildrenPropertiesHint;
+use datafusion_physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_proto_converter,
     physical_plan_to_bytes_with_proto_converter,
@@ -337,10 +337,14 @@ impl ExecutionPlan for DowncastDelegatingExec {
     fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
-        _: ChildrenPropertiesHint,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let inner = Arc::clone(&self.inner)
-            .replace_children(children, ChildrenPropertiesHint::Recompute)?;
+        let inner = Arc::clone(&self.inner).replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )?;
         Ok(Arc::new(Self::new(inner)))
     }
 
@@ -348,7 +352,12 @@ impl ExecutionPlan for DowncastDelegatingExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn downcast_delegate(&self) -> Option<&dyn ExecutionPlan> {
@@ -536,8 +545,12 @@ fn roundtrip_limit_required_ordering_reaches_data_source() -> Result<()> {
             roundtrip_test_and_return(Arc::new(limit), &ctx, &codec, &proto_converter)?;
 
         // Child replacement must not erase the decoded ordering before pushdown.
-        let rebuilt = decoded
-            .replace_children(vec![make_scan()], ChildrenPropertiesHint::Recompute)?;
+        let rebuilt = decoded.replace_children(
+            vec![make_scan()],
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )?;
 
         let optimized =
             LimitPushdown::new().optimize(rebuilt, &ConfigOptions::default())?;
@@ -5397,7 +5410,7 @@ impl ExecutionPlan for CustomExecWithExprs {
     fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
-        _: ChildrenPropertiesHint,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         unreachable!()
     }
@@ -5406,7 +5419,12 @@ impl ExecutionPlan for CustomExecWithExprs {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn execute(

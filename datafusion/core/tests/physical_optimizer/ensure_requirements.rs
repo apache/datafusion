@@ -45,8 +45,9 @@ use datafusion_physical_plan::limit::GlobalLimitExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
-    ChildrenPropertiesHint, DisplayAs, DisplayFormatType, ExecutionPlan,
-    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
+    ExecutionPlanProperties, Partitioning, PlanProperties, ReplaceChildrenOptions,
+    SendableRecordBatchStream,
 };
 
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
@@ -134,7 +135,7 @@ impl ExecutionPlan for MockMultiPartitionExec {
     fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
-        _: ChildrenPropertiesHint,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
     }
@@ -143,7 +144,12 @@ impl ExecutionPlan for MockMultiPartitionExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn apply_expressions(
@@ -1036,7 +1042,7 @@ impl ExecutionPlan for MockReqExec {
     fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
-        _: ChildrenPropertiesHint,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert_eq!(children.len(), 1);
         Ok(Arc::new(MockReqExec::new(
@@ -1049,7 +1055,12 @@ impl ExecutionPlan for MockReqExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
     fn execute(
         &self,

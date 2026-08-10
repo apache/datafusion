@@ -53,8 +53,8 @@ use crate::joins::piecewise_merge_join::utils::{
 use crate::joins::utils::asymmetric_join_output_partitioning;
 use crate::metrics::MetricsSet;
 use crate::{
-    ChildrenPropertiesHint, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
-    validate_child_count,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
+    ReplaceChildrenOptions, validate_child_count,
 };
 use crate::{
     ExecutionPlan, PlanProperties,
@@ -521,11 +521,11 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
     fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
-        hint: ChildrenPropertiesHint,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
-        match hint {
-            ChildrenPropertiesHint::SameProperties => {
+        match options.children_properties {
+            ChildrenPropertiesMode::SameProperties => {
                 let buffered = children.swap_remove(0);
                 let streamed = children.swap_remove(0);
                 Ok(Arc::new(Self {
@@ -548,7 +548,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                     buffered_fut: Default::default(),
                 }))
             }
-            ChildrenPropertiesHint::Recompute => match &children[..] {
+            ChildrenPropertiesMode::Recompute => match &children[..] {
                 [left, right] => Ok(Arc::new(PiecewiseMergeJoinExec::try_new(
                     Arc::clone(left),
                     Arc::clone(right),
@@ -569,14 +569,24 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::SameProperties)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::SameProperties,
+            },
+        )
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
@@ -584,7 +594,9 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         let streamed = Arc::clone(&self.streamed);
         self.replace_children(
             vec![buffered, streamed],
-            ChildrenPropertiesHint::SameProperties,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::SameProperties,
+            },
         )
     }
 

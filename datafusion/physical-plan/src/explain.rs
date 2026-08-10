@@ -22,7 +22,10 @@ use std::sync::Arc;
 use super::{DisplayAs, PlanProperties, SendableRecordBatchStream};
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{ChildrenPropertiesHint, DisplayFormatType, ExecutionPlan, Partitioning};
+use crate::{
+    ChildrenPropertiesMode, DisplayFormatType, ExecutionPlan, Partitioning,
+    ReplaceChildrenOptions,
+};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::display::StringifiedPlan;
@@ -127,7 +130,7 @@ impl ExecutionPlan for ExplainExec {
     fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
-        _: ChildrenPropertiesHint,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
     }
@@ -136,7 +139,12 @@ impl ExecutionPlan for ExplainExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn execute(

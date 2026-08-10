@@ -31,7 +31,8 @@ use crate::projection::{
 };
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
-    ChildrenPropertiesHint, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+    ChildrenPropertiesMode, ExecutionPlan, Partitioning, ReplaceChildrenOptions,
+    SendableRecordBatchStream,
 };
 
 use arrow::datatypes::{Schema, SchemaRef};
@@ -285,7 +286,7 @@ impl ExecutionPlan for StreamingTableExec {
     fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
-        _: ChildrenPropertiesHint,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.is_empty() {
             Ok(self)
@@ -298,7 +299,12 @@ impl ExecutionPlan for StreamingTableExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn execute(

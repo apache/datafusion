@@ -26,9 +26,9 @@ use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
-    ChildrenPropertiesHint, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
-    Statistics, validate_child_count,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, Partitioning, PlanProperties, ReplaceChildrenOptions,
+    SendableRecordBatchStream, Statistics, validate_child_count,
 };
 
 use datafusion_common::tree_node::TreeNodeRecursion;
@@ -297,16 +297,16 @@ impl ExecutionPlan for SortPreservingMergeExec {
     fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
-        hint: ChildrenPropertiesHint,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
-        match hint {
-            ChildrenPropertiesHint::SameProperties => Ok(Arc::new(Self {
+        match options.children_properties {
+            ChildrenPropertiesMode::SameProperties => Ok(Arc::new(Self {
                 input: children.swap_remove(0),
                 metrics: ExecutionPlanMetricsSet::new(),
                 ..Self::clone(&*self)
             })),
-            ChildrenPropertiesHint::Recompute => Ok(Arc::new(
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(
                 SortPreservingMergeExec::new(self.expr.clone(), children.swap_remove(0))
                     .with_fetch(self.fetch),
             )),
@@ -317,14 +317,24 @@ impl ExecutionPlan for SortPreservingMergeExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::SameProperties)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::SameProperties,
+            },
+        )
     }
 
     fn execute(
@@ -1607,7 +1617,7 @@ mod tests {
         fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
-            _: ChildrenPropertiesHint,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(self)
         }
@@ -1615,7 +1625,12 @@ mod tests {
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.replace_children(children, ChildrenPropertiesHint::Recompute)
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions {
+                    children_properties: ChildrenPropertiesMode::Recompute,
+                },
+            )
         }
         fn execute(
             &self,

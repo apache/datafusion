@@ -43,7 +43,9 @@ use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::StatisticsArgs;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
-use datafusion_physical_plan::{ChildrenPropertiesHint, PlanProperties};
+use datafusion_physical_plan::{
+    ChildrenPropertiesMode, PlanProperties, ReplaceChildrenOptions,
+};
 
 use async_trait::async_trait;
 use futures::stream::Stream;
@@ -168,7 +170,7 @@ impl ExecutionPlan for CustomExecutionPlan {
     fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
-        _: ChildrenPropertiesHint,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
     }
@@ -177,7 +179,12 @@ impl ExecutionPlan for CustomExecutionPlan {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn execute(

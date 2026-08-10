@@ -43,8 +43,8 @@ use crate::spill::spill_pool::{self, SpillPoolSink, SpillPoolWriter};
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
 use crate::{
-    ChildrenPropertiesHint, DisplayFormatType, ExecutionPlan, Partitioning,
-    PlanProperties, Statistics, validate_child_count,
+    ChildrenPropertiesMode, DisplayFormatType, ExecutionPlan, Partitioning,
+    PlanProperties, ReplaceChildrenOptions, Statistics, validate_child_count,
 };
 
 use arrow::array::{Array, PrimitiveArray, RecordBatch, RecordBatchOptions};
@@ -1355,17 +1355,17 @@ impl ExecutionPlan for RepartitionExec {
     fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
-        hint: ChildrenPropertiesHint,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
-        match hint {
-            ChildrenPropertiesHint::SameProperties => Ok(Arc::new(Self {
+        match options.children_properties {
+            ChildrenPropertiesMode::SameProperties => Ok(Arc::new(Self {
                 input: children.swap_remove(0),
                 metrics: ExecutionPlanMetricsSet::new(),
                 state: Default::default(),
                 ..Self::clone(&*self)
             })),
-            ChildrenPropertiesHint::Recompute => {
+            ChildrenPropertiesMode::Recompute => {
                 let mut repartition = RepartitionExec::try_new(
                     children.swap_remove(0),
                     self.partitioning().clone(),
@@ -1382,14 +1382,24 @@ impl ExecutionPlan for RepartitionExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::SameProperties)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::SameProperties,
+            },
+        )
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -2972,7 +2982,7 @@ mod tests {
         fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
-            _: ChildrenPropertiesHint,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(self)
         }
@@ -2981,7 +2991,12 @@ mod tests {
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.replace_children(children, ChildrenPropertiesHint::Recompute)
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions {
+                    children_properties: ChildrenPropertiesMode::Recompute,
+                },
+            )
         }
 
         fn execute(

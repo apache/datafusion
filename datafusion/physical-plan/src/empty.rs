@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use crate::memory::MemoryStream;
 use crate::{
-    ChildrenPropertiesHint, DisplayAs, PlanProperties, SendableRecordBatchStream,
-    Statistics,
+    ChildrenPropertiesMode, DisplayAs, PlanProperties, ReplaceChildrenOptions,
+    SendableRecordBatchStream, Statistics,
 };
 use crate::{
     DisplayFormatType, ExecutionPlan, Partitioning,
@@ -133,7 +133,7 @@ impl ExecutionPlan for EmptyExec {
     fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
-        _: ChildrenPropertiesHint,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
     }
@@ -142,7 +142,12 @@ impl ExecutionPlan for EmptyExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn execute(

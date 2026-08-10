@@ -26,8 +26,8 @@ use crate::coop::cooperative;
 use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    ChildrenPropertiesHint, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    PlanProperties, RecordBatchStream, ReplaceChildrenOptions, SendableRecordBatchStream,
 };
 
 use arrow::array::RecordBatch;
@@ -322,7 +322,7 @@ impl ExecutionPlan for LazyMemoryExec {
     fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
-        _: ChildrenPropertiesHint,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert_or_internal_err!(
             children.is_empty(),
@@ -335,7 +335,12 @@ impl ExecutionPlan for LazyMemoryExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn execute(

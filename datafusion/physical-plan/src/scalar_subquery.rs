@@ -38,7 +38,8 @@ use crate::joins::utils::{OnceAsync, OnceFut};
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
-    ChildrenPropertiesHint, DisplayAs, DisplayFormatType, SendableRecordBatchStream,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ReplaceChildrenOptions,
+    SendableRecordBatchStream,
 };
 
 use futures::StreamExt;
@@ -169,7 +170,7 @@ impl ExecutionPlan for ScalarSubqueryExec {
     fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
-        _: ChildrenPropertiesHint,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // First child is the main input, the rest are subquery plans.
         let input = children.remove(0);
@@ -193,7 +194,12 @@ impl ExecutionPlan for ScalarSubqueryExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
@@ -465,7 +471,7 @@ mod tests {
         fn replace_children(
             self: Arc<Self>,
             mut children: Vec<Arc<dyn ExecutionPlan>>,
-            _: ChildrenPropertiesHint,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(Arc::new(Self::new(
                 children.remove(0),
@@ -484,7 +490,12 @@ mod tests {
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.replace_children(children, ChildrenPropertiesHint::Recompute)
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions {
+                    children_properties: ChildrenPropertiesMode::Recompute,
+                },
+            )
         }
 
         fn execute(

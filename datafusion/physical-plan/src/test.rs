@@ -31,7 +31,7 @@ use crate::metrics::MetricsSet;
 use crate::statistics::StatisticsArgs;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::streaming::PartitionStream;
-use crate::{ChildrenPropertiesHint, ExecutionPlan};
+use crate::{ChildrenPropertiesMode, ExecutionPlan, ReplaceChildrenOptions};
 use crate::{DisplayAs, DisplayFormatType, PlanProperties};
 
 use arrow::array::{Array, ArrayRef, Int32Array, RecordBatch};
@@ -151,7 +151,7 @@ impl ExecutionPlan for TestMemoryExec {
     fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
-        _: ChildrenPropertiesHint,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
     }
@@ -160,7 +160,12 @@ impl ExecutionPlan for TestMemoryExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn repartitioned(

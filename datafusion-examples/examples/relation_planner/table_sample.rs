@@ -117,7 +117,7 @@ use datafusion::{
 };
 use datafusion::{
     optimizer::simplify_expressions::simplify_literal::parse_literal,
-    physical_plan::ChildrenPropertiesHint,
+    physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions},
 };
 use datafusion_common::{
     DFSchemaRef, DataFusionError, Result, Statistics, internal_err, not_impl_err,
@@ -704,7 +704,7 @@ impl ExecutionPlan for SampleExec {
     fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
-        _: ChildrenPropertiesHint,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self::try_new(
             children.swap_remove(0),
@@ -718,7 +718,12 @@ impl ExecutionPlan for SampleExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn execute(

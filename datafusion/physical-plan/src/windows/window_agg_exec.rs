@@ -33,10 +33,10 @@ use crate::windows::{
     window_equivalence_properties,
 };
 use crate::{
-    ChildrenPropertiesHint, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
+    ChildrenPropertiesMode, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
     ExecutionPlan, ExecutionPlanProperties, InputDistributionRequirements, PhysicalExpr,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
-    validate_child_count,
+    PlanProperties, RecordBatchStream, ReplaceChildrenOptions, SendableRecordBatchStream,
+    Statistics, WindowExpr, validate_child_count,
 };
 
 use arrow::array::ArrayRef;
@@ -265,16 +265,16 @@ impl ExecutionPlan for WindowAggExec {
     fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
-        hint: ChildrenPropertiesHint,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
-        match hint {
-            ChildrenPropertiesHint::SameProperties => Ok(Arc::new(Self {
+        match options.children_properties {
+            ChildrenPropertiesMode::SameProperties => Ok(Arc::new(Self {
                 input: children.swap_remove(0),
                 metrics: ExecutionPlanMetricsSet::new(),
                 ..Self::clone(&*self)
             })),
-            ChildrenPropertiesHint::Recompute => Ok(Arc::new(WindowAggExec::try_new(
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(WindowAggExec::try_new(
                 self.window_expr.clone(),
                 children.swap_remove(0),
                 true,
@@ -286,14 +286,24 @@ impl ExecutionPlan for WindowAggExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::SameProperties)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::SameProperties,
+            },
+        )
     }
 
     fn execute(

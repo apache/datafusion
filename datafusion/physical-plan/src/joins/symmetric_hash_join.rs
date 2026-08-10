@@ -49,7 +49,7 @@ use crate::projection::{
     JoinData, ProjectionExec, try_pushdown_through_join_with_column_indices,
 };
 use crate::stream::EmptyRecordBatchStream;
-use crate::{ChildrenPropertiesHint, validate_child_count};
+use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions, validate_child_count};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     InputDistributionRequirements, PlanProperties, RecordBatchStream,
@@ -465,11 +465,11 @@ impl ExecutionPlan for SymmetricHashJoinExec {
     fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
-        hint: ChildrenPropertiesHint,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
-        match hint {
-            ChildrenPropertiesHint::SameProperties => {
+        match options.children_properties {
+            ChildrenPropertiesMode::SameProperties => {
                 let left = children.swap_remove(0);
                 let right = children.swap_remove(0);
                 Ok(Arc::new(Self {
@@ -479,7 +479,7 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                     ..Self::clone(&*self)
                 }))
             }
-            ChildrenPropertiesHint::Recompute => {
+            ChildrenPropertiesMode::Recompute => {
                 Ok(Arc::new(SymmetricHashJoinExec::try_new(
                     Arc::clone(&children[0]),
                     Arc::clone(&children[1]),
@@ -499,14 +499,24 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::SameProperties)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::SameProperties,
+            },
+        )
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

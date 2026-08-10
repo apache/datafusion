@@ -44,8 +44,8 @@ use crate::projection::{
 };
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
-    ChildrenPropertiesHint, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, PlanProperties, RecordBatchStream, ReplaceChildrenOptions,
     SendableRecordBatchStream, validate_child_count,
 };
 
@@ -577,11 +577,11 @@ impl ExecutionPlan for NestedLoopJoinExec {
     fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
-        hint: ChildrenPropertiesHint,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
-        match hint {
-            ChildrenPropertiesHint::SameProperties => {
+        match options.children_properties {
+            ChildrenPropertiesMode::SameProperties => {
                 let left = children.swap_remove(0);
                 let right = children.swap_remove(0);
                 Ok(Arc::new(Self {
@@ -598,7 +598,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
                     projection: self.projection.clone(),
                 }))
             }
-            ChildrenPropertiesHint::Recompute => Ok(Arc::new(
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(
                 NestedLoopJoinExecBuilder::new(
                     Arc::clone(&children[0]),
                     Arc::clone(&children[1]),
@@ -615,14 +615,24 @@ impl ExecutionPlan for NestedLoopJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::SameProperties)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::SameProperties,
+            },
+        )
     }
 
     fn execute(

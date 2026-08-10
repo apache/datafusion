@@ -34,9 +34,10 @@ use crate::projection::{
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
-    ChildrenPropertiesHint, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
+    ChildrenPropertiesMode, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
     ExecutionPlan, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics, handle_state, validate_child_count,
+    ReplaceChildrenOptions, SendableRecordBatchStream, Statistics, handle_state,
+    validate_child_count,
 };
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
@@ -279,11 +280,11 @@ impl ExecutionPlan for CrossJoinExec {
     fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
-        hint: ChildrenPropertiesHint,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
-        match hint {
-            ChildrenPropertiesHint::SameProperties => {
+        match options.children_properties {
+            ChildrenPropertiesMode::SameProperties => {
                 let left = children.swap_remove(0);
                 let right = children.swap_remove(0);
 
@@ -296,7 +297,7 @@ impl ExecutionPlan for CrossJoinExec {
                     schema: Arc::clone(&self.schema),
                 }))
             }
-            ChildrenPropertiesHint::Recompute => Ok(Arc::new(CrossJoinExec::new(
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(CrossJoinExec::new(
                 Arc::clone(&children[0]),
                 Arc::clone(&children[1]),
             ))),
@@ -307,14 +308,24 @@ impl ExecutionPlan for CrossJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::SameProperties)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::SameProperties,
+            },
+        )
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {

@@ -19,8 +19,9 @@ use crate::coalesce::LimitedBatchCoalescer;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
 use crate::{
-    ChildrenPropertiesHint, DisplayAs, DisplayFormatType, ExecutionPlan,
-    ExecutionPlanProperties, PlanProperties, validate_child_count,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
+    ExecutionPlanProperties, PlanProperties, ReplaceChildrenOptions,
+    validate_child_count,
 };
 use arrow::array::RecordBatch;
 use arrow_schema::{FieldRef, Fields, Schema, SchemaRef};
@@ -173,16 +174,16 @@ impl ExecutionPlan for AsyncFuncExec {
     fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
-        hint: ChildrenPropertiesHint,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
-        match hint {
-            ChildrenPropertiesHint::SameProperties => Ok(Arc::new(Self {
+        match options.children_properties {
+            ChildrenPropertiesMode::SameProperties => Ok(Arc::new(Self {
                 input: children.swap_remove(0),
                 metrics: ExecutionPlanMetricsSet::new(),
                 ..Self::clone(&*self)
             })),
-            ChildrenPropertiesHint::Recompute => Ok(Arc::new(AsyncFuncExec::try_new(
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(AsyncFuncExec::try_new(
                 self.async_exprs.clone(),
                 children.swap_remove(0),
             )?)),
@@ -193,14 +194,24 @@ impl ExecutionPlan for AsyncFuncExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::SameProperties)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::SameProperties,
+            },
+        )
     }
 
     fn execute(

@@ -1027,7 +1027,10 @@ mod tests {
     use crate::filter::FilterExec;
     use crate::projection::ProjectionExec;
     use crate::statistics::StatisticsArgs;
-    use crate::{ChildrenPropertiesHint, DisplayAs, DisplayFormatType, PlanProperties};
+    use crate::{
+        ChildrenPropertiesMode, DisplayAs, DisplayFormatType, PlanProperties,
+        ReplaceChildrenOptions,
+    };
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::stats::Precision;
     use datafusion_common::{ColumnStatistics, ScalarValue};
@@ -1110,7 +1113,7 @@ mod tests {
         fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
-            _: ChildrenPropertiesHint,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(self)
         }
@@ -1119,7 +1122,12 @@ mod tests {
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.replace_children(children, ChildrenPropertiesHint::Recompute)
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions {
+                    children_properties: ChildrenPropertiesMode::Recompute,
+                },
+            )
         }
 
         fn properties(&self) -> &Arc<PlanProperties> {
@@ -1225,7 +1233,7 @@ mod tests {
         fn replace_children(
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
-            _: ChildrenPropertiesHint,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(Arc::new(CustomExec {
                 input: Arc::clone(&children[0]),
@@ -1236,7 +1244,12 @@ mod tests {
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.replace_children(children, ChildrenPropertiesHint::Recompute)
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions {
+                    children_properties: ChildrenPropertiesMode::Recompute,
+                },
+            )
         }
 
         fn properties(&self) -> &Arc<PlanProperties> {

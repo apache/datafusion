@@ -28,7 +28,9 @@ use datafusion_common::config::Dialect;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_expr::{Expr, TableType, dml::InsertOp};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion_physical_plan::{ChildrenPropertiesHint, execution_plan::SchedulingType};
+use datafusion_physical_plan::{
+    ChildrenPropertiesMode, ReplaceChildrenOptions, execution_plan::SchedulingType,
+};
 use datafusion_physical_plan::{
     DisplayAs, ExecutionPlan, PlanProperties,
     execution_plan::{Boundedness, EmissionType},
@@ -165,7 +167,7 @@ impl ExecutionPlan for TestInsertExec {
     fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
-        _: ChildrenPropertiesHint,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert!(children.is_empty());
         Ok(self)
@@ -175,7 +177,12 @@ impl ExecutionPlan for TestInsertExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ChildrenPropertiesHint::Recompute)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions {
+                children_properties: ChildrenPropertiesMode::Recompute,
+            },
+        )
     }
 
     fn execute(

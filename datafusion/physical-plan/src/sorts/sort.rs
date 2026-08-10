@@ -52,9 +52,9 @@ use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use crate::topk::TopK;
 use crate::topk::TopKDynamicFilters;
 use crate::{
-    ChildrenPropertiesHint, DisplayAs, DisplayFormatType, Distribution,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, Distribution,
     EmptyRecordBatchStream, ExecutionPlan, ExecutionPlanProperties, Partitioning,
-    PlanProperties, SendableRecordBatchStream, Statistics,
+    PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
@@ -1311,13 +1311,13 @@ impl ExecutionPlan for SortExec {
     fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
-        hint: ChildrenPropertiesHint,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut new_sort = self.cloned();
         assert_eq!(children.len(), 1, "SortExec should have exactly one child");
         new_sort.input = Arc::clone(&children[0]);
 
-        if hint == ChildrenPropertiesHint::Recompute {
+        if options.children_properties == ChildrenPropertiesMode::Recompute {
             // Recompute the properties based on the new input since they may have changed.
             let (cache, sort_prefix) = Self::compute_properties(
                 &new_sort.input,
@@ -1339,10 +1339,18 @@ impl ExecutionPlan for SortExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         match has_same_children_properties(self.as_ref(), &children)? {
-            true => {
-                self.replace_children(children, ChildrenPropertiesHint::SameProperties)
-            }
-            false => self.replace_children(children, ChildrenPropertiesHint::Recompute),
+            true => self.replace_children(
+                children,
+                ReplaceChildrenOptions {
+                    children_properties: ChildrenPropertiesMode::SameProperties,
+                },
+            ),
+            false => self.replace_children(
+                children,
+                ReplaceChildrenOptions {
+                    children_properties: ChildrenPropertiesMode::Recompute,
+                },
+            ),
         }
     }
 
@@ -1798,7 +1806,7 @@ mod tests {
         fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
-            _: ChildrenPropertiesHint,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(self)
         }
@@ -1814,7 +1822,12 @@ mod tests {
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.replace_children(children, ChildrenPropertiesHint::Recompute)
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions {
+                    children_properties: ChildrenPropertiesMode::Recompute,
+                },
+            )
         }
 
         fn execute(
