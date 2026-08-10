@@ -141,8 +141,7 @@ impl ParquetFileMetrics {
         let bytes_scanned = builder
             .clone()
             .with_type(MetricType::Summary)
-            .with_category(MetricCategory::Bytes)
-            .counter("bytes_scanned", partition);
+            .bytes_counter("bytes_scanned", partition);
 
         let metadata_load_time = builder
             .clone()

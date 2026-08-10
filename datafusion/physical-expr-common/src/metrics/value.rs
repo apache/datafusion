@@ -665,11 +665,33 @@ pub enum MetricValue {
         /// The value of the metric
         count: Count,
     },
+    /// Operator defined count representing a size in bytes (e.g.
+    /// `bytes_scanned`, `bytes_written`). Like [`Self::Count`], but always
+    /// displayed with [`human_readable_size`]'s 1024-based byte units
+    /// (KB/MB/GB/TB) instead of [`human_readable_count`]'s 1000-based units.
+    BytesCount {
+        /// The provided name of this metric
+        name: Cow<'static, str>,
+        /// The value of the metric, in bytes
+        count: Count,
+    },
     /// Operator defined gauge.
     Gauge {
         /// The provided name of this metric
         name: Cow<'static, str>,
         /// The value of the metric
+        gauge: Gauge,
+    },
+    /// Operator defined gauge representing a size in bytes (e.g.
+    /// `stream_memory_usage`) that is not necessarily monotonically
+    /// increasing. Like [`Self::Gauge`], but always displayed with
+    /// [`human_readable_size`]'s byte units. Unlike [`Self::PeakMemoryUsage`],
+    /// this does not imply the value only ever grows - use
+    /// [`Self::PeakMemoryUsage`] for that.
+    BytesGauge {
+        /// The provided name of this metric
+        name: Cow<'static, str>,
+        /// The value of the metric, in bytes
         gauge: Gauge,
     },
     /// Operator defined peak memory usage in bytes.
@@ -744,10 +766,24 @@ impl PartialEq for MetricValue {
                     name: other_name,
                     count: other_count,
                 },
+            )
+            | (
+                MetricValue::BytesCount { name, count },
+                MetricValue::BytesCount {
+                    name: other_name,
+                    count: other_count,
+                },
             ) => name == other_name && count == other_count,
             (
                 MetricValue::Gauge { name, gauge },
                 MetricValue::Gauge {
+                    name: other_name,
+                    gauge: other_gauge,
+                },
+            )
+            | (
+                MetricValue::BytesGauge { name, gauge },
+                MetricValue::BytesGauge {
                     name: other_name,
                     gauge: other_gauge,
                 },
@@ -823,10 +859,10 @@ impl MetricValue {
             Self::SpilledRows(_) => "spilled_rows",
             Self::CurrentMemoryUsage(_) => "mem_used",
             Self::ElapsedCompute(_) => "elapsed_compute",
-            Self::Count { name, .. } => name.borrow(),
-            Self::Gauge { name, .. } | Self::PeakMemoryUsage { name, .. } => {
-                name.borrow()
-            }
+            Self::Count { name, .. } | Self::BytesCount { name, .. } => name.borrow(),
+            Self::Gauge { name, .. }
+            | Self::BytesGauge { name, .. }
+            | Self::PeakMemoryUsage { name, .. } => name.borrow(),
             Self::Time { name, .. } => name.borrow(),
             Self::StartTimestamp(_) => "start_timestamp",
             Self::EndTimestamp(_) => "end_timestamp",
@@ -848,10 +884,10 @@ impl MetricValue {
             Self::SpilledRows(count) => count.value(),
             Self::CurrentMemoryUsage(used) => used.value(),
             Self::ElapsedCompute(time) => time.value(),
-            Self::Count { count, .. } => count.value(),
-            Self::Gauge { gauge, .. } | Self::PeakMemoryUsage { gauge, .. } => {
-                gauge.value()
-            }
+            Self::Count { count, .. } | Self::BytesCount { count, .. } => count.value(),
+            Self::Gauge { gauge, .. }
+            | Self::BytesGauge { gauge, .. }
+            | Self::PeakMemoryUsage { gauge, .. } => gauge.value(),
             Self::Time { time, .. } => time.value(),
             Self::StartTimestamp(timestamp) => timestamp
                 .value()
@@ -889,7 +925,15 @@ impl MetricValue {
                 name: name.clone(),
                 count: Count::new(),
             },
+            Self::BytesCount { name, .. } => Self::BytesCount {
+                name: name.clone(),
+                count: Count::new(),
+            },
             Self::Gauge { name, .. } => Self::Gauge {
+                name: name.clone(),
+                gauge: Gauge::new(),
+            },
+            Self::BytesGauge { name, .. } => Self::BytesGauge {
                 name: name.clone(),
                 gauge: Gauge::new(),
             },
@@ -948,11 +992,23 @@ impl MetricValue {
                 Self::Count {
                     count: other_count, ..
                 },
+            )
+            | (
+                Self::BytesCount { count, .. },
+                Self::BytesCount {
+                    count: other_count, ..
+                },
             ) => count.add(other_count.value()),
             (Self::CurrentMemoryUsage(gauge), Self::CurrentMemoryUsage(other_gauge))
             | (
                 Self::Gauge { gauge, .. },
                 Self::Gauge {
+                    gauge: other_gauge, ..
+                },
+            )
+            | (
+                Self::BytesGauge { gauge, .. },
+                Self::BytesGauge {
                     gauge: other_gauge, ..
                 },
             )
@@ -1058,7 +1114,9 @@ impl MetricValue {
                 _ => 14,
             },
             Self::PeakMemoryUsage { .. } => 13,
+            Self::BytesCount { .. } => 14,
             Self::Gauge { .. } => 15,
+            Self::BytesGauge { .. } => 15,
             Self::Time { .. } => 16,
             Self::Ratio { .. } => 17,
             Self::StartTimestamp(_) => 18, // show timestamps last
@@ -1084,7 +1142,9 @@ impl Display for MetricValue {
             | Self::Count { count, .. } => {
                 write!(f, "{count}")
             }
-            Self::SpilledBytes(count) | Self::OutputBytes(count) => {
+            Self::SpilledBytes(count)
+            | Self::OutputBytes(count)
+            | Self::BytesCount { count, .. } => {
                 let readable_count = human_readable_size(count.value());
                 write!(f, "{readable_count}")
             }
@@ -1093,7 +1153,7 @@ impl Display for MetricValue {
                 let readable_size = human_readable_size(gauge.value());
                 write!(f, "{readable_size}")
             }
-            Self::PeakMemoryUsage { gauge, .. } => {
+            Self::PeakMemoryUsage { gauge, .. } | Self::BytesGauge { gauge, .. } => {
                 let readable_size = human_readable_size(gauge.value());
                 write!(f, "{readable_size}")
             }

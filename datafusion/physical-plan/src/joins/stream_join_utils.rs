@@ -727,9 +727,8 @@ impl StreamJoinMetrics {
             input_rows,
         };
 
-        let stream_memory_usage = MetricBuilder::new(metrics)
-            .with_category(MetricCategory::Bytes)
-            .gauge("stream_memory_usage", partition);
+        let stream_memory_usage =
+            MetricBuilder::new(metrics).bytes_gauge("stream_memory_usage", partition);
 
         Self {
             left,
