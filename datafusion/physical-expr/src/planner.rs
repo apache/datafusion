@@ -121,9 +121,11 @@ use datafusion_expr::{
 ///   to qualified or unqualified fields by name.
 /// * `execution_props` - Per-execution properties such as the query start time.
 /// * `planning_ctx` - The [`PhysicalPlanningContext`] used to resolve
-///   `Expr::ScalarSubquery` nodes. The physical planner threads the subquery
-///   index map and shared results container from its `ScalarSubqueryExec`
-///   construction into calls to `create_physical_expr`. Callers creating
+///   `Expr::ScalarSubquery` and `Expr::LambdaVariable` nodes. The physical
+///   planner threads the subquery index map and shared results container from
+///   its `ScalarSubqueryExec` construction into calls to
+///   `create_physical_expr`; the lambda variable qualifiers are added by this
+///   function itself as it descends into lambda bodies. Callers creating
 ///   physical expressions outside of physical planning should pass
 ///   `&PhysicalPlanningContext::default()`; converting a scalar subquery then returns a
 ///   planning error.
@@ -612,15 +614,15 @@ pub fn create_physical_expr(
                             input_dfschema.metadata().clone(),
                         )?;
 
-                        let execution_props = execution_props
+                        let planning_ctx = planning_ctx
                             .clone()
                             .with_qualified_lambda_variables(&qualifier, &lambda.params);
 
                         create_physical_expr(
                             arg,
                             &lambda_schema,
-                            &execution_props,
-                            planning_ctx,
+                            execution_props,
+                            &planning_ctx,
                         )
                     }
                     _ => create_physical_expr(
@@ -657,12 +659,14 @@ pub fn create_physical_expr(
                 plan_datafusion_err!("unresolved LambdaVariable {name}")
             })?;
 
-            let qualifier = execution_props
-                .lambda_variable_qualifier
-                .get(name)
-                .ok_or_else(|| {
-                    plan_datafusion_err!("qualifier for lambda variable {name} not found")
-                })?;
+            let qualifier =
+                planning_ctx
+                    .lambda_variable_qualifier(name)
+                    .ok_or_else(|| {
+                        plan_datafusion_err!(
+                            "qualifier for lambda variable {name} not found"
+                        )
+                    })?;
 
             let index = input_dfschema
                 .index_of_column_by_name(Some(qualifier), name)
