@@ -2281,7 +2281,7 @@ mod tests {
 
     use super::*;
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_expr::{and, col, lit, or};
+    use datafusion_expr::{and, case, col, lit, or, when};
     use datafusion_physical_expr::utils::collect_columns;
     use insta::assert_snapshot;
 
@@ -6160,5 +6160,190 @@ mod tests {
         let expected =
             "c1_null_count@2 != row_count@3 AND c1_min@0 <= a AND a <= c1_max@1";
         assert_eq!(res.to_string(), expected);
+    }
+
+    /// Schema used by the `CASE` tests: `c1` is the column the arms filter on,
+    /// `c2` only appears in the `WHEN` conditions (like a partition selector)
+    fn case_test_schema() -> Schema {
+        Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ])
+    }
+
+    /// The distinct source columns whose statistics the predicate requires
+    fn required_column_names(required_columns: &RequiredColumns) -> Vec<String> {
+        required_columns
+            .iter()
+            .map(|(c, _t, _f)| c.name().to_string())
+            .unique()
+            .collect()
+    }
+
+    /// `CASE <expr> WHEN .. THEN .. ELSE .. END`: the container predicate is the
+    /// disjunction of the arms
+    #[test]
+    fn test_build_predicate_expression_case_with_base_expr() {
+        let schema = case_test_schema();
+        // CASE c2 % 2 WHEN 0 THEN c1 < 10 WHEN 1 THEN c1 > 100 ELSE false END
+        let expr = case(col("c2").rem(lit(2)))
+            .when(lit(0), col("c1").lt(lit(10)))
+            .when(lit(1), col("c1").gt(lit(100)))
+            .otherwise(lit(ScalarValue::Boolean(Some(false))))
+            .unwrap();
+        let mut required_columns = RequiredColumns::new();
+        let res = test_build_predicate_expression(&expr, &schema, &mut required_columns);
+        assert_eq!(
+            res.to_string(),
+            "c1_null_count@1 != row_count@2 AND c1_min@0 < 10 \
+             OR c1_null_count@1 != row_count@2 AND c1_max@3 > 100"
+        );
+        // the `WHEN` values are not prunable and must not require statistics
+        assert_eq!(required_column_names(&required_columns), vec!["c1"]);
+    }
+
+    /// `CASE WHEN <cond> THEN .. END`: same, for the form without a base
+    /// expression
+    #[test]
+    fn test_build_predicate_expression_case_without_base_expr() {
+        let schema = case_test_schema();
+        // CASE WHEN c2 = 0 THEN c1 < 10 WHEN c2 = 1 THEN c1 > 100 ELSE false END
+        let expr = when(col("c2").eq(lit(0)), col("c1").lt(lit(10)))
+            .when(col("c2").eq(lit(1)), col("c1").gt(lit(100)))
+            .otherwise(lit(ScalarValue::Boolean(Some(false))))
+            .unwrap();
+        let mut required_columns = RequiredColumns::new();
+        let res = test_build_predicate_expression(&expr, &schema, &mut required_columns);
+        assert_eq!(
+            res.to_string(),
+            "c1_null_count@1 != row_count@2 AND c1_min@0 < 10 \
+             OR c1_null_count@1 != row_count@2 AND c1_max@3 > 100"
+        );
+        assert_eq!(required_column_names(&required_columns), vec!["c1"]);
+    }
+
+    /// A `CASE` without an `ELSE` has an implicit `NULL` else, which selects no
+    /// rows and so must not weaken the predicate to `true`
+    #[test]
+    fn test_build_predicate_expression_case_without_else() {
+        let schema = case_test_schema();
+        // CASE c2 WHEN 0 THEN c1 < 10 END
+        let expr = case(col("c2"))
+            .when(lit(0), col("c1").lt(lit(10)))
+            .end()
+            .unwrap();
+        let res =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(
+            res.to_string(),
+            "c1_null_count@1 != row_count@2 AND c1_min@0 < 10"
+        );
+
+        // an explicit NULL else behaves the same way
+        let expr = case(col("c2"))
+            .when(lit(0), col("c1").lt(lit(10)))
+            .otherwise(lit(ScalarValue::Boolean(None)))
+            .unwrap();
+        let res =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(
+            res.to_string(),
+            "c1_null_count@1 != row_count@2 AND c1_min@0 < 10"
+        );
+    }
+
+    /// `lit(false)` arms (e.g. an empty partition) drop out of the disjunction
+    #[test]
+    fn test_build_predicate_expression_case_with_false_arms() {
+        let schema = case_test_schema();
+        // CASE c2 WHEN 0 THEN false WHEN 1 THEN c1 < 10 ELSE false END
+        let expr = case(col("c2"))
+            .when(lit(0), lit(ScalarValue::Boolean(Some(false))))
+            .when(lit(1), col("c1").lt(lit(10)))
+            .otherwise(lit(ScalarValue::Boolean(Some(false))))
+            .unwrap();
+        let res =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(
+            res.to_string(),
+            "c1_null_count@1 != row_count@2 AND c1_min@0 < 10"
+        );
+    }
+
+    /// If every arm is `false` no row can pass the predicate, so every
+    /// container can be pruned
+    #[test]
+    fn test_build_predicate_expression_case_all_false_arms() {
+        let schema = case_test_schema();
+        let expr = case(col("c2"))
+            .when(lit(0), lit(ScalarValue::Boolean(Some(false))))
+            .otherwise(lit(ScalarValue::Boolean(Some(false))))
+            .unwrap();
+        let mut required_columns = RequiredColumns::new();
+        let res = test_build_predicate_expression(&expr, &schema, &mut required_columns);
+        assert_eq!(res.to_string(), "false");
+        assert!(required_column_names(&required_columns).is_empty());
+    }
+
+    /// An arm that can not be rewritten degrades the whole `CASE` to `true`
+    /// (i.e. no pruning), never to `false`
+    #[test]
+    fn test_build_predicate_expression_case_with_unhandled_arm() {
+        let schema = case_test_schema();
+        // CASE c2 WHEN 0 THEN c1 < 10 WHEN 1 THEN array_has([1], c1) END
+        let expr = case(col("c2"))
+            .when(lit(0), col("c1").lt(lit(10)))
+            .when(lit(1), array_has(make_array(vec![lit(1)]), col("c1")))
+            .end()
+            .unwrap();
+        let res =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(res.to_string(), "true");
+
+        // ... and the same when the unhandled arm comes first
+        let expr = case(col("c2"))
+            .when(lit(0), array_has(make_array(vec![lit(1)]), col("c1")))
+            .when(lit(1), col("c1").lt(lit(10)))
+            .end()
+            .unwrap();
+        let res =
+            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        assert_eq!(res.to_string(), "true");
+    }
+
+    /// End to end pruning with a `CASE` predicate of the shape produced by a
+    /// dynamic filter pushed down from a hash partitioned join
+    #[test]
+    fn prune_case_partitioned_ranges() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ]));
+        // CASE c2 % 2
+        //   WHEN 0 THEN c1 >= 0 AND c1 <= 10
+        //   WHEN 1 THEN c1 >= 100 AND c1 <= 110
+        //   ELSE false
+        // END
+        let expr = case(col("c2").rem(lit(2)))
+            .when(
+                lit(0),
+                col("c1").gt_eq(lit(0)).and(col("c1").lt_eq(lit(10))),
+            )
+            .when(
+                lit(1),
+                col("c1").gt_eq(lit(100)).and(col("c1").lt_eq(lit(110))),
+            )
+            .otherwise(lit(ScalarValue::Boolean(Some(false))))
+            .unwrap();
+
+        let statistics = TestStatistics::new().with(
+            "c1",
+            ContainerStats::new_i32(
+                vec![Some(0), Some(50), Some(100), Some(200)], // min
+                vec![Some(5), Some(60), Some(105), Some(300)], // max
+            ),
+        );
+        // only the container that overlaps neither range is pruned
+        prune_with_expr(expr, &schema, &statistics, &[true, false, true, false]);
     }
 }
