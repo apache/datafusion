@@ -367,7 +367,7 @@ mod tests {
             match spark_abs(&[args], true) {
                 Err(e) => {
                     assert_eq!(
-                        e.to_string(),
+                        e.strip_backtrace(),
                         format!(
                             "Arrow error: Compute error: {ARITHMETIC_OVERFLOW_ERROR}"
                         )
