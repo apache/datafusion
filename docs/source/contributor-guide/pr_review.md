@@ -55,7 +55,7 @@ Practical tips:
 
 1. Check out the changes locally to explore them in your IDE or with an
    agent, e.g. `gh pr checkout <PR number>` using the [GitHub CLI].
-2. There is normally no need to rerun tests locally that CI has already run.
+2. There is normally no need to rerun locally any tests that CI has already run.
 3. Leave comments on specific lines of the diff where possible, so the
    discussion has context.
 4. If you review a PR but don't feel confident approving it, leaving comments
@@ -80,7 +80,8 @@ Check that the description:
 
 2. Follows the [PR template], and answers the template's questions.
 
-3. Accurately describes the content of the PR, including any relevant context or background.  
+3. Accurately describes the content of the PR, including any relevant context or
+   background.
    Great descriptions have a high signal-to-noise ratio, summarizing
    important implementation changes without repeating technical minutiae that
    are already present in the code itself.
@@ -99,7 +100,7 @@ maintainers.
 
 Some practical guidelines for reviewing comments:
 
-1. The code has adequate comments, focused on the **rationale** for any
+1. The code has adequate comments focused on the **rationale** for any
    non-obvious change (the "why"), not a restatement of what the code does
    (the "what"), which is typically clear from reading the code itself.
 2. Comments do not narrate irrelevant internal implementation details or the
@@ -131,14 +132,14 @@ reported problem.
 Guidelines for evaluating tests:
 
 1. Prefer `sqllogictest` (`.slt`) tests or DataFrame API tests where
-   possible, as they exercise **user visible behavior** and are less coupled
+   possible, as they exercise **user-visible behavior** and are less coupled
    to internal implementation details than unit tests.
 2. Verify tests cover edge cases and common failure scenarios, not just the
    common successful path. However, it is NOT necessary to test every possible
    error path, especially if it is difficult to trigger or unlikely to occur in
    practice.
 3. Verify test coverage of changed code using the `codecov` check on the PR,
-   or by running [`cargo llvm-cov`] locally for an HTML report. Use judgement
+   or by running [`cargo llvm-cov`] locally for an HTML report. Use judgment
    about any uncovered lines -- the goal is confidence in the change, not
    slavishly hitting some coverage number.
 4. Avoid tests with lots of repeated boilerplate: when many tests share
@@ -148,7 +149,7 @@ Guidelines for evaluating tests:
 5. Check that tests assert on specific expected values or plans (e.g. via
    `insta` snapshots or `.slt` expected output) rather than merely checking
    "no error occurred".
-6. Verify test actually cover the bug ("Ablation Testing"): For bug fixes, revert
+6. Verify tests actually cover the bug ("Ablation Testing"): For bug fixes, revert
    the fix locally and check that the new test fails without it (i.e. the test
    actually reproduces the bug or covers the new feature).
 
@@ -160,7 +161,7 @@ Check that:
 
 1. The code is clear and fits the style of the existing codebase.
 2. New functions and tests are placed near similar functions and
-   tests. For example helper functions should be defined close to where they are used,
+   tests. For example, helper functions should be defined close to where they are used,
    and new tests should be placed in the same module as the code they test.
    SLT tests should be placed in an existing .slt file with related functionality,
    unless the new tests are large enough to justify their own file.
@@ -179,7 +180,7 @@ Check that:
 
 ## Review the Performance
 
-Performance is a key DataFusion feature. See [Performance Improvements](index.md#performance-improvements)
+Performance is a key feature of DataFusion. See [Performance Improvements](index.md#performance-improvements)
 for the project policy: an improvement should be "enough" to justify any
 added code complexity, and performance PRs should come with benchmark
 results.
@@ -187,7 +188,7 @@ results.
 When reviewing:
 
 1. Find any relevant existing benchmarks and run them against `main`:
-   the [system level SQL benchmarks] are run with `bench.sh` (see the
+   the [system-level SQL benchmarks] are run with `bench.sh` (see the
    [benchmarks README]), and microbenchmarks (e.g. in
    `datafusion/functions/benches`) are run with `cargo bench`.
 2. Be aware that benchmarking on a machine where other
@@ -197,7 +198,7 @@ When reviewing:
    results are reproducible and that the benchmark exercises the changed
    code path.
 
-[system level sql benchmarks]: https://github.com/apache/datafusion/tree/main/benchmarks
+[system-level sql benchmarks]: https://github.com/apache/datafusion/tree/main/benchmarks
 [benchmarks readme]: https://github.com/apache/datafusion/blob/main/benchmarks/README.md
 
 ## Best Practices for Reviewers
