@@ -80,7 +80,10 @@ Check that the description:
 
 2. Follows the [PR template], and answers the template's questions.
 
-3. Accurately describes what the PR actually does.
+3. Accurately describes the content of the PR, including any relevant context or background.  
+   Great descriptions have a high signal-to-noise ratio, summarizing
+   important implementation changes without repeating technical minutiae that
+   are already present in the code itself.
 
 4. Explicitly calls out any user-facing or API changes (see
    [Review the Code](#review-the-code) below).
