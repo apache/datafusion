@@ -805,6 +805,19 @@ fn is_always_false(expr: &Arc<dyn PhysicalExpr>) -> bool {
         .unwrap_or_default()
 }
 
+/// Returns true if `expr` is a literal that can never evaluate to `true`,
+/// i.e. either `false` or `NULL`.
+///
+/// A filter only keeps rows for which the predicate evaluates to `true`, so a
+/// `NULL` literal selects no rows, exactly like `false`.
+fn is_never_true(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    expr.downcast_ref::<phys_expr::Literal>()
+        .map(|l| {
+            matches!(l.value(), ScalarValue::Boolean(Some(false))) || l.value().is_null()
+        })
+        .unwrap_or_default()
+}
+
 /// Describes which columns statistics are necessary to evaluate a
 /// [`PruningPredicate`].
 ///
@@ -1621,6 +1634,15 @@ fn build_predicate_expression(
             return unhandled_hook.handle(expr);
         }
     }
+    if let Some(case) = expr.downcast_ref::<phys_expr::CaseExpr>() {
+        return build_case_predicate_expression(
+            case,
+            schema,
+            required_columns,
+            unhandled_hook,
+            max_in_list_size,
+        );
+    }
 
     let (left, op, right) = {
         if let Some(bin_expr) = expr.downcast_ref::<phys_expr::BinaryExpr>() {
@@ -1709,6 +1731,84 @@ fn build_predicate_expression(
 
     build_statistics_expr(&mut expr_builder)
         .unwrap_or_else(|_| unhandled_hook.handle(expr))
+}
+
+/// Rewrite a `CASE` expression used as a predicate into a container level
+/// pruning predicate.
+///
+/// A container (row group, file, partition, ...) holds many rows and a
+/// container can only be pruned if *no* row in it can pass the predicate. Each
+/// row picks exactly one arm of the `CASE`, but different rows in the same
+/// container may pick different arms, so the container level predicate is the
+/// **disjunction** of the arms' `THEN` predicates:
+///
+/// ```text
+/// CASE [expr] WHEN v1 THEN t1 WHEN v2 THEN t2 ELSE e END
+///   => prune(t1) OR prune(t2) OR prune(e)
+/// ```
+///
+/// This is what a dynamic filter pushed down from a hash partitioned join
+/// looks like: one arm per partition, keyed on the partition number, e.g.
+/// `CASE hash(a) % 4 WHEN 0 THEN a >= 1 AND a <= 9 WHEN 1 THEN ... END`. The
+/// `WHEN` values are not expressible in terms of container statistics and are
+/// deliberately ignored: dropping them only makes the predicate weaker (more
+/// containers are kept), which is always sound.
+///
+/// Notes:
+/// * A missing `ELSE` is an implicit `NULL`, which never passes a filter, so it
+///   contributes nothing to the disjunction (it must *not* be treated as
+///   `true`).
+/// * An arm that cannot be rewritten becomes `true` via `unhandled_hook`, which
+///   makes the whole disjunction `true` (no pruning). That is sound.
+/// * An arm that is statically `false` (empty partitions are emitted as
+///   `lit(false)`) drops out of the disjunction.
+/// * If every arm drops out the result is `false`: no row of any container can
+///   pass, so all containers can be pruned.
+fn build_case_predicate_expression(
+    case: &phys_expr::CaseExpr,
+    schema: &SchemaRef,
+    required_columns: &mut RequiredColumns,
+    unhandled_hook: &Arc<dyn UnhandledPredicateHook>,
+    max_in_list_size: usize,
+) -> Arc<dyn PhysicalExpr> {
+    let arms = case
+        .when_then_expr()
+        .iter()
+        .map(|(_when, then)| then)
+        .chain(case.else_expr());
+
+    let mut result: Option<Arc<dyn PhysicalExpr>> = None;
+    for arm in arms {
+        // Arms that can never evaluate to `true` select no rows at all and so
+        // contribute nothing to the disjunction.
+        if is_never_true(arm) {
+            continue;
+        }
+        let arm_expr = build_predicate_expression(
+            arm,
+            schema,
+            required_columns,
+            unhandled_hook,
+            max_in_list_size,
+        );
+        if is_always_true(&arm_expr) {
+            // `x OR true` is `true`: this container can never be pruned.
+            return arm_expr;
+        }
+        if is_always_false(&arm_expr) {
+            continue;
+        }
+        result = Some(match result {
+            None => arm_expr,
+            Some(prev) => {
+                Arc::new(phys_expr::BinaryExpr::new(prev, Operator::Or, arm_expr))
+            }
+        });
+    }
+
+    result.unwrap_or_else(|| {
+        Arc::new(phys_expr::Literal::new(ScalarValue::Boolean(Some(false))))
+    })
 }
 
 /// Count of distinct column references in an expression.
