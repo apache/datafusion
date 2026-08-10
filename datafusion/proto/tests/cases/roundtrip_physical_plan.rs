@@ -536,7 +536,8 @@ fn roundtrip_limit_required_ordering_reaches_data_source() -> Result<()> {
             roundtrip_test_and_return(Arc::new(limit), &ctx, &codec, &proto_converter)?;
 
         // Child replacement must not erase the decoded ordering before pushdown.
-        let rebuilt = decoded.with_new_children(vec![make_scan()])?;
+        let rebuilt = decoded
+            .replace_children(vec![make_scan()], ChildrenPropertiesHint::Recompute)?;
 
         let optimized =
             LimitPushdown::new().optimize(rebuilt, &ConfigOptions::default())?;

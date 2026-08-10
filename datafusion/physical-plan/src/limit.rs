@@ -900,7 +900,7 @@ mod tests {
     }
 
     #[test]
-    fn with_new_children_preserves_required_ordering() -> Result<()> {
+    fn replace_children_preserves_required_ordering() -> Result<()> {
         let source = test::scan_partitioned(1);
         let schema = source.schema();
         let ordering = LexOrdering::new(vec![PhysicalSortExpr {
@@ -913,15 +913,19 @@ mod tests {
 
         let mut global = GlobalLimitExec::new(Arc::clone(&source), 0, Some(10));
         global.set_required_ordering(ordering.clone());
-        let rebuilt =
-            Arc::new(global).with_new_children(vec![test::scan_partitioned(1)])?;
+        let rebuilt = Arc::new(global).replace_children(
+            vec![test::scan_partitioned(1)],
+            ChildrenPropertiesHint::Recompute,
+        )?;
         let rebuilt = rebuilt.downcast_ref::<GlobalLimitExec>().unwrap();
         assert_eq!(rebuilt.required_ordering(), &ordering);
 
         let mut local = LocalLimitExec::new(source, 10);
         local.set_required_ordering(ordering.clone());
-        let rebuilt =
-            Arc::new(local).with_new_children(vec![test::scan_partitioned(1)])?;
+        let rebuilt = Arc::new(local).replace_children(
+            vec![test::scan_partitioned(1)],
+            ChildrenPropertiesHint::Recompute,
+        )?;
         let rebuilt = rebuilt.downcast_ref::<LocalLimitExec>().unwrap();
         assert_eq!(rebuilt.required_ordering(), &ordering);
 
