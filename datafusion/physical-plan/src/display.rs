@@ -1718,14 +1718,14 @@ mod tests {
                 }
                 fn apply_expressions(
                     &self,
-                    f: &mut dyn FnMut(
+                    _f: &mut dyn FnMut(
                         &Arc<dyn PhysicalExpr>,
                     ) -> Result<
                         datafusion_common::tree_node::TreeNodeRecursion,
                     >,
                 ) -> Result<datafusion_common::tree_node::TreeNodeRecursion>
                 {
-                    self.inner.apply_expressions(f)
+                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
                 }
                 fn with_new_children(
                     self: Arc<Self>,

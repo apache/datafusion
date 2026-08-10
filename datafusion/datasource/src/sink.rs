@@ -318,15 +318,9 @@ impl ExecutionPlan for DataSinkExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        datafusion_physical_plan::apply_expression_roots(
-            self.sort_order
-                .iter()
-                .flatten()
-                .map(|requirement| &requirement.expr),
-            f,
-        )
+        Ok(TreeNodeRecursion::Continue)
     }
 
     /// Execute the plan and return a stream of `RecordBatch`es for
