@@ -631,7 +631,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 </section>
 <section id="id10">
 <h4>Example<a class="headerlink" href="#id10" title="Link to this heading">#</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="w">    </span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">atan</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">atan</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
 <span class="o">+</span><span class="c1">-----------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">atan</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="w">   </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">-----------+</span>
@@ -682,7 +682,7 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 <section id="id14">
 <h4>Example<a class="headerlink" href="#id14" title="Link to this heading">#</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="w">    </span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">atanh</span><span class="p">(</span><span class="mi">0</span><span class="p">.</span><span class="mi">5</span><span class="p">);</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">atanh</span><span class="p">(</span><span class="mi">0</span><span class="p">.</span><span class="mi">5</span><span class="p">);</span>
 <span class="o">+</span><span class="c1">-------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">atanh</span><span class="p">(</span><span class="mi">0</span><span class="p">.</span><span class="mi">5</span><span class="p">)</span><span class="w">  </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">-------------+</span>
@@ -826,7 +826,7 @@ Can be a constant, column, or function, and any combination of arithmetic operat
 </section>
 <section id="id26">
 <h4>Example<a class="headerlink" href="#id26" title="Link to this heading">#</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="w">    </span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">degrees</span><span class="p">(</span><span class="n">pi</span><span class="p">());</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">degrees</span><span class="p">(</span><span class="n">pi</span><span class="p">());</span>
 <span class="o">+</span><span class="c1">------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">degrees</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">------------+</span>
@@ -1375,12 +1375,12 @@ Zero and positive numbers return <code class="docutils literal notranslate"><spa
 </section>
 <section id="id69">
 <h4>Example<a class="headerlink" href="#id69" title="Link to this heading">#</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="w">  </span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">tanh</span><span class="p">(</span><span class="mi">20</span><span class="p">);</span>
-<span class="w">  </span><span class="o">+</span><span class="c1">----------+</span>
-<span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="n">tanh</span><span class="p">(</span><span class="mi">20</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
-<span class="w">  </span><span class="o">+</span><span class="c1">----------+</span>
-<span class="w">  </span><span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="p">.</span><span class="mi">0</span><span class="w">      </span><span class="o">|</span>
-<span class="w">  </span><span class="o">+</span><span class="c1">----------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">tanh</span><span class="p">(</span><span class="mi">20</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">tanh</span><span class="p">(</span><span class="mi">20</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="p">.</span><span class="mi">0</span><span class="w">      </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+</span>
 </pre></div>
 </div>
 </section>
@@ -2716,8 +2716,16 @@ If count is negative, everything to the right of the final delimiter (counting f
 <h2>Regular Expression Functions<a class="headerlink" href="#regular-expression-functions" title="Link to this heading">#</a></h2>
 <p>Apache DataFusion uses a <a class="reference external" href="https://en.wikibooks.org/wiki/Regular_Expressions/Perl-Compatible_Regular_Expressions">PCRE-like</a>
 regular expression <a class="reference external" href="https://docs.rs/regex/latest/regex/#syntax">syntax</a>
-(minus support for several features including look-around and backreferences).
-The following regular expression functions are supported:</p>
+(minus support for several features including look-around and backreferences).</p>
+<p>The following flags are optionally supported in functions:</p>
+<ul class="simple">
+<li><p><strong>i</strong>: case-insensitive: letters match both upper and lower case</p></li>
+<li><p><strong>m</strong>: multi-line mode: <code class="docutils literal notranslate"><span class="pre">^</span></code> and <code class="docutils literal notranslate"><span class="pre">$</span></code> match begin/end of line</p></li>
+<li><p><strong>s</strong>: allow <code class="docutils literal notranslate"><span class="pre">.</span></code> to match <code class="docutils literal notranslate"><span class="pre">\n</span></code></p></li>
+<li><p><strong>R</strong>: enables CRLF mode: when multi-line mode is enabled, <code class="docutils literal notranslate"><span class="pre">\r\n</span></code> is used</p></li>
+<li><p><strong>U</strong>: swap the meaning of <code class="docutils literal notranslate"><span class="pre">x*</span></code> and <code class="docutils literal notranslate"><span class="pre">x*?</span></code></p></li>
+</ul>
+<p>The following regular expression functions are supported:</p>
 <ul class="simple">
 <li><p><a class="reference internal" href="#regexp-count">regexp_count</a></p></li>
 <li><p><a class="reference internal" href="#regexp-instr">regexp_instr</a></p></li>
@@ -2728,7 +2736,7 @@ The following regular expression functions are supported:</p>
 <section id="regexp-count">
 <h3><code class="docutils literal notranslate"><span class="pre">regexp_count</span></code><a class="headerlink" href="#regexp-count" title="Link to this heading">#</a></h3>
 <p>Returns the number of matches that a <a class="reference external" href="https://docs.rs/regex/latest/regex/#syntax">regular expression</a> has in a string.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">regexp_count</span><span class="p">(</span><span class="n">str</span><span class="p">,</span><span class="w"> </span><span class="n">regexp</span><span class="p">[,</span><span class="w"> </span><span class="k">start</span><span class="p">,</span><span class="w"> </span><span class="n">flags</span><span class="p">])</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">regexp_count</span><span class="p">(</span><span class="n">str</span><span class="p">,</span><span class="w"> </span><span class="n">regexp</span><span class="p">[,</span><span class="w"> </span><span class="k">start</span><span class="p">[,</span><span class="w"> </span><span class="n">flags</span><span class="p">]])</span>
 </pre></div>
 </div>
 <section id="id161">
@@ -2736,16 +2744,8 @@ The following regular expression functions are supported:</p>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
 <li><p><strong>regexp</strong>: Regular expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
-<li><p><strong>start</strong>: - <strong>start</strong>: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function.</p></li>
-<li><p><strong>flags</strong>: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:</p>
-<ul>
-<li><p><strong>i</strong>: case-insensitive: letters match both upper and lower case</p></li>
-<li><p><strong>m</strong>: multi-line mode: ^ and $ match begin/end of line</p></li>
-<li><p><strong>s</strong>: allow . to match \n</p></li>
-<li><p><strong>R</strong>: enables CRLF mode: when multi-line mode is enabled, \r\n is used</p></li>
-<li><p><strong>U</strong>: swap the meaning of x* and x*?</p></li>
-</ul>
-</li>
+<li><p><strong>start</strong>: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function.</p></li>
+<li><p><strong>flags</strong>: Optional regular expression flags that control the behavior of the regular expression. Refer to the flags reference above for supported flags.</p></li>
 </ul>
 </section>
 <section id="id162">
@@ -2771,17 +2771,9 @@ The following regular expression functions are supported:</p>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
 <li><p><strong>regexp</strong>: Regular expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
-<li><p><strong>start</strong>: - <strong>start</strong>: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function. Defaults to 1</p></li>
-<li><p><strong>N</strong>: - <strong>N</strong>: Optional The N-th occurrence of pattern to find. Defaults to 1 (first match). Can be a constant, column, or function.</p></li>
-<li><p><strong>flags</strong>: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:</p>
-<ul>
-<li><p><strong>i</strong>: case-insensitive: letters match both upper and lower case</p></li>
-<li><p><strong>m</strong>: multi-line mode: ^ and $ match begin/end of line</p></li>
-<li><p><strong>s</strong>: allow . to match \n</p></li>
-<li><p><strong>R</strong>: enables CRLF mode: when multi-line mode is enabled, \r\n is used</p></li>
-<li><p><strong>U</strong>: swap the meaning of x* and x*?</p></li>
-</ul>
-</li>
+<li><p><strong>start</strong>: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function. Defaults to 1</p></li>
+<li><p><strong>N</strong>: Optional The N-th occurrence of pattern to find. Defaults to 1 (first match). Can be a constant, column, or function.</p></li>
+<li><p><strong>flags</strong>: Optional regular expression flags that control the behavior of the regular expression. Refer to the flags reference above for supported flags.</p></li>
 <li><p><strong>subexpr</strong>: Optional Specifies which capture group (subexpression) to return the position for. Defaults to 0, which returns the position of the entire match.</p></li>
 </ul>
 </section>
@@ -2808,15 +2800,7 @@ The following regular expression functions are supported:</p>
 <ul class="simple">
 <li><p><strong>str</strong>: String expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
 <li><p><strong>regexp</strong>: Regular expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
-<li><p><strong>flags</strong>: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:</p>
-<ul>
-<li><p><strong>i</strong>: case-insensitive: letters match both upper and lower case</p></li>
-<li><p><strong>m</strong>: multi-line mode: ^ and $ match begin/end of line</p></li>
-<li><p><strong>s</strong>: allow . to match \n</p></li>
-<li><p><strong>R</strong>: enables CRLF mode: when multi-line mode is enabled, \r\n is used</p></li>
-<li><p><strong>U</strong>: swap the meaning of x* and x*?</p></li>
-</ul>
-</li>
+<li><p><strong>flags</strong>: Optional regular expression flags that control the behavior of the regular expression. Refer to the flags reference above for supported flags.</p></li>
 </ul>
 </section>
 <section id="id166">
@@ -2850,15 +2834,7 @@ The following regular expression functions are supported:</p>
 <li><p><strong>str</strong>: String expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
 <li><p><strong>regexp</strong>: Regular expression to match against.
 Can be a constant, column, or function.</p></li>
-<li><p><strong>flags</strong>: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:</p>
-<ul>
-<li><p><strong>i</strong>: case-insensitive: letters match both upper and lower case</p></li>
-<li><p><strong>m</strong>: multi-line mode: ^ and $ match begin/end of line</p></li>
-<li><p><strong>s</strong>: allow . to match \n</p></li>
-<li><p><strong>R</strong>: enables CRLF mode: when multi-line mode is enabled, \r\n is used</p></li>
-<li><p><strong>U</strong>: swap the meaning of x* and x*?</p></li>
-</ul>
-</li>
+<li><p><strong>flags</strong>: Optional regular expression flags that control the behavior of the regular expression. Refer to the flags reference above for supported flags.</p></li>
 </ul>
 </section>
 <section id="id168">
@@ -2893,13 +2869,7 @@ Can be a constant, column, or function.</p></li>
 <li><p><strong>regexp</strong>: Regular expression to match against.
 Can be a constant, column, or function.</p></li>
 <li><p><strong>replacement</strong>: Replacement string expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
-<li><p><strong>flags</strong>: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:</p></li>
-<li><p><strong>g</strong>: (global) Search globally and don’t return after the first match</p></li>
-<li><p><strong>i</strong>: case-insensitive: letters match both upper and lower case</p></li>
-<li><p><strong>m</strong>: multi-line mode: ^ and $ match begin/end of line</p></li>
-<li><p><strong>s</strong>: allow . to match \n</p></li>
-<li><p><strong>R</strong>: enables CRLF mode: when multi-line mode is enabled, \r\n is used</p></li>
-<li><p><strong>U</strong>: swap the meaning of x* and x*?</p></li>
+<li><p><strong>flags</strong>: Optional regular expression flags that control the behavior of the regular expression. Refer to the flags reference above for supported flags.</p></li>
 </ul>
 </section>
 <section id="id170">
@@ -2955,8 +2925,6 @@ Can be a constant, column, or function.</p></li>
 <p>Returns the current date in the session time zone.</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">current_date()</span></code> return value is determined at query time and will return the same date, no matter when in the query plan the function executes.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">current_date</span><span class="p">()</span>
-<span class="w">    </span><span class="p">(</span><span class="n">optional</span><span class="p">)</span><span class="w"> </span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">time_zone</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;+00:00&#39;</span><span class="p">;</span>
-<span class="w">    </span><span class="k">SELECT</span><span class="w"> </span><span class="k">current_date</span><span class="p">();</span>
 </pre></div>
 </div>
 <section id="id171">
@@ -2992,8 +2960,6 @@ Can be a constant, column, or function.</p></li>
 <p>The <code class="docutils literal notranslate"><span class="pre">current_time()</span></code> return value is determined at query time and will return the same time, no matter when in the query plan the function executes.</p>
 <p>The session time zone can be set using the statement ‘SET datafusion.execution.time_zone = desired time zone’. The time zone can be a value like +00:00, ‘Europe/London’ etc.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">current_time</span><span class="p">()</span>
-<span class="w">    </span><span class="p">(</span><span class="n">optional</span><span class="p">)</span><span class="w"> </span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">time_zone</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;+00:00&#39;</span><span class="p">;</span>
-<span class="w">    </span><span class="k">SELECT</span><span class="w"> </span><span class="k">current_time</span><span class="p">();</span>
 </pre></div>
 </div>
 <section id="id173">
@@ -3025,7 +2991,7 @@ Can be a constant, column, or function.</p></li>
 <h3><code class="docutils literal notranslate"><span class="pre">date_bin</span></code><a class="headerlink" href="#date-bin" title="Link to this heading">#</a></h3>
 <p>Calculates time intervals and returns the start of the interval nearest to the specified timestamp. Use <code class="docutils literal notranslate"><span class="pre">date_bin</span></code> to downsample time series data by grouping rows into time-based “bins” or “windows” and applying an aggregate or selector function to each window.</p>
 <p>For example, if you “bin” or “window” data into 15 minute intervals, an input timestamp of <code class="docutils literal notranslate"><span class="pre">2023-01-01T18:18:18Z</span></code> will be updated to the start time of the 15 minute bin it is in: <code class="docutils literal notranslate"><span class="pre">2023-01-01T18:15:00Z</span></code>.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">date_bin</span><span class="p">(</span><span class="nb">interval</span><span class="p">,</span><span class="w"> </span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="n">origin</span><span class="o">-</span><span class="k">timestamp</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">date_bin</span><span class="p">(</span><span class="nb">interval</span><span class="p">,</span><span class="w"> </span><span class="n">expression</span><span class="p">[,</span><span class="w"> </span><span class="n">origin_timestamp</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id174">
@@ -3033,7 +2999,7 @@ Can be a constant, column, or function.</p></li>
 <ul class="simple">
 <li><p><strong>interval</strong>: Bin interval.</p></li>
 <li><p><strong>expression</strong>: Time expression to operate on. Can be a constant, column, or function.</p></li>
-<li><p><strong>origin-timestamp</strong>: Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC). The following intervals are supported:</p>
+<li><p><strong>origin_timestamp</strong>: Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC). The following intervals are supported:</p>
 <ul>
 <li><p>nanoseconds</p></li>
 <li><p>microseconds</p></li>
@@ -3357,7 +3323,6 @@ Can be a constant, column, or function.</p></li>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to operate on. Can be a constant, column, or function that results in a date, time, timestamp or duration.</p></li>
 <li><p><strong>format</strong>: A <a class="reference external" href="https://docs.rs/chrono/latest/chrono/format/strftime/index.html">Chrono format</a> string to use to convert the expression.</p></li>
-<li><p><strong>day</strong>: Day to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators.</p></li>
 </ul>
 </section>
 <section id="id192">
@@ -3387,7 +3352,7 @@ Strings are parsed as YYYY-MM-DD (e.g. ‘2023-07-20’) if no <a class="referen
 Integers and doubles are interpreted as days since the unix epoch (<code class="docutils literal notranslate"><span class="pre">1970-01-01T00:00:00Z</span></code>).
 Returns the corresponding date.</p>
 <p>Note: <code class="docutils literal notranslate"><span class="pre">to_date</span></code> returns Date32, which represents its values as the number of days since unix epoch(<code class="docutils literal notranslate"><span class="pre">1970-01-01</span></code>) stored as signed 32 bit value. The largest supported date value is <code class="docutils literal notranslate"><span class="pre">9999-12-31</span></code>.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">to_date</span><span class="p">(</span><span class="n">expression</span><span class="p">[,</span><span class="w"> </span><span class="p">...,</span><span class="w"> </span><span class="n">format_n</span><span class="p">])</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">to_date</span><span class="p">(</span><span class="n">expression</span><span class="p">[,</span><span class="w"> </span><span class="n">format1</span><span class="p">,</span><span class="w"> </span><span class="p">...,</span><span class="w"> </span><span class="n">format_n</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id194">
@@ -3488,7 +3453,7 @@ Strings are parsed as <code class="docutils literal notranslate"><span class="pr
 Timestamps will have the time portion extracted.
 Returns the corresponding time.</p>
 <p>Note: <code class="docutils literal notranslate"><span class="pre">to_time</span></code> returns Time64(Nanosecond), which represents the time of day in nanoseconds since midnight.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">to_time</span><span class="p">(</span><span class="n">expression</span><span class="p">[,</span><span class="w"> </span><span class="p">...,</span><span class="w"> </span><span class="n">format_n</span><span class="p">])</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">to_time</span><span class="p">(</span><span class="n">expression</span><span class="p">[,</span><span class="w"> </span><span class="n">format1</span><span class="p">,</span><span class="w"> </span><span class="p">...,</span><span class="w"> </span><span class="n">format_n</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id198">
@@ -4412,25 +4377,25 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 </section>
 <section id="array-has-all">
 <h3><code class="docutils literal notranslate"><span class="pre">array_has_all</span></code><a class="headerlink" href="#array-has-all" title="Link to this heading">#</a></h3>
-<p>Returns true if all elements of sub-array exist in array.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_has_all</span><span class="p">(</span><span class="nb">array</span><span class="p">,</span><span class="w"> </span><span class="n">sub</span><span class="o">-</span><span class="nb">array</span><span class="p">)</span>
+<p>Returns true if all elements of sub_array exist in array.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_has_all</span><span class="p">(</span><span class="nb">array</span><span class="p">,</span><span class="w"> </span><span class="n">sub_array</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id257">
 <h4>Arguments<a class="headerlink" href="#id257" title="Link to this heading">#</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
-<li><p><strong>sub-array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
+<li><p><strong>sub_array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
 </ul>
 </section>
 <section id="id258">
 <h4>Example<a class="headerlink" href="#id258" title="Link to this heading">#</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_has_all</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">4</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]);</span>
-<span class="o">+</span><span class="c1">--------------------------------------------+</span>
+<span class="o">+</span><span class="c1">---------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">array_has_all</span><span class="p">(</span><span class="n">List</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">]),</span><span class="w"> </span><span class="n">List</span><span class="p">([</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">]))</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">--------------------------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                                       </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">--------------------------------------------+</span>
+<span class="o">+</span><span class="c1">---------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                                        </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -4521,14 +4486,14 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <section id="array-length">
 <h3><code class="docutils literal notranslate"><span class="pre">array_length</span></code><a class="headerlink" href="#array-length" title="Link to this heading">#</a></h3>
 <p>Returns the length of the array dimension.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_length</span><span class="p">(</span><span class="nb">array</span><span class="p">,</span><span class="w"> </span><span class="n">dimension</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_length</span><span class="p">(</span><span class="nb">array</span><span class="p">[,</span><span class="w"> </span><span class="n">dimension</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id266">
 <h4>Arguments<a class="headerlink" href="#id266" title="Link to this heading">#</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
-<li><p><strong>dimension</strong>: Array dimension.</p></li>
+<li><p><strong>dimension</strong>: Array dimension. Default is 1</p></li>
 </ul>
 </section>
 <section id="id267">
@@ -4606,14 +4571,13 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <section id="array-ndims">
 <h3><code class="docutils literal notranslate"><span class="pre">array_ndims</span></code><a class="headerlink" href="#array-ndims" title="Link to this heading">#</a></h3>
 <p>Returns the number of dimensions of the array.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_ndims</span><span class="p">(</span><span class="nb">array</span><span class="p">,</span><span class="w"> </span><span class="n">element</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_ndims</span><span class="p">(</span><span class="nb">array</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id274">
 <h4>Arguments<a class="headerlink" href="#id274" title="Link to this heading">#</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
-<li><p><strong>element</strong>: Array element.</p></li>
 </ul>
 </section>
 <section id="id275">
@@ -4727,8 +4691,7 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <section id="array-position">
 <h3><code class="docutils literal notranslate"><span class="pre">array_position</span></code><a class="headerlink" href="#array-position" title="Link to this heading">#</a></h3>
 <p>Returns the position of the first occurrence of the specified element in the array, or NULL if not found. Comparisons are done using <code class="docutils literal notranslate"><span class="pre">IS</span> <span class="pre">DISTINCT</span> <span class="pre">FROM</span></code> semantics, so NULL is considered to match NULL.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_position</span><span class="p">(</span><span class="nb">array</span><span class="p">,</span><span class="w"> </span><span class="n">element</span><span class="p">)</span>
-<span class="n">array_position</span><span class="p">(</span><span class="nb">array</span><span class="p">,</span><span class="w"> </span><span class="n">element</span><span class="p">,</span><span class="w"> </span><span class="k">index</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_position</span><span class="p">(</span><span class="nb">array</span><span class="p">,</span><span class="w"> </span><span class="n">element</span><span class="p">[,</span><span class="w"> </span><span class="k">index</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id286">
@@ -4736,7 +4699,7 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
 <li><p><strong>element</strong>: Element to search for in the array.</p></li>
-<li><p><strong>index</strong>: Index at which to start searching (1-indexed).</p></li>
+<li><p><strong>index</strong>: Index at which to start searching (1-indexed). Defaults to searching from the start</p></li>
 </ul>
 </section>
 <section id="id287">
@@ -5118,8 +5081,8 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 </section>
 <section id="array-resize">
 <h3><code class="docutils literal notranslate"><span class="pre">array_resize</span></code><a class="headerlink" href="#array-resize" title="Link to this heading">#</a></h3>
-<p>Resizes the list to contain size elements. Initializes new elements with value or empty if value is not set.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_resize</span><span class="p">(</span><span class="nb">array</span><span class="p">,</span><span class="w"> </span><span class="k">size</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">)</span>
+<p>Resizes the list to contain size elements.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_resize</span><span class="p">(</span><span class="nb">array</span><span class="p">,</span><span class="w"> </span><span class="k">size</span><span class="p">[,</span><span class="w"> </span><span class="n">value</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id319">
@@ -5127,7 +5090,7 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
 <li><p><strong>size</strong>: New size of given array.</p></li>
-<li><p><strong>value</strong>: Defines new elements’ value or empty if value is not set.</p></li>
+<li><p><strong>value</strong>: If expanding the array, defines the values to fill in. Defaults to null.</p></li>
 </ul>
 </section>
 <section id="id320">
@@ -5212,7 +5175,7 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <section id="array-slice">
 <h3><code class="docutils literal notranslate"><span class="pre">array_slice</span></code><a class="headerlink" href="#array-slice" title="Link to this heading">#</a></h3>
 <p>Returns a slice of the array based on 1-indexed start and end positions.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_slice</span><span class="p">(</span><span class="nb">array</span><span class="p">,</span><span class="w"> </span><span class="k">begin</span><span class="p">,</span><span class="w"> </span><span class="k">end</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_slice</span><span class="p">(</span><span class="nb">array</span><span class="p">,</span><span class="w"> </span><span class="k">begin</span><span class="p">,</span><span class="w"> </span><span class="k">end</span><span class="p">[,</span><span class="w"> </span><span class="n">stride</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id328">
@@ -5245,15 +5208,15 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <section id="array-sort">
 <h3><code class="docutils literal notranslate"><span class="pre">array_sort</span></code><a class="headerlink" href="#array-sort" title="Link to this heading">#</a></h3>
 <p>Sort array.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_sort</span><span class="p">(</span><span class="nb">array</span><span class="p">,</span><span class="w"> </span><span class="k">desc</span><span class="p">,</span><span class="w"> </span><span class="n">nulls_first</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_sort</span><span class="p">(</span><span class="nb">array</span><span class="p">[,</span><span class="w"> </span><span class="k">order</span><span class="p">[,</span><span class="w"> </span><span class="n">nulls_order</span><span class="p">]])</span>
 </pre></div>
 </div>
 <section id="id331">
 <h4>Arguments<a class="headerlink" href="#id331" title="Link to this heading">#</a></h4>
 <ul class="simple">
 <li><p><strong>array</strong>: Array expression. Can be a constant, column, or function, and any combination of array operators.</p></li>
-<li><p><strong>desc</strong>: Whether to sort in ascending (<code class="docutils literal notranslate"><span class="pre">ASC</span></code>) or descending (<code class="docutils literal notranslate"><span class="pre">DESC</span></code>) order. The default is <code class="docutils literal notranslate"><span class="pre">ASC</span></code>.</p></li>
-<li><p><strong>nulls_first</strong>: Whether to sort nulls first (<code class="docutils literal notranslate"><span class="pre">NULLS</span> <span class="pre">FIRST</span></code>) or last (<code class="docutils literal notranslate"><span class="pre">NULLS</span> <span class="pre">LAST</span></code>). The default is <code class="docutils literal notranslate"><span class="pre">NULLS</span> <span class="pre">FIRST</span></code>.</p></li>
+<li><p><strong>order</strong>: Whether to sort in ascending (<code class="docutils literal notranslate"><span class="pre">ASC</span></code>) or descending (<code class="docutils literal notranslate"><span class="pre">DESC</span></code>) order. The default is <code class="docutils literal notranslate"><span class="pre">ASC</span></code>.</p></li>
+<li><p><strong>nulls_order</strong>: Whether to sort nulls first (<code class="docutils literal notranslate"><span class="pre">NULLS</span> <span class="pre">FIRST</span></code>) or last (<code class="docutils literal notranslate"><span class="pre">NULLS</span> <span class="pre">LAST</span></code>). The default is <code class="docutils literal notranslate"><span class="pre">NULLS</span> <span class="pre">FIRST</span></code>.</p></li>
 </ul>
 </section>
 <section id="id332">
@@ -5264,6 +5227,12 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <span class="o">+</span><span class="c1">-----------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]</span><span class="w">                   </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">-----------------------------+</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">array_sort</span><span class="p">([</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">],</span><span class="w"> </span><span class="s1">&#39;desc&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;nulls last&#39;</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">array_sort</span><span class="p">(</span><span class="n">List</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="k">NULL</span><span class="p">,</span><span class="mi">2</span><span class="p">),</span><span class="s1">&#39;desc&#39;</span><span class="p">,</span><span class="s1">&#39;nulls last&#39;</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="p">[</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">]</span><span class="w">                                  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------------------------------------+</span>
 </pre></div>
 </div>
 </section>
@@ -5868,7 +5837,7 @@ Integers, unsigned integers, and floats are interpreted as seconds since the uni
 <section id="make-array">
 <h3><code class="docutils literal notranslate"><span class="pre">make_array</span></code><a class="headerlink" href="#make-array" title="Link to this heading">#</a></h3>
 <p>Returns an array using the specified input expressions.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">make_array</span><span class="p">(</span><span class="n">expression1</span><span class="p">[,</span><span class="w"> </span><span class="p">...,</span><span class="w"> </span><span class="n">expression_n</span><span class="p">])</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">make_array</span><span class="p">([</span><span class="n">expression1</span><span class="p">,</span><span class="w"> </span><span class="p">...,</span><span class="w"> </span><span class="n">expression_n</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id366">
@@ -6099,7 +6068,7 @@ a struct type of fields <code class="docutils literal notranslate"><span class="
 <p>Returns an Arrow map with the specified key-value pairs.</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">make_map</span></code> function creates a map from two lists: one for keys and one for values. Each key must be unique and non-null.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">map</span><span class="p">(</span><span class="k">key</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">)</span>
-<span class="k">map</span><span class="p">(</span><span class="k">key</span><span class="p">:</span><span class="w"> </span><span class="n">value</span><span class="p">)</span>
+<span class="k">map</span><span class="w"> </span><span class="err">{</span><span class="k">key</span><span class="p">:</span><span class="w"> </span><span class="n">value</span><span class="err">}</span>
 <span class="n">make_map</span><span class="p">([</span><span class="s1">&#39;key1&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;key2&#39;</span><span class="p">],</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;value1&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;value2&#39;</span><span class="p">])</span>
 </pre></div>
 </div>
