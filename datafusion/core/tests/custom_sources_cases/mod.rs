@@ -38,6 +38,7 @@ use datafusion_catalog::Session;
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::project_schema;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::PlanProperties;
 use datafusion_physical_plan::StatisticsArgs;
@@ -208,6 +209,15 @@ impl ExecutionPlan for CustomExecutionPlan {
                 })
                 .collect(),
         }))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

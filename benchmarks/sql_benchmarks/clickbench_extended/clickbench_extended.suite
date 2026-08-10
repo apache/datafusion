@@ -1,0 +1,21 @@
+description = "Extended ClickBench queries over the hits dataset"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[path_replacements]
+DATA_DIR = "../../data"
+
+[[options]]
+name = "partitioning"
+env = "CLICKBENCH_TYPE"
+default = "single"
+values = ["single", "partitioned"]
+help = "Selects the single-file or partitioned ClickBench dataset."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- clickbench_extended"
+description = "Run all extended ClickBench queries against the single-file dataset."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- clickbench_extended --query 4 --partitioning partitioned"
+description = "Run extended ClickBench query 4 against the partitioned dataset."

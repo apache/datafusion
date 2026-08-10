@@ -19,6 +19,7 @@ mod kernels;
 
 use crate::PhysicalExpr;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
+use std::cmp::Ordering;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -33,7 +34,7 @@ use datafusion_common::{Result, ScalarValue, internal_err, not_impl_err};
 
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{Interval, apply_operator};
-use datafusion_expr::sort_properties::ExprProperties;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 #[expect(deprecated)]
 use datafusion_expr::statistics::Distribution::{Bernoulli, Gaussian};
 #[expect(deprecated)]
@@ -118,6 +119,68 @@ impl BinaryExpr {
     pub fn op(&self) -> &Operator {
         &self.op
     }
+
+    /// Wrapping on overflow breaks monotonicity (e.g. the sum of two
+    /// ascending `UInt8` columns can wrap back to small values), so the
+    /// derived ordering is kept only when overflow is impossible. `time ±
+    /// interval` wraps around the 24-hour clock even in checked mode, so it
+    /// never preserves ordering.
+    fn arithmetic_sort_properties(
+        &self,
+        sort_properties: SortProperties,
+        l_range: &Interval,
+        r_range: &Interval,
+        range: &Interval,
+    ) -> SortProperties {
+        if sort_properties == SortProperties::Singleton {
+            return sort_properties;
+        }
+        let wraps_in_domain = match self.op {
+            Operator::Plus => {
+                is_time_plus_interval(&l_range.data_type(), &r_range.data_type())
+            }
+            Operator::Minus => {
+                is_time_minus_interval(&l_range.data_type(), &r_range.data_type())
+            }
+            _ => false,
+        };
+        let cannot_overflow = !range.is_unbounded()
+            && !unsigned_subtraction_may_underflow(self.op, l_range, r_range, range);
+        if !wraps_in_domain && (self.fail_on_overflow || cannot_overflow) {
+            sort_properties
+        } else {
+            SortProperties::Unordered
+        }
+    }
+}
+
+/// Returns `true` unless `l_range - r_range` provably stays within an unsigned
+/// domain.
+///
+/// [`Interval`] standardizes an underflowed (i.e. `null`) lower bound of an
+/// unsigned type back to zero, so an apparently bounded result range is not
+/// enough to rule out wrapping here -- e.g. `[0, 10] - [0, 10]` over `UInt32`
+/// yields `[0, 10]` even though `0 - 10` wraps to `u32::MAX`. Compare the
+/// endpoints that produce the smallest difference instead.
+fn unsigned_subtraction_may_underflow(
+    op: Operator,
+    l_range: &Interval,
+    r_range: &Interval,
+    range: &Interval,
+) -> bool {
+    if op != Operator::Minus || !range.data_type().is_unsigned_integer() {
+        return false;
+    }
+    let (smallest_lhs, largest_rhs) = (l_range.lower(), r_range.upper());
+    if smallest_lhs.is_null() || largest_rhs.is_null() {
+        return true;
+    }
+    // Operands of differing types compare as incomparable, in which case we
+    // conservatively assume an underflow is possible.
+    !matches!(
+        smallest_lhs.partial_cmp(largest_rhs),
+        Some(Ordering::Greater | Ordering::Equal)
+    )
 }
 
 impl std::fmt::Display for BinaryExpr {
@@ -760,18 +823,34 @@ impl PhysicalExpr for BinaryExpr {
         let (l_order, l_range) = (children[0].sort_properties, &children[0].range);
         let (r_order, r_range) = (children[1].sort_properties, &children[1].range);
         match self.op() {
-            Operator::Plus => Ok(ExprProperties {
-                sort_properties: l_order.add(&r_order),
-                range: l_range.add(r_range)?,
-                preserves_lex_ordering: false,
-                strictly_order_preserving: false,
-            }),
-            Operator::Minus => Ok(ExprProperties {
-                sort_properties: l_order.sub(&r_order),
-                range: l_range.sub(r_range)?,
-                preserves_lex_ordering: false,
-                strictly_order_preserving: false,
-            }),
+            Operator::Plus => {
+                let range = l_range.add(r_range)?;
+                Ok(ExprProperties {
+                    sort_properties: self.arithmetic_sort_properties(
+                        l_order.add(&r_order),
+                        l_range,
+                        r_range,
+                        &range,
+                    ),
+                    range,
+                    preserves_lex_ordering: false,
+                    strictly_order_preserving: false,
+                })
+            }
+            Operator::Minus => {
+                let range = l_range.sub(r_range)?;
+                Ok(ExprProperties {
+                    sort_properties: self.arithmetic_sort_properties(
+                        l_order.sub(&r_order),
+                        l_range,
+                        r_range,
+                        &range,
+                    ),
+                    range,
+                    preserves_lex_ordering: false,
+                    strictly_order_preserving: false,
+                })
+            }
             Operator::Gt => Ok(ExprProperties {
                 sort_properties: l_order.gt_or_gteq(&r_order),
                 range: l_range.gt(r_range)?,
@@ -1306,7 +1385,176 @@ mod tests {
 
     use crate::planner::logical2physical;
     use arrow::array::BooleanArray;
+    use arrow::compute::SortOptions;
     use datafusion_expr::col as logical_col;
+
+    #[test]
+    fn test_arithmetic_ordering_overflow() -> Result<()> {
+        let asc = SortProperties::Ordered(Default::default());
+        let ordered = |range: Interval| ExprProperties {
+            sort_properties: asc,
+            range,
+            preserves_lex_ordering: false,
+            strictly_order_preserving: false,
+        };
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let a_plus_b =
+            BinaryExpr::new(col("a", &schema)?, Operator::Plus, col("b", &schema)?);
+        let unbounded = [
+            ordered(Interval::make_unbounded(&DataType::Int32)?),
+            ordered(Interval::make_unbounded(&DataType::Int32)?),
+        ];
+        let bounded = [
+            ordered(Interval::make(Some(0), Some(10))?),
+            ordered(Interval::make(Some(0), Some(10))?),
+        ];
+
+        // Unknown ranges: the sum may overflow and wrap, so it is unordered.
+        assert_eq!(
+            a_plus_b.get_properties(&unbounded)?.sort_properties,
+            SortProperties::Unordered
+        );
+        // Bounded ranges that cannot overflow keep the ordering, as does
+        // checked arithmetic, which errors instead of wrapping.
+        assert_eq!(a_plus_b.get_properties(&bounded)?.sort_properties, asc);
+        let checked = a_plus_b.with_fail_on_overflow(true);
+        assert_eq!(checked.get_properties(&unbounded)?.sort_properties, asc);
+
+        // `time + interval` wraps around the 24-hour clock even in checked
+        // mode, so it never preserves ordering.
+        let time = DataType::Time64(TimeUnit::Nanosecond);
+        let interval = DataType::Interval(IntervalUnit::MonthDayNano);
+        let schema = Schema::new(vec![
+            Field::new("t", time.clone(), false),
+            Field::new("i", interval.clone(), false),
+        ]);
+        let time_plus_interval =
+            BinaryExpr::new(col("t", &schema)?, Operator::Plus, col("i", &schema)?)
+                .with_fail_on_overflow(true);
+        let time_props = [
+            ordered(Interval::make_unbounded(&time)?),
+            ordered(Interval::make_unbounded(&interval)?),
+        ];
+        assert_eq!(
+            time_plus_interval
+                .get_properties(&time_props)?
+                .sort_properties,
+            SortProperties::Unordered
+        );
+
+        Ok(())
+    }
+
+    /// `a - b` only derives an ordering when `a` and `b` are ordered in
+    /// opposite directions, so every case below pairs an ascending left-hand
+    /// side with a descending right-hand side.
+    #[test]
+    fn test_subtraction_ordering_overflow() -> Result<()> {
+        let asc = SortProperties::Ordered(SortOptions {
+            descending: false,
+            nulls_first: true,
+        });
+        let desc = SortProperties::Ordered(SortOptions {
+            descending: true,
+            nulls_first: true,
+        });
+        let props = |sort_properties, range| ExprProperties {
+            sort_properties,
+            range,
+            preserves_lex_ordering: false,
+            strictly_order_preserving: false,
+        };
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let a_minus_b =
+            BinaryExpr::new(col("a", &schema)?, Operator::Minus, col("b", &schema)?);
+
+        // Signed minimum: the difference can underflow past `i32::MIN` and
+        // wrap around to large positive values.
+        let signed_underflow = [
+            props(asc, Interval::make(Some(i32::MIN), Some(0))?),
+            props(desc, Interval::make(Some(0), Some(i32::MAX))?),
+        ];
+        assert_eq!(
+            a_minus_b.get_properties(&signed_underflow)?.sort_properties,
+            SortProperties::Unordered
+        );
+        // The very same ranges keep the ordering under checked arithmetic,
+        // which errors instead of wrapping.
+        let checked = a_minus_b.clone().with_fail_on_overflow(true);
+        assert_eq!(
+            checked.get_properties(&signed_underflow)?.sort_properties,
+            asc
+        );
+        // Ranges whose difference stays inside `Int32` are safe.
+        let signed_safe = [
+            props(asc, Interval::make(Some(0), Some(10))?),
+            props(desc, Interval::make(Some(0), Some(10))?),
+        ];
+        assert_eq!(a_minus_b.get_properties(&signed_safe)?.sort_properties, asc);
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::UInt32, false),
+        ]);
+        let a_minus_b =
+            BinaryExpr::new(col("a", &schema)?, Operator::Minus, col("b", &schema)?);
+
+        // Unsigned underflow: the ranges overlap, so `0 - 1` wraps to
+        // `u32::MAX` even though both operands are bounded.
+        let unsigned_underflow = [
+            props(asc, Interval::make(Some(0_u32), Some(10_u32))?),
+            props(desc, Interval::make(Some(0_u32), Some(10_u32))?),
+        ];
+        assert_eq!(
+            a_minus_b
+                .get_properties(&unsigned_underflow)?
+                .sort_properties,
+            SortProperties::Unordered
+        );
+        // A left-hand range that always dominates the right-hand one cannot
+        // underflow.
+        let unsigned_safe = [
+            props(asc, Interval::make(Some(10_u32), Some(20_u32))?),
+            props(desc, Interval::make(Some(0_u32), Some(5_u32))?),
+        ];
+        assert_eq!(
+            a_minus_b.get_properties(&unsigned_safe)?.sort_properties,
+            asc
+        );
+
+        // `time - interval` wraps around the 24-hour clock even in checked
+        // mode, so it never preserves ordering.
+        let time = DataType::Time64(TimeUnit::Nanosecond);
+        let interval = DataType::Interval(IntervalUnit::MonthDayNano);
+        let schema = Schema::new(vec![
+            Field::new("t", time.clone(), false),
+            Field::new("i", interval.clone(), false),
+        ]);
+        let time_minus_interval =
+            BinaryExpr::new(col("t", &schema)?, Operator::Minus, col("i", &schema)?)
+                .with_fail_on_overflow(true);
+        let time_props = [
+            props(asc, Interval::make_unbounded(&time)?),
+            props(desc, Interval::make_unbounded(&interval)?),
+        ];
+        assert_eq!(
+            time_minus_interval
+                .get_properties(&time_props)?
+                .sort_properties,
+            SortProperties::Unordered
+        );
+
+        Ok(())
+    }
+
     /// Performs a binary operation, applying any type coercion necessary
     fn binary_op(
         left: Arc<dyn PhysicalExpr>,

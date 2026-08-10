@@ -40,6 +40,7 @@ use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
 use datafusion_common::DataFusionError;
 use datafusion_common::config::TableParquetOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -485,6 +486,14 @@ impl ParquetSource {
         self.table_parquet_options.global.max_predicate_cache_size
     }
 
+    /// Return the maximum size of an `IN (...)` list that the pruning
+    /// predicate will rewrite into per-value statistics checks. Lists
+    /// longer than this skip container-level pruning. Reads from
+    /// `datafusion.execution.parquet.max_in_list_size`.
+    pub fn max_in_list_size(&self) -> usize {
+        self.table_parquet_options.global.max_in_list_size
+    }
+
     #[cfg(feature = "parquet_encryption")]
     fn get_encryption_factory_with_config(
         &self,
@@ -647,6 +656,7 @@ impl FileSource for ParquetSource {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
+            max_in_list_size: self.max_in_list_size(),
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             virtual_state,
@@ -781,6 +791,7 @@ impl FileSource for ParquetSource {
                         Some(predicate),
                         self.table_schema.table_schema(),
                         &predicate_creation_errors,
+                        self.max_in_list_size(),
                     ) {
                         let mut guarantees = pruning_predicate
                             .literal_guarantees()
@@ -1046,6 +1057,149 @@ impl FileSource for ParquetSource {
         Ok(SortOrderPushdownResult::Inexact {
             inner: Arc::new(new_source) as Arc<dyn FileSource>,
         })
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &Arc<dyn PhysicalExpr>,
+        ) -> datafusion_common::Result<TreeNodeRecursion>,
+    ) -> datafusion_common::Result<TreeNodeRecursion> {
+        datafusion_physical_plan::apply_expression_roots(
+            self.predicate
+                .iter()
+                .chain(self.projection.iter().map(|proj_expr| &proj_expr.expr)),
+            f,
+        )
+    }
+
+    /// Emit a `ParquetScan` node wrapping the shared base config plus the
+    /// Parquet-specific pushdown predicate and `TableParquetOptions`.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        base: &FileScanConfig,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> datafusion_common::Result<
+        Option<datafusion_proto_models::protobuf::PhysicalPlanNode>,
+    > {
+        use datafusion_proto_models::protobuf;
+        use protobuf::physical_plan_node::PhysicalPlanType;
+
+        let predicate = self
+            .filter()
+            .map(|pred| ctx.encode_expr(&pred))
+            .transpose()?;
+
+        let node = protobuf::ParquetScanExecNode {
+            base_conf: Some(base.try_to_proto(ctx)?),
+            predicate,
+            parquet_options: Some(self.table_parquet_options().try_into()?),
+        };
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::ParquetScan(node)),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl ParquetSource {
+    /// Reconstructs a `DataSourceExec` from a protobuf `ParquetScan`.
+    ///
+    /// Rebuilds the reader factory from the decode context because it is not serialized.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> datafusion_common::Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>> {
+        use crate::CachedParquetFileReaderFactory;
+        use arrow::datatypes::Schema;
+        use datafusion_common::config::TableParquetOptions;
+        use datafusion_datasource::file_scan_config::FileScanConfig;
+        use datafusion_datasource::source::DataSourceExec;
+        use datafusion_execution::object_store::ObjectStoreUrl;
+        use datafusion_proto_models::protobuf;
+
+        let scan = match &node.physical_plan_type {
+            Some(protobuf::physical_plan_node::PhysicalPlanType::ParquetScan(scan)) => {
+                scan
+            }
+            _ => {
+                return datafusion_common::internal_err!(
+                    "PhysicalPlanNode is not a ParquetScan"
+                );
+            }
+        };
+
+        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "ParquetScanExecNode is missing required field 'base_conf'"
+            )
+        })?;
+
+        let schema: Arc<Schema> = Arc::new(
+            base_conf
+                .schema
+                .as_ref()
+                .ok_or_else(|| {
+                    datafusion_common::internal_datafusion_err!(
+                        "FileScanExecConf is missing required field 'schema'"
+                    )
+                })?
+                .try_into()?,
+        );
+
+        // The predicate was serialized against the scan's output schema, so it
+        // must be decoded against the projected schema when a projection is
+        // present.
+        let predicate_schema = if !base_conf.projection.is_empty() {
+            let projected_fields: Vec<_> = base_conf
+                .projection
+                .iter()
+                .map(|&i| schema.field(i as usize).clone())
+                .collect();
+            Arc::new(Schema::new(projected_fields))
+        } else {
+            schema
+        };
+
+        let predicate = scan
+            .predicate
+            .as_ref()
+            .map(|expr| ctx.decode_expr(expr, predicate_schema.as_ref()))
+            .transpose()?;
+
+        let mut options = TableParquetOptions::default();
+        if let Some(table_options) = scan.parquet_options.as_ref() {
+            options = table_options.try_into()?;
+        }
+
+        let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
+        let object_store_url = match base_conf.object_store_url.is_empty() {
+            false => ObjectStoreUrl::parse(&base_conf.object_store_url)?,
+            true => ObjectStoreUrl::local_filesystem(),
+        };
+        let store = ctx
+            .task_ctx()
+            .runtime_env()
+            .object_store(object_store_url)?;
+        let metadata_cache = ctx
+            .task_ctx()
+            .runtime_env()
+            .cache_manager
+            .get_file_metadata_cache();
+        let reader_factory =
+            Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
+
+        let mut source = ParquetSource::new(table_schema)
+            .with_parquet_file_reader_factory(reader_factory)
+            .with_table_parquet_options(options);
+
+        if let Some(predicate) = predicate {
+            source = source.with_predicate(predicate);
+        }
+        let base_config =
+            FileScanConfig::try_from_proto(base_conf, ctx, Arc::new(source))?;
+        Ok(DataSourceExec::from_data_source(base_config))
     }
 }
 
