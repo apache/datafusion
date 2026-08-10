@@ -244,50 +244,77 @@ pub fn spark_handled_url_decode(
 mod tests {
 
     use super::*;
-    use arrow::array::StringArray;
+    use arrow::array::{LargeStringArray, StringArray, StringViewArray};
+
+    const INPUT: [Option<&str>; 7] = [
+        Some("https%3A%2F%2Fspark.apache.org"),
+        Some("inva+lid://user:pass@host/file\\;param?query\\;p2"),
+        Some("inva lid://user:pass@host/file\\;param?query\\;p2"),
+        Some("%7E%21%40%23%24%25%5E%26%2A%28%29%5F%2B"),
+        Some("%E4%BD%A0%E5%A5%BD"),
+        Some(""),
+        None,
+    ];
+
+    const EXPECTED: [Option<&str>; 7] = [
+        Some("https://spark.apache.org"),
+        Some("inva lid://user:pass@host/file\\;param?query\\;p2"),
+        Some("inva lid://user:pass@host/file\\;param?query\\;p2"),
+        Some("~!@#$%^&*()_+"),
+        Some("你好"),
+        Some(""),
+        None,
+    ];
+
+    // '%2s' is not a valid percent encoded character
+    const MALFORMED_INPUT: [Option<&str>; 3] = [
+        Some("http%3A%2F%2spark.apache.org"),
+        // Valid cases
+        Some("https%3A%2F%2Fspark.apache.org"),
+        None,
+    ];
 
     #[test]
-    fn test_decode() -> Result<()> {
-        let input = Arc::new(StringArray::from(vec![
-            Some("https%3A%2F%2Fspark.apache.org"),
-            Some("inva+lid://user:pass@host/file\\;param?query\\;p2"),
-            Some("inva lid://user:pass@host/file\\;param?query\\;p2"),
-            Some("%7E%21%40%23%24%25%5E%26%2A%28%29%5F%2B"),
-            Some("%E4%BD%A0%E5%A5%BD"),
-            Some(""),
-            None,
-        ]));
-        let expected = StringArray::from(vec![
-            Some("https://spark.apache.org"),
-            Some("inva lid://user:pass@host/file\\;param?query\\;p2"),
-            Some("inva lid://user:pass@host/file\\;param?query\\;p2"),
-            Some("~!@#$%^&*()_+"),
-            Some("你好"),
-            Some(""),
-            None,
-        ]);
-
-        let result = spark_url_decode(&[input as ArrayRef])?;
+    fn test_decode_utf8() -> Result<()> {
+        let input = Arc::new(StringArray::from(INPUT.to_vec())) as ArrayRef;
+        let result = spark_url_decode(&[input])?;
         let result = as_string_array(&result)?;
+        assert_eq!(&StringArray::from(EXPECTED.to_vec()), result);
+        Ok(())
+    }
 
-        assert_eq!(&expected, result);
+    #[test]
+    fn test_decode_large_utf8() -> Result<()> {
+        let input = Arc::new(LargeStringArray::from(INPUT.to_vec())) as ArrayRef;
+        let result = spark_url_decode(&[input])?;
+        let result = as_large_string_array(&result)?;
+        assert_eq!(&LargeStringArray::from(EXPECTED.to_vec()), result);
+        Ok(())
+    }
 
+    #[test]
+    fn test_decode_utf8_view() -> Result<()> {
+        let input = Arc::new(StringViewArray::from(INPUT.to_vec())) as ArrayRef;
+        let result = spark_url_decode(&[input])?;
+        let result = as_string_view_array(&result)?;
+        assert_eq!(&StringViewArray::from(EXPECTED.to_vec()), result);
         Ok(())
     }
 
     #[test]
     fn test_decode_error() -> Result<()> {
-        let input = Arc::new(StringArray::from(vec![
-            Some("http%3A%2F%2spark.apache.org"), // '%2s' is not a valid percent encoded character
-            // Valid cases
-            Some("https%3A%2F%2Fspark.apache.org"),
-            None,
-        ]));
+        let inputs: [ArrayRef; 3] = [
+            Arc::new(StringArray::from(MALFORMED_INPUT.to_vec())),
+            Arc::new(LargeStringArray::from(MALFORMED_INPUT.to_vec())),
+            Arc::new(StringViewArray::from(MALFORMED_INPUT.to_vec())),
+        ];
 
-        let result = spark_url_decode(&[input]);
-        assert!(
-            result.is_err_and(|e| e.to_string().contains("Invalid percent-encoding"))
-        );
+        for input in inputs {
+            let result = spark_url_decode(&[input]);
+            assert!(
+                result.is_err_and(|e| e.to_string().contains("Invalid percent-encoding"))
+            );
+        }
 
         Ok(())
     }

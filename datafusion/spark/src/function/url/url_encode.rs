@@ -135,3 +135,52 @@ fn spark_url_encode(args: &[ArrayRef]) -> Result<ArrayRef> {
         other => exec_err!("`url_encode`: Expr must be STRING, got {other:?}"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{LargeStringArray, StringArray, StringViewArray};
+
+    const INPUT: [Option<&str>; 5] = [
+        Some("https://spark.apache.org"),
+        Some("inva lid://user:pass@host/file\\;param?query\\;p2"),
+        Some("你好"),
+        Some(""),
+        None,
+    ];
+
+    const EXPECTED: [Option<&str>; 5] = [
+        Some("https%3A%2F%2Fspark.apache.org"),
+        Some("inva+lid%3A%2F%2Fuser%3Apass%40host%2Ffile%5C%3Bparam%3Fquery%5C%3Bp2"),
+        Some("%E4%BD%A0%E5%A5%BD"),
+        Some(""),
+        None,
+    ];
+
+    #[test]
+    fn test_encode_utf8() -> Result<()> {
+        let input = Arc::new(StringArray::from(INPUT.to_vec())) as ArrayRef;
+        let result = spark_url_encode(&[input])?;
+        let result = as_string_array(&result)?;
+        assert_eq!(&StringArray::from(EXPECTED.to_vec()), result);
+        Ok(())
+    }
+
+    #[test]
+    fn test_encode_large_utf8() -> Result<()> {
+        let input = Arc::new(LargeStringArray::from(INPUT.to_vec())) as ArrayRef;
+        let result = spark_url_encode(&[input])?;
+        let result = as_large_string_array(&result)?;
+        assert_eq!(&LargeStringArray::from(EXPECTED.to_vec()), result);
+        Ok(())
+    }
+
+    #[test]
+    fn test_encode_utf8_view() -> Result<()> {
+        let input = Arc::new(StringViewArray::from(INPUT.to_vec())) as ArrayRef;
+        let result = spark_url_encode(&[input])?;
+        let result = as_string_view_array(&result)?;
+        assert_eq!(&StringViewArray::from(EXPECTED.to_vec()), result);
+        Ok(())
+    }
+}
