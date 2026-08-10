@@ -1428,6 +1428,80 @@ impl<'de> serde::Deserialize<'de> for AnalyzedLogicalPlanType {
         deserializer.deserialize_struct("datafusion.AnalyzedLogicalPlanType", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for ArrowIpcFormat {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Unspecified => "ARROW_IPC_FORMAT_UNSPECIFIED",
+            Self::File => "ARROW_IPC_FORMAT_FILE",
+            Self::Stream => "ARROW_IPC_FORMAT_STREAM",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for ArrowIpcFormat {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "ARROW_IPC_FORMAT_UNSPECIFIED",
+            "ARROW_IPC_FORMAT_FILE",
+            "ARROW_IPC_FORMAT_STREAM",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl serde::de::Visitor<'_> for GeneratedVisitor {
+            type Value = ArrowIpcFormat;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "ARROW_IPC_FORMAT_UNSPECIFIED" => Ok(ArrowIpcFormat::Unspecified),
+                    "ARROW_IPC_FORMAT_FILE" => Ok(ArrowIpcFormat::File),
+                    "ARROW_IPC_FORMAT_STREAM" => Ok(ArrowIpcFormat::Stream),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ArrowScanExecNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -1439,9 +1513,17 @@ impl serde::Serialize for ArrowScanExecNode {
         if self.base_conf.is_some() {
             len += 1;
         }
+        if self.format != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.ArrowScanExecNode", len)?;
         if let Some(v) = self.base_conf.as_ref() {
             struct_ser.serialize_field("baseConf", v)?;
+        }
+        if self.format != 0 {
+            let v = ArrowIpcFormat::try_from(self.format)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.format)))?;
+            struct_ser.serialize_field("format", &v)?;
         }
         struct_ser.end()
     }
@@ -1455,11 +1537,13 @@ impl<'de> serde::Deserialize<'de> for ArrowScanExecNode {
         const FIELDS: &[&str] = &[
             "base_conf",
             "baseConf",
+            "format",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             BaseConf,
+            Format,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1482,6 +1566,7 @@ impl<'de> serde::Deserialize<'de> for ArrowScanExecNode {
                     {
                         match value {
                             "baseConf" | "base_conf" => Ok(GeneratedField::BaseConf),
+                            "format" => Ok(GeneratedField::Format),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1502,6 +1587,7 @@ impl<'de> serde::Deserialize<'de> for ArrowScanExecNode {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut base_conf__ = None;
+                let mut format__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::BaseConf => {
@@ -1510,10 +1596,17 @@ impl<'de> serde::Deserialize<'de> for ArrowScanExecNode {
                             }
                             base_conf__ = map_.next_value()?;
                         }
+                        GeneratedField::Format => {
+                            if format__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("format"));
+                            }
+                            format__ = Some(map_.next_value::<ArrowIpcFormat>()? as i32);
+                        }
                     }
                 }
                 Ok(ArrowScanExecNode {
                     base_conf: base_conf__,
+                    format: format__.unwrap_or_default(),
                 })
             }
         }

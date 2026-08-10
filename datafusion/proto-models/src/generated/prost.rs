@@ -1985,6 +1985,8 @@ pub struct AvroScanExecNode {
 pub struct ArrowScanExecNode {
     #[prost(message, optional, tag = "1")]
     pub base_conf: ::core::option::Option<FileScanExecConf>,
+    #[prost(enumeration = "ArrowIpcFormat", tag = "2")]
+    pub format: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MemoryScanExecNode {
@@ -2770,6 +2772,40 @@ impl InsertOp {
             "Append" => Some(Self::Append),
             "Overwrite" => Some(Self::Overwrite),
             "Replace" => Some(Self::Replace),
+            _ => None,
+        }
+    }
+}
+/// Identifies which Arrow IPC format an ArrowScanExecNode reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ArrowIpcFormat {
+    /// Unset in payloads encoded before this field existed; decoded as the
+    /// IPC file format for backward compatibility.
+    Unspecified = 0,
+    /// Arrow IPC file format (with footer, supports range-based parallel reading)
+    File = 1,
+    /// Arrow IPC stream format (without footer, sequential reading only)
+    Stream = 2,
+}
+impl ArrowIpcFormat {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "ARROW_IPC_FORMAT_UNSPECIFIED",
+            Self::File => "ARROW_IPC_FORMAT_FILE",
+            Self::Stream => "ARROW_IPC_FORMAT_STREAM",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "ARROW_IPC_FORMAT_UNSPECIFIED" => Some(Self::Unspecified),
+            "ARROW_IPC_FORMAT_FILE" => Some(Self::File),
+            "ARROW_IPC_FORMAT_STREAM" => Some(Self::Stream),
             _ => None,
         }
     }

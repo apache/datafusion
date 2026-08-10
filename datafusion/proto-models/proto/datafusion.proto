@@ -1289,8 +1289,20 @@ message AvroScanExecNode {
   FileScanExecConf base_conf = 1;
 }
 
+// Identifies which Arrow IPC format an ArrowScanExecNode reads.
+enum ArrowIpcFormat {
+  // Unset in payloads encoded before this field existed; decoded as the
+  // IPC file format for backward compatibility.
+  ARROW_IPC_FORMAT_UNSPECIFIED = 0;
+  // Arrow IPC file format (with footer, supports range-based parallel reading)
+  ARROW_IPC_FORMAT_FILE = 1;
+  // Arrow IPC stream format (without footer, sequential reading only)
+  ARROW_IPC_FORMAT_STREAM = 2;
+}
+
 message ArrowScanExecNode {
   FileScanExecConf base_conf = 1;
+  ArrowIpcFormat format = 2;
 }
 
 message MemoryScanExecNode {
