@@ -427,6 +427,10 @@ pub fn serialize_maybe_filter(
     }
 }
 
+#[deprecated(
+    since = "55.0.0",
+    note = "unused by DataFusion; `MemorySourceConfig` serializes its record batches itself via `DataSource::try_to_proto`"
+)]
 pub fn serialize_record_batches(batches: &[RecordBatch]) -> Result<Vec<u8>> {
     if batches.is_empty() {
         return Ok(vec![]);

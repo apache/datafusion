@@ -60,6 +60,7 @@ use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::SpillCompression;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     DataFusionError, Result, assert_or_internal_err, internal_datafusion_err,
     unwrap_or_internal_err,
@@ -1278,6 +1279,23 @@ impl ExecutionPlan for SortExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let dynamic_filter = self
+            .filter
+            .as_ref()
+            .map(|filter| filter.read().expr() as Arc<dyn PhysicalExpr>);
+        crate::apply_expression_roots(
+            self.expr
+                .iter()
+                .map(|sort_expr| &sort_expr.expr)
+                .chain(dynamic_filter.iter()),
+            f,
+        )
+    }
+
     fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         self.filter
             .iter()
@@ -1768,6 +1786,13 @@ mod tests {
             _: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(self)
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
 
         fn execute(
