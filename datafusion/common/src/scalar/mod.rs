@@ -11569,7 +11569,7 @@ mod tests {
         let expected_array = Arc::new(expected_struct_array) as ArrayRef;
 
         // Test new_list
-        let list = ScalarValue::new_list(&[value.clone()], &requested_element_type, true);
+        let list = ScalarValue::new_list(std::slice::from_ref(&value), &requested_element_type, true);
         assert_eq!(
             list.data_type(),
             &DataType::List(Arc::new(Field::new_list_field(
@@ -11581,7 +11581,7 @@ mod tests {
 
         // Test new_list_from_iter
         let list_from_iter = ScalarValue::new_list_from_iter(
-            vec![value.clone()].into_iter(),
+            std::iter::once(value.clone()),
             &requested_element_type,
             true,
         );
