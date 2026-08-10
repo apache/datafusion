@@ -26,6 +26,7 @@ mod value;
 
 use datafusion_common::HashMap;
 pub use datafusion_common::format::{MetricCategory, MetricType};
+use datafusion_common::human_readable_size;
 use parking_lot::Mutex;
 use std::{
     borrow::Cow,
@@ -125,7 +126,29 @@ impl Display for Metric {
         }
 
         // and now the value
-        write!(f, "={}", self.value)
+        write!(f, "=")?;
+
+        // MetricValue::Count/Gauge are used for operator-defined metrics with
+        // no dedicated variant of their own (e.g. `bytes_scanned`), so unlike
+        // OutputBytes/SpilledBytes/CurrentMemoryUsage/PeakMemoryUsage, their
+        // Display impl has no way to know they hold a byte measurement -
+        // MetricValue does not carry the category, only Metric does. Without
+        // this, a Bytes-category Count/Gauge silently falls back to
+        // human_readable_count's 1000-based K/M/B/T instead of the correct
+        // 1024-based KB/MB/GB/TB.
+        if self.metric_category == Some(MetricCategory::Bytes) {
+            match &self.value {
+                MetricValue::Count { count, .. } => {
+                    return write!(f, "{}", human_readable_size(count.value()));
+                }
+                MetricValue::Gauge { gauge, .. } => {
+                    return write!(f, "{}", human_readable_size(gauge.value()));
+                }
+                _ => {}
+            }
+        }
+
+        write!(f, "{}", self.value)
     }
 }
 
@@ -771,6 +794,74 @@ mod tests {
         };
 
         assert_eq!(metrics.sum(|_| true), Some(expected_sum));
+    }
+
+    #[test]
+    fn test_display_generic_count_respects_bytes_category() {
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        // A Bytes-category custom counter (like `bytes_scanned`) must render
+        // with human_readable_size's 1024-based units (KB/MB/GB), not
+        // human_readable_count's 1000-based units (K/M/B) - see #24203.
+        // 3 GiB, chosen to clear human_readable_size's >= 2x-tier threshold
+        // for GB (below that it falls back to a large MB value).
+        let three_gib = 3 * 1024 * 1024 * 1024;
+        let bytes_scanned = MetricBuilder::new(&metrics)
+            .with_category(MetricCategory::Bytes)
+            .counter("bytes_scanned", 0);
+        bytes_scanned.add(three_gib);
+
+        // A Rows-category custom counter must keep using human_readable_count,
+        // since that is already the correct formatter for it.
+        let output_rows_like = MetricBuilder::new(&metrics)
+            .with_category(MetricCategory::Rows)
+            .counter("right_input_rows", 0);
+        output_rows_like.add(three_gib);
+
+        let rendered: Vec<String> = metrics
+            .clone_inner()
+            .iter()
+            .map(|m| m.to_string())
+            .collect();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|s| s == "bytes_scanned{partition=0}=3.0 GB"),
+            "bytes_scanned should be byte-formatted, got: {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|s| s == "right_input_rows{partition=0}=3.22 B"),
+            "a Rows-category counter should keep count-formatting, got: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn test_display_generic_gauge_respects_bytes_category() {
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        // A Bytes-category custom gauge (like `stream_memory_usage`) must
+        // also render with byte units, not human_readable_count's units.
+        let three_gib = 3 * 1024 * 1024 * 1024;
+        let stream_memory_usage = MetricBuilder::new(&metrics)
+            .with_category(MetricCategory::Bytes)
+            .gauge("stream_memory_usage", 0);
+        stream_memory_usage.add(three_gib);
+
+        let rendered: Vec<String> = metrics
+            .clone_inner()
+            .iter()
+            .map(|m| m.to_string())
+            .collect();
+
+        assert!(
+            rendered
+                .iter()
+                .any(|s| s == "stream_memory_usage{partition=0}=3.0 GB"),
+            "stream_memory_usage should be byte-formatted, got: {rendered:?}"
+        );
     }
 
     #[test]
