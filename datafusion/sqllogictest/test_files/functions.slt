@@ -492,10 +492,11 @@ SELECT btrim('   foo  ')
 ----
 foo
 
-query T
-SELECT btrim(arrow_cast('   foo  ', 'Dictionary(Int32, Utf8)'))
+query TT
+SELECT btrim(arrow_cast('   foo  ', 'Dictionary(Int32, Utf8)')),
+       arrow_typeof(btrim(arrow_cast('   foo  ', 'Dictionary(Int32, Utf8)')))
 ----
-foo
+foo Dictionary(Int32, Utf8)
 
 query T
 SELECT initcap('foo')
@@ -689,10 +690,11 @@ SELECT ltrim('   foo')
 ----
 foo
 
-query T
-SELECT ltrim(arrow_cast('    foo', 'Dictionary(Int32, Utf8)'))
+query TT
+SELECT ltrim(arrow_cast('    foo', 'Dictionary(Int32, Utf8)')),
+       arrow_typeof(ltrim(arrow_cast('    foo', 'Dictionary(Int32, Utf8)')))
 ----
-foo
+foo Dictionary(Int32, Utf8)
 
 query T
 SELECT md5('foo')
@@ -710,20 +712,75 @@ SELECT rtrim(' foo  ')
 ----
  foo
 
-query T
-SELECT rtrim(arrow_cast(' foo  ', 'Dictionary(Int32, Utf8)'))
+query TT
+SELECT rtrim(arrow_cast(' foo  ', 'Dictionary(Int32, Utf8)')),
+       arrow_typeof(rtrim(arrow_cast(' foo  ', 'Dictionary(Int32, Utf8)')))
 ----
- foo
+ foo Dictionary(Int32, Utf8)
 
 query T
 SELECT trim('  foo  ')
 ----
 foo
 
-query T
-SELECT trim(arrow_cast('  foo  ', 'Dictionary(Int32, Utf8)'))
+query TT
+SELECT trim(arrow_cast('  foo  ', 'Dictionary(Int32, Utf8)')),
+       arrow_typeof(trim(arrow_cast('  foo  ', 'Dictionary(Int32, Utf8)')))
 ----
-foo
+foo Dictionary(Int32, Utf8)
+
+query TTTT?T
+SELECT btrim(arrow_cast('  foo  ', 'Dictionary(Int32, LargeUtf8)')),
+       arrow_typeof(btrim(arrow_cast('  foo  ', 'Dictionary(Int32, LargeUtf8)'))),
+       ltrim(arrow_cast(
+           arrow_cast('  bar', 'Dictionary(Int32, Utf8)'),
+           'Dictionary(Int32, Utf8View)'
+       )),
+       arrow_typeof(ltrim(arrow_cast(
+           arrow_cast('  bar', 'Dictionary(Int32, Utf8)'),
+           'Dictionary(Int32, Utf8View)'
+       ))),
+       rtrim(arrow_cast(
+           arrow_cast('baz  ', 'Dictionary(UInt32, Utf8)'),
+           'Dictionary(Int32, Dictionary(UInt32, Utf8))'
+       )),
+       arrow_typeof(rtrim(arrow_cast(
+           arrow_cast('baz  ', 'Dictionary(UInt32, Utf8)'),
+           'Dictionary(Int32, Dictionary(UInt32, Utf8))'
+       )))
+----
+foo Dictionary(Int32, LargeUtf8) bar Dictionary(Int32, Utf8View) baz Dictionary(Int32, Dictionary(UInt32, Utf8))
+
+statement ok
+CREATE TABLE trim_dictionary_test AS
+SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS both,
+       arrow_cast(column2, 'Dictionary(Int32, Utf8)') AS leading,
+       arrow_cast(column3, 'Dictionary(Int32, Utf8)') AS trailing
+FROM (VALUES
+('  foo  ', '  bar', 'baz  '),
+(NULL, NULL, NULL));
+
+query TTTTTT
+SELECT btrim(both), arrow_typeof(btrim(both)),
+       ltrim(leading), arrow_typeof(ltrim(leading)),
+       rtrim(trailing), arrow_typeof(rtrim(trailing))
+FROM trim_dictionary_test
+----
+foo Dictionary(Int32, Utf8) bar Dictionary(Int32, Utf8) baz Dictionary(Int32, Utf8)
+NULL Dictionary(Int32, Utf8) NULL Dictionary(Int32, Utf8) NULL Dictionary(Int32, Utf8)
+
+statement ok
+DROP TABLE trim_dictionary_test
+
+query TTTTTT
+SELECT btrim(arrow_cast('__foo__', 'Dictionary(Int32, Utf8)'), '_'),
+       arrow_typeof(btrim(arrow_cast('__foo__', 'Dictionary(Int32, Utf8)'), '_')),
+       ltrim(arrow_cast('__bar', 'Dictionary(Int32, Utf8)'), '_'),
+       arrow_typeof(ltrim(arrow_cast('__bar', 'Dictionary(Int32, Utf8)'), '_')),
+       rtrim(arrow_cast('baz__', 'Dictionary(Int32, Utf8)'), '_'),
+       arrow_typeof(rtrim(arrow_cast('baz__', 'Dictionary(Int32, Utf8)'), '_'))
+----
+foo Utf8 bar Utf8 baz Utf8
 
 # Verify that trim, ltrim, and rtrim only strip spaces by default,
 # not other whitespace characters (tabs, newlines, etc.)

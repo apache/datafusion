@@ -91,7 +91,9 @@ use datafusion::{
     prelude::{SessionConfig, SessionContext},
 };
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{ScalarValue, assert_eq_or_internal_err, assert_or_internal_err};
 use datafusion_expr::{FetchType, InvariantLevel, Projection, SortExpr};
 use datafusion_optimizer::AnalyzerRule;
@@ -748,6 +750,15 @@ impl ExecutionPlan for TopKExec {
             done: false,
             state: BTreeMap::new(),
         }))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

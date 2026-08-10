@@ -31,9 +31,11 @@ use crate::{
     check_if_same_properties,
 };
 
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
@@ -279,6 +281,16 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        crate::apply_expression_roots(
+            self.expr.iter().map(|sort_expr| &sort_expr.expr),
+            f,
+        )
     }
 
     fn with_new_children(
@@ -1572,6 +1584,12 @@ mod tests {
         }
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
+        }
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
         fn with_new_children(
             self: Arc<Self>,

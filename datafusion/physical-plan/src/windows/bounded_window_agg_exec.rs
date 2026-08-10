@@ -50,6 +50,7 @@ use arrow::{
 };
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::{
     evaluate_partition_ranges, get_at_indices, get_row_at_idx,
 };
@@ -312,6 +313,21 @@ impl ExecutionPlan for BoundedWindowAggExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let expressions = self.window_expr.iter().flat_map(|window_expr| {
+            let expressions = window_expr.all_expressions();
+            expressions
+                .args
+                .into_iter()
+                .chain(expressions.partition_by_exprs)
+                .chain(expressions.order_by_exprs)
+        });
+        crate::apply_expression_roots(expressions, f)
+    }
+
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
@@ -413,9 +429,31 @@ impl ExecutionPlan for BoundedWindowAggExec {
         use datafusion_proto_models::protobuf;
         use protobuf::window_agg_exec_node::InputOrderMode as ProtoInputOrderMode;
 
-        let input = ctx.encode_child(self.input())?;
-        let window_expr = self
-            .window_expr()
+        // Exhaustive destructure: adding a field to `BoundedWindowAggExec`
+        // without deciding how it is serialized is a compile error, not a
+        // silent round-trip gap.
+        let Self {
+            input,
+            window_expr,
+            // Derived at construction by `create_schema` from the input schema
+            // and the window expressions.
+            schema: _,
+            // Runtime execution state, rebuilt empty on decode.
+            metrics: _,
+            input_order_mode,
+            // Derived at construction from `input_order_mode` and the window
+            // expressions' PARTITION BY.
+            ordered_partition_by_indices: _,
+            // Derived at construction by `Self::compute_properties`.
+            cache: _,
+            // No wire field of its own; it is folded into `partition_keys`
+            // below, since `partition_keys()` returns an empty vec when this is
+            // false and the decoder recovers it as `!partition_keys.is_empty()`.
+            can_repartition: _,
+        } = self;
+
+        let input = ctx.encode_child(input)?;
+        let window_expr = window_expr
             .iter()
             .map(|expr| encode_physical_window_expr(expr, ctx))
             .collect::<Result<Vec<_>>>()?;
@@ -426,7 +464,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
             .collect::<Result<Vec<_>>>()?;
         // A `Some(input_order_mode)` is what tells the shared `Window` decode
         // arm to rebuild a `BoundedWindowAggExec` rather than a `WindowAggExec`.
-        let input_order_mode = match &self.input_order_mode {
+        let input_order_mode = match input_order_mode {
             InputOrderMode::Linear => ProtoInputOrderMode::Linear(EmptyMessage {}),
             InputOrderMode::PartiallySorted(columns) => {
                 ProtoInputOrderMode::PartiallySorted(
