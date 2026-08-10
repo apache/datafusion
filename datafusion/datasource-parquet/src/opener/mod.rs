@@ -37,6 +37,7 @@ use crate::{
     apply_file_schema_type_coercions,
 };
 use arrow::array::RecordBatch;
+use arrow::compute::BatchCoalescer;
 use arrow::datatypes::DataType;
 use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
 use datafusion_physical_expr::projection::ProjectionExprs;
@@ -1527,6 +1528,10 @@ impl RowGroupsPrunedParquetOpen {
             .row_groups_pruned_dynamic_filter
             .clone();
 
+        // Captured before `decoder_projection` is moved into the stream state.
+        let post_scan_filtered = decoder_projection.has_post_scan_filter();
+        let filtered_schema = Arc::clone(decoder_projection.filtered_schema());
+
         let stream = PushDecoderStreamState {
             decoder: Some(decoder),
             active_reader: None,
@@ -1540,6 +1545,11 @@ impl RowGroupsPrunedParquetOpen {
             row_group_pruner,
             row_groups_pruned_dynamic,
             remaining_limit,
+            // A post-scan filter can leave only a few rows per decoded batch;
+            // reassemble them so the operator above sees full-size batches.
+            batch_coalescer: post_scan_filtered
+                .then(|| BatchCoalescer::new(filtered_schema, prepared.batch_size)),
+            flushed: false,
         }
         .into_stream();
 
@@ -3365,6 +3375,76 @@ mod test {
     /// returned — i.e. the predicate was relaxed and the query returned wrong
     /// results. After the fix the conjunct is surfaced and applied as a
     /// post-scan filter, so only the rows with a non-null struct survive.
+    /// A selective post-scan filter must not fragment the output stream.
+    ///
+    /// The decoder hands back one batch per `batch_size` rows; a predicate
+    /// matching a single row in each of them used to be emitted as one
+    /// sliver-sized batch per decoded batch, leaving every operator above the
+    /// scan to pay per-batch overhead on batches of one row. `FilterExec`
+    /// coalesces for exactly this reason, and the in-scan filter now does too.
+    #[tokio::test]
+    async fn selective_post_scan_filter_coalesces_output_batches() {
+        use arrow::array::Int32Array;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        // 8 write batches of 1000 rows. The default test `batch_size` is 1024,
+        // so the decoder yields several batches regardless of how the writer
+        // chunked the data.
+        let batches: Vec<RecordBatch> = (0..8)
+            .map(|chunk: i32| {
+                let base = chunk * 1000;
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(Int32Array::from(
+                        (base..base + 1000).collect::<Vec<i32>>(),
+                    ))],
+                )
+                .unwrap()
+            })
+            .collect();
+
+        let data_size =
+            write_parquet_batches(Arc::clone(&store), "coalesce.parquet", batches, None)
+                .await;
+        let file = PartitionedFile::new("coalesce.parquet".to_string(), data_size as u64);
+
+        // One match per ~1024-row decoded batch, spread across the file, so an
+        // uncoalesced stream would emit one batch per match.
+        let matches = [0i32, 1500, 3000, 4500, 6000, 7500];
+        let predicate = logical2physical(
+            &matches
+                .iter()
+                .map(|v| col("id").eq(lit(*v)))
+                .reduce(|acc, e| acc.or(e))
+                .unwrap(),
+            &schema,
+        );
+
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(predicate)
+            // pushdown_filters=false routes the whole predicate to the
+            // post-scan filter — the path this test is about.
+            .with_pushdown_filters(false)
+            .build();
+
+        let stream = open_file(&morselizer, file).await.unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+
+        assert_eq!(num_rows, matches.len(), "every match must survive");
+        // All survivors fit in one target-size batch. Without coalescing this
+        // was one batch per match.
+        assert_eq!(
+            num_batches, 1,
+            "expected the survivors to be coalesced into a single batch, got \
+             {num_batches} batches for {num_rows} rows"
+        );
+    }
+
     #[tokio::test]
     async fn rejected_struct_conjunct_runs_post_scan_not_dropped() {
         use arrow::array::{Int32Array, StringArray, StructArray};

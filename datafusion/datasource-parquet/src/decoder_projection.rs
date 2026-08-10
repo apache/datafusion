@@ -156,6 +156,10 @@ pub(crate) struct DecoderProjection {
     /// column — always the case without a post-scan filter, where the decoder
     /// mask covers exactly the projection and narrowing would be an identity.
     narrow_indices: Option<Vec<usize>>,
+    /// Schema of a narrowed, filtered batch: what [`map`](Self::map) consumes,
+    /// and the schema any coalescer buffering these batches must be built with.
+    /// Equals the full stream schema when [`Self::narrow_indices`] is `None`.
+    filtered_schema: SchemaRef,
 }
 
 impl DecoderProjection {
@@ -256,16 +260,20 @@ impl DecoderProjection {
         // and rebase the projector onto that narrower schema — the same
         // project-then-filter order `FilterExec::filter_and_project` uses.
         let narrow_indices = projector_input_indices(&rebased_projection, &stream_schema);
-        let (projector, narrow_indices) = match narrow_indices {
+        let (projector, narrow_indices, filtered_schema) = match narrow_indices {
             Some(indices) => {
                 let narrowed = Arc::new(stream_schema.project(&indices)?);
                 let renarrowed = rebased_projection
                     .clone()
                     .try_map_exprs(|expr| reassign_expr_columns(expr, &narrowed))?;
                 let projector = renarrowed.make_projector(&narrowed)?;
-                (projector, Some(indices))
+                (projector, Some(indices), narrowed)
             }
-            None => (rebased_projection.make_projector(&stream_schema)?, None),
+            None => (
+                rebased_projection.make_projector(&stream_schema)?,
+                None,
+                Arc::clone(&stream_schema),
+            ),
         };
 
         // Compare against the projector's *output* schema rather than the
@@ -297,6 +305,7 @@ impl DecoderProjection {
             replace_schema,
             post_scan_filter,
             narrow_indices,
+            filtered_schema,
         })
     }
 
@@ -324,6 +333,13 @@ impl DecoderProjection {
             Some(indices) => Ok(batch.project(indices)?),
             None => Ok(batch),
         }
+    }
+
+    /// Schema of the batches [`map`](Self::map) consumes, i.e. what
+    /// [`narrow`](Self::narrow) produces. Used to build the coalescer that
+    /// reassembles post-filter batches back to the target batch size.
+    pub(crate) fn filtered_schema(&self) -> &SchemaRef {
+        &self.filtered_schema
     }
 
     /// Whether this file has a post-scan filter. Used by the opener to decide
