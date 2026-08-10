@@ -787,6 +787,13 @@ struct HashJoinExecDynamicFilter {
     build_accumulator: OnceLock<Arc<SharedBuildAccumulator>>,
 }
 
+impl HashJoinExecDynamicFilter {
+    /// Every dynamic expression this join produces.
+    fn produced_expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![Arc::<DynamicFilterPhysicalExpr>::clone(&self.filter) as _]
+    }
+}
+
 impl fmt::Debug for HashJoinExec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HashJoinExec")
@@ -1338,20 +1345,17 @@ impl ExecutionPlan for HashJoinExec {
             .filter
             .iter()
             .map(|filter| Arc::clone(filter.expression()));
-        let dynamic_filter = self.dynamic_filter.iter().map(|dynamic_filter| {
-            Arc::<DynamicFilterPhysicalExpr>::clone(&dynamic_filter.filter)
-                as Arc<dyn PhysicalExpr>
-        });
+        let dynamic_filter = self
+            .dynamic_filter
+            .iter()
+            .flat_map(HashJoinExecDynamicFilter::produced_expressions);
         crate::apply_expression_roots(join_keys.chain(filter).chain(dynamic_filter), f)
     }
 
     fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         self.dynamic_filter
             .iter()
-            .map(|dynamic_filter| {
-                Arc::<DynamicFilterPhysicalExpr>::clone(&dynamic_filter.filter)
-                    as Arc<dyn PhysicalExpr>
-            })
+            .flat_map(HashJoinExecDynamicFilter::produced_expressions)
             .collect()
     }
 
@@ -1758,24 +1762,26 @@ impl ExecutionPlan for HashJoinExec {
         let mut result = FilterPushdownPropagation::if_any(child_pushdown_result.clone());
         assert_eq!(child_pushdown_result.self_filters.len(), 2); // Should always be 2, we have 2 children
         let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
-        // We expect 0 or 1 self filters
-        if let Some(filter) = right_child_self_filters.first() {
-            // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
-            // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
-            let predicate = Arc::clone(&filter.predicate);
-            if let Ok(dynamic_filter) =
-                Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
-            {
-                // We successfully pushed down our self filter - we need to make a new node with the dynamic filter
-                let new_node = self
-                    .builder()
-                    .with_dynamic_filter(Some(HashJoinExecDynamicFilter {
-                        filter: dynamic_filter,
-                        build_accumulator: OnceLock::new(),
-                    }))
-                    .build_exec()?;
-                result = result.with_updated_node(new_node);
-            }
+        // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
+        // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
+        let mut pushed = right_child_self_filters
+            .iter()
+            .filter_map(|filter| {
+                let predicate = Arc::clone(&filter.predicate);
+                Arc::downcast::<DynamicFilterPhysicalExpr>(predicate).ok()
+            })
+            .collect::<Vec<_>>();
+        // The filter this join drives is always the last one pushed.
+        if let Some(filter) = pushed.pop() {
+            // We successfully pushed down our self filter - we need to make a new node with the dynamic filter
+            let new_node = self
+                .builder()
+                .with_dynamic_filter(Some(HashJoinExecDynamicFilter {
+                    filter,
+                    build_accumulator: OnceLock::new(),
+                }))
+                .build_exec()?;
+            result = result.with_updated_node(new_node);
         }
         Ok(result)
     }
