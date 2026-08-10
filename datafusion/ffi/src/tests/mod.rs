@@ -113,6 +113,8 @@ pub struct ForeignLibraryModule {
 
     pub create_empty_exec: extern "C" fn() -> FFI_ExecutionPlan,
 
+    pub create_exec_with_expressions: extern "C" fn() -> FFI_ExecutionPlan,
+
     pub create_exec_with_dynamic_expressions: extern "C" fn() -> FFI_ExecutionPlan,
 
     pub create_exec_with_statistics: extern "C" fn() -> FFI_ExecutionPlan,
@@ -177,6 +179,13 @@ pub(crate) extern "C" fn create_empty_exec() -> FFI_ExecutionPlan {
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
 
     let plan = Arc::new(EmptyExec::new(schema));
+    FFI_ExecutionPlan::new(plan, None)
+}
+
+pub(crate) extern "C" fn create_exec_with_expressions() -> FFI_ExecutionPlan {
+    let schema = Arc::new(Schema::empty());
+    let expression: Arc<dyn PhysicalExpr> = create_dynamic_filter();
+    let plan = Arc::new(EmptyExec::new(schema).with_expressions(vec![expression]));
     FFI_ExecutionPlan::new(plan, None)
 }
 
@@ -286,6 +295,7 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_rank_udwf: create_ffi_rank_func,
         create_extension_options: config::create_extension_options,
         create_empty_exec,
+        create_exec_with_expressions,
         create_exec_with_dynamic_expressions,
         create_exec_with_statistics,
         create_table_with_statistics,

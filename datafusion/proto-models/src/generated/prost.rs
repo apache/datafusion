@@ -1687,6 +1687,8 @@ pub struct PhysicalAggregateExprNode {
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(string, tag = "8")]
     pub human_display: ::prost::alloc::string::String,
+    #[prost(bool, tag = "9")]
+    pub is_reversed: bool,
     #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "4")]
     pub aggregate_function: ::core::option::Option<
         physical_aggregate_expr_node::AggregateFunction,
@@ -2230,6 +2232,9 @@ pub struct AggregateExecNode {
     /// Optional dynamic filter expression for pushing down to the child.
     #[prost(message, optional, tag = "13")]
     pub dynamic_filter: ::core::option::Option<PhysicalExprNode>,
+    /// Output schema preserved by physical optimizer rewrites.
+    #[prost(message, optional, tag = "14")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GlobalLimitExecNode {
@@ -2241,6 +2246,9 @@ pub struct GlobalLimitExecNode {
     /// Maximum number of rows to fetch; negative means no limit
     #[prost(int64, tag = "3")]
     pub fetch: i64,
+    /// Ordering the limit must preserve; empty means none
+    #[prost(message, repeated, tag = "4")]
+    pub required_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LocalLimitExecNode {
@@ -2248,6 +2256,9 @@ pub struct LocalLimitExecNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(uint32, tag = "2")]
     pub fetch: u32,
+    /// Ordering the limit must preserve; empty means none
+    #[prost(message, repeated, tag = "3")]
+    pub required_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SortExecNode {

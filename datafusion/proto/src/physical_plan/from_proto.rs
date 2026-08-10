@@ -425,6 +425,10 @@ pub fn parse_protobuf_partitioning(
         .transpose()
         .map(Option::flatten)
 }
+#[deprecated(
+    since = "55.0.0",
+    note = "unused by DataFusion; use `FileScanConfig::parse_table_schema_from_proto` to reconstruct the full table schema"
+)]
 pub fn parse_protobuf_file_scan_schema(
     proto: &protobuf::FileScanExecConf,
 ) -> Result<Arc<Schema>> {
@@ -455,6 +459,10 @@ pub fn parse_protobuf_file_scan_config(
     )
 }
 
+#[deprecated(
+    since = "55.0.0",
+    note = "unused by DataFusion; `MemorySourceConfig` deserializes its record batches itself via `MemorySourceConfig::try_from_proto`"
+)]
 pub fn parse_record_batches(buf: &[u8]) -> Result<Vec<RecordBatch>> {
     if buf.is_empty() {
         return Ok(vec![]);
