@@ -171,6 +171,22 @@ mod file_scan_config_serde {
             "serde-test"
         }
 
+        fn apply_expressions(
+            &self,
+            f: &mut dyn FnMut(
+                &Arc<dyn PhysicalExpr>,
+            )
+                -> Result<datafusion_common::tree_node::TreeNodeRecursion>,
+        ) -> Result<datafusion_common::tree_node::TreeNodeRecursion> {
+            datafusion_physical_plan::apply_expression_roots(
+                self.projection
+                    .iter()
+                    .flatten()
+                    .map(|proj_expr| &proj_expr.expr),
+                f,
+            )
+        }
+
         fn try_pushdown_projection(
             &self,
             projection: &FileProjectionExprs,

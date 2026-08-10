@@ -2241,6 +2241,9 @@ pub struct GlobalLimitExecNode {
     /// Maximum number of rows to fetch; negative means no limit
     #[prost(int64, tag = "3")]
     pub fetch: i64,
+    /// Ordering the limit must preserve; empty means none
+    #[prost(message, repeated, tag = "4")]
+    pub required_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LocalLimitExecNode {
@@ -2248,6 +2251,9 @@ pub struct LocalLimitExecNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(uint32, tag = "2")]
     pub fetch: u32,
+    /// Ordering the limit must preserve; empty means none
+    #[prost(message, repeated, tag = "3")]
+    pub required_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SortExecNode {
