@@ -1178,6 +1178,7 @@ pub fn ensure_distribution(
             exec.window_expr(),
             exec.input(),
             &exec.partition_keys(),
+            None,
         )? {
             plan = updated_window;
         }
@@ -1186,6 +1187,7 @@ pub fn ensure_distribution(
             exec.window_expr(),
             exec.input(),
             &exec.partition_keys(),
+            exec.state_observer().cloned(),
         )?
     {
         plan = updated_window;

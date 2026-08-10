@@ -220,6 +220,15 @@ impl BoundedWindowAggExec {
         self
     }
 
+    /// The currently-installed [`WindowStateObserver`], if any. Optimizer
+    /// rules that rebuild this exec via
+    /// [`crate::windows::get_best_fitting_window`] or a direct `try_new`
+    /// call must read this and reinstall it on the new exec, otherwise a
+    /// caller-installed observer is silently dropped by the rewrite.
+    pub fn state_observer(&self) -> Option<&Arc<dyn WindowStateObserver>> {
+        self.state_observer.as_ref()
+    }
+
     /// Window expressions
     pub fn window_expr(&self) -> &[Arc<dyn WindowExpr>] {
         &self.window_expr

@@ -556,17 +556,33 @@ fn adjust_window_sort_removal(
     window_tree.children.push(child_node);
 
     let child_plan = &window_tree.children[0].plan;
+    // Captured up-front so the fallback `BoundedWindowAggExec::try_new` below
+    // can reinstall the observer that was on the source exec. `None` when
+    // the source is a `WindowAggExec` (no observer) or when no observer was
+    // installed on the source `BoundedWindowAggExec`.
+    let state_observer = window_tree
+        .plan
+        .downcast_ref::<BoundedWindowAggExec>()
+        .and_then(|exec| exec.state_observer().cloned());
     let (window_expr, new_window) = if let Some(exec) =
         window_tree.plan.downcast_ref::<WindowAggExec>()
     {
         let window_expr = exec.window_expr();
-        let new_window =
-            get_best_fitting_window(window_expr, child_plan, &exec.partition_keys())?;
+        let new_window = get_best_fitting_window(
+            window_expr,
+            child_plan,
+            &exec.partition_keys(),
+            None,
+        )?;
         (window_expr, new_window)
     } else if let Some(exec) = window_tree.plan.downcast_ref::<BoundedWindowAggExec>() {
         let window_expr = exec.window_expr();
-        let new_window =
-            get_best_fitting_window(window_expr, child_plan, &exec.partition_keys())?;
+        let new_window = get_best_fitting_window(
+            window_expr,
+            child_plan,
+            &exec.partition_keys(),
+            state_observer.clone(),
+        )?;
         (window_expr, new_window)
     } else {
         return plan_err!("Expected WindowAggExec or BoundedWindowAggExec");
@@ -589,12 +605,15 @@ fn adjust_window_sort_removal(
         window_tree.children.push(child_node);
 
         if window_expr.iter().all(|e| e.uses_bounded_memory()) {
-            Arc::new(BoundedWindowAggExec::try_new(
-                window_expr.to_vec(),
-                child_plan,
-                InputOrderMode::Sorted,
-                !window_expr[0].partition_by().is_empty(),
-            )?) as _
+            Arc::new(
+                BoundedWindowAggExec::try_new(
+                    window_expr.to_vec(),
+                    child_plan,
+                    InputOrderMode::Sorted,
+                    !window_expr[0].partition_by().is_empty(),
+                )?
+                .with_state_observer(state_observer),
+            ) as _
         } else {
             Arc::new(WindowAggExec::try_new(
                 window_expr.to_vec(),
