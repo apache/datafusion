@@ -442,8 +442,10 @@ impl HashJoinExecBuilder {
                     on.len()
                 );
             }
-            if exec.filter.is_some() {
-                return plan_err!("null_aware anti join does not support a join filter");
+            if *join_type == JoinType::RightAnti && exec.filter.is_some() {
+                return plan_err!(
+                    "null_aware RightAnti join does not support a join filter"
+                );
             }
         }
 
@@ -7275,52 +7277,62 @@ mod tests {
         );
     }
 
-    /// A join filter runs *after* the null-aware NULL checks, so it cannot
-    /// restore the rows those checks drop. The operator must reject the
-    /// combination regardless of which anti join type is used, so it cannot be
-    /// constructed via `try_new` (or protobuf decoding, which routes through the
-    /// same builder).
+    /// A null-aware `RightAnti` short-circuits on the build-side NULL before any
+    /// filter runs, so the combination must be rejected at construction (and thus
+    /// via protobuf decoding, which routes through the same builder). A filtered
+    /// null-aware `LeftAnti`, by contrast, is a valid decorrelated correlated
+    /// `NOT IN` plan and must still be accepted.
     #[tokio::test]
-    async fn test_null_aware_validation_rejects_filter() {
-        for join_type in [JoinType::LeftAnti, JoinType::RightAnti] {
+    async fn test_null_aware_filter_rejected_only_for_right_anti() {
+        let make_inputs = || {
             let left =
                 build_table_two_cols(("c1", &vec![Some(1)]), ("dummy", &vec![Some(10)]));
             let right =
                 build_table_two_cols(("c2", &vec![Some(1)]), ("dummy", &vec![Some(100)]));
-
             let on = vec![(
                 Arc::new(Column::new_with_schema("c1", &left.schema()).unwrap()) as _,
                 Arc::new(Column::new_with_schema("c2", &right.schema()).unwrap()) as _,
             )];
+            (left, right, on)
+        };
 
-            let result = HashJoinExec::try_new(
-                left,
-                right,
-                on,
-                Some(prepare_join_filter()),
-                &join_type,
-                None,
-                PartitionMode::CollectLeft,
-                NullEquality::NullEqualsNothing,
-                true, // null_aware = true (invalid together with a filter)
-            );
+        // RightAnti + filter is rejected.
+        let (left, right, on) = make_inputs();
+        let result = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            Some(prepare_join_filter()),
+            &JoinType::RightAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("null_aware RightAnti join does not support a join filter")
+        );
 
-            assert!(result.is_err(), "{join_type} should be rejected");
-            assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("null_aware anti join does not support a join filter"),
-                "{join_type} should report the filter restriction"
-            );
-        }
+        // LeftAnti + filter is accepted (correlated NOT IN decorrelates to this).
+        let (left, right, on) = make_inputs();
+        let result = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            Some(prepare_join_filter()),
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        );
+        assert!(result.is_ok());
     }
 
-    /// Null-aware LeftAnti must suppress all output when the probe (subquery)
-    /// side contains a dictionary key that is only logically NULL (points at a
-    /// null dictionary value), matching `x NOT IN (.. NULL ..)` semantics. This
-    /// is the unfiltered analogue of the physical-NULL probe test and guards the
-    /// `logical_null_count()` probe check.
     #[apply(hash_join_exec_configs)]
     #[tokio::test]
     async fn test_null_aware_left_anti_probe_logical_null(
@@ -7328,7 +7340,6 @@ mod tests {
     ) -> Result<()> {
         let task_ctx = prepare_task_ctx(batch_size, false);
 
-        // Build side (outer rows) has no NULLs: logical [1, 2, 3].
         let left = build_table_dict_key(
             "c1",
             vec![Some(1), Some(2), Some(3)],
@@ -7337,7 +7348,6 @@ mod tests {
             vec![Some(100), Some(200), Some(300)],
         );
 
-        // Probe side (subquery) has a logical NULL: dict [1, NULL, 4] => [1, NULL, 4].
         let right = build_table_dict_key(
             "c2",
             vec![Some(1), None, Some(4)],
@@ -7373,7 +7383,6 @@ mod tests {
         let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
 
-        // NULL in the subquery means every `NOT IN` result is unknown => no rows.
         allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&batches), @r"
             ++

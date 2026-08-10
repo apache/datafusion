@@ -774,7 +774,12 @@ impl HashJoinStream {
                     // Check if probe side (RIGHT) contains NULL
                     // Since null_aware validation ensures single column join, we only check the first column
                     let probe_key_column = &state.values[0];
-                    if probe_key_column.logical_null_count() > 0 {
+                    let probe_has_null = if self.filter.is_some() {
+                        probe_key_column.null_count() > 0
+                    } else {
+                        probe_key_column.logical_null_count() > 0
+                    };
+                    if probe_has_null {
                         // Found NULL in probe side - set shared flag to prevent any output
                         build_side
                             .left_data
