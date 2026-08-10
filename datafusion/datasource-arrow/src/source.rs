@@ -477,9 +477,7 @@ impl ArrowSource {
             protobuf::ArrowIpcFormat::Stream => {
                 ArrowSource::new_stream_file_source(table_schema)
             }
-            protobuf::ArrowIpcFormat::Unspecified | protobuf::ArrowIpcFormat::File => {
-                ArrowSource::new_file_source(table_schema)
-            }
+            protobuf::ArrowIpcFormat::File => ArrowSource::new_file_source(table_schema),
         };
         let scan_conf = FileScanConfig::try_from_proto(base_conf, ctx, Arc::new(source))?;
         Ok(DataSourceExec::from_data_source(scan_conf))

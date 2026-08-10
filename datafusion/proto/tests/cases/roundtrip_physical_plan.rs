@@ -1449,7 +1449,7 @@ fn arrow_scan_without_format_field_decodes_as_file_format() -> Result<()> {
     })?;
     match node.physical_plan_type.as_mut() {
         Some(protobuf::physical_plan_node::PhysicalPlanType::ArrowScan(scan)) => {
-            scan.format = protobuf::ArrowIpcFormat::Unspecified as i32;
+            scan.format = protobuf::ArrowIpcFormat::File as i32;
         }
         other => return internal_err!("Expected ArrowScan node, got {other:?}"),
     }

@@ -1291,13 +1291,11 @@ message AvroScanExecNode {
 
 // Identifies which Arrow IPC format an ArrowScanExecNode reads.
 enum ArrowIpcFormat {
-  // Unset in payloads encoded before this field existed; decoded as the
-  // IPC file format for backward compatibility.
-  ARROW_IPC_FORMAT_UNSPECIFIED = 0;
-  // Arrow IPC file format (with footer, supports range-based parallel reading)
-  ARROW_IPC_FORMAT_FILE = 1;
+  // Arrow IPC file format (with footer, supports range-based parallel reading).
+  // This is the default for payloads encoded before the format field existed.
+  ARROW_IPC_FORMAT_FILE = 0;
   // Arrow IPC stream format (without footer, sequential reading only)
-  ARROW_IPC_FORMAT_STREAM = 2;
+  ARROW_IPC_FORMAT_STREAM = 1;
 }
 
 message ArrowScanExecNode {

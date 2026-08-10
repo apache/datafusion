@@ -2780,13 +2780,11 @@ impl InsertOp {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum ArrowIpcFormat {
-    /// Unset in payloads encoded before this field existed; decoded as the
-    /// IPC file format for backward compatibility.
-    Unspecified = 0,
-    /// Arrow IPC file format (with footer, supports range-based parallel reading)
-    File = 1,
+    /// Arrow IPC file format (with footer, supports range-based parallel reading).
+    /// This is the default for payloads encoded before the format field existed.
+    File = 0,
     /// Arrow IPC stream format (without footer, sequential reading only)
-    Stream = 2,
+    Stream = 1,
 }
 impl ArrowIpcFormat {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2795,7 +2793,6 @@ impl ArrowIpcFormat {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            Self::Unspecified => "ARROW_IPC_FORMAT_UNSPECIFIED",
             Self::File => "ARROW_IPC_FORMAT_FILE",
             Self::Stream => "ARROW_IPC_FORMAT_STREAM",
         }
@@ -2803,7 +2800,6 @@ impl ArrowIpcFormat {
     /// Creates an enum from field names used in the ProtoBuf definition.
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
-            "ARROW_IPC_FORMAT_UNSPECIFIED" => Some(Self::Unspecified),
             "ARROW_IPC_FORMAT_FILE" => Some(Self::File),
             "ARROW_IPC_FORMAT_STREAM" => Some(Self::Stream),
             _ => None,

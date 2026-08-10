@@ -1435,7 +1435,6 @@ impl serde::Serialize for ArrowIpcFormat {
         S: serde::Serializer,
     {
         let variant = match self {
-            Self::Unspecified => "ARROW_IPC_FORMAT_UNSPECIFIED",
             Self::File => "ARROW_IPC_FORMAT_FILE",
             Self::Stream => "ARROW_IPC_FORMAT_STREAM",
         };
@@ -1449,7 +1448,6 @@ impl<'de> serde::Deserialize<'de> for ArrowIpcFormat {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "ARROW_IPC_FORMAT_UNSPECIFIED",
             "ARROW_IPC_FORMAT_FILE",
             "ARROW_IPC_FORMAT_STREAM",
         ];
@@ -1492,7 +1490,6 @@ impl<'de> serde::Deserialize<'de> for ArrowIpcFormat {
                 E: serde::de::Error,
             {
                 match value {
-                    "ARROW_IPC_FORMAT_UNSPECIFIED" => Ok(ArrowIpcFormat::Unspecified),
                     "ARROW_IPC_FORMAT_FILE" => Ok(ArrowIpcFormat::File),
                     "ARROW_IPC_FORMAT_STREAM" => Ok(ArrowIpcFormat::Stream),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
