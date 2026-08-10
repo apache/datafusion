@@ -37,6 +37,16 @@
 
 This is a list of DataFusion related blog posts, articles, and other resources. Please open a PR to add any new resources you create or find
 
+- **2026-07-29** [Blog: Bringing DuckLake to DataFusion](https://ducklake.select/2026/07/29/bringing-ducklake-to-datafusion/)
+
+- **2026-07-20** [Blog: Optimizing for Almost Sorted Data: Sort Pushdown in Apache DataFusion](https://datafusion.apache.org/blog/2026/07/20/sort-pushdown/)
+
+- **2026-06-03** [Blog: What two months with the Comet community got our Spark workload on Amazon EKS](https://datafusion.apache.org/blog/2026/06/03/comet-eks/)
+
+- **2026-05-28** [Blog: Writing Agent Skills for an Open Source Project: Lessons from DataFusion Python](https://datafusion.apache.org/blog/2026/05/28/writing-agent-skills/)
+
+- **2026-05-23** [Blog: Single-Node Data Engineering: DuckDB, DataFusion, Polars, and LakeSail](https://medium.alexmerced.blog/single-node-data-engineering-duckdb-datafusion-polars-and-lakesail-9581e4c9e1a5)
+
 - **2026-04-10** [Blog: DataFusion and the Rise of Deconstructed Data Systems](https://thedataquarry.com/blog/datafusion-and-the-rise-of-deconstructed-data-systems/)
 
 - **2026-04-04** [Video: Generalized Consensus & Native Top-K Joins in ParadeDB](https://www.youtube.com/watch?v=TeFsBVIYBis)
@@ -46,6 +56,8 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 - **2026-03-24** [Podcast: The Data Fusion Secret & Why Custom Query Engines Fail with Nikita Lapkov](https://www.youtube.com/watch?v=HkYF2So6nHQ)
 
 - **2026-03-20** [Blog: Turning LIMIT into an I/O Optimization: Inside DataFusion’s Multi-Layer Pruning Stack](https://datafusion.apache.org/blog/2026/03/20/multi-layer-pruning/)
+
+- **2026-02-23** [Blog: Apache DataFusion: A Data Engineer's Guide to the Query Engine Reshaping How We Build Data Systems](https://andrewmadson.substack.com/p/apache-datafusion-a-data-engineers)
 
 - **2026-02-09** [Blog: Vector search using only Parquet and DataFusion](https://blog.xiangpeng.systems/posts/vector-search-with-parquet-datafusion/)
 
@@ -98,7 +110,6 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 - **2024-11-18** [Blog: Apache DataFusion is now the fastest single node engine for querying Apache Parquet files](https://datafusion.apache.org/blog/2024/11/18/datafusion-fastest-single-node-parquet-clickbench/)
 
 - **2024-11-18** [Blog: Building Databases over a Weekend](https://www.denormalized.io/blog/building-databases)
-
 - **2024-10-29** [Video: MiDAS Seminar Fall 2024 on "Apache DataFusion" by Andrew Lamb](https://www.youtube.com/watch?v=CpnxuBwHbUc)
 
 - **2024-10-27** [Blog: Caching in DataFusion: Don't read twice](https://blog.xiangpeng.systems/posts/caching-datafusion/)
@@ -178,6 +189,15 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 
 ## 📅 Release Notes & Updates
 
+- **2026-08-09** [Apache DataFusion Ballista 54.1.0 Released](https://datafusion.apache.org/blog/2026/08/09/datafusion-ballista-54.1.0)
+- **2026-08-07** [Apache DataFusion Comet 1.0.0 Release](https://datafusion.apache.org/blog/2026/08/07/datafusion-comet-1.0.0)
+- **2026-07-12** [Apache DataFusion Ballista 54.0.0 Released](https://datafusion.apache.org/blog/2026/07/12/datafusion-ballista-54.0.0)
+- **2026-06-20** [Apache DataFusion Comet 0.17.0 Release](https://datafusion.apache.org/blog/2026/06/20/datafusion-comet-0.17.0)
+- **2026-06-12** [Apache DataFusion 54.0.0 Released](https://datafusion.apache.org/blog/2026/06/12/datafusion-54.0.0)
+- **2026-05-26** [Introducing Apache DataFusion Java 0.1.0](https://datafusion.apache.org/blog/2026/05/26/datafusion-java-0.1.0)
+- **2026-05-24** [Apache DataFusion Ballista 53.0.0 Released](https://datafusion.apache.org/blog/2026/05/24/datafusion-ballista-53.0.0)
+- **2026-05-07** [Apache DataFusion Comet 0.16.0 Release](https://datafusion.apache.org/blog/2026/05/07/datafusion-comet-0.16.0)
+- **2026-04-18** [Apache DataFusion Comet 0.15.0 Release](https://datafusion.apache.org/blog/2026/04/18/datafusion-comet-0.15.0)
 - **2026-04-02** [Apache DataFusion 53.0.0 Released](https://datafusion.apache.org/blog/2026/04/02/datafusion-53.0.0)
 - **2026-03-18** [Apache DataFusion Comet 0.14.0 Release](https://datafusion.apache.org/blog/2026/03/18/datafusion-comet-0.14.0)
 - **2026-01-30** [Apache DataFusion Comet 0.13.0 Release](https://datafusion.apache.org/blog/2026/01/30/datafusion-comet-0.13.0)
@@ -203,6 +223,7 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 # 🌎 Community Events
 
 - **2026-09-03** [Boston Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/21541) - [RSVP](https://luma.com/yexgqifv)
+- **2026-08-13** [San Francisco Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/24013) - [RSVP](https://luma.com/gk3s2vib)
 - **2026-07-22** [Denver Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/18428) - [RSVP](https://luma.com/jsu6faie)
 - **2026-06-28** [Shanghai Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/16334) - [RSVP](https://luma.com/7xrhm9rx), [LinkedIn](https://www.linkedin.com/posts/ruihang-xia_we-are-going-to-have-a-apache-datafusion-share-7473348653169160194-NcmY)
 - **2026-05-12** [New York City Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/20030) - [RSVP](https://luma.com/adhshv92)
