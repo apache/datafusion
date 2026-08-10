@@ -148,6 +148,9 @@ Guidelines for evaluating tests:
 5. Check that tests assert on specific expected values or plans (e.g. via
    `insta` snapshots or `.slt` expected output) rather than merely checking
    "no error occurred".
+6. Verify test actually cover the bug ("Ablation Testing"): For bug fixes, revert 
+   the fix locally and check that the new test fails without it (i.e. the test 
+   actually reproduces the bug or covers the new feature). 
 
 [`cargo llvm-cov`]: https://github.com/taiki-e/cargo-llvm-cov
 
@@ -222,12 +225,6 @@ without scope creep.
 Similarly, when a PR mixes refactoring with behavior changes or fixes a narrow
 problem with a broad mechanism, ask for it to be split or scoped down rather
 than reviewing it as-is.
-
-### Verify Tests Actually Pin the Bug ("Ablation Testing")
-
-For bug fixes, revert the fix locally and check that the new test fails
-without it -- several tests have been found during review that pass even
-with the fix reverted.
 
 ### Narrate What You Verified When Approving
 
