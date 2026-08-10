@@ -22,24 +22,35 @@ use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::logical_expr::Volatility;
+use datafusion::physical_expr::LexOrdering;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
-use datafusion::physical_plan::PhysicalExpr;
+use datafusion::physical_optimizer::PhysicalOptimizerRule;
+use datafusion::physical_optimizer::update_aggr_exprs::OptimizeAggregateOrder;
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
 };
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{PhysicalSortExpr, col, lit};
+use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::{ExecutionPlan, PhysicalExpr};
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
-use datafusion_common::Result;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, Signature, SimpleAggregateUDF,
 };
 use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
 use datafusion_functions_aggregate::average::avg_udaf;
+use datafusion_functions_aggregate::first_last::first_value_udaf;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 use datafusion_functions_aggregate::string_agg::string_agg_udaf;
+use datafusion_functions_aggregate::sum::sum_udaf;
+use datafusion_proto::physical_plan::{AsExecutionPlan, DefaultPhysicalExtensionCodec};
+use datafusion_proto::protobuf;
+use datafusion_proto::protobuf::PhysicalPlanNode;
+use prost::Message;
 use std::sync::Arc;
 use std::vec;
 
@@ -88,6 +99,100 @@ fn roundtrip_aggregate() -> Result<()> {
         )?))?;
     }
 
+    Ok(())
+}
+
+#[test]
+fn roundtrip_aggregate_preserves_optimizer_schema_and_reversed_state() -> Result<()> {
+    let input_schema =
+        Arc::new(Schema::new(vec![Field::new("b", DataType::Int64, true)]));
+    let input_ordering = LexOrdering::new(vec![PhysicalSortExpr {
+        expr: col("b", &input_schema)?,
+        options: SortOptions::new(true, true),
+    }])
+    .expect("single sort expression should form an ordering");
+    let input: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(
+        input_ordering,
+        Arc::new(EmptyExec::new(Arc::clone(&input_schema))),
+    ));
+    let original_name = "first_value(b) ORDER BY [b ASC NULLS LAST]";
+    let aggregate_expr = Arc::new(
+        AggregateExprBuilder::new(first_value_udaf(), vec![col("b", &input_schema)?])
+            .order_by(vec![PhysicalSortExpr {
+                expr: col("b", &input_schema)?,
+                options: SortOptions::new(false, false),
+            }])
+            .schema(Arc::clone(&input_schema))
+            .alias(original_name)
+            .build()?,
+    );
+    let aggregate = AggregateExec::try_new(
+        AggregateMode::Single,
+        PhysicalGroupBy::new(vec![], vec![], vec![], false),
+        vec![aggregate_expr],
+        vec![None],
+        input,
+        input_schema,
+    )?;
+
+    let optimized = OptimizeAggregateOrder::new()
+        .optimize(Arc::new(aggregate), &ConfigOptions::new())?;
+    let optimized_aggregate = optimized
+        .downcast_ref::<AggregateExec>()
+        .expect("expected optimized AggregateExec");
+    assert_eq!(optimized.schema().field(0).name(), original_name);
+    assert_eq!(
+        optimized_aggregate.aggr_expr()[0].name(),
+        "last_value(b) ORDER BY [b DESC NULLS FIRST]"
+    );
+    assert!(optimized_aggregate.aggr_expr()[0].is_reversed());
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let node = PhysicalPlanNode::try_from_physical_plan(Arc::clone(&optimized), &codec)?;
+    let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let ctx = SessionContext::new();
+    let decoded = node.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+    let decoded_aggregate = decoded
+        .downcast_ref::<AggregateExec>()
+        .expect("expected decoded AggregateExec");
+
+    assert_eq!(optimized.schema(), decoded.schema());
+    assert!(decoded_aggregate.aggr_expr()[0].is_reversed());
+    Ok(())
+}
+
+#[test]
+fn decode_aggregate_without_output_schema() -> Result<()> {
+    let input_schema =
+        Arc::new(Schema::new(vec![Field::new("b", DataType::Int64, true)]));
+    let aggregate_expr = Arc::new(
+        AggregateExprBuilder::new(sum_udaf(), vec![col("b", &input_schema)?])
+            .schema(Arc::clone(&input_schema))
+            .alias("SUM(b)")
+            .build()?,
+    );
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
+        AggregateMode::Single,
+        PhysicalGroupBy::new(vec![], vec![], vec![], false),
+        vec![aggregate_expr],
+        vec![None],
+        Arc::new(EmptyExec::new(Arc::clone(&input_schema))),
+        input_schema,
+    )?);
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let mut node = PhysicalPlanNode::try_from_physical_plan(Arc::clone(&plan), &codec)?;
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::Aggregate(aggregate)) =
+        node.physical_plan_type.as_mut()
+    else {
+        panic!("expected AggregateExecNode");
+    };
+    assert!(aggregate.schema.take().is_some());
+
+    let ctx = SessionContext::new();
+    let decoded = node.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+    assert_eq!(plan.schema(), decoded.schema());
     Ok(())
 }
 
