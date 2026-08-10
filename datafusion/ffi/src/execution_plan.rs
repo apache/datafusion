@@ -20,6 +20,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr_common::metrics::MetricsSet;
@@ -50,6 +51,10 @@ pub struct FFI_ExecutionPlan {
 
     /// Return a vector of children plans
     pub children: unsafe extern "C" fn(plan: &Self) -> SVec<FFI_ExecutionPlan>,
+
+    /// Return the physical expression roots owned by this plan node.
+    pub apply_expressions:
+        unsafe extern "C" fn(plan: &Self) -> FFI_Result<SVec<FFI_PhysicalExpr>>,
 
     /// Return the dynamic expressions produced by this plan node.
     pub dynamic_expressions_produced:
@@ -96,6 +101,9 @@ pub struct FFI_ExecutionPlan {
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(arg: &mut Self),
 
+    /// Return the major DataFusion version number of this provider.
+    pub version: unsafe extern "C" fn() -> u64,
+
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// A [`ForeignExecutionPlan`] should never attempt to access this data.
     pub private_data: *mut c_void,
@@ -141,6 +149,17 @@ unsafe extern "C" fn children_fn_wrapper(
         .into_iter()
         .map(|child| FFI_ExecutionPlan::new(Arc::clone(child), runtime.clone()))
         .collect()
+}
+
+unsafe extern "C" fn apply_expressions_fn_wrapper(
+    plan: &FFI_ExecutionPlan,
+) -> FFI_Result<SVec<FFI_PhysicalExpr>> {
+    let mut expressions = SVec::new();
+    let result = plan.inner().apply_expressions(&mut |expr| {
+        expressions.push(FFI_PhysicalExpr::from(Arc::clone(expr)));
+        Ok(TreeNodeRecursion::Continue)
+    });
+    sresult!(result.map(|_| expressions))
 }
 
 unsafe extern "C" fn dynamic_expressions_produced_fn_wrapper(
@@ -325,6 +344,7 @@ impl FFI_ExecutionPlan {
         Self {
             properties: properties_fn_wrapper,
             children: children_fn_wrapper,
+            apply_expressions: apply_expressions_fn_wrapper,
             dynamic_expressions_produced: dynamic_expressions_produced_fn_wrapper,
             with_new_children: with_new_children_fn_wrapper,
             name: name_fn_wrapper,
@@ -334,6 +354,7 @@ impl FFI_ExecutionPlan {
             partition_statistics: partition_statistics_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
+            version: crate::version,
             private_data: Box::into_raw(private_data) as *mut c_void,
             library_marker_id: crate::get_library_marker_id,
         }
@@ -470,6 +491,24 @@ impl ExecutionPlan for ForeignExecutionPlan {
         }
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let expressions =
+            df_result!(unsafe { (self.plan.apply_expressions)(&self.plan) })?;
+        datafusion_physical_plan::apply_expression_roots(
+            expressions.iter().map(|expression| {
+                let expression: Arc<dyn datafusion_physical_plan::PhysicalExpr> =
+                    expression.into();
+                expression
+            }),
+            f,
+        )
+    }
+
     fn dynamic_expressions_produced(
         &self,
     ) -> Vec<Arc<dyn datafusion_physical_plan::PhysicalExpr>> {
@@ -521,6 +560,7 @@ pub mod tests {
     pub struct EmptyExec {
         props: Arc<PlanProperties>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        expressions: Vec<Arc<dyn PhysicalExpr>>,
         dynamic_expressions: Vec<Arc<dyn PhysicalExpr>>,
         metrics: Option<MetricsSet>,
         statistics: Option<Statistics>,
@@ -536,6 +576,7 @@ pub mod tests {
                     Boundedness::Bounded,
                 )),
                 children: Vec::default(),
+                expressions: Vec::default(),
                 dynamic_expressions: Vec::default(),
                 metrics: None,
                 statistics: None,
@@ -549,6 +590,14 @@ pub mod tests {
 
         pub fn with_statistics(mut self, statistics: Statistics) -> Self {
             self.statistics = Some(statistics);
+            self
+        }
+
+        pub fn with_expressions(
+            mut self,
+            expressions: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Self {
+            self.expressions = expressions;
             self
         }
 
@@ -592,6 +641,7 @@ pub mod tests {
             Ok(Arc::new(EmptyExec {
                 props: Arc::clone(&self.props),
                 children,
+                expressions: self.expressions.clone(),
                 dynamic_expressions: self.dynamic_expressions.clone(),
                 metrics: self.metrics.clone(),
                 statistics: self.statistics.clone(),
@@ -630,6 +680,13 @@ pub mod tests {
                 Statistics::new_unknown(self.props.eq_properties.schema())
             })))
         }
+
+        fn apply_expressions(
+            &self,
+            f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            datafusion_physical_plan::apply_expression_roots(&self.expressions, f)
+        }
     }
 
     pub(crate) fn create_dynamic_filter() -> Arc<DynamicFilterPhysicalExpr> {
@@ -662,6 +719,35 @@ pub mod tests {
             "FFI_ExecutionPlan: empty-exec, number_of_children=0"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_execution_plan_apply_expressions() -> Result<()> {
+        let schema = Arc::new(arrow::datatypes::Schema::empty());
+        let dynamic_filter = create_dynamic_filter();
+        let expected_id = dynamic_filter
+            .expression_id()
+            .expect("dynamic filters always have an expression ID");
+        let expression: Arc<dyn PhysicalExpr> = Arc::clone(&dynamic_filter) as _;
+        let original_plan =
+            Arc::new(EmptyExec::new(schema).with_expressions(vec![expression]));
+
+        let mut ffi_plan = FFI_ExecutionPlan::new(original_plan, None);
+        ffi_plan.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_plan: Arc<dyn ExecutionPlan> = (&ffi_plan).try_into()?;
+
+        let mut retained = None;
+        foreign_plan.apply_expressions(&mut |expr| {
+            retained = Some(Arc::clone(expr));
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        drop(foreign_plan);
+
+        assert_eq!(
+            retained.and_then(|expr| expr.expression_id()),
+            Some(expected_id)
+        );
         Ok(())
     }
 

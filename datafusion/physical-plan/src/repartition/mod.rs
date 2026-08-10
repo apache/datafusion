@@ -53,6 +53,7 @@ use arrow::datatypes::{SchemaRef, UInt32Type};
 use arrow_schema::SortOptions;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, transpose};
 use datafusion_common::{
     ColumnStatistics, DataFusionError, HashMap, ScalarValue, SplitPoint,
@@ -1335,6 +1336,20 @@ impl ExecutionPlan for RepartitionExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        match self.partitioning() {
+            Partitioning::Hash(exprs, _) => crate::apply_expression_roots(exprs, f),
+            Partitioning::Range(range) => crate::apply_expression_roots(
+                range.ordering().iter().map(|sort_expr| &sort_expr.expr),
+                f,
+            ),
+            _ => Ok(TreeNodeRecursion::Continue),
+        }
     }
 
     fn replace_children(
@@ -2947,6 +2962,13 @@ mod tests {
             vec![]
         }
 
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
         fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
@@ -4188,6 +4210,13 @@ mod test {
             ],
         )?);
         let exec = RepartitionExec::try_new(source, partitioning)?;
+
+        let mut expressions = vec![];
+        exec.apply_expressions(&mut |expr| {
+            expressions.push(expr.to_string());
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        assert_eq!(expressions, ["c0@0"]);
 
         // Range partition count is fixed by split points, so repartitioned()
         // cannot change it to an arbitrary target.

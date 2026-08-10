@@ -333,6 +333,20 @@ impl ExecutionPlan for ProjectionExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        crate::apply_expression_roots(
+            self.projector
+                .projection()
+                .as_ref()
+                .iter()
+                .map(|proj_expr| &proj_expr.expr),
+            f,
+        )
+    }
+
     fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,

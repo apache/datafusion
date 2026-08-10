@@ -782,6 +782,7 @@ impl DatePartitionedTable {
 #     }
 #
 #     fn execute(&self, _: usize, _: Arc<TaskContext>) -> Result<SendableRecordBatchStream> { todo!() }
+#     fn apply_expressions(&self, _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>) -> Result<TreeNodeRecursion> { Ok(TreeNodeRecursion::Continue) }
 # }
 ```
 
@@ -931,6 +932,13 @@ impl ExecutionPlan for CountingExec {
             batch_stream,
         )))
     }
+
+#     fn apply_expressions(
+#         &self,
+#         _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+#     ) -> Result<TreeNodeRecursion> {
+#         Ok(TreeNodeRecursion::Continue)
+#     }
 }
 ```
 

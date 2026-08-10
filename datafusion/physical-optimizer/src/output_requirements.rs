@@ -27,7 +27,9 @@ use std::sync::Arc;
 use crate::PhysicalOptimizerRule;
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{Result, Statistics, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::Distribution;
@@ -333,6 +335,15 @@ impl ExecutionPlan for OutputRequirementExec {
 
     fn fetch(&self) -> Option<usize> {
         self.fetch
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion_physical_expr_common::physical_expr::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

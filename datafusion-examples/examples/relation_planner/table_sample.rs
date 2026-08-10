@@ -121,7 +121,7 @@ use datafusion::{
 };
 use datafusion_common::{
     DFSchemaRef, DataFusionError, Result, Statistics, internal_err, not_impl_err,
-    plan_datafusion_err, plan_err,
+    plan_datafusion_err, plan_err, tree_node::TreeNodeRecursion,
 };
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{
@@ -760,6 +760,15 @@ impl ExecutionPlan for SampleExec {
             .to_inexact();
 
         Ok(Arc::new(stats))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

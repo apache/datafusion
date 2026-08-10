@@ -108,6 +108,7 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::format::ExplainFormat;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     DataFusionError, JoinSide, NullEquality, Result, UnnestOptions, exec_datafusion_err,
     internal_datafusion_err, internal_err, not_impl_err,
@@ -322,6 +323,13 @@ impl ExecutionPlan for DowncastDelegatingExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         self.inner.children()
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        self.inner.apply_expressions(f)
     }
 
     fn replace_children(
@@ -1382,6 +1390,24 @@ fn roundtrip_json_scan() -> Result<()> {
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
             .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
                 "/path/to/file.json".to_string(),
+                1024,
+            )])])
+            .build();
+    roundtrip_test(DataSourceExec::from_data_source(scan_config))
+}
+
+#[cfg(feature = "avro")]
+#[test]
+fn roundtrip_avro_scan() -> Result<()> {
+    use datafusion_datasource_avro::source::AvroSource;
+
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let file_source = Arc::new(AvroSource::new(TableSchema::from(&file_schema)));
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.avro".to_string(),
                 1024,
             )])])
             .build();
@@ -3537,6 +3563,59 @@ async fn roundtrip_memory_source() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_memory_source_sort_information_and_fetch() -> Result<()> {
+    use datafusion::datasource::memory::MemorySourceConfig;
+    use datafusion::datasource::source::DataSource as _;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Int64, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(arrow::array::StringArray::from(vec!["Tom", "Bob"])),
+            Arc::new(arrow::array::Int64Array::from(vec![18i64, 21i64])),
+        ],
+    )?;
+    let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+        col("b", &schema)?,
+        SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    )])
+    .unwrap();
+    let source = MemorySourceConfig::try_new(&[vec![batch]], Arc::clone(&schema), None)?
+        .with_limit(Some(1))
+        .with_show_sizes(false)
+        .try_with_sort_information(vec![ordering])?;
+    let exec_plan = DataSourceExec::from_data_source(source.clone());
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let decoded = roundtrip_test_and_return(exec_plan, &ctx, &codec, &proto_converter)?;
+
+    // The string representation does not include every field; check the
+    // decoded source directly.
+    let decoded = decoded
+        .downcast_ref::<DataSourceExec>()
+        .expect("expected DataSourceExec");
+    let decoded_source = decoded
+        .data_source()
+        .downcast_ref::<MemorySourceConfig>()
+        .expect("expected MemorySourceConfig");
+    assert_eq!(decoded_source.partitions(), source.partitions());
+    assert_eq!(decoded_source.original_schema(), source.original_schema());
+    assert_eq!(decoded_source.projection(), source.projection());
+    assert_eq!(decoded_source.sort_information(), source.sort_information());
+    assert_eq!(decoded_source.fetch(), Some(1));
+    assert!(!decoded_source.show_sizes());
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_listing_table_with_schema_metadata() -> Result<()> {
     let ctx = SessionContext::new();
     let file_format = JsonFormat::default();
@@ -4873,6 +4952,61 @@ fn test_aggregate_with_dynamic_filter_roundtrip() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_aggregate_without_dynamic_filter_roundtrip() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+    let child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+    let aggregate = Arc::new(AggregateExec::try_new(
+        AggregateMode::Partial,
+        PhysicalGroupBy::new_single(vec![]),
+        vec![
+            AggregateExprBuilder::new(
+                datafusion::functions_aggregate::min_max::min_udaf(),
+                vec![col_a],
+            )
+            .schema(Arc::clone(&schema))
+            .alias("min_a")
+            .build()
+            .map(Arc::new)?,
+        ],
+        vec![None],
+        child,
+        Arc::clone(&schema),
+    )?) as Arc<dyn ExecutionPlan>;
+
+    let mut config = ConfigOptions::default();
+    config.optimizer.enable_aggregate_dynamic_filter_pushdown = true;
+    let optimizer = FilterPushdown::new_post_optimization();
+    let plan = optimizer.optimize(aggregate, &config)?;
+    assert!(
+        plan.downcast_ref::<AggregateExec>()
+            .expect("Should be AggregateExec")
+            .dynamic_expressions_produced()
+            .is_empty()
+    );
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DefaultPhysicalProtoConverter {};
+    let bytes = physical_plan_to_bytes_with_proto_converter(plan, &codec, &converter)?;
+    let deserialized = physical_plan_from_bytes_with_proto_converter(
+        bytes.as_ref(),
+        ctx.task_ctx().as_ref(),
+        &codec,
+        &converter,
+    )?;
+
+    assert!(
+        deserialized
+            .downcast_ref::<AggregateExec>()
+            .expect("Should be AggregateExec")
+            .dynamic_expressions_produced()
+            .is_empty()
+    );
+    Ok(())
+}
+
 /// Test that plan containing a SortExec with dynamic filter pushdown
 /// can be serialized and deserialized while preserving references to the dynamic filter.
 #[test]
@@ -4991,6 +5125,13 @@ impl ExecutionPlan for CustomExecWithExprs {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.child]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        datafusion_physical_plan::apply_expression_roots(&self.exprs, f)
     }
 
     fn replace_children(
