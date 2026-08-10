@@ -358,7 +358,7 @@ impl ExecutionPlan for CrossJoinExec {
                 right: stream,
                 left_index: 0,
                 join_metrics,
-                state: CrossJoinStreamState::WaitBuildSide,
+                processed_right_data: None,
                 left_data: RecordBatch::new_empty(self.left().schema()),
                 batch_transformer: BatchSplitter::new(batch_size),
             }))
@@ -369,7 +369,7 @@ impl ExecutionPlan for CrossJoinExec {
                 right: stream,
                 left_index: 0,
                 join_metrics,
-                state: CrossJoinStreamState::WaitBuildSide,
+                processed_right_data: None,
                 left_data: RecordBatch::new_empty(self.left().schema()),
                 batch_transformer: NoopBatchTransformer::new(),
             }))
@@ -609,10 +609,10 @@ fn build_batch(
 impl<T: BatchTransformer> CrossJoinStream<T> {
     /// Separate implementation function that unpins the [`CrossJoinStream`] so
     /// that partial borrows work correctly
-    fn poll_next_impl(
+    async fn next(
         &mut self,
         cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<Result<RecordBatch>>> {
+    ) -> Option<Result<RecordBatch>> {
         loop {
             return match self.state {
                 CrossJoinStreamState::WaitBuildSide => {
@@ -634,7 +634,7 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
     fn collect_build_side(
         &mut self,
         cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
+    ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         let build_timer = self.join_metrics.build_time.timer();
         let left_data = match ready!(self.left_fut.get(cx)) {
             Ok(left_data) => left_data,
@@ -647,34 +647,32 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
             StatefulStreamResult::Ready(None)
         } else {
             self.left_data = left_data;
-            self.state = CrossJoinStreamState::FetchProbeBatch;
             StatefulStreamResult::Continue
         };
-        Poll::Ready(Ok(result))
+        Ok(result)
     }
 
     /// Fetches the probe (right) batch, updates the metrics, and save the batch in the state.
     /// Then, the state is updated to build result batches.
-    fn fetch_probe_batch(
+    async fn fetch_probe_batch(
         &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
+    ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         self.left_index = 0;
-        let right_data = match ready!(self.right.poll_next_unpin(cx)) {
+        let right_data = match self.right.next().await {
             Some(Ok(right_data)) => right_data,
-            Some(Err(e)) => return Poll::Ready(Err(e)),
+            Some(Err(e)) => return Err(e),
             None => {
                 // Release the right (probe) input pipeline's resources.
                 let right_schema = self.right.schema();
                 self.right = Box::pin(EmptyRecordBatchStream::new(right_schema));
-                return Poll::Ready(Ok(StatefulStreamResult::Ready(None)));
+                return Ok(StatefulStreamResult::Ready(None));
             }
         };
         self.join_metrics.input_batches.add(1);
         self.join_metrics.input_rows.add(right_data.num_rows());
 
-        self.state = CrossJoinStreamState::BuildBatches(right_data);
-        Poll::Ready(Ok(StatefulStreamResult::Continue))
+        self.processed_right_data = Some(right_data);
+        Ok(StatefulStreamResult::Continue)
     }
 
     /// Joins the indexed row of left data with the current probe batch.
