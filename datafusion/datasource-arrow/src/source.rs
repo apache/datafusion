@@ -40,6 +40,7 @@ use arrow::buffer::Buffer;
 use arrow::ipc::reader::{FileDecoder, FileReader, StreamReader};
 use datafusion_common::error::Result;
 use datafusion_common::exec_datafusion_err;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_datasource::PartitionedFile;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -391,6 +392,21 @@ impl FileSource for ArrowSource {
 
     fn projection(&self) -> Option<&ProjectionExprs> {
         Some(&self.projection.source)
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        datafusion_physical_plan::apply_expression_roots(
+            self.projection
+                .source
+                .iter()
+                .map(|proj_expr| &proj_expr.expr),
+            f,
+        )
     }
 
     /// Emit an `ArrowScan` node wrapping the shared base config.

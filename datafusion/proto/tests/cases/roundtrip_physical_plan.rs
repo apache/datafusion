@@ -108,6 +108,7 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::format::ExplainFormat;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     DataFusionError, JoinSide, NullEquality, Result, UnnestOptions, exec_datafusion_err,
     internal_datafusion_err, internal_err, not_impl_err,
@@ -321,6 +322,13 @@ impl ExecutionPlan for DowncastDelegatingExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         self.inner.children()
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        self.inner.apply_expressions(f)
     }
 
     fn with_new_children(
@@ -4934,6 +4942,61 @@ fn test_aggregate_with_dynamic_filter_roundtrip() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_aggregate_without_dynamic_filter_roundtrip() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+    let child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+    let aggregate = Arc::new(AggregateExec::try_new(
+        AggregateMode::Partial,
+        PhysicalGroupBy::new_single(vec![]),
+        vec![
+            AggregateExprBuilder::new(
+                datafusion::functions_aggregate::min_max::min_udaf(),
+                vec![col_a],
+            )
+            .schema(Arc::clone(&schema))
+            .alias("min_a")
+            .build()
+            .map(Arc::new)?,
+        ],
+        vec![None],
+        child,
+        Arc::clone(&schema),
+    )?) as Arc<dyn ExecutionPlan>;
+
+    let mut config = ConfigOptions::default();
+    config.optimizer.enable_aggregate_dynamic_filter_pushdown = true;
+    let optimizer = FilterPushdown::new_post_optimization();
+    let plan = optimizer.optimize(aggregate, &config)?;
+    assert!(
+        plan.downcast_ref::<AggregateExec>()
+            .expect("Should be AggregateExec")
+            .dynamic_expressions_produced()
+            .is_empty()
+    );
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DefaultPhysicalProtoConverter {};
+    let bytes = physical_plan_to_bytes_with_proto_converter(plan, &codec, &converter)?;
+    let deserialized = physical_plan_from_bytes_with_proto_converter(
+        bytes.as_ref(),
+        ctx.task_ctx().as_ref(),
+        &codec,
+        &converter,
+    )?;
+
+    assert!(
+        deserialized
+            .downcast_ref::<AggregateExec>()
+            .expect("Should be AggregateExec")
+            .dynamic_expressions_produced()
+            .is_empty()
+    );
+    Ok(())
+}
+
 /// Test that plan containing a SortExec with dynamic filter pushdown
 /// can be serialized and deserialized while preserving references to the dynamic filter.
 #[test]
@@ -5052,6 +5115,13 @@ impl ExecutionPlan for CustomExecWithExprs {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.child]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        datafusion_physical_plan::apply_expression_roots(&self.exprs, f)
     }
 
     fn with_new_children(

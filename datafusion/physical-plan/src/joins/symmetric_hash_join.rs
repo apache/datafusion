@@ -66,6 +66,7 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::bisect;
 use datafusion_common::{
     HashSet, JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err,
@@ -450,6 +451,15 @@ impl ExecutionPlan for SymmetricHashJoinExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.left, &self.right]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn crate::PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let join_keys = self.on.iter().flat_map(|(left, right)| [left, right]);
+        let filter = self.filter.iter().map(|filter| filter.expression());
+        crate::apply_expression_roots(join_keys.chain(filter), f)
     }
 
     fn with_new_children(
