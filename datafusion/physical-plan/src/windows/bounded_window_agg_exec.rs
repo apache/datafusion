@@ -212,12 +212,33 @@ impl BoundedWindowAggExec {
 
     /// Install (or clear) a [`WindowStateObserver`] that receives each
     /// PARTITION BY group's finalized window state at partition close.
+    ///
+    /// Errors when `observer` is `Some` and any window expression on this
+    /// exec has a non-ever-expanding frame (i.e. its start bound is not
+    /// `UNBOUNDED PRECEDING`). Those frames use `SlidingAggregateWindowExpr`
+    /// under the hood, whose accumulator calls `retract_batch` — at
+    /// partition close the accumulator holds only the last frame's rows,
+    /// not the partition aggregate, so the observed state would silently
+    /// misrepresent the group.
     pub fn with_state_observer(
         mut self,
         observer: Option<Arc<dyn WindowStateObserver>>,
-    ) -> Self {
+    ) -> Result<Self> {
+        if observer.is_some() {
+            for expr in &self.window_expr {
+                if !expr.get_window_frame().is_ever_expanding() {
+                    return exec_err!(
+                        "cannot install WindowStateObserver on BoundedWindowAggExec \
+                         with a sliding aggregate window frame (start != \
+                         UNBOUNDED PRECEDING) for `{}`; sliding accumulator state \
+                         is frame-only, not the partition aggregate",
+                        expr.name()
+                    );
+                }
+            }
+        }
         self.state_observer = observer;
-        self
+        Ok(self)
     }
 
     /// The currently-installed [`WindowStateObserver`], if any. Optimizer
@@ -453,7 +474,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
             self.input_order_mode.clone(),
             self.can_repartition,
         )?
-        .with_state_observer(self.state_observer.clone());
+        .with_state_observer(self.state_observer.clone())?;
         Ok(Arc::new(new))
     }
 
@@ -2162,15 +2183,13 @@ mod tests {
         }
     }
 
-    /// Runs `count(sn) OVER (PARTITION BY hash ORDER BY sn <frame>)` over a
-    /// fixed two-group source (hash=1 × 3, hash=2 × 3, sorted by (hash, sn))
-    /// with a [`RecordingObserver`] installed, and asserts that the
-    /// observer fires once per PARTITION BY group with a non-empty
-    /// `count()` accumulator state.
-    async fn run_partition_close_test(frame: WindowFrame) -> Result<()> {
-        use std::sync::Mutex;
-
-        let task_ctx = Arc::new(TaskContext::default());
+    /// Build a `BoundedWindowAggExec` for `count(sn) OVER (PARTITION BY hash
+    /// ORDER BY sn <frame>)` over a fixed two-group source (hash=1 × 3,
+    /// hash=2 × 3, sorted by (hash, sn)). Returns the plan pre-observer so
+    /// callers can decide how to install it.
+    async fn build_partition_close_plan(
+        frame: WindowFrame,
+    ) -> Result<BoundedWindowAggExec> {
         let schema = test_schema();
 
         let mut sn_b = UInt64Builder::with_capacity(6);
@@ -2216,73 +2235,88 @@ mod tests {
             None,
         )?;
 
-        let observations: Arc<Mutex<Vec<Observation>>> = Arc::new(Mutex::new(vec![]));
-        let observer: Arc<dyn WindowStateObserver> = Arc::new(RecordingObserver {
-            sink: Arc::clone(&observations),
-        });
-
-        let plan = BoundedWindowAggExec::try_new(
-            vec![expr],
-            source,
-            InputOrderMode::Sorted,
-            false,
-        )?
-        .with_state_observer(Some(observer));
-
-        let _ = collect(Arc::new(plan).execute(0, task_ctx)?).await?;
-
-        let obs = observations.lock().unwrap();
-        assert_eq!(obs.len(), 2, "one observation per PARTITION BY group");
-        let keys: Vec<i64> = obs
-            .iter()
-            .map(|(_, k, _)| match &k[0] {
-                ScalarValue::Int64(Some(v)) => *v,
-                other => panic!("unexpected partition-key element: {other:?}"),
-            })
-            .collect();
-        assert_eq!(keys, vec![1, 2]);
-        for (idx, _, state) in obs.iter() {
-            assert_eq!(*idx, 0, "single output partition");
-            assert!(!state.is_empty(), "count() accumulator state is non-empty");
-        }
-        Ok(())
+        BoundedWindowAggExec::try_new(vec![expr], source, InputOrderMode::Sorted, false)
     }
 
     // Two PARTITION BY groups: hash=1 [sn=1,2,3] then hash=2 [sn=4,5,6].
     // Input is sorted by (hash, sn) so we can run in Sorted mode; in that
     // mode `mark_partition_end` closes the leading group mid-stream and
-    // EOS closes the tail — both should fire the observer. The two tests
-    // below cover the two frame-causality regimes.
+    // EOS closes the tail — both fire the observer for an ever-expanding
+    // frame. Sliding frames are rejected at install time.
 
     #[tokio::test]
-    async fn test_finalized_state_observer_fires_at_partition_close() -> Result<()> {
-        // CURRENT ROW → UNBOUNDED FOLLOWING forces each row's output to wait
-        // for partition close (is_causal = false), so hash=2's rows are held
-        // until EOS marks its buffer is_end — the observer path we want to
-        // exercise.
-        run_partition_close_test(WindowFrame::new_bounds(
+    async fn test_state_observer_rejects_sliding_frame() -> Result<()> {
+        // `CURRENT ROW → UNBOUNDED FOLLOWING` is not ever-expanding, so this
+        // maps to `SlidingAggregateWindowExpr` whose accumulator retracts as
+        // rows leave the frame — at partition close the accumulator holds
+        // only the last frame's rows, not the partition aggregate.
+        // `with_state_observer` refuses this configuration.
+        use std::sync::Mutex;
+
+        let plan = build_partition_close_plan(WindowFrame::new_bounds(
             WindowFrameUnits::Rows,
             WindowFrameBound::CurrentRow,
             WindowFrameBound::Following(ScalarValue::UInt64(None)),
         ))
-        .await
+        .await?;
+        let observer: Arc<dyn WindowStateObserver> = Arc::new(RecordingObserver {
+            sink: Arc::new(Mutex::new(vec![])),
+        });
+        let err = plan.with_state_observer(Some(observer)).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("sliding aggregate window frame"),
+            "expected sliding-frame rejection, got: {msg}"
+        );
+        Ok(())
     }
 
     #[tokio::test]
     async fn test_finalized_state_observer_fires_on_causal_frame() -> Result<()> {
-        // `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` — the
-        // running-sum shape. Output can stream row-by-row without waiting
-        // for partition close, so this is the frame most likely to bypass
-        // the observer path if `is_end` were tied to buffered-output
-        // flushing. It isn't: `is_end` comes from PARTITION BY transition
-        // detection in `mark_partition_end` (mid-stream) and EOS (tail),
-        // independent of frame causality. This test locks that in.
-        run_partition_close_test(WindowFrame::new_bounds(
+        // `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` — ever-expanding,
+        // `PlainAggregateWindowExpr` under the hood. At partition close the
+        // accumulator holds the partition aggregate. Both mid-stream close
+        // (hash=1 as hash=2 rows arrive) and EOS (hash=2 at drain) fire.
+        use std::sync::Mutex;
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let plan = build_partition_close_plan(WindowFrame::new_bounds(
             WindowFrameUnits::Rows,
             WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
             WindowFrameBound::CurrentRow,
         ))
-        .await
+        .await?;
+
+        let observations: Arc<Mutex<Vec<Observation>>> = Arc::new(Mutex::new(vec![]));
+        let observer: Arc<dyn WindowStateObserver> = Arc::new(RecordingObserver {
+            sink: Arc::clone(&observations),
+        });
+        let plan = plan.with_state_observer(Some(observer))?;
+
+        let _ = collect(Arc::new(plan).execute(0, task_ctx)?).await?;
+
+        // count(sn) over each of hash=1 (3 rows) and hash=2 (3 rows), in
+        // close order — hash=1 first (mid-stream close), hash=2 second (EOS).
+        let observed: Vec<(usize, i64, Vec<ScalarValue>)> = observations
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(idx, key, state)| {
+                let hash = match &key[0] {
+                    ScalarValue::Int64(Some(v)) => *v,
+                    other => panic!("unexpected partition-key element: {other:?}"),
+                };
+                (*idx, hash, state.clone())
+            })
+            .collect();
+        assert_eq!(
+            observed,
+            vec![
+                (0, 1, vec![ScalarValue::Int64(Some(3))]),
+                (0, 2, vec![ScalarValue::Int64(Some(3))]),
+            ]
+        );
+        Ok(())
     }
 
     #[tokio::test]
@@ -2377,7 +2411,7 @@ mod tests {
             InputOrderMode::Sorted,
             false,
         )?
-        .with_state_observer(Some(observer));
+        .with_state_observer(Some(observer))?;
 
         let _ = collect(Arc::new(plan).execute(0, task_ctx)?).await?;
 
@@ -2498,7 +2532,7 @@ mod tests {
             InputOrderMode::Sorted,
             false,
         )?
-        .with_state_observer(Some(observer));
+        .with_state_observer(Some(observer))?;
         let batches = collect(Arc::new(plan).execute(0, task_ctx)?).await?;
 
         let mut out = Vec::with_capacity(input.len());
@@ -2609,7 +2643,7 @@ mod tests {
             InputOrderMode::Sorted,
             false,
         )?
-        .with_state_observer(Some(observer));
+        .with_state_observer(Some(observer))?;
         let _ = collect(Arc::new(plan).execute(0, task_ctx)?).await?;
 
         state_sink

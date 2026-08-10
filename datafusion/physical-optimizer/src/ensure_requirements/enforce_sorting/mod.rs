@@ -612,7 +612,7 @@ fn adjust_window_sort_removal(
                     InputOrderMode::Sorted,
                     !window_expr[0].partition_by().is_empty(),
                 )?
-                .with_state_observer(state_observer),
+                .with_state_observer(state_observer)?,
             ) as _
         } else {
             Arc::new(WindowAggExec::try_new(

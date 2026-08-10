@@ -648,7 +648,7 @@ pub fn get_best_fitting_window(
                 input_order_mode,
                 !physical_partition_keys.is_empty(),
             )?
-            .with_state_observer(state_observer),
+            .with_state_observer(state_observer)?,
         ) as _))
     } else if input_order_mode != InputOrderMode::Sorted {
         // For `WindowAggExec` to work correctly PARTITION BY columns should be sorted.
@@ -999,7 +999,7 @@ mod tests {
             Sorted,
             false,
         )?
-        .with_state_observer(Some(Arc::clone(&observer)));
+        .with_state_observer(Some(Arc::clone(&observer)))?;
 
         let rebuilt = get_best_fitting_window(
             bounded.window_expr(),
