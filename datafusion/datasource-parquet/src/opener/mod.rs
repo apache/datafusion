@@ -37,6 +37,7 @@ use crate::{
     apply_file_schema_type_coercions,
 };
 use arrow::array::RecordBatch;
+use arrow::compute::BatchCoalescer;
 use arrow::datatypes::DataType;
 use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
 use datafusion_physical_expr::projection::ProjectionExprs;
@@ -1423,31 +1424,96 @@ impl RowGroupsPrunedParquetOpen {
 
         let arrow_reader_metrics = ArrowReaderMetrics::enabled();
 
-        // Build the decoder projection (mask + per-batch transform) in a
-        // single call. Encapsulating it behind `DecoderProjection` keeps the
-        // opener's orchestration body focused on filter / decoder / stream
-        // wiring.
+        // ---------------------------------------------------------------
+        // Filter placement
+        //
+        // The scan accepts every pushable filter (the parent `FilterExec`
+        // is gone), so the predicate must be applied here. Each conjunct is
+        // routed to one of two places:
+        //
+        // * the parquet `RowFilter` (during decode, only when
+        //   `pushdown_filters = true`), or
+        // * the in-scan post-scan filter (otherwise, plus any conjunct the
+        //   `RowFilter` machinery cannot evaluate on this file —
+        //   `RowFilterGenerator::rejected_conjuncts`).
+        //
+        // Either way every conjunct is applied; nothing is silently dropped.
+        // ---------------------------------------------------------------
+        let pushdown_predicate = prepared
+            .pushdown_filters
+            .then_some(prepared.predicate.as_ref())
+            .flatten();
+        let mut row_filter_generator = RowFilterGenerator::new(
+            pushdown_predicate,
+            &prepared.physical_file_schema,
+            file_metadata.as_ref(),
+            prepared.reorder_predicates,
+            &prepared.file_metrics,
+        );
+
+        let post_scan_conjuncts: Vec<Arc<dyn PhysicalExpr>> = if prepared.pushdown_filters
+        {
+            // Pushdown enabled: only what the RowFilter could not place falls
+            // through to post-scan.
+            row_filter_generator.rejected_conjuncts().to_vec()
+        } else if let Some(predicate) = prepared.predicate.as_ref() {
+            // Pushdown disabled: the predicate runs post-scan (in-scan
+            // equivalent of a FilterExec) — except for conjuncts containing a
+            // dynamic filter, which stay *pruning-only* here.
+            //
+            // A dynamic filter (a join's build-side summary, a TopK threshold)
+            // earns its keep at the row-group / page level, where one
+            // evaluation against statistics can skip millions of rows. Applied
+            // row-wise it is usually a bad trade: the canonical shape is a
+            // `CASE` over per-partition hash-table probes, which costs far more
+            // per row than the operator that produced it pays to re-check the
+            // same rows itself — and it always does re-check them, which is why
+            // leaving it out cannot change results. Running it here would just
+            // be doing the join's work twice, once on more rows.
+            //
+            // With `pushdown_filters = true` this does not apply: arrow-rs
+            // evaluates each `ArrowPredicate` against an accumulating
+            // `RowSelection`, so the dynamic filter only ever sees rows the
+            // cheaper conjuncts already kept, and skipping the rows it rejects
+            // saves decoding the projected columns for them.
+            //
+            // `ParquetSource::try_pushdown_filters` is the other half of this:
+            // at this setting it reports dynamic-filter conjuncts as *not*
+            // pushed down, so a parent `FilterExec` holding one is retained.
+            datafusion_physical_expr::split_conjunction(predicate)
+                .into_iter()
+                .filter(|conjunct| {
+                    !DynamicFilterTracking::classify(conjunct).contains_dynamic_filter()
+                })
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        // Build the decoder projection (mask + per-batch transform + optional
+        // post-scan filter) in a single call. Encapsulating it behind
+        // `DecoderProjection` keeps the opener's orchestration body focused on
+        // filter / decoder / stream wiring.
         let decoder_projection = DecoderProjection::try_new(
             &prepared.projection,
+            &post_scan_conjuncts,
             &prepared.physical_file_schema,
             reader_metadata.parquet_schema(),
             &prepared.output_schema,
             prepared.virtual_state.as_deref(),
+            &prepared.file_metrics,
         )?;
 
-        let (decoder, rg_plan) = {
-            let pushdown_predicate = prepared
-                .pushdown_filters
-                .then_some(prepared.predicate.as_ref())
-                .flatten();
-            let mut row_filter_generator = RowFilterGenerator::new(
-                pushdown_predicate,
-                &prepared.physical_file_schema,
-                file_metadata.as_ref(),
-                prepared.reorder_predicates,
-                &prepared.file_metrics,
-            );
+        // Decoder-local LIMIT is only safe when no post-decode work can reject
+        // rows. A post-scan filter can — so when one is present the limit is
+        // enforced at the stream level via `remaining_limit` and kept out of
+        // the decoder; otherwise it is pushed into the decoder.
+        let has_post_scan_filter = decoder_projection.has_post_scan_filter();
+        let decoder_limit = prepared.limit.filter(|_| !has_post_scan_filter);
+        let remaining_limit = prepared.limit.filter(|_| has_post_scan_filter);
 
+        let (decoder, rg_plan) = {
             // Build the prepared access plan first — `prepare_access_plan` may
             // call `reorder_by_statistics` (for `sort_order_for_reorder`) and
             // `reverse` (for `reverse_row_groups`), both of which mutate
@@ -1460,7 +1526,7 @@ impl RowGroupsPrunedParquetOpen {
                 batch_size: prepared.batch_size,
                 arrow_reader_metrics: &arrow_reader_metrics,
                 force_filter_selections: prepared.force_filter_selections,
-                decoder_limit: prepared.limit,
+                decoder_limit,
             };
 
             let prepared_access_plan = prepare_access_plan(access_plan)?;
@@ -1527,6 +1593,10 @@ impl RowGroupsPrunedParquetOpen {
             .row_groups_pruned_dynamic_filter
             .clone();
 
+        // Captured before `decoder_projection` is moved into the stream state.
+        let post_scan_filtered = decoder_projection.has_post_scan_filter();
+        let filtered_schema = Arc::clone(decoder_projection.filtered_schema());
+
         let stream = PushDecoderStreamState {
             decoder: Some(decoder),
             active_reader: None,
@@ -1539,6 +1609,12 @@ impl RowGroupsPrunedParquetOpen {
             baseline_metrics: prepared.baseline_metrics,
             row_group_pruner,
             row_groups_pruned_dynamic,
+            remaining_limit,
+            // A post-scan filter can leave only a few rows per decoded batch;
+            // reassemble them so the operator above sees full-size batches.
+            batch_coalescer: post_scan_filtered
+                .then(|| BatchCoalescer::new(filtered_schema, prepared.batch_size)),
+            flushed: false,
         }
         .into_stream();
 
@@ -2427,14 +2503,17 @@ mod test {
                 .build()
         };
 
-        // A filter on "a" should not exclude any rows even if it matches the data
+        // A filter on "a" cannot be excluded by file-level stats (no stats on
+        // column 0). The scan now accepts the filter and applies it post-scan
+        // (in-scan equivalent of `FilterExec`), so only the matching row
+        // survives.
         let expr = col("a").eq(lit(1));
         let predicate = logical2physical(&expr, &schema);
         let opener = make_opener(predicate);
         let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
-        assert_eq!(num_rows, 3);
+        assert_eq!(num_rows, 1);
 
         // A filter on `b = 5.0` should exclude all rows
         let expr = col("b").eq(lit(ScalarValue::Float32(Some(5.0))));
@@ -2555,14 +2634,16 @@ mod test {
                 .build()
         };
 
-        // Filter should match the partition value and file statistics
+        // Filter should match the partition value and file statistics (i.e. no
+        // file-level pruning). The scan now accepts the filter and applies it
+        // post-scan, leaving only the single row where `b = 1.0`.
         let expr = col("part").eq(lit(1)).and(col("b").eq(lit(1.0)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
         let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
-        assert_eq!(num_rows, 3);
+        assert_eq!(num_rows, 1);
 
         // Should prune based on partition value but not file statistics
         let expr = col("part").eq(lit(2)).and(col("b").eq(lit(1.0)));
@@ -2783,10 +2864,12 @@ mod test {
             Ok(count_batches_and_rows(stream).await)
         };
 
+        // The scan accepts the `a = 1` filter and applies it (RowFilter or
+        // post-scan), so only the matching row survives (data is a=[1, 2, 2]).
         let (num_batches, num_rows) =
             query_file(schema.clone()).await.expect("query_file");
         assert_eq!(num_batches, 1);
-        assert_eq!(num_rows, 3);
+        assert_eq!(num_rows, 1);
 
         let mismatching_schema = Schema::new(vec![
             Field::new("a", DataType::Int32, true),
@@ -3149,13 +3232,17 @@ mod test {
         )
         .await;
 
+        // The scan now always applies the predicate (RowFilter or post-scan),
+        // so both paths return the same matching rows. The page index only
+        // affects IO — it decides whether the 90 non-matching rows are
+        // physically read before being rejected.
         assert_eq!(
             rows_with_page_index, 10,
             "page index should prune 9 of 10 pages"
         );
         assert_eq!(
-            rows_without_page_index, 100,
-            "without page index all rows are returned"
+            rows_without_page_index, 10,
+            "without page index the post-scan filter still rejects non-matching rows"
         );
     }
 
@@ -3420,6 +3507,228 @@ mod test {
 
         let values = collect_int32_values(open_file(&opener, file).await.unwrap()).await;
         assert_eq!(values, vec![7, 4, 5, 6, 3]);
+    }
+
+    /// End-to-end regression test for the "drop-on-floor" bug fixed by
+    /// `build_row_filter` now returning rejected conjuncts and the opener
+    /// routing them to the post-scan filter.
+    ///
+    /// Setup: a parquet file with a struct column where some rows have a NULL
+    /// struct. Predicate `s IS NOT NULL` is set on the source with
+    /// `pushdown_filters = true`. `ParquetSource::try_pushdown_filters` would
+    /// have already removed the parent `FilterExec` (the conjunct is pushable
+    /// at table schema level). Inside `build_row_filter`,
+    /// `FilterCandidateBuilder::build` rejects the whole-struct reference as
+    /// non-primitive.
+    ///
+    /// Before the fix the rejected conjunct was silently dropped, leaving the
+    /// scan with no `RowFilter` and no post-scan filter, so every row was
+    /// returned — i.e. the predicate was relaxed and the query returned wrong
+    /// results. After the fix the conjunct is surfaced and applied as a
+    /// post-scan filter, so only the rows with a non-null struct survive.
+    /// A selective post-scan filter must not fragment the output stream.
+    ///
+    /// The decoder hands back one batch per `batch_size` rows; a predicate
+    /// matching a single row in each of them used to be emitted as one
+    /// sliver-sized batch per decoded batch, leaving every operator above the
+    /// scan to pay per-batch overhead on batches of one row. `FilterExec`
+    /// coalesces for exactly this reason, and the in-scan filter now does too.
+    #[tokio::test]
+    async fn selective_post_scan_filter_coalesces_output_batches() {
+        use arrow::array::Int32Array;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        // 8 write batches of 1000 rows. The default test `batch_size` is 1024,
+        // so the decoder yields several batches regardless of how the writer
+        // chunked the data.
+        let batches: Vec<RecordBatch> = (0..8)
+            .map(|chunk: i32| {
+                let base = chunk * 1000;
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(Int32Array::from(
+                        (base..base + 1000).collect::<Vec<i32>>(),
+                    ))],
+                )
+                .unwrap()
+            })
+            .collect();
+
+        let data_size =
+            write_parquet_batches(Arc::clone(&store), "coalesce.parquet", batches, None)
+                .await;
+        let file = PartitionedFile::new("coalesce.parquet".to_string(), data_size as u64);
+
+        // One match per ~1024-row decoded batch, spread across the file, so an
+        // uncoalesced stream would emit one batch per match.
+        let matches = [0i32, 1500, 3000, 4500, 6000, 7500];
+        let predicate = logical2physical(
+            &matches
+                .iter()
+                .map(|v| col("id").eq(lit(*v)))
+                .reduce(|acc, e| acc.or(e))
+                .unwrap(),
+            &schema,
+        );
+
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(predicate)
+            // pushdown_filters=false routes the whole predicate to the
+            // post-scan filter — the path this test is about.
+            .with_pushdown_filters(false)
+            .build();
+
+        let stream = open_file(&morselizer, file).await.unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+
+        assert_eq!(num_rows, matches.len(), "every match must survive");
+        // All survivors fit in one target-size batch. Without coalescing this
+        // was one batch per match.
+        assert_eq!(
+            num_batches, 1,
+            "expected the survivors to be coalesced into a single batch, got \
+             {num_batches} batches for {num_rows} rows"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejected_struct_conjunct_runs_post_scan_not_dropped() {
+        use arrow::array::{Int32Array, StringArray, StructArray};
+        use arrow::buffer::NullBuffer;
+        use arrow::datatypes::Fields;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        // Schema: id (Int32), s (Struct{value: Int32, label: Utf8}).
+        let struct_fields: Fields = vec![
+            Arc::new(Field::new("value", DataType::Int32, true)),
+            Arc::new(Field::new("label", DataType::Utf8, true)),
+        ]
+        .into();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("s", DataType::Struct(struct_fields.clone()), true),
+        ]));
+
+        // Data: rows 0 and 2 have a non-null struct, row 1 is null.
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StructArray::new(
+                    struct_fields,
+                    vec![
+                        Arc::new(Int32Array::from(vec![Some(10), None, Some(30)])) as _,
+                        Arc::new(StringArray::from(vec![Some("a"), None, Some("c")]))
+                            as _,
+                    ],
+                    Some(NullBuffer::from(vec![true, false, true])),
+                )),
+            ],
+        )
+        .unwrap();
+
+        let data_size = write_parquet_batches(
+            Arc::clone(&store),
+            "rejected.parquet",
+            vec![batch],
+            None,
+        )
+        .await;
+
+        let file = PartitionedFile::new("rejected.parquet".to_string(), data_size as u64);
+
+        // `s IS NOT NULL` references a whole struct, which `PushdownChecker`
+        // flags as non-primitive — `FilterCandidateBuilder::build` returns
+        // `Ok(None)` and the conjunct lands in `rejected`.
+        let predicate = logical2physical(&col("s").is_not_null(), &schema);
+
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(predicate)
+            // The RowFilter path: emulates the post-`try_pushdown_filters`
+            // state where the parent `FilterExec` has already been removed
+            // and the scan owns the conjunct.
+            .with_pushdown_filters(true)
+            .build();
+
+        let stream = open_file(&morselizer, file).await.unwrap();
+        let (_, rows) = count_batches_and_rows(stream).await;
+
+        // 2 rows have a non-null struct. Before the fix this returned 3
+        // (the conjunct was silently dropped).
+        assert_eq!(
+            rows, 2,
+            "expected 2 rows with non-null struct; the rejected conjunct must \
+             be applied post-scan, not silently dropped"
+        );
+    }
+
+    /// Build a 10-row `id` file plus the predicate
+    /// `id > 3 AND DynamicFilter[id > 7]`, and return the rows the scan emits
+    /// at the given `pushdown_filters` setting.
+    async fn rows_for_static_and_dynamic_predicate(pushdown_filters: bool) -> usize {
+        use arrow::array::Int32Array;
+        use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from((0..10).collect::<Vec<i32>>()))],
+        )
+        .unwrap();
+        let data_size =
+            write_parquet_batches(Arc::clone(&store), "dyn.parquet", vec![batch], None)
+                .await;
+        let file = PartitionedFile::new("dyn.parquet".to_string(), data_size as u64);
+
+        let dynamic = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("id", 0))],
+            logical2physical(&col("id").gt(lit(7i32)), &schema),
+        )) as Arc<dyn PhysicalExpr>;
+        let predicate = datafusion_physical_expr::conjunction([
+            logical2physical(&col("id").gt(lit(3i32)), &schema),
+            dynamic,
+        ]);
+
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(predicate)
+            .with_pushdown_filters(pushdown_filters)
+            .build();
+
+        let stream = open_file(&morselizer, file).await.unwrap();
+        count_batches_and_rows(stream).await.1
+    }
+
+    /// With pushdown disabled a dynamic filter is pruning-only: the scan
+    /// applies the static conjunct row-wise and leaves the dynamic one to the
+    /// operator that produced it. `id > 3` keeps 6 of the 10 rows; if the
+    /// dynamic filter were also applied only 2 would survive.
+    ///
+    /// This is what keeps the expensive shape of a real dynamic filter (a
+    /// `CASE` over per-partition hash probes) off every decoded row, and it
+    /// mirrors what the scan did before it started owning filters.
+    #[tokio::test]
+    async fn dynamic_conjunct_is_pruning_only_without_pushdown() {
+        assert_eq!(rows_for_static_and_dynamic_predicate(false).await, 6);
+    }
+
+    /// With pushdown enabled the dynamic filter is a `RowFilter`
+    /// `ArrowPredicate`, evaluated only against rows the cheaper conjuncts
+    /// already kept — so it is applied and 2 rows survive.
+    #[tokio::test]
+    async fn dynamic_conjunct_is_applied_with_pushdown() {
+        assert_eq!(rows_for_static_and_dynamic_predicate(true).await, 2);
     }
 
     /// Helpers for tests that exercise parquet virtual columns
@@ -3887,9 +4196,12 @@ mod test {
 
         #[tokio::test]
         async fn test_row_index_predicate_allowed_when_pushdown_disabled() {
-            // Guards the `pushdown_filters=false` path: the predicate is only
-            // used for stats pruning (a no-op for row_number) and must not
-            // trip the virtual-column check.
+            // Guards the `pushdown_filters=false` path with a virtual-column
+            // predicate set directly on the opener: it must not trip the
+            // virtual-column check in the read-plan mask. With always-accept
+            // semantics the predicate runs as an in-scan post-scan filter
+            // (evaluated against the reader-appended `row_number` column), so
+            // only the single matching row survives.
             let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
             let expr = col("row_number").eq(lit(2i64));
             let (morselizer, file) =
@@ -3899,7 +4211,7 @@ mod test {
 
             let stream = open_file(&morselizer, file).await.unwrap();
             let (_batches, rows) = count_batches_and_rows(stream).await;
-            assert_eq!(rows, 5);
+            assert_eq!(rows, 1);
         }
     }
 }

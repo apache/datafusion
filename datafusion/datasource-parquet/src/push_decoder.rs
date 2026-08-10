@@ -39,6 +39,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
+use arrow::compute::BatchCoalescer;
 use arrow::datatypes::SchemaRef;
 use futures::StreamExt;
 use futures::stream::BoxStream;
@@ -60,7 +61,7 @@ use datafusion_physical_plan::metrics::{BaselineMetrics, Count, Gauge};
 use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
 
 use crate::access_plan::PreparedAccessPlan;
-use crate::decoder_projection::DecoderProjection;
+use crate::decoder_projection::{DecoderProjection, PostScanSelection};
 use crate::row_group_filter::RowGroupPruningStatistics;
 
 /// Shared options applied to the [`ParquetPushDecoderBuilder`] for a file
@@ -272,6 +273,26 @@ pub(crate) struct PushDecoderStreamState {
     pub(crate) row_group_pruner: Option<RowGroupPruner>,
     /// Count of row groups skipped at runtime by [`Self::row_group_pruner`].
     pub(crate) row_groups_pruned_dynamic: Count,
+    /// Stream-level remaining row limit, enforced *after* the post-scan
+    /// filter. `Some` only when the file has a post-scan filter (which makes
+    /// the decoder-local `with_limit` unsafe — the decoder would short-circuit
+    /// before the filter rejects enough rows); `None` otherwise, in which case
+    /// the limit is enforced inside the decoder via `DecoderBuilderConfig`.
+    pub(crate) remaining_limit: Option<usize>,
+    /// Reassembles post-filter batches back to the target batch size.
+    ///
+    /// `Some` exactly when the file has a post-scan filter. A selective
+    /// predicate leaves only a handful of rows per decoded batch (TPC-H q3
+    /// yields ~41 rows from each 8192-row batch), and without this every one
+    /// of those slivers would be handed to the operator above as its own
+    /// batch. `FilterExec` coalesces for the same reason. `None` when there is
+    /// no post-scan filter: decoder batches are already full size, so routing
+    /// them through the coalescer would only add a copy.
+    pub(crate) batch_coalescer: Option<BatchCoalescer>,
+    /// Set once [`BatchCoalescer::finish_buffered_batch`] has been called, so
+    /// end-of-input flushing happens exactly once no matter which terminal
+    /// path reached it.
+    pub(crate) flushed: bool,
 }
 
 impl PushDecoderStreamState {
@@ -300,12 +321,75 @@ impl PushDecoderStreamState {
     /// with `unfold`'s ownership across yield points.
     async fn transition(mut self) -> Option<(Result<RecordBatch>, Self)> {
         loop {
+            // Hand out anything the coalescer has already assembled into a
+            // full-size batch before doing more decoding work.
+            if self
+                .batch_coalescer
+                .as_ref()
+                .is_some_and(BatchCoalescer::has_completed_batch)
+            {
+                return self.emit_completed();
+            }
+
+            // The stream-level limit (set only when a post-scan filter made
+            // the decoder-local limit unsafe) is exhausted — stop. Anything
+            // still buffered is beyond the limit, so it is dropped rather
+            // than flushed.
+            if self.remaining_limit == Some(0) {
+                return None;
+            }
+
             // Step 1: drain a batch from the active reader if any.
             if let Some(reader) = self.active_reader.as_mut() {
                 match reader.next() {
                     Some(Ok(batch)) => {
                         let mut timer = self.baseline_metrics.elapsed_compute().timer();
                         self.copy_arrow_reader_metrics();
+
+                        // Apply the in-scan post-scan filter (if any). The
+                        // decoder's projection mask already covers the
+                        // predicate's columns; the filter's compact-once loop
+                        // needs them for every conjunct, but once it is done
+                        // those the projector does not also read are dropped by
+                        // `narrow` before the residual mask is applied, so we
+                        // never filter a column just to discard it. Survivors go
+                        // into the coalescer rather than straight downstream, so
+                        // a selective predicate does not fragment the stream into
+                        // slivers; the limit and the projection are applied to
+                        // the full-size batches the coalescer hands back.
+                        if let Some(filter) = self.decoder_projection.post_scan_filter() {
+                            let pushed = filter.evaluate(batch).and_then(|selection| {
+                                let (batch, mask) = match selection {
+                                    PostScanSelection::Empty => return Ok(()),
+                                    PostScanSelection::Rows { batch, mask } => {
+                                        (batch, mask)
+                                    }
+                                };
+                                let narrowed = self.decoder_projection.narrow(batch)?;
+                                let coalescer = self
+                                    .batch_coalescer
+                                    .as_mut()
+                                    .expect("coalescer present with a post-scan filter");
+                                match mask {
+                                    Some(mask) => {
+                                        coalescer
+                                            .push_batch_with_filter(narrowed, &mask)?;
+                                    }
+                                    None => coalescer.push_batch(narrowed)?,
+                                }
+                                Ok(())
+                            });
+                            timer.stop();
+                            drop(timer);
+                            if let Err(e) = pushed {
+                                return Some((Err(e), self));
+                            }
+                            continue;
+                        }
+
+                        // No post-scan filter: the decoder's batches are
+                        // already the right shape, so project and yield
+                        // directly. The limit was pushed into the decoder.
                         let result = self.project_batch(&batch);
                         timer.stop();
                         drop(timer);
@@ -358,7 +442,7 @@ impl PushDecoderStreamState {
                 }
                 if pruned_count > 0 {
                     if self.rg_plan.is_empty() {
-                        return None;
+                        return self.finish();
                     }
                     let decoder = self.decoder.take().expect("decoder present");
                     let new_indices: Vec<usize> =
@@ -406,7 +490,7 @@ impl PushDecoderStreamState {
                     self.rg_plan.pop_front();
                     self.active_reader = Some(reader);
                 }
-                Ok(DecodeResult::Finished) => return None,
+                Ok(DecodeResult::Finished) => return self.finish(),
                 Err(e) => {
                     return Some((Err(DataFusionError::from(e)), self));
                 }
@@ -423,6 +507,54 @@ impl PushDecoderStreamState {
         if let Some(v) = self.arrow_reader_metrics.records_read_from_cache() {
             self.predicate_cache_records.set(v);
         }
+    }
+
+    /// Pop one assembled batch from the coalescer, apply the stream-level
+    /// limit, and project it onto the scan's output schema.
+    ///
+    /// Returns `None` only when the coalescer has nothing left, which ends the
+    /// stream.
+    fn emit_completed(mut self) -> Option<(Result<RecordBatch>, Self)> {
+        let batch = self.batch_coalescer.as_mut()?.next_completed_batch()?;
+
+        let mut timer = self.baseline_metrics.elapsed_compute().timer();
+        // Enforce the stream-level limit here rather than in the decoder: the
+        // post-scan filter rejects rows the decoder has already counted, so a
+        // decoder-local limit would stop short.
+        let batch = if let Some(remaining) = self.remaining_limit {
+            if batch.num_rows() > remaining {
+                self.remaining_limit = Some(0);
+                batch.slice(0, remaining)
+            } else {
+                self.remaining_limit = Some(remaining - batch.num_rows());
+                batch
+            }
+        } else {
+            batch
+        };
+        let result = self.project_batch(&batch);
+        timer.stop();
+        drop(timer);
+        Some((result, self))
+    }
+
+    /// End of input: flush the partial batch the coalescer is still holding,
+    /// then drain it one batch at a time. Idempotent — every terminal path in
+    /// `transition` routes through here, but the flush happens once.
+    fn finish(mut self) -> Option<(Result<RecordBatch>, Self)> {
+        self.batch_coalescer.as_ref()?;
+        if !self.flushed {
+            self.flushed = true;
+            if let Err(e) = self
+                .batch_coalescer
+                .as_mut()
+                .expect("coalescer checked present")
+                .finish_buffered_batch()
+            {
+                return Some((Err(DataFusionError::from(e)), self));
+            }
+        }
+        self.emit_completed()
     }
 
     fn project_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
