@@ -48,7 +48,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::{Result, internal_datafusion_err, not_impl_datafusion_err};
+use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
@@ -1113,11 +1113,6 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
                 Arc::clone(child_field),
                 child,
             ))),
-            // Replicate the generic fallback branch below, because we're in a match
-            // and `if let` can't be used due to MSRV.
-            Err(_) if RowsGroupColumn::supports_type(data_type) => {
-                Some(Box::new(RowsGroupColumn::try_new(data_type.clone())?))
-            }
             Err(_) => None,
         },
         DataType::LargeList(child_field) => match make_group_column(child_field.as_ref())
@@ -1126,26 +1121,22 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
                 Arc::clone(child_field),
                 child,
             ))),
-            // Replicate the generic fallback branch below, because we're in a match
-            // and `if let` can't be used due to MSRV.
-            Err(_) if RowsGroupColumn::supports_type(data_type) => {
-                Some(Box::new(RowsGroupColumn::try_new(data_type.clone())?))
-            }
             Err(_) => None,
         },
+        _ => None,
+    };
+    match builder {
+        Some(b) => Ok(b),
         // Generic fallback for nested types (Struct / FixedSizeList, etc.) that
         // lack a type-specialized builder but can be encoded by arrow's row
         // format. This is what lets a mixed schema keep the column-wise fast
         // path for its native columns instead of dropping the whole key onto
         // `GroupValuesRows`.
-        dt if dt.is_nested() && RowsGroupColumn::supports_type(dt) => {
-            Some(Box::new(RowsGroupColumn::try_new(dt.clone())?))
+        None if data_type.is_nested() && RowsGroupColumn::supports_type(data_type) => {
+            Ok(Box::new(RowsGroupColumn::try_new(data_type.clone())?))
         }
-        _ => None,
-    };
-    builder.ok_or_else(|| {
-        not_impl_datafusion_err!("{data_type} not supported in GroupValuesColumn")
-    })
+        None => not_impl_err!("{data_type} not supported in GroupValuesColumn"),
+    }
 }
 
 impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
