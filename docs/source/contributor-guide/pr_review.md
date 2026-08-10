@@ -156,7 +156,12 @@ Guidelines for evaluating tests:
 Check that:
 
 1. The code is clear and fits the style of the existing codebase.
-2. New APIs are consistent with existing public APIs and patterns; where a
+2. New functions and tests are placed near similar functions and
+   tests. For example helper functions should be defined close to where they are used, 
+   and new tests should be placed in the same module as the code they test.
+   SLT tests should be placed in an existing .slt file with related functionality, 
+   unless the new tests are large enough to justify their own file.
+3. New APIs are consistent with existing public APIs and patterns; where a
    similar mechanism already exists, the PR should extend it rather than
    introduce a parallel one.
 3. Any changes to the public API follow the [API health policy].
