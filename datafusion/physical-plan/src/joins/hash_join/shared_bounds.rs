@@ -31,7 +31,7 @@ use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{
     HashExpr, HashTableLookupExpr, SeededRandomState,
 };
-use crate::ordering::build_lexicographic_filter;
+use crate::repartition::RangeExpr;
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
@@ -42,8 +42,7 @@ use datafusion_physical_expr::expressions::{
     BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr, IsNullExpr, lit,
 };
 use datafusion_physical_expr::{
-    PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, RangePartitioning,
-    ScalarFunctionExpr,
+    PhysicalExpr, PhysicalExprRef, RangePartitioning, ScalarFunctionExpr,
 };
 
 use parking_lot::Mutex;
@@ -679,41 +678,37 @@ impl SharedBuildAccumulator {
                         partition_filters.len(),
                         range_partitioning.partition_count()
                     );
-                    assert_eq!(self.on_right.len(), range_partitioning.ordering().len());
-                    let sort_exprs = self
-                        .on_right
-                        .iter()
-                        .zip(range_partitioning.ordering())
-                        .map(|(expr, sort_expr)| {
-                            PhysicalSortExpr::new(Arc::clone(expr), sort_expr.options)
-                        })
-                        .collect::<Vec<_>>();
+                    let routing_range_expr = Arc::new(RangeExpr::try_new(
+                        self.on_right.clone(),
+                        range_partitioning,
+                    )?)
+                        as Arc<dyn PhysicalExpr>;
                     let else_expr = partition_filters
                         .pop()
                         .expect("Range partitioning always has at least one partition");
-                    // CASE evaluates in order
-                    //
-                    // CASE
-                    //   WHEN key <range split[0] THEN F0
-                    //   WHEN key <range split[1] THEN F1
+
+                    // CASE range_partition(key)
+                    //   WHEN 0 THEN F0
+                    //   WHEN 1 THEN F1
                     //   ...
                     //   ELSE Fn
                     // END
-                    let when_then_expr = range_partitioning
-                        .split_points()
-                        .iter()
-                        .zip(partition_filters)
-                        .map(|(split_point, then_expr)| {
-                            let when_expr = build_lexicographic_filter(
-                                &sort_exprs,
-                                split_point.values(),
-                            )?;
-                            Ok((when_expr, then_expr))
+                    let when_then_expr = partition_filters
+                        .into_iter()
+                        .enumerate()
+                        .map(|(partition_id, then_expr)| {
+                            (
+                                lit(ScalarValue::UInt64(Some(partition_id as u64))),
+                                then_expr,
+                            )
                         })
-                        .collect::<Result<Vec<_>>>()?;
+                        .collect();
 
-                    Arc::new(CaseExpr::try_new(None, when_then_expr, Some(else_expr))?)
-                        as Arc<dyn PhysicalExpr>
+                    Arc::new(CaseExpr::try_new(
+                        Some(routing_range_expr),
+                        when_then_expr,
+                        Some(else_expr),
+                    )?) as Arc<dyn PhysicalExpr>
                 } else {
                     // Hash partitioning
                     let routing_hash_expr = Arc::new(HashExpr::new(
@@ -844,11 +839,14 @@ pub(super) fn completed_partitions_for_test(acc: &SharedBuildAccumulator) -> usi
 mod tests {
     use super::*;
 
-    use arrow::array::{ArrayRef, BooleanArray, Int32Array};
+    use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int32Array};
     use arrow::compute::SortOptions;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::SplitPoint;
-    use datafusion_physical_expr::expressions::{Column, Literal};
+    use datafusion_physical_expr::{
+        PhysicalSortExpr,
+        expressions::{Column, Literal},
+    };
 
     fn test_on_right() -> Vec<PhysicalExprRef> {
         vec![Arc::new(Column::new("probe_key", 0))]
@@ -1089,7 +1087,7 @@ mod tests {
     }
 
     #[test]
-    fn partitioned_range_dynamic_filter_routes_with_searched_case() -> Result<()> {
+    fn partitioned_range_dynamic_filter_routes_with_range_expr() -> Result<()> {
         let mut acc = make_partitioned_expr_accumulator_for_test(4);
         acc.probe_range_partitioning = Some(RangePartitioning::try_new(
             [PhysicalSortExpr::new(
@@ -1114,8 +1112,10 @@ mod tests {
         let expr = current_expr(&acc);
         let case = case_expr(&expr);
         assert!(
-            case.expr().is_none(),
-            "Range routing must use searched CASE"
+            case.expr()
+                .and_then(|expr| expr.downcast_ref::<RangeExpr>())
+                .is_some(),
+            "Range routing must use RangeExpr"
         );
         assert_eq!(case.when_then_expr().len(), 3);
 
@@ -1190,7 +1190,7 @@ mod tests {
 
         let expr = current_expr(&acc);
         let case = case_expr(&expr);
-        assert!(case.expr().is_none());
+        assert!(case.expr().is_some());
         assert_eq!(case.when_then_expr().len(), 3);
 
         let batch = RecordBatch::try_new(
@@ -1229,6 +1229,51 @@ mod tests {
                 vec![false, true, true, false, false, false, true, true,]
             )
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn partitioned_range_dynamic_filter_preserves_signed_zero_routing() -> Result<()> {
+        let probe_schema = Arc::new(Schema::new(vec![Field::new(
+            "probe_key",
+            DataType::Float64,
+            false,
+        )]));
+        let on_right: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("probe_key", 0))];
+        let mut acc = make_accumulator_for_test(
+            AccumulatedBuildData::Partitioned {
+                partitions: vec![PartitionStatus::Pending; 2],
+                completed_partitions: 0,
+            },
+            on_right,
+        );
+        acc.probe_schema = Arc::clone(&probe_schema);
+        acc.probe_range_partitioning = Some(RangePartitioning::try_new(
+            [PhysicalSortExpr::new(
+                Arc::clone(&acc.on_right[0]),
+                SortOptions::default(),
+            )]
+            .into(),
+            vec![SplitPoint::new(vec![ScalarValue::Float64(Some(0.0))])],
+        )?);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            PartitionStatus::CanceledUnknown,
+            reported(PushdownStrategy::Empty, no_bounds()),
+        ]))?;
+
+        let expr = current_expr(&acc);
+        let batch = RecordBatch::try_new(
+            probe_schema,
+            vec![Arc::new(Float64Array::from(vec![-0.0, 0.0]))],
+        )?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = result
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .expect("dynamic filter should evaluate to BooleanArray");
+        assert_eq!(result, &BooleanArray::from(vec![true, false]));
 
         Ok(())
     }

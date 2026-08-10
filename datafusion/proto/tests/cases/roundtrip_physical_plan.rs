@@ -83,7 +83,7 @@ use datafusion::physical_plan::metrics::MetricCategory;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::proto::ExecutionPlanEncodeCtx;
-use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::repartition::{RangeExpr, RepartitionExec};
 use datafusion::physical_plan::scalar_subquery::{
     ScalarSubqueryExec, ScalarSubqueryLink,
 };
@@ -3703,6 +3703,58 @@ fn roundtrip_hash_expr() -> Result<()> {
         "Debug string missing seeds: {filter:?}"
     );
     roundtrip_test(filter)
+}
+
+#[test]
+fn roundtrip_range_expr() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Float64, false),
+        Field::new("b", DataType::Float64, false),
+    ]));
+    let options = [SortOptions::new(true, true), SortOptions::new(false, false)];
+    let range_partitioning = RangePartitioning::try_new(
+        [
+            PhysicalSortExpr::new(col("a", &schema)?, options[0]),
+            PhysicalSortExpr::new(col("b", &schema)?, options[1]),
+        ]
+        .into(),
+        vec![SplitPoint::new(vec![
+            ScalarValue::Float64(Some(0.0)),
+            ScalarValue::Float64(Some(1.0)),
+        ])],
+    )?;
+    let range_expr: Arc<dyn PhysicalExpr> = Arc::new(RangeExpr::try_new(
+        // Expression remapping may produce duplicate children. Preserve both
+        // so their sort options stay aligned with the split-point values.
+        vec![col("a", &schema)?, col("a", &schema)?],
+        &range_partitioning,
+    )?);
+    let filter_expr = binary(range_expr, Operator::Eq, lit(0u64), &schema)?;
+    let plan = Arc::new(FilterExec::try_new(
+        filter_expr,
+        Arc::new(EmptyExec::new(Arc::clone(&schema))),
+    )?);
+
+    let ctx = SessionContext::new();
+    let result = roundtrip_test_and_return(
+        plan,
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let filter = result.downcast_ref::<FilterExec>().unwrap();
+    let binary = filter.predicate().downcast_ref::<BinaryExpr>().unwrap();
+    let range_expr = binary.left().downcast_ref::<RangeExpr>().unwrap();
+    assert_eq!(range_expr.split_points(), range_partitioning.split_points());
+    assert_eq!(range_expr.sort_options(), &options);
+    let children = range_expr.children();
+    assert_eq!(children.len(), 2);
+    for child in children {
+        let column = child.downcast_ref::<Column>().unwrap();
+        assert_eq!((column.name(), column.index()), ("a", 0));
+    }
+
+    Ok(())
 }
 
 #[test]
