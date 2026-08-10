@@ -1324,6 +1324,14 @@ message HashJoinExecNode {
   bool null_aware = 10;
   // Optional dynamic filter expression for pushing down to the probe side.
   PhysicalExprNode dynamic_filter = 11;
+  // Optional row limit pushed into the join by the `limit_pushdown` rule.
+  //
+  // This is presence-tracked (`optional`) on purpose: messages produced by
+  // versions predating this field carry no `fetch` at all, and a plain proto3
+  // scalar would decode that absence as `0`, i.e. "fetch 0 rows", silently
+  // turning old plans into empty results. With `optional`, absent decodes to
+  // `None`, which is the correct reading of an older message.
+  optional uint64 fetch = 12;
 }
 
 enum StreamPartitionMode {

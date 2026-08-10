@@ -40,7 +40,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
@@ -140,6 +140,34 @@ impl ProjectionExec {
         let expr_arc = expr.into_iter().map(Into::into).collect::<Arc<_>>();
         let projection = ProjectionExprs::from_expressions(expr_arc);
         let projector = projection.make_projector(&input_schema)?;
+        Self::try_from_projector(projector, input)
+    }
+
+    /// Create a projection using field and schema metadata from
+    /// `projected_schema`.
+    ///
+    /// Field names, data types, and nullability are still derived from the physical
+    /// projection expressions and the input plan; only field and schema metadata are
+    /// taken from `projected_schema`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the projection cannot be applied to the input plan, or if
+    /// `projected_schema` has a different number of fields than the projection.
+    pub fn try_new_with_schema_metadata<I, E>(
+        expr: I,
+        input: Arc<dyn ExecutionPlan>,
+        projected_schema: &Schema,
+    ) -> Result<Self>
+    where
+        I: IntoIterator<Item = E>,
+        E: Into<ProjectionExpr>,
+    {
+        let input_schema = input.schema();
+        let expr_arc = expr.into_iter().map(Into::into).collect::<Arc<_>>();
+        let projection = ProjectionExprs::from_expressions(expr_arc);
+        let projector = projection
+            .make_projector_with_schema_metadata(&input_schema, projected_schema)?;
         Self::try_from_projector(projector, input)
     }
 
@@ -1394,6 +1422,46 @@ mod tests {
     use datafusion_physical_expr::expressions::{
         BinaryExpr, Column, DynamicFilterPhysicalExpr, Literal, binary, col, lit,
     };
+
+    #[test]
+    fn test_try_new_with_schema_metadata_only_replaces_metadata() -> Result<()> {
+        let input_schema = Arc::new(Schema::new(vec![Field::new(
+            "input",
+            DataType::Int32,
+            false,
+        )]));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(input_schema));
+        let field_metadata =
+            HashMap::from([("field-key".to_string(), "field-value".to_string())]);
+        let schema_metadata =
+            HashMap::from([("schema-key".to_string(), "schema-value".to_string())]);
+        let metadata_schema = Schema::new_with_metadata(
+            vec![
+                Field::new("ignored", DataType::Utf8, true)
+                    .with_metadata(field_metadata.clone()),
+            ],
+            schema_metadata.clone(),
+        );
+
+        let projection = ProjectionExec::try_new_with_schema_metadata(
+            [ProjectionExpr {
+                expr: Arc::new(Column::new("input", 0)),
+                alias: "output".to_string(),
+            }],
+            input,
+            &metadata_schema,
+        )?;
+
+        let expected_schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("output", DataType::Int32, false)
+                    .with_metadata(field_metadata),
+            ],
+            schema_metadata,
+        ));
+        assert_eq!(projection.schema(), expected_schema);
+        Ok(())
+    }
 
     #[test]
     fn test_collect_column_indices() -> Result<()> {

@@ -32,6 +32,9 @@ use datafusion_expr::dml::InsertOp;
 use async_trait::async_trait;
 use object_store::ObjectStore;
 
+#[cfg(feature = "proto")]
+mod proto;
+
 /// Determines how `FileSink` output paths are interpreted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FileOutputMode {
