@@ -939,6 +939,21 @@ config_namespace! {
         /// tables with a highly-selective join filter, but is also slightly slower.
         pub enforce_batch_size_in_joins: bool, default = false
 
+        /// (experimental) When enabled, `FilterExec` adaptively reorders the
+        /// conjuncts of a conjunctive predicate at runtime. It measures each
+        /// conjunct's selectivity and evaluation cost on the rows that reach it
+        /// and runs the conjuncts that discard the most rows per unit of CPU
+        /// time first, so cheap-and-selective predicates gate expensive ones.
+        /// This never changes query results, but it is off by default because
+        /// it can change observable side effects of fallible predicates (even
+        /// when no reorder is adopted): while measuring, and after a reorder,
+        /// conjuncts are evaluated only on the rows that survived the conjuncts
+        /// before them, so an error the fused predicate would have raised on an
+        /// already-filtered row (e.g. `b <> 0 AND 1/b > 2` evaluating `1/b` on
+        /// every row) may not occur. Predicates containing volatile expressions
+        /// are never reordered.
+        pub adaptive_filter_reordering: bool, default = false
+
         /// Size (bytes) of data buffer DataFusion uses when writing output files.
         /// This affects the size of the data chunks that are uploaded to remote
         /// object stores (e.g. AWS S3). If very large (>= 100 GiB) output files are being

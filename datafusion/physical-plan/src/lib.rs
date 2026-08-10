@@ -64,6 +64,7 @@ mod render_tree;
 mod topk;
 mod visitor;
 
+mod adaptive_filter;
 pub mod aggregates;
 pub mod analyze;
 pub mod async_func;
