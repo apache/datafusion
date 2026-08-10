@@ -186,9 +186,6 @@ fn test_pushdown_into_scan_with_config_options() {
 // distinction this test exercises is not reachable via SQL.
 #[tokio::test]
 async fn test_static_filter_pushdown_through_hash_join() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     // Create build side with limited values
     let build_batches = vec![
         record_batch!(
@@ -1011,9 +1008,6 @@ async fn optimize_and_collect_pushdown_plan(
 // per-partition CASE filter this test exercises is not reachable via SQL.
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     // Rough sketch of the MRE we're trying to recreate:
     // COPY (select i as k from generate_series(1, 10000000) as t(i))
     // TO 'test_files/scratch/push_down_filter/t1.parquet'
@@ -1212,9 +1206,6 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
 
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_range_partitioned() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     // Rough sketch of the Range-partitioned MRE we're trying to recreate. The
     // test hand-wires identical Range repartitioning:
     //
@@ -1419,9 +1410,6 @@ async fn test_hashjoin_dynamic_filter_pushdown_range_partitioned() {
 // (push_down_filter_parquet.slt::test_hashjoin_dynamic_filter_pushdown).
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     let (build_side_schema, build_scan, probe_side_schema, probe_scan) =
         hashjoin_pushdown_scans();
 
@@ -1544,9 +1532,6 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
 
 #[test]
 fn test_hashjoin_parent_filter_pushdown_same_column_names() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     let build_side_schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
         Field::new("build_val", DataType::Utf8, false),
@@ -1613,9 +1598,6 @@ fn test_hashjoin_parent_filter_pushdown_same_column_names() {
 
 #[test]
 fn test_hashjoin_parent_filter_pushdown_mark_join() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     let left_schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Utf8, false),
         Field::new("val", DataType::Utf8, false),
@@ -1683,9 +1665,6 @@ fn test_hashjoin_parent_filter_pushdown_mark_join() {
 /// only rely on the output side to preserve their semantics.
 #[test]
 fn test_hashjoin_parent_filter_pushdown_semi_anti_join() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     let left_schema = Arc::new(Schema::new(vec![
         Field::new("k", DataType::Utf8, false),
         Field::new("v", DataType::Utf8, false),
@@ -2641,9 +2620,6 @@ fn test_pushdown_with_computed_grouping_key() {
 // on a hand-wired plan, which does trigger the `false` path.
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     // Test scenario where all build-side partitions are empty
     // This validates the code path that sets the filter to `false` when no rows can match
 
@@ -2776,9 +2752,6 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
 // PartitionMode::Partitioned, which SQL never picks for small parquet inputs.
 #[tokio::test]
 async fn test_hashjoin_hash_table_pushdown_partitioned() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     let (build_side_schema, build_scan, probe_side_schema, probe_scan) =
         hashjoin_pushdown_scans();
 
@@ -2894,9 +2867,6 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
 // IN (SET) invariant is captured in the slt port.
 #[tokio::test]
 async fn test_hashjoin_hash_table_pushdown_collect_left() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     let (build_side_schema, build_scan, probe_side_schema, probe_scan) =
         hashjoin_pushdown_scans();
 
@@ -3004,9 +2974,6 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
 )]
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-
     // Test both cases: probe side with and without filter pushdown support
     for (probe_supports_pushdown, expected_is_used) in [(false, false), (true, true)] {
         let build_side_schema = Arc::new(Schema::new(vec![
@@ -3589,7 +3556,6 @@ fn test_filter_pushdown_through_sort_with_projection() {
 #[test]
 fn post_phase_is_idempotent_on_hash_join() {
     use crate::physical_optimizer::test_utils::{hash_join_exec, parquet_exec, schema};
-    use datafusion_common::JoinType;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
     use datafusion_physical_plan::get_plan_string;
