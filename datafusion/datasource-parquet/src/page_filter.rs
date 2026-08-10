@@ -376,6 +376,16 @@ impl PagePruningAccessPlanFilter {
     pub fn filter_number(&self) -> usize {
         self.predicates.len()
     }
+
+    /// Returns the names of the columns referenced by the page pruning
+    /// predicates (each predicate references exactly one column, see
+    /// [`Self::new`]).
+    pub(crate) fn predicate_column_names(&self) -> impl Iterator<Item = &str> {
+        self.predicates
+            .iter()
+            .filter_map(|p| p.required_columns().single_column())
+            .map(|c| c.name())
+    }
 }
 
 fn update_selection(
