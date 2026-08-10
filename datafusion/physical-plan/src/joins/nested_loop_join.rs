@@ -867,6 +867,102 @@ impl NestedLoopJoinExec {
     }
 }
 
+/// Field-level tests for the `try_to_proto` / `try_from_proto` hooks.
+///
+/// `projection` carries the same three states as on `HashJoinExec`, encoded the
+/// same way; the mapping is written out again here, so it is tested again here.
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::proto::{ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx};
+    use crate::proto_test_util::{
+        StubPlanDecoder, StubPlanEncoder, UnreachablePlanDecoder, encoded_child_node,
+        stub_child,
+    };
+    use datafusion_proto_models::protobuf;
+
+    /// Encode an inner nested loop join with the given projection.
+    fn encode_projection(projection: Option<Vec<usize>>) -> Vec<u32> {
+        let plan = NestedLoopJoinExec::try_new(
+            stub_child(),
+            stub_child(),
+            None,
+            &JoinType::Inner,
+            projection,
+        )
+        .unwrap();
+        let encoder = StubPlanEncoder::ok();
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        let node = plan
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("NestedLoopJoinExec should encode to Some(node)");
+        match node.physical_plan_type {
+            Some(protobuf::physical_plan_node::PhysicalPlanType::NestedLoopJoin(
+                join,
+            )) => join.projection,
+            other => panic!("expected a NestedLoopJoin node, got {other:?}"),
+        }
+    }
+
+    /// A hand-built `NestedLoopJoinExecNode` wrapped in its `PhysicalPlanNode`.
+    fn join_node(projection: Vec<u32>) -> protobuf::PhysicalPlanNode {
+        protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::NestedLoopJoin(Box::new(
+                    protobuf::NestedLoopJoinExecNode {
+                        left: Some(Box::new(encoded_child_node())),
+                        right: Some(Box::new(encoded_child_node())),
+                        join_type: protobuf::JoinType::Inner.into(),
+                        filter: None,
+                        projection,
+                    },
+                )),
+            ),
+        }
+    }
+
+    /// Decode a node with the given projection field, returning the plan's
+    /// reconstructed projection.
+    fn decode_projection(projection: Vec<u32>) -> Option<Vec<usize>> {
+        let decoder = StubPlanDecoder::ok();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        let plan =
+            NestedLoopJoinExec::try_from_proto(&join_node(projection), &ctx).unwrap();
+        plan.downcast_ref::<NestedLoopJoinExec>()
+            .expect("decoded plan should be a NestedLoopJoinExec")
+            .projection
+            .as_ref()
+            .map(|p| p.to_vec())
+    }
+
+    #[test]
+    fn projection_states_survive_the_encode_side() {
+        assert_eq!(encode_projection(None), Vec::<u32>::new());
+        // An empty projection changes the output schema, so it must not share
+        // the "absent" encoding.
+        assert_eq!(encode_projection(Some(vec![])), vec![u32::MAX]);
+        assert_eq!(encode_projection(Some(vec![0, 1])), vec![0, 1]);
+    }
+
+    #[test]
+    fn projection_states_survive_the_decode_side() {
+        assert_eq!(decode_projection(vec![]), None);
+        assert_eq!(decode_projection(vec![u32::MAX]), Some(vec![]));
+        assert_eq!(decode_projection(vec![0, 1]), Some(vec![0, 1]));
+    }
+
+    #[test]
+    fn try_from_proto_rejects_a_different_plan_variant() {
+        let decoder = UnreachablePlanDecoder::new();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+
+        let err =
+            NestedLoopJoinExec::try_from_proto(&encoded_child_node(), &ctx).unwrap_err();
+        assert!(err.to_string().contains("not a NestedLoopJoinExec"));
+    }
+}
+
 impl EmbeddedProjection for NestedLoopJoinExec {
     fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
         self.with_projection(projection)

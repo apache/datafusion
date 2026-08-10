@@ -2008,6 +2008,297 @@ impl HashJoinExec {
     }
 }
 
+/// Field-level tests for the `try_to_proto` / `try_from_proto` hooks.
+///
+/// These cover the three states of `projection` that proto3 cannot express
+/// directly (the `[u32::MAX]` sentinel), `fetch` presence semantics — the field
+/// dropped in #24165, which the central `Debug`-comparing round-trip tests
+/// could not see — and the by-name `PartitionMode` mapping, whose discriminants
+/// deliberately differ between the plan and the wire.
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::proto::{ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx};
+    use crate::proto_test_util::{
+        StubPlanDecoder, StubPlanEncoder, UnreachablePlanDecoder, column_node,
+        encoded_child_node, stub_child,
+    };
+    use datafusion_physical_expr::expressions::Column;
+    use datafusion_proto_models::protobuf;
+
+    /// An inner hash join on `a = a` between two stub children.
+    fn join_builder() -> HashJoinExecBuilder {
+        let on: Vec<(PhysicalExprRef, PhysicalExprRef)> =
+            vec![(Arc::new(Column::new("a", 0)), Arc::new(Column::new("a", 0)))];
+        HashJoinExecBuilder::new(stub_child(), stub_child(), on, JoinType::Inner)
+    }
+
+    /// Encode `plan` with a stub encoder, returning the `HashJoinExecNode`.
+    fn encode(
+        plan: &HashJoinExec,
+        encoder: &StubPlanEncoder,
+    ) -> protobuf::HashJoinExecNode {
+        let ctx = ExecutionPlanEncodeCtx::new(encoder);
+        let node = plan
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("HashJoinExec should encode to Some(node)");
+        match node.physical_plan_type {
+            Some(protobuf::physical_plan_node::PhysicalPlanType::HashJoin(join)) => *join,
+            other => panic!("expected a HashJoin node, got {other:?}"),
+        }
+    }
+
+    /// Encode a join whose only non-default state is its projection.
+    fn encode_projection(projection: Option<Vec<usize>>) -> Vec<u32> {
+        let plan = join_builder().with_projection(projection).build().unwrap();
+        encode(&plan, &StubPlanEncoder::ok()).projection
+    }
+
+    /// A hand-built `HashJoinExecNode` wrapped in its `PhysicalPlanNode`.
+    fn join_node(node: protobuf::HashJoinExecNode) -> protobuf::PhysicalPlanNode {
+        protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::HashJoin(Box::new(node)),
+            ),
+        }
+    }
+
+    /// A decodable `HashJoinExecNode`: two children, one join key, no filter.
+    fn decodable_node() -> protobuf::HashJoinExecNode {
+        protobuf::HashJoinExecNode {
+            left: Some(Box::new(encoded_child_node())),
+            right: Some(Box::new(encoded_child_node())),
+            on: vec![protobuf::JoinOn {
+                left: Some(column_node("a", 0)),
+                right: Some(column_node("a", 0)),
+            }],
+            join_type: protobuf::JoinType::Inner.into(),
+            partition_mode: protobuf::PartitionMode::Partitioned.into(),
+            null_equality: protobuf::NullEquality::NullEqualsNothing.into(),
+            filter: None,
+            projection: vec![],
+            null_aware: false,
+            dynamic_filter: None,
+            fetch: None,
+        }
+    }
+
+    /// Decode `node` with a stub decoder.
+    fn decode(node: protobuf::HashJoinExecNode) -> Arc<dyn ExecutionPlan> {
+        let decoder = StubPlanDecoder::ok();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        HashJoinExec::try_from_proto(&join_node(node), &ctx).unwrap()
+    }
+
+    /// View a decoded plan as the `HashJoinExec` it must be.
+    fn as_join(plan: &Arc<dyn ExecutionPlan>) -> &HashJoinExec {
+        plan.downcast_ref::<HashJoinExec>()
+            .expect("decoded plan should be a HashJoinExec")
+    }
+
+    /// "No projection" is the empty repeated field.
+    #[test]
+    fn try_to_proto_encodes_an_absent_projection_as_empty() {
+        assert_eq!(encode_projection(None), Vec::<u32>::new());
+    }
+
+    /// An *empty* projection changes the output schema, so it cannot share the
+    /// "absent" encoding: it goes out as the `[u32::MAX]` sentinel.
+    #[test]
+    fn try_to_proto_encodes_an_empty_projection_as_the_sentinel() {
+        assert_eq!(encode_projection(Some(vec![])), vec![u32::MAX]);
+    }
+
+    #[test]
+    fn try_to_proto_encodes_a_non_empty_projection_as_is() {
+        assert_eq!(encode_projection(Some(vec![0, 2])), vec![0, 2]);
+    }
+
+    #[test]
+    fn try_from_proto_decodes_an_empty_projection_field_as_absent() {
+        let plan = decode(decodable_node());
+
+        assert!(as_join(&plan).projection.is_none());
+    }
+
+    #[test]
+    fn try_from_proto_decodes_the_sentinel_as_an_empty_projection() {
+        let mut node = decodable_node();
+        node.projection = vec![u32::MAX];
+
+        let plan = decode(node);
+        let projection = as_join(&plan)
+            .projection
+            .as_ref()
+            .expect("the sentinel decodes to Some(empty)");
+        assert!(projection.is_empty());
+    }
+
+    #[test]
+    fn try_from_proto_decodes_a_non_empty_projection_as_is() {
+        let mut node = decodable_node();
+        node.projection = vec![0, 2];
+
+        let plan = decode(node);
+        assert_eq!(
+            as_join(&plan).projection.as_deref(),
+            Some([0, 2].as_slice())
+        );
+    }
+
+    /// The regression guard for #24165: an unlimited join must not encode as
+    /// `Some(0)`, and a limited one must keep its limit.
+    #[test]
+    fn try_to_proto_encodes_fetch_by_presence() {
+        let unlimited = join_builder().build().unwrap();
+        assert_eq!(encode(&unlimited, &StubPlanEncoder::ok()).fetch, None);
+
+        let limited = join_builder().with_fetch(Some(10)).build().unwrap();
+        assert_eq!(encode(&limited, &StubPlanEncoder::ok()).fetch, Some(10));
+
+        let empty = join_builder().with_fetch(Some(0)).build().unwrap();
+        assert_eq!(encode(&empty, &StubPlanEncoder::ok()).fetch, Some(0));
+    }
+
+    /// A message written before `fetch` existed has no value on the wire, and
+    /// must decode to "no limit" rather than to `Some(0)` ("no rows").
+    #[test]
+    fn try_from_proto_decodes_an_absent_fetch_as_no_limit() {
+        assert_eq!(as_join(&decode(decodable_node())).fetch, None);
+    }
+
+    #[test]
+    fn try_from_proto_decodes_a_present_fetch() {
+        let mut node = decodable_node();
+        node.fetch = Some(10);
+        assert_eq!(as_join(&decode(node)).fetch, Some(10));
+
+        let mut node = decodable_node();
+        node.fetch = Some(0);
+        assert_eq!(as_join(&decode(node)).fetch, Some(0));
+    }
+
+    /// `fetch` is a `u64` on the wire and a `usize` in the plan. The conversion
+    /// is checked rather than `as usize`, so a value too large for the target
+    /// is reported instead of truncated — on a 64-bit target every `u64` fits,
+    /// and the largest one must come back intact rather than wrapping.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn try_from_proto_decodes_the_largest_fetch_without_truncating() {
+        let plan = decode({
+            let mut node = decodable_node();
+            node.fetch = Some(u64::MAX);
+            node
+        });
+
+        assert_eq!(as_join(&plan).fetch, Some(usize::MAX));
+    }
+
+    /// The plan-side and wire-side `PartitionMode` discriminants differ, so the
+    /// mapping has to be by name in both directions.
+    #[test]
+    fn partition_mode_round_trips_by_name() {
+        for (mode, wire) in [
+            (
+                PartitionMode::CollectLeft,
+                protobuf::PartitionMode::CollectLeft,
+            ),
+            (
+                PartitionMode::Partitioned,
+                protobuf::PartitionMode::Partitioned,
+            ),
+            (PartitionMode::Auto, protobuf::PartitionMode::Auto),
+        ] {
+            let plan = join_builder().with_partition_mode(mode).build().unwrap();
+            let node = encode(&plan, &StubPlanEncoder::ok());
+            assert_eq!(node.partition_mode, i32::from(wire), "encoding {mode:?}");
+
+            let mut decodable = decodable_node();
+            decodable.partition_mode = node.partition_mode;
+            assert_eq!(*as_join(&decode(decodable)).partition_mode(), mode);
+        }
+    }
+
+    #[test]
+    fn try_from_proto_rejects_an_unknown_partition_mode() {
+        let decoder = StubPlanDecoder::ok();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        let mut node = decodable_node();
+        node.partition_mode = 42;
+
+        let err = HashJoinExec::try_from_proto(&join_node(node), &ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("HashJoinExec: unknown PartitionMode 42")
+        );
+    }
+
+    /// `null_aware` is only legal on a `LeftAnti` join, so the round trip has
+    /// to carry the join type with it.
+    #[test]
+    fn null_aware_round_trips() {
+        let plan = join_builder()
+            .with_type(JoinType::LeftAnti)
+            .with_null_aware(true)
+            .build()
+            .unwrap();
+        assert!(encode(&plan, &StubPlanEncoder::ok()).null_aware);
+
+        let mut node = decodable_node();
+        node.join_type = protobuf::JoinType::Leftanti.into();
+        node.null_aware = true;
+        assert!(as_join(&decode(node)).null_aware);
+    }
+
+    #[test]
+    fn try_to_proto_encodes_both_children_and_both_key_sides() {
+        let encoder = StubPlanEncoder::ok();
+        let node = encode(&join_builder().build().unwrap(), &encoder);
+
+        assert_eq!(encoder.plan_calls(), 2);
+        assert_eq!(encoder.expr_calls(), 2);
+        assert_eq!(node.left, Some(Box::new(encoded_child_node())));
+        assert_eq!(node.right, Some(Box::new(encoded_child_node())));
+    }
+
+    #[test]
+    fn try_to_proto_propagates_child_encode_error() {
+        let plan = join_builder().build().unwrap();
+        let encoder = StubPlanEncoder::failing_on_plan(2);
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+
+        let err = plan.try_to_proto(&ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("stub plan encode failure on call 2")
+        );
+    }
+
+    #[test]
+    fn try_from_proto_rejects_a_different_plan_variant() {
+        let decoder = UnreachablePlanDecoder::new();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+
+        let err = HashJoinExec::try_from_proto(&encoded_child_node(), &ctx).unwrap_err();
+        assert!(err.to_string().contains("not a HashJoinExec"));
+    }
+
+    #[test]
+    fn try_from_proto_rejects_a_missing_child() {
+        let decoder = UnreachablePlanDecoder::new();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        let mut node = decodable_node();
+        node.left = None;
+
+        let err = HashJoinExec::try_from_proto(&join_node(node), &ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("HashJoinExec is missing required field 'left'")
+        );
+    }
+}
+
 /// Determines which sides of a join are "preserved" for filter pushdown.
 ///
 /// A preserved side means filters on that side's columns can be safely pushed
