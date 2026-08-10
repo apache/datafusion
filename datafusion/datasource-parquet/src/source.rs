@@ -841,33 +841,52 @@ impl FileSource for ParquetSource {
         let pushdown_filters = table_pushdown_enabled || config_pushdown_enabled;
 
         let mut source = self.clone();
+        // Two separate questions per filter:
+        //
+        // * *pushable* — can the scan express it at all? A pushable filter
+        //   joins `source.predicate`, which drives row-group / page pruning
+        //   whether or not the scan also applies it row-wise.
+        // * *applied* — will the scan evaluate it row-wise, so the parent may
+        //   drop it? Everything pushable qualifies, except a dynamic filter at
+        //   `pushdown_filters = false`: the opener deliberately keeps those out
+        //   of the post-scan filter (they are pruning-only there — see
+        //   `post_scan_conjuncts`), so the parent must keep enforcing them.
+        //   Nothing in DataFusion currently routes a dynamic filter through a
+        //   parent `FilterExec` — they arrive as an operator's self filter, and
+        //   the operator that produced one always re-checks the rows itself —
+        //   so this is an invariant guard rather than a live path.
         let filters: Vec<PushedDownPredicate> = filters
             .into_iter()
             .map(|filter| {
-                if can_expr_be_pushed_down_with_schemas(&filter, pushable_schema) {
+                let pushable =
+                    can_expr_be_pushed_down_with_schemas(&filter, pushable_schema);
+                let applied_row_wise = pushdown_filters
+                    || !DynamicFilterTracking::classify(&filter)
+                        .contains_dynamic_filter();
+                if pushable && applied_row_wise {
                     PushedDownPredicate::supported(filter)
                 } else {
                     PushedDownPredicate::unsupported(filter)
                 }
             })
             .collect();
-        if filters
+        // `PushedDownPredicate::unsupported` covers both "the scan cannot
+        // express this" and "the scan will only prune with it", so recompute
+        // pushability here to decide what joins the predicate.
+        let allowed_filters = filters
             .iter()
-            .all(|f| matches!(f.discriminant, PushedDown::No))
-        {
-            // No filters can be pushed down, so we can just return the remaining filters
-            // and avoid replacing the source in the physical plan.
+            .filter(|f| {
+                can_expr_be_pushed_down_with_schemas(&f.predicate, pushable_schema)
+            })
+            .map(|f| Arc::clone(&f.predicate))
+            .collect_vec();
+        if allowed_filters.is_empty() {
+            // Nothing the scan can even prune with: return the filters
+            // unchanged and avoid replacing the source in the physical plan.
             return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
                 vec![PushedDown::No; filters.len()],
             ));
         }
-        let allowed_filters = filters
-            .iter()
-            .filter_map(|f| match f.discriminant {
-                PushedDown::Yes => Some(Arc::clone(&f.predicate)),
-                PushedDown::No => None,
-            })
-            .collect_vec();
         let predicate = match source.predicate {
             Some(predicate) => {
                 conjunction(std::iter::once(predicate).chain(allowed_filters))
@@ -877,14 +896,13 @@ impl FileSource for ParquetSource {
         source.predicate = Some(predicate);
         source = source.with_pushdown_filters(pushdown_filters);
         let source = Arc::new(source);
-        // The parquet scan always accepts pushable filters: report each
-        // pushable filter as accepted (`Yes`) so the parent `FilterExec` is
-        // removed. The scan now owns these filters and guarantees they are
-        // applied — as a parquet `RowFilter` when `pushdown_filters` is
-        // enabled, or as the in-scan post-scan filter otherwise (and for any
-        // conjunct the `RowFilter` cannot evaluate on a given file). The
-        // `pushdown_filters` config is preserved because it still controls the
-        // `RowFilter` vs. post-scan placement downstream.
+        // Report each row-wise-applied filter as accepted (`Yes`) so the parent
+        // `FilterExec` is removed. The scan now owns those filters and
+        // guarantees they are applied — as a parquet `RowFilter` when
+        // `pushdown_filters` is enabled, or as the in-scan post-scan filter
+        // otherwise (and for any conjunct the `RowFilter` cannot evaluate on a
+        // given file). The `pushdown_filters` config is preserved because it
+        // still controls the `RowFilter` vs. post-scan placement downstream.
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
             filters.iter().map(|f| f.discriminant).collect(),
         )
@@ -1445,6 +1463,104 @@ mod tests {
             !rendered.contains("dynamic_rg_pruning"),
             "did not expect marker for predicate-less scan, got: {rendered}"
         );
+    }
+
+    /// A dynamic filter is *not* applied row-wise by the scan when
+    /// `pushdown_filters = false` (the opener keeps it out of the post-scan
+    /// filter so it stays pruning-only), so `try_pushdown_filters` must report
+    /// it as `PushedDown::No` — otherwise a parent `FilterExec` holding one
+    /// would be removed and the conjunct would go unenforced, letting rows
+    /// through that the query asked to reject.
+    ///
+    /// It must still join the scan's predicate, because that is what drives
+    /// row-group and page pruning.
+    #[test]
+    fn dynamic_filter_is_not_reported_as_applied_without_pushdown() {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+        let dynamic = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("v", 0))],
+            lit(true),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let source = ParquetSource::new(Arc::clone(&schema));
+        let config = ConfigOptions::default();
+        assert!(
+            !config.execution.parquet.pushdown_filters,
+            "this test is about the default (pushdown disabled) setting"
+        );
+
+        let result = source
+            .try_pushdown_filters(vec![Arc::clone(&dynamic)], &config)
+            .unwrap();
+
+        assert!(
+            matches!(result.filters.as_slice(), [PushedDown::No]),
+            "a dynamic filter must stay with the parent when the scan will not \
+             evaluate it row-wise, got {:?}",
+            result.filters
+        );
+        // ... but the scan still takes it on board for pruning.
+        let updated = result.updated_node.expect("source should be updated");
+        let updated = updated.downcast_ref::<ParquetSource>().unwrap();
+        assert!(
+            DynamicFilterTracking::classify(&updated.filter().unwrap())
+                .contains_dynamic_filter(),
+            "the dynamic filter must still reach the predicate so row-group \
+             pruning keeps working"
+        );
+    }
+
+    /// With `pushdown_filters = true` the dynamic filter becomes an
+    /// `ArrowPredicate` inside the parquet `RowFilter`, so the scan does apply
+    /// it row-wise and the parent may drop it.
+    #[test]
+    fn dynamic_filter_is_reported_as_applied_with_pushdown() {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+        let dynamic = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("v", 0))],
+            lit(true),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let source = ParquetSource::new(Arc::clone(&schema));
+        let mut config = ConfigOptions::default();
+        config.execution.parquet.pushdown_filters = true;
+
+        let result = source.try_pushdown_filters(vec![dynamic], &config).unwrap();
+        assert!(matches!(result.filters.as_slice(), [PushedDown::Yes]));
+    }
+
+    /// Static conjuncts are unaffected: the scan applies them post-scan even
+    /// with pushdown disabled, which is the whole point of the in-scan filter.
+    #[test]
+    fn static_filter_is_still_reported_as_applied_without_pushdown() {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::Operator;
+        use datafusion_physical_expr::expressions::{BinaryExpr, Column};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+        let static_filter = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("v", 0)),
+            Operator::Gt,
+            lit(5i64),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let source = ParquetSource::new(Arc::clone(&schema));
+        let config = ConfigOptions::default();
+
+        let result = source
+            .try_pushdown_filters(vec![static_filter], &config)
+            .unwrap();
+        assert!(matches!(result.filters.as_slice(), [PushedDown::Yes]));
+        assert!(result.updated_node.is_some());
     }
 
     /// Helpers for the `try_pushdown_sort` regression tests below.

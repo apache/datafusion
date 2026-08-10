@@ -1336,3 +1336,71 @@ RESET datafusion.execution.parquet.pushdown_filters;
 
 statement ok
 drop table t;
+
+########
+# Test:
+#   test_join_dynamic_filter_correctness_without_pushdown
+#
+# At the default `pushdown_filters = false` the parquet scan applies static
+# conjuncts row-wise (in-scan, no `FilterExec`) but leaves dynamic filters as
+# pruning-only. Dropping a conjunct is only safe if nothing relied on the scan
+# to enforce it, so this asserts the actual result set of a hash join whose
+# build side is far smaller than its probe side: if the dynamic filter were
+# load-bearing here, extra probe rows would leak into the output.
+########
+
+statement ok
+set datafusion.optimizer.enable_join_dynamic_filter_pushdown = true;
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+query I
+COPY (SELECT * FROM (VALUES (2), (4)) v(k))
+TO 'test_files/scratch/push_down_filter_parquet/dyn_build.parquet'
+STORED AS PARQUET;
+----
+2
+
+query I
+COPY (SELECT * FROM (VALUES (1, 10), (2, 20), (3, 30), (4, 40), (5, 50)) v(k, val))
+TO 'test_files/scratch/push_down_filter_parquet/dyn_probe.parquet'
+STORED AS PARQUET;
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE dyn_build (k INT) STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/dyn_build.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE dyn_probe (k INT, val INT) STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/dyn_probe.parquet';
+
+# Only the probe rows whose key is in the build side, and only those the static
+# conjunct keeps. `val > 15` is applied in-scan; the join enforces `k IN (2, 4)`.
+query II
+SELECT p.k, p.val FROM dyn_probe p JOIN dyn_build b ON p.k = b.k
+WHERE p.val > 15 ORDER BY p.k;
+----
+2 20
+4 40
+
+# Without the static conjunct: the join alone must still reject k = 1, 3, 5.
+query II
+SELECT p.k, p.val FROM dyn_probe p JOIN dyn_build b ON p.k = b.k ORDER BY p.k;
+----
+2 20
+4 40
+
+statement ok
+drop table dyn_build;
+
+statement ok
+drop table dyn_probe;
+
+statement ok
+RESET datafusion.optimizer.enable_join_dynamic_filter_pushdown;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;

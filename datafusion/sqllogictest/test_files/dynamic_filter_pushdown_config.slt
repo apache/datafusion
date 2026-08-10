@@ -336,7 +336,8 @@ physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(id@0, id@0)]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_right.parquet]]}, projection=[id], file_type=parquet
 03)--SortExec: expr=[data@1 DESC], preserve_partitioning=[false]
-04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ], sort_order_for_reorder=[data@1 DESC], reverse_row_groups=true, dynamic_rg_pruning=eligible
+04)----FilterExec: DynamicFilter [ empty ]
+05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/join_left.parquet]]}, projection=[id, data], file_type=parquet, predicate=DynamicFilter [ empty ], sort_order_for_reorder=[data@1 DESC], reverse_row_groups=true, dynamic_rg_pruning=eligible
 
 statement count 0
 SET datafusion.execution.parquet.pushdown_filters = true;

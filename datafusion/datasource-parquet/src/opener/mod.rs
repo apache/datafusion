@@ -1416,10 +1416,34 @@ impl RowGroupsPrunedParquetOpen {
             // through to post-scan.
             row_filter_generator.rejected_conjuncts().to_vec()
         } else if let Some(predicate) = prepared.predicate.as_ref() {
-            // Pushdown disabled: the whole predicate runs post-scan (in-scan
-            // equivalent of a FilterExec).
+            // Pushdown disabled: the predicate runs post-scan (in-scan
+            // equivalent of a FilterExec) — except for conjuncts containing a
+            // dynamic filter, which stay *pruning-only* here.
+            //
+            // A dynamic filter (a join's build-side summary, a TopK threshold)
+            // earns its keep at the row-group / page level, where one
+            // evaluation against statistics can skip millions of rows. Applied
+            // row-wise it is usually a bad trade: the canonical shape is a
+            // `CASE` over per-partition hash-table probes, which costs far more
+            // per row than the operator that produced it pays to re-check the
+            // same rows itself — and it always does re-check them, which is why
+            // leaving it out cannot change results. Running it here would just
+            // be doing the join's work twice, once on more rows.
+            //
+            // With `pushdown_filters = true` this does not apply: arrow-rs
+            // evaluates each `ArrowPredicate` against an accumulating
+            // `RowSelection`, so the dynamic filter only ever sees rows the
+            // cheaper conjuncts already kept, and skipping the rows it rejects
+            // saves decoding the projected columns for them.
+            //
+            // `ParquetSource::try_pushdown_filters` is the other half of this:
+            // at this setting it reports dynamic-filter conjuncts as *not*
+            // pushed down, so a parent `FilterExec` holding one is retained.
             datafusion_physical_expr::split_conjunction(predicate)
                 .into_iter()
+                .filter(|conjunct| {
+                    !DynamicFilterTracking::classify(conjunct).contains_dynamic_filter()
+                })
                 .cloned()
                 .collect()
         } else {
@@ -3517,6 +3541,67 @@ mod test {
             "expected 2 rows with non-null struct; the rejected conjunct must \
              be applied post-scan, not silently dropped"
         );
+    }
+
+    /// Build a 10-row `id` file plus the predicate
+    /// `id > 3 AND DynamicFilter[id > 7]`, and return the rows the scan emits
+    /// at the given `pushdown_filters` setting.
+    async fn rows_for_static_and_dynamic_predicate(pushdown_filters: bool) -> usize {
+        use arrow::array::Int32Array;
+        use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from((0..10).collect::<Vec<i32>>()))],
+        )
+        .unwrap();
+        let data_size =
+            write_parquet_batches(Arc::clone(&store), "dyn.parquet", vec![batch], None)
+                .await;
+        let file = PartitionedFile::new("dyn.parquet".to_string(), data_size as u64);
+
+        let dynamic = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("id", 0))],
+            logical2physical(&col("id").gt(lit(7i32)), &schema),
+        )) as Arc<dyn PhysicalExpr>;
+        let predicate = datafusion_physical_expr::conjunction([
+            logical2physical(&col("id").gt(lit(3i32)), &schema),
+            dynamic,
+        ]);
+
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(predicate)
+            .with_pushdown_filters(pushdown_filters)
+            .build();
+
+        let stream = open_file(&morselizer, file).await.unwrap();
+        count_batches_and_rows(stream).await.1
+    }
+
+    /// With pushdown disabled a dynamic filter is pruning-only: the scan
+    /// applies the static conjunct row-wise and leaves the dynamic one to the
+    /// operator that produced it. `id > 3` keeps 6 of the 10 rows; if the
+    /// dynamic filter were also applied only 2 would survive.
+    ///
+    /// This is what keeps the expensive shape of a real dynamic filter (a
+    /// `CASE` over per-partition hash probes) off every decoded row, and it
+    /// mirrors what the scan did before it started owning filters.
+    #[tokio::test]
+    async fn dynamic_conjunct_is_pruning_only_without_pushdown() {
+        assert_eq!(rows_for_static_and_dynamic_predicate(false).await, 6);
+    }
+
+    /// With pushdown enabled the dynamic filter is a `RowFilter`
+    /// `ArrowPredicate`, evaluated only against rows the cheaper conjuncts
+    /// already kept — so it is applied and 2 rows survive.
+    #[tokio::test]
+    async fn dynamic_conjunct_is_applied_with_pushdown() {
+        assert_eq!(rows_for_static_and_dynamic_predicate(true).await, 2);
     }
 
     /// Helpers for tests that exercise parquet virtual columns
