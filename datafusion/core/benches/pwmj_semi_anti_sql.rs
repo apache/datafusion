@@ -20,18 +20,26 @@
 //! end from SQL, with `datafusion.optimizer.enable_piecewise_merge_join` toggled to pick
 //! the operator under test:
 //!
-//! - **on**: the subquery is decorrelated to a `LeftSemi` / `LeftAnti` join and planned as
-//!   `PiecewiseMergeJoin`, together with the `SortExec` the planner inserts on the
-//!   buffered side. The sort is included because it is a real cost of that plan.
-//! - **off**: the same join falls back to `NestedLoopJoinExec`, which is O(n*m).
+//! - **`pwmj_enabled`**: on a build that routes existence joins to PWMJ, the subquery is
+//!   decorrelated to a `LeftSemi` / `LeftAnti` join and planned as `PiecewiseMergeJoin`,
+//!   together with the `SortExec` the planner inserts on the buffered side. The sort is
+//!   included because it is a real cost of that plan.
+//! - **`nlj`**: the same join is planned as `NestedLoopJoinExec`, which is O(n*m).
 //!
 //! Both arms compute the same result, so the comparison measures the win from routing an
 //! inequality-correlated `EXISTS` / `NOT EXISTS` to PWMJ instead of the nested-loop join.
 //!
-//! Each arm asserts up front that the operator it means to measure is actually in the
-//! physical plan. Without that check a planning change (or running this against a build
-//! where PWMJ does not accept existence joins) would silently compare
-//! `NestedLoopJoinExec` against itself and report a meaningless ~1.0x.
+//! The arms are named after the config they set, not the operator they get, because the
+//! enabled arm's operator is build-dependent: while the planner still excludes semi/anti
+//! join types from PWMJ, setting the flag changes nothing and both arms plan
+//! `NestedLoopJoinExec`. So the enabled arm accepts either operator instead of aborting the
+//! run. Benchmark ids stay the same either way, which is what makes such a run useful as a
+//! baseline: a later build that does route these joins to PWMJ compares straight against it.
+//!
+//! What every arm does pin down is *which* operator it planned, printed before the
+//! timings, and it says so outright when both arms landed on the same one. Without that a
+//! planning change would quietly compare `NestedLoopJoinExec` against itself and the
+//! resulting ~1.0x would read as "PWMJ is no faster".
 //!
 //! ## Axes
 //! - **join type**: `EXISTS` (LeftSemi) and `NOT EXISTS` (LeftAnti).
@@ -54,6 +62,14 @@ use tokio::runtime::Runtime;
 const LEFT_ROWS: usize = 20_000;
 const RIGHT_ROWS: usize = 20_000;
 const KEY_SPAN: i32 = 10_000;
+
+/// Operators the `pwmj_enabled` arm is allowed to plan. Two of them, because the planner
+/// only hands existence joins to PWMJ once PWMJ accepts semi/anti join types; before that
+/// the flag is a no-op and the nested-loop join stays.
+const PWMJ_OR_NLJ: &[&str] = &["PiecewiseMergeJoin", "NestedLoopJoinExec"];
+
+/// With the flag off, nothing but the nested-loop join can plan this query.
+const NLJ_ONLY: &[&str] = &["NestedLoopJoinExec"];
 
 /// Two-column schema: (`key`, `payload`).
 fn schema() -> SchemaRef {
@@ -147,16 +163,39 @@ fn physical_plan(
     })
 }
 
-/// Fail loudly if the plan does not contain every expected fragment, so an arm can never
-/// silently measure an operator other than the one it is named after.
-fn assert_plan_contains(plan: &Arc<dyn ExecutionPlan>, expected: &[&str], label: &str) {
+/// Check that the plan contains every fragment in `required` and exactly one of the
+/// operators in `one_of`, returning the one it found.
+///
+/// An arm named after a config flag says nothing about what ran, so each one reports the
+/// operator it actually planned. `one_of` has two entries for the enabled arm because
+/// whether existence joins reach PWMJ depends on the build; a single-entry list pins the
+/// arm down completely.
+fn assert_plan_operator<'a>(
+    plan: &Arc<dyn ExecutionPlan>,
+    required: &[&str],
+    one_of: &[&'a str],
+    label: &str,
+) -> &'a str {
     let displayed = displayable(plan.as_ref()).indent(false).to_string();
-    for fragment in expected {
+    for fragment in required {
         assert!(
             displayed.contains(fragment),
             "{label}: expected `{fragment}` in the physical plan, got:\n{displayed}"
         );
     }
+
+    let found: Vec<&str> = one_of
+        .iter()
+        .copied()
+        .filter(|operator| displayed.contains(operator))
+        .collect();
+    assert_eq!(
+        found.len(),
+        1,
+        "{label}: expected exactly one of {one_of:?} in the physical plan, found \
+         {found:?} in:\n{displayed}"
+    );
+    found[0]
 }
 
 fn run(plan: Arc<dyn ExecutionPlan>, ctx: &SessionContext, rt: &Runtime) -> usize {
@@ -197,27 +236,45 @@ fn bench_pwmj_semi_anti_sql(c: &mut Criterion) {
             let sql = query(exists);
             let label = if exists { "semi" } else { "anti" };
 
-            for (arm, pwmj, operator) in [
-                ("pwmj", true, "PiecewiseMergeJoin"),
-                ("nlj", false, "NestedLoopJoinExec"),
-            ] {
+            // Plan and check both arms before timing either, so the operators they picked
+            // are on screen ahead of the numbers those operators qualify.
+            let arms: Vec<(String, SessionContext, &str)> = [
+                ("pwmj_enabled", true, PWMJ_OR_NLJ),
+                ("nlj", false, NLJ_ONLY),
+            ]
+            .into_iter()
+            .map(|(arm, pwmj, operators)| {
                 let ctx = create_context(right_offset, pwmj, &s);
                 let name = format!("{arm}_{label}_{regime}");
-                assert_plan_contains(
+                let planned = assert_plan_operator(
                     &physical_plan(&ctx, &rt, &sql),
-                    &[operator, join_type],
+                    &[join_type],
+                    operators,
                     &name,
                 );
+                println!("{name}: planned {planned}");
+                (name, ctx, planned)
+            })
+            .collect();
 
+            if arms.iter().all(|(_, _, planned)| *planned == arms[0].2) {
+                println!(
+                    "note: {label}_{regime}: both arms planned {}, so the ratio between \
+                     them measures nothing about PWMJ",
+                    arms[0].2
+                );
+            }
+
+            for (name, ctx, _) in &arms {
                 // Plan afresh in the untimed setup rather than reusing one plan: the
                 // buffered side of `PiecewiseMergeJoinExec` (its visited-indices bitmap
                 // and final-pass partition counter) is cached in a `OnceAsync` on the
                 // exec, so a second `collect` over the same instance would not repeat
                 // the work.
-                group.bench_function(BenchmarkId::new(name, RIGHT_ROWS), |b| {
+                group.bench_function(BenchmarkId::new(name.as_str(), RIGHT_ROWS), |b| {
                     b.iter_batched(
-                        || physical_plan(&ctx, &rt, &sql),
-                        |plan| run(plan, &ctx, &rt),
+                        || physical_plan(ctx, &rt, &sql),
+                        |plan| run(plan, ctx, &rt),
                         BatchSize::SmallInput,
                     )
                 });
