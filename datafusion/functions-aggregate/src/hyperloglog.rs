@@ -25,10 +25,10 @@
 //!
 //! Specifically, like Redis's version, the default HLL structure uses
 //! 2**14 = 16384 registers, which means the standard error is
-//! 1.04/(16384**0.5) = 0.8125%. The precision `p` is now a runtime
-//! parameter; supported range is 4 ≤ p ≤ 18. Unlike Redis, the register
-//! takes up full [`u8`] size instead of a raw int* and thus saves some
-//! tricky bit shifting techniques used in the original version.
+//! 1.04/(16384**0.5) = 0.8125%. The precision `p` is a runtime parameter;
+//! supported range is `HLL_P_MIN..=DEFAULT_HLL_P` (4..=14). Unlike Redis,
+//! the register takes up full [`u8`] size instead of a raw int* and thus
+//! saves some tricky bit shifting techniques used in the original version.
 //! Also only the dense version is adopted, so there's no automatic
 //! conversion, largely to simplify the code.
 //!
@@ -44,23 +44,43 @@ pub(crate) const DEFAULT_HLL_P: usize = 14_usize;
 #[cfg(test)]
 pub(crate) const NUM_REGISTERS: usize = 1_usize << DEFAULT_HLL_P;
 
-/// Minimum and maximum supported precision values.
+/// Minimum supported precision value.
 pub(crate) const HLL_P_MIN: usize = 4;
-pub(crate) const HLL_P_MAX: usize = 18;
 
 #[derive(Clone, Debug)]
 pub(crate) struct HyperLogLog<T>
 where
     T: Hash + ?Sized,
 {
-    registers: Vec<u8>,
     p: usize,
     q: usize,    // 64 - p
     p_mask: u64, // (1 << p) - 1
     phantom: PhantomData<T>,
+    // Only registers[..1 << p] is meaningful; the rest is zero-padding.
+    registers: [u8; 1 << DEFAULT_HLL_P],
 }
 
 pub(crate) use datafusion_common::hash_utils::HLL_RANDOM_STATE as HLL_HASH_STATE;
+
+/// Update one register given a pre-computed hash.
+/// Used by `add_hashed` for single-element updates.
+/// Loop callers hoist the branch explicitly for better codegen.
+macro_rules! hll_update {
+    ($self:expr, $hash:expr) => {{
+        if $self.p == DEFAULT_HLL_P {
+            const P: usize = DEFAULT_HLL_P;
+            const Q: usize = 64 - DEFAULT_HLL_P;
+            const MASK: u64 = (1u64 << DEFAULT_HLL_P) - 1;
+            let index = ($hash & MASK) as usize;
+            let rho = (($hash >> P) | (1_u64 << Q)).trailing_zeros() + 1;
+            $self.registers[index] = $self.registers[index].max(rho as u8);
+        } else {
+            let index = ($hash & $self.p_mask) as usize;
+            let rho = (($hash >> $self.p) | (1_u64 << $self.q)).trailing_zeros() + 1;
+            $self.registers[index] = $self.registers[index].max(rho as u8);
+        }
+    }};
+}
 
 impl<T> Default for HyperLogLog<T>
 where
@@ -82,50 +102,52 @@ where
 
     /// Creates a new, empty HyperLogLog with the given precision `p`.
     ///
-    /// The number of registers is `2^p`. Supported range: `HLL_P_MIN..=HLL_P_MAX`.
+    /// The number of registers is `2^p`. Supported range: `HLL_P_MIN..=DEFAULT_HLL_P`.
+    #[inline(always)]
     pub fn with_precision(p: usize) -> Self {
         assert!(
-            (HLL_P_MIN..=HLL_P_MAX).contains(&p),
-            "HLL precision must be in {HLL_P_MIN}..={HLL_P_MAX}, got {p}",
+            (HLL_P_MIN..=DEFAULT_HLL_P).contains(&p),
+            "HLL precision must be in {HLL_P_MIN}..={DEFAULT_HLL_P}, got {p}",
         );
-        let num_registers = 1_usize << p;
         let q = 64 - p;
-        let p_mask = (num_registers as u64) - 1;
+        let p_mask = ((1_usize << p) as u64) - 1;
         Self {
-            registers: vec![0u8; num_registers],
             p,
             q,
             p_mask,
             phantom: PhantomData,
+            registers: [0u8; 1 << DEFAULT_HLL_P],
         }
     }
 
     /// Creates a HyperLogLog from already populated registers.
     ///
     /// The precision is inferred from the register slice length, which must be
-    /// a power of two in the range `2^HLL_P_MIN..=2^HLL_P_MAX`.
+    /// a power of two in the range `2^HLL_P_MIN..=2^DEFAULT_HLL_P`.
     ///
     /// Note that this method should not be invoked in an untrusted environment
     /// because the internal structure of registers is not examined.
-    pub(crate) fn from_registers(registers: Vec<u8>) -> Self {
-        let len = registers.len();
+    pub(crate) fn from_registers(v: &[u8]) -> Self {
+        let len = v.len();
         assert!(
             len.is_power_of_two(),
             "register slice length must be a power of two, got {len}",
         );
         let p = len.ilog2() as usize;
         assert!(
-            (HLL_P_MIN..=HLL_P_MAX).contains(&p),
-            "inferred precision {p} is outside {HLL_P_MIN}..={HLL_P_MAX}",
+            (HLL_P_MIN..=DEFAULT_HLL_P).contains(&p),
+            "inferred precision {p} is outside {HLL_P_MIN}..={DEFAULT_HLL_P}",
         );
         let q = 64 - p;
         let p_mask = (len as u64) - 1;
+        let mut registers = [0u8; 1 << DEFAULT_HLL_P];
+        registers[..len].copy_from_slice(v);
         Self {
-            registers,
             p,
             q,
             p_mask,
             phantom: PhantomData,
+            registers,
         }
     }
 
@@ -136,20 +158,15 @@ where
     }
 
     /// Heap bytes used by the register buffer (not captured by `size_of_val`).
+    /// Always 0 — registers are stored inline in the struct.
     pub(crate) fn register_heap_size(&self) -> usize {
-        self.registers.len()
-    }
-
-    /// The HLL hash state is shared through `datafusion_common::hash_utils`
-    /// so sketches remain compatible across accumulators.
-    #[inline]
-    fn hash_value(&self, obj: &T) -> u64 {
-        HLL_HASH_STATE.hash_one(obj)
+        0
     }
 
     /// Adds an element to the HyperLogLog.
+    #[cfg(test)]
     pub fn add(&mut self, obj: &T) {
-        let hash = self.hash_value(obj);
+        let hash = HLL_HASH_STATE.hash_one(obj);
         self.add_hashed(hash);
     }
 
@@ -157,17 +174,39 @@ where
     ///
     /// The hash should be computed using [`HLL_HASH_STATE`], the same hasher used
     /// by [`Self::add`].
-    #[inline]
+    #[inline(always)]
     pub(crate) fn add_hashed(&mut self, hash: u64) {
-        let index = (hash & self.p_mask) as usize;
-        let rho = ((hash >> self.p) | (1_u64 << self.q)).trailing_zeros() + 1;
-        self.registers[index] = self.registers[index].max(rho as u8);
+        hll_update!(self, hash);
+    }
+
+    /// Process a slice of pre-computed hashes.
+    /// The precision branch is hoisted outside the loop.
+    pub(crate) fn add_hashed_slice(&mut self, hashes: &[u64]) {
+        if self.p == DEFAULT_HLL_P {
+            const P: usize = DEFAULT_HLL_P;
+            const Q: usize = 64 - DEFAULT_HLL_P;
+            const MASK: u64 = (1u64 << DEFAULT_HLL_P) - 1;
+            for &hash in hashes {
+                let index = (hash & MASK) as usize;
+                let rho = ((hash >> P) | (1_u64 << Q)).trailing_zeros() + 1;
+                self.registers[index] = self.registers[index].max(rho as u8);
+            }
+        } else {
+            let p = self.p;
+            let q = self.q;
+            let p_mask = self.p_mask;
+            for &hash in hashes {
+                let index = (hash & p_mask) as usize;
+                let rho = ((hash >> p) | (1_u64 << q)).trailing_zeros() + 1;
+                self.registers[index] = self.registers[index].max(rho as u8);
+            }
+        }
     }
 
     #[inline]
     fn get_histogram(&self) -> [u32; 64 - HLL_P_MIN + 2] {
         let mut histogram = [0u32; 64 - HLL_P_MIN + 2];
-        for r in &self.registers {
+        for r in &self.registers[..1 << self.p] {
             histogram[*r as usize] += 1;
         }
         histogram
@@ -180,7 +219,8 @@ where
             "cannot merge HLL sketches with different precisions ({} vs {})",
             self.p, other.p
         );
-        for i in 0..self.registers.len() {
+        let n = 1 << self.p;
+        for i in 0..n {
             self.registers[i] = self.registers[i].max(other.registers[i]);
         }
     }
@@ -312,7 +352,7 @@ where
     T: Hash + ?Sized,
 {
     fn as_ref(&self) -> &[u8] {
-        &self.registers
+        &self.registers[..1 << self.p]
     }
 }
 
@@ -321,8 +361,26 @@ where
     T: Hash,
 {
     fn extend<S: IntoIterator<Item = T>>(&mut self, iter: S) {
-        for elem in iter {
-            self.add(&elem);
+        if self.p == DEFAULT_HLL_P {
+            const P: usize = DEFAULT_HLL_P;
+            const Q: usize = 64 - DEFAULT_HLL_P;
+            const MASK: u64 = (1u64 << DEFAULT_HLL_P) - 1;
+            for elem in iter {
+                let hash = HLL_HASH_STATE.hash_one(&elem);
+                let index = (hash & MASK) as usize;
+                let rho = ((hash >> P) | (1_u64 << Q)).trailing_zeros() + 1;
+                self.registers[index] = self.registers[index].max(rho as u8);
+            }
+        } else {
+            let p = self.p;
+            let q = self.q;
+            let p_mask = self.p_mask;
+            for elem in iter {
+                let hash = HLL_HASH_STATE.hash_one(&elem);
+                let index = (hash & p_mask) as usize;
+                let rho = ((hash >> p) | (1_u64 << q)).trailing_zeros() + 1;
+                self.registers[index] = self.registers[index].max(rho as u8);
+            }
         }
     }
 }
@@ -332,15 +390,33 @@ where
     T: 'a + Hash + ?Sized,
 {
     fn extend<S: IntoIterator<Item = &'a T>>(&mut self, iter: S) {
-        for elem in iter {
-            self.add(elem);
+        if self.p == DEFAULT_HLL_P {
+            const P: usize = DEFAULT_HLL_P;
+            const Q: usize = 64 - DEFAULT_HLL_P;
+            const MASK: u64 = (1u64 << DEFAULT_HLL_P) - 1;
+            for elem in iter {
+                let hash = HLL_HASH_STATE.hash_one(elem);
+                let index = (hash & MASK) as usize;
+                let rho = ((hash >> P) | (1_u64 << Q)).trailing_zeros() + 1;
+                self.registers[index] = self.registers[index].max(rho as u8);
+            }
+        } else {
+            let p = self.p;
+            let q = self.q;
+            let p_mask = self.p_mask;
+            for elem in iter {
+                let hash = HLL_HASH_STATE.hash_one(elem);
+                let index = (hash & p_mask) as usize;
+                let rho = ((hash >> p) | (1_u64 << q)).trailing_zeros() + 1;
+                self.registers[index] = self.registers[index].max(rho as u8);
+            }
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_HLL_P, HLL_P_MAX, HLL_P_MIN, HyperLogLog, NUM_REGISTERS};
+    use super::{DEFAULT_HLL_P, HLL_P_MIN, HyperLogLog, NUM_REGISTERS};
 
     fn compare_with_delta(got: usize, expected: usize, p: usize) {
         let expected = expected as f64;
@@ -512,7 +588,7 @@ mod tests {
             let bytes = src.as_ref().to_vec();
             assert_eq!(bytes.len(), 1 << p);
 
-            let dst = HyperLogLog::<u64>::from_registers(bytes);
+            let dst = HyperLogLog::<u64>::from_registers(&bytes);
             assert_eq!(dst.precision(), p);
             assert_eq!(dst.count(), src.count());
         }
@@ -542,7 +618,7 @@ mod tests {
     fn test_precision_range_bounds() {
         // boundary values must not panic
         let _ = HyperLogLog::<u64>::with_precision(HLL_P_MIN);
-        let _ = HyperLogLog::<u64>::with_precision(HLL_P_MAX);
+        let _ = HyperLogLog::<u64>::with_precision(DEFAULT_HLL_P);
     }
 
     #[test]
@@ -554,19 +630,19 @@ mod tests {
     #[test]
     #[should_panic(expected = "HLL precision must be in")]
     fn test_precision_above_max_panics() {
-        let _ = HyperLogLog::<u64>::with_precision(HLL_P_MAX + 1);
+        let _ = HyperLogLog::<u64>::with_precision(DEFAULT_HLL_P + 1);
     }
 
     #[test]
     #[should_panic(expected = "register slice length must be a power of two")]
     fn test_from_registers_non_power_of_two_panics() {
-        let _ = HyperLogLog::<u64>::from_registers(vec![0u8; 3]);
+        let _ = HyperLogLog::<u64>::from_registers(&vec![0u8; 3]);
     }
 
     #[test]
     #[should_panic(expected = "inferred precision")]
     fn test_from_registers_out_of_range_precision_panics() {
         // 2 bytes => p = 1, below HLL_P_MIN
-        let _ = HyperLogLog::<u64>::from_registers(vec![0u8; 2]);
+        let _ = HyperLogLog::<u64>::from_registers(&vec![0u8; 2]);
     }
 }

@@ -18,7 +18,7 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use crate::hyperloglog::{
-    DEFAULT_HLL_P, HLL_HASH_STATE, HLL_P_MAX, HLL_P_MIN, HyperLogLog, count_from_hashes,
+    DEFAULT_HLL_P, HLL_HASH_STATE, HLL_P_MIN, HyperLogLog, count_from_hashes,
 };
 use arrow::array::{
     Array, ArrayRef, BinaryArray, BinaryBuilder, BooleanArray, PrimitiveArray,
@@ -84,16 +84,16 @@ impl<T: Hash + ?Sized> TryFrom<&[u8]> for HyperLogLog<T> {
             );
         }
         let p = v.len().ilog2() as usize;
-        if !(HLL_P_MIN..=HLL_P_MAX).contains(&p) {
+        if !(HLL_P_MIN..=DEFAULT_HLL_P).contains(&p) {
             return internal_err!(
                 "approx_distinct: HLL state length {} implies precision {} outside {}..={}",
                 v.len(),
                 p,
                 HLL_P_MIN,
-                HLL_P_MAX
+                DEFAULT_HLL_P
             );
         }
-        Ok(HyperLogLog::<T>::from_registers(v.to_vec()))
+        Ok(HyperLogLog::<T>::from_registers(v))
     }
 }
 
@@ -169,11 +169,7 @@ impl Accumulator for HLLAccumulator {
         create_hashes([array], &HLL_HASH_STATE, &mut self.hashes)?;
 
         match array.logical_nulls() {
-            None => {
-                for &hash in &self.hashes {
-                    self.hll.add_hashed(hash);
-                }
-            }
+            None => self.hll.add_hashed_slice(&self.hashes),
             Some(nulls) => {
                 for row in 0..array.len() {
                     if nulls.is_valid(row) {
@@ -724,11 +720,11 @@ impl ApproxDistinct {
     ///
     /// This only has effect for types that use the HLL accumulator path. Small
     /// integer and boolean types use exact bitmap counting regardless of this
-    /// value. Valid range: `HLL_P_MIN..=HLL_P_MAX` (4..=18).
+    /// value. Valid range: `HLL_P_MIN..=DEFAULT_HLL_P` (4..=14).
     pub fn with_hll_precision(p: usize) -> Result<Self> {
-        if !(HLL_P_MIN..=HLL_P_MAX).contains(&p) {
+        if !(HLL_P_MIN..=DEFAULT_HLL_P).contains(&p) {
             return plan_err!(
-                "HLL precision must be in {HLL_P_MIN}..={HLL_P_MAX}, got {p}"
+                "HLL precision must be in {HLL_P_MIN}..={DEFAULT_HLL_P}, got {p}"
             );
         }
         Ok(Self {
@@ -1691,7 +1687,7 @@ mod tests {
 
     #[test]
     fn with_hll_precision_out_of_range_returns_err() {
-        let result = ApproxDistinct::with_hll_precision(HLL_P_MAX + 1);
+        let result = ApproxDistinct::with_hll_precision(DEFAULT_HLL_P + 1);
         assert!(result.is_err(), "precision above max must be rejected");
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("HLL precision must be in"), "got: {msg}");
@@ -1772,14 +1768,14 @@ mod tests {
     #[test]
     fn hll_accumulator_size_includes_register_buffer() {
         let acc = HLLAccumulator::with_precision(10);
+        // Registers are now inline in the struct — size_of_val captures them.
         assert!(acc.size() >= 1 << 10, "register buffer must be counted");
-        assert!(acc.size() > size_of_val(&acc), "heap must be counted");
     }
 
     #[test]
     fn numeric_hll_accumulator_size_includes_register_buffer() {
         let acc = NumericHLLAccumulator::<Int64Type>::with_precision(10);
+        // Registers are now inline in the struct — size_of_val captures them.
         assert!(acc.size() >= 1 << 10, "register buffer must be counted");
-        assert!(acc.size() > size_of_val(&acc), "heap must be counted");
     }
 }
