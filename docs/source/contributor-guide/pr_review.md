@@ -148,9 +148,9 @@ Guidelines for evaluating tests:
 5. Check that tests assert on specific expected values or plans (e.g. via
    `insta` snapshots or `.slt` expected output) rather than merely checking
    "no error occurred".
-6. Verify test actually cover the bug ("Ablation Testing"): For bug fixes, revert 
-   the fix locally and check that the new test fails without it (i.e. the test 
-   actually reproduces the bug or covers the new feature). 
+6. Verify test actually cover the bug ("Ablation Testing"): For bug fixes, revert
+   the fix locally and check that the new test fails without it (i.e. the test
+   actually reproduces the bug or covers the new feature).
 
 [`cargo llvm-cov`]: https://github.com/taiki-e/cargo-llvm-cov
 
@@ -160,18 +160,18 @@ Check that:
 
 1. The code is clear and fits the style of the existing codebase.
 2. New functions and tests are placed near similar functions and
-   tests. For example helper functions should be defined close to where they are used, 
+   tests. For example helper functions should be defined close to where they are used,
    and new tests should be placed in the same module as the code they test.
-   SLT tests should be placed in an existing .slt file with related functionality, 
+   SLT tests should be placed in an existing .slt file with related functionality,
    unless the new tests are large enough to justify their own file.
 3. New APIs are consistent with existing public APIs and patterns; where a
    similar mechanism already exists, the PR should extend it rather than
    introduce a parallel one.
-3. Any changes to the public API follow the [API health policy].
-4. The change is appropriately scoped: unrelated refactoring, formatting
+4. Any changes to the public API follow the [API health policy].
+5. The change is appropriately scoped: unrelated refactoring, formatting
    churn, or drive-by changes make review longer and are better as separate
    PRs.
-5. New errors are actionable, mention the offending item, and use
+6. New errors are actionable, mention the offending item, and use
    the right error variant (e.g. `plan_err!` for user-triggerable errors vs
    `internal_err!` for invariant violations).
 
