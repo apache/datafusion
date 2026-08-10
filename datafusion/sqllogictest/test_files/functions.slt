@@ -138,6 +138,55 @@ SELECT right(NULL, CAST(NULL AS INT))
 ----
 NULL
 
+# Multi-byte (non-ASCII) coverage for left/right.
+#
+# `left_right_byte_length` takes an ASCII fast path that derives the byte offset from the
+# character count (apache/datafusion#23762); non-ASCII input must fall through to the
+# `char_indices()` / `nth_back()` path. The cases below pin that behaviour for both string
+# representations. The StringArray path slices via `&str` indexing, while the StringViewArray
+# path slices the underlying bytes without the `&str` boundary check, so an incorrect offset can
+# produce an invalid UTF-8 view rather than the explicit boundary panic seen on StringArray.
+
+query T
+SELECT left('日本語abc', 2)
+----
+日本
+
+query T
+SELECT left('héllo', -2)
+----
+hél
+
+query T
+SELECT left('hi🌏there', 3)
+----
+hi🌏
+
+query T
+SELECT left(arrow_cast('日本語abc', 'Utf8View'), 2)
+----
+日本
+
+query T
+SELECT left(arrow_cast('hi🌏there', 'Utf8View'), 3)
+----
+hi🌏
+
+query T
+SELECT right('日本語abc', 2)
+----
+bc
+
+query T
+SELECT right('日本語', -1)
+----
+本語
+
+query T
+SELECT right(arrow_cast('日本語abc', 'Utf8View'), 2)
+----
+bc
+
 query T
 SELECT substr('alphabet', -3)
 ----
