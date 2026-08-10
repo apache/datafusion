@@ -57,6 +57,7 @@ use datafusion::physical_expr::{
 };
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
+use datafusion::physical_optimizer::limit_pushdown::LimitPushdown;
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
 };
@@ -88,6 +89,7 @@ use datafusion::physical_plan::scalar_subquery::{
     ScalarSubqueryExec, ScalarSubqueryLink,
 };
 use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
 use datafusion::physical_plan::windows::{
@@ -457,6 +459,108 @@ fn roundtrip_global_skip_no_limit() -> Result<()> {
         10,
         None, // no limit
     )))
+}
+
+/// Sort key at index 1, so a decoder that misbinds column name vs index
+/// cannot pass.
+fn limit_test_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, false),
+        Field::new("b", DataType::Int64, false),
+    ]))
+}
+
+/// Non-default sort options, so a decode that falls back to defaults cannot
+/// pass.
+fn limit_required_ordering(schema: &Schema) -> Result<Option<LexOrdering>> {
+    Ok(LexOrdering::new(vec![PhysicalSortExpr {
+        expr: col("b", schema)?,
+        options: SortOptions {
+            descending: true,
+            nulls_first: false,
+        },
+    }]))
+}
+
+#[test]
+fn roundtrip_limit_with_required_ordering() -> Result<()> {
+    let schema = limit_test_schema();
+    let required_ordering = limit_required_ordering(&schema)?;
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+
+    let mut global =
+        GlobalLimitExec::new(Arc::new(EmptyExec::new(Arc::clone(&schema))), 3, Some(25));
+    global.set_required_ordering(required_ordering.clone());
+    let decoded =
+        roundtrip_test_and_return(Arc::new(global), &ctx, &codec, &proto_converter)?;
+    let decoded = decoded
+        .downcast_ref::<GlobalLimitExec>()
+        .expect("expected GlobalLimitExec");
+    assert_eq!(decoded.required_ordering(), &required_ordering);
+
+    let mut local = LocalLimitExec::new(Arc::new(EmptyExec::new(schema)), 25);
+    local.set_required_ordering(required_ordering.clone());
+    let decoded =
+        roundtrip_test_and_return(Arc::new(local), &ctx, &codec, &proto_converter)?;
+    let decoded = decoded
+        .downcast_ref::<LocalLimitExec>()
+        .expect("expected LocalLimitExec");
+    assert_eq!(decoded.required_ordering(), &required_ordering);
+    Ok(())
+}
+
+/// A limit's `required_ordering` is the only record that an `ORDER BY ... LIMIT`
+/// whose sort node was optimized away is order-sensitive, so it must survive
+/// serde all the way into the scan's `preserve_order` flag.
+#[test]
+fn roundtrip_limit_required_ordering_reaches_data_source() -> Result<()> {
+    let file_schema = limit_test_schema();
+    let make_scan = || {
+        let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
+        let scan_config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file.parquet".to_string(),
+                    1024,
+                )])])
+                .build();
+        DataSourceExec::from_data_source(scan_config)
+    };
+    let scan_after_limit_pushdown = |limit: GlobalLimitExec| -> Result<FileScanConfig> {
+        let ctx = SessionContext::new();
+        let codec = DefaultPhysicalExtensionCodec {};
+        let proto_converter = DefaultPhysicalProtoConverter {};
+        let decoded =
+            roundtrip_test_and_return(Arc::new(limit), &ctx, &codec, &proto_converter)?;
+
+        // Child replacement must not erase the decoded ordering before pushdown.
+        let rebuilt = decoded.with_new_children(vec![make_scan()])?;
+
+        let optimized =
+            LimitPushdown::new().optimize(rebuilt, &ConfigOptions::default())?;
+        let scan = optimized
+            .downcast_ref::<DataSourceExec>()
+            .expect("limit should be absorbed into the scan");
+        Ok(scan
+            .data_source()
+            .downcast_ref::<FileScanConfig>()
+            .expect("expected FileScanConfig")
+            .clone())
+    };
+
+    let mut limit = GlobalLimitExec::new(make_scan(), 0, Some(10));
+    limit.set_required_ordering(limit_required_ordering(&file_schema)?);
+    let scan_config = scan_after_limit_pushdown(limit)?;
+    assert_eq!(scan_config.limit, Some(10));
+    assert!(scan_config.preserve_order);
+
+    let scan_config =
+        scan_after_limit_pushdown(GlobalLimitExec::new(make_scan(), 0, Some(10)))?;
+    assert_eq!(scan_config.limit, Some(10));
+    assert!(!scan_config.preserve_order);
+    Ok(())
 }
 
 #[test]
@@ -1207,6 +1311,161 @@ fn roundtrip_sort_preserve_partitioning() -> Result<()> {
         SortExec::new(sort_exprs, Arc::new(EmptyExec::new(schema)))
             .with_preserve_partitioning(true),
     ))
+}
+
+/// `SortExec::fetch` turns a sort into a top-k sort. Losing it during serde
+/// would silently widen the result set, so exercise the `Some(..)` state
+/// explicitly (`roundtrip_sort` only covers `None`).
+///
+/// `SortExec` currently derives `Debug`, so `roundtrip_test`'s
+/// `format!("{plan:?}")` comparison does observe `fetch`. The assertions below
+/// go through the accessor instead so that this coverage does not silently
+/// disappear if `SortExec` ever grows a hand-written `Debug` impl.
+#[test]
+fn roundtrip_sort_with_fetch() -> Result<()> {
+    let field_a = Field::new("a", DataType::Boolean, false);
+    let field_b = Field::new("b", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+    let sort_exprs: LexOrdering = [
+        PhysicalSortExpr {
+            expr: col("a", &schema)?,
+            options: SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        },
+        PhysicalSortExpr {
+            expr: col("b", &schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        },
+    ]
+    .into();
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+
+    let roundtripped = roundtrip_test_and_return(
+        Arc::new(
+            SortExec::new(
+                sort_exprs.clone(),
+                Arc::new(EmptyExec::new(Arc::clone(&schema))),
+            )
+            .with_fetch(Some(7)),
+        ),
+        &ctx,
+        &codec,
+        &proto_converter,
+    )?;
+    let roundtripped = roundtripped
+        .downcast_ref::<SortExec>()
+        .expect("should decode back into a SortExec");
+    assert_eq!(roundtripped.fetch(), Some(7));
+    assert_eq!(roundtripped.expr(), &sort_exprs);
+
+    // `fetch` combined with `preserve_partitioning`, since both share the same
+    // proto node.
+    let roundtripped = roundtrip_test_and_return(
+        Arc::new(
+            SortExec::new(sort_exprs.clone(), Arc::new(EmptyExec::new(schema)))
+                .with_fetch(Some(3))
+                .with_preserve_partitioning(true),
+        ),
+        &ctx,
+        &codec,
+        &proto_converter,
+    )?;
+    let roundtripped = roundtripped
+        .downcast_ref::<SortExec>()
+        .expect("should decode back into a SortExec");
+    assert_eq!(roundtripped.fetch(), Some(3));
+    assert!(roundtripped.preserve_partitioning());
+    Ok(())
+}
+
+/// Round trip a [`SortPreservingMergeExec`], which had no dedicated round trip
+/// test at all.
+///
+/// Covers everything that is actually on the wire for this plan: the input, the
+/// sort expressions and `fetch` in both its `None` and `Some(..)` states.
+///
+/// Note that `SortPreservingMergeExec::enable_round_robin_repartition` is
+/// deliberately *not* asserted on here: it has no field in
+/// `SortPreservingMergeExecNode`, so it is not serialized and decoding always
+/// restores the `true` default from `SortPreservingMergeExec::new`. Asserting
+/// round trip equality on it would give a false sense of coverage.
+///
+/// `SortPreservingMergeExec` derives `Debug`, so `roundtrip_test`'s
+/// `format!("{plan:?}")` comparison does observe `expr` and `fetch`. The
+/// assertions below use the accessors so the coverage survives a future
+/// hand-written `Debug` impl.
+#[test]
+fn roundtrip_sort_preserving_merge() -> Result<()> {
+    let field_a = Field::new("a", DataType::Boolean, false);
+    let field_b = Field::new("b", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+    let sort_exprs: LexOrdering = [
+        PhysicalSortExpr {
+            expr: col("a", &schema)?,
+            options: SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        },
+        PhysicalSortExpr {
+            expr: col("b", &schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        },
+    ]
+    .into();
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+
+    // No fetch: `fetch` is encoded as -1 and must decode back to `None`.
+    let roundtripped = roundtrip_test_and_return(
+        Arc::new(SortPreservingMergeExec::new(
+            sort_exprs.clone(),
+            Arc::new(EmptyExec::new(Arc::clone(&schema))),
+        )),
+        &ctx,
+        &codec,
+        &proto_converter,
+    )?;
+    let roundtripped = roundtripped
+        .downcast_ref::<SortPreservingMergeExec>()
+        .expect("should decode back into a SortPreservingMergeExec");
+    assert_eq!(roundtripped.fetch(), None);
+    assert_eq!(roundtripped.expr(), &sort_exprs);
+    assert_eq!(roundtripped.input().schema(), schema);
+
+    // With a fetch: dropping it would turn a bounded merge into an unbounded
+    // one and change the query result.
+    let roundtripped = roundtrip_test_and_return(
+        Arc::new(
+            SortPreservingMergeExec::new(
+                sort_exprs.clone(),
+                Arc::new(EmptyExec::new(Arc::clone(&schema))),
+            )
+            .with_fetch(Some(11)),
+        ),
+        &ctx,
+        &codec,
+        &proto_converter,
+    )?;
+    let roundtripped = roundtripped
+        .downcast_ref::<SortPreservingMergeExec>()
+        .expect("should decode back into a SortPreservingMergeExec");
+    assert_eq!(roundtripped.fetch(), Some(11));
+    assert_eq!(roundtripped.expr(), &sort_exprs);
+    Ok(())
 }
 
 #[test]
