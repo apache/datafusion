@@ -48,7 +48,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
+use datafusion_common::{Result, internal_datafusion_err, not_impl_datafusion_err};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
@@ -910,15 +910,18 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 /// `$nullable`: whether the input can contains nulls
 /// `$t`: the primitive type of the builder
 macro_rules! instantiate_primitive {
-    ($v:expr, $nullable:expr, $t:ty, $data_type:ident) => {
-        if $nullable {
-            let b = PrimitiveGroupValueBuilder::<$t, true>::new($data_type.to_owned());
-            $v.push(Box::new(b) as _)
+    ($nullable:expr, $t:ty, $data_type:ident) => {{
+        let builder: Box<dyn GroupColumn> = if $nullable {
+            Box::new(PrimitiveGroupValueBuilder::<$t, true>::new(
+                $data_type.to_owned(),
+            ))
         } else {
-            let b = PrimitiveGroupValueBuilder::<$t, false>::new($data_type.to_owned());
-            $v.push(Box::new(b) as _)
-        }
-    };
+            Box::new(PrimitiveGroupValueBuilder::<$t, false>::new(
+                $data_type.to_owned(),
+            ))
+        };
+        Some(builder)
+    }};
 }
 
 /// Returns true if the specified data type has a specialized
@@ -996,162 +999,153 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
 fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
     let nullable = field.is_nullable();
     let data_type = field.data_type();
-    let mut v: Vec<Box<dyn GroupColumn>> = Vec::with_capacity(1);
-    match data_type {
-        DataType::Int8 => instantiate_primitive!(v, nullable, Int8Type, data_type),
-        DataType::Int16 => instantiate_primitive!(v, nullable, Int16Type, data_type),
-        DataType::Int32 => instantiate_primitive!(v, nullable, Int32Type, data_type),
-        DataType::Int64 => instantiate_primitive!(v, nullable, Int64Type, data_type),
-        DataType::UInt8 => instantiate_primitive!(v, nullable, UInt8Type, data_type),
-        DataType::UInt16 => instantiate_primitive!(v, nullable, UInt16Type, data_type),
-        DataType::UInt32 => instantiate_primitive!(v, nullable, UInt32Type, data_type),
-        DataType::UInt64 => instantiate_primitive!(v, nullable, UInt64Type, data_type),
-        DataType::Float16 => {
-            instantiate_primitive!(v, nullable, Float16Type, data_type)
-        }
-        DataType::Float32 => {
-            instantiate_primitive!(v, nullable, Float32Type, data_type)
-        }
-        DataType::Float64 => {
-            instantiate_primitive!(v, nullable, Float64Type, data_type)
-        }
-        DataType::Date32 => instantiate_primitive!(v, nullable, Date32Type, data_type),
-        DataType::Date64 => instantiate_primitive!(v, nullable, Date64Type, data_type),
+    let builder: Option<Box<dyn GroupColumn>> = match data_type {
+        DataType::Int8 => instantiate_primitive!(nullable, Int8Type, data_type),
+        DataType::Int16 => instantiate_primitive!(nullable, Int16Type, data_type),
+        DataType::Int32 => instantiate_primitive!(nullable, Int32Type, data_type),
+        DataType::Int64 => instantiate_primitive!(nullable, Int64Type, data_type),
+        DataType::UInt8 => instantiate_primitive!(nullable, UInt8Type, data_type),
+        DataType::UInt16 => instantiate_primitive!(nullable, UInt16Type, data_type),
+        DataType::UInt32 => instantiate_primitive!(nullable, UInt32Type, data_type),
+        DataType::UInt64 => instantiate_primitive!(nullable, UInt64Type, data_type),
+        DataType::Float16 => instantiate_primitive!(nullable, Float16Type, data_type),
+        DataType::Float32 => instantiate_primitive!(nullable, Float32Type, data_type),
+        DataType::Float64 => instantiate_primitive!(nullable, Float64Type, data_type),
+        DataType::Date32 => instantiate_primitive!(nullable, Date32Type, data_type),
+        DataType::Date64 => instantiate_primitive!(nullable, Date64Type, data_type),
         DataType::Time32(t) => match t {
             TimeUnit::Second => {
-                instantiate_primitive!(v, nullable, Time32SecondType, data_type)
+                instantiate_primitive!(nullable, Time32SecondType, data_type)
             }
             TimeUnit::Millisecond => {
-                instantiate_primitive!(v, nullable, Time32MillisecondType, data_type)
+                instantiate_primitive!(nullable, Time32MillisecondType, data_type)
             }
             // Time32 with Microsecond / Nanosecond is not a valid Arrow type
             // combination; reject explicitly so group_column_supported_type
             // and this dispatcher stay in lockstep (see consistency fuzz below).
-            _ => return not_impl_err!("{data_type} not supported in GroupValuesColumn"),
+            _ => None,
         },
         DataType::Time64(t) => match t {
             TimeUnit::Microsecond => {
-                instantiate_primitive!(v, nullable, Time64MicrosecondType, data_type)
+                instantiate_primitive!(nullable, Time64MicrosecondType, data_type)
             }
             TimeUnit::Nanosecond => {
-                instantiate_primitive!(v, nullable, Time64NanosecondType, data_type)
+                instantiate_primitive!(nullable, Time64NanosecondType, data_type)
             }
             // Time64 with Second / Millisecond is not a valid Arrow type
             // combination; reject explicitly.
-            _ => return not_impl_err!("{data_type} not supported in GroupValuesColumn"),
+            _ => None,
         },
         DataType::Timestamp(t, _) => match t {
             TimeUnit::Second => {
-                instantiate_primitive!(v, nullable, TimestampSecondType, data_type)
+                instantiate_primitive!(nullable, TimestampSecondType, data_type)
             }
             TimeUnit::Millisecond => {
-                instantiate_primitive!(v, nullable, TimestampMillisecondType, data_type)
+                instantiate_primitive!(nullable, TimestampMillisecondType, data_type)
             }
             TimeUnit::Microsecond => {
-                instantiate_primitive!(v, nullable, TimestampMicrosecondType, data_type)
+                instantiate_primitive!(nullable, TimestampMicrosecondType, data_type)
             }
             TimeUnit::Nanosecond => {
-                instantiate_primitive!(v, nullable, TimestampNanosecondType, data_type)
+                instantiate_primitive!(nullable, TimestampNanosecondType, data_type)
             }
         },
         DataType::Duration(t) => match t {
             TimeUnit::Second => {
-                instantiate_primitive!(v, nullable, DurationSecondType, data_type)
+                instantiate_primitive!(nullable, DurationSecondType, data_type)
             }
             TimeUnit::Millisecond => {
-                instantiate_primitive!(v, nullable, DurationMillisecondType, data_type)
+                instantiate_primitive!(nullable, DurationMillisecondType, data_type)
             }
             TimeUnit::Microsecond => {
-                instantiate_primitive!(v, nullable, DurationMicrosecondType, data_type)
+                instantiate_primitive!(nullable, DurationMicrosecondType, data_type)
             }
             TimeUnit::Nanosecond => {
-                instantiate_primitive!(v, nullable, DurationNanosecondType, data_type)
+                instantiate_primitive!(nullable, DurationNanosecondType, data_type)
             }
         },
         // `IntervalUnit` has exactly three variants, so this match is exhaustive
         // with no fallback arm (unlike Time32 / Time64).
         DataType::Interval(u) => match u {
             IntervalUnit::YearMonth => {
-                instantiate_primitive!(v, nullable, IntervalYearMonthType, data_type)
+                instantiate_primitive!(nullable, IntervalYearMonthType, data_type)
             }
             IntervalUnit::DayTime => {
-                instantiate_primitive!(v, nullable, IntervalDayTimeType, data_type)
+                instantiate_primitive!(nullable, IntervalDayTimeType, data_type)
             }
             IntervalUnit::MonthDayNano => {
-                instantiate_primitive!(v, nullable, IntervalMonthDayNanoType, data_type)
+                instantiate_primitive!(nullable, IntervalMonthDayNanoType, data_type)
             }
         },
         DataType::Decimal128(_, _) => {
-            instantiate_primitive!(v, nullable, Decimal128Type, data_type)
+            instantiate_primitive!(nullable, Decimal128Type, data_type)
         }
         DataType::Decimal256(_, _) => {
-            instantiate_primitive!(v, nullable, Decimal256Type, data_type)
+            instantiate_primitive!(nullable, Decimal256Type, data_type)
         }
-        DataType::Utf8 => {
-            v.push(Box::new(ByteGroupValueBuilder::<i32>::new(
-                OutputType::Utf8,
-            )));
-        }
-        DataType::LargeUtf8 => {
-            v.push(Box::new(ByteGroupValueBuilder::<i64>::new(
-                OutputType::Utf8,
-            )));
-        }
-        DataType::Binary => {
-            v.push(Box::new(ByteGroupValueBuilder::<i32>::new(
-                OutputType::Binary,
-            )));
-        }
-        DataType::LargeBinary => {
-            v.push(Box::new(ByteGroupValueBuilder::<i64>::new(
-                OutputType::Binary,
-            )));
-        }
+        DataType::Utf8 => Some(Box::new(ByteGroupValueBuilder::<i32>::new(
+            OutputType::Utf8,
+        ))),
+        DataType::LargeUtf8 => Some(Box::new(ByteGroupValueBuilder::<i64>::new(
+            OutputType::Utf8,
+        ))),
+        DataType::Binary => Some(Box::new(ByteGroupValueBuilder::<i32>::new(
+            OutputType::Binary,
+        ))),
+        DataType::LargeBinary => Some(Box::new(ByteGroupValueBuilder::<i64>::new(
+            OutputType::Binary,
+        ))),
         DataType::Utf8View => {
-            v.push(Box::new(ByteViewGroupValueBuilder::<StringViewType>::new()));
+            Some(Box::new(ByteViewGroupValueBuilder::<StringViewType>::new()))
         }
         DataType::BinaryView => {
-            v.push(Box::new(ByteViewGroupValueBuilder::<BinaryViewType>::new()));
+            Some(Box::new(ByteViewGroupValueBuilder::<BinaryViewType>::new()))
         }
         DataType::Boolean => {
             if nullable {
-                v.push(Box::new(BooleanGroupValueBuilder::<true>::new()));
+                Some(Box::new(BooleanGroupValueBuilder::<true>::new()))
             } else {
-                v.push(Box::new(BooleanGroupValueBuilder::<false>::new()));
+                Some(Box::new(BooleanGroupValueBuilder::<false>::new()))
             }
         }
-        DataType::List(child_field)
-            if let Ok(child) = make_group_column(child_field.as_ref()) =>
-        {
-            v.push(Box::new(list::ListGroupValueBuilder::<i32>::new(
+        DataType::List(child_field) => match make_group_column(child_field.as_ref()) {
+            Ok(child) => Some(Box::new(list::ListGroupValueBuilder::<i32>::new(
                 Arc::clone(child_field),
                 child,
-            )));
-        }
-        DataType::LargeList(child_field)
-            if let Ok(child) = make_group_column(child_field.as_ref()) =>
+            ))),
+            // Replicate the generic fallback branch below, because we're in a match
+            // and `if let` can't be used due to MSRV.
+            Err(_) if RowsGroupColumn::supports_type(data_type) => {
+                Some(Box::new(RowsGroupColumn::try_new(data_type.clone())?))
+            }
+            Err(_) => None,
+        },
+        DataType::LargeList(child_field) => match make_group_column(child_field.as_ref())
         {
-            v.push(Box::new(list::ListGroupValueBuilder::<i64>::new(
+            Ok(child) => Some(Box::new(list::ListGroupValueBuilder::<i64>::new(
                 Arc::clone(child_field),
                 child,
-            )));
-        }
-        // Generic fallback for nested types (Struct / List / LargeList /
-        // FixedSizeList, recursively) that lack a type-specialized builder but
-        // can be encoded by arrow's row format. This is what lets a mixed
-        // schema keep the column-wise fast path for its native columns instead
-        // of dropping the whole key onto `GroupValuesRows`.
+            ))),
+            // Replicate the generic fallback branch below, because we're in a match
+            // and `if let` can't be used due to MSRV.
+            Err(_) if RowsGroupColumn::supports_type(data_type) => {
+                Some(Box::new(RowsGroupColumn::try_new(data_type.clone())?))
+            }
+            Err(_) => None,
+        },
+        // Generic fallback for nested types (Struct / FixedSizeList, etc.) that
+        // lack a type-specialized builder but can be encoded by arrow's row
+        // format. This is what lets a mixed schema keep the column-wise fast
+        // path for its native columns instead of dropping the whole key onto
+        // `GroupValuesRows`.
         dt if dt.is_nested() && RowsGroupColumn::supports_type(dt) => {
-            v.push(Box::new(RowsGroupColumn::try_new(dt.clone())?));
+            Some(Box::new(RowsGroupColumn::try_new(dt.clone())?))
         }
-        _ => return not_impl_err!("{data_type} not supported in GroupValuesColumn"),
-    }
-    debug_assert_eq!(
-        v.len(),
-        1,
-        "make_group_column must push exactly one builder"
-    );
-    Ok(v.into_iter().next().unwrap())
+        _ => None,
+    };
+    builder.ok_or_else(|| {
+        not_impl_datafusion_err!("{data_type} not supported in GroupValuesColumn")
+    })
 }
 
 impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
