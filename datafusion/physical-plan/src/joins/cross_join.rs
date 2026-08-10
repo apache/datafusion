@@ -44,7 +44,8 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    JoinType, Result, ScalarValue, assert_eq_or_internal_err, internal_err,
+    DataFusionError, JoinType, Result, ScalarValue, assert_eq_or_internal_err,
+    internal_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -631,23 +632,21 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
 
     /// Collects build (left) side of the join into the state. In case of an empty build batch,
     /// the execution terminates. Otherwise, the state is updated to fetch probe (right) batch.
-    fn collect_build_side(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+    /// Returns true if build side was loaded and non-empty
+    fn collect_build_side(&mut self, cx: &mut std::task::Context<'_>) -> Result<bool> {
         let build_timer = self.join_metrics.build_time.timer();
         let left_data = match ready!(self.left_fut.get(cx)) {
             Ok(left_data) => left_data,
-            Err(e) => return Poll::Ready(Err(e)),
+            Err(e) => return Err(e),
         };
         build_timer.done();
 
         let left_data = left_data.merged_batch.clone();
         let result = if left_data.num_rows() == 0 {
-            StatefulStreamResult::Ready(None)
+            false
         } else {
             self.left_data = left_data;
-            StatefulStreamResult::Continue
+            true
         };
         Ok(result)
     }
@@ -677,15 +676,19 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
 
     /// Joins the indexed row of left data with the current probe batch.
     /// If all the results are produced, the state is set to fetch new probe batch.
-    fn build_batches(&mut self) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
-        let right_batch = self.state.try_as_record_batch()?;
+    async fn build_batches(
+        &mut self,
+    ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+        let right_batch = self
+            .processed_right_data
+            .ok_or(internal_err!("Expected RecordBatch for right side"))?;
         if self.left_index < self.left_data.num_rows() {
             match self.batch_transformer.next() {
                 None => {
                     let join_timer = self.join_metrics.join_time.timer();
                     let result = build_batch(
                         self.left_index,
-                        right_batch,
+                        &right_batch,
                         &self.left_data,
                         &self.schema,
                     );
