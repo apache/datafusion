@@ -343,9 +343,29 @@ impl ExecutionPlan for WindowAggExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
 
-        let input = ctx.encode_child(self.input())?;
-        let window_expr = self
-            .window_expr()
+        // Exhaustive destructure: adding a field to `WindowAggExec` without
+        // deciding how it is serialized is a compile error, not a silent
+        // round-trip gap.
+        let Self {
+            input,
+            window_expr,
+            // Derived at construction by `create_schema` from the input schema
+            // and the window expressions.
+            schema: _,
+            // Runtime execution state, rebuilt empty on decode.
+            metrics: _,
+            // Derived at construction by `get_ordered_partition_by_indices`.
+            ordered_partition_by_indices: _,
+            // Derived at construction by `Self::compute_properties`.
+            cache: _,
+            // No wire field of its own; it is folded into `partition_keys`
+            // below, since `partition_keys()` returns an empty vec when this is
+            // false and the decoder recovers it as `!partition_keys.is_empty()`.
+            can_repartition: _,
+        } = self;
+
+        let input = ctx.encode_child(input)?;
+        let window_expr = window_expr
             .iter()
             .map(|expr| encode_physical_window_expr(expr, ctx))
             .collect::<Result<Vec<_>>>()?;
@@ -394,24 +414,28 @@ impl WindowAggExec {
             protobuf::physical_plan_node::PhysicalPlanType::Window,
             "WindowAggExec",
         );
-        let input = ctx.decode_required_child(
-            window_agg.input.as_deref(),
-            "WindowAggExec",
-            "input",
-        )?;
+        // Exhaustive destructure: a new field on `WindowAggExecNode` is a
+        // compile error here rather than a silently ignored wire field.
+        let protobuf::WindowAggExecNode {
+            input,
+            window_expr,
+            partition_keys,
+            input_order_mode,
+        } = window_agg.as_ref();
+
+        let input =
+            ctx.decode_required_child(input.as_deref(), "WindowAggExec", "input")?;
         let input_schema = input.schema();
-        let window_expr = window_agg
-            .window_expr
+        let window_expr = window_expr
             .iter()
             .map(|expr| decode_physical_window_expr(expr, ctx, input_schema.as_ref()))
             .collect::<Result<Vec<_>>>()?;
-        let partition_keys = window_agg
-            .partition_keys
+        let partition_keys = partition_keys
             .iter()
             .map(|expr| ctx.decode_expr(expr, input_schema.as_ref()))
             .collect::<Result<Vec<_>>>()?;
 
-        if let Some(input_order_mode) = window_agg.input_order_mode.as_ref() {
+        if let Some(input_order_mode) = input_order_mode.as_ref() {
             let input_order_mode = match input_order_mode {
                 ProtoInputOrderMode::Linear(_) => InputOrderMode::Linear,
                 ProtoInputOrderMode::PartiallySorted(
@@ -425,12 +449,15 @@ impl WindowAggExec {
                 window_expr,
                 input,
                 input_order_mode,
+                // `can_repartition` has no wire field: the encoder writes an
+                // empty `partition_keys` when it is false.
                 !partition_keys.is_empty(),
             )?))
         } else {
             Ok(Arc::new(WindowAggExec::try_new(
                 window_expr,
                 input,
+                // See above: `can_repartition` is recovered from `partition_keys`.
                 !partition_keys.is_empty(),
             )?))
         }

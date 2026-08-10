@@ -264,6 +264,58 @@ impl DataSource for MemorySourceConfig {
     ) -> Result<TreeNodeRecursion> {
         Ok(TreeNodeRecursion::Continue)
     }
+
+    /// Serialize this `MemorySourceConfig` as a `MemoryScanExecNode` wrapped
+    /// in a [`PhysicalPlanNode`]. Byte-compatible with the former central
+    /// `MemoryScan` arm in `datafusion-proto`.
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_physical_expr_common::sort_expr::sort_exprs_try_to_proto;
+        use datafusion_proto_models::protobuf;
+
+        let partitions = self
+            .partitions
+            .iter()
+            .map(|batches| record_batches_to_ipc_bytes(batches))
+            .collect::<Result<Vec<_>>>()?;
+
+        // Proto3 can't tell `None` from `Some(vec![])`; encode the latter
+        // as the `[u32::MAX]` sentinel, matching the join/filter nodes.
+        let projection = match self.projection.as_ref() {
+            None => Vec::new(),
+            Some(v) if v.is_empty() => vec![u32::MAX],
+            Some(v) => v.iter().map(|x| *x as u32).collect(),
+        };
+
+        let mut sort_information = Vec::with_capacity(self.sort_information.len());
+        for ordering in &self.sort_information {
+            let physical_sort_expr_nodes =
+                sort_exprs_try_to_proto(ordering.iter(), &ctx.expr_ctx())?;
+            sort_information.push(protobuf::PhysicalSortExprNodeCollection {
+                physical_sort_expr_nodes,
+            });
+        }
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::MemoryScan(
+                    protobuf::MemoryScanExecNode {
+                        partitions,
+                        schema: Some(self.schema.as_ref().try_into()?),
+                        projection,
+                        sort_information,
+                        show_sizes: self.show_sizes,
+                        fetch: self.fetch.map(|f| f as u32),
+                    },
+                ),
+            ),
+        }))
+    }
 }
 
 impl MemorySourceConfig {
@@ -613,6 +665,96 @@ impl MemorySourceConfig {
 
         Ok(Some(partitions))
     }
+}
+
+#[cfg(feature = "proto")]
+impl MemorySourceConfig {
+    /// Reconstruct a [`DataSourceExec`] wrapping a `MemorySourceConfig` from
+    /// its protobuf representation. Byte-compatible with the former central
+    /// `MemoryScan` arm in `datafusion-proto`.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>> {
+        use datafusion_common::internal_datafusion_err;
+        use datafusion_physical_expr_common::sort_expr::sort_exprs_try_from_proto;
+        use datafusion_proto_models::protobuf;
+
+        let scan = datafusion_physical_plan::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::MemoryScan,
+            "MemorySourceConfig",
+        );
+
+        let partitions = scan
+            .partitions
+            .iter()
+            .map(|buf| record_batches_from_ipc_bytes(buf))
+            .collect::<Result<Vec<_>>>()?;
+
+        let proto_schema = scan.schema.as_ref().ok_or_else(|| {
+            internal_datafusion_err!("schema in MemoryScanExecNode is missing.")
+        })?;
+        let schema: SchemaRef = SchemaRef::new(proto_schema.try_into()?);
+
+        // Preserve the empty-projection sentinel written by `try_to_proto`.
+        let projection = match scan.projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Vec::new()),
+            indices => Some(indices.iter().map(|i| *i as usize).collect()),
+        };
+
+        let mut sort_information = vec![];
+        for ordering in &scan.sort_information {
+            let sort_exprs = sort_exprs_try_from_proto(
+                &ordering.physical_sort_expr_nodes,
+                &ctx.expr_ctx(&schema),
+            )?;
+            sort_information.extend(LexOrdering::new(sort_exprs));
+        }
+
+        let source = Self::try_new(&partitions, schema, projection)?
+            .with_limit(scan.fetch.map(|f| f as usize))
+            .with_show_sizes(scan.show_sizes)
+            .try_with_sort_information(sort_information)?;
+
+        Ok(DataSourceExec::from_data_source(source))
+    }
+}
+
+/// Encode record batches as Arrow IPC stream bytes; an empty slice encodes to
+/// an empty buffer.
+#[cfg(feature = "proto")]
+fn record_batches_to_ipc_bytes(batches: &[RecordBatch]) -> Result<Vec<u8>> {
+    use arrow::ipc::writer::StreamWriter;
+
+    if batches.is_empty() {
+        return Ok(vec![]);
+    }
+    let schema = batches[0].schema();
+    let mut buf = Vec::new();
+    let mut writer = StreamWriter::try_new(&mut buf, &schema)?;
+    for batch in batches {
+        writer.write(batch)?;
+    }
+    writer.finish()?;
+    Ok(buf)
+}
+
+/// Inverse of [`record_batches_to_ipc_bytes`].
+#[cfg(feature = "proto")]
+fn record_batches_from_ipc_bytes(buf: &[u8]) -> Result<Vec<RecordBatch>> {
+    use arrow::ipc::reader::StreamReader;
+
+    if buf.is_empty() {
+        return Ok(vec![]);
+    }
+    let reader = StreamReader::try_new(buf, None)?;
+    let mut batches = Vec::new();
+    for batch in reader {
+        batches.push(batch?);
+    }
+    Ok(batches)
 }
 
 /// For use in repartitioning, track the total size and original partition index.

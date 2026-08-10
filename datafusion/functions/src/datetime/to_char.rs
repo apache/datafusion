@@ -57,10 +57,6 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
     argument(
         name = "format",
         description = "A [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) string to use to convert the expression."
-    ),
-    argument(
-        name = "day",
-        description = "Day to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators."
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
