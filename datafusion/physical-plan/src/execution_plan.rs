@@ -35,13 +35,13 @@ pub use datafusion_common::utils::project_schema;
 pub use datafusion_common::{ColumnStatistics, Statistics, internal_err};
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
+use datafusion_physical_expr::projection::ProjectionExpr;
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
     Distribution, Partitioning, PhysicalExpr, expressions,
 };
 
 use std::any::Any;
-use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, LazyLock};
@@ -936,6 +936,33 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     }
 }
 
+/// A value that contains a physical expression root.
+pub trait PhysicalExprRoot {
+    /// Returns the physical expression at this root.
+    fn as_physical_expr_root(&self) -> &Arc<dyn PhysicalExpr>;
+}
+
+impl PhysicalExprRoot for Arc<dyn PhysicalExpr> {
+    fn as_physical_expr_root(&self) -> &Arc<dyn PhysicalExpr> {
+        self
+    }
+}
+
+impl PhysicalExprRoot for ProjectionExpr {
+    fn as_physical_expr_root(&self) -> &Arc<dyn PhysicalExpr> {
+        self.as_ref()
+    }
+}
+
+impl<T> PhysicalExprRoot for &T
+where
+    T: PhysicalExprRoot + ?Sized,
+{
+    fn as_physical_expr_root(&self) -> &Arc<dyn PhysicalExpr> {
+        (*self).as_physical_expr_root()
+    }
+}
+
 /// Applies `f` to a shallow sequence of physical expression roots.
 ///
 /// [`TreeNodeRecursion::Stop`] stops iteration and is returned immediately.
@@ -947,10 +974,10 @@ pub fn apply_expression_roots<I>(
 ) -> Result<TreeNodeRecursion>
 where
     I: IntoIterator,
-    I::Item: Borrow<Arc<dyn PhysicalExpr>>,
+    I::Item: PhysicalExprRoot,
 {
     for root in roots {
-        match f(root.borrow())? {
+        match f(root.as_physical_expr_root())? {
             TreeNodeRecursion::Stop => return Ok(TreeNodeRecursion::Stop),
             TreeNodeRecursion::Continue | TreeNodeRecursion::Jump => {}
         }

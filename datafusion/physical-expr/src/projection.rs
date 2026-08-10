@@ -69,6 +69,12 @@ impl PartialEq for ProjectionExpr {
 
 impl Eq for ProjectionExpr {}
 
+impl AsRef<Arc<dyn PhysicalExpr>> for ProjectionExpr {
+    fn as_ref(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.expr
+    }
+}
+
 impl std::fmt::Display for ProjectionExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.expr.to_string() == self.alias {

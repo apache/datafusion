@@ -179,10 +179,7 @@ mod file_scan_config_serde {
                 -> Result<datafusion_common::tree_node::TreeNodeRecursion>,
         ) -> Result<datafusion_common::tree_node::TreeNodeRecursion> {
             datafusion_physical_plan::apply_expression_roots(
-                self.projection
-                    .iter()
-                    .flatten()
-                    .map(|proj_expr| &proj_expr.expr),
+                self.projection.iter().flatten(),
                 f,
             )
         }
