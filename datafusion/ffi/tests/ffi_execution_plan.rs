@@ -21,6 +21,7 @@ mod tests {
     use arrow::datatypes::Schema;
     use arrow_schema::DataType;
     use datafusion_common::DataFusionError;
+    use datafusion_common::tree_node::TreeNodeRecursion;
     use datafusion_ffi::execution_plan::FFI_ExecutionPlan;
     use datafusion_ffi::execution_plan::ForeignExecutionPlan;
     use datafusion_ffi::execution_plan::{ExecutionPlanPrivateData, tests::EmptyExec};
@@ -61,6 +62,30 @@ mod tests {
         let observed_part = with_stats.partition_statistics(Some(0))?;
         assert_eq!(observed_part.as_ref(), &expected);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_execution_plan_expressions_cross_library() -> Result<(), DataFusionError>
+    {
+        let module = get_module()?;
+        let plan = (module.create_exec_with_expressions)();
+        let plan: Arc<dyn ExecutionPlan> = (&plan).try_into()?;
+        assert!(plan.is::<ForeignExecutionPlan>());
+
+        let mut retained = None;
+        plan.apply_expressions(&mut |expr| {
+            retained = Some(Arc::clone(expr));
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        drop(plan);
+
+        assert!(
+            retained
+                .as_ref()
+                .and_then(|expr| expr.expression_id())
+                .is_some()
+        );
         Ok(())
     }
 

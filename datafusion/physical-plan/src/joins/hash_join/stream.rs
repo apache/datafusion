@@ -559,16 +559,24 @@ impl HashJoinStream {
             .bounds
             .clone()
             .unwrap_or_else(|| PartitionBounds::new(vec![]));
+        // Arrow tracks null counts per array, so this costs no data scan.
+        let keys_have_null = left_data
+            .values()
+            .iter()
+            .any(|array| array.null_count() > 0);
 
         let build_data = match self.mode {
             PartitionMode::Partitioned => PartitionBuildData::Partitioned {
                 partition_id: self.partition,
                 pushdown,
                 bounds,
+                keys_have_null,
             },
-            PartitionMode::CollectLeft => {
-                PartitionBuildData::CollectLeft { pushdown, bounds }
-            }
+            PartitionMode::CollectLeft => PartitionBuildData::CollectLeft {
+                pushdown,
+                bounds,
+                keys_have_null,
+            },
             PartitionMode::Auto => unreachable!(
                 "PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"
             ),
@@ -1118,6 +1126,7 @@ mod tests {
             partition_id,
             pushdown: PushdownStrategy::Empty,
             bounds: PartitionBounds::new(vec![]),
+            keys_have_null: false,
         }
     }
 
