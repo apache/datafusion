@@ -26,8 +26,8 @@ use crate::object_storage::instrumented::{
 };
 use crate::print_format::PrintFormat;
 
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::DataFusionError;
 use datafusion::common::instant::Instant;
 use datafusion::error::Result;

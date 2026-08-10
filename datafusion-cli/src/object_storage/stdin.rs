@@ -364,7 +364,7 @@ mod tests {
         use datafusion::arrow::array::Int32Array;
         use datafusion::arrow::datatypes::{DataType, Field, Schema};
         use datafusion::arrow::record_batch::RecordBatch;
-        use parquet::arrow::ArrowWriter;
+        use datafusion::parquet::arrow::ArrowWriter;
 
         // Parquet requires random access to the footer, which a real pipe cannot
         // provide; the in-memory buffer makes this work.

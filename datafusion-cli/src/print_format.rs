@@ -21,11 +21,11 @@ use std::str::FromStr;
 
 use crate::print_options::MaxRows;
 
-use arrow::csv::writer::WriterBuilder;
-use arrow::datatypes::SchemaRef;
-use arrow::json::{ArrayWriter, LineDelimitedWriter};
-use arrow::record_batch::RecordBatch;
-use arrow::util::pretty::pretty_format_batches_with_options;
+use datafusion::arrow::csv::writer::WriterBuilder;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::json::{ArrayWriter, LineDelimitedWriter};
+use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::arrow::util::pretty::pretty_format_batches_with_options;
 use datafusion::config::FormatOptions;
 use datafusion::error::Result;
 
@@ -112,7 +112,8 @@ fn format_batches_with_maxrows<W: std::io::Write>(
     maxrows: MaxRows,
     format_options: &FormatOptions,
 ) -> Result<()> {
-    let options: arrow::util::display::FormatOptions = format_options.try_into()?;
+    let options: datafusion::arrow::util::display::FormatOptions =
+        format_options.try_into()?;
 
     match maxrows {
         MaxRows::Limited(maxrows) => {
@@ -200,7 +201,7 @@ impl PrintFormat {
         match self {
             // Print column headers for Table format
             Self::Table if !schema.fields().is_empty() => {
-                let format_options: arrow::util::display::FormatOptions =
+                let format_options: datafusion::arrow::util::display::FormatOptions =
                     format_options.try_into()?;
 
                 let empty_batch = RecordBatch::new_empty(schema);
@@ -219,8 +220,8 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use arrow::array::Int32Array;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::array::Int32Array;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use insta::{allow_duplicates, assert_snapshot};
 
     #[test]
@@ -661,7 +662,7 @@ mod tests {
 
     /// return a batch with many columns and three rows
     fn wide_column_batch() -> RecordBatch {
-        let arrays: Vec<Arc<dyn arrow::array::Array>> = (0..10)
+        let arrays: Vec<Arc<dyn datafusion::arrow::array::Array>> = (0..10)
             .map(|_| Arc::new(Int32Array::from(vec![0, 1, 2])) as _)
             .collect();
         RecordBatch::try_new(wide_column_schema(), arrays).unwrap()

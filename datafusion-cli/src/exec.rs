@@ -524,10 +524,8 @@ pub(crate) async fn register_object_store_and_config_extensions(
 mod tests {
     use super::*;
 
-    use datafusion::common::plan_err;
-
+    use datafusion::common::{assert_contains, plan_err};
     use datafusion::prelude::SessionContext;
-    use datafusion_common::assert_contains;
     use url::Url;
 
     async fn create_external_table_test(location: &str, sql: &str) -> Result<()> {
