@@ -47,6 +47,7 @@ use crate::{
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err, internal_err,
     plan_err,
@@ -81,8 +82,7 @@ use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequiremen
 /// on the output batch size of the execution plan. There is no spilling support for streamed input.
 /// The comparisons are performed from values of join keys in streamed input with the values of
 /// join keys in buffered input. One row in streamed record batch could be matched with multiple rows in
-/// buffered input batches. The streamed input is managed through the states in `StreamedState`
-/// and streamed input batches are represented by `StreamedBatch`.
+/// buffered input batches. Streamed input batches are represented by `StreamedBatch`.
 ///
 /// Buffered input is buffered for all record batches having the same value of join key.
 /// If the memory limit increases beyond the specified value and spilling is enabled,
@@ -92,8 +92,7 @@ use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequiremen
 /// memory/disk depends on the number of rows of buffered input having the same value
 /// of join key as that of streamed input rows currently present in memory. Due to pre-sorted inputs,
 /// the algorithm understands when it is not needed anymore, and releases the buffered batches
-/// from memory/disk. The buffered input is managed through the states in `BufferedState`
-/// and buffered input batches are represented by `BufferedBatch`.
+/// from memory/disk. Buffered input batches are represented by `BufferedBatch`.
 ///
 /// Depending on the type of join, left or right input may be selected as streamed or buffered
 /// respectively. For example, in a left-outer join, the left execution plan will be selected as
@@ -441,6 +440,15 @@ impl ExecutionPlan for SortMergeJoinExec {
         vec![&self.left, &self.right]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn crate::PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let join_keys = self.on.iter().flat_map(|(left, right)| [left, right]);
+        let filter = self.filter.iter().map(|filter| filter.expression());
+        crate::apply_expression_roots(join_keys.chain(filter), f)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -528,7 +536,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 | JoinType::LeftMark
                 | JoinType::RightMark
         ) {
-            Ok(Box::pin(BitwiseSortMergeJoinStream::try_new(
+            BitwiseSortMergeJoinStream::try_new(
                 Arc::clone(&self.schema),
                 self.sort_options.clone(),
                 self.null_equality,
@@ -544,9 +552,9 @@ impl ExecutionPlan for SortMergeJoinExec {
                 reservation,
                 spill_manager,
                 context.runtime_env(),
-            )?))
+            )
         } else {
-            Ok(Box::pin(MaterializingSortMergeJoinStream::try_new(
+            MaterializingSortMergeJoinStream::try_new(
                 Arc::clone(&self.schema),
                 self.sort_options.clone(),
                 self.null_equality,
@@ -561,7 +569,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 reservation,
                 spill_manager,
                 context.runtime_env(),
-            )?))
+            )
         }
     }
 

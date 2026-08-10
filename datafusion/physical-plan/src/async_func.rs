@@ -106,6 +106,10 @@ impl AsyncFuncExec {
         ))
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `AsyncFuncExec` serializes itself via `AsyncFuncExec::try_to_proto`, which reads the field directly. There is no replacement; please open an issue if you have a use case for it."
+    )]
     pub fn async_exprs(&self) -> &[Arc<AsyncFuncExpr>] {
         &self.async_exprs
     }
@@ -151,6 +155,19 @@ impl ExecutionPlan for AsyncFuncExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        crate::apply_expression_roots(
+            self.async_exprs
+                .iter()
+                .cloned()
+                .map(|expr| expr as Arc<dyn PhysicalExpr>),
+            f,
+        )
     }
 
     fn with_new_children(
@@ -245,6 +262,95 @@ impl ExecutionPlan for AsyncFuncExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        // Exhaustive destructure: adding a field to `AsyncFuncExec` without
+        // deciding how it is serialized is a compile error, not a silent
+        // round-trip gap.
+        let Self {
+            async_exprs,
+            input,
+            // Derived at construction by `AsyncFuncExec::compute_properties`.
+            cache: _,
+            // Runtime execution state, rebuilt empty on decode.
+            metrics: _,
+        } = self;
+
+        let input = ctx.encode_child(input)?;
+        let async_expr_names = async_exprs.iter().map(|e| e.name().to_string()).collect();
+        let async_exprs = ctx.encode_expressions(async_exprs.iter().map(|e| &e.func))?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::AsyncFunc(Box::new(
+                    protobuf::AsyncFuncExecNode {
+                        input: Some(Box::new(input)),
+                        async_exprs,
+                        async_expr_names,
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl AsyncFuncExec {
+    /// Reconstruct an [`AsyncFuncExec`] from its protobuf representation.
+    ///
+    /// The exact inverse of [`ExecutionPlan::try_to_proto`]: it takes the whole
+    /// [`PhysicalPlanNode`] so every plan's `try_from_proto` shares one
+    /// signature. Child plans and expressions are decoded recursively via the
+    /// [`ExecutionPlanDecodeCtx`].
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    /// [`ExecutionPlanDecodeCtx`]: crate::proto::ExecutionPlanDecodeCtx
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let async_func = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::AsyncFunc,
+            "AsyncFuncExec",
+        );
+        // Exhaustive destructure: a new field on `AsyncFuncExecNode` is a
+        // compile error here rather than a silently ignored wire field.
+        let protobuf::AsyncFuncExecNode {
+            input,
+            async_exprs,
+            async_expr_names,
+        } = async_func.as_ref();
+
+        let input =
+            ctx.decode_required_child(input.as_deref(), "AsyncFuncExec", "input")?;
+        let input_schema = input.schema();
+        assert_eq_or_internal_err!(
+            async_exprs.len(),
+            async_expr_names.len(),
+            "AsyncFuncExecNode async_exprs length does not match async_expr_names"
+        );
+        let async_exprs = async_exprs
+            .iter()
+            .zip(async_expr_names.iter())
+            .map(|(expr, name)| {
+                let physical_expr = ctx.decode_expr(expr, input_schema.as_ref())?;
+                Ok(Arc::new(AsyncFuncExpr::try_new(
+                    name.clone(),
+                    physical_expr,
+                    input_schema.as_ref(),
+                )?))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Arc::new(AsyncFuncExec::try_new(async_exprs, input)?))
     }
 }
 

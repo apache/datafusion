@@ -403,7 +403,22 @@ message ColumnUnnestListRecursion {
 }
 
 message UnnestOptions {
-  bool preserve_nulls = 1;
+  // Reserved for the historical `bool preserve_nulls = 1;` field.
+  // Use `null_handling` instead.
+  reserved 1;
+  reserved "preserve_nulls";
+
+  enum NullHandling {
+    // Preserve nulls; empty lists produce no rows. The historical default.
+    PRESERVE = 0;
+    // Drop both null and empty lists from the output.
+    DROP = 1;
+    // Preserve nulls, and additionally expand empty lists into a single
+    // NULL output row (outer-unnest semantics).
+    PRESERVE_AND_EXPAND_EMPTY = 2;
+  }
+
+  NullHandling null_handling = 3;
   repeated RecursionUnnestOption recursions = 2;
 }
 
@@ -618,6 +633,9 @@ message NegativeNode {
 
 message Unnest {
   repeated LogicalExprNode exprs = 1;
+  // When true, this Unnest expression has outer-unnest semantics: NULL and
+  // empty input lists both produce a single NULL output row.
+  bool outer = 2;
 }
 
 message InListNode {
@@ -1231,7 +1249,9 @@ message FileScanExecConf {
   optional uint64 batch_size = 12;
 
   optional ProjectionExprs projection_exprs = 13;
-  optional bool partitioned_by_file_group = 14;
+  // Was optional bool partitioned_by_file_group = 14.
+  reserved 14;
+  reserved "partitioned_by_file_group";
   optional Partitioning output_partitioning = 15;
 }
 
@@ -1304,6 +1324,14 @@ message HashJoinExecNode {
   bool null_aware = 10;
   // Optional dynamic filter expression for pushing down to the probe side.
   PhysicalExprNode dynamic_filter = 11;
+  // Optional row limit pushed into the join by the `limit_pushdown` rule.
+  //
+  // This is presence-tracked (`optional`) on purpose: messages produced by
+  // versions predating this field carry no `fetch` at all, and a plain proto3
+  // scalar would decode that absence as `0`, i.e. "fetch 0 rows", silently
+  // turning old plans into empty results. With `optional`, absent decodes to
+  // `None`, which is the correct reading of an older message.
+  optional uint64 fetch = 12;
 }
 
 enum StreamPartitionMode {
@@ -1452,11 +1480,15 @@ message GlobalLimitExecNode {
   uint32 skip = 2;
   // Maximum number of rows to fetch; negative means no limit
   int64 fetch = 3;
+  // Ordering the limit must preserve; empty means none
+  repeated PhysicalSortExprNode required_ordering = 4;
 }
 
 message LocalLimitExecNode {
   PhysicalPlanNode input = 1;
   uint32 fetch = 2;
+  // Ordering the limit must preserve; empty means none
+  repeated PhysicalSortExprNode required_ordering = 3;
 }
 
 message SortExecNode {
