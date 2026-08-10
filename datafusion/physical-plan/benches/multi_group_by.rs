@@ -28,8 +28,9 @@
 //! `FixedSizeBinaryGroupValueBuilder`.
 
 use arrow::array::{
-    ArrayRef, Decimal256Array, DurationMicrosecondArray, Float16Array, Int32Array,
-    IntervalMonthDayNanoArray, UInt32Array,
+    ArrayRef, BinaryArray, Decimal256Array, DurationMicrosecondArray, Float16Array,
+    Int32Array, IntervalMonthDayNanoArray, LargeBinaryArray, LargeStringArray,
+    StringArray, UInt32Array,
 };
 use arrow::compute::take;
 use arrow::datatypes::{
