@@ -34,6 +34,7 @@ use crate::joins::hash_join::partitioned_hash_eval::{
     HashExpr, HashTableLookupExpr, SeededRandomState,
 };
 use arrow::array::ArrayRef;
+use arrow::compute::concat;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
@@ -283,6 +284,15 @@ pub(crate) struct SharedBuildAccumulator {
     /// three-valued logic can collapse the result, so the pushed filter keeps NULL rows.
     null_aware: bool,
 }
+
+/// Ceiling on the combined size of the per-partition `InList` arrays that
+/// [`SharedBuildAccumulator::union_inlist_membership`] will concatenate.
+///
+/// Each partition's list is independently capped by
+/// `hash_join_inlist_pushdown_max_size`, so without a combined cap the union
+/// grows with the partition count. Past this size, keeping the routed `CASE` —
+/// where each probe row only ever probes one list — is the cheaper shape.
+const MAX_UNIONED_INLIST_BYTES: usize = 1024 * 1024;
 
 /// Strategy for filter pushdown (decided at collection time)
 #[derive(Clone)]
@@ -767,6 +777,13 @@ impl SharedBuildAccumulator {
         has_canceled_unknown: bool,
         include_bounds: bool,
     ) -> Result<Arc<dyn PhysicalExpr>> {
+        if !has_canceled_unknown
+            && !include_bounds
+            && let Some(union) = self.union_inlist_membership(real_partitions)?
+        {
+            return Ok(union);
+        }
+
         let mut real_branches = Vec::with_capacity(real_partitions.len());
         for (partition_id, partition) in real_partitions {
             let membership_expr = create_membership_predicate(
@@ -831,6 +848,60 @@ impl SharedBuildAccumulator {
                 Some(lit(false)),
             )?) as Arc<dyn PhysicalExpr>)
         }
+    }
+
+    /// Collapses an all-`InList` partitioned membership check into one `InList`
+    /// over the union of the per-partition lists.
+    ///
+    /// This is **exact**, not a relaxation: routing is a deterministic function
+    /// of the key columns, so every build row holding key `K` lands in the same
+    /// partition a probe row holding `K` routes to. Testing `K` against the
+    /// union therefore accepts and rejects precisely what the `CASE` does, and
+    /// the result no longer needs the routing hash at all — nor is it opaque to
+    /// pruning the way a `CASE` is.
+    ///
+    /// Returns `None` when the collapse does not apply (some partition pushes a
+    /// hash map instead of a list, the lists disagree on type, or the union
+    /// would be too large to be worth materializing).
+    fn union_inlist_membership(
+        &self,
+        real_partitions: &[(usize, &PartitionData)],
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        if real_partitions.is_empty() {
+            return Ok(None);
+        }
+
+        let mut arrays = Vec::with_capacity(real_partitions.len());
+        let mut total_bytes = 0;
+        for (_, partition) in real_partitions {
+            let PushdownStrategy::InList(values) = &partition.pushdown else {
+                return Ok(None);
+            };
+            total_bytes += values.get_array_memory_size();
+            if total_bytes > MAX_UNIONED_INLIST_BYTES {
+                return Ok(None);
+            }
+            if arrays
+                .first()
+                .is_some_and(|first: &&ArrayRef| first.data_type() != values.data_type())
+            {
+                return Ok(None);
+            }
+            arrays.push(values);
+        }
+
+        let union: ArrayRef = if arrays.len() == 1 {
+            Arc::clone(arrays[0])
+        } else {
+            concat(&arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>())?
+        };
+
+        create_membership_predicate(
+            &self.on_right,
+            PushdownStrategy::InList(union),
+            &HASH_JOIN_SEED,
+            self.probe_schema.as_ref(),
+        )
     }
 
     /// Keeps probe rows with a NULL key when the join semantics need them.
@@ -1249,6 +1320,40 @@ mod tests {
             format!("{bounds_expr}"),
             "probe_key@0 >= 0 AND probe_key@0 <= 10 OR probe_key@0 >= 100 AND probe_key@0 <= 110"
         );
+    }
+
+    #[test]
+    fn partitioned_all_inlist_collapses_to_a_single_union_inlist() {
+        let acc = make_split_partitioned_accumulator_for_test(3);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[1, 4]), bounds(1, 4)),
+            reported(in_list(&[2, 5]), bounds(2, 5)),
+            reported(PushdownStrategy::Empty, no_bounds()),
+        ]))
+        .unwrap();
+
+        // Routing is a function of the key, so a probe key only ever matches
+        // the list of the partition it routes to: the union is exact and the
+        // `CASE` (and its routing hash) disappears entirely.
+        let membership_expr = current_expr(&acc);
+        assert!(membership_expr.downcast_ref::<CaseExpr>().is_none());
+        assert_in_list_column_values(&membership_expr, "probe_key", 0, &[1, 4, 2, 5]);
+    }
+
+    #[test]
+    fn partitioned_mixed_strategies_keep_the_routing_case() {
+        let acc = make_split_partitioned_accumulator_for_test(2);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[1, 2]), bounds(1, 2)),
+            reported(map_pushdown(), bounds(3, 4)),
+        ]))
+        .unwrap();
+
+        // One partition still needs a hash-table lookup, so routing is required.
+        let membership_expr = current_expr(&acc);
+        assert_eq!(case_expr(&membership_expr).when_then_expr().len(), 2);
     }
 
     #[test]
