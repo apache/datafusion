@@ -289,7 +289,7 @@ pub fn array_slice(array: Expr, begin: Expr, end: Expr, stride: Option<Expr>) ->
 #[user_doc(
     doc_section(label = "Array Functions"),
     description = "Returns a slice of the array based on 1-indexed start and end positions.",
-    syntax_example = "array_slice(array, begin, end)",
+    syntax_example = "array_slice(array, begin, end[, stride])",
     sql_example = r#"```sql
 > select array_slice([1, 2, 3, 4, 5, 6, 7, 8], 3, 6);
 +--------------------------------------------------------+

@@ -34,7 +34,7 @@ use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::config::{ConfigOptions, CsvOptions};
 use datafusion_common::tree_node::{TreeNode, TransformedResult};
 use datafusion_common::{create_array, DataFusionError, NullEquality, Result, TableReference};
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr_common::operator::Operator;
 use datafusion_expr::{JoinType, SortExpr};
@@ -57,6 +57,8 @@ use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
 use datafusion_physical_optimizer::enforce_sorting::sort_pushdown::{SortPushDown, assign_initial_requirements, pushdown_sorts};
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
+use datafusion_physical_optimizer::limit_pushdown::LimitPushdown;
+use datafusion_physical_optimizer::projection_pushdown::ProjectionPushdown;
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion::prelude::*;
@@ -2293,6 +2295,55 @@ async fn test_remove_unnecessary_spm2() -> Result<()> {
     Optimized Plan:
     DataSourceExec: partitions=1, partition_sizes=[0]
     ");
+
+    Ok(())
+}
+
+#[test]
+fn test_spm_fetch_preserves_ordering_through_child_rewrite() -> Result<()> {
+    let schema = create_test_schema()?;
+    let ordering: LexOrdering = [sort_expr("non_nullable_col", &schema)].into();
+    let source = parquet_exec_with_sort(Arc::clone(&schema), vec![ordering.clone()]);
+    let projection = projection_exec(
+        vec![
+            (col("nullable_col", &schema)?, "nullable_col".to_string()),
+            (
+                col("non_nullable_col", &schema)?,
+                "non_nullable_col".to_string(),
+            ),
+        ],
+        source,
+    )?;
+    let plan = sort_preserving_merge_exec_with_fetch(ordering.clone(), projection, 100);
+
+    let optimized = PlanWithCorrespondingSort::new_default(plan)
+        .transform_up(ensure_sorting)?
+        .data;
+    let optimized = check_integrity(optimized)?.plan;
+    let limit = optimized
+        .downcast_ref::<LocalLimitExec>()
+        .expect("SPM fetch should become a local limit");
+    assert_eq!(limit.fetch(), 100);
+    assert_eq!(limit.required_ordering().as_ref(), Some(&ordering));
+
+    let config = ConfigOptions::new();
+    let optimized = ProjectionPushdown::new().optimize(optimized, &config)?;
+    let limit = optimized
+        .downcast_ref::<LocalLimitExec>()
+        .expect("projection rewrite should retain the local limit");
+    assert_eq!(limit.required_ordering().as_ref(), Some(&ordering));
+    assert!(limit.input().is::<DataSourceExec>());
+
+    let optimized = LimitPushdown::new().optimize(optimized, &config)?;
+    let source = optimized
+        .downcast_ref::<DataSourceExec>()
+        .expect("limit should be pushed into the parquet scan");
+    let config = source
+        .data_source()
+        .downcast_ref::<FileScanConfig>()
+        .expect("parquet scan should use FileScanConfig");
+    assert_eq!(config.limit, Some(100));
+    assert!(config.preserve_order);
 
     Ok(())
 }
