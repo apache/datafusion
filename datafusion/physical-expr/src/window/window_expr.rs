@@ -744,8 +744,7 @@ mod tests {
         // doc says "should not be called twice"; `WindowState::aggregate_state`
         // enforces that at this layer by returning an error rather than
         // performing the second read.
-        let acc: Box<dyn Accumulator> =
-            Box::new(CallCountingAccumulator { calls: 0 });
+        let acc: Box<dyn Accumulator> = Box::new(CallCountingAccumulator { calls: 0 });
         let mut ws = WindowState {
             state: WindowAggState::new(&DataType::UInt64)?,
             window_fn: WindowFn::Aggregate(acc),

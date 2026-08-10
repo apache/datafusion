@@ -530,6 +530,10 @@ impl ExecutionPlan for BoundedWindowAggExec {
             // below, since `partition_keys()` returns an empty vec when this is
             // false and the decoder recovers it as `!partition_keys.is_empty()`.
             can_repartition: _,
+            // Runtime callback installed after planning; not part of the wire
+            // format. Any decoder that needs it must reinstall via
+            // `with_state_observer`.
+            state_observer: _,
         } = self;
 
         let input = ctx.encode_child(input)?;
@@ -2327,12 +2331,9 @@ mod tests {
             },
         ]
         .into();
-        let source_raw = TestMemoryExec::try_new(
-            &[vec![batch1, batch2]],
-            Arc::clone(&schema),
-            None,
-        )?
-        .try_with_sort_information(vec![ordering])?;
+        let source_raw =
+            TestMemoryExec::try_new(&[vec![batch1, batch2]], Arc::clone(&schema), None)?
+                .try_with_sort_information(vec![ordering])?;
         let source: Arc<dyn ExecutionPlan> =
             Arc::new(TestMemoryExec::update_cache(&Arc::new(source_raw)));
 
