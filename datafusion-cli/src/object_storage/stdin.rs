@@ -103,9 +103,10 @@ impl StdinUtils {
     /// standard input when the store is first constructed and reusing that
     /// buffer for any subsequent `stdin://` table created in the same session.
     ///
-    /// stdin is a one-shot stream: it can only be read once. The object store
-    /// registry keys by scheme/authority, so every `stdin://` URL maps to the
-    /// same store. Without this guard, a second `CREATE EXTERNAL TABLE ...
+    /// stdin is a one-shot stream: it can only be read once. The stdin store is
+    /// registered at the `stdin://` authority, so every `stdin://` object path
+    /// resolves to the same store. Without this guard, a second `CREATE EXTERNAL
+    /// TABLE ...
     /// LOCATION '/dev/stdin'` would re-read (now-EOF) stdin, build an empty
     /// store, and overwrite the populated one, silently emptying the earlier
     /// table. Reusing the already-registered store avoids that.
@@ -119,6 +120,9 @@ impl StdinUtils {
         state: &SessionState,
         url: &Url,
     ) -> Result<Arc<dyn ObjectStore>> {
+        // Every `stdin://` object path is served by the single per-session stdin
+        // store, registered at the `stdin://` authority; the registry resolves
+        // this url to it.
         let Ok(existing) = state.runtime_env().object_store_registry.get_store(url)
         else {
             return Self::object_store(state, url).await;
@@ -252,7 +256,7 @@ mod tests {
         let store = StdinUtils::in_memory_object_store(&url, data).await?;
 
         let ctx = SessionContext::new();
-        ctx.register_object_store(&url, store);
+        ctx.register_object_store(&Url::parse("stdin:///").unwrap(), store);
         ctx.sql(&format!(
             "CREATE EXTERNAL TABLE t STORED AS {stored_as} LOCATION '{location}' {options}"
         ))
@@ -281,7 +285,10 @@ mod tests {
         buffered.put(&path, b"a\n1\n2\n".to_vec().into()).await?;
 
         let ctx = SessionContext::new();
-        ctx.register_object_store(&url, Arc::clone(&buffered));
+        ctx.register_object_store(
+            &Url::parse("stdin:///").unwrap(),
+            Arc::clone(&buffered),
+        );
 
         let reused = StdinUtils::get_or_create(&ctx.state(), &url).await?;
         assert!(
@@ -304,7 +311,7 @@ mod tests {
             StdinUtils::in_memory_object_store(&csv_url, b"a\n1\n".to_vec()).await?;
 
         let ctx = SessionContext::new();
-        ctx.register_object_store(&csv_url, store);
+        ctx.register_object_store(&Url::parse("stdin:///").unwrap(), store);
 
         let json_url = Url::parse("stdin:///stdin.json").unwrap();
         let err = StdinUtils::get_or_create(&ctx.state(), &json_url)
