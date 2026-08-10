@@ -61,7 +61,7 @@ use datafusion_physical_plan::metrics::{BaselineMetrics, Count, Gauge};
 use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
 
 use crate::access_plan::PreparedAccessPlan;
-use crate::decoder_projection::DecoderProjection;
+use crate::decoder_projection::{DecoderProjection, PostScanSelection};
 use crate::row_group_filter::RowGroupPruningStatistics;
 
 /// Shared options applied to the [`ParquetPushDecoderBuilder`] for a file
@@ -348,21 +348,35 @@ impl PushDecoderStreamState {
 
                         // Apply the in-scan post-scan filter (if any). The
                         // decoder's projection mask already covers the
-                        // predicate's columns; those the projector does not
-                        // also read are dropped by `narrow` before the filter
-                        // kernel runs, so we never filter a column just to
-                        // discard it. Survivors go into the coalescer rather
-                        // than straight downstream, so a selective predicate
-                        // does not fragment the stream into slivers; the limit
-                        // and the projection are applied to the full-size
-                        // batches the coalescer hands back.
+                        // predicate's columns; the filter's compact-once loop
+                        // needs them for every conjunct, but once it is done
+                        // those the projector does not also read are dropped by
+                        // `narrow` before the residual mask is applied, so we
+                        // never filter a column just to discard it. Survivors go
+                        // into the coalescer rather than straight downstream, so
+                        // a selective predicate does not fragment the stream into
+                        // slivers; the limit and the projection are applied to
+                        // the full-size batches the coalescer hands back.
                         if let Some(filter) = self.decoder_projection.post_scan_filter() {
-                            let pushed = filter.evaluate(&batch).and_then(|mask| {
+                            let pushed = filter.evaluate(batch).and_then(|selection| {
+                                let (batch, mask) = match selection {
+                                    PostScanSelection::Empty => return Ok(()),
+                                    PostScanSelection::Rows { batch, mask } => {
+                                        (batch, mask)
+                                    }
+                                };
                                 let narrowed = self.decoder_projection.narrow(batch)?;
-                                self.batch_coalescer
+                                let coalescer = self
+                                    .batch_coalescer
                                     .as_mut()
-                                    .expect("coalescer present with a post-scan filter")
-                                    .push_batch_with_filter(narrowed, &mask)?;
+                                    .expect("coalescer present with a post-scan filter");
+                                match mask {
+                                    Some(mask) => {
+                                        coalescer
+                                            .push_batch_with_filter(narrowed, &mask)?;
+                                    }
+                                    None => coalescer.push_batch(narrowed)?,
+                                }
                                 Ok(())
                             });
                             timer.stop();

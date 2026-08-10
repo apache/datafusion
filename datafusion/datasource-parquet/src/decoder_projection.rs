@@ -34,13 +34,14 @@
 use std::sync::Arc;
 
 use arrow::array::{Array, BooleanArray, RecordBatch, RecordBatchOptions};
-use arrow::compute::kernels::filter::prep_null_mask_filter;
+use arrow::compute::kernels::boolean::and;
+use arrow::compute::kernels::filter::{filter_record_batch, prep_null_mask_filter};
 use arrow::datatypes::SchemaRef;
 
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{Result, internal_err};
-use datafusion_physical_expr::conjunction;
 use datafusion_physical_expr::projection::{ProjectionExprs, Projector};
+use datafusion_physical_expr::split_conjunction;
 use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -76,54 +77,154 @@ fn projector_input_indices(
     (indices.len() < stream_schema.fields().len()).then_some(indices)
 }
 
+/// Compact the working batch to the surviving rows once a conjunct leaves at
+/// most this fraction of them alive. Above the threshold the copy would not be
+/// repaid by the (smaller) saving on the conjuncts that follow, so the masks are
+/// just combined with a cheap bitwise `AND` instead.
+///
+/// The threshold is higher than the equivalent constant in `FilterExec`'s
+/// adaptive evaluator because the post-scan filter's conjunct mix is skewed:
+/// the conjuncts that land here at `pushdown_filters = false` are typically a
+/// cheap static range predicate followed by a *much* more expensive dynamic
+/// filter (a `CASE` over per-partition hash-table probes), so even a modest
+/// reduction in the row count reaching the later conjunct pays for the copy.
+const COMPACTION_SELECTIVITY_THRESHOLD: f64 = 0.8;
+
+/// Outcome of running the post-scan predicate over one decoded batch.
+///
+/// The surviving rows are described rather than fully materialized so the
+/// caller can drop filter-only columns (see [`DecoderProjection::narrow`])
+/// before paying for the final filter kernel.
+pub(crate) enum PostScanSelection {
+    /// No row survived; nothing to hand downstream.
+    Empty,
+    /// Some rows survived. `batch` is the working batch — the input batch, or a
+    /// compacted copy of it when the loop compacted at least once — and `mask`
+    /// is the residual selection over `batch`'s rows (`None` when every row of
+    /// `batch` survived).
+    Rows {
+        batch: RecordBatch,
+        mask: Option<BooleanArray>,
+    },
+}
+
 /// Predicate applied to decoded record batches inside the parquet scan.
 ///
-/// Semantically identical to a `FilterExec` over the scan: the predicate is
-/// evaluated against the batch as a whole and rows where the predicate is
-/// not `true` are dropped. `NULL` predicate results drop the row (SQL `WHERE`
-/// semantics — `filter_record_batch` treats null mask entries as false, same
-/// as `FilterExec`'s `batch_filter`).
+/// Semantically identical to a `FilterExec` over the scan: rows where the
+/// predicate is not `true` are dropped. `NULL` predicate results drop the row
+/// (SQL `WHERE` semantics — `filter_record_batch` treats null mask entries as
+/// false, same as `FilterExec`'s `batch_filter`).
+///
+/// # Compact-once evaluation
+///
+/// The predicate is kept split into its `AND` conjuncts and evaluated
+/// sequentially, compacting the working batch to the survivors whenever a
+/// conjunct proves selective enough. A fused `BinaryExpr` `AND` does *not*
+/// compact between conjuncts, so every conjunct is evaluated on ~every decoded
+/// row; with `pushdown_filters = false` the whole predicate lands here, which
+/// means an expensive dynamic filter would run on all decoded rows even though
+/// a cheap static conjunct ahead of it already rejected most of them. Compacting
+/// is what the parquet `RowFilter` path gets for free from arrow-rs (each
+/// conjunct is its own `ArrowPredicate`, applied against an accumulating
+/// `RowSelection`); this loop is the post-scan equivalent.
 ///
 /// Holds metric handles so per-batch rows-pruned / matched / time accumulate
 /// into [`ParquetFileMetrics`] for `EXPLAIN ANALYZE`.
 pub(crate) struct PostScanFilter {
-    /// Combined predicate, rebased onto the decoder's stream schema.
-    predicate: Arc<dyn PhysicalExpr>,
+    /// The `AND` conjuncts of the predicate, rebased onto the decoder's stream
+    /// schema, in the order they are evaluated. Never empty.
+    conjuncts: Vec<Arc<dyn PhysicalExpr>>,
     rows_pruned: Count,
     rows_matched: Count,
     eval_time: Time,
 }
 
 impl PostScanFilter {
-    /// Evaluate the predicate on `batch` and return the selection mask.
+    /// Evaluate the conjuncts against `batch` and describe the surviving rows.
     ///
-    /// The mask is returned rather than applied so the caller can drop the
-    /// filter-only columns *before* paying for the filter kernel — see
-    /// [`DecoderProjection::narrow`]. Rows where the predicate is not `true`
-    /// (including `NULL`) are excluded, matching `FilterExec`.
-    pub(crate) fn evaluate(&self, batch: &RecordBatch) -> Result<BooleanArray> {
+    /// Takes the batch by value because a compaction replaces it; the caller
+    /// gets the working batch back inside [`PostScanSelection::Rows`].
+    ///
+    /// Note the batch handed back is still on the *full* stream schema (the
+    /// decoder mask widened for the predicate's columns): every conjunct may
+    /// need those columns, so narrowing to the projector's inputs must not
+    /// happen until the loop is done.
+    pub(crate) fn evaluate(&self, batch: RecordBatch) -> Result<PostScanSelection> {
         // Scoped timer: stops on drop, so the early-return paths still record.
         let _timer = self.eval_time.timer();
 
         let input_rows = batch.num_rows();
-        let array = self.predicate.evaluate(batch)?.into_array(input_rows)?;
-        let Ok(mask) = as_boolean_array(array.as_ref()) else {
-            return internal_err!(
-                "post-scan filter predicate did not evaluate to a BooleanArray"
-            );
-        };
-        // `filter_record_batch` treats a null mask entry as false, so the
-        // surviving-row count is the number of entries that are `true` and
-        // non-null — exactly `true_count()` on the mask with nulls excluded.
-        let mask = match mask.nulls() {
-            Some(_) => prep_null_mask_filter(mask),
-            None => mask.clone(),
-        };
+        if input_rows == 0 {
+            return Ok(PostScanSelection::Rows { batch, mask: None });
+        }
 
-        let kept = mask.true_count();
-        self.rows_matched.add(kept);
-        self.rows_pruned.add(input_rows - kept);
-        Ok(mask)
+        // `working` is what conjuncts are evaluated against; `acc` is the
+        // accumulated (null-free) selection over `working`'s rows since the last
+        // compaction, `None` meaning "all of them are still live".
+        let mut working = batch;
+        let mut acc: Option<BooleanArray> = None;
+
+        let last = self.conjuncts.len() - 1;
+        for (position, conjunct) in self.conjuncts.iter().enumerate() {
+            let rows_in = working.num_rows();
+            let array = conjunct.evaluate(&working)?.into_array(rows_in)?;
+            let Ok(mask) = as_boolean_array(array.as_ref()) else {
+                return internal_err!(
+                    "post-scan filter predicate did not evaluate to a BooleanArray"
+                );
+            };
+            // `filter_record_batch` treats a null mask entry as false, so a
+            // surviving row is one that is `true` and non-null.
+            let mask = match mask.nulls() {
+                Some(_) => prep_null_mask_filter(mask),
+                None => mask.clone(),
+            };
+            // An all-true conjunct leaves the accumulated selection untouched.
+            if mask.true_count() == rows_in {
+                continue;
+            }
+
+            let folded = match &acc {
+                None => mask,
+                Some(previous) => and(previous, &mask)?,
+            };
+            let alive = folded.true_count();
+            if alive == 0 {
+                self.record(input_rows, 0);
+                return Ok(PostScanSelection::Empty);
+            }
+
+            // Compaction only benefits the conjuncts that come *after* this
+            // one, so never compact on the last: its residual mask goes to the
+            // caller, which narrows away the filter-only columns before
+            // applying it.
+            if position < last
+                && (alive as f64) <= COMPACTION_SELECTIVITY_THRESHOLD * rows_in as f64
+            {
+                working = filter_record_batch(&working, &folded)?;
+                acc = None;
+            } else {
+                acc = Some(folded);
+            }
+        }
+
+        let survivors = match &acc {
+            Some(mask) => mask.true_count(),
+            None => working.num_rows(),
+        };
+        self.record(input_rows, survivors);
+        Ok(PostScanSelection::Rows {
+            batch: working,
+            mask: acc,
+        })
+    }
+
+    /// Record one batch's contribution to the rows-matched / rows-pruned
+    /// metrics. `rows_pruned` stays "total rows in, minus final survivors"
+    /// regardless of how many intermediate compactions the loop performed.
+    fn record(&self, input_rows: usize, survivors: usize) {
+        self.rows_matched.add(survivors);
+        self.rows_pruned.add(input_rows - survivors);
     }
 }
 
@@ -183,8 +284,9 @@ impl DecoderProjection {
     /// `physical_file_schema` (virtual-column predicates are never pushed into
     /// the scan). When non-empty the decoder mask is widened to include their
     /// columns, the conjuncts are rebased onto the (widened) stream schema, and
-    /// the conjoined predicate becomes [`Self::post_scan_filter`]. When empty
-    /// this is exactly the prior projection-only behaviour.
+    /// they become [`Self::post_scan_filter`] — kept split so it can compact
+    /// between them. When empty this is exactly the prior projection-only
+    /// behaviour.
     pub(crate) fn try_new(
         projection: &ProjectionExprs,
         post_scan_conjuncts: &[Arc<dyn PhysicalExpr>],
@@ -286,12 +388,19 @@ impl DecoderProjection {
         let post_scan_filter = if post_scan_conjuncts.is_empty() {
             None
         } else {
+            // Split each conjunct again after rebasing: the caller's list is
+            // already conjunct-wise, but a single entry may still be a nested
+            // `AND` (e.g. a `RowFilter`-rejected conjunct). The compact-once
+            // loop can only compact between the pieces it can see.
             let rebased = post_scan_conjuncts
                 .iter()
                 .map(|expr| reassign_expr_columns(Arc::clone(expr), &stream_schema))
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Result<Vec<_>>>()?
+                .iter()
+                .flat_map(|expr| split_conjunction(expr).into_iter().map(Arc::clone))
+                .collect::<Vec<_>>();
             Some(PostScanFilter {
-                predicate: conjunction(rebased),
+                conjuncts: rebased,
                 rows_pruned: file_metrics.post_scan_rows_pruned.clone(),
                 rows_matched: file_metrics.post_scan_rows_matched.clone(),
                 eval_time: file_metrics.post_scan_filter_eval_time.clone(),
@@ -324,10 +433,12 @@ impl DecoderProjection {
     /// Drop the columns only the post-scan filter needed, leaving just what
     /// the [`Projector`] reads.
     ///
-    /// Call this *before* applying the filter mask: `RecordBatch::project` is
-    /// a cheap `Arc` reslice, so narrowing first keeps the filter kernel off
-    /// columns that would be discarded immediately afterwards. Returns the
-    /// batch unchanged when the projector already reads every stream column.
+    /// Call this *after* [`PostScanFilter::evaluate`] (every conjunct may need
+    /// the filter-only columns) but *before* applying the residual mask it
+    /// returned: `RecordBatch::project` is a cheap `Arc` reslice, so narrowing
+    /// first keeps the final filter kernel off columns that would be discarded
+    /// immediately afterwards. Returns the batch unchanged when the projector
+    /// already reads every stream column.
     pub(crate) fn narrow(&self, batch: RecordBatch) -> Result<RecordBatch> {
         match &self.narrow_indices {
             Some(indices) => Ok(batch.project(indices)?),
@@ -368,5 +479,141 @@ impl DecoderProjection {
             arrays,
             &options,
         )?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use arrow::array::Int32Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+
+    fn batch(values: Vec<Option<i32>>) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let a = Int32Array::from(values.clone());
+        // `b` mirrors `a` so both conjuncts can be expressed over real data
+        // while still exercising two separate columns.
+        let b = Int32Array::from(values);
+        RecordBatch::try_new(schema, vec![Arc::new(a), Arc::new(b)]).unwrap()
+    }
+
+    fn gt(column: &str, index: usize, value: i32) -> Arc<dyn PhysicalExpr> {
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new(column, index)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(value)))),
+        ))
+    }
+
+    fn filter(conjuncts: Vec<Arc<dyn PhysicalExpr>>) -> PostScanFilter {
+        PostScanFilter {
+            conjuncts,
+            rows_pruned: Count::new(),
+            rows_matched: Count::new(),
+            eval_time: Time::new(),
+        }
+    }
+
+    /// Apply the selection the way the push-decoder does, so the test asserts
+    /// on the rows that actually reach the coalescer.
+    fn survivors(filter: &PostScanFilter, input: RecordBatch) -> Vec<Option<i32>> {
+        match filter.evaluate(input).unwrap() {
+            PostScanSelection::Empty => Vec::new(),
+            PostScanSelection::Rows { batch, mask } => {
+                let batch = match mask {
+                    Some(mask) => filter_record_batch(&batch, &mask).unwrap(),
+                    None => batch,
+                };
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .iter()
+                    .collect()
+            }
+        }
+    }
+
+    #[test]
+    fn compacts_between_conjuncts_without_losing_rows() {
+        // 100 rows; `a > 79` keeps 20 (20% — below the compaction threshold, so
+        // the loop compacts), then `b > 89` keeps 10 of those.
+        let input = batch((0..100).map(Some).collect());
+        let f = filter(vec![gt("a", 0, 79), gt("b", 1, 89)]);
+        assert_eq!(
+            survivors(&f, input),
+            (90..100).map(Some).collect::<Vec<_>>()
+        );
+        assert_eq!(f.rows_matched.value(), 10);
+        assert_eq!(f.rows_pruned.value(), 90);
+    }
+
+    #[test]
+    fn conjunct_order_does_not_change_the_result() {
+        let a = filter(vec![gt("a", 0, 79), gt("b", 1, 89)]);
+        let b = filter(vec![gt("b", 1, 89), gt("a", 0, 79)]);
+        let expected = (90..100).map(Some).collect::<Vec<_>>();
+        assert_eq!(survivors(&a, batch((0..100).map(Some).collect())), expected);
+        assert_eq!(survivors(&b, batch((0..100).map(Some).collect())), expected);
+    }
+
+    /// A `NULL` predicate result drops the row, matching `filter_record_batch`
+    /// and `FilterExec`. The null must be dropped even when it is the *first*
+    /// conjunct that produced it and a later conjunct would have said `true`.
+    #[test]
+    fn null_predicate_results_drop_the_row() {
+        let values: Vec<Option<i32>> = (0..100)
+            .map(|i| if i == 95 { None } else { Some(i) })
+            .collect();
+        let f = filter(vec![gt("a", 0, 79), gt("b", 1, 89)]);
+        let expected: Vec<Option<i32>> =
+            (90..100).filter(|i| *i != 95).map(Some).collect();
+        assert_eq!(survivors(&f, batch(values)), expected);
+        assert_eq!(f.rows_matched.value(), 9);
+        assert_eq!(f.rows_pruned.value(), 91);
+    }
+
+    #[test]
+    fn all_rows_rejected_reports_empty() {
+        let input = batch((0..100).map(Some).collect());
+        let f = filter(vec![gt("a", 0, 500), gt("b", 1, 0)]);
+        assert!(matches!(
+            f.evaluate(input).unwrap(),
+            PostScanSelection::Empty
+        ));
+        assert_eq!(f.rows_matched.value(), 0);
+        assert_eq!(f.rows_pruned.value(), 100);
+    }
+
+    #[test]
+    fn all_rows_kept_needs_no_mask() {
+        let input = batch((0..100).map(Some).collect());
+        let f = filter(vec![gt("a", 0, -1), gt("b", 1, -1)]);
+        match f.evaluate(input).unwrap() {
+            PostScanSelection::Rows { batch, mask } => {
+                assert!(mask.is_none(), "an all-true predicate needs no mask");
+                assert_eq!(batch.num_rows(), 100);
+            }
+            PostScanSelection::Empty => panic!("expected every row to survive"),
+        }
+        assert_eq!(f.rows_matched.value(), 100);
+        assert_eq!(f.rows_pruned.value(), 0);
+    }
+
+    #[test]
+    fn empty_batch_is_passed_through() {
+        let input = batch(Vec::new());
+        let f = filter(vec![gt("a", 0, 79)]);
+        assert_eq!(survivors(&f, input), Vec::<Option<i32>>::new());
+        assert_eq!(f.rows_matched.value(), 0);
+        assert_eq!(f.rows_pruned.value(), 0);
     }
 }
