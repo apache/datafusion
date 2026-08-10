@@ -963,9 +963,15 @@ config_namespace! {
         /// This is the maximum number of RecordBatches buffered
         /// for each output file being worked. Higher values can potentially
         /// give faster write performance at the cost of higher peak
-        /// memory consumption. Must be at least 2: this value is halved to
-        /// size internal buffering channels, and a value of 0 or 1 would
-        /// create a zero-capacity channel and panic at write time.
+        /// memory consumption.
+        ///
+        /// This budget is split evenly between two independent points in the
+        /// write pipeline (see the demuxer diagram in #7791): how many files
+        /// can be in flight from the demuxer to a writer task, and how many
+        /// RecordBatches are buffered for a single file's writer. Must be at
+        /// least 2 so each half gets at least 1 unit of buffering - 0 or 1
+        /// would leave one side with a zero-capacity channel and panic at
+        /// write time.
         pub max_buffered_batches_per_output_file: ConfigMinTwoUsize, default = min_two_usize_default(2)
 
         /// Should sub directories be ignored when scanning directories for data
