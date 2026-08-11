@@ -1526,6 +1526,8 @@ mod tests {
         Ok(())
     }
 
+    // Ensure the build-side memory usage equals the sum of all build-side input
+    // batches, verifying that the build-side buffer is shared.
     #[tokio::test]
     async fn shared_right_buffers_are_reserved_once() -> Result<()> {
         let left_schema = Arc::new(Schema::new(vec![
