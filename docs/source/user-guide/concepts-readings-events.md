@@ -212,6 +212,15 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 - **2026-01-12** [Apache DataFusion 52.0.0 Released](https://datafusion.apache.org/blog/2026/01/12/datafusion-52.0.0)
 - Older release announcements can be found on the [Apache DataFusion Blog](https://datafusion.apache.org/blog/)
 
+# 🎥 Community Showcase
+
+The [DataFusion Community Showcase](https://github.com/apache/datafusion/issues/22963) is a
+regular virtual event where community members share what they are building with DataFusion.
+
+- **2026-08-06** [Vol. 3: ASAPQuery (Milind Srivastava) & Streamling (Yaroslav Tkachenko)](https://www.youtube.com/watch?v=0-BIHyzODH8)
+- **2026-07-23** [Vol. 2: DataFusion Comet (Jordan Epstein) & DataFusion Ballista (Phillip LeBlanc)](https://www.youtube.com/watch?v=G8In--2RUwI)
+- **2026-07-09** [Vol. 1: SedonaDB (Dewey Dunnington) & Xarray-SQL (Alex Merose)](https://www.youtube.com/watch?v=5o-4hL8vGPw)
+
 # 🌎 Community Events
 
 - **2026-09-03** [Boston Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/21541) - [RSVP](https://luma.com/yexgqifv)

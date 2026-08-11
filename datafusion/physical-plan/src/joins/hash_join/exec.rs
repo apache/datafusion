@@ -876,14 +876,24 @@ impl HashJoinExec {
             return false;
         }
 
-        // `preserve_file_partitions` can report Hash partitioning for Hive-style
-        // file groups, but those partitions are not actually hash-distributed.
-        // Partitioned dynamic filters rely on hash routing, so disable them in
-        // this mode to avoid incorrect results. Follow-up work: enable dynamic
-        // filtering for preserve_file_partitioned scans (issue #20195).
+        // `preserve_file_partitions` can report Hive-style file groups as Hash
+        // partitioned even though their partition indexes do not follow the
+        // hash router used by partitioned dynamic filters. Reject Hash inputs
+        // because the metadata cannot distinguish those scans from a real hash
+        // repartition. Compatible Range inputs remain safe because matching
+        // ordering and split points align each build filter with its probe
+        // partition. Other unsupported layouts are rejected.
+        // Follow-up work: enable dynamic filtering for preserve_file_partitioned scans (issue #20195).
         // https://github.com/apache/datafusion/issues/20195
         if config.optimizer.preserve_file_partitions > 0
             && self.mode == PartitionMode::Partitioned
+            && matches!(
+                (
+                    self.left.output_partitioning(),
+                    self.right.output_partitioning()
+                ),
+                (Partitioning::Hash(_, _), Partitioning::Hash(_, _))
+            )
         {
             return false;
         }
@@ -891,9 +901,6 @@ impl HashJoinExec {
         if self.mode == PartitionMode::Partitioned
             && !self.has_partitioned_dynamic_filter_routing()
         {
-            // TODO: support partition-routed dynamic filters for compatible
-            // range co-partitioned joins.
-            // <https://github.com/apache/datafusion/issues/23376>.
             return false;
         }
 
@@ -909,6 +916,14 @@ impl HashJoinExec {
                 Partitioning::Hash(_, left_partition_count),
                 Partitioning::Hash(_, right_partition_count),
             ) => left_partition_count == right_partition_count,
+            (Partitioning::Range(_), Partitioning::Range(_)) => {
+                let children = [self.left.as_ref(), self.right.as_ref()];
+                matches!(
+                    self.input_distribution_requirements()
+                        .unsatisfied_co_partitioned_children(self.name(), &children),
+                    Ok(unsatisfied) if unsatisfied.is_empty()
+                )
+            }
             (left_partitioning, right_partitioning) => {
                 left_partitioning.partition_count() == 1
                     && right_partitioning.partition_count() == 1
@@ -7089,9 +7104,10 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_partitioned_dynamic_filter_pushdown_rejects_range_partitioning() -> Result<()>
-    {
+    fn range_partitioned_dynamic_filter_test_join(
+        left_split: i32,
+        right_split: i32,
+    ) -> Result<(HashJoinExec, JoinOn)> {
         let (left_schema, right_schema, on) = build_schema_and_on()?;
         let left_partitioning = Partitioning::Range(RangePartitioning::try_new(
             [PhysicalSortExpr {
@@ -7099,7 +7115,7 @@ mod tests {
                 options: Default::default(),
             }]
             .into(),
-            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(left_split))])],
         )?);
         let right_partitioning = Partitioning::Range(RangePartitioning::try_new(
             [PhysicalSortExpr {
@@ -7107,7 +7123,7 @@ mod tests {
                 options: Default::default(),
             }]
             .into(),
-            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(right_split))])],
         )?);
         let left = Arc::new(PartitionedTestExec::try_new(
             left_schema,
@@ -7118,16 +7134,10 @@ mod tests {
             right_partitioning,
         )?);
 
-        let mut session_config = SessionConfig::default();
-        session_config
-            .options_mut()
-            .optimizer
-            .enable_join_dynamic_filter_pushdown = true;
-
         let join = HashJoinExec::try_new(
             left,
             right,
-            on,
+            on.clone(),
             None,
             &JoinType::Inner,
             None,
@@ -7135,8 +7145,73 @@ mod tests {
             NullEquality::NullEqualsNothing,
             false,
         )?;
+        Ok((join, on))
+    }
 
-        assert!(!join.allow_join_dynamic_filter_pushdown(session_config.options()));
+    fn with_hash_partitioned_children(
+        join: &HashJoinExec,
+        on: &JoinOn,
+    ) -> Result<HashJoinExec> {
+        join.builder()
+            .with_new_children(vec![
+                Arc::new(PartitionedTestExec::try_new(
+                    join.left().schema(),
+                    Partitioning::Hash(vec![Arc::clone(&on[0].0)], 2),
+                )?),
+                Arc::new(PartitionedTestExec::try_new(
+                    join.right().schema(),
+                    Partitioning::Hash(vec![Arc::clone(&on[0].1)], 2),
+                )?),
+            ])?
+            .build()
+    }
+
+    #[test]
+    fn test_partitioned_dynamic_filter_pushdown_allows_supported_partitioning()
+    -> Result<()> {
+        let (range_join, on) = range_partitioned_dynamic_filter_test_join(10, 10)?;
+        let hash_join = with_hash_partitioned_children(&range_join, &on)?;
+        let mut session_config = SessionConfig::default();
+        session_config
+            .options_mut()
+            .optimizer
+            .enable_join_dynamic_filter_pushdown = true;
+
+        assert!(range_join.allow_join_dynamic_filter_pushdown(session_config.options()));
+        assert!(hash_join.allow_join_dynamic_filter_pushdown(session_config.options()));
+
+        session_config
+            .options_mut()
+            .optimizer
+            .preserve_file_partitions = 1;
+        assert!(range_join.allow_join_dynamic_filter_pushdown(session_config.options()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_partitioned_dynamic_filter_pushdown_rejects_unsupported_partitioning()
+    -> Result<()> {
+        let (range_join, on) = range_partitioned_dynamic_filter_test_join(10, 10)?;
+        let hash_join = with_hash_partitioned_children(&range_join, &on)?;
+        let (mismatched_range_join, _) =
+            range_partitioned_dynamic_filter_test_join(10, 11)?;
+        let mut session_config = SessionConfig::default();
+        session_config
+            .options_mut()
+            .optimizer
+            .enable_join_dynamic_filter_pushdown = true;
+
+        assert!(
+            !mismatched_range_join
+                .allow_join_dynamic_filter_pushdown(session_config.options())
+        );
+
+        session_config
+            .options_mut()
+            .optimizer
+            .preserve_file_partitions = 1;
+        assert!(!hash_join.allow_join_dynamic_filter_pushdown(session_config.options()));
 
         Ok(())
     }
