@@ -31,7 +31,8 @@ use arrow::{
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::{
     HashMap, Result, ScalarValue, downcast_value, exec_err, internal_err, not_impl_err,
-    stats::Precision, utils::expr::COUNT_STAR_EXPANSION,
+    stats::Precision,
+    utils::{expr::COUNT_STAR_EXPANSION, proxy::VecAllocExt},
 };
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, GroupsAccumulator,
@@ -620,11 +621,6 @@ impl Accumulator for CountAccumulator {
     }
 }
 
-/// Returns bytes reserved by a vector's backing allocation, excluding the `Vec` itself.
-fn vec_capacity_bytes<T>(values: &Vec<T>) -> usize {
-    values.capacity() * size_of::<T>()
-}
-
 /// An accumulator to compute the counts of [`PrimitiveArray<T>`].
 /// Stores values as native types, and does overflow checking
 ///
@@ -779,7 +775,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         Ok(vec![state_array])
     }
     fn size(&self) -> usize {
-        vec_capacity_bytes(&self.counts)
+        self.counts.allocated_size()
     }
 }
 
@@ -945,19 +941,14 @@ mod tests {
         acc.update_batch(&[values], &[0, 1, 2], None, 3)?;
 
         assert!(acc.counts.capacity() > 0);
-        assert_eq!(acc.size(), vec_capacity_bytes(&acc.counts));
+        assert_eq!(
+            acc.counts.allocated_size(),
+            acc.counts.capacity() * size_of::<i64>()
+        );
+        assert_eq!(acc.size(), acc.counts.allocated_size());
         assert!(acc.size() > empty_size);
 
         Ok(())
-    }
-
-    #[test]
-    fn vec_capacity_bytes_uses_element_type() {
-        let values = Vec::<u32>::with_capacity(3);
-        assert_eq!(
-            vec_capacity_bytes(&values),
-            values.capacity() * size_of::<u32>()
-        );
     }
 
     #[test]
