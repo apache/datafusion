@@ -45,7 +45,7 @@ use crate::{
     DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join, Limit,
     LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition, Sort,
     Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode,
-    Values, Window, builder::unnest_with_options, dml::CopyTo,
+    Values, Window, WriteOp, builder::unnest_with_options, dml::CopyTo,
 };
 use datafusion_common::tree_node::TreeNodeRefContainer;
 
@@ -480,6 +480,10 @@ impl LogicalPlan {
                 }
                 _ => Ok(TreeNodeRecursion::Continue),
             },
+            LogicalPlan::Dml(DmlStatement {
+                op: WriteOp::MergeInto(merge_op),
+                ..
+            }) => merge_op.exprs().apply_ref_elements(f),
             // plans without expressions
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::RecursiveQuery(_)
@@ -717,6 +721,27 @@ impl LogicalPlan {
                         new_columns,
                         options,
                     )
+                })?
+            }
+            LogicalPlan::Dml(DmlStatement {
+                table_name,
+                target,
+                op: WriteOp::MergeInto(merge_op),
+                input,
+                output_schema,
+            }) => {
+                let owned_exprs: Vec<Expr> =
+                    merge_op.exprs().into_iter().cloned().collect();
+                owned_exprs.map_elements(f)?.transform_data(|new_exprs| {
+                    Ok(Transformed::no(LogicalPlan::Dml(DmlStatement {
+                        table_name,
+                        target,
+                        op: WriteOp::MergeInto(Box::new(
+                            merge_op.with_new_exprs(new_exprs)?,
+                        )),
+                        input,
+                        output_schema,
+                    })))
                 })?
             }
             // plans without expressions
