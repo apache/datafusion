@@ -34,7 +34,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
-use crate::regex::compile_regex;
+use crate::regex::{compile_regex, start_to_byte_offset};
 
 #[user_doc(
     doc_section(label = "Regular Expression Functions"),
@@ -52,20 +52,15 @@ use crate::regex::compile_regex;
     standard_argument(name = "regexp", prefix = "Regular"),
     argument(
         name = "start",
-        description = "- **start**: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function. Defaults to 1"
+        description = "Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function. Defaults to 1"
     ),
     argument(
         name = "N",
-        description = "- **N**: Optional The N-th occurrence of pattern to find. Defaults to 1 (first match). Can be a constant, column, or function."
+        description = "Optional The N-th occurrence of pattern to find. Defaults to 1 (first match). Can be a constant, column, or function."
     ),
     argument(
         name = "flags",
-        description = r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
-  - **i**: case-insensitive: letters match both upper and lower case
-  - **m**: multi-line mode: ^ and $ match begin/end of line
-  - **s**: allow . to match \n
-  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-  - **U**: swap the meaning of x* and x*?"#
+        description = r#"Optional regular expression flags that control the behavior of the regular expression. Refer to the flags reference above for supported flags."#
     ),
     argument(
         name = "subexpr",
@@ -388,17 +383,7 @@ fn get_index(
         ));
     }
 
-    let Ok(start_index) = usize::try_from(start - 1) else {
-        return Ok(0);
-    };
-    // Include the terminal byte boundary so an empty pattern can match after
-    // the last character, including in an empty string.
-    let Some(byte_start_offset) = value
-        .char_indices()
-        .map(|(offset, _)| offset)
-        .chain(std::iter::once(value.len()))
-        .nth(start_index)
-    else {
+    let Some(byte_start_offset) = start_to_byte_offset(value, start) else {
         return Ok(0);
     };
     let search_slice = &value[byte_start_offset..];

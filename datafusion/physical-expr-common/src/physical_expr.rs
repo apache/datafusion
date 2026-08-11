@@ -498,8 +498,8 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// <https://github.com/apache/datafusion/issues/21835>.
     ///
     /// The `try_` prefix matches the fallible `try_from_proto` decode
-    /// constructors (and the `TryFromProto` trait in `datafusion-proto`);
-    /// both sides of the round-trip are fallible and named consistently.
+    /// constructors; both sides of the round-trip are fallible and named
+    /// consistently.
     ///
     /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
     #[cfg(feature = "proto")]
