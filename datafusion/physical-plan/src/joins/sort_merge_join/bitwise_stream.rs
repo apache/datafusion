@@ -127,6 +127,7 @@ use crate::joins::utils::{JoinFilter, JoinKeyComparator, compare_join_arrays};
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, Time,
 };
+use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch};
@@ -234,9 +235,9 @@ pub(crate) struct BitwiseSortMergeJoinStream {
     // Inner key group buffer: all inner rows sharing the current join key.
     // Only populated when a filter is present. Unbounded — a single key
     // with many inner rows will buffer them all. See "Degenerate cases"
-    // in exec.rs. Spilled to disk when memory reservation fails.
+    // in exec.rs. On memory pool overflow the buffered slices move to a
+    // per-group spill file (see [`Self::buffer_inner_key_group`]).
     inner_key_buffer: Vec<RecordBatch>,
-    inner_key_spill: Option<Arc<dyn SpillFile>>,
 
     // Join ON expressions, evaluated against each new batch to produce
     // the key arrays used for sorted key comparisons.
@@ -339,7 +340,6 @@ impl BitwiseSortMergeJoinStream {
             inner_key_arrays: vec![],
             matched: BooleanBufferBuilder::new(0),
             inner_key_buffer: vec![],
-            inner_key_spill: None,
             on_outer,
             on_inner,
             filter,
@@ -443,18 +443,24 @@ impl BitwiseSortMergeJoinStream {
         Ok(self.inner_self_cmp.as_ref().unwrap())
     }
 
-    /// Spill the in-memory inner key buffer to disk and clear it.
-    fn spill_inner_key_buffer(&mut self) -> Result<()> {
-        let spill_file = self
-            .spill_manager
-            .spill_record_batch_and_finish(
-                &self.inner_key_buffer,
-                "semi_anti_smj_inner_key_spill",
-            )?
-            .expect("inner_key_buffer is non-empty when spilling");
-        self.inner_key_buffer.clear();
+    /// Spill the in-memory inner key buffer to disk and clear it. One key
+    /// group can spill repeatedly; every call appends to `writer` — the
+    /// group's single open spill file — creating it on first use.
+    fn spill_inner_key_buffer(
+        &mut self,
+        writer: &mut Option<InProgressSpillFile>,
+    ) -> Result<()> {
+        if writer.is_none() {
+            *writer = Some(
+                self.spill_manager
+                    .create_in_progress_file("semi_anti_smj_inner_key_spill")?,
+            );
+        }
+        let writer = writer.as_mut().unwrap();
+        for batch in self.inner_key_buffer.drain(..) {
+            writer.append_batch(&batch)?;
+        }
         self.inner_buffer_size = 0;
-        self.inner_key_spill = Some(spill_file);
         // Should succeed now — inner buffer has been spilled.
         self.try_resize_reservation()
     }
@@ -465,7 +471,6 @@ impl BitwiseSortMergeJoinStream {
     /// pool interactions (see apache/datafusion#20729).
     fn clear_inner_key_group(&mut self) {
         self.inner_key_buffer.clear();
-        self.inner_key_spill = None;
         self.inner_buffer_size = 0;
     }
 
@@ -639,13 +644,15 @@ impl BitwiseSortMergeJoinStream {
     /// cursor past the group. Collects all inner rows with the current key
     /// across batch boundaries. Sets `inner_batch` to `None` if inner is
     /// exhausted.
-    async fn buffer_inner_key_group(&mut self) -> Result<()> {
+    ///
+    /// Slices that overflow the memory pool are appended to a single spill
+    /// file, returned finished — ready for reading — once the whole group
+    /// has been buffered. `None` means the group fit in memory.
+    async fn buffer_inner_key_group(&mut self) -> Result<Option<Arc<dyn SpillFile>>> {
         self.clear_inner_key_group();
+        let mut writer: Option<InProgressSpillFile> = None;
 
-        loop {
-            let Some(inner_batch) = &self.inner_batch else {
-                return Ok(());
-            };
+        while let Some(inner_batch) = &self.inner_batch {
             let num_inner = inner_batch.num_rows();
             let from = self.inner_offset;
             let group_end =
@@ -660,7 +667,7 @@ impl BitwiseSortMergeJoinStream {
             // is exhausted, spill the entire buffer to disk.
             if self.try_resize_reservation().is_err() {
                 if self.runtime_env.disk_manager.tmp_files_enabled() {
-                    self.spill_inner_key_buffer()?;
+                    self.spill_inner_key_buffer(&mut writer)?;
                 } else {
                     // Re-attempt to get the error message
                     self.try_resize_reservation().map_err(|e| {
@@ -673,7 +680,7 @@ impl BitwiseSortMergeJoinStream {
 
             if group_end < num_inner {
                 self.inner_offset = group_end;
-                return Ok(());
+                break;
             }
 
             // Key group extends to the end of the batch — it may continue
@@ -682,7 +689,7 @@ impl BitwiseSortMergeJoinStream {
 
             if !self.next_inner_batch().await? {
                 self.inner_batch = None;
-                return Ok(());
+                break;
             }
             if !keys_match(
                 &saved_inner_keys,
@@ -690,20 +697,30 @@ impl BitwiseSortMergeJoinStream {
                 &self.sort_options,
                 self.null_equality,
             )? {
-                return Ok(());
+                break;
             }
+        }
+
+        match writer {
+            Some(mut writer) => writer.finish(),
+            None => Ok(None),
         }
     }
 
     /// Process a key match with a filter. For each inner row in the buffered
-    /// key group, evaluates the filter against the outer key group and ORs
-    /// the results into the matched bitset using u64-chunked bitwise ops.
-    async fn process_key_match_with_filter(&mut self) -> Result<()> {
+    /// key group — the spilled slices in `spill` plus the in-memory
+    /// `inner_key_buffer` — evaluates the filter against the outer key group
+    /// and ORs the results into the matched bitset using u64-chunked bitwise
+    /// ops.
+    async fn process_key_match_with_filter(
+        &mut self,
+        spill: Option<&Arc<dyn SpillFile>>,
+    ) -> Result<()> {
         let num_outer = self.outer_batch.as_ref().unwrap().num_rows();
 
         // buffer_inner_key_group must be called before this function
         debug_assert!(
-            !self.inner_key_buffer.is_empty() || self.inner_key_spill.is_some(),
+            !self.inner_key_buffer.is_empty() || spill.is_some(),
             "process_key_match_with_filter called with no inner key data"
         );
         debug_assert!(
@@ -734,7 +751,7 @@ impl BitwiseSortMergeJoinStream {
 
         // Process spilled inner batches first asynchronously.
         if matched_count < outer_group_len
-            && let Some(spill_file) = &self.inner_key_spill
+            && let Some(spill_file) = spill
         {
             let mut spill_stream = self
                 .spill_manager
@@ -799,10 +816,14 @@ impl BitwiseSortMergeJoinStream {
 
     /// Evaluate the filter for the buffered inner key group against the
     /// outer key group. If the outer key group continues into subsequent
-    /// outer batches, keep evaluating there too.
-    async fn process_filtered_match_loop(&mut self) -> Result<()> {
+    /// outer batches, keep evaluating there too. Dropping `spill` on return
+    /// deletes the group's temp file.
+    async fn process_filtered_match_loop(
+        &mut self,
+        spill: Option<Arc<dyn SpillFile>>,
+    ) -> Result<()> {
         loop {
-            self.process_key_match_with_filter().await?;
+            self.process_key_match_with_filter(spill.as_ref()).await?;
 
             let outer_batch = self.outer_batch.as_ref().unwrap();
             if self.outer_offset < outer_batch.num_rows() {
@@ -872,8 +893,8 @@ impl BitwiseSortMergeJoinStream {
             // Buffer the inner key group so each inner row can be evaluated
             // against the outer key group, OR-ing filter results into the
             // matched bitset.
-            self.buffer_inner_key_group().await?;
-            self.process_filtered_match_loop().await
+            let spill = self.buffer_inner_key_group().await?;
+            self.process_filtered_match_loop(spill).await
         } else {
             // Without a filter, key equality alone means every outer row in
             // the group matches; the inner rows themselves are not needed.
