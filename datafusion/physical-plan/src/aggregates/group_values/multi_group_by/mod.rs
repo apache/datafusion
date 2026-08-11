@@ -20,6 +20,7 @@
 mod boolean;
 mod bytes;
 pub mod bytes_view;
+mod dictionary;
 mod fixed_size_binary;
 pub mod primitive;
 pub mod row_backed;
@@ -34,7 +35,6 @@ use crate::aggregates::group_values::multi_group_by::{
     primitive::PrimitiveGroupValueBuilder, row_backed::RowsGroupColumn,
 };
 use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
-use arrow::compute::cast;
 use arrow::datatypes::{
     BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
     DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
@@ -48,7 +48,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
+use datafusion_common::{Result, not_impl_err};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
@@ -980,7 +980,7 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::Utf8View
             | DataType::BinaryView
             | DataType::Boolean
-    )
+    ) || matches!(data_type, DataType::Dictionary(_,v ) if group_column_supported_type(v))
 }
 
 /// Build a [`GroupColumn`] for a single schema field.
@@ -1002,7 +1002,7 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
     let nullable = field.is_nullable();
     let data_type = field.data_type();
     let mut v: Vec<Box<dyn GroupColumn>> = Vec::with_capacity(1);
-    match *data_type {
+    match data_type {
         DataType::Int8 => instantiate_primitive!(v, nullable, Int8Type, data_type),
         DataType::Int16 => instantiate_primitive!(v, nullable, Int16Type, data_type),
         DataType::Int32 => instantiate_primitive!(v, nullable, Int32Type, data_type),
@@ -1130,6 +1130,33 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
                 v.push(Box::new(BooleanGroupValueBuilder::<false>::new()));
             }
         }
+        DataType::Dictionary(key_dt, value_dt) => {
+            let new_field = Field::new("", *value_dt.clone(), true);
+            let inner = make_group_column(&new_field)?;
+            macro_rules! dict_col {
+                ($T:ty) => {
+                    Box::new(dictionary::DictionaryGroupValuesColumn::<$T>::new(
+                        inner, &new_field,
+                    ))
+                };
+            }
+            let col: Box<dyn GroupColumn> = match key_dt.as_ref() {
+                DataType::Int8 => dict_col!(Int8Type),
+                DataType::Int16 => dict_col!(Int16Type),
+                DataType::Int32 => dict_col!(Int32Type),
+                DataType::Int64 => dict_col!(Int64Type),
+                DataType::UInt8 => dict_col!(UInt8Type),
+                DataType::UInt16 => dict_col!(UInt16Type),
+                DataType::UInt32 => dict_col!(UInt32Type),
+                DataType::UInt64 => dict_col!(UInt64Type),
+                _ => {
+                    return not_impl_err!(
+                        "Dictionary key type {key_dt} not supported in GroupValuesColumn"
+                    );
+                }
+            };
+            v.push(col)
+        }
         // Generic fallback for nested types (Struct / List / LargeList /
         // FixedSizeList, recursively) that lack a type-specialized builder but
         // can be encoded by arrow's row format. This is what lets a mixed
@@ -1178,7 +1205,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let mut output = match emit_to {
+        let output = match emit_to {
             EmitTo::All => {
                 // Replace the column builders with a fresh set so the
                 // aggregator is immediately reusable after the drain.
@@ -1267,20 +1294,6 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                 output
             }
         };
-
-        // TODO: Materialize dictionaries in group keys (#7647)
-        for (field, array) in self.schema.fields.iter().zip(&mut output) {
-            let expected = field.data_type();
-            if let DataType::Dictionary(_, v) = expected {
-                let actual = array.data_type();
-                if v.as_ref() != actual {
-                    return Err(internal_datafusion_err!(
-                        "Converted group rows expected dictionary of {v} got {actual}"
-                    ));
-                }
-                *array = cast(array.as_ref(), expected)?;
-            }
-        }
 
         Ok(output)
     }
@@ -1645,6 +1658,19 @@ mod tests {
             DataType::Interval(arrow::datatypes::IntervalUnit::YearMonth),
             DataType::Interval(arrow::datatypes::IntervalUnit::DayTime),
             DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int64)),
+            DataType::Dictionary(
+                Box::new(DataType::UInt16),
+                Box::new(DataType::LargeUtf8),
+            ),
+            DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Timestamp(
+                    arrow::datatypes::TimeUnit::Nanosecond,
+                    None,
+                )),
+            ),
         ];
 
         for dt in &supported_cases {
@@ -1674,6 +1700,11 @@ mod tests {
             // A negative width is representable in the DataType but is not
             // a valid Arrow type; no array can be constructed for it.
             DataType::FixedSizeBinary(-5),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Float16)),
+            DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Decimal256(76, 10)),
+            ),
         ];
 
         for dt in &unsupported_cases {
@@ -1903,6 +1934,107 @@ mod tests {
                 );
             }
         }
+    }
+
+    // Regression for https://github.com/apache/datafusion/issues/23127:
+    // In a multi-column group-by there can be more than 128 groups while an
+    // Int8 dictionary column still has only a few distinct values. The toll
+    // row path must emit 129 groups without overflowing the Int8 key range.
+    // This also documents that the inner GroupColumn does NOT deduplicate dict
+    // values — each group gets its own slot, so values().len() == n_groups.
+    #[test]
+    fn multi_col_groupby_dict_many_groups_two_values() {
+        use arrow::array::{AsArray, DictionaryArray, Int16Array};
+        use arrow::datatypes::Int16Type;
+
+        let n_groups = 129_usize;
+        let dict_vocab: ArrayRef = Arc::new(StringArray::from(vec!["cat", "dog"]));
+
+        // Each row has a unique label (forcing a new group) and alternates
+        // between the two dictionary values.  Int16 keys are used so that
+        // 129 groups don't hit the Int8 overflow limit (i8::MAX = 127).
+        let labels: ArrayRef = Arc::new(StringArray::from(
+            (0..n_groups).map(|i| format!("g{i}")).collect::<Vec<_>>(),
+        ));
+        let dict_keys = Int16Array::from(
+            (0..n_groups)
+                .map(|i| Some((i % 2) as i16))
+                .collect::<Vec<_>>(),
+        );
+        let categories: ArrayRef = Arc::new(DictionaryArray::<Int16Type>::new(
+            dict_keys,
+            Arc::clone(&dict_vocab),
+        ));
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("label", DataType::Utf8, false),
+            Field::new(
+                "category",
+                DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+                false,
+            ),
+        ]));
+
+        let mut gv = GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+        gv.intern(&[labels, categories], &mut vec![]).unwrap();
+        let out = gv.emit(EmitTo::All).unwrap();
+
+        assert_eq!(out[0].len(), n_groups);
+        assert!(matches!(
+            out[1].data_type(),
+            DataType::Dictionary(k, v)
+                if k.as_ref() == &DataType::Int16 && v.as_ref() == &DataType::Utf8
+        ));
+        // Both vectorized and streaming paths now deduplicate dict values.
+        assert_eq!(out[1].as_dictionary::<Int16Type>().values().len(), 2);
+    }
+
+    // Same as above but uses the non-vectorized (streaming) path via
+    // `GroupValuesColumn::<true>`. The dict column's values array must be
+    // deduplicated — only 2 distinct entries ("cat" / "dog") regardless of
+    // how many groups were seen.
+    #[test]
+    fn multi_col_groupby_dict_many_groups_two_values_streaming() {
+        use arrow::array::{AsArray, DictionaryArray, Int16Array};
+        use arrow::datatypes::Int16Type;
+
+        let n_groups = 129_usize;
+        let dict_vocab: ArrayRef = Arc::new(StringArray::from(vec!["cat", "dog"]));
+
+        let labels: ArrayRef = Arc::new(StringArray::from(
+            (0..n_groups).map(|i| format!("g{i}")).collect::<Vec<_>>(),
+        ));
+        let dict_keys = Int16Array::from(
+            (0..n_groups)
+                .map(|i| Some((i % 2) as i16))
+                .collect::<Vec<_>>(),
+        );
+        let categories: ArrayRef = Arc::new(DictionaryArray::<Int16Type>::new(
+            dict_keys,
+            Arc::clone(&dict_vocab),
+        ));
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("label", DataType::Utf8, false),
+            Field::new(
+                "category",
+                DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+                false,
+            ),
+        ]));
+
+        let mut gv = GroupValuesColumn::<true>::try_new(Arc::clone(&schema)).unwrap();
+        gv.intern(&[labels, categories], &mut vec![]).unwrap();
+        let out = gv.emit(EmitTo::All).unwrap();
+
+        assert_eq!(out[0].len(), n_groups);
+        assert!(matches!(
+            out[1].data_type(),
+            DataType::Dictionary(k, v)
+                if k.as_ref() == &DataType::Int16 && v.as_ref() == &DataType::Utf8
+        ));
+        // append_val deduplicates: only 2 distinct values in the output values array.
+        assert_eq!(out[1].as_dictionary::<Int16Type>().values().len(), 2);
     }
 
     #[test]
