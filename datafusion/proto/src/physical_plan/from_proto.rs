@@ -46,6 +46,7 @@ use datafusion_physical_plan::expressions::{
 };
 use datafusion_physical_plan::joins::HashExpr;
 use datafusion_physical_plan::proto::ExecutionPlanDecodeCtx;
+use datafusion_physical_plan::repartition::RangeExpr;
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion_proto_common::common::proto_error;
@@ -354,6 +355,7 @@ pub fn parse_physical_expr_with_converter(
         }
         ExprType::LikeExpr(_) => LikeExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::HashExpr(_) => HashExpr::try_from_proto(proto, &decode_ctx)?,
+        ExprType::RangeExpr(_) => RangeExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::ScalarSubquery(_) => {
             let results = ctx.scalar_subquery_results().ok_or_else(|| {
                 proto_error(
@@ -425,6 +427,10 @@ pub fn parse_protobuf_partitioning(
         .transpose()
         .map(Option::flatten)
 }
+#[deprecated(
+    since = "55.0.0",
+    note = "unused by DataFusion; use `FileScanConfig::parse_table_schema_from_proto` to reconstruct the full table schema"
+)]
 pub fn parse_protobuf_file_scan_schema(
     proto: &protobuf::FileScanExecConf,
 ) -> Result<Arc<Schema>> {
@@ -455,6 +461,10 @@ pub fn parse_protobuf_file_scan_config(
     )
 }
 
+#[deprecated(
+    since = "55.0.0",
+    note = "unused by DataFusion; `MemorySourceConfig` deserializes its record batches itself via `MemorySourceConfig::try_from_proto`"
+)]
 pub fn parse_record_batches(buf: &[u8]) -> Result<Vec<RecordBatch>> {
     if buf.is_empty() {
         return Ok(vec![]);

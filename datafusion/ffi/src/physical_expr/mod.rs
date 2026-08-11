@@ -726,7 +726,7 @@ impl PhysicalExpr for ForeignPhysicalExpr {
     }
 
     fn expression_id(&self) -> Option<u64> {
-        unsafe { (self.expr.expression_id)(&self.expr).into() }
+        unsafe { (self.expr.expression_id)(&self.expr) }.into()
     }
 }
 
@@ -762,7 +762,9 @@ mod tests {
     use datafusion_expr::interval_arithmetic::Interval;
     #[expect(deprecated)]
     use datafusion_expr::statistics::Distribution;
-    use datafusion_physical_expr::expressions::{Column, NegativeExpr, NotExpr};
+    use datafusion_physical_expr::expressions::{
+        Column, DynamicFilterPhysicalExpr, NegativeExpr, NotExpr, lit,
+    };
     use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, fmt_sql};
 
     use crate::physical_expr::FFI_PhysicalExpr;
@@ -775,6 +777,21 @@ mod tests {
         let foreign_expr: Arc<dyn PhysicalExpr> = (&ffi_expr).into();
 
         (original, foreign_expr)
+    }
+
+    #[test]
+    fn ffi_physical_expr_expression_id() {
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
+        let expected_id = dynamic_filter
+            .expression_id()
+            .expect("dynamic filters always have an expression ID");
+        let expression: Arc<dyn PhysicalExpr> =
+            Arc::<DynamicFilterPhysicalExpr>::clone(&dynamic_filter);
+        let mut ffi_expr = FFI_PhysicalExpr::from(expression);
+        ffi_expr.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_expr: Arc<dyn PhysicalExpr> = (&ffi_expr).into();
+        assert_eq!(foreign_expr.expression_id(), Some(expected_id));
     }
 
     fn test_record_batch() -> RecordBatch {

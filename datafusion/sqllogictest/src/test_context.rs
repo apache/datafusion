@@ -573,14 +573,17 @@ fn register_union_table(ctx: &SessionContext) {
             ],
         )
         .unwrap(),
-        ScalarBuffer::from(vec![3, 1, 3]),
+        ScalarBuffer::from(vec![3, 1, 3, 3, 1, 3]),
         None,
         vec![
-            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 1, 5, 3])),
             Arc::new(StringArray::from(vec![
                 Some("foo"),
                 Some("bar"),
                 Some("baz"),
+                Some("qux"),
+                Some("bar"),
+                Some("quux"),
             ])),
         ],
     )
