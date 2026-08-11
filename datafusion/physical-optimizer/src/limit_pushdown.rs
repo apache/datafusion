@@ -161,7 +161,7 @@ pub fn pushdown_limit_helper(
         );
         global_state.skip = skip;
         global_state.fetch = fetch;
-        global_state.preserve_order = limit_info.preserve_order;
+        global_state.preserve_order |= limit_info.preserve_order;
         global_state.satisfied = false;
 
         if let Some(fetch) = fetch

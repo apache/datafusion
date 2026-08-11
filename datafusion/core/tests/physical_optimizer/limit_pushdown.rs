@@ -417,7 +417,8 @@ fn preserves_order_when_pushing_fetch_from_sort_preserving_merge() -> Result<()>
     }]
     .into();
     let scan = parquet_exec_with_sort(schema, vec![ordering.clone()]);
-    let plan = sort_preserving_merge_exec_with_fetch(ordering, scan, 5);
+    let local_limit = local_limit_exec(scan, 10);
+    let plan = sort_preserving_merge_exec_with_fetch(ordering, local_limit, 5);
 
     let optimized = LimitPushdown::new().optimize(plan, &ConfigOptions::new())?;
     let scan = optimized.children().swap_remove(0);
