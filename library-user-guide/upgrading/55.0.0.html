@@ -1479,6 +1479,28 @@ runtime), implement <code class="docutils literal notranslate"><span class="pre"
 following the pattern in <a class="reference external" href="https://github.com/apache/arrow-rs/blob/main/parquet/examples/object_store.rs"><code class="docutils literal notranslate"><span class="pre">parquet/examples/object_store.rs</span></code></a></p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/24030">PR #24030</a> for details.</p>
 </section>
+<section id="datafusion-proto-parquet-options-conversions-are-fallible">
+<h3><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: parquet options conversions are fallible<a class="headerlink" href="#datafusion-proto-parquet-options-conversions-are-fallible" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">protobuf::ParquetOptions</span></code> and <code class="docutils literal notranslate"><span class="pre">protobuf::TableParquetOptions</span></code> validate
+<code class="docutils literal notranslate"><span class="pre">writer_version</span></code> when converting into their <code class="docutils literal notranslate"><span class="pre">datafusion-common</span></code> counterparts, so
+those conversions are <code class="docutils literal notranslate"><span class="pre">TryFrom</span></code> rather than <code class="docutils literal notranslate"><span class="pre">From</span></code>.</p>
+<p>Every other <code class="docutils literal notranslate"><span class="pre">From</span></code> / <code class="docutils literal notranslate"><span class="pre">TryFrom</span></code> conversion between DataFusion types and
+<code class="docutils literal notranslate"><span class="pre">datafusion_proto::protobuf</span></code> messages is unchanged. Several impls moved to the
+crate that owns their DataFusion type, but trait impls are global, so
+<code class="docutils literal notranslate"><span class="pre">X::try_from(&amp;proto)</span></code> and <code class="docutils literal notranslate"><span class="pre">proto.try_into()</span></code> still resolve with no import
+changes.</p>
+<p><strong>Migration guide:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">opts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ParquetOptions</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="o">&amp;</span><span class="n">proto_opts</span><span class="p">);</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">table_opts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TableParquetOptions</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="o">&amp;</span><span class="n">proto_table_opts</span><span class="p">);</span>
+
+<span class="c1">// After</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">opts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ParquetOptions</span><span class="p">::</span><span class="n">try_from</span><span class="p">(</span><span class="o">&amp;</span><span class="n">proto_opts</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">table_opts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TableParquetOptions</span><span class="p">::</span><span class="n">try_from</span><span class="p">(</span><span class="o">&amp;</span><span class="n">proto_table_opts</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/24019">issue #24019</a> for details.</p>
+</section>
 </section>
 </section>
 
@@ -1564,6 +1586,7 @@ following the pattern in <a class="reference external" href="https://github.com/
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cachedparquetfilereader-removed-parquetfilereader-fields-are-now-private"><code class="docutils literal notranslate"><span class="pre">CachedParquetFileReader</span></code> removed; <code class="docutils literal notranslate"><span class="pre">ParquetFileReader</span></code> fields are now private</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#array-distance-scalar-function-now-rejects-multidimensional-arrays"><code class="docutils literal notranslate"><span class="pre">array_distance</span></code> scalar function now rejects multidimensional arrays</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquetobjectreader-parquetobjectwriter-deprecated-upstream"><code class="docutils literal notranslate"><span class="pre">ParquetObjectReader</span></code> / <code class="docutils literal notranslate"><span class="pre">ParquetObjectWriter</span></code> deprecated upstream</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-proto-parquet-options-conversions-are-fallible"><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: parquet options conversions are fallible</a></li>
 </ul>
 </li>
 </ul>
