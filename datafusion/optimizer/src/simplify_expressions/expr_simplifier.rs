@@ -2579,23 +2579,26 @@ mod tests {
         // use the same equality relation. Comparing structurally there while the guard
         // normalizes makes the rule rebuild its input and still report `Transformed::yes`,
         // which spins the simplifier until it hits the cycle limit.
+        //
+        // Operands are non-nullable so the expected results do not depend on how the XOR
+        // rules treat a NULL operand, which is a separate question from the cycle.
 
-        // (c4 + c4_non_null) ^ (c4_non_null + c4) --> 0
+        // (c4_non_null + 1) ^ (1 + c4_non_null) --> 0
         let expr = bitwise_xor(
-            col("c4") + col("c4_non_null"),
-            col("c4_non_null") + col("c4"),
+            col("c4_non_null") + lit(1_u32),
+            lit(1_u32) + col("c4_non_null"),
         );
         let (simplified, cycles) = simplify_no_canonicalize_with_cycle_count(expr);
         assert_eq!(simplified, lit(0_u32));
         assert_eq!(cycles, 2);
 
-        // (c4 + c4_non_null) ^ ((c4_non_null + c4) ^ c4) --> c4
+        // (c4_non_null + 1) ^ ((1 + c4_non_null) ^ c4_non_null) --> c4_non_null
         let expr = bitwise_xor(
-            col("c4") + col("c4_non_null"),
-            bitwise_xor(col("c4_non_null") + col("c4"), col("c4")),
+            col("c4_non_null") + lit(1_u32),
+            bitwise_xor(lit(1_u32) + col("c4_non_null"), col("c4_non_null")),
         );
         let (simplified, cycles) = simplify_no_canonicalize_with_cycle_count(expr);
-        assert_eq!(simplified, col("c4"));
+        assert_eq!(simplified, col("c4_non_null"));
         assert_eq!(cycles, 2);
     }
 
