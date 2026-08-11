@@ -18,10 +18,12 @@
 //! [`GroupValues`] trait for storing and interning group keys
 
 use arrow::array::types::{
-    Date32Type, Date64Type, Decimal128Type, Time32MillisecondType, Time32SecondType,
-    Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    Date32Type, Date64Type, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
+
 use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use datafusion_common::Result;
@@ -41,7 +43,8 @@ pub(crate) use single_group_by::primitive::HashValue;
 use crate::aggregates::{
     group_values::single_group_by::{
         boolean::GroupValuesBoolean, bytes::GroupValuesBytes,
-        bytes_view::GroupValuesBytesView, primitive::GroupValuesPrimitive,
+        bytes_view::GroupValuesBytesView, flat::GroupValuesFlatPrimitive,
+        primitive::GroupValuesPrimitive,
     },
     order::GroupOrdering,
 };
@@ -139,6 +142,23 @@ pub fn new_group_values(
 ) -> Result<Box<dyn GroupValues>> {
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
+
+        macro_rules! flat_helper {
+            ($t:ty) => {
+                return Ok(Box::new(GroupValuesFlatPrimitive::<$t>::new(d.clone())))
+            };
+        }
+        match d {
+            DataType::Int8 => flat_helper!(Int8Type),
+            DataType::Int16 => flat_helper!(Int16Type),
+            DataType::Int32 => flat_helper!(Int32Type),
+            DataType::Int64 => flat_helper!(Int64Type),
+            DataType::UInt8 => flat_helper!(UInt8Type),
+            DataType::UInt16 => flat_helper!(UInt16Type),
+            DataType::UInt32 => flat_helper!(UInt32Type),
+            DataType::UInt64 => flat_helper!(UInt64Type),
+            _ => {}
+        }
 
         macro_rules! downcast_helper {
             ($t:ty, $d:ident) => {
