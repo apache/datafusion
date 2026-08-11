@@ -365,20 +365,24 @@ impl ScalarUDFImpl for LogFunc {
 
         match number {
             Expr::Literal(value, _)
-                if value == ScalarValue::new_one(&number_datatype)? =>
+                if value == ScalarValue::new_one(&number_datatype)?
+                    && !info.nullable(&base)? =>
             {
                 Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_zero(
                     &info.get_data_type(&base)?,
                 )?)))
             }
             Expr::ScalarFunction(ScalarFunction { func, mut args })
-                if is_pow(&func) && args.len() == 2 && base == args[0] =>
+                if is_pow(&func)
+                    && args.len() == 2
+                    && base == args[0]
+                    && !info.nullable(&base)? =>
             {
                 let b = args.pop().unwrap(); // length checked above
                 Ok(ExprSimplifyResult::Simplified(b))
             }
             number => {
-                if number == base {
+                if number == base && !info.nullable(&number)? {
                     Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_one(
                         &number_datatype,
                     )?)))
@@ -414,9 +418,11 @@ mod tests {
         Date32Array, Decimal128Array, Decimal256Array, Float32Array, Float64Array,
     };
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DECIMAL256_MAX_PRECISION, Field};
+    use arrow::datatypes::{DECIMAL256_MAX_PRECISION, Field, Schema};
+    use datafusion_common::ToDFSchema;
     use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::col;
 
     #[test]
     fn test_log_decimal_native() {
@@ -782,6 +788,25 @@ mod tests {
         assert_eq!(args.len(), 2);
         assert_eq!(args[0], lit(2));
         assert_eq!(args[1], lit(3));
+    }
+
+    #[test]
+    fn test_log_simplify_preserves_nullable_base() {
+        let context = SimplifyContext::builder()
+            .with_schema(
+                Schema::new(vec![Field::new("a", DataType::Float64, true)])
+                    .to_dfschema_ref()
+                    .unwrap(),
+            )
+            .build();
+        let original = vec![col("a"), lit(1.0)];
+
+        let result = LogFunc::new().simplify(original.clone(), &context).unwrap();
+
+        let ExprSimplifyResult::Original(args) = result else {
+            panic!("Expected ExprSimplifyResult::Original")
+        };
+        assert_eq!(args, original);
     }
 
     #[test]

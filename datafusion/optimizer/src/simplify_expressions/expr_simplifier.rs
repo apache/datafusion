@@ -1372,7 +1372,9 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: BitwiseXor,
                 right,
-            }) if expr_contains(&left, &right, BitwiseXor) => {
+            }) if expr_contains(&left, &right, BitwiseXor)
+                && matches!(info.nullable(&right), Ok(false)) =>
+            {
                 let expr = delete_xor_in_complex_expr(&left, &right, false);
                 Transformed::yes(if expr == *right {
                     Expr::Literal(
@@ -1389,7 +1391,9 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 left,
                 op: BitwiseXor,
                 right,
-            }) if expr_contains(&right, &left, BitwiseXor) => {
+            }) if expr_contains(&right, &left, BitwiseXor)
+                && matches!(info.nullable(&left), Ok(false)) =>
+            {
                 let expr = delete_xor_in_complex_expr(&right, &left, true);
                 Transformed::yes(if expr == *left {
                     Expr::Literal(
@@ -1843,7 +1847,14 @@ impl TreeNodeRewriter for Simplifier<'_> {
             {
                 match (*left, *right) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
-                        return inlist_intersection(l1, &l2, false).map(Transformed::yes);
+                        let simplified = inlist_intersection(l1.clone(), &l2, false)?;
+                        if let Some(simplified) =
+                            simplify_inlist_set_operation(info, &l1, &l2, simplified)
+                        {
+                            Transformed::yes(simplified)
+                        } else {
+                            Transformed::no(Expr::InList(l1).and(Expr::InList(l2)))
+                        }
                     }
                     // Matched previously once
                     _ => unreachable!(),
@@ -1883,7 +1894,14 @@ impl TreeNodeRewriter for Simplifier<'_> {
             {
                 match (*left, *right) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
-                        return inlist_except(l1, &l2).map(Transformed::yes);
+                        let simplified = inlist_except(l1.clone(), &l2)?;
+                        if let Some(simplified) =
+                            simplify_inlist_set_operation(info, &l1, &l2, simplified)
+                        {
+                            Transformed::yes(simplified)
+                        } else {
+                            Transformed::no(Expr::InList(l1).and(Expr::InList(l2)))
+                        }
                     }
                     // Matched previously once
                     _ => unreachable!(),
@@ -1903,7 +1921,14 @@ impl TreeNodeRewriter for Simplifier<'_> {
             {
                 match (*left, *right) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
-                        return inlist_except(l2, &l1).map(Transformed::yes);
+                        let simplified = inlist_except(l2.clone(), &l1)?;
+                        if let Some(simplified) =
+                            simplify_inlist_set_operation(info, &l1, &l2, simplified)
+                        {
+                            Transformed::yes(simplified)
+                        } else {
+                            Transformed::no(Expr::InList(l1).and(Expr::InList(l2)))
+                        }
                     }
                     // Matched previously once
                     _ => unreachable!(),
@@ -1923,7 +1948,14 @@ impl TreeNodeRewriter for Simplifier<'_> {
             {
                 match (*left, *right) {
                     (Expr::InList(l1), Expr::InList(l2)) => {
-                        return inlist_intersection(l1, &l2, true).map(Transformed::yes);
+                        let simplified = inlist_intersection(l1.clone(), &l2, true)?;
+                        if let Some(simplified) =
+                            simplify_inlist_set_operation(info, &l1, &l2, simplified)
+                        {
+                            Transformed::yes(simplified)
+                        } else {
+                            Transformed::no(Expr::InList(l1).or(Expr::InList(l2)))
+                        }
                     }
                     // Matched previously once
                     _ => unreachable!(),
@@ -2321,6 +2353,39 @@ fn inlist_except(mut l1: InList, l2: &InList) -> Result<Expr> {
     Ok(Expr::InList(l1))
 }
 
+/// Set algebra on `IN` lists is only sound if nullable list items are not
+/// discarded. When the tested expression is nullable, preserve the NULL branch
+/// of an otherwise constant result explicitly.
+fn simplify_inlist_set_operation(
+    info: &SimplifyContext,
+    left: &InList,
+    right: &InList,
+    result: Expr,
+) -> Option<Expr> {
+    let list_items_are_non_nullable = left
+        .list
+        .iter()
+        .chain(&right.list)
+        .all(|item| matches!(info.nullable(item), Ok(false)));
+
+    if !list_items_are_non_nullable {
+        return None;
+    }
+
+    if !is_true(&result) && !is_false(&result) {
+        return Some(result);
+    }
+
+    match info.nullable(left.expr.as_ref()) {
+        Ok(false) => Some(result),
+        Ok(true) if is_true(&result) => {
+            Some(Expr::IsNotNull(left.expr.clone()).or(lit_bool_null()))
+        }
+        Ok(true) => Some(Expr::IsNull(left.expr.clone()).and(lit_bool_null())),
+        Err(_) => None,
+    }
+}
+
 /// Returns expression testing a boolean `expr` for being exactly `true` (not `false` or NULL).
 fn is_exactly_true(expr: Expr, info: &SimplifyContext) -> Result<Expr> {
     if !info.nullable(&expr)? {
@@ -2368,7 +2433,7 @@ mod tests {
         array::{Int32Array, StructArray},
         datatypes::{FieldRef, Fields},
     };
-    use datafusion_common::{DFSchemaRef, ToDFSchema, assert_contains};
+    use datafusion_common::{DFSchema, DFSchemaRef, ToDFSchema, assert_contains};
     use datafusion_expr::{
         expr::WindowFunction,
         function::{
@@ -3016,6 +3081,8 @@ mod tests {
 
     #[test]
     fn test_simplify_composed_bitwise_xor() {
+        // XOR cancellation is only valid for non-nullable operands, so these
+        // algebraic tests use a non-nullable version of the expression schema.
         // with an even number of the column "c2"
         // c2 ^ ((c2 ^ (c2 | c1)) ^ (c1 & c2)) --> (c2 | c1) ^ (c1 & c2)
 
@@ -3032,7 +3099,7 @@ mod tests {
             bitwise_and(col("c1"), col("c2")),
         );
 
-        assert_eq!(simplify(expr), expected);
+        assert_eq!(simplify_with_non_nullable_schema(expr), expected);
 
         // with an odd number of the column "c2"
         // c2 ^ (c2 ^ (c2 | c1)) ^ ((c1 & c2) ^ c2) --> c2 ^ ((c2 | c1) ^ (c1 & c2))
@@ -3053,7 +3120,7 @@ mod tests {
             ),
         );
 
-        assert_eq!(simplify(expr), expected);
+        assert_eq!(simplify_with_non_nullable_schema(expr), expected);
 
         // with an even number of the column "c2"
         // ((c2 ^ (c2 | c1)) ^ (c1 & c2)) ^ c2 --> (c2 | c1) ^ (c1 & c2)
@@ -3071,7 +3138,7 @@ mod tests {
             bitwise_and(col("c1"), col("c2")),
         );
 
-        assert_eq!(simplify(expr), expected);
+        assert_eq!(simplify_with_non_nullable_schema(expr), expected);
 
         // with an odd number of the column "c2"
         // (c2 ^ (c2 | c1)) ^ ((c1 & c2) ^ c2) ^ c2 --> ((c2 | c1) ^ (c1 & c2)) ^ c2
@@ -3092,7 +3159,7 @@ mod tests {
             col("c2"),
         );
 
-        assert_eq!(simplify(expr), expected);
+        assert_eq!(simplify_with_non_nullable_schema(expr), expected);
     }
 
     #[test]
@@ -3183,17 +3250,21 @@ mod tests {
 
     #[test]
     fn test_simplify_simple_bitwise_xor() {
-        // c4 ^ c4 -> 0
-        let expr = (col("c4")).bitxor(col("c4"));
+        // c4_non_null ^ c4_non_null -> 0
+        let expr = (col("c4_non_null")).bitxor(col("c4_non_null"));
         let expected = lit(0u32);
 
         assert_eq!(simplify(expr), expected);
 
-        // c3 ^ c3 -> 0
-        let expr = col("c3").bitxor(col("c3"));
+        // c3_non_null ^ c3_non_null -> 0
+        let expr = col("c3_non_null").bitxor(col("c3_non_null"));
         let expected = lit(0i64);
 
         assert_eq!(simplify(expr), expected);
+
+        // Nullable inputs must remain nullable after XOR cancellation.
+        assert_no_change(col("c4").bitxor(col("c4")));
+        assert_no_change(col("c3").bitxor(col("c3")));
     }
 
     #[test]
@@ -3646,6 +3717,20 @@ mod tests {
 
     fn simplify(expr: Expr) -> Expr {
         try_simplify(expr).unwrap()
+    }
+
+    fn simplify_with_non_nullable_schema(expr: Expr) -> Expr {
+        let fields = expr_test_schema()
+            .fields()
+            .iter()
+            .map(|field| field.as_ref().clone().with_nullable(false))
+            .collect::<Vec<_>>();
+        let schema = Arc::new(
+            DFSchema::from_unqualified_fields(fields.into(), HashMap::new()).unwrap(),
+        );
+        ExprSimplifier::new(SimplifyContext::builder().with_schema(schema).build())
+            .simplify(expr)
+            .unwrap()
     }
 
     fn try_simplify_with_cycle_count(expr: Expr) -> Result<(Expr, u32)> {
@@ -4423,11 +4508,24 @@ mod tests {
             col("c1").eq(subquery1).or(col("c1").eq(subquery2))
         );
 
-        // 1. c1 IN (1,2,3,4) AND c1 IN (5,6,7,8) -> false
+        // 1. c1_non_null IN (1,2,3,4) AND c1_non_null IN (5,6,7,8) -> false
+        let expr = in_list(
+            col("c1_non_null"),
+            vec![lit(1), lit(2), lit(3), lit(4)],
+            false,
+        )
+        .and(in_list(
+            col("c1_non_null"),
+            vec![lit(5), lit(6), lit(7), lit(8)],
+            false,
+        ));
+        assert_eq!(simplify(expr), lit(false));
+
+        // Preserve the NULL branch when the tested expression is nullable.
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).and(
             in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], false),
         );
-        assert_eq!(simplify(expr), lit(false));
+        assert_eq!(simplify(expr), col("c1").is_null().and(lit_bool_null()));
 
         // 2. c1 IN (1,2,3,4) AND c1 IN (4,5,6,7) -> c1 = 4
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], false).and(
@@ -4435,11 +4533,24 @@ mod tests {
         );
         assert_eq!(simplify(expr), col("c1").eq(lit(4)));
 
-        // 3. c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (5, 6, 7, 8) -> true
+        // 3. c1_non_null NOT IN (1, 2, 3, 4) OR c1_non_null NOT IN (5, 6, 7, 8) -> true
+        let expr = in_list(
+            col("c1_non_null"),
+            vec![lit(1), lit(2), lit(3), lit(4)],
+            true,
+        )
+        .or(in_list(
+            col("c1_non_null"),
+            vec![lit(5), lit(6), lit(7), lit(8)],
+            true,
+        ));
+        assert_eq!(simplify(expr), lit(true));
+
+        // Preserve the NULL branch when the tested expression is nullable.
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(
             in_list(col("c1"), vec![lit(5), lit(6), lit(7), lit(8)], true),
         );
-        assert_eq!(simplify(expr), lit(true));
+        assert_eq!(simplify(expr), col("c1").is_not_null().or(lit_bool_null()));
 
         // 3.5 c1 NOT IN (1, 2, 3, 4) OR c1 NOT IN (4, 5, 6, 7) -> c1 != 4 (4 overlaps)
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3), lit(4)], true).or(
@@ -4473,13 +4584,23 @@ mod tests {
             )
         );
 
-        // 6. c1 IN (1,2,3) AND c1 NOT INT (1,2,3,4,5) -> false
+        // 6. c1_non_null IN (1,2,3) AND c1_non_null NOT IN (1,2,3,4,5) -> false
+        let expr = in_list(col("c1_non_null"), vec![lit(1), lit(2), lit(3)], false).and(
+            in_list(
+                col("c1_non_null"),
+                vec![lit(1), lit(2), lit(3), lit(4), lit(5)],
+                true,
+            ),
+        );
+        assert_eq!(simplify(expr), lit(false));
+
+        // Preserve the NULL branch when the tested expression is nullable.
         let expr = in_list(col("c1"), vec![lit(1), lit(2), lit(3)], false).and(in_list(
             col("c1"),
             vec![lit(1), lit(2), lit(3), lit(4), lit(5)],
             true,
         ));
-        assert_eq!(simplify(expr), lit(false));
+        assert_eq!(simplify(expr), col("c1").is_null().and(lit_bool_null()));
 
         // 7. c1 NOT IN (1,2,3,4) AND c1 IN (1,2,3,4,5) -> c1 = 5
         let expr =
