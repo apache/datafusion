@@ -25,12 +25,16 @@ use crate::ExecutionPlan;
 use crate::ExecutionPlanProperties;
 use crate::joins::Map;
 use crate::joins::PartitionMode;
+use crate::joins::hash_join::bounds_union::{
+    create_merged_bounds_predicate, merge_partition_bounds,
+};
 use crate::joins::hash_join::exec::HASH_JOIN_SEED;
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{
     HashExpr, HashTableLookupExpr, SeededRandomState,
 };
 use arrow::array::ArrayRef;
+use arrow::compute::concat;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
@@ -248,8 +252,24 @@ pub(crate) struct SharedBuildAccumulator {
     /// result, then broadcasts), so late subscribers simply re-check the
     /// state under the mutex and return immediately.
     completion_notify: Notify,
-    /// Dynamic filter for pushdown to probe side
+    /// Dynamic filter carrying the membership half of the pushed predicate
+    /// (and, when [`Self::bounds_dynamic_filter`] is absent, the whole thing).
     dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
+    /// Second dynamic filter carrying the build-side value ranges, `AND`'d with
+    /// [`Self::dynamic_filter`] on the probe side.
+    ///
+    /// Two wrappers rather than one `DynamicFilter[bounds AND membership]` is
+    /// deliberate: `split_conjunction` splits only on a top-level `AND` and
+    /// does not look inside a `DynamicFilterPhysicalExpr`, so a single wrapper
+    /// reaches the Parquet reader as one opaque conjunct. Split in two, the
+    /// reader builds two `ArrowPredicate`s and applies them in sequence against
+    /// an accumulating `RowSelection` — the cheap vectorized range check runs
+    /// first and the expensive membership lookup only sees the survivors — and
+    /// the range half additionally becomes visible to row-group pruning.
+    ///
+    /// `None` for `CollectLeft` joins, which have no routing to hoist bounds
+    /// out of, and whenever the second filter did not survive pushdown.
+    bounds_dynamic_filter: Option<Arc<DynamicFilterPhysicalExpr>>,
     /// Right side join expressions needed for creating filter expressions
     on_right: Vec<PhysicalExprRef>,
     /// Random state for partitioning (RepartitionExec's hash function with 0,0,0,0 seeds)
@@ -264,6 +284,15 @@ pub(crate) struct SharedBuildAccumulator {
     /// three-valued logic can collapse the result, so the pushed filter keeps NULL rows.
     null_aware: bool,
 }
+
+/// Ceiling on the combined size of the per-partition `InList` arrays that
+/// [`SharedBuildAccumulator::union_inlist_membership`] will concatenate.
+///
+/// Each partition's list is independently capped by
+/// `hash_join_inlist_pushdown_max_size`, so without a combined cap the union
+/// grows with the partition count. Past this size, keeping the routed `CASE` —
+/// where each probe row only ever probes one list — is the cheaper shape.
+const MAX_UNIONED_INLIST_BYTES: usize = 1024 * 1024;
 
 /// Strategy for filter pushdown (decided at collection time)
 #[derive(Clone)]
@@ -370,6 +399,7 @@ impl SharedBuildAccumulator {
         left_child: &dyn ExecutionPlan,
         right_child: &dyn ExecutionPlan,
         dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
+        bounds_dynamic_filter: Option<Arc<DynamicFilterPhysicalExpr>>,
         on_right: Vec<PhysicalExprRef>,
         repartition_random_state: SeededRandomState,
         null_equality: NullEquality,
@@ -417,6 +447,11 @@ impl SharedBuildAccumulator {
             }),
             completion_notify: Notify::new(),
             dynamic_filter,
+            // Only a partitioned join routes through a `CASE`, so only it has
+            // bounds to hoist out into a second conjunct.
+            bounds_dynamic_filter: matches!(partition_mode, PartitionMode::Partitioned)
+                .then_some(bounds_dynamic_filter)
+                .flatten(),
             on_right,
             repartition_random_state,
             probe_schema: right_child.schema(),
@@ -568,6 +603,9 @@ impl SharedBuildAccumulator {
     fn finish(&self, finalize_input: FinalizeInput) {
         let result = self.build_filter(finalize_input).map_err(Arc::new);
         self.dynamic_filter.mark_complete();
+        if let Some(bounds_filter) = &self.bounds_dynamic_filter {
+            bounds_filter.mark_complete();
+        }
 
         let mut guard = self.inner.lock();
         guard.completion = CompletionState::Ready(result);
@@ -627,20 +665,7 @@ impl SharedBuildAccumulator {
                 }
             },
             FinalizeInput::Partitioned(partitions) => {
-                let num_partitions = partitions.len();
-                let routing_hash_expr = Arc::new(HashExpr::new(
-                    self.on_right.clone(),
-                    self.repartition_random_state.clone(),
-                    "hash_repartition".to_string(),
-                )) as Arc<dyn PhysicalExpr>;
-
-                let modulo_expr = Arc::new(BinaryExpr::new(
-                    routing_hash_expr,
-                    Operator::Modulo,
-                    lit(ScalarValue::UInt64(Some(num_partitions as u64))),
-                )) as Arc<dyn PhysicalExpr>;
-
-                let mut real_branches = Vec::new();
+                let mut real_partitions: Vec<(usize, &PartitionData)> = Vec::new();
                 let mut empty_partition_ids = Vec::new();
                 let mut has_canceled_unknown = false;
                 let mut keys_have_null = false;
@@ -654,25 +679,7 @@ impl SharedBuildAccumulator {
                         }
                         PartitionStatus::Reported(partition) => {
                             keys_have_null |= partition.keys_have_null;
-                            let membership_expr = create_membership_predicate(
-                                &self.on_right,
-                                partition.pushdown.clone(),
-                                &HASH_JOIN_SEED,
-                                self.probe_schema.as_ref(),
-                            )?;
-                            let bounds_expr = create_bounds_predicate(
-                                &self.on_right,
-                                &partition.bounds,
-                            );
-                            let then_expr = combine_membership_and_bounds(
-                                membership_expr,
-                                bounds_expr,
-                            )
-                            .unwrap_or_else(|| lit(true));
-                            real_branches.push((
-                                lit(ScalarValue::UInt64(Some(partition_id as u64))),
-                                then_expr,
-                            ));
+                            real_partitions.push((partition_id, partition));
                         }
                         PartitionStatus::CanceledUnknown => {
                             has_canceled_unknown = true;
@@ -688,47 +695,213 @@ impl SharedBuildAccumulator {
                     }
                 }
 
-                let filter_expr = if has_canceled_unknown {
-                    let mut when_then_branches = empty_partition_ids
-                        .into_iter()
-                        .map(|partition_id| {
-                            (
-                                lit(ScalarValue::UInt64(Some(partition_id as u64))),
-                                lit(false),
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    when_then_branches.extend(real_branches);
+                // A canceled partition can hold any value, so its route must stay
+                // permissive and no set-theoretic union over the *reported* partitions
+                // describes the build side. Keep the bounds inside the `CASE` in that
+                // case, exactly as before.
+                let split_bounds =
+                    self.bounds_dynamic_filter.is_some() && !has_canceled_unknown;
 
-                    if when_then_branches.is_empty() {
-                        lit(true)
+                let bounds_expr = if split_bounds {
+                    let merged = merge_partition_bounds(
+                        self.on_right.len(),
+                        &real_partitions
+                            .iter()
+                            .map(|(_, partition)| &partition.bounds)
+                            .collect::<Vec<_>>(),
+                    );
+                    log::debug!(
+                        "hash join merged build-side bounds over {} partitions, \
+                         degenerate {}, estimated relaxation {:?}",
+                        real_partitions.len(),
+                        merged.is_degenerate(),
+                        merged.relaxation()
+                    );
+                    // A degenerate merge constrains nothing, so emitting it
+                    // would cost an evaluation per probe batch and prune
+                    // nothing. Leave the conjunct at `true` instead.
+                    if merged.is_degenerate() {
+                        None
                     } else {
-                        Arc::new(CaseExpr::try_new(
-                            Some(modulo_expr),
-                            when_then_branches,
-                            Some(lit(true)),
-                        )?) as Arc<dyn PhysicalExpr>
+                        create_merged_bounds_predicate(&self.on_right, &merged)
                     }
-                } else if real_branches.is_empty() {
-                    lit(false)
-                } else if real_branches.len() == 1
-                    && empty_partition_ids.len() + 1 == num_partitions
-                {
-                    Arc::clone(&real_branches[0].1)
                 } else {
-                    Arc::new(CaseExpr::try_new(
-                        Some(modulo_expr),
-                        real_branches,
-                        Some(lit(false)),
-                    )?) as Arc<dyn PhysicalExpr>
+                    None
                 };
 
-                self.dynamic_filter
-                    .update(self.preserve_probe_nulls(filter_expr, keys_have_null)?)?;
+                let membership_expr = self.build_partitioned_membership(
+                    partitions.len(),
+                    &real_partitions,
+                    &empty_partition_ids,
+                    has_canceled_unknown,
+                    // When the bounds cannot be hoisted into their own conjunct they
+                    // must stay in the routed branches, or they are lost entirely.
+                    !split_bounds,
+                )?;
+
+                match (&self.bounds_dynamic_filter, bounds_expr) {
+                    (Some(bounds_filter), Some(bounds_expr)) => {
+                        // Both halves keep the NULL widening: the probe side sees
+                        // `(nulls OR bounds) AND (nulls OR membership)`, which is
+                        // `nulls OR (bounds AND membership)`.
+                        bounds_filter.update(
+                            self.preserve_probe_nulls(bounds_expr, keys_have_null)?,
+                        )?;
+                    }
+                    // Nothing usable to hoist; leave the conjunct as the no-op it
+                    // was initialized with so it folds away.
+                    (Some(bounds_filter), None) => bounds_filter.update(lit(true))?,
+                    (None, _) => {}
+                }
+
+                self.dynamic_filter.update(
+                    self.preserve_probe_nulls(membership_expr, keys_have_null)?,
+                )?;
             }
         }
 
         Ok(())
+    }
+
+    /// Builds the routing half of a partitioned join's pushed predicate.
+    ///
+    /// Normally this is a `CASE hash(keys) % n WHEN i THEN <partition i's check>`,
+    /// but when every non-empty partition pushes an `InList` the routing is
+    /// redundant and the whole thing collapses to a single `InList` over the
+    /// union — see [`Self::union_inlist_membership`].
+    fn build_partitioned_membership(
+        &self,
+        num_partitions: usize,
+        real_partitions: &[(usize, &PartitionData)],
+        empty_partition_ids: &[usize],
+        has_canceled_unknown: bool,
+        include_bounds: bool,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        if !has_canceled_unknown
+            && !include_bounds
+            && let Some(union) = self.union_inlist_membership(real_partitions)?
+        {
+            return Ok(union);
+        }
+
+        let mut real_branches = Vec::with_capacity(real_partitions.len());
+        for (partition_id, partition) in real_partitions {
+            let membership_expr = create_membership_predicate(
+                &self.on_right,
+                partition.pushdown.clone(),
+                &HASH_JOIN_SEED,
+                self.probe_schema.as_ref(),
+            )?;
+            let bounds_expr = include_bounds
+                .then(|| create_bounds_predicate(&self.on_right, &partition.bounds))
+                .flatten();
+            let then_expr = combine_membership_and_bounds(membership_expr, bounds_expr)
+                .unwrap_or_else(|| lit(true));
+            real_branches.push((
+                lit(ScalarValue::UInt64(Some(*partition_id as u64))),
+                then_expr,
+            ));
+        }
+
+        let routing_hash_expr = Arc::new(HashExpr::new(
+            self.on_right.clone(),
+            self.repartition_random_state.clone(),
+            "hash_repartition".to_string(),
+        )) as Arc<dyn PhysicalExpr>;
+        let modulo_expr = Arc::new(BinaryExpr::new(
+            routing_hash_expr,
+            Operator::Modulo,
+            lit(ScalarValue::UInt64(Some(num_partitions as u64))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        if has_canceled_unknown {
+            let mut when_then_branches = empty_partition_ids
+                .iter()
+                .map(|partition_id| {
+                    (
+                        lit(ScalarValue::UInt64(Some(*partition_id as u64))),
+                        lit(false),
+                    )
+                })
+                .collect::<Vec<_>>();
+            when_then_branches.extend(real_branches);
+
+            if when_then_branches.is_empty() {
+                Ok(lit(true))
+            } else {
+                Ok(Arc::new(CaseExpr::try_new(
+                    Some(modulo_expr),
+                    when_then_branches,
+                    Some(lit(true)),
+                )?) as Arc<dyn PhysicalExpr>)
+            }
+        } else if real_branches.is_empty() {
+            Ok(lit(false))
+        } else if real_branches.len() == 1
+            && empty_partition_ids.len() + 1 == num_partitions
+        {
+            Ok(Arc::clone(&real_branches[0].1))
+        } else {
+            Ok(Arc::new(CaseExpr::try_new(
+                Some(modulo_expr),
+                real_branches,
+                Some(lit(false)),
+            )?) as Arc<dyn PhysicalExpr>)
+        }
+    }
+
+    /// Collapses an all-`InList` partitioned membership check into one `InList`
+    /// over the union of the per-partition lists.
+    ///
+    /// This is **exact**, not a relaxation: routing is a deterministic function
+    /// of the key columns, so every build row holding key `K` lands in the same
+    /// partition a probe row holding `K` routes to. Testing `K` against the
+    /// union therefore accepts and rejects precisely what the `CASE` does, and
+    /// the result no longer needs the routing hash at all — nor is it opaque to
+    /// pruning the way a `CASE` is.
+    ///
+    /// Returns `None` when the collapse does not apply (some partition pushes a
+    /// hash map instead of a list, the lists disagree on type, or the union
+    /// would be too large to be worth materializing).
+    fn union_inlist_membership(
+        &self,
+        real_partitions: &[(usize, &PartitionData)],
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        if real_partitions.is_empty() {
+            return Ok(None);
+        }
+
+        let mut arrays = Vec::with_capacity(real_partitions.len());
+        let mut total_bytes = 0;
+        for (_, partition) in real_partitions {
+            let PushdownStrategy::InList(values) = &partition.pushdown else {
+                return Ok(None);
+            };
+            total_bytes += values.get_array_memory_size();
+            if total_bytes > MAX_UNIONED_INLIST_BYTES {
+                return Ok(None);
+            }
+            if arrays
+                .first()
+                .is_some_and(|first: &&ArrayRef| first.data_type() != values.data_type())
+            {
+                return Ok(None);
+            }
+            arrays.push(values);
+        }
+
+        let union: ArrayRef = if arrays.len() == 1 {
+            Arc::clone(arrays[0])
+        } else {
+            concat(&arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>())?
+        };
+
+        create_membership_predicate(
+            &self.on_right,
+            PushdownStrategy::InList(union),
+            &HASH_JOIN_SEED,
+            self.probe_schema.as_ref(),
+        )
     }
 
     /// Keeps probe rows with a NULL key when the join semantics need them.
@@ -806,6 +979,7 @@ pub(super) fn make_partitioned_accumulator_for_test(
         }),
         completion_notify: Notify::new(),
         dynamic_filter,
+        bounds_dynamic_filter: None,
         on_right: vec![],
         repartition_random_state: SeededRandomState::with_seed(1),
         probe_schema,
@@ -830,6 +1004,8 @@ pub(super) fn completed_partitions_for_test(acc: &SharedBuildAccumulator) -> usi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::joins::join_hash_map::JoinHashMapU32;
 
     use arrow::array::{ArrayRef, Int32Array};
     use datafusion_physical_expr::expressions::{Column, Literal};
@@ -856,7 +1032,16 @@ mod tests {
         data: AccumulatedBuildData,
         on_right: Vec<PhysicalExprRef>,
     ) -> SharedBuildAccumulator {
+        make_accumulator_with_bounds_filter_for_test(data, on_right, false)
+    }
+
+    fn make_accumulator_with_bounds_filter_for_test(
+        data: AccumulatedBuildData,
+        on_right: Vec<PhysicalExprRef>,
+        split_bounds: bool,
+    ) -> SharedBuildAccumulator {
         let dynamic_filter = test_dynamic_filter(&on_right);
+        let bounds_dynamic_filter = split_bounds.then(|| test_dynamic_filter(&on_right));
         SharedBuildAccumulator {
             inner: Mutex::new(AccumulatorState {
                 data,
@@ -864,6 +1049,7 @@ mod tests {
             }),
             completion_notify: Notify::new(),
             dynamic_filter,
+            bounds_dynamic_filter,
             on_right,
             repartition_random_state: SeededRandomState::with_seed(1),
             probe_schema: test_probe_schema(),
@@ -895,8 +1081,39 @@ mod tests {
         )
     }
 
+    /// A partitioned accumulator wired the way filter pushdown wires it in
+    /// production: a separate dynamic filter for the bounds conjunct.
+    fn make_split_partitioned_accumulator_for_test(
+        num_partitions: usize,
+    ) -> SharedBuildAccumulator {
+        make_accumulator_with_bounds_filter_for_test(
+            AccumulatedBuildData::Partitioned {
+                partitions: vec![PartitionStatus::Pending; num_partitions],
+                completed_partitions: 0,
+            },
+            test_on_right(),
+            true,
+        )
+    }
+
+    fn current_bounds_expr(acc: &SharedBuildAccumulator) -> PhysicalExprRef {
+        acc.bounds_dynamic_filter
+            .as_ref()
+            .expect("expected a bounds dynamic filter")
+            .current()
+            .expect("bounds dynamic filter current expression should be available")
+    }
+
     fn in_list(values: &[i32]) -> PushdownStrategy {
         PushdownStrategy::InList(Arc::new(Int32Array::from(values.to_vec())) as ArrayRef)
+    }
+
+    /// A build side too large for an `InList`, which is what forces the routed
+    /// `CASE` to survive.
+    fn map_pushdown() -> PushdownStrategy {
+        PushdownStrategy::Map(Arc::new(Map::HashMap(Box::new(
+            JoinHashMapU32::with_capacity(1),
+        ))))
     }
 
     fn bounds(min: i32, max: i32) -> PartitionBounds {
@@ -1057,6 +1274,124 @@ mod tests {
     }
 
     #[test]
+    fn partitioned_split_hoists_merged_bounds_out_of_the_case() {
+        let acc = make_split_partitioned_accumulator_for_test(2);
+
+        // Two large (map-backed) partitions whose ranges overlap: the union is
+        // a single range and the routing CASE keeps only the membership checks.
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(map_pushdown(), bounds(0, 10)),
+            reported(map_pushdown(), bounds(5, 20)),
+        ]))
+        .unwrap();
+
+        let bounds_expr = current_bounds_expr(&acc);
+        assert_eq!(
+            format!("{bounds_expr}"),
+            "probe_key@0 >= 0 AND probe_key@0 <= 20"
+        );
+
+        // The membership half is a routing CASE with no bounds left in it.
+        let membership_expr = current_expr(&acc);
+        let case = case_expr(&membership_expr);
+        assert_eq!(case.when_then_expr().len(), 2);
+        for (_, then_expr) in case.when_then_expr() {
+            assert!(
+                then_expr.downcast_ref::<HashTableLookupExpr>().is_some(),
+                "expected a bare membership check, got {then_expr}"
+            );
+        }
+    }
+
+    #[test]
+    fn partitioned_split_ors_disjoint_partition_ranges() {
+        let acc = make_split_partitioned_accumulator_for_test(2);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(map_pushdown(), bounds(0, 10)),
+            reported(map_pushdown(), bounds(100, 110)),
+        ]))
+        .unwrap();
+
+        // Disjoint ranges are kept apart instead of being widened to the hull:
+        // `[0, 110]` would admit everything in between for nothing.
+        let bounds_expr = current_bounds_expr(&acc);
+        assert_eq!(
+            format!("{bounds_expr}"),
+            "probe_key@0 >= 0 AND probe_key@0 <= 10 OR probe_key@0 >= 100 AND probe_key@0 <= 110"
+        );
+    }
+
+    #[test]
+    fn partitioned_all_inlist_collapses_to_a_single_union_inlist() {
+        let acc = make_split_partitioned_accumulator_for_test(3);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[1, 4]), bounds(1, 4)),
+            reported(in_list(&[2, 5]), bounds(2, 5)),
+            reported(PushdownStrategy::Empty, no_bounds()),
+        ]))
+        .unwrap();
+
+        // Routing is a function of the key, so a probe key only ever matches
+        // the list of the partition it routes to: the union is exact and the
+        // `CASE` (and its routing hash) disappears entirely.
+        let membership_expr = current_expr(&acc);
+        assert!(membership_expr.downcast_ref::<CaseExpr>().is_none());
+        assert_in_list_column_values(&membership_expr, "probe_key", 0, &[1, 4, 2, 5]);
+    }
+
+    #[test]
+    fn partitioned_mixed_strategies_keep_the_routing_case() {
+        let acc = make_split_partitioned_accumulator_for_test(2);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[1, 2]), bounds(1, 2)),
+            reported(map_pushdown(), bounds(3, 4)),
+        ]))
+        .unwrap();
+
+        // One partition still needs a hash-table lookup, so routing is required.
+        let membership_expr = current_expr(&acc);
+        assert_eq!(case_expr(&membership_expr).when_then_expr().len(), 2);
+    }
+
+    #[test]
+    fn partitioned_split_leaves_bounds_in_the_case_when_a_partition_is_canceled() {
+        let acc = make_split_partitioned_accumulator_for_test(2);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            PartitionStatus::CanceledUnknown,
+            reported(map_pushdown(), bounds(0, 10)),
+        ]))
+        .unwrap();
+
+        // A canceled partition can hold any value, so no union over the
+        // reported partitions describes the build side: the hoisted conjunct
+        // must stay a no-op and the bounds stay inside the routed branch.
+        assert_literal_bool(&current_bounds_expr(&acc), true);
+        let membership_expr = current_expr(&acc);
+        let case = case_expr(&membership_expr);
+        assert_eq!(case.when_then_expr().len(), 1);
+        assert_top_binary_op(&case.when_then_expr()[0].1, Operator::And);
+    }
+
+    #[test]
+    fn partitioned_split_without_usable_bounds_emits_a_no_op_conjunct() {
+        let acc = make_split_partitioned_accumulator_for_test(2);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(map_pushdown(), bounds(0, 10)),
+            // No bounds reported here, so any value could route to partition 1
+            // and the column cannot be constrained at all.
+            reported(map_pushdown(), no_bounds()),
+        ]))
+        .unwrap();
+
+        assert_literal_bool(&current_bounds_expr(&acc), true);
+    }
+
+    #[test]
     fn partitioned_canceled_unknown_partitions_keep_unknown_routes_permissive() {
         let acc = make_partitioned_expr_accumulator_for_test(2);
 
@@ -1150,6 +1485,7 @@ mod tests {
             }),
             completion_notify: Notify::new(),
             dynamic_filter: Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true))),
+            bounds_dynamic_filter: None,
             on_right,
             repartition_random_state: SeededRandomState::with_seed(1),
             probe_schema,
