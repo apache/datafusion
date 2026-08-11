@@ -101,6 +101,31 @@ impl WindowAggState {
         Ok(())
     }
 
+    /// Returns true when this state is fully up to date with the partition's
+    /// buffered batch, meaning another evaluation pass over the partition could
+    /// not produce any new results or change any state:
+    ///
+    /// - `last_calculated_index` has reached the end of the partition's
+    ///   buffered batch, so every row of this partition that has arrived so
+    ///   far already has a result.
+    /// - When a partition ends, a final evaluation pass is needed to bring
+    ///   derived state up to date.
+    #[inline]
+    pub fn is_up_to_date_with(
+        &self,
+        partition_batch_state: &PartitionBatchState,
+    ) -> bool {
+        let all_rows_have_results =
+            self.last_calculated_index == partition_batch_state.record_batch.num_rows();
+        if all_rows_have_results {
+            debug_assert_eq!(self.n_row_result_missing, 0);
+        }
+
+        // `self.is_end` holds the flag as of the previous evaluation pass.
+        let partition_just_ended = !self.is_end && partition_batch_state.is_end;
+        all_rows_have_results && !partition_just_ended
+    }
+
     pub fn new(out_type: &DataType) -> Result<Self> {
         let empty_out_col = ScalarValue::try_from(out_type)?.to_array_of_size(0)?;
         Ok(Self {
@@ -248,11 +273,6 @@ impl WindowFrameContext {
 pub struct PartitionBatchState {
     /// The record batch belonging to current partition
     pub record_batch: RecordBatch,
-    /// The record batch that contains the most recent row at the input.
-    /// Please note that this batch doesn't necessarily have the same partitioning
-    /// with `record_batch`. Keeping track of this batch enables us to prune
-    /// `record_batch` when cardinality of the partition is sparse.
-    pub most_recent_row: Option<RecordBatch>,
     /// Flag indicating whether we have received all data for this partition
     pub is_end: bool,
     /// Number of rows emitted for each partition
@@ -263,7 +283,6 @@ impl PartitionBatchState {
     pub fn new(schema: SchemaRef) -> Self {
         Self {
             record_batch: RecordBatch::new_empty(schema),
-            most_recent_row: None,
             is_end: false,
             n_out_row: 0,
         }
@@ -272,7 +291,6 @@ impl PartitionBatchState {
     pub fn new_with_batch(batch: RecordBatch) -> Self {
         Self {
             record_batch: batch,
-            most_recent_row: None,
             is_end: false,
             n_out_row: 0,
         }
@@ -282,12 +300,6 @@ impl PartitionBatchState {
         self.record_batch =
             concat_batches(&self.record_batch.schema(), [&self.record_batch, batch])?;
         Ok(())
-    }
-
-    pub fn set_most_recent_row(&mut self, batch: RecordBatch) {
-        // It is enough for the batch to contain only a single row (the rest
-        // are not necessary).
-        self.most_recent_row = Some(batch);
     }
 }
 

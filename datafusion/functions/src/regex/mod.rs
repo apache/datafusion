@@ -146,6 +146,22 @@ where
     Ok(result)
 }
 
+/// Maps `start`, a 1-based character position, to a byte offset in `value`.
+/// Positions `1..=n` (for an `n`-character string) map to the corresponding
+/// character's first byte; position `n + 1`, the end of the string, maps to
+/// `value.len()`. Returns `None` for larger positions. Callers must validate
+/// `start >= 1`.
+pub(crate) fn start_to_byte_offset(value: &str, start: i64) -> Option<usize> {
+    // If `start - 1` does not fit in `usize`, it is necessarily past the end
+    // of the string.
+    let start_index = usize::try_from(start - 1).ok()?;
+    value
+        .char_indices()
+        .map(|(offset, _)| offset)
+        .chain(std::iter::once(value.len()))
+        .nth(start_index)
+}
+
 pub fn compile_regex(regex: &str, flags: Option<&str>) -> Result<Regex, ArrowError> {
     let pattern = match flags {
         None | Some("") => regex.to_string(),
@@ -163,4 +179,33 @@ pub fn compile_regex(regex: &str, flags: Option<&str>) -> Result<Regex, ArrowErr
     Regex::new(&pattern).map_err(|_| {
         ArrowError::ComputeError(format!("Regular expression did not compile: {pattern}"))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::start_to_byte_offset;
+
+    #[test]
+    fn start_to_byte_offset_ascii() {
+        assert_eq!(start_to_byte_offset("abc", 1), Some(0));
+        assert_eq!(start_to_byte_offset("abc", 3), Some(2));
+        // The end of the string is a valid position.
+        assert_eq!(start_to_byte_offset("abc", 4), Some(3));
+        assert_eq!(start_to_byte_offset("abc", 5), None);
+        assert_eq!(start_to_byte_offset("abc", i64::MAX), None);
+    }
+
+    #[test]
+    fn start_to_byte_offset_empty_string() {
+        assert_eq!(start_to_byte_offset("", 1), Some(0));
+        assert_eq!(start_to_byte_offset("", 2), None);
+    }
+
+    #[test]
+    fn start_to_byte_offset_multibyte() {
+        assert_eq!(start_to_byte_offset("😀a", 1), Some(0));
+        assert_eq!(start_to_byte_offset("😀a", 2), Some(4));
+        assert_eq!(start_to_byte_offset("😀a", 3), Some(5));
+        assert_eq!(start_to_byte_offset("😀a", 4), None);
+    }
 }

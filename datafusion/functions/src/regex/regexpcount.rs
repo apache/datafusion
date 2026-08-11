@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::regex::{compile_and_cache_regex, compile_regex};
+use crate::regex::{compile_and_cache_regex, compile_regex, start_to_byte_offset};
 use arrow::array::{Array, ArrayRef, AsArray, Datum, Int64Array, StringArrayType};
 use arrow::datatypes::{DataType, Int64Type};
 use arrow::datatypes::{
@@ -36,7 +36,7 @@ use std::sync::Arc;
 #[user_doc(
     doc_section(label = "Regular Expression Functions"),
     description = "Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.",
-    syntax_example = "regexp_count(str, regexp[, start, flags])",
+    syntax_example = "regexp_count(str, regexp[, start[, flags]])",
     sql_example = r#"```sql
 > select regexp_count('abcAbAbc', 'abc', 2, 'i');
 +---------------------------------------------------------------+
@@ -49,16 +49,11 @@ use std::sync::Arc;
     standard_argument(name = "regexp", prefix = "Regular"),
     argument(
         name = "start",
-        description = "- **start**: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function."
+        description = "Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function."
     ),
     argument(
         name = "flags",
-        description = r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
-  - **i**: case-insensitive: letters match both upper and lower case
-  - **m**: multi-line mode: ^ and $ match begin/end of line
-  - **s**: allow . to match \n
-  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-  - **U**: swap the meaning of x* and x*?"#
+        description = r#"Optional regular expression flags that control the behavior of the regular expression. Refer to the flags reference above for supported flags."#
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -565,27 +560,10 @@ fn count_matches(
             ));
         }
 
-        let char_len = value.chars().count();
-        let start_index = (start as usize).saturating_sub(1);
-
-        if start_index > char_len {
+        let Some(byte_offset) = start_to_byte_offset(value, start) else {
             return Ok(0);
-        }
-
-        // Find the byte offset for the start position (1-based character index)
-        let byte_offset = if start_index == char_len {
-            value.len()
-        } else {
-            value
-                .char_indices()
-                .nth(start_index)
-                .map(|(idx, _)| idx)
-                .unwrap_or(value.len())
         };
-
-        // Use string slicing instead of collecting chars into a new String
-        let find_slice = &value[byte_offset..];
-        let count = pattern.find_iter(find_slice).count();
+        let count = pattern.find_iter(&value[byte_offset..]).count();
         Ok(count as i64)
     } else {
         let count = pattern.find_iter(value).count();

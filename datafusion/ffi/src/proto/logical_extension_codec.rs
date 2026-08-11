@@ -99,7 +99,7 @@ pub struct FFI_LogicalExtensionCodec {
     try_encode_udwf:
         unsafe extern "C" fn(&Self, node: FFI_WindowUDF) -> FFI_Result<SVec<u8>>,
 
-    pub task_ctx_provider: FFI_TaskContextProvider,
+    pub(crate) task_ctx_provider: FFI_TaskContextProvider,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -295,7 +295,7 @@ impl Drop for FFI_LogicalExtensionCodec {
 impl FFI_LogicalExtensionCodec {
     /// Creates a new [`FFI_LogicalExtensionCodec`].
     pub fn new(
-        codec: Arc<dyn LogicalExtensionCodec + Send>,
+        codec: Arc<dyn LogicalExtensionCodec>,
         runtime: Option<Handle>,
         task_ctx_provider: impl Into<FFI_TaskContextProvider>,
     ) -> Self {
@@ -712,14 +712,12 @@ mod tests {
 
     #[test]
     fn ffi_logical_extension_codec_local_bypass() {
-        let codec =
-            Arc::new(TestExtensionCodec {}) as Arc<dyn LogicalExtensionCodec + Send>;
+        let codec = Arc::new(TestExtensionCodec {}) as Arc<dyn LogicalExtensionCodec>;
         let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
 
         let mut ffi_codec =
             FFI_LogicalExtensionCodec::new(Arc::clone(&codec), None, task_ctx_provider);
 
-        let codec = codec as Arc<dyn LogicalExtensionCodec>;
         // Verify local libraries can be downcast to their original
         let foreign_codec: Arc<dyn LogicalExtensionCodec> = (&ffi_codec).into();
         assert!(arc_ptr_eq(&foreign_codec, &codec));
