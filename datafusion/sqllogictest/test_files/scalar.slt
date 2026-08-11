@@ -694,8 +694,8 @@ select log(2,arrow_cast(a, 'Float64')), log(4,arrow_cast(b, 'Float32')) from sig
 ----
 1 NaN
 2 NULL
-NaN 3.321928
-NaN 6.643856
+NaN 3.321928094887
+NaN 6.643856189775
 
 
 ## log10
