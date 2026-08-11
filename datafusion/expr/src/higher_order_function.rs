@@ -413,13 +413,11 @@ fn merge_captures_with_variables(
     if columns.is_empty() {
         // No columns to derive a row count from, so borrow one variable's
         // array length instead (all variables have the same length).
-        let row_count = variables
-            .first()
-            .ok_or_else(|| {
-                internal_datafusion_err!(
-                    "merge_captures_with_variables: no variables to derive a row count from"
-                )
-            })?()?
+        let row_count = variables.first().ok_or_else(|| {
+            internal_datafusion_err!(
+                "merge_captures_with_variables: no variables to derive a row count from"
+            )
+        })?()?
         .len();
         return Ok(RecordBatch::try_new_with_options(
             schema,
