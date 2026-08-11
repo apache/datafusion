@@ -456,6 +456,7 @@ impl RepartitionExecState {
 
         let num_input_partitions = streams_and_metrics.len();
         let num_output_partitions = partitioning.partition_count();
+        let coalesce_batches = !preserve_order && !input.boundedness().is_unbounded();
 
         let spill_manager = Arc::new(spill_manager);
 
@@ -524,9 +525,10 @@ impl RepartitionExecState {
 
             // Coalesce on the producer side, before the channel's gate, so
             // the consumer never sees the per-input-task small batches.
-            // Skip in preserve-order mode: each input has its own dedicated
-            // channel and `StreamingMergeBuilder` handles batching.
-            let shared_coalescer = (!preserve_order).then(|| {
+            // Skip in preserve-order mode, where `StreamingMergeBuilder`
+            // handles batching, and for unbounded inputs, where a residual
+            // batch could otherwise be withheld indefinitely.
+            let shared_coalescer = coalesce_batches.then(|| {
                 SharedCoalescer::new(
                     input.schema(),
                     context.session_config().batch_size(),
@@ -1127,7 +1129,8 @@ impl BatchPartitioner {
 /// Repartitioning one [`RecordBatch`] implies creating multiple smaller batches, potentially
 /// as many as the number of output partitions. [`RepartitionExec`] makes sure that the returned
 /// batches adhere to the configured `datafusion.execution.batch_size` for efficient operations,
-/// and for that, it will automatically coalesce batches right after repartitioning.
+/// and for that, it will automatically coalesce batches right after repartitioning for bounded
+/// inputs. Coalescing is skipped for unbounded inputs so partial batches are emitted promptly.
 ///
 /// For this, one shared [`LimitedBatchCoalescer`] per output partition is used:
 ///
@@ -2239,6 +2242,7 @@ mod tests {
     use super::*;
     use crate::empty::EmptyExec;
     use crate::projection::ProjectionExpr;
+    use crate::streaming::{PartitionStream, StreamingTableExec};
     use crate::test::TestMemoryExec;
     use crate::{
         test::{
@@ -2262,6 +2266,27 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_physical_expr::{PhysicalSortExpr, RangePartitioning, SplitPoint};
     use insta::assert_snapshot;
+
+    #[derive(Debug)]
+    struct UnboundedTestPartition {
+        schema: SchemaRef,
+        batch: RecordBatch,
+    }
+
+    impl PartitionStream for UnboundedTestPartition {
+        fn schema(&self) -> &SchemaRef {
+            &self.schema
+        }
+
+        fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+            let stream = futures::stream::iter([Ok(self.batch.clone())])
+                .chain(futures::stream::pending());
+            Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&self.schema),
+                stream,
+            ))
+        }
+    }
 
     #[test]
     fn strength_reduced_u64_remainder_matches_modulo() {
@@ -3004,6 +3029,37 @@ mod tests {
                 assert_eq!(200, batch.num_rows());
             }
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unbounded_input_emits_before_batch_size() -> Result<()> {
+        let schema = test_schema(false);
+        let batch = create_batch();
+        let source = Arc::new(StreamingTableExec::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(UnboundedTestPartition {
+                schema: Arc::clone(&schema),
+                batch: batch.clone(),
+            })],
+            None,
+            vec![],
+            true,
+            None,
+        )?);
+        let exec = RepartitionExec::try_new(source, Partitioning::RoundRobinBatch(1))?;
+        let session_config = SessionConfig::new().with_batch_size(batch.num_rows() * 2);
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(session_config));
+
+        let mut stream = exec.execute(0, task_ctx)?;
+        let output =
+            tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+                .await
+                .expect("unbounded repartition withheld a partial batch")
+                .expect("unbounded input ended unexpectedly")?;
+
+        assert_eq!(batch, output);
         Ok(())
     }
 
