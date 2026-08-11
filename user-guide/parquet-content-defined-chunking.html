@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Frequently Asked Questions &#8212; Apache DataFusion  documentation</title>
+    <title>Parquet Content-Defined Chunking &#8212; Apache DataFusion  documentation</title>
   
   
   
@@ -42,13 +42,13 @@
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'user-guide/faq';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'user-guide/parquet-content-defined-chunking';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
     <link rel="icon" href="../_static/favicon.svg"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Introduction" href="../library-user-guide/index.html" />
-    <link rel="prev" title="Metrics" href="metrics.html" />
+    <link rel="next" title="Metrics" href="metrics.html" />
+    <link rel="prev" title="Reading Explain Plans" href="explain-usage.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
@@ -293,9 +293,9 @@
 
 
 <li class="toctree-l1"><a class="reference internal" href="explain-usage.html">Reading Explain Plans</a></li>
-<li class="toctree-l1"><a class="reference internal" href="parquet-content-defined-chunking.html">Parquet Content-Defined Chunking</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Parquet Content-Defined Chunking</a></li>
 <li class="toctree-l1"><a class="reference internal" href="metrics.html">Metrics</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Frequently Asked Questions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="faq.html">Frequently Asked Questions</a></li>
 
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Library User Guide</span></p>
@@ -408,7 +408,7 @@
         <i class="fa-solid fa-home"></i>
       </a>
     </li>
-    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Frequently Asked Questions</span></li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Parquet Content-Defined Chunking</span></li>
   </ul>
 </nav>
 </div>
@@ -443,49 +443,150 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="frequently-asked-questions">
-<h1>Frequently Asked Questions<a class="headerlink" href="#frequently-asked-questions" title="Link to this heading">#</a></h1>
-<section id="what-is-the-relationship-between-apache-arrow-datafusion-and-ballista">
-<h2>What is the relationship between Apache Arrow, DataFusion, and Ballista?<a class="headerlink" href="#what-is-the-relationship-between-apache-arrow-datafusion-and-ballista" title="Link to this heading">#</a></h2>
-<p>Apache Arrow is a library which provides a standardized memory representation for columnar data. It also provides
-“kernels” for performing common operations on this data.</p>
-<p>DataFusion is a library for executing queries in-process using the Apache Arrow memory
-model and computational kernels. It is designed to run within a single process, using threads
-for parallel query execution.</p>
-<p><a class="reference external" href="https://github.com/apache/datafusion-ballista">Ballista</a> is a distributed compute platform built on DataFusion.</p>
-</section>
-</section>
-<section id="how-does-datafusion-compare-with-xyz">
-<h1>How does DataFusion Compare with <code class="docutils literal notranslate"><span class="pre">XYZ</span></code>?<a class="headerlink" href="#how-does-datafusion-compare-with-xyz" title="Link to this heading">#</a></h1>
-<p>When compared to similar systems, DataFusion typically is:</p>
-<ol class="arabic simple">
-<li><p>Targeted at developers, rather than end users / data scientists.</p></li>
-<li><p>Designed to be embedded, rather than a complete file based SQL system.</p></li>
-<li><p>Governed by the <a class="reference external" href="https://www.apache.org/">Apache Software Foundation</a> process, rather than a single company or individual.</p></li>
-<li><p>Implemented in <code class="docutils literal notranslate"><span class="pre">Rust</span></code>, rather than <code class="docutils literal notranslate"><span class="pre">C/C++</span></code></p></li>
-</ol>
-<p>Here is a comparison with similar projects that may help understand
-when DataFusion might be suitable or unsuitable for your needs:</p>
+<section id="parquet-content-defined-chunking">
+<h1>Parquet Content-Defined Chunking<a class="headerlink" href="#parquet-content-defined-chunking" title="Link to this heading">#</a></h1>
+<p>Content-defined chunking (CDC) is an experimental Parquet writer feature that
+makes data page boundaries depend on column values rather than fixed row or byte
+counts. This makes unchanged regions more likely to produce identical pages when
+closely related versions of a dataset are written with the same settings.</p>
+<p>CDC is useful when the resulting files are stored or transferred through a
+content-addressable or block-deduplicating system. Such a system can reuse the
+identical pages instead of storing or transferring them again. For example, a
+small insertion near the beginning of a dataset can change one page while later
+page boundaries converge back to those of the previous version.</p>
+<p>CDC does not itself deduplicate data or provide a page store. On a conventional
+filesystem or object store, each Parquet file is still stored in full. The output
+is a normal Parquet file and requires no CDC-specific reader support.</p>
+<section id="when-to-enable-cdc">
+<h2>When to enable CDC<a class="headerlink" href="#when-to-enable-cdc" title="Link to this heading">#</a></h2>
+<p>Consider CDC when all of the following apply:</p>
 <ul class="simple">
-<li><p><a class="reference external" href="https://www.duckdb.org">DuckDB</a> is an open source, in process analytic database.
-Like DataFusion, it supports very fast execution, both from its custom file format
-and directly from parquet files. Unlike DataFusion, it is written in C/C++ and it
-is primarily used directly by users as a serverless database and query system rather
-than as a library for building such database systems.</p></li>
-<li><p><a class="reference external" href="http://pola.rs">Polars</a>: Polars is one of the fastest DataFrame
-libraries at the time of writing. Like DataFusion, it is also
-written in Rust and uses the Apache Arrow memory model, but unlike
-DataFusion it is not designed with as many extension points.</p></li>
-<li><p><a class="reference external" href="https://github.com/facebookincubator/velox">Facebook Velox</a>
-is an execution engine. Like DataFusion, Velox aims to
-provide a reusable foundation for building database-like systems. Unlike DataFusion,
-it is written in C/C++ and does not include a SQL frontend or planning / optimization
-framework.</p></li>
-<li><p><a class="reference external" href="https://github.com/datafuselabs/databend">Databend</a> is a complete
-database system. Like DataFusion it is also written in Rust and
-utilizes the Apache Arrow memory model, but unlike DataFusion it
-targets end-users rather than developers of other database systems.</p></li>
+<li><p>You regularly write similar versions of the same dataset.</p></li>
+<li><p>Your storage or transfer layer detects and reuses duplicate byte ranges.</p></li>
+<li><p>Reducing storage or network transfer is more important than maximizing write
+parallelism for an individual file.</p></li>
 </ul>
+<p>Leave CDC disabled for ordinary Parquet output unless you have measured a benefit
+in the system that stores or transfers the files. CDC is disabled by default.</p>
+<p>When CDC is enabled, DataFusion uses the sequential Arrow writer for each output
+file because the chunker’s state must persist across row groups. This can reduce
+write throughput compared with DataFusion’s parallel writer path. Writing
+different output files can still proceed concurrently.</p>
+<p>CDC operates independently for each output file. When <code class="docutils literal notranslate"><span class="pre">COPY</span></code> targets a
+directory, DataFusion distributes input RecordBatches in round-robin order across
+parallel output files; <code class="docutils literal notranslate"><span class="pre">datafusion.execution.minimum_parallel_output_files</span></code>
+defaults to four. If batching or file assignment changes between dataset
+versions, unchanged rows can move between files and reduce deduplication. For
+the best results, keep the input order and output file layout stable. Use a
+filename target for single-file output, or partition by stable keys when
+multiple files are required. See
+<a class="reference internal" href="configs.html#setting-configuration-options"><span class="std std-ref">Configuration Settings</span></a>.</p>
+</section>
+<section id="enable-cdc-with-sql">
+<h2>Enable CDC with SQL<a class="headerlink" href="#enable-cdc-with-sql" title="Link to this heading">#</a></h2>
+<p>Set CDC for one <a class="reference internal" href="sql/dml.html#copy"><span class="std std-ref"><code class="docutils literal notranslate"><span class="pre">COPY</span></code></span></a> operation with Parquet format options.
+The filename target in this example selects single-file output:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">COPY</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="k">SELECT</span>
+<span class="w">        </span><span class="n">value</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">id</span><span class="p">,</span>
+<span class="w">        </span><span class="n">CONCAT</span><span class="p">(</span><span class="s1">&#39;event-&#39;</span><span class="p">,</span><span class="w"> </span><span class="k">CAST</span><span class="p">(</span><span class="n">value</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">))</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">event</span>
+<span class="w">    </span><span class="k">FROM</span><span class="w"> </span><span class="n">generate_series</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">100000</span><span class="p">)</span>
+<span class="p">)</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="s1">&#39;cdc-output.parquet&#39;</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
+<span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="s1">&#39;format.content_defined_chunking.enabled&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p>The default chunking parameters are a good starting point. The next example
+specifies those defaults explicitly for one write; it does not change their
+values:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">COPY</span><span class="w"> </span><span class="n">source_table</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="s1">&#39;cdc-output.parquet&#39;</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">PARQUET</span>
+<span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="s1">&#39;format.content_defined_chunking.enabled&#39;</span><span class="w"> </span><span class="s1">&#39;true&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;format.content_defined_chunking.min_chunk_size&#39;</span><span class="w"> </span><span class="s1">&#39;262144&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;format.content_defined_chunking.max_chunk_size&#39;</span><span class="w"> </span><span class="s1">&#39;1048576&#39;</span><span class="p">,</span>
+<span class="w">    </span><span class="s1">&#39;format.content_defined_chunking.norm_level&#39;</span><span class="w"> </span><span class="s1">&#39;0&#39;</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p>Change these values only after measuring with representative data.</p>
+<p>You can instead enable CDC for subsequent Parquet writes in the session:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">parquet</span><span class="p">.</span><span class="n">content_defined_chunking</span><span class="p">.</span><span class="n">enabled</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">true</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>The corresponding environment variable is
+<code class="docutils literal notranslate"><span class="pre">DATAFUSION_EXECUTION_PARQUET_CONTENT_DEFINED_CHUNKING_ENABLED</span></code>. See
+<a class="reference internal" href="configs.html#setting-configuration-options"><span class="std std-ref">Configuration Settings</span></a> for all ways
+to set session options.</p>
+</section>
+<section id="enable-cdc-with-the-rust-api">
+<h2>Enable CDC with the Rust API<a class="headerlink" href="#enable-cdc-with-the-rust-api" title="Link to this heading">#</a></h2>
+<p>Pass <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/common/config/struct.TableParquetOptions.html"><code class="docutils literal notranslate"><span class="pre">TableParquetOptions</span></code></a> to <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.write_parquet"><code class="docutils literal notranslate"><span class="pre">DataFrame::write_parquet</span></code></a>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">config</span><span class="p">::{</span><span class="n">ParquetCdcOptions</span><span class="p">,</span><span class="w"> </span><span class="n">TableParquetOptions</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">dataframe</span><span class="p">::</span><span class="n">DataFrameWriteOptions</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">error</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="n">SessionContext</span><span class="p">;</span>
+
+<span class="cp">#[tokio::main]</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span>
+<span class="w">        </span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="s">&quot;SELECT value AS id FROM generate_series(1, 100000)&quot;</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">parquet_options</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TableParquetOptions</span><span class="p">::</span><span class="n">default</span><span class="p">();</span>
+<span class="w">    </span><span class="n">parquet_options</span><span class="p">.</span><span class="n">global</span><span class="p">.</span><span class="n">content_defined_chunking</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ParquetCdcOptions</span><span class="p">::</span><span class="n">enabled</span><span class="p">();</span>
+
+<span class="w">    </span><span class="n">df</span><span class="p">.</span><span class="n">write_parquet</span><span class="p">(</span>
+<span class="w">        </span><span class="s">&quot;cdc-output.parquet&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="n">DataFrameWriteOptions</span><span class="p">::</span><span class="n">new</span><span class="p">().</span><span class="n">with_single_file_output</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+<span class="w">        </span><span class="nb">Some</span><span class="p">(</span><span class="n">parquet_options</span><span class="p">),</span>
+<span class="w">    </span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Set the fields of <code class="docutils literal notranslate"><span class="pre">ParquetCdcOptions</span></code> directly to use non-default chunk sizes or
+normalization.</p>
+</section>
+<section id="tuning">
+<h2>Tuning<a class="headerlink" href="#tuning" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Option</p></th>
+<th class="head"><p>Default</p></th>
+<th class="head"><p>Effect</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">min_chunk_size</span></code></p></td>
+<td><p>256 KiB</p></td>
+<td><p>Minimum logical size before the rolling hash can select a boundary.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">max_chunk_size</span></code></p></td>
+<td><p>1 MiB</p></td>
+<td><p>Maximum logical size before the writer forces a boundary. It must be greater than <code class="docutils literal notranslate"><span class="pre">min_chunk_size</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">norm_level</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
+<td><p>Controls how aggressively boundaries are selected. Higher values can improve deduplication but create more small pages; recommended range is <code class="docutils literal notranslate"><span class="pre">-3</span></code> through <code class="docutils literal notranslate"><span class="pre">3</span></code>.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Chunk sizes are measured from logical column data before encoding and
+compression. Definition and repetition levels for nested data also count toward
+the size.</p>
+<p>Use the same CDC, encoding, compression, and schema settings when comparing
+dataset versions. Changing writer settings can change the page bytes and reduce
+deduplication even when the logical data is unchanged. Measure the deduplication
+ratio, output size, network transfer, and write time with representative data
+before changing the defaults.</p>
+</section>
 </section>
 
 
@@ -499,20 +600,20 @@ targets end-users rather than developers of other database systems.</p></li>
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="metrics.html"
+       href="explain-usage.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">Metrics</p>
+        <p class="prev-next-title">Reading Explain Plans</p>
       </div>
     </a>
     <a class="right-next"
-       href="../library-user-guide/index.html"
+       href="metrics.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Introduction</p>
+        <p class="prev-next-title">Metrics</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -535,20 +636,18 @@ targets end-users rather than developers of other database systems.</p></li>
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#">Frequently Asked Questions</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-is-the-relationship-between-apache-arrow-datafusion-and-ballista">What is the relationship between Apache Arrow, DataFusion, and Ballista?</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#when-to-enable-cdc">When to enable CDC</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#enable-cdc-with-sql">Enable CDC with SQL</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#enable-cdc-with-the-rust-api">Enable CDC with the Rust API</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tuning">Tuning</a></li>
 </ul>
-</li>
-<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#how-does-datafusion-compare-with-xyz">How does DataFusion Compare with <code class="docutils literal notranslate"><span class="pre">XYZ</span></code>?</a></li>
-</ul>
-
   </nav></div>
 
   <div class="sidebar-secondary-item">
 
   
   <div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/faq.md">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/parquet-content-defined-chunking.md">
       <i class="fa-solid fa-pencil"></i>
       
       
@@ -563,7 +662,7 @@ targets end-users rather than developers of other database systems.</p></li>
   <div class="sidebar-secondary-item">
 
   <div class="tocsection sourcelink">
-    <a href="../_sources/user-guide/faq.md.txt">
+    <a href="../_sources/user-guide/parquet-content-defined-chunking.md.txt">
       <i class="fa-solid fa-file-lines"></i> Show Source
     </a>
   </div>

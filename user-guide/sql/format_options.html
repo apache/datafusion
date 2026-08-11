@@ -293,6 +293,7 @@
 
 
 <li class="toctree-l1"><a class="reference internal" href="../explain-usage.html">Reading Explain Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../parquet-content-defined-chunking.html">Parquet Content-Defined Chunking</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../metrics.html">Metrics</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../faq.html">Frequently Asked Questions</a></li>
 
@@ -804,6 +805,30 @@ a<span class="p">;</span>b
 <td><p>Maximum number of buffered record batches per stream.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">'maximum_buffered_record_batches_per_stream'</span></code></p></td>
 <td><p>2</p></td>
+</tr>
+<tr class="row-even"><td><p>CONTENT_DEFINED_CHUNKING_ENABLED</p></td>
+<td><p>No</p></td>
+<td><p>Enables experimental content-defined chunking when writing Parquet files. Enabling it uses the sequential writer for each output file so chunker state persists across row groups. See <a class="reference internal" href="../parquet-content-defined-chunking.html"><span class="std std-doc">Parquet Content-Defined Chunking</span></a>.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'content_defined_chunking.enabled'</span></code></p></td>
+<td><p>false</p></td>
+</tr>
+<tr class="row-odd"><td><p>CONTENT_DEFINED_CHUNKING_MIN_CHUNK_SIZE</p></td>
+<td><p>No</p></td>
+<td><p>Minimum logical size in bytes before the rolling hash can select a chunk boundary.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'content_defined_chunking.min_chunk_size'</span></code></p></td>
+<td><p>262144 (256 KiB)</p></td>
+</tr>
+<tr class="row-even"><td><p>CONTENT_DEFINED_CHUNKING_MAX_CHUNK_SIZE</p></td>
+<td><p>No</p></td>
+<td><p>Maximum logical size in bytes before the writer forces a chunk boundary. Must be greater than <code class="docutils literal notranslate"><span class="pre">content_defined_chunking.min_chunk_size</span></code>.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'content_defined_chunking.max_chunk_size'</span></code></p></td>
+<td><p>1048576 (1 MiB)</p></td>
+</tr>
+<tr class="row-odd"><td><p>CONTENT_DEFINED_CHUNKING_NORM_LEVEL</p></td>
+<td><p>No</p></td>
+<td><p>Controls how aggressively chunk boundaries are selected. Higher values can improve deduplication but increase fragmentation. The recommended range is <code class="docutils literal notranslate"><span class="pre">-3</span></code> through <code class="docutils literal notranslate"><span class="pre">3</span></code>.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">'content_defined_chunking.norm_level'</span></code></p></td>
+<td><p>0</p></td>
 </tr>
 <tr class="row-even"><td><p>KEY_VALUE_METADATA</p></td>
 <td><p>No (Key is specific)</p></td>
