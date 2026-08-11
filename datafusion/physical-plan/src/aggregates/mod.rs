@@ -1236,9 +1236,16 @@ impl AggregateExec {
                     self, context, partition,
                 )?));
             }
+
+            return internal_err!(
+                "No migrated aggregate stream supports mode={:?}, input_order_mode={:?}, grouping_sets={}",
+                self.mode,
+                self.input_order_mode,
+                self.group_by.has_grouping_set()
+            );
         }
 
-        // Execution paths that have not been migrated use the fallback implementation
+        // Migration-disabled execution uses the legacy implementation.
         Ok(StreamType::GroupedHash(GroupedHashAggregateStream::new(
             self, context, partition,
         )?))

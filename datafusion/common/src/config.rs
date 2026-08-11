@@ -796,10 +796,10 @@ config_namespace! {
         /// Temporary switch for aggregate stream implementations that are being
         /// migrated from `GroupedHashAggregateStream`.
         ///
-        /// When set to true, DataFusion tries the migrated implementations when
-        /// their preconditions are satisfied. When set to false, grouped
-        /// aggregation falls back to `GroupedHashAggregateStream`. This option
-        /// will be removed after the migration is finished.
+        /// When set to true, grouped hash aggregation executes only migrated
+        /// implementations. When set to false, grouped hash aggregation uses
+        /// `GroupedHashAggregateStream`. This option will be removed after the
+        /// migration is finished.
         ///
         /// See <https://github.com/apache/datafusion/issues/22710> for details.
         pub enable_migration_aggregate: bool, default = true
