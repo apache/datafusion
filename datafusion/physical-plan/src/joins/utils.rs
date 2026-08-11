@@ -1768,15 +1768,17 @@ pub(crate) struct BuildProbeJoinMetrics {
     pub(crate) build_input_rows: metrics::Count,
     /// Memory used by build-side in bytes
     pub(crate) build_mem_used: metrics::Gauge,
-    /// Total time for joining probe-side batches to the build-side batches
+    /// Total time for join processing after build-side collection
     pub(crate) join_time: metrics::Time,
     /// Number of batches consumed by probe-side of this operator
     pub(crate) input_batches: metrics::Count,
     /// Number of rows consumed by probe-side this operator
     pub(crate) input_rows: metrics::Count,
-    /// Fraction of probe rows that found at least one match
+    /// Fraction of probe rows with at least one build-side join-key match before
+    /// applying any join filter
     pub(crate) probe_hit_rate: metrics::RatioMetrics,
-    /// Average number of build matches per matched probe row
+    /// Average number of build-side join-key matches per matched probe row before
+    /// applying any join filter
     pub(crate) avg_fanout: metrics::RatioMetrics,
 }
 
