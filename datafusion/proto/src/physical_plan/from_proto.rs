@@ -46,6 +46,7 @@ use datafusion_physical_plan::expressions::{
 };
 use datafusion_physical_plan::joins::HashExpr;
 use datafusion_physical_plan::proto::ExecutionPlanDecodeCtx;
+use datafusion_physical_plan::repartition::RangeExpr;
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion_proto_common::common::proto_error;
@@ -354,6 +355,7 @@ pub fn parse_physical_expr_with_converter(
         }
         ExprType::LikeExpr(_) => LikeExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::HashExpr(_) => HashExpr::try_from_proto(proto, &decode_ctx)?,
+        ExprType::RangeExpr(_) => RangeExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::ScalarSubquery(_) => {
             let results = ctx.scalar_subquery_results().ok_or_else(|| {
                 proto_error(

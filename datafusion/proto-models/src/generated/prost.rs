@@ -1557,7 +1557,7 @@ pub struct PhysicalExprNode {
     pub expr_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1620,6 +1620,8 @@ pub mod physical_expr_node {
         Lambda(::prost::alloc::boxed::Box<super::PhysicalLambdaExprNode>),
         #[prost(message, tag = "26")]
         LambdaVariable(super::PhysicalLambdaVariableExprNode),
+        #[prost(message, tag = "27")]
+        RangeExpr(super::PhysicalRangeExprNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1859,6 +1861,13 @@ pub struct PhysicalHashExprNode {
     pub seed0: u64,
     #[prost(string, tag = "6")]
     pub description: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalRangeExprNode {
+    #[prost(message, repeated, tag = "1")]
+    pub sort_expr: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
+    #[prost(message, repeated, tag = "2")]
+    pub split_point: ::prost::alloc::vec::Vec<PhysicalRangeSplitPoint>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FilterExecNode {
