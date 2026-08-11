@@ -937,6 +937,7 @@ mod tests {
     fn count_groups_size_includes_vec_capacity() -> Result<()> {
         let mut acc = CountGroupsAccumulator::new();
         let empty_size = acc.size();
+        assert_eq!(empty_size, 0);
         let values: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
         acc.update_batch(&[values], &[0, 1, 2], None, 3)?;
 
