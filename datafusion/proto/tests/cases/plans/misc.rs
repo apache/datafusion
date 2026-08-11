@@ -26,9 +26,10 @@ use datafusion::physical_expr::LexOrdering;
 use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::explain::ExplainExec;
-use datafusion::physical_plan::expressions::{PhysicalSortExpr, col};
+use datafusion::physical_plan::expressions::{PhysicalSortExpr, col, lit};
 use datafusion::physical_plan::metrics::MetricCategory;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
+use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
@@ -172,6 +173,57 @@ fn roundtrip_union() -> Result<()> {
     let inputs: Vec<Arc<dyn ExecutionPlan>> = vec![Arc::new(left), Arc::new(right)];
     let union = UnionExec::try_new(inputs)?;
     roundtrip_test(union)
+}
+
+/// `UnionExec::try_new` coerces a nullability-mismatched leg by wrapping it
+/// in a `ProjectionExec` with a same-type `CastExpr` (see `coerce_schema` in
+/// `datafusion-physical-plan`'s `union` module) -- a zero-copy relabeling,
+/// not a real cast. `ProjectionExec` has an ordinary protobuf message, so
+/// unlike the node this replaced, there's no wrapper-erasure trick to verify;
+/// just that the decoded plan still contains the coercion and that its
+/// emitted batches expose the union's nullable schema.
+#[tokio::test]
+async fn roundtrip_union_with_mismatched_nullability_executes() -> Result<()> {
+    let literal_leg = |value: ScalarValue| -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(ProjectionExec::try_new(
+            vec![ProjectionExpr {
+                expr: lit(value),
+                alias: "a".to_string(),
+            }],
+            Arc::new(PlaceholderRowExec::new(Arc::new(Schema::empty()))),
+        )?))
+    };
+    let non_nullable_leg = literal_leg(ScalarValue::Int64(Some(1)))?;
+    let nullable_leg = literal_leg(ScalarValue::Int64(None))?;
+
+    let union: Arc<dyn ExecutionPlan> =
+        UnionExec::try_new(vec![non_nullable_leg, nullable_leg])?;
+    assert!(union.schema().field(0).is_nullable());
+    assert!(
+        format!("{union:?}").contains("CastExpr"),
+        "expected a coercing CastExpr in plan:\n{union:?}"
+    );
+
+    let ctx = SessionContext::new();
+    let bytes = datafusion_proto::bytes::physical_plan_to_bytes(Arc::clone(&union))?;
+    let roundtripped = datafusion_proto::bytes::physical_plan_from_bytes(
+        bytes.as_ref(),
+        ctx.task_ctx().as_ref(),
+    )?;
+    assert!(roundtripped.schema().field(0).is_nullable());
+    assert!(
+        format!("{roundtripped:?}").contains("CastExpr"),
+        "expected a coercing CastExpr after roundtrip:\n{roundtripped:?}"
+    );
+
+    let batches =
+        datafusion::physical_plan::collect(roundtripped, ctx.task_ctx()).await?;
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
+    for batch in &batches {
+        assert!(batch.schema().field(0).is_nullable());
+    }
+
+    Ok(())
 }
 
 #[test]
@@ -318,6 +370,59 @@ fn roundtrip_interleave() -> Result<()> {
     let inputs: Vec<Arc<dyn ExecutionPlan>> = vec![Arc::new(left), Arc::new(right)];
     let interleave = InterleaveExec::try_new(inputs)?;
     roundtrip_test(Arc::new(interleave))
+}
+
+/// See [`roundtrip_union_with_mismatched_nullability_executes`]: the same
+/// wrapper-reinsertion behavior applies to `InterleaveExec::try_from_proto`.
+#[tokio::test]
+async fn roundtrip_interleave_with_mismatched_nullability_executes() -> Result<()> {
+    let partition = Partitioning::Hash(vec![], 3);
+    let literal_leg = |value: ScalarValue| -> Result<Arc<dyn ExecutionPlan>> {
+        let projection = ProjectionExec::try_new(
+            vec![ProjectionExpr {
+                expr: lit(value),
+                alias: "a".to_string(),
+            }],
+            Arc::new(PlaceholderRowExec::new(Arc::new(Schema::empty()))),
+        )?;
+        Ok(Arc::new(RepartitionExec::try_new(
+            Arc::new(projection),
+            partition.clone(),
+        )?))
+    };
+    let non_nullable_leg = literal_leg(ScalarValue::Int64(Some(1)))?;
+    let nullable_leg = literal_leg(ScalarValue::Int64(None))?;
+
+    let interleave: Arc<dyn ExecutionPlan> = Arc::new(InterleaveExec::try_new(vec![
+        non_nullable_leg,
+        nullable_leg,
+    ])?);
+    assert!(interleave.schema().field(0).is_nullable());
+    assert!(
+        format!("{interleave:?}").contains("CastExpr"),
+        "expected a coercing CastExpr in plan:\n{interleave:?}"
+    );
+
+    let ctx = SessionContext::new();
+    let bytes = datafusion_proto::bytes::physical_plan_to_bytes(Arc::clone(&interleave))?;
+    let roundtripped = datafusion_proto::bytes::physical_plan_from_bytes(
+        bytes.as_ref(),
+        ctx.task_ctx().as_ref(),
+    )?;
+    assert!(roundtripped.schema().field(0).is_nullable());
+    assert!(
+        format!("{roundtripped:?}").contains("CastExpr"),
+        "expected a coercing CastExpr after roundtrip:\n{roundtripped:?}"
+    );
+
+    let batches =
+        datafusion::physical_plan::collect(roundtripped, ctx.task_ctx()).await?;
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
+    for batch in &batches {
+        assert!(batch.schema().field(0).is_nullable());
+    }
+
+    Ok(())
 }
 
 #[test]
