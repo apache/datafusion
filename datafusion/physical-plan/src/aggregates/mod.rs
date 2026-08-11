@@ -1243,7 +1243,6 @@ impl AggregateExec {
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
-            && self.limit_options_supported_by_hash_stream()
     }
 
     fn should_use_ordered_partial_aggregate_stream(
@@ -1254,15 +1253,13 @@ impl AggregateExec {
             && self.input_order_mode != InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
-            && self.limit_options_supported_by_hash_stream()
     }
 
     fn should_use_final_hash_stream(&self, _context: &TaskContext) -> bool {
         matches!(
             self.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
-        ) && self.limit_options_supported_by_hash_stream()
-            && self.input_order_mode == InputOrderMode::Linear
+        ) && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
     }
@@ -1274,7 +1271,6 @@ impl AggregateExec {
         }
 
         self.mode == AggregateMode::PartialReduce
-            && self.limit_options.is_none()
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
@@ -1284,8 +1280,7 @@ impl AggregateExec {
         matches!(
             self.mode,
             AggregateMode::Single | AggregateMode::SinglePartitioned
-        ) && self.limit_options.is_none()
-            && self.input_order_mode == InputOrderMode::Linear
+        ) && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
     }
@@ -1294,8 +1289,7 @@ impl AggregateExec {
         matches!(
             self.mode,
             AggregateMode::Single | AggregateMode::SinglePartitioned
-        ) && self.limit_options.is_none()
-            && self.input_order_mode != InputOrderMode::Linear
+        ) && self.input_order_mode != InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
     }
@@ -1304,15 +1298,9 @@ impl AggregateExec {
         matches!(
             self.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
-        ) && self.limit_options_supported_by_hash_stream()
-            && self.input_order_mode != InputOrderMode::Linear
+        ) && self.input_order_mode != InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
             && self.group_by.is_single()
-    }
-
-    /// See comments in `PartialHashAggregateStream` limit optimization section
-    fn limit_options_supported_by_hash_stream(&self) -> bool {
-        self.limit_options.is_none() || self.is_unordered_unfiltered_group_by_distinct()
     }
 
     /// Finds the DataType and SortDirection for this Aggregate, if there is one
