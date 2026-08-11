@@ -23,16 +23,11 @@ use std::sync::Arc;
 
 use arrow::datatypes::{IntervalMonthDayNanoType, Schema, SchemaRef};
 use datafusion_catalog::memory::MemorySourceConfig;
-use datafusion_common::config::CsvOptions;
 use datafusion_common::{
     DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
 };
-#[cfg(feature = "parquet")]
-use datafusion_datasource::file::FileSource;
-use datafusion_datasource::file_compression_type::FileCompressionType;
-use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::DataSinkExec;
-use datafusion_datasource::source::{DataSource, DataSourceExec};
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource_arrow::source::ArrowSource;
 #[cfg(feature = "avro")]
 use datafusion_datasource_avro::source::AvroSource;
@@ -41,20 +36,15 @@ use datafusion_datasource_csv::source::CsvSource;
 use datafusion_datasource_json::file_format::JsonSink;
 use datafusion_datasource_json::source::JsonSource;
 #[cfg(feature = "parquet")]
-use datafusion_datasource_parquet::CachedParquetFileReaderFactory;
-#[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::ParquetSink;
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::source::ParquetSource;
-#[cfg(feature = "parquet")]
-use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
 use datafusion_functions_table::generate_series::{
     Empty, GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, TimestampValue,
 };
-use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
 use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
 use datafusion_physical_plan::aggregates::AggregateExec;
@@ -94,16 +84,9 @@ use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
 use prost::Message;
 use prost::bytes::BufMut;
 
-use crate::common::{byte_to_string, str_to_byte};
 use crate::convert_required;
-use crate::physical_plan::from_proto::{
-    parse_physical_expr_with_converter, parse_physical_sort_exprs,
-    parse_protobuf_file_scan_config, parse_record_batches, parse_table_schema_from_proto,
-};
-use crate::physical_plan::to_proto::{
-    serialize_file_scan_config, serialize_physical_expr_with_converter,
-    serialize_physical_sort_exprs, serialize_record_batches,
-};
+use crate::physical_plan::from_proto::parse_physical_expr_with_converter;
+use crate::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::protobuf::{self, SortMergeJoinExecNode, proto_error};
 
@@ -126,6 +109,9 @@ mod file_scan_config_serde {
     use datafusion_common::{Constraint, Constraints, ScalarValue, Statistics};
     use datafusion_datasource::file::FileSource;
     use datafusion_datasource::file_groups::FileGroup;
+    use datafusion_datasource::file_scan_config::{
+        FileScanConfig, FileScanConfigBuilder,
+    };
     use datafusion_datasource::file_stream::FileOpener;
     use datafusion_datasource::{PartitionedFile, TableSchema};
     use datafusion_execution::object_store::ObjectStoreUrl;
@@ -183,6 +169,22 @@ mod file_scan_config_serde {
 
         fn file_type(&self) -> &str {
             "serde-test"
+        }
+
+        fn apply_expressions(
+            &self,
+            f: &mut dyn FnMut(
+                &Arc<dyn PhysicalExpr>,
+            )
+                -> Result<datafusion_common::tree_node::TreeNodeRecursion>,
+        ) -> Result<datafusion_common::tree_node::TreeNodeRecursion> {
+            datafusion_physical_plan::apply_expression_roots(
+                self.projection
+                    .iter()
+                    .flatten()
+                    .map(|proj_expr| &proj_expr.expr),
+                f,
+            )
         }
 
         fn try_pushdown_projection(
@@ -1084,23 +1086,37 @@ pub trait PhysicalPlanNodeExt: Sized {
             PhysicalPlanType::Filter(_) => {
                 FilterExec::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::CsvScan(scan) => {
-                self.try_into_csv_scan_physical_plan(scan, ctx, proto_converter)
+            PhysicalPlanType::CsvScan(_) => {
+                CsvSource::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::JsonScan(scan) => {
-                self.try_into_json_scan_physical_plan(scan, ctx, proto_converter)
+            PhysicalPlanType::JsonScan(_) => {
+                JsonSource::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::ParquetScan(scan) => {
-                self.try_into_parquet_scan_physical_plan(scan, ctx, proto_converter)
+            PhysicalPlanType::ParquetScan(_) => {
+                #[cfg(feature = "parquet")]
+                {
+                    ParquetSource::try_from_proto(self.node(), &decode_ctx)
+                }
+                #[cfg(not(feature = "parquet"))]
+                not_impl_err!(
+                    "Unable to process a Parquet PhysicalPlan when the `parquet` feature is not enabled"
+                )
             }
-            PhysicalPlanType::AvroScan(scan) => {
-                self.try_into_avro_scan_physical_plan(scan, ctx, proto_converter)
+            PhysicalPlanType::AvroScan(_) => {
+                #[cfg(feature = "avro")]
+                {
+                    AvroSource::try_from_proto(self.node(), &decode_ctx)
+                }
+                #[cfg(not(feature = "avro"))]
+                panic!(
+                    "Unable to process a Avro PhysicalPlan when `avro` feature is not enabled"
+                )
             }
-            PhysicalPlanType::MemoryScan(scan) => {
-                self.try_into_memory_scan_physical_plan(scan, ctx, proto_converter)
+            PhysicalPlanType::MemoryScan(_) => {
+                MemorySourceConfig::try_from_proto(self.node(), &decode_ctx)
             }
-            PhysicalPlanType::ArrowScan(scan) => {
-                self.try_into_arrow_scan_physical_plan(scan, ctx, proto_converter)
+            PhysicalPlanType::ArrowScan(_) => {
+                ArrowSource::try_from_proto(self.node(), &decode_ctx)
             }
             #[expect(
                 deprecated,
@@ -1229,16 +1245,6 @@ pub trait PhysicalPlanNodeExt: Sized {
             return Ok(node);
         }
 
-        if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>()
-            && let Some(node) = protobuf::PhysicalPlanNode::try_from_data_source_exec(
-                data_source_exec,
-                codec,
-                proto_converter,
-            )?
-        {
-            return Ok(node);
-        }
-
         if let Some(exec) = plan.downcast_ref::<LazyMemoryExec>()
             && let Some(node) =
                 protobuf::PhysicalPlanNode::try_from_lazy_memory_exec(exec)?
@@ -1340,96 +1346,74 @@ pub trait PhysicalPlanNodeExt: Sized {
         FilterExec::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `CsvSource` deserializes itself via `CsvSource::try_from_proto`"
+    )]
     fn try_into_csv_scan_physical_plan(
         &self,
         scan: &protobuf::CsvScanExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let escape =
-            if let Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(escape)) =
-                &scan.optional_escape
-            {
-                Some(str_to_byte(escape, "escape")?)
-            } else {
-                None
-            };
-
-        let comment = if let Some(
-            protobuf::csv_scan_exec_node::OptionalComment::Comment(comment),
-        ) = &scan.optional_comment
-        {
-            Some(str_to_byte(comment, "comment")?)
-        } else {
-            None
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::CsvScan(scan.clone())),
         };
-
-        // Parse table schema with partition columns
-        let table_schema =
-            parse_table_schema_from_proto(scan.base_conf.as_ref().unwrap())?;
-
-        let csv_options = CsvOptions {
-            has_header: Some(scan.has_header),
-            delimiter: str_to_byte(&scan.delimiter, "delimiter")?,
-            quote: str_to_byte(&scan.quote, "quote")?,
-            newlines_in_values: Some(scan.newlines_in_values),
-            ..Default::default()
-        };
-        let source = Arc::new(
-            CsvSource::new(table_schema)
-                .with_csv_options(csv_options)
-                .with_escape(escape)
-                .with_comment(comment),
-        );
-
-        let conf = FileScanConfigBuilder::from(parse_protobuf_file_scan_config(
-            scan.base_conf.as_ref().unwrap(),
+        let decoder = ConverterPlanDecoder {
             ctx,
             proto_converter,
-            source,
-        )?)
-        .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
-        .build();
-        Ok(DataSourceExec::from_data_source(conf))
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        CsvSource::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `JsonSource` deserializes itself via `JsonSource::try_from_proto`"
+    )]
     fn try_into_json_scan_physical_plan(
         &self,
         scan: &protobuf::JsonScanExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let base_conf = scan.base_conf.as_ref().unwrap();
-        let table_schema = parse_table_schema_from_proto(base_conf)?;
-        let scan_conf = parse_protobuf_file_scan_config(
-            base_conf,
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::JsonScan(scan.clone())),
+        };
+        let decoder = ConverterPlanDecoder {
             ctx,
             proto_converter,
-            Arc::new(JsonSource::new(table_schema)),
-        )?;
-        Ok(DataSourceExec::from_data_source(scan_conf))
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        JsonSource::try_from_proto(&node, &decode_ctx)
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `ArrowSource` deserializes itself via `ArrowSource::try_from_proto`"
+    )]
     fn try_into_arrow_scan_physical_plan(
         &self,
         scan: &protobuf::ArrowScanExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
-            internal_datafusion_err!("base_conf in ArrowScanExecNode is missing.")
-        })?;
-        let table_schema = parse_table_schema_from_proto(base_conf)?;
-        let scan_conf = parse_protobuf_file_scan_config(
-            base_conf,
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::ArrowScan(scan.clone())),
+        };
+        let decoder = ConverterPlanDecoder {
             ctx,
             proto_converter,
-            Arc::new(ArrowSource::new_file_source(table_schema)),
-        )?;
-        Ok(DataSourceExec::from_data_source(scan_conf))
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        ArrowSource::try_from_proto(&node, &decode_ctx)
     }
 
     #[cfg_attr(not(feature = "parquet"), expect(unused_variables))]
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `ParquetSource` deserializes itself via `ParquetSource::try_from_proto`"
+    )]
     fn try_into_parquet_scan_physical_plan(
         &self,
         scan: &protobuf::ParquetScanExecNode,
@@ -1438,81 +1422,28 @@ pub trait PhysicalPlanNodeExt: Sized {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         #[cfg(feature = "parquet")]
         {
-            let schema = from_proto::parse_protobuf_file_scan_schema(
-                scan.base_conf.as_ref().unwrap(),
-            )?;
-
-            // Check if there's a projection and use projected schema for predicate parsing
-            let base_conf = scan.base_conf.as_ref().unwrap();
-            let predicate_schema = if !base_conf.projection.is_empty() {
-                // Create projected schema for parsing the predicate
-                let projected_fields: Vec<_> = base_conf
-                    .projection
-                    .iter()
-                    .map(|&i| schema.field(i as usize).clone())
-                    .collect();
-                Arc::new(Schema::new(projected_fields))
-            } else {
-                schema
+            let node = protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::ParquetScan(scan.clone())),
             };
-
-            let predicate = scan
-                .predicate
-                .as_ref()
-                .map(|expr| {
-                    proto_converter.proto_to_physical_expr(
-                        expr,
-                        predicate_schema.as_ref(),
-                        ctx,
-                    )
-                })
-                .transpose()?;
-            let mut options = datafusion_common::config::TableParquetOptions::default();
-
-            if let Some(table_options) = scan.parquet_options.as_ref() {
-                options = table_options.try_into()?;
-            }
-
-            // Parse table schema with partition columns
-            let table_schema = parse_table_schema_from_proto(base_conf)?;
-            let object_store_url = match base_conf.object_store_url.is_empty() {
-                false => ObjectStoreUrl::parse(&base_conf.object_store_url)?,
-                true => ObjectStoreUrl::local_filesystem(),
-            };
-            let store = ctx
-                .task_ctx()
-                .runtime_env()
-                .object_store(object_store_url)?;
-            let metadata_cache = ctx
-                .task_ctx()
-                .runtime_env()
-                .cache_manager
-                .get_file_metadata_cache();
-            let reader_factory =
-                Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
-
-            let mut source = ParquetSource::new(table_schema)
-                .with_parquet_file_reader_factory(reader_factory)
-                .with_table_parquet_options(options);
-
-            if let Some(predicate) = predicate {
-                source = source.with_predicate(predicate);
-            }
-            let base_config = parse_protobuf_file_scan_config(
-                base_conf,
+            let decoder = ConverterPlanDecoder {
                 ctx,
                 proto_converter,
-                Arc::new(source),
-            )?;
-            Ok(DataSourceExec::from_data_source(base_config))
+            };
+            let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+            ParquetSource::try_from_proto(&node, &decode_ctx)
         }
+
         #[cfg(not(feature = "parquet"))]
-        panic!(
-            "Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled"
+        not_impl_err!(
+            "Unable to process a Parquet PhysicalPlan when the `parquet` feature is not enabled"
         )
     }
 
     #[cfg_attr(not(feature = "avro"), expect(unused_variables))]
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `AvroSource` deserializes itself via `AvroSource::try_from_proto`"
+    )]
     fn try_into_avro_scan_physical_plan(
         &self,
         scan: &protobuf::AvroScanExecNode,
@@ -1521,63 +1452,42 @@ pub trait PhysicalPlanNodeExt: Sized {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         #[cfg(feature = "avro")]
         {
-            let table_schema =
-                parse_table_schema_from_proto(scan.base_conf.as_ref().unwrap())?;
-            let conf = parse_protobuf_file_scan_config(
-                scan.base_conf.as_ref().unwrap(),
+            let node = protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::AvroScan(scan.clone())),
+            };
+            let decoder = ConverterPlanDecoder {
                 ctx,
                 proto_converter,
-                Arc::new(AvroSource::new(table_schema)),
-            )?;
-            Ok(DataSourceExec::from_data_source(conf))
+            };
+            let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+            AvroSource::try_from_proto(&node, &decode_ctx)
         }
 
         #[cfg(not(feature = "avro"))]
-        panic!("Unable to process a Avro PhysicalPlan when `avro` feature is not enabled")
+        not_impl_err!(
+            "Unable to process an Avro PhysicalPlan when the `avro` feature is not enabled"
+        )
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `MemorySourceConfig` deserializes itself via `MemorySourceConfig::try_from_proto`"
+    )]
     fn try_into_memory_scan_physical_plan(
         &self,
         scan: &protobuf::MemoryScanExecNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let partitions = scan
-            .partitions
-            .iter()
-            .map(|p| parse_record_batches(p))
-            .collect::<Result<Vec<_>>>()?;
-
-        let proto_schema = scan.schema.as_ref().ok_or_else(|| {
-            internal_datafusion_err!("schema in MemoryScanExecNode is missing.")
-        })?;
-        let schema: SchemaRef = SchemaRef::new(proto_schema.try_into()?);
-
-        // Preserve the empty-projection sentinel written by `try_from_data_source_exec`.
-        let projection = match scan.projection.as_slice() {
-            [] => None,
-            [u32::MAX] => Some(Vec::new()),
-            indices => Some(indices.iter().map(|i| *i as usize).collect()),
+        let node = protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::MemoryScan(scan.clone())),
         };
-
-        let mut sort_information = vec![];
-        for ordering in &scan.sort_information {
-            let sort_exprs = parse_physical_sort_exprs(
-                &ordering.physical_sort_expr_nodes,
-                ctx,
-                &schema,
-                proto_converter,
-            )?;
-            sort_information.extend(LexOrdering::new(sort_exprs));
-        }
-
-        let source = MemorySourceConfig::try_new(&partitions, schema, projection)?
-            .with_limit(scan.fetch.map(|f| f as usize))
-            .with_show_sizes(scan.show_sizes);
-
-        let source = source.try_with_sort_information(sort_information)?;
-
-        Ok(DataSourceExec::from_data_source(source))
+        let decoder = ConverterPlanDecoder {
+            ctx,
+            proto_converter,
+        };
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        MemorySourceConfig::try_from_proto(&node, &decode_ctx)
     }
 
     #[deprecated(
@@ -2555,177 +2465,21 @@ pub trait PhysicalPlanNodeExt: Sized {
         })
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "unused by DataFusion; `DataSourceExec` serializes itself via `ExecutionPlan::try_to_proto`"
+    )]
     fn try_from_data_source_exec(
         data_source_exec: &DataSourceExec,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Option<protobuf::PhysicalPlanNode>> {
-        let data_source = data_source_exec.data_source();
-        if let Some(maybe_csv) = data_source.downcast_ref::<FileScanConfig>() {
-            let source = maybe_csv.file_source();
-            if let Some(csv_config) = source.downcast_ref::<CsvSource>() {
-                return Ok(Some(protobuf::PhysicalPlanNode {
-                    physical_plan_type: Some(PhysicalPlanType::CsvScan(
-                        protobuf::CsvScanExecNode {
-                            base_conf: Some(serialize_file_scan_config(
-                                maybe_csv,
-                                codec,
-                                proto_converter,
-                            )?),
-                            has_header: csv_config.has_header(),
-                            delimiter: byte_to_string(
-                                csv_config.delimiter(),
-                                "delimiter",
-                            )?,
-                            quote: byte_to_string(csv_config.quote(), "quote")?,
-                            optional_escape: if let Some(escape) = csv_config.escape() {
-                                Some(
-                                    protobuf::csv_scan_exec_node::OptionalEscape::Escape(
-                                        byte_to_string(escape, "escape")?,
-                                    ),
-                                )
-                            } else {
-                                None
-                            },
-                            optional_comment: if let Some(comment) = csv_config.comment()
-                            {
-                                Some(protobuf::csv_scan_exec_node::OptionalComment::Comment(
-                                        byte_to_string(comment, "comment")?,
-                                    ))
-                            } else {
-                                None
-                            },
-                            newlines_in_values: csv_config.newlines_in_values(),
-                            truncate_rows: csv_config.truncate_rows(),
-                        },
-                    )),
-                }));
-            }
-        }
-
-        if let Some(scan_conf) = data_source.downcast_ref::<FileScanConfig>() {
-            let source = scan_conf.file_source();
-            if let Some(_json_source) = source.downcast_ref::<JsonSource>() {
-                return Ok(Some(protobuf::PhysicalPlanNode {
-                    physical_plan_type: Some(PhysicalPlanType::JsonScan(
-                        protobuf::JsonScanExecNode {
-                            base_conf: Some(serialize_file_scan_config(
-                                scan_conf,
-                                codec,
-                                proto_converter,
-                            )?),
-                        },
-                    )),
-                }));
-            }
-        }
-
-        if let Some(scan_conf) = data_source.downcast_ref::<FileScanConfig>() {
-            let source = scan_conf.file_source();
-            if let Some(_arrow_source) = source.downcast_ref::<ArrowSource>() {
-                return Ok(Some(protobuf::PhysicalPlanNode {
-                    physical_plan_type: Some(PhysicalPlanType::ArrowScan(
-                        protobuf::ArrowScanExecNode {
-                            base_conf: Some(serialize_file_scan_config(
-                                scan_conf,
-                                codec,
-                                proto_converter,
-                            )?),
-                        },
-                    )),
-                }));
-            }
-        }
-
-        #[cfg(feature = "parquet")]
-        if let Some((maybe_parquet, conf)) =
-            data_source_exec.downcast_to_file_source::<ParquetSource>()
-        {
-            let predicate = conf
-                .filter()
-                .map(|pred| proto_converter.physical_expr_to_proto(&pred, codec))
-                .transpose()?;
-            return Ok(Some(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::ParquetScan(
-                    protobuf::ParquetScanExecNode {
-                        base_conf: Some(serialize_file_scan_config(
-                            maybe_parquet,
-                            codec,
-                            proto_converter,
-                        )?),
-                        predicate,
-                        parquet_options: Some(conf.table_parquet_options().try_into()?),
-                    },
-                )),
-            }));
-        }
-
-        #[cfg(feature = "avro")]
-        if let Some(maybe_avro) = data_source.downcast_ref::<FileScanConfig>() {
-            let source = maybe_avro.file_source();
-            if source.downcast_ref::<AvroSource>().is_some() {
-                return Ok(Some(protobuf::PhysicalPlanNode {
-                    physical_plan_type: Some(PhysicalPlanType::AvroScan(
-                        protobuf::AvroScanExecNode {
-                            base_conf: Some(serialize_file_scan_config(
-                                maybe_avro,
-                                codec,
-                                proto_converter,
-                            )?),
-                        },
-                    )),
-                }));
-            }
-        }
-
-        if let Some(source_conf) = data_source.downcast_ref::<MemorySourceConfig>() {
-            let proto_partitions = source_conf
-                .partitions()
-                .iter()
-                .map(|p| serialize_record_batches(p))
-                .collect::<Result<Vec<_>>>()?;
-
-            let proto_schema: protobuf::Schema =
-                source_conf.original_schema().as_ref().try_into()?;
-
-            // Proto3 can't tell `None` from `Some(vec![])`; encode the latter
-            // as the `[u32::MAX]` sentinel, matching the join/filter nodes.
-            let proto_projection = match source_conf.projection().as_ref() {
-                None => Vec::new(),
-                Some(v) if v.is_empty() => vec![u32::MAX],
-                Some(v) => v.iter().map(|x| *x as u32).collect(),
-            };
-
-            let proto_sort_information = source_conf
-                .sort_information()
-                .iter()
-                .map(|ordering| {
-                    let sort_exprs = serialize_physical_sort_exprs(
-                        ordering.to_owned(),
-                        codec,
-                        proto_converter,
-                    )?;
-                    Ok::<_, DataFusionError>(protobuf::PhysicalSortExprNodeCollection {
-                        physical_sort_expr_nodes: sort_exprs,
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-
-            return Ok(Some(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::MemoryScan(
-                    protobuf::MemoryScanExecNode {
-                        partitions: proto_partitions,
-                        schema: Some(proto_schema),
-                        projection: proto_projection,
-                        sort_information: proto_sort_information,
-                        show_sizes: source_conf.show_sizes(),
-                        fetch: source_conf.fetch().map(|f| f as u32),
-                    },
-                )),
-            }));
-        }
-
-        Ok(None)
+        let encoder = ConverterPlanEncoder {
+            codec,
+            proto_converter,
+        };
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        data_source_exec.try_to_proto(&encode_ctx)
     }
 
     #[deprecated(

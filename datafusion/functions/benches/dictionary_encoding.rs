@@ -24,7 +24,7 @@ use arrow::datatypes::{Field, Int32Type};
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::type_coercion::functions::fields_with_udf;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 
 const NUM_ROWS: usize = 8_192;
 const DICTIONARY_CARDINALITIES: [usize; 4] = [10, 100, 1_000, 8_192];
@@ -42,16 +42,19 @@ fn create_string_dictionary(cardinality: usize) -> ArrayRef {
 }
 
 fn benchmark_dictionary_string_udfs(c: &mut Criterion) {
-    let udfs: [(&str, Arc<ScalarUDF>); 6] = [
+    let udfs = [
         ("ascii", datafusion_functions::string::ascii()),
         ("bit_length", datafusion_functions::string::bit_length()),
+        ("btrim", datafusion_functions::string::btrim()),
         (
             "character_length",
             datafusion_functions::unicode::character_length(),
         ),
         ("initcap", datafusion_functions::unicode::initcap()),
+        ("ltrim", datafusion_functions::string::ltrim()),
         ("octet_length", datafusion_functions::string::octet_length()),
         ("reverse", datafusion_functions::unicode::reverse()),
+        ("rtrim", datafusion_functions::string::rtrim()),
     ];
     let config_options = Arc::new(ConfigOptions::default());
 
