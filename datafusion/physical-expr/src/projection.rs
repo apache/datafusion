@@ -69,6 +69,8 @@ impl PartialEq for ProjectionExpr {
 
 impl Eq for ProjectionExpr {}
 
+/// Enables [`ProjectionExpr`] to be treated as a reference to its wrapped
+/// [`Arc<dyn PhysicalExpr>`] using [`AsRef::as_ref`].
 impl AsRef<Arc<dyn PhysicalExpr>> for ProjectionExpr {
     fn as_ref(&self) -> &Arc<dyn PhysicalExpr> {
         &self.expr

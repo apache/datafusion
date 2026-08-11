@@ -936,30 +936,39 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     }
 }
 
-/// A value that contains a physical expression root.
-pub trait PhysicalExprRoot {
-    /// Returns the physical expression at this root.
-    fn as_physical_expr_root(&self) -> &Arc<dyn PhysicalExpr>;
+/// Allows a type to be treated as a reference to an
+/// [`Arc<dyn PhysicalExpr>`].
+///
+/// Used by [`apply_expression_roots`].
+pub trait AsPhysicalExprRef {
+    /// Returns the referenced physical expression.
+    fn as_physical_expr_ref(&self) -> &Arc<dyn PhysicalExpr>;
 }
 
-impl PhysicalExprRoot for Arc<dyn PhysicalExpr> {
-    fn as_physical_expr_root(&self) -> &Arc<dyn PhysicalExpr> {
+/// Allows an [`Arc<dyn PhysicalExpr>`] to be treated as a reference to itself.
+///
+/// This is needed because `Arc<dyn PhysicalExpr>` does not implement
+/// `AsRef<Arc<dyn PhysicalExpr>>`.
+impl AsPhysicalExprRef for Arc<dyn PhysicalExpr> {
+    fn as_physical_expr_ref(&self) -> &Arc<dyn PhysicalExpr> {
         self
     }
 }
 
-impl PhysicalExprRoot for ProjectionExpr {
-    fn as_physical_expr_root(&self) -> &Arc<dyn PhysicalExpr> {
+/// Allows a [`ProjectionExpr`] to be treated as a reference to its
+/// [`Arc<dyn PhysicalExpr>`].
+impl AsPhysicalExprRef for ProjectionExpr {
+    fn as_physical_expr_ref(&self) -> &Arc<dyn PhysicalExpr> {
         self.as_ref()
     }
 }
 
-impl<T> PhysicalExprRoot for &T
+impl<T> AsPhysicalExprRef for &T
 where
-    T: PhysicalExprRoot + ?Sized,
+    T: AsPhysicalExprRef + ?Sized,
 {
-    fn as_physical_expr_root(&self) -> &Arc<dyn PhysicalExpr> {
-        (*self).as_physical_expr_root()
+    fn as_physical_expr_ref(&self) -> &Arc<dyn PhysicalExpr> {
+        (*self).as_physical_expr_ref()
     }
 }
 
@@ -974,10 +983,10 @@ pub fn apply_expression_roots<I>(
 ) -> Result<TreeNodeRecursion>
 where
     I: IntoIterator,
-    I::Item: PhysicalExprRoot,
+    I::Item: AsPhysicalExprRef,
 {
     for root in roots {
-        match f(root.as_physical_expr_root())? {
+        match f(root.as_physical_expr_ref())? {
             TreeNodeRecursion::Stop => return Ok(TreeNodeRecursion::Stop),
             TreeNodeRecursion::Continue | TreeNodeRecursion::Jump => {}
         }

@@ -45,7 +45,7 @@ pub use crate::distribution_requirements::{
     ChildSatisfactionOptions, InputDistributionRequirements,
 };
 pub use crate::execution_plan::{
-    ExecutionPlan, ExecutionPlanProperties, PhysicalExprRoot, PlanProperties,
+    AsPhysicalExprRef, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
     apply_expression_roots, collect, collect_partitioned, displayable,
     execute_input_stream, execute_stream, execute_stream_partitioned, get_plan_string,
     with_new_children_if_necessary,
