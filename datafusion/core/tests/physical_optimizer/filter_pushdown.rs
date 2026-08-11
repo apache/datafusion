@@ -34,7 +34,11 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use datafusion_catalog::memory::DataSourceExec;
-use datafusion_common::config::ConfigOptions;
+use datafusion_common::{
+    JoinType,
+    config::ConfigOptions,
+    tree_node::{TreeNode, TreeNodeRecursion},
+};
 use datafusion_datasource::{
     PartitionedFile, file_groups::FileGroup, file_scan_config::FileScanConfigBuilder,
 };
@@ -46,7 +50,9 @@ use datafusion_functions_aggregate::{
     min_max::{max_udaf, min_udaf},
 };
 use datafusion_physical_expr::{
-    LexOrdering, PhysicalSortExpr, expressions::col, utils::conjunction,
+    LexOrdering, PhysicalSortExpr,
+    expressions::{DynamicFilterPhysicalExpr, col},
+    utils::conjunction,
 };
 use datafusion_physical_expr::{
     Partitioning, ScalarFunctionExpr, aggregate::AggregateExprBuilder,
@@ -60,6 +66,7 @@ use datafusion_physical_plan::{
     coalesce_partitions::CoalescePartitionsExec,
     collect,
     filter::{FilterExec, FilterExecBuilder},
+    joins::{HashJoinExec, PartitionMode},
     projection::ProjectionExec,
     repartition::RepartitionExec,
     sorts::sort::SortExec,
@@ -2914,19 +2921,30 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
     );
 }
 
-// Not portable to sqllogictest: asserts on `HashJoinExec::dynamic_filter_for_test().is_used()`
-// which is a debug-only API. The observable behavior (probe-side scan
-// receiving the dynamic filter when the data source supports it) is
-// already covered by the simpler CollectLeft port in push_down_filter_parquet.slt;
-// the with_support(false) branch has no SQL analog (parquet always supports
-// pushdown).
-#[tokio::test]
-async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
-    use datafusion_common::JoinType;
-    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+// Not portable to sqllogictest: verifies whether the optimized probe-side plan
+// retains the HashJoinExec's dynamic filter expression. The with_support(false)
+// branch has no SQL analog because parquet supports filter pushdown.
+#[test]
+fn test_hashjoin_dynamic_filter_pushdown_is_used() {
+    fn contains_expression_id(plan: &Arc<dyn ExecutionPlan>, expression_id: u64) -> bool {
+        let mut found = false;
+        plan.apply(|node| {
+            node.apply_expressions(&mut |root| {
+                root.apply(|expr| {
+                    if expr.expression_id() == Some(expression_id) {
+                        found = true;
+                        Ok(TreeNodeRecursion::Stop)
+                    } else {
+                        Ok(TreeNodeRecursion::Continue)
+                    }
+                })
+            })
+        })
+        .unwrap();
+        found
+    }
 
-    // Test both cases: probe side with and without filter pushdown support
-    for (probe_supports_pushdown, expected_is_used) in [(false, false), (true, true)] {
+    for (probe_supports_pushdown, expected_consumer) in [(false, false), (true, true)] {
         let build_side_schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Utf8, false),
             Field::new("b", DataType::Utf8, false),
@@ -2979,31 +2997,26 @@ async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
             .unwrap(),
         ) as Arc<dyn ExecutionPlan>;
 
-        // Apply filter pushdown optimization
         let mut config = ConfigOptions::default();
         config.execution.parquet.pushdown_filters = true;
         config.optimizer.enable_dynamic_filter_pushdown = true;
         let plan = FilterPushdown::new_post_optimization()
             .optimize(plan, &config)
             .unwrap();
-
-        // Get the HashJoinExec to check the dynamic filter
         let hash_join = plan
             .downcast_ref::<HashJoinExec>()
             .expect("Plan should be HashJoinExec");
+        let dynamic_filters = hash_join.dynamic_expressions_produced();
+        let expression_id = dynamic_filters
+            .first()
+            .expect("Dynamic filter should be created")
+            .expression_id()
+            .expect("Dynamic filters always have an expression ID");
 
-        // Verify that a dynamic filter was created
-        let dynamic_filter = hash_join
-            .dynamic_filter_expr()
-            .expect("Dynamic filter should be created");
-
-        // Verify that is_used() returns the expected value based on probe side support.
-        // When probe_supports_pushdown=false: no consumer holds a reference (is_used=false)
-        // When probe_supports_pushdown=true: probe side holds a reference (is_used=true)
         assert_eq!(
-            dynamic_filter.is_used(),
-            expected_is_used,
-            "is_used() should return {expected_is_used} when probe side support is {probe_supports_pushdown}"
+            contains_expression_id(hash_join.right(), expression_id),
+            expected_consumer,
+            "probe consumer should be {expected_consumer} when pushdown support is {probe_supports_pushdown}"
         );
     }
 }
@@ -3099,6 +3112,172 @@ async fn test_filter_with_projection_pushdown() {
         "+------+", "| size |", "+------+", "| 10   |", "| 20   |", "+------+",
     ];
     assert_batches_eq!(expected, &result);
+}
+
+/// Test that ExecutionPlan::apply_expressions() can discover dynamic filters across the plan tree.
+///
+/// Not portable to sqllogictest: asserts by walking the plan tree with
+/// `apply_expressions` + `downcast_ref::<DynamicFilterPhysicalExpr>` and
+/// counting nodes. Neither API is observable from SQL.
+#[tokio::test]
+async fn test_discover_dynamic_filters_via_expressions_api() {
+    fn count_dynamic_filters(plan: &Arc<dyn ExecutionPlan>) -> usize {
+        let mut count = 0;
+
+        // Check expressions from this node using apply_expressions
+        let _ = plan.apply_expressions(&mut |expr| {
+            if let Some(_df) = expr.downcast_ref::<DynamicFilterPhysicalExpr>() {
+                count += 1;
+            }
+            Ok(TreeNodeRecursion::Continue)
+        });
+
+        // Recursively visit children
+        for child in plan.children() {
+            count += count_dynamic_filters(child);
+        }
+
+        count
+    }
+
+    // Create build side (left)
+    let build_batches =
+        vec![record_batch!(("a", Utf8, ["foo", "bar"]), ("b", Int32, [1, 2])).unwrap()];
+    let build_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+    let build_scan = TestScanBuilder::new(build_schema.clone())
+        .with_support(true)
+        .with_batches(build_batches)
+        .build();
+
+    // Create probe side (right)
+    let probe_batches = vec![
+        record_batch!(
+            ("a", Utf8, ["foo", "bar", "baz", "qux"]),
+            ("c", Float64, [1.0, 2.0, 3.0, 4.0])
+        )
+        .unwrap(),
+    ];
+    let probe_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(probe_schema.clone())
+        .with_support(true)
+        .with_batches(probe_batches)
+        .build();
+
+    // Create HashJoinExec
+    let plan = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            probe_scan,
+            vec![(
+                col("a", &build_schema).unwrap(),
+                col("a", &probe_schema).unwrap(),
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    // Before optimization: no dynamic filters
+    let count_before = count_dynamic_filters(&plan);
+    assert_eq!(
+        count_before, 0,
+        "Before optimization, should have no dynamic filters"
+    );
+
+    // Apply filter pushdown optimization (this creates dynamic filters)
+    let mut config = ConfigOptions::default();
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    config.execution.parquet.pushdown_filters = true;
+    let optimized_plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+
+    // After optimization: should discover dynamic filters
+    // We expect 2 dynamic filters:
+    // 1. In the HashJoinExec (producer)
+    // 2. In the DataSourceExec (consumer, pushed down to the probe side)
+    let count_after = count_dynamic_filters(&optimized_plan);
+    assert_eq!(
+        count_after, 2,
+        "After optimization, should discover exactly 2 dynamic filters (1 in HashJoinExec, 1 in DataSourceExec), found {count_after}"
+    );
+}
+
+#[test]
+fn test_discover_dynamic_expression_producers() {
+    fn producer_count(plan: &Arc<dyn ExecutionPlan>) -> usize {
+        let mut count = 0;
+        plan.apply(|node| {
+            count += node.dynamic_expressions_produced().len();
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .expect("plan traversal should succeed");
+        count
+    }
+
+    let build_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("b", DataType::Int32, false),
+    ]));
+    let build_scan = TestScanBuilder::new(Arc::clone(&build_schema))
+        .with_support(true)
+        .with_batches(vec![
+            record_batch!(("a", Utf8, ["foo", "bar"]), ("b", Int32, [1, 2])).unwrap(),
+        ])
+        .build();
+
+    let probe_schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let probe_scan = TestScanBuilder::new(Arc::clone(&probe_schema))
+        .with_support(true)
+        .with_batches(vec![
+            record_batch!(
+                ("a", Utf8, ["foo", "bar", "baz", "qux"]),
+                ("c", Float64, [1.0, 2.0, 3.0, 4.0])
+            )
+            .unwrap(),
+        ])
+        .build();
+
+    let plan = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            probe_scan,
+            vec![(
+                col("a", &build_schema).unwrap(),
+                col("a", &probe_schema).unwrap(),
+            )],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+    assert_eq!(producer_count(&plan), 0);
+
+    let mut config = ConfigOptions::default();
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    config.execution.parquet.pushdown_filters = true;
+    let optimized_plan = FilterPushdown::new_post_optimization()
+        .optimize(plan, &config)
+        .unwrap();
+    assert_eq!(producer_count(&optimized_plan), 1);
 }
 
 // ==== Filter pushdown through SortExec tests ====

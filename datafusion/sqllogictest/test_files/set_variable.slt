@@ -759,6 +759,25 @@ caused by
 Invalid or Unsupported Configuration: value must be greater than 0
 
 
+# max_buffered_batches_per_output_file is halved to size an internal channel
+# capacity, so 0 and 1 both round down to a zero-capacity channel and must be
+# rejected, not just 0.
+statement error
+SET datafusion.execution.max_buffered_batches_per_output_file = 0
+----
+DataFusion error: Error setting config datafusion.execution.max_buffered_batches_per_output_file
+caused by
+Invalid or Unsupported Configuration: value must be at least 2
+
+
+statement error
+SET datafusion.execution.max_buffered_batches_per_output_file = 1
+----
+DataFusion error: Error setting config datafusion.execution.max_buffered_batches_per_output_file
+caused by
+Invalid or Unsupported Configuration: value must be at least 2
+
+
 # Config reset
 statement ok
 RESET datafusion.catalog.create_default_catalog_and_schema

@@ -243,6 +243,7 @@ async fn set_writer_encryption_properties(
 }
 
 #[cfg(not(feature = "parquet_encryption"))]
+#[expect(clippy::unused_async)]
 async fn set_writer_encryption_properties(
     builder: WriterPropertiesBuilder,
     _runtime: &Arc<RuntimeEnv>,

@@ -50,6 +50,7 @@ use datafusion_common::{
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::DataSinkExec;
+use datafusion_datasource::write::get_writer_schema;
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::ExecutionPlan;
@@ -297,6 +298,7 @@ async fn get_file_decryption_properties(
 }
 
 #[cfg(not(feature = "parquet_encryption"))]
+#[expect(clippy::unused_async)]
 async fn get_file_decryption_properties(
     _state: &dyn Session,
     _options: &TableParquetOptions,
@@ -533,11 +535,18 @@ impl FileFormat for ParquetFormat {
         // Convert ordering requirements to Parquet SortingColumns for file metadata
         let sorting_columns = if let Some(ref requirements) = order_requirements {
             let ordering: LexOrdering = requirements.clone().into();
+            let writer_schema = get_writer_schema(&conf);
             // In cases like `COPY (... ORDER BY ...) TO ...` the ORDER BY clause
             // may not be compatible with Parquet sorting columns (e.g. ordering on `random()`).
             // So if we cannot create a Parquet sorting column from the ordering requirement,
             // we skip setting sorting columns on the Parquet sink.
-            lex_ordering_to_sorting_columns(&ordering).ok()
+            lex_ordering_to_sorting_columns(
+                &ordering,
+                conf.output_schema(),
+                &writer_schema,
+            )
+            .ok()
+            .filter(|columns| !columns.is_empty())
         } else {
             None
         };

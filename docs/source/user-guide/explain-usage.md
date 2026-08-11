@@ -169,7 +169,7 @@ debugging to see why and when DataFusion added and removed operators from a plan
 
 During execution, DataFusion operators collect detailed metrics. You can access
 them programmatically via [`ExecutionPlan::metrics`] as well as with the
-`EXPLAIN ANALYZE` command. For example here is the same query query as
+`EXPLAIN ANALYZE` command. For example here is the same query as
 above but with `EXPLAIN ANALYZE` (note the output is edited for clarity)
 
 [`executionplan::metrics`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#method.metrics
@@ -365,7 +365,7 @@ For this query, let's again read the plan from the bottom to the top:
   - `gby=[UserID@0 as UserID]`: Represents `GROUP BY` in the [physical plan] and groups together the same values of `UserID`.
   - `aggr=[count(*)]`: Applies the `COUNT` aggregate on all rows for each group.
 - `RepartitionExec`
-  - `partitioning=Hash([UserID@0], 10)`: Divides the input into into 10 (new) output partitions based on the value of `hash(UserID)`. You can read more about this in the [partitioning] documentation.
+  - `partitioning=Hash([UserID@0], 10)`: Divides the input into 10 (new) output partitions based on the value of `hash(UserID)`. You can read more about this in the [partitioning] documentation.
   - `input_partitions=10`: Number of input partitions.
 - `CoalesceBatchesExec`
   - `target_batch_size=8192`: Combines smaller batches in to larger batches. In this case approximately 8192 rows in each batch.
