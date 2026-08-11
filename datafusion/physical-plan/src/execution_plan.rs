@@ -35,13 +35,13 @@ pub use datafusion_common::utils::project_schema;
 pub use datafusion_common::{ColumnStatistics, Statistics, internal_err};
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
+use datafusion_physical_expr::projection::ProjectionExpr;
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
     Distribution, Partitioning, PhysicalExpr, expressions,
 };
 
 use std::any::Any;
-use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, LazyLock};
@@ -936,6 +936,42 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     }
 }
 
+/// Allows a type to be treated as a reference to an
+/// [`Arc<dyn PhysicalExpr>`].
+///
+/// Used by [`apply_expression_roots`].
+pub trait AsPhysicalExprRef {
+    /// Returns the referenced physical expression.
+    fn as_physical_expr_ref(&self) -> &Arc<dyn PhysicalExpr>;
+}
+
+/// Allows an [`Arc<dyn PhysicalExpr>`] to be treated as a reference to itself.
+///
+/// This is needed because `Arc<dyn PhysicalExpr>` does not implement
+/// `AsRef<Arc<dyn PhysicalExpr>>`.
+impl AsPhysicalExprRef for Arc<dyn PhysicalExpr> {
+    fn as_physical_expr_ref(&self) -> &Arc<dyn PhysicalExpr> {
+        self
+    }
+}
+
+/// Allows a [`ProjectionExpr`] to be treated as a reference to its
+/// [`Arc<dyn PhysicalExpr>`].
+impl AsPhysicalExprRef for ProjectionExpr {
+    fn as_physical_expr_ref(&self) -> &Arc<dyn PhysicalExpr> {
+        self.as_ref()
+    }
+}
+
+impl<T> AsPhysicalExprRef for &T
+where
+    T: AsPhysicalExprRef + ?Sized,
+{
+    fn as_physical_expr_ref(&self) -> &Arc<dyn PhysicalExpr> {
+        (*self).as_physical_expr_ref()
+    }
+}
+
 /// Applies `f` to a shallow sequence of physical expression roots.
 ///
 /// [`TreeNodeRecursion::Stop`] stops iteration and is returned immediately.
@@ -947,10 +983,10 @@ pub fn apply_expression_roots<I>(
 ) -> Result<TreeNodeRecursion>
 where
     I: IntoIterator,
-    I::Item: Borrow<Arc<dyn PhysicalExpr>>,
+    I::Item: AsPhysicalExprRef,
 {
     for root in roots {
-        match f(root.borrow())? {
+        match f(root.as_physical_expr_ref())? {
             TreeNodeRecursion::Stop => return Ok(TreeNodeRecursion::Stop),
             TreeNodeRecursion::Continue | TreeNodeRecursion::Jump => {}
         }
