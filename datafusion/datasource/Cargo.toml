@@ -34,10 +34,14 @@ all-features = true
 backtrace = ["datafusion-common/backtrace"]
 compression = ["async-compression", "liblzma", "bzip2", "flate2", "zstd", "tokio-util"]
 default = ["compression"]
-# Enables the protobuf conversions for the file-scan leaf types owned by this
-# crate (`FileRange`, `PartitionedFile`, `FileGroup`). Off by default so
-# consumers that never serialize plans pay nothing.
-proto = ["dep:datafusion-proto-models"]
+# Enables protobuf conversions for datasource types, source serialization hooks,
+# and the shared `FileScanConfig` <-> proto conversion. Off by default so
+# consumers that never serialize plans pay nothing. Mirrors the `proto` feature
+# on `datafusion-physical-plan`.
+proto = [
+    "dep:datafusion-proto-models",
+    "datafusion-physical-plan/proto",
+]
 
 [dependencies]
 arrow = { workspace = true }

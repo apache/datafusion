@@ -49,6 +49,13 @@ SELECT 2 AS k,
        lpad(cast(value AS varchar), 512, 'x') AS p
 FROM generate_series(1, 2000);
 
+# One narrow 20,000-row key group for the bitwise semi-join regression. Its
+# 200-row input batches fit in 64 KB, while the complete group does not.
+statement ok
+CREATE VIEW bitwise_wide AS
+SELECT 2 AS k, value AS v
+FROM generate_series(1, 20000);
+
 # Keep output narrow while retaining the payload in the buffered input.
 
 query TT
@@ -105,6 +112,19 @@ query III rowsort
 SELECT p.k, w.v, length(w.p) FROM probe_nomatch p FULL JOIN wide w ON p.k = w.k
 ----
 6009 values hashing to 126cd87356bc636448b65c5fb5f4bd2b
+
+# Only the first input batch satisfies this filtered semi join.
+query I
+SELECT pr.k
+FROM probe pr
+WHERE EXISTS (
+  SELECT 1
+  FROM bitwise_wide wi
+  WHERE pr.k = wi.k
+    AND wi.v <= pr.x - 300
+)
+----
+2
 
 # A 64 KB pool spills all 10 buffered batches; each result must match its
 # unlimited-memory hash-join reference.
@@ -235,6 +255,42 @@ query III rowsort
 SELECT p.k, w.v, length(w.p) FROM probe_nomatch p FULL JOIN wide w ON p.k = w.k
 ----
 6009 values hashing to 126cd87356bc636448b65c5fb5f4bd2b
+
+# Let the required narrow input sorts merge within the constrained pool.
+statement ok
+SET datafusion.execution.sort_spill_reservation_bytes = 0
+
+# Prove the correlated EXISTS uses the filtered bitwise LeftSemi stream and
+# spills the complete multi-batch key group.
+query TT
+EXPLAIN ANALYZE
+SELECT pr.k
+FROM probe pr
+WHERE EXISTS (
+  SELECT 1
+  FROM bitwise_wide wi
+  WHERE pr.k = wi.k
+    AND wi.v <= pr.x - 300
+)
+----
+Plan with Metrics
+<slt:ignore>SortMergeJoinExec: join_type=LeftSemi, on=[(k@0, k@0)], filter=v@1 <= x@0 - 300, metrics=[output_rows=1,<slt:ignore>spill_count=1, spilled_bytes=<slt:ignore> KB, spilled_rows=<slt:ignore> K, peak_mem_used=<slt:ignore>
+
+# The same query must retain the matching first slice after later overflows.
+query I
+SELECT pr.k
+FROM probe pr
+WHERE EXISTS (
+  SELECT 1
+  FROM bitwise_wide wi
+  WHERE pr.k = wi.k
+    AND wi.v <= pr.x - 300
+)
+----
+2
+
+statement ok
+RESET datafusion.execution.sort_spill_reservation_bytes
 
 statement ok
 RESET datafusion.runtime.memory_limit

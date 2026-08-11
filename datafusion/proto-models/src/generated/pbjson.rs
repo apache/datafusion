@@ -157,6 +157,9 @@ impl serde::Serialize for AggregateExecNode {
         if self.dynamic_filter.is_some() {
             len += 1;
         }
+        if self.schema.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.AggregateExecNode", len)?;
         if !self.group_expr.is_empty() {
             struct_ser.serialize_field("groupExpr", &self.group_expr)?;
@@ -199,6 +202,9 @@ impl serde::Serialize for AggregateExecNode {
         if let Some(v) = self.dynamic_filter.as_ref() {
             struct_ser.serialize_field("dynamicFilter", v)?;
         }
+        if let Some(v) = self.schema.as_ref() {
+            struct_ser.serialize_field("schema", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -231,6 +237,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
             "hasGroupingSet",
             "dynamic_filter",
             "dynamicFilter",
+            "schema",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -248,6 +255,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
             Limit,
             HasGroupingSet,
             DynamicFilter,
+            Schema,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -282,6 +290,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                             "limit" => Ok(GeneratedField::Limit),
                             "hasGroupingSet" | "has_grouping_set" => Ok(GeneratedField::HasGroupingSet),
                             "dynamicFilter" | "dynamic_filter" => Ok(GeneratedField::DynamicFilter),
+                            "schema" => Ok(GeneratedField::Schema),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -314,6 +323,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                 let mut limit__ = None;
                 let mut has_grouping_set__ = None;
                 let mut dynamic_filter__ = None;
+                let mut schema__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::GroupExpr => {
@@ -394,6 +404,12 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                             }
                             dynamic_filter__ = map_.next_value()?;
                         }
+                        GeneratedField::Schema => {
+                            if schema__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("schema"));
+                            }
+                            schema__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(AggregateExecNode {
@@ -410,6 +426,7 @@ impl<'de> serde::Deserialize<'de> for AggregateExecNode {
                     limit: limit__,
                     has_grouping_set: has_grouping_set__.unwrap_or_default(),
                     dynamic_filter: dynamic_filter__,
+                    schema: schema__,
                 })
             }
         }
@@ -8783,6 +8800,9 @@ impl serde::Serialize for GlobalLimitExecNode {
         if self.fetch != 0 {
             len += 1;
         }
+        if !self.required_ordering.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.GlobalLimitExecNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
@@ -8794,6 +8814,9 @@ impl serde::Serialize for GlobalLimitExecNode {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("fetch", ToString::to_string(&self.fetch).as_str())?;
+        }
+        if !self.required_ordering.is_empty() {
+            struct_ser.serialize_field("requiredOrdering", &self.required_ordering)?;
         }
         struct_ser.end()
     }
@@ -8808,6 +8831,8 @@ impl<'de> serde::Deserialize<'de> for GlobalLimitExecNode {
             "input",
             "skip",
             "fetch",
+            "required_ordering",
+            "requiredOrdering",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -8815,6 +8840,7 @@ impl<'de> serde::Deserialize<'de> for GlobalLimitExecNode {
             Input,
             Skip,
             Fetch,
+            RequiredOrdering,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -8839,6 +8865,7 @@ impl<'de> serde::Deserialize<'de> for GlobalLimitExecNode {
                             "input" => Ok(GeneratedField::Input),
                             "skip" => Ok(GeneratedField::Skip),
                             "fetch" => Ok(GeneratedField::Fetch),
+                            "requiredOrdering" | "required_ordering" => Ok(GeneratedField::RequiredOrdering),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -8861,6 +8888,7 @@ impl<'de> serde::Deserialize<'de> for GlobalLimitExecNode {
                 let mut input__ = None;
                 let mut skip__ = None;
                 let mut fetch__ = None;
+                let mut required_ordering__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -8885,12 +8913,19 @@ impl<'de> serde::Deserialize<'de> for GlobalLimitExecNode {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::RequiredOrdering => {
+                            if required_ordering__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("requiredOrdering"));
+                            }
+                            required_ordering__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(GlobalLimitExecNode {
                     input: input__,
                     skip: skip__.unwrap_or_default(),
                     fetch: fetch__.unwrap_or_default(),
+                    required_ordering: required_ordering__.unwrap_or_default(),
                 })
             }
         }
@@ -9026,6 +9061,9 @@ impl serde::Serialize for HashJoinExecNode {
         if self.dynamic_filter.is_some() {
             len += 1;
         }
+        if self.fetch.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.HashJoinExecNode", len)?;
         if let Some(v) = self.left.as_ref() {
             struct_ser.serialize_field("left", v)?;
@@ -9063,6 +9101,11 @@ impl serde::Serialize for HashJoinExecNode {
         if let Some(v) = self.dynamic_filter.as_ref() {
             struct_ser.serialize_field("dynamicFilter", v)?;
         }
+        if let Some(v) = self.fetch.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("fetch", ToString::to_string(&v).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -9088,6 +9131,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
             "nullAware",
             "dynamic_filter",
             "dynamicFilter",
+            "fetch",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -9102,6 +9146,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
             Projection,
             NullAware,
             DynamicFilter,
+            Fetch,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -9133,6 +9178,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                             "projection" => Ok(GeneratedField::Projection),
                             "nullAware" | "null_aware" => Ok(GeneratedField::NullAware),
                             "dynamicFilter" | "dynamic_filter" => Ok(GeneratedField::DynamicFilter),
+                            "fetch" => Ok(GeneratedField::Fetch),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -9162,6 +9208,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                 let mut projection__ = None;
                 let mut null_aware__ = None;
                 let mut dynamic_filter__ = None;
+                let mut fetch__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Left => {
@@ -9227,6 +9274,14 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                             }
                             dynamic_filter__ = map_.next_value()?;
                         }
+                        GeneratedField::Fetch => {
+                            if fetch__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("fetch"));
+                            }
+                            fetch__ = 
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
                     }
                 }
                 Ok(HashJoinExecNode {
@@ -9240,6 +9295,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                     projection: projection__.unwrap_or_default(),
                     null_aware: null_aware__.unwrap_or_default(),
                     dynamic_filter: dynamic_filter__,
+                    fetch: fetch__,
                 })
             }
         }
@@ -12593,12 +12649,18 @@ impl serde::Serialize for LocalLimitExecNode {
         if self.fetch != 0 {
             len += 1;
         }
+        if !self.required_ordering.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.LocalLimitExecNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
         }
         if self.fetch != 0 {
             struct_ser.serialize_field("fetch", &self.fetch)?;
+        }
+        if !self.required_ordering.is_empty() {
+            struct_ser.serialize_field("requiredOrdering", &self.required_ordering)?;
         }
         struct_ser.end()
     }
@@ -12612,12 +12674,15 @@ impl<'de> serde::Deserialize<'de> for LocalLimitExecNode {
         const FIELDS: &[&str] = &[
             "input",
             "fetch",
+            "required_ordering",
+            "requiredOrdering",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Input,
             Fetch,
+            RequiredOrdering,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -12641,6 +12706,7 @@ impl<'de> serde::Deserialize<'de> for LocalLimitExecNode {
                         match value {
                             "input" => Ok(GeneratedField::Input),
                             "fetch" => Ok(GeneratedField::Fetch),
+                            "requiredOrdering" | "required_ordering" => Ok(GeneratedField::RequiredOrdering),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -12662,6 +12728,7 @@ impl<'de> serde::Deserialize<'de> for LocalLimitExecNode {
             {
                 let mut input__ = None;
                 let mut fetch__ = None;
+                let mut required_ordering__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -12678,11 +12745,18 @@ impl<'de> serde::Deserialize<'de> for LocalLimitExecNode {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::RequiredOrdering => {
+                            if required_ordering__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("requiredOrdering"));
+                            }
+                            required_ordering__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(LocalLimitExecNode {
                     input: input__,
                     fetch: fetch__.unwrap_or_default(),
+                    required_ordering: required_ordering__.unwrap_or_default(),
                 })
             }
         }
@@ -17236,6 +17310,9 @@ impl serde::Serialize for PhysicalAggregateExprNode {
         if !self.human_display.is_empty() {
             len += 1;
         }
+        if self.is_reversed {
+            len += 1;
+        }
         if self.aggregate_function.is_some() {
             len += 1;
         }
@@ -17259,6 +17336,9 @@ impl serde::Serialize for PhysicalAggregateExprNode {
         }
         if !self.human_display.is_empty() {
             struct_ser.serialize_field("humanDisplay", &self.human_display)?;
+        }
+        if self.is_reversed {
+            struct_ser.serialize_field("isReversed", &self.is_reversed)?;
         }
         if let Some(v) = self.aggregate_function.as_ref() {
             match v {
@@ -17287,6 +17367,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
             "funDefinition",
             "human_display",
             "humanDisplay",
+            "is_reversed",
+            "isReversed",
             "user_defined_aggr_function",
             "userDefinedAggrFunction",
         ];
@@ -17299,6 +17381,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
             IgnoreNulls,
             FunDefinition,
             HumanDisplay,
+            IsReversed,
             UserDefinedAggrFunction,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -17327,6 +17410,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                             "ignoreNulls" | "ignore_nulls" => Ok(GeneratedField::IgnoreNulls),
                             "funDefinition" | "fun_definition" => Ok(GeneratedField::FunDefinition),
                             "humanDisplay" | "human_display" => Ok(GeneratedField::HumanDisplay),
+                            "isReversed" | "is_reversed" => Ok(GeneratedField::IsReversed),
                             "userDefinedAggrFunction" | "user_defined_aggr_function" => Ok(GeneratedField::UserDefinedAggrFunction),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -17353,6 +17437,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                 let mut ignore_nulls__ = None;
                 let mut fun_definition__ = None;
                 let mut human_display__ = None;
+                let mut is_reversed__ = None;
                 let mut aggregate_function__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -17394,6 +17479,12 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                             }
                             human_display__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::IsReversed => {
+                            if is_reversed__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("isReversed"));
+                            }
+                            is_reversed__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::UserDefinedAggrFunction => {
                             if aggregate_function__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("userDefinedAggrFunction"));
@@ -17409,6 +17500,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalAggregateExprNode {
                     ignore_nulls: ignore_nulls__.unwrap_or_default(),
                     fun_definition: fun_definition__,
                     human_display: human_display__.unwrap_or_default(),
+                    is_reversed: is_reversed__.unwrap_or_default(),
                     aggregate_function: aggregate_function__,
                 })
             }

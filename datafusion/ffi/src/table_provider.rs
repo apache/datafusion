@@ -263,7 +263,7 @@ unsafe extern "C" fn scan_fn_wrapper(
         let session = sresult_return!(
             session
                 .as_local()
-                .map(Ok::<&(dyn Session + Send + Sync), DataFusionError>)
+                .map(Ok::<&dyn Session, DataFusionError>)
                 .unwrap_or_else(|| {
                     foreign_session = Some(ForeignSession::try_from(&session)?);
                     Ok(foreign_session.as_ref().unwrap())
@@ -314,7 +314,7 @@ unsafe extern "C" fn insert_into_fn_wrapper(
         let session = sresult_return!(
             session
                 .as_local()
-                .map(Ok::<&(dyn Session + Send + Sync), DataFusionError>)
+                .map(Ok::<&dyn Session, DataFusionError>)
                 .unwrap_or_else(|| {
                     foreign_session = Some(ForeignSession::try_from(&session)?);
                     Ok(foreign_session.as_ref().unwrap())
