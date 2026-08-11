@@ -82,6 +82,7 @@ pub fn serialize_physical_aggr_expr(
                 ignore_nulls: aggr_expr.ignore_nulls(),
                 fun_definition: (!buf.is_empty()).then_some(buf),
                 human_display,
+                is_reversed: aggr_expr.is_reversed(),
             },
         )),
     })
