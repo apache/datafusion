@@ -37,6 +37,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
     DataFusionError, NullEquality, Result, ScalarValue, SharedResult,
+    assert_or_internal_err,
 };
 use datafusion_expr::Operator;
 use datafusion_functions::core::r#struct as struct_func;
@@ -706,7 +707,9 @@ impl SharedBuildAccumulator {
                     Arc::clone(&partition_filters[real_partition_ids[0]])
                 } else if let Some(range_partitioning) = &self.probe_range_partitioning {
                     // Range partitioning
-                    assert_eq!(
+                    assert_or_internal_err!(
+                        partition_filters.len() == range_partitioning.partition_count(),
+                        "Dynamic filter partition count {} does not match Range partition count {}",
                         partition_filters.len(),
                         range_partitioning.partition_count()
                     );

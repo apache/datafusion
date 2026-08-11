@@ -4085,7 +4085,7 @@ fn roundtrip_range_expr() -> Result<()> {
     let range_expr = binary.left().downcast_ref::<RangeExpr>().unwrap();
     assert_eq!(range_expr.split_points(), range_partitioning.split_points());
     assert_eq!(range_expr.sort_options(), &options);
-    let children = range_expr.children();
+    let children = range_expr.on_columns();
     assert_eq!(children.len(), 2);
     for child in children {
         let column = child.downcast_ref::<Column>().unwrap();

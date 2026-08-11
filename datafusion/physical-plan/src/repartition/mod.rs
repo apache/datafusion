@@ -72,6 +72,8 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_expr_common::sort_expr::{
     sort_exprs_try_from_proto, sort_exprs_try_to_proto,
 };
+#[cfg(feature = "proto")]
+use datafusion_proto_models::protobuf;
 
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
@@ -693,6 +695,11 @@ impl RangeExpr {
         })
     }
 
+    /// Get the columns used to compute Range partition IDs.
+    pub fn on_columns(&self) -> &[PhysicalExprRef] {
+        &self.on_columns
+    }
+
     /// Returns the Range split points used for routing.
     pub fn split_points(&self) -> &[SplitPoint] {
         &self.split_points
@@ -765,11 +772,9 @@ impl PhysicalExpr for RangeExpr {
     fn try_to_proto(
         &self,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
-    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+    ) -> Result<Option<protobuf::PhysicalExprNode>> {
         // Encode the raw ordered children: rebuilding a `LexOrdering` would
         // deduplicate equivalent children after dynamic-filter remapping.
-        use datafusion_proto_models::protobuf;
-
         let sort_exprs = self
             .on_columns
             .iter()
@@ -805,12 +810,10 @@ impl PhysicalExpr for RangeExpr {
 impl RangeExpr {
     /// Reconstructs a [`RangeExpr`] from its protobuf representation.
     pub fn try_from_proto(
-        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        node: &protobuf::PhysicalExprNode,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<PhysicalExprRef> {
         // Decode the raw ordered children for the same reason as `try_to_proto`.
-        use datafusion_proto_models::protobuf;
-
         let range_expr = match &node.expr_type {
             Some(protobuf::physical_expr_node::ExprType::RangeExpr(expr)) => expr,
             _ => return internal_err!("PhysicalExprNode is not a RangeExpr"),
@@ -1929,9 +1932,7 @@ impl ExecutionPlan for RepartitionExec {
     fn try_to_proto(
         &self,
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
-    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
-        use datafusion_proto_models::protobuf;
-
+    ) -> Result<Option<protobuf::PhysicalPlanNode>> {
         let input = ctx.encode_child(self.input())?;
 
         let partitioning = self.partitioning().try_to_proto(&ctx.expr_ctx())?;
@@ -1954,11 +1955,9 @@ impl ExecutionPlan for RepartitionExec {
 impl RepartitionExec {
     /// Reconstruct a [`RepartitionExec`] from its protobuf representation.
     pub fn try_from_proto(
-        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        node: &protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        use datafusion_proto_models::protobuf;
-
         let repart = crate::expect_plan_variant!(
             node,
             protobuf::physical_plan_node::PhysicalPlanType::Repartition,
