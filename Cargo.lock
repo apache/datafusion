@@ -1752,6 +1752,7 @@ dependencies = [
  "flate2",
  "futures",
  "glob",
+ "half",
  "indexmap 2.14.0",
  "insta",
  "itertools 0.15.0",
