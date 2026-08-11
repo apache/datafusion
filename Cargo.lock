@@ -2610,6 +2610,7 @@ name = "datafusion-spark"
 version = "54.1.0"
 dependencies = [
  "arrow",
+ "base64 0.23.0",
  "bigdecimal",
  "chrono",
  "crc32fast",

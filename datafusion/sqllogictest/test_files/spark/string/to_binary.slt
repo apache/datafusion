@@ -23,5 +23,57 @@
 
 ## Original Query: SELECT to_binary('abc', 'utf-8');
 ## PySpark 3.5.5 Result: {'to_binary(abc, utf-8)': bytearray(b'abc'), 'typeof(to_binary(abc, utf-8))': 'binary', 'typeof(abc)': 'string', 'typeof(utf-8)': 'string'}
-#query
-#SELECT to_binary('abc'::string, 'utf-8'::string);
+query ?
+SELECT to_binary('abc'::string, 'utf-8'::string);
+----
+616263
+
+# the format is matched case-insensitively, and utf8 is an accepted spelling
+query ?
+SELECT to_binary('abc'::string, 'UTF8'::string);
+----
+616263
+
+# hex is the default when fmt is omitted
+query ?
+SELECT to_binary('537061726b'::string);
+----
+537061726b
+
+query ?
+SELECT to_binary('537061726b'::string, 'hex'::string);
+----
+537061726b
+
+# an odd number of hex digits is left-padded with a leading zero
+query ?
+SELECT to_binary('f'::string, 'hex'::string);
+----
+0f
+
+query ?
+SELECT to_binary('U3Bhcms='::string, 'base64'::string);
+----
+537061726b
+
+# NULL input, and a NULL format, both give NULL
+query ?
+SELECT to_binary(NULL::string, 'hex'::string);
+----
+NULL
+
+query ?
+SELECT to_binary('abc'::string, NULL::string);
+----
+NULL
+
+# to_binary raises on a value that cannot be converted
+statement error
+SELECT to_binary('zz'::string, 'hex'::string);
+
+statement error
+SELECT to_binary('a!'::string, 'base64'::string);
+
+# ...and on a format it does not recognise
+statement error
+SELECT to_binary('abc'::string, 'invalidFormat'::string);

@@ -44,6 +44,7 @@ name = "datafusion_spark"
 
 [dependencies]
 arrow = { workspace = true }
+base64 = "0.23"
 bigdecimal = { workspace = true }
 chrono = { workspace = true }
 crc32fast = "1.4"
