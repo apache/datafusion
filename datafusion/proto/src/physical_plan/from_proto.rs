@@ -26,34 +26,33 @@ use arrow::ipc::reader::StreamReader;
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err, not_impl_err};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
-use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_sink_config::FileSinkConfig;
 use datafusion_datasource::{FileRange, PartitionedFile, TableSchema};
 use datafusion_datasource_csv::file_format::CsvSink;
 use datafusion_datasource_json::file_format::JsonSink;
 #[cfg(feature = "parquet")]
 use datafusion_datasource_parquet::file_format::ParquetSink;
-use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::WindowFunctionDefinition;
 use datafusion_physical_expr::expressions::{LambdaExpr, LambdaVariable};
-use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::{
-    HigherOrderFunctionExpr, LexOrdering, PhysicalSortExpr, ScalarFunctionExpr,
+    HigherOrderFunctionExpr, PhysicalSortExpr, ScalarFunctionExpr,
 };
 use datafusion_physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
     LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion_physical_plan::joins::HashExpr;
+use datafusion_physical_plan::proto::ExecutionPlanDecodeCtx;
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion_proto_common::common::proto_error;
 
 use super::{
-    DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
-    PhysicalProtoConverterExtension,
+    ConverterPlanDecoder, DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
+    PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
 };
 use crate::convert::TryFromProto;
 use crate::protobuf::physical_expr_node::ExprType;
@@ -426,6 +425,10 @@ pub fn parse_protobuf_partitioning(
         .transpose()
         .map(Option::flatten)
 }
+#[deprecated(
+    since = "55.0.0",
+    note = "unused by DataFusion; use `FileScanConfig::parse_table_schema_from_proto` to reconstruct the full table schema"
+)]
 pub fn parse_protobuf_file_scan_schema(
     proto: &protobuf::FileScanExecConf,
 ) -> Result<Arc<Schema>> {
@@ -436,33 +439,7 @@ pub fn parse_protobuf_file_scan_schema(
 pub fn parse_table_schema_from_proto(
     proto: &protobuf::FileScanExecConf,
 ) -> Result<TableSchema> {
-    let schema: Arc<Schema> = parse_protobuf_file_scan_schema(proto)?;
-
-    // Reacquire the partition column types from the schema before removing them below.
-    let table_partition_cols = proto
-        .table_partition_cols
-        .iter()
-        .map(|col| Ok(Arc::new(schema.field_with_name(col)?.clone())))
-        .collect::<Result<Vec<_>>>()?;
-
-    // Remove partition columns from the schema after recreating table_partition_cols
-    // because the partition columns are not in the file. They are present to allow
-    // the partition column types to be reconstructed after serde.
-    let file_schema = Arc::new(
-        Schema::new(
-            schema
-                .fields()
-                .iter()
-                .filter(|field| !table_partition_cols.contains(field))
-                .cloned()
-                .collect::<Vec<_>>(),
-        )
-        .with_metadata(schema.metadata.clone()),
-    );
-
-    Ok(TableSchema::builder(file_schema)
-        .with_table_partition_cols(table_partition_cols)
-        .build())
+    FileScanConfig::parse_table_schema_from_proto(proto)
 }
 
 pub fn parse_protobuf_file_scan_config(
@@ -471,78 +448,21 @@ pub fn parse_protobuf_file_scan_config(
     proto_converter: &dyn PhysicalProtoConverterExtension,
     file_source: Arc<dyn FileSource>,
 ) -> Result<FileScanConfig> {
-    let schema: Arc<Schema> = parse_protobuf_file_scan_schema(proto)?;
-
-    let constraints = convert_required!(proto.constraints)?;
-    let statistics = convert_required!(proto.statistics)?;
-
-    let file_groups = proto
-        .file_groups
-        .iter()
-        .map(FileGroup::try_from_proto)
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let object_store_url = match proto.object_store_url.is_empty() {
-        false => ObjectStoreUrl::parse(&proto.object_store_url)?,
-        true => ObjectStoreUrl::local_filesystem(),
-    };
-
-    let mut output_ordering = vec![];
-    for node_collection in &proto.output_ordering {
-        let sort_exprs = parse_physical_sort_exprs(
-            &node_collection.physical_sort_expr_nodes,
-            ctx,
-            &schema,
-            proto_converter,
-        )?;
-        output_ordering.extend(LexOrdering::new(sort_exprs));
-    }
-    let output_partitioning = parse_protobuf_partitioning(
-        proto.output_partitioning.as_ref(),
+    let decoder = ConverterPlanDecoder {
         ctx,
-        &schema,
         proto_converter,
-    )?;
-
-    // Parse projection expressions if present and apply to file source
-    let file_source = if let Some(proto_projection_exprs) = &proto.projection_exprs {
-        let projection_exprs: Vec<ProjectionExpr> = proto_projection_exprs
-            .projections
-            .iter()
-            .map(|proto_expr| {
-                let expr = proto_converter.proto_to_physical_expr(
-                    proto_expr.expr.as_ref().ok_or_else(|| {
-                        internal_datafusion_err!("ProjectionExpr missing expr field")
-                    })?,
-                    &schema,
-                    ctx,
-                )?;
-                Ok(ProjectionExpr::new(expr, proto_expr.alias.clone()))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let projection_exprs = ProjectionExprs::new(projection_exprs);
-
-        // Apply projection to file source
-        file_source
-            .try_pushdown_projection(&projection_exprs)?
-            .unwrap_or(file_source)
-    } else {
-        file_source
     };
-
-    let config = FileScanConfigBuilder::new(object_store_url, file_source)
-        .with_file_groups(file_groups)
-        .with_constraints(constraints)
-        .with_statistics(statistics)
-        .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
-        .with_output_ordering(output_ordering)
-        .with_output_partitioning(output_partitioning)
-        .with_batch_size(proto.batch_size.map(|s| s as usize))
-        .build();
-    Ok(config)
+    FileScanConfig::try_from_proto(
+        proto,
+        &ExecutionPlanDecodeCtx::new(&decoder),
+        file_source,
+    )
 }
 
+#[deprecated(
+    since = "55.0.0",
+    note = "unused by DataFusion; `MemorySourceConfig` deserializes its record batches itself via `MemorySourceConfig::try_from_proto`"
+)]
 pub fn parse_record_batches(buf: &[u8]) -> Result<Vec<RecordBatch>> {
     if buf.is_empty() {
         return Ok(vec![]);
