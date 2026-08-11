@@ -2187,9 +2187,7 @@ mod tests {
     /// ORDER BY sn <frame>)` over a fixed two-group source (hash=1 × 3,
     /// hash=2 × 3, sorted by (hash, sn)). Returns the plan pre-observer so
     /// callers can decide how to install it.
-    async fn build_partition_close_plan(
-        frame: WindowFrame,
-    ) -> Result<BoundedWindowAggExec> {
+    fn build_partition_close_plan(frame: WindowFrame) -> Result<BoundedWindowAggExec> {
         let schema = test_schema();
 
         let mut sn_b = UInt64Builder::with_capacity(6);
@@ -2257,8 +2255,7 @@ mod tests {
             WindowFrameUnits::Rows,
             WindowFrameBound::CurrentRow,
             WindowFrameBound::Following(ScalarValue::UInt64(None)),
-        ))
-        .await?;
+        ))?;
         let observer: Arc<dyn WindowStateObserver> = Arc::new(RecordingObserver {
             sink: Arc::new(Mutex::new(vec![])),
         });
@@ -2284,8 +2281,7 @@ mod tests {
             WindowFrameUnits::Rows,
             WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
             WindowFrameBound::CurrentRow,
-        ))
-        .await?;
+        ))?;
 
         let observations: Arc<Mutex<Vec<Observation>>> = Arc::new(Mutex::new(vec![]));
         let observer: Arc<dyn WindowStateObserver> = Arc::new(RecordingObserver {
