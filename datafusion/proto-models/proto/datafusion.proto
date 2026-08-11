@@ -1096,6 +1096,7 @@ message PhysicalAggregateExprNode {
   bool ignore_nulls = 6;
   optional bytes fun_definition = 7;
   string human_display = 8;
+  bool is_reversed = 9;
 }
 
 message PhysicalWindowExprNode {
@@ -1472,6 +1473,8 @@ message AggregateExecNode {
   bool has_grouping_set = 12;
   // Optional dynamic filter expression for pushing down to the child.
   PhysicalExprNode dynamic_filter = 13;
+  // Output schema preserved by physical optimizer rewrites.
+  datafusion_common.Schema schema = 14;
 }
 
 message GlobalLimitExecNode {

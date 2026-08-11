@@ -621,7 +621,29 @@ pub mod array_conversion {
         }
     }
 
-    //#TODO add impl for f16
+    impl IntoArrayRef for Vec<half::f16> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Float16, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<half::f16>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Float16, self)
+        }
+    }
+
+    impl IntoArrayRef for &[half::f16] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Float16, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<half::f16>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Float16, self.to_vec())
+        }
+    }
 
     impl IntoArrayRef for Vec<f32> {
         fn into_array_ref(self) -> ArrayRef {
