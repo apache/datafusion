@@ -66,6 +66,7 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::bisect;
 use datafusion_common::{
     HashSet, JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err,
@@ -452,6 +453,15 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         vec![&self.left, &self.right]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn crate::PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let join_keys = self.on.iter().flat_map(|(left, right)| [left, right]);
+        let filter = self.filter.iter().map(|filter| filter.expression());
+        crate::apply_expression_roots(join_keys.chain(filter), f)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -698,26 +708,17 @@ impl ExecutionPlan for SymmetricHashJoinExec {
                 })
             })
             .transpose()?;
-        let encode_sort_exprs =
-            |exprs: Option<&LexOrdering>| -> Result<Vec<protobuf::PhysicalSortExprNode>> {
-                exprs
-                    .map(|exprs| {
-                        exprs
-                            .iter()
-                            .map(|expr| {
-                                Ok(protobuf::PhysicalSortExprNode {
-                                    expr: Some(Box::new(ctx.encode_expr(&expr.expr)?)),
-                                    asc: !expr.options.descending,
-                                    nulls_first: expr.options.nulls_first,
-                                })
-                            })
-                            .collect::<Result<Vec<_>>>()
-                    })
-                    .transpose()
-                    .map(Option::unwrap_or_default)
-            };
-        let left_sort_exprs = encode_sort_exprs(self.left_sort_exprs())?;
-        let right_sort_exprs = encode_sort_exprs(self.right_sort_exprs())?;
+        let expr_ctx = ctx.expr_ctx();
+        let left_sort_exprs =
+            datafusion_physical_expr_common::sort_expr::optional_ordering_try_to_proto(
+                self.left_sort_exprs(),
+                &expr_ctx,
+            )?;
+        let right_sort_exprs =
+            datafusion_physical_expr_common::sort_expr::optional_ordering_try_to_proto(
+                self.right_sort_exprs(),
+                &expr_ctx,
+            )?;
 
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
@@ -751,7 +752,6 @@ impl SymmetricHashJoinExec {
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         use datafusion_common::internal_datafusion_err;
-        use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
         use datafusion_proto_models::protobuf;
 
         let sym_join = crate::expect_plan_variant!(
@@ -882,40 +882,16 @@ impl SymmetricHashJoinExec {
                 ))
             })
             .transpose()?;
-        let decode_sort_exprs = |sort_exprs: &[protobuf::PhysicalSortExprNode],
-                                 schema: &Schema,
-                                 field: &str|
-         -> Result<Option<LexOrdering>> {
-            let sort_exprs = sort_exprs
-                .iter()
-                .map(|sort_expr| {
-                    let expr = ctx.decode_required_expr(
-                        sort_expr.expr.as_deref(),
-                        schema,
-                        "SymmetricHashJoinExec",
-                        field,
-                    )?;
-                    Ok(PhysicalSortExpr {
-                        expr,
-                        options: arrow::compute::SortOptions {
-                            descending: !sort_expr.asc,
-                            nulls_first: sort_expr.nulls_first,
-                        },
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(LexOrdering::new(sort_exprs))
-        };
-        let left_sort_exprs = decode_sort_exprs(
-            &sym_join.left_sort_exprs,
-            left_schema.as_ref(),
-            "left_sort_exprs",
-        )?;
-        let right_sort_exprs = decode_sort_exprs(
-            &sym_join.right_sort_exprs,
-            right_schema.as_ref(),
-            "right_sort_exprs",
-        )?;
+        let left_sort_exprs =
+            datafusion_physical_expr_common::sort_expr::optional_ordering_try_from_proto(
+                &sym_join.left_sort_exprs,
+                &ctx.expr_ctx(left_schema.as_ref()),
+            )?;
+        let right_sort_exprs =
+            datafusion_physical_expr_common::sort_expr::optional_ordering_try_from_proto(
+                &sym_join.right_sort_exprs,
+                &ctx.expr_ctx(right_schema.as_ref()),
+            )?;
 
         Self::try_new(
             left,

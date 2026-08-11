@@ -1,0 +1,33 @@
+description = "H2O group-by, join, and window SQL benchmarks"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[path_replacements]
+DATA_DIR = "../../data"
+
+[[options]]
+name = "size"
+env = "H2O_BENCH_SIZE"
+default = "small"
+values = ["small", "medium", "big"]
+help = "Selects the H2O dataset size."
+
+[[options]]
+name = "format"
+short = "f"
+env = "H2O_FILE_TYPE"
+default = "csv"
+values = ["csv", "parquet"]
+help = "Selects the H2O data format."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- h2o"
+description = "Run all H2O queries with the small CSV datasets."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- h2o --query 3 --subgroup window"
+description = "Run H2O window query 3."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- h2o --subgroup join --size medium -f parquet"
+description = "Run the H2O join queries with the medium Parquet dataset."

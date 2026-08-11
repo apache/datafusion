@@ -670,10 +670,56 @@ pub struct ColumnUnnestListRecursion {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UnnestOptions {
-    #[prost(bool, tag = "1")]
-    pub preserve_nulls: bool,
+    #[prost(enumeration = "unnest_options::NullHandling", tag = "3")]
+    pub null_handling: i32,
     #[prost(message, repeated, tag = "2")]
     pub recursions: ::prost::alloc::vec::Vec<RecursionUnnestOption>,
+}
+/// Nested message and enum types in `UnnestOptions`.
+pub mod unnest_options {
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        Hash,
+        PartialOrd,
+        Ord,
+        ::prost::Enumeration
+    )]
+    #[repr(i32)]
+    pub enum NullHandling {
+        /// Preserve nulls; empty lists produce no rows. The historical default.
+        Preserve = 0,
+        /// Drop both null and empty lists from the output.
+        Drop = 1,
+        /// Preserve nulls, and additionally expand empty lists into a single
+        /// NULL output row (outer-unnest semantics).
+        PreserveAndExpandEmpty = 2,
+    }
+    impl NullHandling {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Preserve => "PRESERVE",
+                Self::Drop => "DROP",
+                Self::PreserveAndExpandEmpty => "PRESERVE_AND_EXPAND_EMPTY",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "PRESERVE" => Some(Self::Preserve),
+                "DROP" => Some(Self::Drop),
+                "PRESERVE_AND_EXPAND_EMPTY" => Some(Self::PreserveAndExpandEmpty),
+                _ => None,
+            }
+        }
+    }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RecursionUnnestOption {
@@ -963,6 +1009,10 @@ pub struct NegativeNode {
 pub struct Unnest {
     #[prost(message, repeated, tag = "1")]
     pub exprs: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    /// When true, this Unnest expression has outer-unnest semantics: NULL and
+    /// empty input lists both produce a single NULL output row.
+    #[prost(bool, tag = "2")]
+    pub outer: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct InListNode {
@@ -1507,7 +1557,7 @@ pub struct PhysicalExprNode {
     pub expr_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1570,6 +1620,8 @@ pub mod physical_expr_node {
         Lambda(::prost::alloc::boxed::Box<super::PhysicalLambdaExprNode>),
         #[prost(message, tag = "26")]
         LambdaVariable(super::PhysicalLambdaVariableExprNode),
+        #[prost(message, tag = "27")]
+        RangeExpr(super::PhysicalRangeExprNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1637,6 +1689,8 @@ pub struct PhysicalAggregateExprNode {
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(string, tag = "8")]
     pub human_display: ::prost::alloc::string::String,
+    #[prost(bool, tag = "9")]
+    pub is_reversed: bool,
     #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "4")]
     pub aggregate_function: ::core::option::Option<
         physical_aggregate_expr_node::AggregateFunction,
@@ -1809,6 +1863,13 @@ pub struct PhysicalHashExprNode {
     pub description: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalRangeExprNode {
+    #[prost(message, repeated, tag = "1")]
+    pub sort_expr: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
+    #[prost(message, repeated, tag = "2")]
+    pub split_point: ::prost::alloc::vec::Vec<PhysicalRangeSplitPoint>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FilterExecNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
@@ -1979,6 +2040,15 @@ pub struct HashJoinExecNode {
     /// Optional dynamic filter expression for pushing down to the probe side.
     #[prost(message, optional, tag = "11")]
     pub dynamic_filter: ::core::option::Option<PhysicalExprNode>,
+    /// Optional row limit pushed into the join by the `limit_pushdown` rule.
+    ///
+    /// This is presence-tracked (`optional`) on purpose: messages produced by
+    /// versions predating this field carry no `fetch` at all, and a plain proto3
+    /// scalar would decode that absence as `0`, i.e. "fetch 0 rows", silently
+    /// turning old plans into empty results. With `optional`, absent decodes to
+    /// `None`, which is the correct reading of an older message.
+    #[prost(uint64, optional, tag = "12")]
+    pub fetch: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SymmetricHashJoinExecNode {
@@ -2171,6 +2241,9 @@ pub struct AggregateExecNode {
     /// Optional dynamic filter expression for pushing down to the child.
     #[prost(message, optional, tag = "13")]
     pub dynamic_filter: ::core::option::Option<PhysicalExprNode>,
+    /// Output schema preserved by physical optimizer rewrites.
+    #[prost(message, optional, tag = "14")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GlobalLimitExecNode {
@@ -2182,6 +2255,9 @@ pub struct GlobalLimitExecNode {
     /// Maximum number of rows to fetch; negative means no limit
     #[prost(int64, tag = "3")]
     pub fetch: i64,
+    /// Ordering the limit must preserve; empty means none
+    #[prost(message, repeated, tag = "4")]
+    pub required_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LocalLimitExecNode {
@@ -2189,6 +2265,9 @@ pub struct LocalLimitExecNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(uint32, tag = "2")]
     pub fetch: u32,
+    /// Ordering the limit must preserve; empty means none
+    #[prost(message, repeated, tag = "3")]
+    pub required_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SortExecNode {
