@@ -167,7 +167,8 @@ use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputDistributionRequirements,
-    InputOrderMode, SendableRecordBatchStream, Statistics, check_if_same_properties,
+    InputOrderMode, Partitioning, SendableRecordBatchStream, Statistics,
+    check_if_same_properties,
 };
 use datafusion_common::config::ConfigOptions;
 use parking_lot::Mutex;
@@ -1011,7 +1012,9 @@ impl AggregateExec {
             .filter(|idx| group_by.groups.iter().all(|group| !group[*idx]))
             .collect();
 
-        let input_order_mode = if indices.len() == groupby_exprs.len()
+        let input_order_mode = if group_by.has_grouping_set() {
+            InputOrderMode::Linear
+        } else if indices.len() == groupby_exprs.len()
             && !indices.is_empty()
             && group_by.groups.len() == 1
         {
@@ -1026,15 +1029,19 @@ impl AggregateExec {
         let group_expr_mapping =
             ProjectionMapping::try_new(group_by.expr.clone(), &input.schema())?;
 
-        let cache = Self::compute_properties(
-            &input,
-            Arc::clone(&schema),
-            &group_expr_mapping,
-            group_by.is_true_no_grouping(),
-            &mode,
-            &input_order_mode,
-            aggr_expr.as_ref(),
-        )?;
+        let cache = if group_by.has_grouping_set() {
+            Self::compute_grouping_set_properties(&input, Arc::clone(&schema))
+        } else {
+            Self::compute_properties(
+                &input,
+                Arc::clone(&schema),
+                &group_expr_mapping,
+                group_by.is_true_no_grouping(),
+                &mode,
+                &input_order_mode,
+                aggr_expr.as_ref(),
+            )?
+        };
 
         let mut exec = AggregateExec {
             mode,
@@ -1242,7 +1249,6 @@ impl AggregateExec {
         self.mode == AggregateMode::Partial
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
     }
 
     fn should_use_ordered_partial_aggregate_stream(
@@ -1282,7 +1288,6 @@ impl AggregateExec {
             AggregateMode::Single | AggregateMode::SinglePartitioned
         ) && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
-            && self.group_by.is_single()
     }
 
     fn should_use_ordered_single_aggregate_stream(&self, _context: &TaskContext) -> bool {
@@ -1420,6 +1425,22 @@ impl AggregateExec {
             emission_type,
             input.boundedness(),
         ))
+    }
+
+    fn compute_grouping_set_properties(
+        input: &Arc<dyn ExecutionPlan>,
+        schema: SchemaRef,
+    ) -> PlanProperties {
+        // Grouping-set expansion can replace group keys with nulls and adds a
+        // grouping ID, so input properties do not project through unchanged.
+        PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            Partitioning::UnknownPartitioning(
+                input.output_partitioning().partition_count(),
+            ),
+            EmissionType::Final,
+            input.boundedness(),
+        )
     }
 
     pub fn input_order_mode(&self) -> &InputOrderMode {
@@ -3266,12 +3287,14 @@ mod tests {
             | 2 | 1.0 | 0             | 1               |
             | 3 |     | 1             | 1               |
             | 3 |     | 1             | 2               |
-            | 3 | 2.0 | 0             | 2               |
+            | 3 | 2.0 | 0             | 1               |
+            | 3 | 2.0 | 0             | 1               |
             | 3 | 3.0 | 0             | 1               |
             | 4 |     | 1             | 1               |
             | 4 |     | 1             | 2               |
             | 4 | 3.0 | 0             | 1               |
-            | 4 | 4.0 | 0             | 2               |
+            | 4 | 4.0 | 0             | 1               |
+            | 4 | 4.0 | 0             | 1               |
             +---+-----+---------------+-----------------+
             "
             );
@@ -5612,6 +5635,97 @@ mod tests {
             skipped_rows, 0,
             "threshold=1.0 should disable skip aggregation, but {skipped_rows} rows were skipped"
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn grouping_sets_use_unordered_hash_streams() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let batches = vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1])),
+                    Arc::new(Int32Array::from(vec![1])),
+                ],
+            )?,
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 2])),
+                    Arc::new(Int32Array::from(vec![2, 1])),
+                ],
+            )?,
+        ];
+        let ordering =
+            LexOrdering::new([PhysicalSortExpr::new_default(col("a", &schema)?)])
+                .unwrap();
+        let input = TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![ordering])?;
+        let input = Arc::new(TestMemoryExec::update_cache(&Arc::new(input)));
+
+        let grouping_set = PhysicalGroupBy::new(
+            vec![
+                (col("a", &schema)?, "a".to_string()),
+                (col("b", &schema)?, "b".to_string()),
+            ],
+            vec![
+                (lit(ScalarValue::Int32(None)), "a".to_string()),
+                (lit(ScalarValue::Int32(None)), "b".to_string()),
+            ],
+            vec![vec![false, true], vec![false, false]],
+            true,
+        );
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Single,
+            grouping_set.clone(),
+            vec![],
+            vec![],
+            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+            Arc::clone(&schema),
+        )?;
+
+        assert_eq!(aggregate.input_order_mode(), &InputOrderMode::Linear);
+        assert_eq!(aggregate.maintains_input_order(), vec![false]);
+        assert!(aggregate.properties().output_ordering().is_none());
+        assert!(
+            aggregate
+                .properties()
+                .eq_properties
+                .constraints()
+                .is_empty()
+        );
+
+        let task_ctx = new_migrated_hash_ctx(2);
+        let stream = aggregate.execute_typed(0, &task_ctx)?;
+        assert!(matches!(stream, StreamType::SingleHash(_)));
+        let output = collect(stream.into()).await?;
+        assert_snapshot!(batches_to_sort_string(&output), @r"
++---+---+---------------+
+| a | b | __grouping_id |
++---+---+---------------+
+| 1 |   | 1             |
+| 1 | 1 | 0             |
+| 1 | 2 | 0             |
+| 2 |   | 1             |
+| 2 | 1 | 0             |
++---+---+---------------+
+");
+
+        let partial = AggregateExec::try_new(
+            AggregateMode::Partial,
+            grouping_set,
+            vec![],
+            vec![],
+            input,
+            Arc::clone(&schema),
+        )?;
+        let stream = partial.execute_typed(0, &task_ctx)?;
+        assert!(matches!(stream, StreamType::PartialHash(_)));
 
         Ok(())
     }

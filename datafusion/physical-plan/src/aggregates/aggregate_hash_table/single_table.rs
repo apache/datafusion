@@ -70,6 +70,7 @@ impl AggregateHashTable<SingleMarker> {
     }
 
     pub(in crate::aggregates) fn start_output(&mut self) -> Result<()> {
+        self.init_empty_grouping_sets_for_raw_input()?;
         self.start_outputting();
         Ok(())
     }
