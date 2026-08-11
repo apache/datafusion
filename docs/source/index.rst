@@ -126,6 +126,7 @@ To get started, see
    user-guide/sql/index
    user-guide/configs
    user-guide/explain-usage
+   user-guide/parquet-content-defined-chunking
    user-guide/metrics
    user-guide/faq
 

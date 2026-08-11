@@ -1104,6 +1104,74 @@ ORDER BY tags, timestamp;
 statement ok
 DROP TABLE median_window_test;
 
+# Regression: percentile_cont(DISTINCT ...) used to forward the extra
+# percentile-argument column into the distinct-values buffer (which asserts a
+# single input array), panicking on every distinct query. Plain aggregate:
+statement ok
+CREATE TABLE distinct_pct(id INT, x DOUBLE) AS VALUES
+  (1, 5), (2, 5), (3, 9);
+
+query R
+SELECT percentile_cont(DISTINCT x, 0.5) FROM distinct_pct;
+----
+7
+
+# Regression: distinct sliding-window percentile must count value multiplicity
+# on retract. Row 3's frame is {5, 9}; the row-1 `5` leaves the frame but the
+# row-2 `5` remains, so the distinct set is still {5, 9} (median 7), not {9}.
+query IR
+SELECT id, percentile_cont(DISTINCT x, 0.5)
+  OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM distinct_pct
+ORDER BY id;
+----
+1 5
+2 5
+3 7
+
+statement ok
+DROP TABLE distinct_pct;
+
+# Regression: grouped percentile_cont(DISTINCT ...) forces two-phase
+# (Partial + FinalPartitioned) aggregation, exercising the distinct
+# accumulator's state()/merge_batch() paths. Duplicate values within a
+# group must be de-duplicated across the per-partition merge.
+# Group 1 distinct {1,5,9} -> median 5; group 2 distinct {3,7} -> median 5.
+statement ok
+CREATE TABLE grp_distinct_pct(g INT, x DOUBLE) AS VALUES
+  (1, 5), (1, 5), (1, 9), (1, 1),
+  (2, 7), (2, 7), (2, 3);
+
+query IR
+SELECT g, percentile_cont(DISTINCT x, 0.5) FROM grp_distinct_pct GROUP BY g ORDER BY g;
+----
+1 5
+2 5
+
+statement ok
+DROP TABLE grp_distinct_pct;
+
+# Regression: sliding-window percentile_cont(DISTINCT ...) over data with
+# NULLs exercises the null_count() > 0 slow path in BOTH update_batch (a NULL
+# row enters the frame) and retract_batch (a NULL row leaves the frame as the
+# window slides). NULLs are ignored; distinct dedups the non-null values.
+statement ok
+CREATE TABLE distinct_pct_nulls(id INT, x DOUBLE) AS VALUES
+  (1, 5), (2, NULL), (3, 9), (4, 5);
+
+query IR
+SELECT id, percentile_cont(DISTINCT x, 0.5)
+  OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM distinct_pct_nulls ORDER BY id;
+----
+1 5
+2 5
+3 9
+4 7
+
+statement ok
+DROP TABLE distinct_pct_nulls;
+
 query RT
 select approx_median(arrow_cast(col_f32, 'Float16')), arrow_typeof(approx_median(arrow_cast(col_f32, 'Float16'))) from median_table;
 ----
@@ -1129,6 +1197,11 @@ from median_table;
 
 query ?T
 select approx_median(NULL), arrow_typeof(approx_median(NULL)) from median_table;
+----
+NULL Null
+
+query ?T
+select median(NULL), arrow_typeof(median(NULL));
 ----
 NULL Null
 
@@ -5480,6 +5553,31 @@ SELECT id, MAX(value) FROM fixed_size_binary_views GROUP BY id ORDER BY id;
 3 000101
 4 NULL
 
+# Group by a FixedSizeBinary column
+# (exercises the FixedSizeBinary `GroupColumn` in `GroupValuesColumn`)
+query ?I
+SELECT value, COUNT(*) FROM fixed_size_binary_views GROUP BY value ORDER BY value;
+----
+000101 2
+000102 1
+000103 3
+000104 2
+000109 1
+NULL 2
+
+# Multi-column group by including a FixedSizeBinary column
+query ?II
+SELECT value, id, COUNT(*) FROM fixed_size_binary_views GROUP BY value, id ORDER BY value, id;
+----
+000101 2 1
+000101 3 1
+000102 1 1
+000103 1 3
+000104 1 2
+000109 2 1
+NULL 1 1
+NULL 4 1
+
 statement ok
 DROP VIEW fixed_size_binary_views;
 
@@ -8046,6 +8144,23 @@ CREATE TABLE t1(v1 int);
 # issue: https://github.com/apache/datafusion/issues/12814
 statement error DataFusion error: Error during planning: Aggregate functions are not allowed in the WHERE clause. Consider using HAVING instead
 SELECT v1 FROM t1 WHERE ((count(v1) % 1) << 1) > 0;
+
+# issue: https://github.com/apache/datafusion/issues/11748
+query R
+SELECT AVG(v1) FROM t1 GROUP BY false HAVING false;
+----
+
+query R
+SELECT AVG(v1) FROM t1 GROUP BY false;
+----
+
+statement ok
+INSERT INTO t1 VALUES (1), (2), (3);
+
+query R
+SELECT AVG(v1) FROM t1 GROUP BY false;
+----
+2
 
 statement ok
 DROP TABLE t1;

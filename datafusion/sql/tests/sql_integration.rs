@@ -3600,6 +3600,104 @@ fn select_groupby_orderby_aggregate_on_non_selected_column_original_issue() {
     );
 }
 
+#[test]
+fn plan_merge_into_canonicalizes_qualifiers_and_preserves_quoted_columns() {
+    let plan = logical_plan(
+        "MERGE INTO person_quoted_cols AS t USING j2 AS s ON t.id = s.j2_id \
+         WHEN MATCHED THEN UPDATE SET \"First Name\" = s.j2_string \
+         WHEN NOT MATCHED THEN INSERT (id, \"Age\") VALUES (s.j2_id, 42)",
+    )
+    .unwrap();
+    let LogicalPlan::Dml(dml) = &plan else {
+        panic!("expected Dml, got {plan:?}");
+    };
+    let datafusion_expr::WriteOp::MergeInto(merge_op) = &dml.op else {
+        panic!("expected MergeInto, got {:?}", dml.op);
+    };
+
+    assert_eq!(merge_op.on.to_string(), "person_quoted_cols.id = s.j2_id");
+
+    let datafusion_expr::dml::MergeIntoAction::Update(assignments) =
+        &merge_op.clauses[0].action
+    else {
+        panic!("expected UPDATE");
+    };
+    assert_eq!(assignments[0].0, "First Name");
+    assert_eq!(assignments[0].1.to_string(), "s.j2_string");
+
+    let datafusion_expr::dml::MergeIntoAction::Insert { columns, values } =
+        &merge_op.clauses[1].action
+    else {
+        panic!("expected INSERT");
+    };
+    assert_eq!(columns, &["id".to_string(), "Age".to_string()]);
+    assert_eq!(values[0].to_string(), "s.j2_id");
+}
+
+#[rstest]
+#[case(
+    "MERGE INTO j1 USING j2 ON j1.j1_id = j2.j2_id \
+     WHEN MATCHED THEN UPDATE SET j1_string = j2.j2_string WHERE false",
+    "MERGE UPDATE WHERE predicates are not supported"
+)]
+#[case(
+    "MERGE INTO j1 USING j2 ON j1.j1_id = j2.j2_id \
+     WHEN MATCHED THEN UPDATE SET j1_string = j2.j2_string DELETE WHERE false",
+    "MERGE UPDATE DELETE WHERE predicates are not supported"
+)]
+#[case(
+    "MERGE INTO j1 USING j2 ON j1.j1_id = j2.j2_id \
+     WHEN NOT MATCHED THEN INSERT (j1_id, j1_string) \
+     VALUES (j2.j2_id, j2.j2_string) WHERE false",
+    "MERGE INSERT WHERE predicates are not supported"
+)]
+#[case(
+    "MERGE INTO j1 USING j2 ON j1.j1_id = j2.j2_id \
+     WHEN MATCHED THEN UPDATE SET j1_string = 'a', j1_string = 'b'",
+    "Duplicate column 'j1_string' in MERGE UPDATE"
+)]
+#[case(
+    "MERGE INTO j1 AS t USING j2 AS s ON t.j1_id = s.j2_id \
+     WHEN MATCHED THEN UPDATE SET s.j1_string = s.j2_string",
+    "MERGE assignment target 's.j1_string' must reference target table 't'"
+)]
+#[case(
+    "MERGE INTO j1 AS t USING j2 AS s ON t.j1_id = s.j2_id \
+     WHEN NOT MATCHED THEN INSERT (s.j1_id) VALUES (s.j2_id)",
+    "MERGE assignment target 's.j1_id' must reference target table 't'"
+)]
+#[case(
+    "MERGE INTO j1 USING j2 ON j1.j1_id = j2.j2_id",
+    "MERGE INTO requires at least one WHEN clause"
+)]
+#[case(
+    "MERGE INTO j1 USING j2 ON j1.j1_id = j2.j2_id \
+     WHEN NOT MATCHED THEN INSERT (j1_id, J1_ID) VALUES (1, 2)",
+    "Duplicate column 'j1_id' in MERGE INSERT"
+)]
+#[case(
+    "MERGE INTO j1() USING j2 ON true WHEN MATCHED THEN DELETE",
+    "MERGE target table modifiers are not supported"
+)]
+#[case(
+    "MERGE INTO j1 PARTITION (p0) USING j2 ON true WHEN MATCHED THEN DELETE",
+    "MERGE target table modifiers are not supported"
+)]
+#[case(
+    "MERGE INTO j1 AS t(a) USING j2 ON true WHEN MATCHED THEN DELETE",
+    "MERGE target alias column lists are not supported"
+)]
+fn plan_merge_into_rejects_invalid_actions_and_structure(
+    #[case] sql: &str,
+    #[case] expected: &str,
+) {
+    let err = logical_plan(sql).unwrap_err();
+    assert!(
+        err.strip_backtrace().contains(expected),
+        "unexpected error: {err}"
+    );
+}
+
 fn logical_plan(sql: &str) -> Result<LogicalPlan> {
     logical_plan_with_options(sql, ParserOptions::default())
 }

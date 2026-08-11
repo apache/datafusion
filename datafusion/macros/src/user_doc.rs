@@ -38,7 +38,7 @@ use syn::{DeriveInput, LitStr, parse_macro_input};
 /// #[user_doc(
 ///     doc_section(label = "Time and Date Functions"),
 ///     description = r"Converts a value to a date (`YYYY-MM-DD`).",
-///     syntax_example = "to_date('2017-05-31', '%Y-%m-%d')",
+///     syntax_example = "to_date(expression[, ..., format_n])",
 ///     sql_example = r#"```sql
 /// > select to_date('2023-01-31');
 /// +-----------------------------+
@@ -77,7 +77,7 @@ use syn::{DeriveInput, LitStr, parse_macro_input};
 ///                         description: None,
 ///                     },
 ///                     r"Converts a value to a date (`YYYY-MM-DD`).".to_string(),
-///                     "to_date('2017-05-31', '%Y-%m-%d')".to_string(),
+///                     "to_date(expression[, ..., format_n])".to_string(),
 ///                 )
 ///                 .with_sql_example(
 ///                     r#"```sql

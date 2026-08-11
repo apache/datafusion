@@ -129,6 +129,9 @@ pub struct DisplayableExecutionPlan<'a> {
     /// Optional filter by semantic category (rows / bytes / timing).
     /// `None` means show all categories; `Some(vec![])` means plan-only.
     metric_categories: Option<Vec<MetricCategory>>,
+    /// Optional filter by metric names. Only metric names in this list
+    /// will be rendered.
+    metric_names: Option<Vec<String>>,
     // (TreeRender) Maximum total width of the rendered tree
     tree_maximum_render_width: usize,
     /// Optional summary totals (currently only used by `pgjson`) — the total
@@ -159,6 +162,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_schema: false,
             metric_types: Self::default_metric_types(),
             metric_categories: None,
+            metric_names: None,
             tree_maximum_render_width: 240,
             summary: None,
         }
@@ -175,6 +179,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_schema: false,
             metric_types: Self::default_metric_types(),
             metric_categories: None,
+            metric_names: None,
             tree_maximum_render_width: 240,
             summary: None,
         }
@@ -191,6 +196,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_schema: false,
             metric_types: Self::default_metric_types(),
             metric_categories: None,
+            metric_names: None,
             tree_maximum_render_width: 240,
             summary: None,
         }
@@ -231,6 +237,18 @@ impl<'a> DisplayableExecutionPlan<'a> {
         metric_categories: Option<Vec<MetricCategory>>,
     ) -> Self {
         self.metric_categories = metric_categories;
+        self
+    }
+
+    /// Specify which metric names to include.
+    ///
+    /// - An empty vector means plan-only — suppress all metrics.
+    /// - `vec!["metric_1"]` means show only the metric named `metric_1`.
+    ///
+    /// Name filtering is intersected with other types of filters, like metric
+    /// category and metric type.
+    pub fn set_metric_names(mut self, metric_names: Vec<String>) -> Self {
+        self.metric_names = Some(metric_names);
         self
     }
 
@@ -279,6 +297,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_schema: bool,
             metric_types: Vec<MetricType>,
             metric_categories: Option<Vec<MetricCategory>>,
+            metric_names: Option<Vec<String>>,
         }
         impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -291,6 +310,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     show_schema: self.show_schema,
                     metric_types: &self.metric_types,
                     metric_categories: self.metric_categories.as_deref(),
+                    metric_names: self.metric_names.as_deref(),
                 };
                 accept(self.plan, &mut visitor)
             }
@@ -303,6 +323,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_schema: self.show_schema,
             metric_types: self.metric_types.clone(),
             metric_categories: self.metric_categories.clone(),
+            metric_names: self.metric_names.clone(),
         }
     }
 
@@ -324,6 +345,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_statistics: bool,
             metric_types: Vec<MetricType>,
             metric_categories: Option<Vec<MetricCategory>>,
+            metric_names: Option<Vec<String>>,
         }
         impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -336,6 +358,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     show_statistics: self.show_statistics,
                     metric_types: &self.metric_types,
                     metric_categories: self.metric_categories.as_deref(),
+                    metric_names: self.metric_names.as_deref(),
                     graphviz_builder: GraphvizBuilder::default(),
                     parents: Vec::new(),
                 };
@@ -355,6 +378,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_statistics: self.show_statistics,
             metric_types: self.metric_types.clone(),
             metric_categories: self.metric_categories.clone(),
+            metric_names: self.metric_names.clone(),
         }
     }
 
@@ -403,6 +427,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_schema: bool,
             metric_types: Vec<MetricType>,
             metric_categories: Option<Vec<MetricCategory>>,
+            metric_names: Option<Vec<String>>,
             summary: Option<AnalyzeSummary>,
         }
         impl fmt::Display for Wrapper<'_> {
@@ -413,6 +438,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     show_schema: self.show_schema,
                     metric_types: &self.metric_types,
                     metric_categories: self.metric_categories.as_deref(),
+                    metric_names: self.metric_names.as_deref(),
                     objects: HashMap::new(),
                     parent_ids: Vec::new(),
                     next_id: 0,
@@ -446,6 +472,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_schema: self.show_schema,
             metric_types: self.metric_types.clone(),
             metric_categories: self.metric_categories.clone(),
+            metric_names: self.metric_names.clone(),
             summary: self.summary,
         }
     }
@@ -460,6 +487,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_schema: bool,
             metric_types: Vec<MetricType>,
             metric_categories: Option<Vec<MetricCategory>>,
+            metric_names: Option<Vec<String>>,
         }
 
         impl fmt::Display for Wrapper<'_> {
@@ -473,6 +501,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     show_schema: self.show_schema,
                     metric_types: &self.metric_types,
                     metric_categories: self.metric_categories.as_deref(),
+                    metric_names: self.metric_names.as_deref(),
                 };
                 visitor.pre_visit(self.plan)?;
                 Ok(())
@@ -486,6 +515,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_schema: self.show_schema,
             metric_types: self.metric_types.clone(),
             metric_categories: self.metric_categories.clone(),
+            metric_names: self.metric_names.clone(),
         }
     }
 
@@ -544,6 +574,8 @@ struct IndentVisitor<'a, 'b> {
     metric_types: &'a [MetricType],
     /// Optional filter by semantic category (rows / bytes / timing).
     metric_categories: Option<&'a [MetricCategory]>,
+    /// Optional filter by metric name.
+    metric_names: Option<&'a [String]>,
 }
 
 impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
@@ -563,6 +595,9 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
                     if let Some(cats) = self.metric_categories {
                         metrics = metrics.filter_by_categories(cats);
                     }
+                    if let Some(names) = self.metric_names {
+                        metrics = metrics.filter_by_names(names);
+                    }
                     write!(self.f, ", metrics=[{metrics}]")?;
                 } else {
                     write!(self.f, ", metrics=[]")?;
@@ -573,6 +608,9 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
                     let mut metrics = metrics.filter_by_metric_types(self.metric_types);
                     if let Some(cats) = self.metric_categories {
                         metrics = metrics.filter_by_categories(cats);
+                    }
+                    if let Some(names) = self.metric_names {
+                        metrics = metrics.filter_by_names(names);
                     }
                     write!(self.f, ", metrics=[{metrics}]")?;
                 } else {
@@ -616,6 +654,8 @@ struct GraphvizVisitor<'a, 'b> {
     metric_types: &'a [MetricType],
     /// Optional filter by semantic category
     metric_categories: Option<&'a [MetricCategory]>,
+    /// Optional filter by metric name.
+    metric_names: Option<&'a [String]>,
 
     graphviz_builder: GraphvizBuilder,
     /// Used to record parent node ids when visiting a plan.
@@ -660,6 +700,9 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
                     if let Some(cats) = self.metric_categories {
                         metrics = metrics.filter_by_categories(cats);
                     }
+                    if let Some(names) = self.metric_names {
+                        metrics = metrics.filter_by_names(names);
+                    }
                     format!("metrics=[{metrics}]")
                 } else {
                     "metrics=[]".to_string()
@@ -670,6 +713,9 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
                     let mut metrics = metrics.filter_by_metric_types(self.metric_types);
                     if let Some(cats) = self.metric_categories {
                         metrics = metrics.filter_by_categories(cats);
+                    }
+                    if let Some(names) = self.metric_names {
+                        metrics = metrics.filter_by_names(names);
                     }
                     format!("metrics=[{metrics}]")
                 } else {
@@ -729,6 +775,7 @@ struct PgJsonExecutionPlanVisitor<'a> {
     show_schema: bool,
     metric_types: &'a [MetricType],
     metric_categories: Option<&'a [MetricCategory]>,
+    metric_names: Option<&'a [String]>,
     objects: HashMap<u32, serde_json::Value>,
     parent_ids: Vec<u32>,
     next_id: u32,
@@ -809,6 +856,12 @@ impl PgJsonExecutionPlanVisitor<'_> {
         };
         let metrics = if let Some(cats) = self.metric_categories {
             metrics.filter_by_categories(cats)
+        } else {
+            metrics
+        };
+
+        let metrics = if let Some(names) = self.metric_names {
+            metrics.filter_by_names(names)
         } else {
             metrics
         };
@@ -1451,8 +1504,11 @@ mod tests {
     use std::fmt::Write;
     use std::sync::Arc;
 
-    use datafusion_common::{Result, Statistics, internal_datafusion_err};
+    use datafusion_common::{
+        Result, Statistics, internal_datafusion_err, tree_node::TreeNodeRecursion,
+    };
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+    use datafusion_physical_expr::PhysicalExpr;
 
     use crate::statistics::StatisticsArgs;
     use crate::{DisplayAs, ExecutionPlan, PlanProperties};
@@ -1494,6 +1550,13 @@ mod tests {
             _: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
 
         fn execute(
@@ -1653,6 +1716,17 @@ mod tests {
                 fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
                     vec![&self.inner]
                 }
+                fn apply_expressions(
+                    &self,
+                    _f: &mut dyn FnMut(
+                        &Arc<dyn PhysicalExpr>,
+                    ) -> Result<
+                        datafusion_common::tree_node::TreeNodeRecursion,
+                    >,
+                ) -> Result<datafusion_common::tree_node::TreeNodeRecursion>
+                {
+                    Ok(datafusion_common::tree_node::TreeNodeRecursion::Continue)
+                }
                 fn with_new_children(
                     self: Arc<Self>,
                     _: Vec<Arc<dyn ExecutionPlan>>,
@@ -1701,6 +1775,40 @@ mod tests {
             assert_eq!(root["Actual Rows"].as_u64(), Some(42));
             assert_eq!(root["Actual Total Time"].as_f64(), Some(5.0));
             assert_eq!(root["Extras"]["output_batches"].as_u64(), Some(7));
+
+            let metric_names = vec!["output_rows".to_string()];
+            for rendered in [
+                DisplayableExecutionPlan::with_metrics(plan.as_ref())
+                    .set_metric_names(metric_names.clone())
+                    .indent(false)
+                    .to_string(),
+                DisplayableExecutionPlan::with_full_metrics(plan.as_ref())
+                    .set_metric_names(metric_names.clone())
+                    .indent(false)
+                    .to_string(),
+                DisplayableExecutionPlan::with_metrics(plan.as_ref())
+                    .set_metric_names(metric_names.clone())
+                    .graphviz()
+                    .to_string(),
+                DisplayableExecutionPlan::with_full_metrics(plan.as_ref())
+                    .set_metric_names(metric_names.clone())
+                    .graphviz()
+                    .to_string(),
+            ] {
+                assert!(rendered.contains("output_rows"));
+                assert!(!rendered.contains("elapsed_compute"));
+                assert!(!rendered.contains("output_batches"));
+            }
+
+            let out = DisplayableExecutionPlan::with_metrics(plan.as_ref())
+                .set_metric_names(metric_names)
+                .pgjson(false)
+                .to_string();
+            let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+            let root = value[0].get("Plan").expect("plan");
+            assert_eq!(root["Actual Rows"].as_u64(), Some(42));
+            assert!(root.get("Actual Total Time").is_none());
+            assert!(root.get("Extras").is_none());
         }
 
         #[test]

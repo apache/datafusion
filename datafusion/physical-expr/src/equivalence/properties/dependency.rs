@@ -632,10 +632,10 @@ mod tests {
         ]);
 
         let test_cases = vec![
-            // d + b
+            // d + b can wrap
             (
                 Arc::new(BinaryExpr::new(col_d, Operator::Plus, Arc::clone(&col_b))) as _,
-                SortProperties::Ordered(option_asc),
+                SortProperties::Unordered,
             ),
             // b
             (col_b, SortProperties::Ordered(option_asc)),
@@ -717,8 +717,8 @@ mod tests {
             (vec![col_b], vec![]),
             // TEST CASE 5
             (vec![col_d], vec![(col_d, option_asc)]),
-            // TEST CASE 5
-            (vec![&a_plus_d], vec![(&a_plus_d, option_asc)]),
+            // TEST CASE 5: a + d is not ordered because addition can wrap.
+            (vec![&a_plus_d], vec![]),
             // TEST CASE 6
             (
                 vec![col_b, col_d],
