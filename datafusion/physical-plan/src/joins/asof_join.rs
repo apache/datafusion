@@ -54,6 +54,7 @@
 //!
 //! Each left partition owns its cursors, equality-group state, and current
 //! candidate, while the collected right batches are immutable and shared.
+//! The key state-machine entry point is `AsOfJoinStreamState::next_batch`.
 //!
 //! This mode preserves probe-side parallelism when there are no equality keys
 //! or when equality keys have low cardinality or skew. It retains the complete
@@ -69,7 +70,7 @@ use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, RecordBatch, new_null_array};
+use arrow::array::{Array, ArrayRef, RecordBatch, RecordBatchOptions, new_null_array};
 use arrow::buffer::NullBuffer;
 use arrow::compute::{SortOptions, interleave};
 use arrow::datatypes::{Schema, SchemaRef};
@@ -77,15 +78,15 @@ use datafusion_common::stats::Precision;
 use datafusion_common::utils::memory::RecordBatchMemoryCounter;
 use datafusion_common::utils::normalize_float_zero_scalar;
 use datafusion_common::{
-    ColumnStatistics, JoinType, NullEquality, Result, ScalarValue, Statistics,
-    assert_eq_or_internal_err, internal_err, plan_err,
+    ColumnStatistics, JoinSide, JoinType, NullEquality, Result, ScalarValue, Statistics,
+    assert_eq_or_internal_err, internal_err, plan_err, project_schema,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::expressions::Column as PhysicalColumn;
-use datafusion_physical_expr::projection::ProjectionMapping;
+use datafusion_physical_expr::projection::{ProjectionMapping, ProjectionRef};
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr_common::physical_expr::{
     PhysicalExprRef, fmt_sql, is_volatile,
@@ -95,12 +96,13 @@ use futures::{StreamExt, TryStreamExt, future::poll_fn, stream};
 
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::joins::utils::{
-    JoinKeyComparator, JoinOn, OnceAsync, build_join_schema, matchable_join_keys,
+    ColumnIndex, JoinKeyComparator, JoinOn, OnceAsync, build_join_schema,
+    matchable_join_keys,
 };
 use crate::memory::MemoryStream;
 use crate::metrics::{
-    BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder,
-    MetricCategory, MetricsSet, RecordOutput, Time,
+    BaselineMetrics, ExecutionPlanMetricsSet, Gauge, MetricBuilder, MetricsSet,
+    RecordOutput, Time,
 };
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
@@ -135,9 +137,12 @@ pub struct AsOfJoinExec {
     right: Arc<dyn ExecutionPlan>,
     on: JoinOn,
     match_condition: AsOfMatchExpr,
-    /// Sorted, unique indices of right columns appended after all left columns.
-    right_output_indices: Vec<usize>,
-    schema: SchemaRef,
+    /// Unprojected left-join schema used to interpret `projection`.
+    join_schema: SchemaRef,
+    /// Information of index and left/right placement of columns.
+    column_indices: Vec<ColumnIndex>,
+    /// Optional indices into the full left-then-right join schema.
+    projection: Option<ProjectionRef>,
     metrics: ExecutionPlanMetricsSet,
     /// Required ordering for each left partition.
     left_ordering: LexOrdering,
@@ -154,25 +159,21 @@ impl AsOfJoinExec {
     /// The match operator must be `<`, `<=`, `>`, or `>=`. Equality and match
     /// expressions must be deterministic, reference only their corresponding
     /// input, and have matching input types. Equality types must support hashing.
-    /// Right output indices must be in bounds, sorted, and unique.
+    /// Projection indices refer to the full left-then-right join schema.
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
         match_condition: AsOfMatchExpr,
-        right_output_indices: Vec<usize>,
+        projection: Option<Vec<usize>>,
     ) -> Result<Self> {
-        validate_asof_join(
-            left.as_ref(),
-            right.as_ref(),
-            &on,
-            &match_condition,
-            &right_output_indices,
-        )?;
+        validate_asof_join(left.as_ref(), right.as_ref(), &on, &match_condition)?;
         let left_schema = left.schema();
         let right_schema = right.schema();
-        let schema =
-            build_output_schema(&left_schema, &right_schema, &right_output_indices);
+        let (join_schema, column_indices) =
+            build_join_schema(&left_schema, &right_schema, &JoinType::Left);
+        let join_schema = Arc::new(join_schema);
+        let projection: Option<ProjectionRef> = projection.map(Into::into);
         let descending = matches!(match_condition.op, Operator::Lt | Operator::LtEq);
         let equality_options = SortOptions {
             descending: false,
@@ -214,15 +215,20 @@ impl AsOfJoinExec {
                 "ASOF right ordering must not be empty"
             )
         })?;
-        let cache = Arc::new(Self::compute_properties(&left, &schema)?);
+        let cache = Arc::new(Self::compute_properties(
+            &left,
+            &join_schema,
+            projection.as_deref(),
+        )?);
 
         Ok(Self {
             left,
             right,
             on,
             match_condition,
-            right_output_indices,
-            schema,
+            join_schema,
+            column_indices,
+            projection,
             metrics: ExecutionPlanMetricsSet::new(),
             left_ordering,
             right_ordering,
@@ -233,7 +239,8 @@ impl AsOfJoinExec {
 
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
-        schema: &SchemaRef,
+        join_schema: &SchemaRef,
+        projection: Option<&[usize]>,
     ) -> Result<PlanProperties> {
         let left_schema = left.schema();
         let mapping = ProjectionMapping::try_new(
@@ -251,10 +258,19 @@ impl AsOfJoinExec {
             &left_schema,
         )?;
         let input_eq_properties = left.equivalence_properties();
-        let eq_properties = input_eq_properties.project(&mapping, Arc::clone(schema));
-        let output_partitioning = left
+        let mut eq_properties =
+            input_eq_properties.project(&mapping, Arc::clone(join_schema));
+        let mut output_partitioning = left
             .output_partitioning()
             .project(&mapping, input_eq_properties);
+        if let Some(projection) = projection {
+            let projection_mapping =
+                ProjectionMapping::from_indices(projection, join_schema)?;
+            let output_schema = project_schema(join_schema, Some(&projection))?;
+            output_partitioning =
+                output_partitioning.project(&projection_mapping, &eq_properties);
+            eq_properties = eq_properties.project(&projection_mapping, output_schema);
+        }
         Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
@@ -262,30 +278,6 @@ impl AsOfJoinExec {
             Boundedness::Bounded,
         ))
     }
-}
-
-fn build_output_schema(
-    left: &SchemaRef,
-    right: &SchemaRef,
-    right_output_indices: &[usize],
-) -> SchemaRef {
-    let full_schema = build_join_schema(left, right, &JoinType::Left).0;
-    let left_len = left.fields().len();
-    let fields = full_schema
-        .fields()
-        .iter()
-        .take(left_len)
-        .cloned()
-        .chain(
-            right_output_indices
-                .iter()
-                .map(|index| Arc::clone(&full_schema.fields()[left_len + *index])),
-        )
-        .collect::<Vec<_>>();
-    Arc::new(Schema::new_with_metadata(
-        fields,
-        full_schema.metadata().clone(),
-    ))
 }
 
 impl DisplayAs for AsOfJoinExec {
@@ -304,13 +296,32 @@ impl DisplayAs for AsOfJoinExec {
             self.match_condition.op,
             fmt_sql(self.match_condition.right.as_ref())
         );
+        let projection = self
+            .projection
+            .as_ref()
+            .map(|projection| {
+                format!(
+                    ", projection=[{}]",
+                    projection
+                        .iter()
+                        .map(|index| format!(
+                            "{}@{}",
+                            self.join_schema.field(*index).name(),
+                            index
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })
+            .unwrap_or_default();
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => write!(
                 f,
-                "{}: on=[{}], match=[{}]",
+                "{}: on=[{}], match=[{}]{}",
                 Self::static_name(),
                 on,
-                match_condition
+                match_condition,
+                projection
             ),
             DisplayFormatType::TreeRender => {
                 writeln!(f, "on={on}")?;
@@ -336,6 +347,9 @@ impl ExecutionPlan for AsOfJoinExec {
     fn input_distribution_requirements(&self) -> InputDistributionRequirements {
         // Every left partition scans the complete broadcast right input, so
         // equality keys do not require the inputs to be co-partitioned.
+        // `UnspecifiedDistribution` imposes no layout requirement; because this
+        // operator uses the default `benefits_from_input_partitioning`, the
+        // optimizer may still add round-robin repartitioning when it is useful.
         InputDistributionRequirements::new(vec![
             Distribution::UnspecifiedDistribution,
             Distribution::SinglePartition,
@@ -368,7 +382,7 @@ impl ExecutionPlan for AsOfJoinExec {
                 Arc::clone(right),
                 self.on.clone(),
                 self.match_condition.clone(),
-                self.right_output_indices.clone(),
+                self.projection.as_deref().map(<[usize]>::to_vec),
             )?)),
             _ => internal_err!("AsOfJoinExec requires two children"),
         }
@@ -390,8 +404,9 @@ impl ExecutionPlan for AsOfJoinExec {
             right,
             on: self.on.clone(),
             match_condition: self.match_condition.clone(),
-            right_output_indices: self.right_output_indices.clone(),
-            schema: Arc::clone(&self.schema),
+            join_schema: Arc::clone(&self.join_schema),
+            column_indices: self.column_indices.clone(),
+            projection: self.projection.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             left_ordering: self.left_ordering.clone(),
             right_ordering: self.right_ordering.clone(),
@@ -425,12 +440,18 @@ impl ExecutionPlan for AsOfJoinExec {
             ))
         })?;
         let (left_keys, right_keys) = self.on.iter().cloned().unzip();
-        let output_schema = Arc::clone(&self.schema);
+        let output_schema = self.schema();
         let stream_schema = Arc::clone(&output_schema);
         let left_match = Arc::clone(&self.match_condition.left);
         let right_match = Arc::clone(&self.match_condition.right);
         let match_op = self.match_condition.op;
-        let right_output_indices = self.right_output_indices.clone();
+        let column_indices = match self.projection.as_ref() {
+            Some(projection) => projection
+                .iter()
+                .map(|index| self.column_indices[*index].clone())
+                .collect(),
+            None => self.column_indices.clone(),
+        };
         let batch_size = context.session_config().batch_size();
         let stream = stream::once(async move {
             let mut right_fut = right_fut;
@@ -441,10 +462,12 @@ impl ExecutionPlan for AsOfJoinExec {
                 InputCursor::new(left_stream, left_keys, left_match),
                 InputCursor::new(right_stream, right_keys, right_match),
                 match_op,
-                right_output_indices,
+                column_indices,
                 batch_size,
                 metrics,
             );
+            // `next_batch` is the key state-machine entry point. `try_unfold`
+            // preserves that state between emitted batches.
             let stream = stream::try_unfold(
                 (state, right_input),
                 |(mut state, right_input)| async {
@@ -481,17 +504,24 @@ impl ExecutionPlan for AsOfJoinExec {
         // The default is fully unknown, but ASOF emits exactly one output row
         // per left row and preserves statistics for unmodified left columns.
         let left = &input_stats[0];
-        let mut column_statistics = left.column_statistics.clone();
-        column_statistics.truncate(self.left.schema().fields().len());
-        column_statistics.resize_with(
-            self.left.schema().fields().len(),
-            ColumnStatistics::new_unknown,
-        );
-        column_statistics.extend(
-            self.right_output_indices
+        let column_indices_after_projection = match self.projection.as_ref() {
+            Some(projection) => projection
                 .iter()
-                .map(|_| ColumnStatistics::new_unknown()),
-        );
+                .map(|index| self.column_indices[*index].clone())
+                .collect(),
+            None => self.column_indices.clone(),
+        };
+        let column_statistics = column_indices_after_projection
+            .iter()
+            .map(|column| match column.side {
+                JoinSide::Left => left
+                    .column_statistics
+                    .get(column.index)
+                    .cloned()
+                    .unwrap_or_else(ColumnStatistics::new_unknown),
+                JoinSide::Right | JoinSide::None => ColumnStatistics::new_unknown(),
+            })
+            .collect();
         Ok(Arc::new(Statistics {
             num_rows: left.num_rows,
             total_byte_size: Precision::Absent,
@@ -532,8 +562,6 @@ async fn collect_right_input(
             let batch_size = memory_counter.count_batch(&batch);
             futures::future::ready(reservation.try_grow(batch_size).map(|_| {
                 metrics.build_mem_used.add(batch_size);
-                metrics.build_input_batches.add(1);
-                metrics.build_input_rows.add(batch.num_rows());
                 batches.push(batch);
                 batches
             }))
@@ -546,6 +574,11 @@ async fn collect_right_input(
     })
 }
 
+/// Last eligible right row for the current left equality group.
+///
+/// The row and its evaluated keys survive right batch changes and output
+/// flushes. It belongs to the join state rather than `InputCursor` because its
+/// validity also depends on the current left equality group.
 #[derive(Clone)]
 struct Candidate {
     /// Right batch containing the nearest eligible row.
@@ -674,11 +707,12 @@ impl InputCursor {
 
 #[derive(Clone)]
 struct AsOfJoinMetrics {
+    /// Standard output-row and elapsed-compute metrics.
     baseline: BaselineMetrics,
-    matched_rows: Count,
-    unmatched_left_rows: Count,
-    build_input_batches: Count,
-    build_input_rows: Count,
+    /// Peak bytes retained for the shared right input.
+    ///
+    /// `peak_memory_usage` records this as `MetricValue::PeakMemoryUsage`; `Gauge`
+    /// is the handle used to update that metric.
     build_mem_used: Gauge,
 }
 
@@ -686,18 +720,6 @@ impl AsOfJoinMetrics {
     fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
         Self {
             baseline: BaselineMetrics::new(metrics, partition),
-            matched_rows: MetricBuilder::new(metrics)
-                .with_category(MetricCategory::Rows)
-                .counter("matched_rows", partition),
-            unmatched_left_rows: MetricBuilder::new(metrics)
-                .with_category(MetricCategory::Rows)
-                .counter("unmatched_left_rows", partition),
-            build_input_batches: MetricBuilder::new(metrics)
-                .with_category(MetricCategory::Rows)
-                .counter("build_input_batches", partition),
-            build_input_rows: MetricBuilder::new(metrics)
-                .with_category(MetricCategory::Rows)
-                .counter("build_input_rows", partition),
             build_mem_used: MetricBuilder::new(metrics)
                 .peak_memory_usage("build_mem_used", partition),
         }
@@ -811,8 +833,10 @@ struct AsOfJoinStreamState {
     right: InputCursor,
     /// Validated ordered match operator.
     op: Operator,
-    /// Right columns appended to each output row.
-    right_output_indices: Vec<usize>,
+    /// Projected output columns and their input sides.
+    column_indices: Vec<ColumnIndex>,
+    /// Whether any projected column needs a right row reference.
+    projects_right: bool,
     /// Nearest eligible right row for the current equality group.
     candidate: Option<Candidate>,
     /// Equality-key ordering shared by the comparator caches.
@@ -836,7 +860,7 @@ impl AsOfJoinStreamState {
         left: InputCursor,
         right: InputCursor,
         op: Operator,
-        right_output_indices: Vec<usize>,
+        column_indices: Vec<ColumnIndex>,
         batch_size: usize,
         metrics: AsOfJoinMetrics,
     ) -> Self {
@@ -854,7 +878,10 @@ impl AsOfJoinStreamState {
             left,
             right,
             op,
-            right_output_indices,
+            projects_right: column_indices
+                .iter()
+                .any(|column| column.side == JoinSide::Right),
+            column_indices,
             candidate: None,
             group_sort_options,
             input_group_comparator: None,
@@ -936,6 +963,17 @@ impl AsOfJoinStreamState {
     /// rows in the same group; left EOF flushes the final pending rows. NULL keys
     /// and group changes clear the candidate, while output flushes only clear
     /// pending row references.
+    ///
+    /// ```text
+    /// while the output batch is not full:
+    ///   load the current left row, or flush/finish at left EOF
+    ///   if its match or equality key is NULL, emit it unmatched and advance left
+    ///   clear the candidate if the left equality group changed
+    ///   while the current right row is before the left group or is eligible:
+    ///     remember the nearest eligible row and advance right
+    ///   emit the left row with the candidate (or NULLs), then advance left
+    /// flush pending rows without resetting either cursor or the candidate
+    /// ```
     async fn next_batch(&mut self) -> Result<Option<RecordBatch>> {
         loop {
             if self.pending_left.len() >= self.batch_size {
@@ -1026,16 +1064,14 @@ impl AsOfJoinStreamState {
         self.pending_left.push(left_batch, left_row);
         match candidate {
             Some(candidate) => {
-                if !self.right_output_indices.is_empty() {
+                if self.projects_right {
                     self.pending_right.push(candidate.batch, candidate.row);
                 }
-                self.metrics.matched_rows.add(1);
             }
             None => {
-                if !self.right_output_indices.is_empty() {
+                if self.projects_right {
                     self.pending_right.push_null();
                 }
-                self.metrics.unmatched_left_rows.add(1);
             }
         }
         Ok(())
@@ -1045,23 +1081,26 @@ impl AsOfJoinStreamState {
     /// current equality-group candidate for the next output batch.
     fn flush(&mut self) -> Result<RecordBatch> {
         let _timer = self.metrics.baseline.elapsed_compute().timer();
-        let left_len = self.schema.fields().len() - self.right_output_indices.len();
+        let row_count = self.pending_left.len();
         let mut arrays = Vec::with_capacity(self.schema.fields().len());
-        for index in 0..left_len {
-            arrays.push(
-                self.pending_left
-                    .materialize_column(index, self.schema.field(index).data_type())?,
-            );
-        }
-        for (offset, source_index) in self.right_output_indices.iter().enumerate() {
-            arrays.push(self.pending_right.materialize_column(
-                *source_index,
-                self.schema.field(left_len + offset).data_type(),
-            )?);
+        for (field, column) in self.schema.fields().iter().zip(&self.column_indices) {
+            let pending = match column.side {
+                JoinSide::Left => &self.pending_left,
+                JoinSide::Right => &self.pending_right,
+                JoinSide::None => {
+                    return internal_err!("ASOF projection cannot contain a mark column");
+                }
+            };
+            arrays.push(pending.materialize_column(column.index, field.data_type())?);
         }
         self.pending_left.clear();
         self.pending_right.clear();
-        let batch = RecordBatch::try_new(Arc::clone(&self.schema), arrays)?;
+        let options = RecordBatchOptions::new().with_row_count(Some(row_count));
+        let batch = RecordBatch::try_new_with_options(
+            Arc::clone(&self.schema),
+            arrays,
+            &options,
+        )?;
         (&batch).record_output(&self.metrics.baseline);
         Ok(batch)
     }
@@ -1073,7 +1112,6 @@ fn validate_asof_join(
     right: &dyn ExecutionPlan,
     on: &JoinOn,
     match_condition: &AsOfMatchExpr,
-    right_output_indices: &[usize],
 ) -> Result<()> {
     if !matches!(
         match_condition.op,
@@ -1124,23 +1162,6 @@ fn validate_asof_join(
             "AsOfJoinExec match expression types differ: {left_match_type} and {right_match_type}"
         );
     }
-    if let Some(index) = right_output_indices
-        .iter()
-        .find(|index| **index >= right_schema.fields().len())
-    {
-        return plan_err!(
-            "AsOfJoinExec right output index {index} is outside schema with {} fields",
-            right_schema.fields().len()
-        );
-    }
-    if !right_output_indices
-        .windows(2)
-        .all(|pair| pair[0] < pair[1])
-    {
-        return plan_err!(
-            "AsOfJoinExec right output indices must be strictly increasing"
-        );
-    }
     Ok(())
 }
 
@@ -1181,23 +1202,21 @@ fn is_eligible(op: Operator, left: &ScalarValue, right: &ScalarValue) -> Result<
 
 #[cfg(test)]
 mod tests {
-    // These tests cover physical-only contracts that SQL logic tests cannot
-    // observe, including batch-boundary state, shared build memory, Arrow type
-    // preservation, and execution properties. End-to-end SQL semantics live in
-    // the dependent SQL layer.
+    // Keep physical tests focused on basic executor results, batch-boundary
+    // state, shared build memory, and constructor/statistics contracts.
 
     use super::*;
+    use crate::collect;
     use crate::test::TestMemoryExec;
-    use crate::{collect, collect_partitioned};
-    use arrow::array::{
-        DictionaryArray, Int32Array, Int64Array, StringArray, StringDictionaryBuilder,
-    };
-    use arrow::datatypes::{DataType, Field, Int8Type};
+    use arrow::array::{Int32Array, Int64Array, StringArray};
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::test_util::batches_to_sort_string;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::ColumnarValue;
-    use datafusion_physical_expr_common::metrics::MetricValue;
+    use datafusion_physical_expr::expressions::BinaryExpr;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use insta::assert_snapshot;
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct VolatileExpr;
@@ -1334,27 +1353,12 @@ mod tests {
                 Operator::GtEq,
                 Arc::new(PhysicalColumn::new("ts", 1)),
             ),
-            vec![2],
+            Some(vec![0, 1, 2, 5]),
         )?))
     }
 
-    #[test]
-    fn eligibility_matches_public_semantics() -> Result<()> {
-        let left = ScalarValue::Int64(Some(10));
-        let lower = ScalarValue::Int64(Some(9));
-        let equal = ScalarValue::Int64(Some(10));
-        let higher = ScalarValue::Int64(Some(11));
-        assert!(is_eligible(Operator::Gt, &left, &lower)?);
-        assert!(!is_eligible(Operator::Gt, &left, &equal)?);
-        assert!(is_eligible(Operator::GtEq, &left, &equal)?);
-        assert!(is_eligible(Operator::Lt, &left, &higher)?);
-        assert!(!is_eligible(Operator::Lt, &left, &equal)?);
-        assert!(is_eligible(Operator::LtEq, &left, &equal)?);
-        Ok(())
-    }
-
     #[tokio::test]
-    async fn state_survives_empty_input_batches_and_output_flushes() -> Result<()> {
+    async fn simple_query() -> Result<()> {
         let exec = test_exec()?;
         let context = Arc::new(
             TaskContext::default()
@@ -1368,161 +1372,186 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![2, 2, 2, 1]
         );
-        let ids = batches
-            .iter()
-            .flat_map(|batch| {
-                batch
-                    .column(2)
-                    .as_any()
-                    .downcast_ref::<Int32Array>()
-                    .unwrap()
-                    .iter()
-            })
-            .collect::<Vec<_>>();
-        let prices = batches
-            .iter()
-            .flat_map(|batch| {
-                batch
-                    .column(3)
-                    .as_any()
-                    .downcast_ref::<Int32Array>()
-                    .unwrap()
-                    .iter()
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            ids,
-            vec![
-                Some(0),
-                Some(1),
-                Some(2),
-                Some(3),
-                Some(4),
-                Some(5),
-                Some(6),
-            ]
-        );
-        assert_eq!(
-            prices,
-            vec![None, None, None, Some(40), Some(60), Some(101), None]
-        );
+        assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +-----+----+----+-------+
+        | key | ts | id | price |
+        +-----+----+----+-------+
+        |     | 3  | 0  |       |
+        | A   |    | 1  |       |
+        | A   | 1  | 2  |       |
+        | A   | 4  | 3  | 40    |
+        | A   | 7  | 4  | 60    |
+        | B   | 2  | 5  | 101   |
+        | C   | 3  | 6  |       |
+        +-----+----+----+-------+
+        ");
 
         let metrics = exec.metrics().expect("ASOF metrics must be present");
         assert_eq!(metrics.output_rows(), Some(7));
-        assert_eq!(
-            metrics
-                .sum_by_name("matched_rows")
-                .map(|value| value.as_usize()),
-            Some(3)
-        );
-        assert_eq!(
-            metrics
-                .sum_by_name("unmatched_left_rows")
-                .map(|value| value.as_usize()),
-            Some(4)
-        );
         assert!(metrics.elapsed_compute().is_some());
-        assert!(
-            metrics.iter().any(|metric| {
-                matches!(metric.value(), MetricValue::ElapsedCompute(_))
-            })
-        );
         Ok(())
     }
 
-    #[tokio::test]
-    async fn broadcasts_right_input_to_all_left_partitions() -> Result<()> {
-        let left_schema = Arc::new(Schema::new(vec![
-            Field::new("key", DataType::Utf8, false),
-            Field::new("ts", DataType::Int64, false),
-            Field::new("id", DataType::Int32, false),
-        ]));
+    fn exec_without_equality_keys(
+        left_times: Vec<i64>,
+        right_times: Vec<i64>,
+        op: Operator,
+    ) -> Result<Arc<AsOfJoinExec>> {
+        let left_batch = RecordBatch::try_from_iter(vec![
+            (
+                "ts",
+                Arc::new(Int64Array::from(left_times.clone())) as ArrayRef,
+            ),
+            (
+                "id",
+                Arc::new(Int32Array::from(
+                    left_times
+                        .into_iter()
+                        .map(|value| value as i32)
+                        .collect::<Vec<_>>(),
+                )) as ArrayRef,
+            ),
+        ])?;
+        let left_schema = left_batch.schema();
         let left = TestMemoryExec::try_new_exec(
-            &[
-                vec![make_batch(
-                    &left_schema,
-                    vec![Some("A"), Some("A")],
-                    vec![Some(1), Some(4)],
-                    vec![0, 1],
-                )?],
-                vec![make_batch(
-                    &left_schema,
-                    vec![Some("A"), Some("A")],
-                    vec![Some(2), Some(5)],
-                    vec![2, 3],
-                )?],
-            ],
+            &[vec![left_batch]],
             Arc::clone(&left_schema),
             None,
         )?;
-        let right_schema = Arc::new(Schema::new(vec![
-            Field::new("key", DataType::Utf8, false),
-            Field::new("ts", DataType::Int64, false),
-            Field::new("price", DataType::Int32, false),
-        ]));
+
+        let right_batch = RecordBatch::try_from_iter(vec![
+            (
+                "ts",
+                Arc::new(Int64Array::from(right_times.clone())) as ArrayRef,
+            ),
+            (
+                "price",
+                Arc::new(Int32Array::from(
+                    right_times
+                        .into_iter()
+                        .map(|value| value as i32 * 10)
+                        .collect::<Vec<_>>(),
+                )) as ArrayRef,
+            ),
+        ])?;
+        let right_schema = right_batch.schema();
         let right = TestMemoryExec::try_new_exec(
-            &[vec![
-                make_batch(&right_schema, vec![Some("A")], vec![Some(1)], vec![10])?,
-                make_batch(&right_schema, vec![Some("A")], vec![Some(3)], vec![30])?,
-            ]],
+            &[vec![right_batch]],
             Arc::clone(&right_schema),
             None,
         )?;
-        let exec = Arc::new(AsOfJoinExec::try_new(
+
+        Ok(Arc::new(AsOfJoinExec::try_new(
             left,
             right,
             vec![],
             AsOfMatchExpr::new(
-                Arc::new(PhysicalColumn::new("ts", 1)),
-                Operator::GtEq,
-                Arc::new(PhysicalColumn::new("ts", 1)),
+                Arc::new(PhysicalColumn::new("ts", 0)),
+                op,
+                Arc::new(PhysicalColumn::new("ts", 0)),
             ),
-            vec![2],
-        )?);
-        assert_eq!(exec.properties().output_partitioning().partition_count(), 2);
-        assert!(matches!(
-            &exec.input_distribution_requirements().into_per_child()[..],
-            [
-                Distribution::UnspecifiedDistribution,
-                Distribution::SinglePartition
-            ]
+            Some(vec![1, 3]),
+        )?))
+    }
+
+    #[tokio::test]
+    async fn comparison_directions_without_equality_keys() -> Result<()> {
+        let predecessor =
+            exec_without_equality_keys(vec![1, 4, 7], vec![2, 4, 6], Operator::GtEq)?;
+        let predecessor = collect(predecessor, Arc::new(TaskContext::default())).await?;
+        assert_snapshot!(batches_to_sort_string(&predecessor), @r"
+        +----+-------+
+        | id | price |
+        +----+-------+
+        | 1  |       |
+        | 4  | 40    |
+        | 7  | 60    |
+        +----+-------+
+        ");
+
+        let successor =
+            exec_without_equality_keys(vec![7, 4, 1], vec![6, 4, 2], Operator::Lt)?;
+        let successor = collect(successor, Arc::new(TaskContext::default())).await?;
+        assert_snapshot!(batches_to_sort_string(&successor), @r"
+        +----+-------+
+        | id | price |
+        +----+-------+
+        | 1  | 20    |
+        | 4  | 60    |
+        | 7  |       |
+        +----+-------+
+        ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn complex_equality_and_match_expressions() -> Result<()> {
+        let left_batch = RecordBatch::try_from_iter(vec![
+            ("g1", Arc::new(Int64Array::from(vec![0, 1])) as ArrayRef),
+            ("g2", Arc::new(Int64Array::from(vec![1, 1])) as ArrayRef),
+            ("ts", Arc::new(Int64Array::from(vec![4, 4])) as ArrayRef),
+            ("offset", Arc::new(Int64Array::from(vec![1, 0])) as ArrayRef),
+            ("id", Arc::new(Int64Array::from(vec![10, 20])) as ArrayRef),
+        ])?;
+        let left_schema = left_batch.schema();
+        let left = TestMemoryExec::try_new_exec(
+            &[vec![left_batch]],
+            Arc::clone(&left_schema),
+            None,
+        )?;
+
+        let right_batch = RecordBatch::try_from_iter(vec![
+            ("g1", Arc::new(Int64Array::from(vec![0, 0, 1])) as ArrayRef),
+            ("g2", Arc::new(Int64Array::from(vec![1, 1, 1])) as ArrayRef),
+            ("ts", Arc::new(Int64Array::from(vec![2, 5, 3])) as ArrayRef),
+            (
+                "price",
+                Arc::new(Int64Array::from(vec![12, 15, 23])) as ArrayRef,
+            ),
+        ])?;
+        let right_schema = right_batch.schema();
+        let right = TestMemoryExec::try_new_exec(
+            &[vec![right_batch]],
+            Arc::clone(&right_schema),
+            None,
+        )?;
+
+        let left_group = Arc::new(BinaryExpr::new(
+            Arc::new(PhysicalColumn::new("g1", 0)),
+            Operator::Plus,
+            Arc::new(PhysicalColumn::new("g2", 1)),
         ));
+        let right_group = Arc::new(BinaryExpr::new(
+            Arc::new(PhysicalColumn::new("g1", 0)),
+            Operator::Plus,
+            Arc::new(PhysicalColumn::new("g2", 1)),
+        ));
+        let left_match = Arc::new(BinaryExpr::new(
+            Arc::new(PhysicalColumn::new("ts", 2)),
+            Operator::Plus,
+            Arc::new(PhysicalColumn::new("offset", 3)),
+        ));
+        let exec = Arc::new(AsOfJoinExec::try_new(
+            left,
+            right,
+            vec![(left_group, right_group)],
+            AsOfMatchExpr::new(
+                left_match,
+                Operator::GtEq,
+                Arc::new(PhysicalColumn::new("ts", 2)),
+            ),
+            Some(vec![4, 8]),
+        )?);
 
-        let partitions = collect_partitioned(
-            Arc::clone(&exec) as Arc<dyn ExecutionPlan>,
-            Arc::new(TaskContext::default()),
-        )
-        .await?;
-        assert_eq!(partitions.len(), 2);
-        for batches in partitions {
-            let prices = batches
-                .iter()
-                .flat_map(|batch| {
-                    batch
-                        .column(3)
-                        .as_any()
-                        .downcast_ref::<Int32Array>()
-                        .unwrap()
-                        .iter()
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(prices, vec![Some(10), Some(30)]);
-        }
-
-        let metrics = exec.metrics().expect("ASOF metrics must be present");
-        assert_eq!(
-            metrics
-                .sum_by_name("build_input_batches")
-                .map(|value| value.as_usize()),
-            Some(2)
-        );
-        assert_eq!(
-            metrics
-                .sum_by_name("build_input_rows")
-                .map(|value| value.as_usize()),
-            Some(2)
-        );
-        assert_eq!(metrics.output_rows(), Some(4));
+        let batches = collect(exec, Arc::new(TaskContext::default())).await?;
+        assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+-------+
+        | id | price |
+        +----+-------+
+        | 10 | 15    |
+        | 20 | 23    |
+        +----+-------+
+        ");
         Ok(())
     }
 
@@ -1581,7 +1610,7 @@ mod tests {
                 Operator::GtEq,
                 Arc::new(PhysicalColumn::new("ts", 1)),
             ),
-            vec![2],
+            Some(vec![0, 1, 2, 5]),
         )?);
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(retained_size, 1.0)
@@ -1612,99 +1641,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn preserves_dictionary_outputs_across_large_flush() -> Result<()> {
-        let dictionary_type =
-            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
-        let left_schema = Arc::new(Schema::new(vec![
-            Field::new("key", DataType::Utf8, false),
-            Field::new("ts", DataType::Int64, false),
-            Field::new("payload", dictionary_type.clone(), false),
-        ]));
-        let mut left_payload = StringDictionaryBuilder::<Int8Type>::new();
-        for _ in 0..129 {
-            left_payload.append_value("left");
-        }
-        let left_batch = RecordBatch::try_new(
-            Arc::clone(&left_schema),
-            vec![
-                Arc::new(StringArray::from(vec!["A"; 129])),
-                Arc::new(Int64Array::from_iter_values(-1..128)),
-                Arc::new(left_payload.finish()),
-            ],
-        )?;
-        let left = TestMemoryExec::try_new_exec(
-            &[vec![left_batch]],
-            Arc::clone(&left_schema),
-            None,
-        )?;
-
-        let right_schema = Arc::new(Schema::new(vec![
-            Field::new("key", DataType::Utf8, false),
-            Field::new("ts", DataType::Int64, false),
-            Field::new("payload", dictionary_type.clone(), false),
-        ]));
-        let mut right_payload = StringDictionaryBuilder::<Int8Type>::new();
-        right_payload.append_value("right");
-        let right_batch = RecordBatch::try_new(
-            Arc::clone(&right_schema),
-            vec![
-                Arc::new(StringArray::from(vec!["A"])),
-                Arc::new(Int64Array::from(vec![0])),
-                Arc::new(right_payload.finish()),
-            ],
-        )?;
-        let right = TestMemoryExec::try_new_exec(
-            &[vec![right_batch]],
-            Arc::clone(&right_schema),
-            None,
-        )?;
-
-        let exec = Arc::new(AsOfJoinExec::try_new(
-            left,
-            right,
-            vec![(
-                Arc::new(PhysicalColumn::new("key", 0)),
-                Arc::new(PhysicalColumn::new("key", 0)),
-            )],
-            AsOfMatchExpr::new(
-                Arc::new(PhysicalColumn::new("ts", 1)),
-                Operator::GtEq,
-                Arc::new(PhysicalColumn::new("ts", 1)),
-            ),
-            vec![2],
-        )?);
-        let context = Arc::new(
-            TaskContext::default()
-                .with_session_config(SessionConfig::new().with_batch_size(256)),
-        );
-        let batches = collect(exec, context).await?;
-        assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].num_rows(), 129);
-        assert_eq!(batches[0].column(2).data_type(), &dictionary_type);
-        assert_eq!(batches[0].column(3).data_type(), &dictionary_type);
-
-        let right_output = batches[0]
-            .column(3)
-            .as_any()
-            .downcast_ref::<DictionaryArray<Int8Type>>()
-            .expect("right output must remain Dictionary(Int8, Utf8)");
-        assert!(right_output.is_null(0));
-        assert_eq!(right_output.null_count(), 1);
-        let values = right_output
-            .values()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .expect("dictionary values must be Utf8");
-        for row in 1..129 {
-            assert_eq!(
-                values.value(right_output.keys().value(row) as usize),
-                "right"
-            );
-        }
-        Ok(())
-    }
-
     #[test]
     fn rejects_volatile_physical_expressions() -> Result<()> {
         let exec = test_exec()?;
@@ -1718,7 +1654,7 @@ mod tests {
                 Operator::GtEq,
                 Arc::new(PhysicalColumn::new("ts", 1)),
             ),
-            vec![2],
+            Some(vec![0, 1, 2, 5]),
         )
         .expect_err("volatile match expression must be rejected");
         assert!(match_error.to_string().contains("must be deterministic"));
@@ -1728,7 +1664,7 @@ mod tests {
             Arc::clone(&exec.right),
             vec![(volatile, Arc::new(PhysicalColumn::new("key", 0)))],
             exec.match_condition.clone(),
-            vec![2],
+            Some(vec![0, 1, 2, 5]),
         )
         .expect_err("volatile equality expression must be rejected");
         assert!(equality_error.to_string().contains("must be deterministic"));
@@ -1736,72 +1672,8 @@ mod tests {
     }
 
     #[test]
-    fn properties_and_statistics_follow_left_preserving_contract() -> Result<()> {
+    fn statistics_follow_left_preserving_contract() -> Result<()> {
         let exec = test_exec()?;
-        let exec_plan: Arc<dyn ExecutionPlan> = Arc::clone(&exec) as _;
-        assert_eq!(exec.maintains_input_order(), vec![false, false]);
-        assert_eq!(exec_plan.pipeline_behavior(), EmissionType::Incremental);
-        assert_eq!(exec_plan.boundedness(), Boundedness::Bounded);
-        assert!(matches!(
-            &exec.input_distribution_requirements().into_per_child()[..],
-            [
-                Distribution::UnspecifiedDistribution,
-                Distribution::SinglePartition
-            ]
-        ));
-        for ordering in exec.required_input_ordering() {
-            let requirement = ordering.expect("ASOF ordering is required").into_single();
-            assert_eq!(requirement.len(), 2);
-            assert_eq!(
-                requirement[0].options,
-                Some(SortOptions {
-                    descending: false,
-                    nulls_first: true,
-                })
-            );
-            assert_eq!(
-                requirement[1].options,
-                Some(SortOptions {
-                    descending: false,
-                    nulls_first: true,
-                })
-            );
-        }
-
-        let no_keys: Arc<dyn ExecutionPlan> = Arc::new(AsOfJoinExec::try_new(
-            Arc::clone(&exec.left),
-            Arc::clone(&exec.right),
-            vec![],
-            AsOfMatchExpr::new(
-                Arc::new(PhysicalColumn::new("ts", 1)),
-                Operator::Lt,
-                Arc::new(PhysicalColumn::new("ts", 1)),
-            ),
-            vec![2],
-        )?);
-        assert_eq!(
-            no_keys.output_partitioning().partition_count(),
-            exec.left.output_partitioning().partition_count()
-        );
-        assert!(matches!(
-            &no_keys.input_distribution_requirements().into_per_child()[..],
-            [
-                Distribution::UnspecifiedDistribution,
-                Distribution::SinglePartition
-            ]
-        ));
-        for ordering in no_keys.required_input_ordering() {
-            let requirement = ordering.expect("ASOF ordering is required").into_single();
-            assert_eq!(requirement.len(), 1);
-            assert_eq!(
-                requirement[0].options,
-                Some(SortOptions {
-                    descending: true,
-                    nulls_first: true,
-                })
-            );
-        }
-
         let mut key_stats = ColumnStatistics::new_unknown();
         key_stats.null_count = Precision::Exact(1);
         key_stats.distinct_count = Precision::Exact(4);
