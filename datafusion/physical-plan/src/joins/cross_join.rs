@@ -32,7 +32,7 @@ use crate::projection::{
     physical_to_column_exprs,
 };
 use crate::statistics::{ChildStats, StatisticsArgs};
-use crate::stream::EmptyRecordBatchStream;
+use crate::stream::{EmptyRecordBatchStream, ObservedStream, RecordBatchStreamAdapter};
 use crate::{
     ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, PlanProperties, RecordBatchStream,
@@ -47,8 +47,8 @@ use datafusion_common::{
     DataFusionError, JoinType, Result, ScalarValue, assert_eq_or_internal_err,
     internal_err,
 };
-use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::{TaskContext, async_try_stream};
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use async_trait::async_trait;
@@ -352,29 +352,34 @@ impl ExecutionPlan for CrossJoinExec {
             ))
         })?;
 
-        if enforce_batch_size_in_joins {
-            Ok(Box::pin(CrossJoinStream {
-                schema: Arc::clone(&self.schema),
-                left_fut,
-                right: stream,
-                left_index: 0,
-                join_metrics,
-                processed_right_data: None,
-                left_data: RecordBatch::new_empty(self.left().schema()),
-                batch_transformer: BatchSplitter::new(batch_size),
-            }))
-        } else {
-            Ok(Box::pin(CrossJoinStream {
-                schema: Arc::clone(&self.schema),
-                left_fut,
-                right: stream,
-                left_index: 0,
-                join_metrics,
-                processed_right_data: None,
-                left_data: RecordBatch::new_empty(self.left().schema()),
-                batch_transformer: NoopBatchTransformer::new(),
-            }))
-        }
+        let mut state = CrossJoinStream {
+            schema: Arc::clone(&self.schema),
+            left_fut,
+            right: stream,
+            left_index: 0,
+            join_metrics,
+            processed_right_data: None,
+            left_data: RecordBatch::new_empty(self.left().schema()),
+            batch_transformer: if enforce_batch_size_in_joins {
+                BatchSplitter::new(batch_size)
+            } else {
+                NoopBatchTransformer::new() //todo: figure this out lol
+            },
+        };
+
+        let stream = async_try_stream(|mut emitter| async move {
+            state.start_join_time();
+            let result = state.join(&mut emitter).await;
+            state.stop_join_time();
+            result
+        });
+        // ObservedStream records the baseline metrics (output rows/batches,
+        // end time)
+        Ok(Box::pin(ObservedStream::new(
+            Box::pin(RecordBatchStreamAdapter::new(state.schema, stream)),
+            baseline_metrics, //todo: fix this too
+            None,
+        )))
     }
 
     fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
@@ -608,12 +613,13 @@ fn build_batch(
 }
 
 impl<T: BatchTransformer> CrossJoinStream<T> {
-    /// Separate implementation function that unpins the [`CrossJoinStream`] so
-    /// that partial borrows work correctly
-    async fn next(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> Option<Result<RecordBatch>> {
+    async fn join(&mut self, cx: &mut std::task::Context<'_>) -> Result<()> {
+        if !self.collect_build_side(cx)? {
+            return Ok(());
+        }
+
+        while self.processed_right_data.is_none() {} // <- maybe add helper functions for when we have more data to determine the looping condition?
+
         loop {
             return match self.state {
                 CrossJoinStreamState::WaitBuildSide => {
@@ -635,7 +641,8 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
     /// Returns true if build side was loaded and non-empty
     fn collect_build_side(&mut self, cx: &mut std::task::Context<'_>) -> Result<bool> {
         let build_timer = self.join_metrics.build_time.timer();
-        let left_data = match ready!(self.left_fut.get(cx)) {
+        let left_data = match self.left_fut.get(cx) {
+            //todo: figure out how to make this async maybe
             Ok(left_data) => left_data,
             Err(e) => return Err(e),
         };
