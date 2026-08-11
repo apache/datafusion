@@ -248,9 +248,9 @@ pub struct LambdaArgument {
     /// parameters leave no slot in the merged batch and the body's compressed
     /// column indices line up directly with what the evaluator built.
     ///
-    /// Callers who already have a `LambdaExpr` should read the used names
-    /// from `LambdaExpr::used_params()` and pass them to [`Self::new`];
-    /// [`Self::new`] handles the name → index translation.
+    /// Callers who already have a `LambdaExpr` should pass
+    /// `LambdaExpr::used_param_indices()` directly to [`Self::new`] — both
+    /// are indices into the same positionally-aligned `params` list.
     used_param_indices: Vec<usize>,
     /// The body of the lambda
     ///
@@ -274,15 +274,9 @@ impl LambdaArgument {
         params: Vec<FieldRef>,
         body: Arc<dyn PhysicalExpr>,
         captures: Option<RecordBatch>,
-        used_params: &HashSet<String>,
+        used_param_indices: &[usize],
     ) -> Self {
-        let used_param_indices: Vec<usize> = params
-            .iter()
-            .enumerate()
-            .filter(|(_, f)| used_params.contains(f.name()))
-            .map(|(i, _)| i)
-            .collect();
-
+        let used_param_indices = used_param_indices.to_vec();
         let effective_params = used_param_indices.iter().map(|i| Arc::clone(&params[*i]));
 
         let fields: Vec<FieldRef> = match &captures {
@@ -1775,10 +1769,7 @@ mod tests {
         let v_field = Arc::new(Field::new("v", DataType::Int32, true));
 
         let body = Arc::new(ColumnAt(0)) as Arc<dyn PhysicalExpr>;
-        let used_params: HashSet<String> = ["v".to_string()].into_iter().collect();
-
-        let lambda_arg =
-            LambdaArgument::new(vec![k_field, v_field], body, None, &used_params);
+        let lambda_arg = LambdaArgument::new(vec![k_field, v_field], body, None, &[1]);
 
         let k_values: ArrayRef = Arc::new(Int32Array::from(vec![100, 200, 300]));
         let v_values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
@@ -1810,7 +1801,6 @@ mod tests {
         let v_field = Arc::new(Field::new("v", DataType::Int32, true));
 
         let body = Arc::new(ColumnAt(1)) as Arc<dyn PhysicalExpr>;
-        let used_params: HashSet<String> = ["v".to_string()].into_iter().collect();
 
         let cap_values: ArrayRef = Arc::new(Int32Array::from(vec![9, 9, 9]));
         let captures = RecordBatch::try_new(
@@ -1819,12 +1809,8 @@ mod tests {
         )
         .unwrap();
 
-        let lambda_arg = LambdaArgument::new(
-            vec![k_field, v_field],
-            body,
-            Some(captures),
-            &used_params,
-        );
+        let lambda_arg =
+            LambdaArgument::new(vec![k_field, v_field], body, Some(captures), &[1]);
 
         let k_values: ArrayRef = Arc::new(Int32Array::from(vec![100, 200, 300]));
         let v_values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));

@@ -353,7 +353,7 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
                         } else {
                             Some(batch.project(&projection)?)
                         },
-                        lambda.used_params(),
+                        lambda.used_param_indices(),
                     )))
                 }
                 ArgSlot::Value => {

@@ -43,7 +43,7 @@ pub struct LambdaExpr {
     body: Arc<dyn PhysicalExpr>,
     projected_body: Arc<dyn PhysicalExpr>,
     projection: Vec<usize>,
-    used_params: HashSet<String>,
+    used_param_indices: Vec<usize>,
 }
 
 // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808 [https://github.com/apache/datafusion/issues/13196]
@@ -128,12 +128,19 @@ impl LambdaExpr {
             .expect("closure should be infallible")
             .data;
 
+        let used_param_indices = params
+            .iter()
+            .enumerate()
+            .filter(|(_, name)| used_param_names.contains(*name))
+            .map(|(i, _)| i)
+            .collect();
+
         Self {
             params,
             body,
             projected_body,
             projection,
-            used_params: used_param_names,
+            used_param_indices,
         }
     }
 
@@ -176,10 +183,11 @@ impl LambdaExpr {
         &self.projected_body
     }
 
-    /// Subset of [`params`](Self::params) (by name) that the body actually
-    /// references. See `CollectUsedVisitor` in this module.
-    pub fn used_params(&self) -> &HashSet<String> {
-        &self.used_params
+    /// Indices into [`params`](Self::params) of the parameters the body
+    /// actually references, in declaration order. See `CollectUsedVisitor`
+    /// in this module.
+    pub fn used_param_indices(&self) -> &[usize] {
+        &self.used_param_indices
     }
 }
 
@@ -377,10 +385,7 @@ mod tests {
             LambdaExpr::try_new(vec!["k".to_string(), "v".to_string()], body).unwrap();
 
         assert_eq!(lambda.projection(), &[1]);
-        let used = lambda.used_params();
-        assert!(used.contains("v"));
-        assert!(!used.contains("k"));
-        assert_eq!(used.len(), 1);
+        assert_eq!(lambda.used_param_indices(), &[1]);
     }
 
     /// A body that references neither declared parameter reports no used params.
@@ -392,7 +397,7 @@ mod tests {
             LambdaExpr::try_new(vec!["k".to_string(), "v".to_string()], body).unwrap();
 
         assert!(lambda.projection().is_empty());
-        assert!(lambda.used_params().is_empty());
+        assert!(lambda.used_param_indices().is_empty());
     }
 
     /// A three-parameter lambda that skips the middle parameter reports only the ends as used.
@@ -412,11 +417,7 @@ mod tests {
         )
         .unwrap();
 
-        let used = lambda.used_params();
-        assert!(used.contains("a"));
-        assert!(!used.contains("b"));
-        assert!(used.contains("c"));
-        assert_eq!(used.len(), 2);
+        assert_eq!(lambda.used_param_indices(), &[0, 2]);
     }
 
     /// Referencing params out of declaration order still reports both as used.
@@ -434,10 +435,7 @@ mod tests {
             LambdaExpr::try_new(vec!["k".to_string(), "v".to_string()], body).unwrap();
 
         assert_eq!(lambda.projection(), &[0, 1]);
-        let used = lambda.used_params();
-        assert!(used.contains("k"));
-        assert!(used.contains("v"));
-        assert_eq!(used.len(), 2);
+        assert_eq!(lambda.used_param_indices(), &[0, 1]);
     }
 
     /// Inside a nested lambda that re-declares one of the outer parameter
@@ -486,12 +484,11 @@ mod tests {
             LambdaExpr::try_new(vec!["k".to_string(), "v".to_string()], outer_body)
                 .unwrap();
 
-        let used = outer_lambda.used_params();
-        assert!(used.contains("v"), "outer's `v` should be reported as used");
-        assert!(
-            !used.contains("k"),
-            "outer's `k` is shadowed inside the nested lambda and should not be reported as used"
+        assert_eq!(
+            outer_lambda.used_param_indices(),
+            &[1],
+            "only outer's `v` (index 1) should be reported as used; `k` (index 0) is \
+             shadowed inside the nested lambda"
         );
-        assert_eq!(used.len(), 1);
     }
 }
