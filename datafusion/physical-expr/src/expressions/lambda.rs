@@ -186,6 +186,10 @@ impl LambdaExpr {
     /// Indices into [`params`](Self::params) of the parameters the body
     /// actually references, in declaration order. See `CollectUsedVisitor`
     /// in this module.
+    ///
+    /// Relies on the planner appending each lambda's own params after
+    /// captures, matching the `captures ++ used_params` layout
+    /// `LambdaArgument::new` builds.
     pub fn used_param_indices(&self) -> &[usize] {
         &self.used_param_indices
     }

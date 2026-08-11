@@ -251,6 +251,13 @@ pub struct LambdaArgument {
     /// Callers who already have a `LambdaExpr` should pass
     /// `LambdaExpr::used_param_indices()` directly to [`Self::new`] — both
     /// are indices into the same positionally-aligned `params` list.
+    ///
+    /// Every index here must be `< params.len()`; see the precondition on
+    /// [`Self::new`].
+    ///
+    /// Relies on captures sorting before this lambda's own params in the
+    /// planner's (un-projected) index space, which is what makes
+    /// `captures ++ used_params` below line up with the projected body.
     used_param_indices: Vec<usize>,
     /// The body of the lambda
     ///
@@ -270,12 +277,26 @@ pub struct LambdaArgument {
 }
 
 impl LambdaArgument {
+    /// # Preconditions
+    ///
+    /// Every index in `used_param_indices` must be `< params.len()`;
+    /// violating this panics on out-of-bounds indexing below. Callers should
+    /// pass `LambdaExpr::used_param_indices()`, which always indexes into the
+    /// same `params` list, rather than constructing indices by hand.
     pub fn new(
         params: Vec<FieldRef>,
         body: Arc<dyn PhysicalExpr>,
         captures: Option<RecordBatch>,
         used_param_indices: &[usize],
     ) -> Self {
+        debug_assert!(
+            used_param_indices.iter().all(|i| *i < params.len()),
+            "used_param_indices contains an index out of bounds for params \
+             (len {}): {:?}",
+            params.len(),
+            used_param_indices
+        );
+
         let used_param_indices = used_param_indices.to_vec();
         let effective_params = used_param_indices.iter().map(|i| Arc::clone(&params[*i]));
 
