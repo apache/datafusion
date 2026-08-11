@@ -445,6 +445,7 @@ impl_zero_heap_size!(
     i32,
     i64,
     i128,
+    u128,
     i256,
     f16,
     f32,
@@ -548,6 +549,7 @@ mod tests {
         assert_eq!(size(&0i32), 0);
         assert_eq!(size(&0i64), 0);
         assert_eq!(size(&0i128), 0);
+        assert_eq!(size(&0u128), 0);
         assert_eq!(size(&i256::ZERO), 0);
         assert_eq!(size(&0f32), 0);
         assert_eq!(size(&0f64), 0);
@@ -603,6 +605,14 @@ mod tests {
 
         let empty: Vec<i32> = Vec::new();
         assert_eq!(size(&empty), 0);
+    }
+
+    #[test]
+    fn test_vec_u128() {
+        let mut values = Vec::with_capacity(4);
+        values.push(0u128);
+
+        assert_eq!(size(&values), values.capacity() * size_of::<u128>());
     }
 
     #[test]
