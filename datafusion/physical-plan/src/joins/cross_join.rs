@@ -18,6 +18,7 @@
 //! Defines the cross join plan for loading the left side of the cross join
 //! and producing batches in parallel for the right partitions
 
+use std::future::poll_fn;
 use std::{sync::Arc, task::Poll};
 
 use super::utils::{
@@ -360,12 +361,13 @@ impl ExecutionPlan for CrossJoinExec {
             join_metrics,
             processed_right_data: None,
             left_data: RecordBatch::new_empty(self.left().schema()),
-            batch_size: enforce_batch_size_in_joins.then(|| batch_size),
+            batch_size: enforce_batch_size_in_joins.then_some(batch_size),
+            batch_transformer: NoopBatchTransformer::new(), //todo fix,
         };
 
         let stream = async_try_stream(|mut emitter| async move {
             state.start_join_time();
-            let result = state.join(&context, &mut emitter).await;
+            let result = state.join(&mut emitter).await;
             state.stop_join_time();
             result
         });
@@ -561,7 +563,7 @@ fn stats_cartesian_product(
 }
 
 /// A stream that issues [RecordBatch]es as they arrive from the right of the join.
-struct CrossJoinStream {
+struct CrossJoinStream<T> {
     /// Input schema
     schema: Arc<Schema>,
     /// Future for data from left side
@@ -576,8 +578,10 @@ struct CrossJoinStream {
     processed_right_data: Option<RecordBatch>,
     /// Left data (copy of the entire buffered left side)
     left_data: RecordBatch,
-    /// Max batch size
+    /// Max batch size (todo: maybe remove)
     batch_size: Option<usize>,
+    // todo: add description if we're keeping it
+    batch_transformer: T,
 }
 
 fn build_batch(
@@ -608,40 +612,35 @@ fn build_batch(
     .map_err(Into::into)
 }
 
-impl CrossJoinStream {
+impl<T> CrossJoinStream<T>
+where
+    T: BatchTransformer,
+{
     async fn join(
         &mut self,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
-        if !self.collect_build_side(cx)? {
+        if !self.collect_build_side().await? {
             return Ok(());
         }
 
-        while self.processed_right_data.is_none() {} // <- maybe add helper functions for when we have more data to determine the looping condition?
-
-        loop {
-            return match self.state {
-                CrossJoinStreamState::WaitBuildSide => {
-                    handle_state!(ready!(self.collect_build_side()))
+        while self.fetch_probe_batch().await? {
+            loop {
+                if !self.build_batches(emitter).await? {
+                    break;
                 }
-                CrossJoinStreamState::FetchProbeBatch => {
-                    handle_state!(ready!(self.fetch_probe_batch()))
-                }
-                CrossJoinStreamState::BuildBatches(_) => {
-                    let poll = handle_state!(self.build_batches(emitter));
-                    self.join_metrics.baseline.record_poll(poll)
-                }
-            };
+            }
         }
+
+        Ok(())
     }
 
     /// Collects build (left) side of the join into the state. In case of an empty build batch,
     /// the execution terminates. Otherwise, the state is updated to fetch probe (right) batch.
     /// Returns true if build side was loaded and non-empty
-    fn collect_build_side(&mut self) -> Result<bool> {
+    async fn collect_build_side(&mut self) -> Result<bool> {
         let build_timer = self.join_metrics.build_time.timer();
-        let left_data = match self.left_fut.get(cx) {
-            //todo: figure out how to make this async maybe
+        let left_data = match poll_fn(|cx| self.left_fut.get(cx)).await {
             Ok(left_data) => left_data,
             Err(e) => return Err(e),
         };
@@ -659,9 +658,7 @@ impl CrossJoinStream {
 
     /// Fetches the probe (right) batch, updates the metrics, and save the batch in the state.
     /// Then, the state is updated to build result batches.
-    async fn fetch_probe_batch(
-        &mut self,
-    ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+    async fn fetch_probe_batch(&mut self) -> Result<bool> {
         self.left_index = 0;
         let right_data = match self.right.next().await {
             Some(Ok(right_data)) => right_data,
@@ -670,22 +667,25 @@ impl CrossJoinStream {
                 // Release the right (probe) input pipeline's resources.
                 let right_schema = self.right.schema();
                 self.right = Box::pin(EmptyRecordBatchStream::new(right_schema));
-                return Ok(StatefulStreamResult::Ready(None));
+                return Ok(false);
             }
         };
         self.join_metrics.input_batches.add(1);
         self.join_metrics.input_rows.add(right_data.num_rows());
 
         self.processed_right_data = Some(right_data);
-        Ok(StatefulStreamResult::Continue)
+        Ok(true)
     }
 
     /// Joins the indexed row of left data with the current probe batch.
     /// If all the results are produced, the state is set to fetch new probe batch.
+    /// Err -> error lol
+    /// true -> emitted a batch, keep going
+    /// false -> fetch more from the probe
     async fn build_batches(
         &mut self,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let right_batch = self
             .processed_right_data
             .ok_or(internal_err!("Expected RecordBatch for right side"))?;
@@ -708,14 +708,12 @@ impl CrossJoinStream {
                         self.left_index += 1;
                     }
 
-                    emitter.emit(batch);
-                    return Ok(StatefulStreamResult::Ready(Some(batch)));
+                    emitter.emit(batch).await;
+                    return Ok(true);
                 }
             }
-        } else {
-            self.state = CrossJoinStreamState::FetchProbeBatch;
         }
-        Ok(StatefulStreamResult::Continue)
+        Ok(false)
     }
 }
 
