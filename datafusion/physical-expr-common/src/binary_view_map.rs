@@ -27,7 +27,6 @@ use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 use std::fmt::Debug;
-use std::mem::size_of;
 use std::sync::Arc;
 
 /// HashSet optimized for storing string or binary values that can produce that
@@ -473,9 +472,9 @@ where
     pub fn size(&self) -> usize {
         // All fields below own their allocations. Count retained capacity rather
         // than used length because this value drives memory accounting.
-        let views_size = self.views.capacity() * size_of::<u128>();
-        let in_progress_size = self.in_progress.capacity();
-        let completed_size = self.completed.capacity() * size_of::<Buffer>()
+        let views_size = self.views.allocated_size();
+        let in_progress_size = self.in_progress.allocated_size();
+        let completed_size = self.completed.allocated_size()
             + self.completed.iter().map(Buffer::capacity).sum::<usize>();
         let nulls_size = self.nulls.allocated_size();
 
@@ -749,9 +748,9 @@ mod tests {
         );
 
         let expected_size = map.map_size
-            + map.views.capacity() * size_of::<u128>()
-            + map.in_progress.capacity()
-            + map.completed.capacity() * size_of::<Buffer>()
+            + map.views.allocated_size()
+            + map.in_progress.allocated_size()
+            + map.completed.allocated_size()
             + map.completed.iter().map(Buffer::capacity).sum::<usize>()
             + map.nulls.allocated_size()
             + map.hashes_buffer.allocated_size();
