@@ -29,7 +29,9 @@ use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
-use datafusion::sql::parser::{DFParser, Statement};
+use datafusion::sql::parser::{DFParserBuilder, Statement};
+use datafusion::sql::sqlparser::dialect::dialect_from_str;
+use datafusion_common::config::{Dialect, SqlParserOptions};
 use datafusion_common::config_err;
 use datafusion_common::stats::Precision;
 use regex::Regex;
@@ -61,6 +63,7 @@ impl RunOpt {
         let mut config = SessionConfig::from_env()?.with_collect_statistics(true);
         config.options_mut().optimizer.prefer_hash_join = true;
         let ctx = SessionContext::new_with_config(config);
+        let sql_parser_options = ctx.state().config_options().sql_parser.clone();
         register_parquet_files(&ctx, &self.path).await?;
 
         let branch = current_branch_name();
@@ -85,7 +88,7 @@ impl RunOpt {
                 .to_string_lossy()
                 .to_string();
             let sql = fs::read_to_string(query_path)?;
-            let statements = match sql_statements(&sql) {
+            let statements = match sql_statements(&sql, &sql_parser_options) {
                 Ok(statements) => statements,
                 Err(error) => {
                     let report = QueryReport {
@@ -580,8 +583,20 @@ fn serialize_report(report: &[QueryReport]) -> Result<String> {
         .map_err(|error| DataFusionError::External(Box::new(error)))
 }
 
-fn sql_statements(sql: &str) -> Result<VecDeque<Statement>> {
-    DFParser::parse_sql(sql)
+fn sql_statements(sql: &str, options: &SqlParserOptions) -> Result<VecDeque<Statement>> {
+    let dialect = dialect_from_str(options.dialect).ok_or_else(|| {
+        DataFusionError::Plan(format!(
+            "Unsupported SQL dialect: {}. Available dialects: {}.",
+            options.dialect,
+            Dialect::available()
+        ))
+    })?;
+
+    DFParserBuilder::new(sql)
+        .with_dialect(dialect.as_ref())
+        .with_recursion_limit(options.recursion_limit.get())
+        .build()?
+        .parse_statements()
 }
 
 fn query_files(path: &Path, query: Option<&str>) -> Result<Vec<PathBuf>> {
@@ -687,6 +702,7 @@ mod tests {
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV \
              PARTITIONED BY (p1, p2) LOCATION 'foo.csv' \
              OPTIONS (format.delimiter '|'); SELECT ';'",
+            &SessionConfig::new().options().sql_parser,
         )
         .unwrap();
 
@@ -697,6 +713,19 @@ mod tests {
         assert_eq!(table.columns.len(), 1);
         assert_eq!(table.table_partition_cols, ["p1", "p2"]);
         assert_eq!(table.options.len(), 1);
+    }
+
+    #[test]
+    fn parses_statements_with_session_sql_dialect() {
+        let sql = "# MySQL comment\nSELECT 1";
+        assert!(sql_statements(sql, &SessionConfig::new().options().sql_parser).is_err());
+
+        let mut config = SessionConfig::new();
+        config.options_mut().sql_parser.dialect = Dialect::MySQL;
+
+        let statements = sql_statements(sql, &config.options().sql_parser).unwrap();
+
+        assert_eq!(statements.len(), 1);
     }
 
     #[test]
