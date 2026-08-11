@@ -122,11 +122,11 @@ To get started, see
    user-guide/cli/index
    user-guide/dataframe
    user-guide/arrow-introduction
-   user-guide/parquet-content-defined-chunking
    user-guide/expressions
    user-guide/sql/index
    user-guide/configs
    user-guide/explain-usage
+   user-guide/parquet-content-defined-chunking
    user-guide/metrics
    user-guide/faq
 

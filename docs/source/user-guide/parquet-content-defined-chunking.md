@@ -51,9 +51,20 @@ file because the chunker's state must persist across row groups. This can reduce
 write throughput compared with DataFusion's parallel writer path. Writing
 different output files can still proceed concurrently.
 
+CDC operates independently for each output file. When `COPY` targets a
+directory, DataFusion distributes input RecordBatches in round-robin order across
+parallel output files; `datafusion.execution.minimum_parallel_output_files`
+defaults to four. If batching or file assignment changes between dataset
+versions, unchanged rows can move between files and reduce deduplication. For
+the best results, keep the input order and output file layout stable. Use a
+filename target for single-file output, or partition by stable keys when
+multiple files are required. See
+[Configuration Settings](configs.md#setting-configuration-options).
+
 ## Enable CDC with SQL
 
-Set CDC for one [`COPY`](sql/dml.md#copy) operation with Parquet format options:
+Set CDC for one [`COPY`](sql/dml.md#copy) operation with Parquet format options.
+The filename target in this example selects single-file output:
 
 ```sql
 COPY (
@@ -61,18 +72,19 @@ COPY (
         value AS id,
         CONCAT('event-', CAST(value AS VARCHAR)) AS event
     FROM generate_series(1, 100000)
-) TO 'cdc-output'
+) TO 'cdc-output.parquet'
 STORED AS PARQUET
 OPTIONS (
     'format.content_defined_chunking.enabled' 'true'
 );
 ```
 
-The default chunking parameters are a good starting point. To tune them for one
-write:
+The default chunking parameters are a good starting point. The next example
+specifies those defaults explicitly for one write; it does not change their
+values:
 
 ```sql
-COPY source_table TO 'cdc-output'
+COPY source_table TO 'cdc-output.parquet'
 STORED AS PARQUET
 OPTIONS (
     'format.content_defined_chunking.enabled' 'true',
@@ -81,6 +93,8 @@ OPTIONS (
     'format.content_defined_chunking.norm_level' '0'
 );
 ```
+
+Change these values only after measuring with representative data.
 
 You can instead enable CDC for subsequent Parquet writes in the session:
 
@@ -114,8 +128,8 @@ async fn main() -> Result<()> {
     parquet_options.global.content_defined_chunking = ParquetCdcOptions::enabled();
 
     df.write_parquet(
-        "cdc-output",
-        DataFrameWriteOptions::new(),
+        "cdc-output.parquet",
+        DataFrameWriteOptions::new().with_single_file_output(true),
         Some(parquet_options),
     )
     .await?;
