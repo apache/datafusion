@@ -469,11 +469,14 @@ where
     }
 
     /// Return the total size, in bytes, of memory used to store the data in
-    /// this set, not including `self`
+    /// this set, not including `self` or input-array buffers.
     pub fn size(&self) -> usize {
-        let views_size = self.views.len() * size_of::<u128>();
+        // All fields below own their allocations. Count retained capacity rather
+        // than used length because this value drives memory accounting.
+        let views_size = self.views.capacity() * size_of::<u128>();
         let in_progress_size = self.in_progress.capacity();
-        let completed_size: usize = self.completed.iter().map(|b| b.len()).sum();
+        let completed_size = self.completed.capacity() * size_of::<Buffer>()
+            + self.completed.iter().map(Buffer::capacity).sum::<usize>();
         let nulls_size = self.nulls.allocated_size();
 
         self.map_size
@@ -713,6 +716,50 @@ mod tests {
         assert!(size_after_values2 > size_after_values1);
 
         assert_eq!(set.len(), 10);
+    }
+
+    #[test]
+    fn test_size_counts_retained_buffer_capacities() {
+        let first = "a".repeat(BYTE_VIEW_MAX_BLOCK_SIZE / 2 + 1);
+        let second = "b".repeat(BYTE_VIEW_MAX_BLOCK_SIZE / 2 + 1);
+        let third = "c".repeat(BYTE_VIEW_MAX_BLOCK_SIZE / 2 + 1);
+        let values: ArrayRef = Arc::new(StringViewArray::from(vec![
+            first.as_str(),
+            second.as_str(),
+            third.as_str(),
+        ]));
+
+        let mut map = ArrowBytesViewMap::new(OutputType::Utf8View);
+        map.insert_if_new(&values, |_| (), |_| {});
+
+        // Make unused vector capacity explicit; the completed buffers were created
+        // by the map's flush path.
+        map.views.shrink_to_fit();
+        map.views.reserve_exact(1);
+        map.completed.shrink_to_fit();
+        map.completed.reserve_exact(1);
+
+        // The map owns these allocations; `values` and its Arrow buffers remain external.
+        assert!(map.views.capacity() > map.views.len());
+        assert!(map.completed.capacity() > map.completed.len());
+        assert!(
+            map.completed
+                .iter()
+                .any(|buffer| buffer.capacity() > buffer.len())
+        );
+
+        let expected_size = map.map_size
+            + map.views.capacity() * size_of::<u128>()
+            + map.in_progress.capacity()
+            + map.completed.capacity() * size_of::<Buffer>()
+            + map.completed.iter().map(Buffer::capacity).sum::<usize>()
+            + map.nulls.allocated_size()
+            + map.hashes_buffer.allocated_size();
+        assert_eq!(map.size(), expected_size);
+
+        let size_after_insert = map.size();
+        map.insert_if_new(&values, |_| (), |_| {});
+        assert_eq!(map.size(), size_after_insert);
     }
 
     #[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
