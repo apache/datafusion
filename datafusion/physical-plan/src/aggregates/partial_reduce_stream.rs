@@ -28,7 +28,7 @@ use std::task::{Context, Poll};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
@@ -68,6 +68,12 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
 /// This stage is useful for tree-reduce plans. It consumes the same schema as
 /// a final aggregate stage, but emits the same schema as a partial aggregate
 /// stage.
+///
+/// # Memory Management
+///
+/// If memory usage exceeds the budget, the stream returns an execution error.
+///
+/// Larger-than-memory execution is left for future work.
 pub(crate) struct PartialReduceHashAggregateStream {
     /// Output schema: group columns followed by partial aggregate state columns.
     schema: SchemaRef,
@@ -97,6 +103,10 @@ enum PartialReduceHashAggregateState {
         hash_table: AggregateHashTable<PartialReduceMarker>,
     },
     Done,
+    /// Sentinel state to use when returning error from any other states, because:
+    /// - It explicitly releases state-owned resources immediately
+    /// - More defensive against accidentally resuming execution after error
+    Error,
 }
 
 type PartialReduceHashAggregatePoll = Poll<Option<Result<RecordBatch>>>;
@@ -114,7 +124,9 @@ impl PartialReduceHashAggregateState {
             Self::ReadingInput { hash_table } | Self::ProducingOutput { hash_table } => {
                 hash_table
             }
-            Self::Done => unreachable!("Done state does not hold a hash table"),
+            Self::Done | Self::Error => {
+                unreachable!("Done and Error states do not hold a hash table")
+            }
         }
     }
 
@@ -123,7 +135,9 @@ impl PartialReduceHashAggregateState {
             Self::ReadingInput { hash_table } | Self::ProducingOutput { hash_table } => {
                 hash_table
             }
-            Self::Done => unreachable!("Done state does not hold a hash table"),
+            Self::Done | Self::Error => {
+                unreachable!("Done and Error states do not hold a hash table")
+            }
         }
     }
 
@@ -132,7 +146,9 @@ impl PartialReduceHashAggregateState {
             Self::ReadingInput { hash_table } | Self::ProducingOutput { hash_table } => {
                 hash_table
             }
-            Self::Done => unreachable!("Done state does not hold a hash table"),
+            Self::Done | Self::Error => {
+                unreachable!("Done and Error states do not hold a hash table")
+            }
         }
     }
 
@@ -184,13 +200,18 @@ impl PartialReduceHashAggregateStream {
         })
     }
 
-    fn start_output(
-        &mut self,
-        hash_table: &mut AggregateHashTable<PartialReduceMarker>,
-    ) -> Result<()> {
+    fn close_input(&mut self) {
         let input_schema = self.input.schema();
         self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
-        hash_table.start_output()
+    }
+
+    fn break_with_err(
+        error: DataFusionError,
+    ) -> PartialReduceHashAggregateStateTransition {
+        ControlFlow::Break((
+            Poll::Ready(Some(Err(error))),
+            PartialReduceHashAggregateState::Error,
+        ))
     }
 
     /// Handle ReadingInput state - aggregate partial state batches into the hash table.
@@ -219,41 +240,33 @@ impl PartialReduceHashAggregateStream {
                 timer.done();
 
                 if let Err(e) = result {
-                    return ControlFlow::Break((
-                        Poll::Ready(Some(Err(e))),
-                        original_state,
-                    ));
+                    return Self::break_with_err(e);
                 }
 
+                // If OOM, return execution error.
                 if let Err(e) = self
                     .reservation
                     .try_resize(original_state.hash_table().memory_size())
                 {
-                    return ControlFlow::Break((
-                        Poll::Ready(Some(Err(e))),
-                        original_state,
-                    ));
+                    return Self::break_with_err(e);
                 }
 
                 ControlFlow::Continue(original_state)
             }
-            Poll::Ready(Some(Err(e))) => {
-                ControlFlow::Break((Poll::Ready(Some(Err(e))), original_state))
-            }
+            Poll::Ready(Some(Err(e))) => Self::break_with_err(e),
             // Input ends, move to output state
             Poll::Ready(None) => {
+                self.close_input();
                 let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
                 let timer = elapsed_compute.timer();
-                let result = self.start_output(original_state.hash_table_mut());
+                let result = original_state.hash_table_mut().start_output();
                 timer.done();
 
                 match result {
                     Ok(()) => {
                         ControlFlow::Continue(original_state.into_producing_output())
                     }
-                    Err(e) => {
-                        ControlFlow::Break((Poll::Ready(Some(Err(e))), original_state))
-                    }
+                    Err(e) => Self::break_with_err(e),
                 }
             }
         }
@@ -281,9 +294,12 @@ impl PartialReduceHashAggregateStream {
 
         match result {
             Ok(Some(batch)) => {
-                let _ = self
+                if let Err(e) = self
                     .reservation
-                    .try_resize(original_state.hash_table().memory_size());
+                    .try_resize(original_state.hash_table().memory_size())
+                {
+                    return Self::break_with_err(e);
+                }
                 debug_assert!(batch.num_rows() > 0);
                 let next_state = if original_state.hash_table().is_done() {
                     original_state.into_done()
@@ -300,7 +316,7 @@ impl PartialReduceHashAggregateStream {
                 let _ = self.reservation.try_resize(0);
                 ControlFlow::Continue(original_state.into_done())
             }
-            Err(e) => ControlFlow::Break((Poll::Ready(Some(Err(e))), original_state)),
+            Err(e) => Self::break_with_err(e),
         }
     }
 }
@@ -337,6 +353,13 @@ impl Stream for PartialReduceHashAggregateStream {
     ///   -> Done
     ///      All merged partial-state output was emitted.
     ///
+    /// Any active state
+    ///   -> Error
+    ///      An error drops state-owned resources before it is returned.
+    ///
+    /// Error
+    ///   -> (end)
+    ///
     /// Done
     ///   -> (end)
     /// ```
@@ -357,6 +380,12 @@ impl Stream for PartialReduceHashAggregateStream {
                 state @ PartialReduceHashAggregateState::ProducingOutput { .. } => {
                     self.handle_producing_output(state)
                 }
+                state @ PartialReduceHashAggregateState::Error => {
+                    self.close_input();
+                    self.reservation.free();
+                    self.state = Some(state);
+                    return Poll::Ready(None);
+                }
                 state @ PartialReduceHashAggregateState::Done => {
                     let _ = self.reservation.try_resize(0);
                     self.state = Some(state);
@@ -368,6 +397,19 @@ impl Stream for PartialReduceHashAggregateStream {
                 ControlFlow::Continue(next_state) => {
                     self.state = Some(next_state);
                     continue;
+                }
+                ControlFlow::Break((Poll::Ready(Some(Err(e))), next_state)) => {
+                    debug_assert!(matches!(
+                        next_state,
+                        PartialReduceHashAggregateState::Error
+                    ));
+
+                    // The handler has already discarded its state-owned resources.
+                    // Release the remaining stream-owned resources before returning.
+                    self.close_input();
+                    self.reservation.free();
+                    self.state = Some(PartialReduceHashAggregateState::Error);
+                    return Poll::Ready(Some(Err(e)));
                 }
                 ControlFlow::Break((poll, next_state)) => {
                     self.state = Some(next_state);

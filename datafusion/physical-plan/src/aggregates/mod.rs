@@ -184,7 +184,6 @@ use datafusion_common::{
     internal_err, not_impl_err,
 };
 use datafusion_execution::TaskContext;
-use datafusion_execution::memory_pool::MemoryLimit;
 use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
@@ -1270,12 +1269,7 @@ impl AggregateExec {
             && self.group_by.is_single()
     }
 
-    fn should_use_partial_reduce_hash_stream(&self, context: &TaskContext) -> bool {
-        // TODO: implement memory-limited path and remove this limitation
-        if matches!(context.memory_pool().memory_limit(), MemoryLimit::Finite(_)) {
-            return false;
-        }
-
+    fn should_use_partial_reduce_hash_stream(&self, _context: &TaskContext) -> bool {
         self.mode == AggregateMode::PartialReduce
             && self.input_order_mode == InputOrderMode::Linear
             && !self.group_by.is_true_no_grouping()
@@ -4262,10 +4256,10 @@ mod tests {
         Ok(())
     }
 
-    /// Spilling behavior is not implemented for partial-reduce stream yet, so fall
-    /// back to the existing `GroupedHashAggregateStream`
+    /// Partial-reduce hash aggregation returns `ResourcesExhausted` when its
+    /// reservation cannot grow.
     #[tokio::test]
-    async fn partial_reduce_aggregate_with_memory_limit_planning() -> Result<()> {
+    async fn partial_reduce_aggregate_with_memory_limit_returns_oom() -> Result<()> {
         let partial_reduce = partial_reduce_test_aggregate()?;
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(1, 1.0)
@@ -4281,7 +4275,13 @@ mod tests {
             );
 
         let stream = partial_reduce.execute_typed(0, &task_ctx)?;
-        assert!(matches!(stream, StreamType::GroupedHash(_)));
+        assert!(matches!(stream, StreamType::PartialReduceHash(_)));
+        let stream: SendableRecordBatchStream = stream.into();
+        let err = collect(stream).await.unwrap_err();
+        assert!(
+            matches!(err.find_root(), DataFusionError::ResourcesExhausted(_)),
+            "expected ResourcesExhausted, got: {err}"
+        );
 
         Ok(())
     }
