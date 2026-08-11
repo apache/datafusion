@@ -247,7 +247,6 @@ match_wild_err_arm = "warn"
 mem_forget = "warn"
 mismatching_type_param_order = "warn"
 mut_mut = "warn"
-mutex_integer = "warn"
 # https://github.com/apache/datafusion/issues/18503
 needless_pass_by_value = "warn"
 negative_feature_names = "warn"
