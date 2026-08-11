@@ -2474,16 +2474,18 @@ mod tests {
             Field::new("a", DataType::UInt32, false),
             Field::new("b", DataType::UInt32, false),
         ]));
+        let sort_options = [SortOptions::new(false, false), SortOptions::new(true, true)];
+        let split_points = vec![SplitPoint::new(vec![
+            ScalarValue::UInt32(Some(10)),
+            ScalarValue::UInt32(Some(20)),
+        ])];
         let range_partitioning = RangePartitioning::try_new(
             [
-                PhysicalSortExpr::new(col("a", &schema)?, SortOptions::default()),
-                PhysicalSortExpr::new(col("b", &schema)?, SortOptions::default()),
+                PhysicalSortExpr::new(col("a", &schema)?, sort_options[0]),
+                PhysicalSortExpr::new(col("b", &schema)?, sort_options[1]),
             ]
             .into(),
-            vec![SplitPoint::new(vec![
-                ScalarValue::UInt32(Some(10)),
-                ScalarValue::UInt32(Some(20)),
-            ])],
+            split_points.clone(),
         )?;
         let expr = Arc::new(RangeExpr::try_new(
             vec![col("a", &schema)?, col("b", &schema)?],
@@ -2493,9 +2495,16 @@ mod tests {
         let rewritten =
             expr.with_new_children(vec![Arc::clone(&remapped), Arc::clone(&remapped)])?;
 
-        let children = rewritten.children();
-        assert_eq!(children.len(), 2);
-        assert_eq!(children[0], children[1]);
+        let rewritten = rewritten
+            .downcast_ref::<RangeExpr>()
+            .expect("rewritten expression should remain a RangeExpr");
+        assert_eq!(rewritten.on_columns().len(), 2);
+        assert!(Arc::ptr_eq(
+            &rewritten.on_columns()[0],
+            &rewritten.on_columns()[1]
+        ));
+        assert_eq!(rewritten.sort_options(), sort_options);
+        assert_eq!(rewritten.split_points(), split_points);
 
         Ok(())
     }
