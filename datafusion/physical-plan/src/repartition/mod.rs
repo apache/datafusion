@@ -53,6 +53,7 @@ use arrow::datatypes::{SchemaRef, UInt32Type};
 use arrow_schema::SortOptions;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, transpose};
 use datafusion_common::{
     ColumnStatistics, DataFusionError, HashMap, ScalarValue, SplitPoint,
@@ -455,6 +456,7 @@ impl RepartitionExecState {
 
         let num_input_partitions = streams_and_metrics.len();
         let num_output_partitions = partitioning.partition_count();
+        let coalesce_batches = !preserve_order && !input.boundedness().is_unbounded();
 
         let spill_manager = Arc::new(spill_manager);
 
@@ -523,9 +525,10 @@ impl RepartitionExecState {
 
             // Coalesce on the producer side, before the channel's gate, so
             // the consumer never sees the per-input-task small batches.
-            // Skip in preserve-order mode: each input has its own dedicated
-            // channel and `StreamingMergeBuilder` handles batching.
-            let shared_coalescer = (!preserve_order).then(|| {
+            // Skip in preserve-order mode, where `StreamingMergeBuilder`
+            // handles batching, and for unbounded inputs, where a residual
+            // batch could otherwise be withheld indefinitely.
+            let shared_coalescer = coalesce_batches.then(|| {
                 SharedCoalescer::new(
                     input.schema(),
                     context.session_config().batch_size(),
@@ -1126,7 +1129,8 @@ impl BatchPartitioner {
 /// Repartitioning one [`RecordBatch`] implies creating multiple smaller batches, potentially
 /// as many as the number of output partitions. [`RepartitionExec`] makes sure that the returned
 /// batches adhere to the configured `datafusion.execution.batch_size` for efficient operations,
-/// and for that, it will automatically coalesce batches right after repartitioning.
+/// and for that, it will automatically coalesce batches right after repartitioning for bounded
+/// inputs. Coalescing is skipped for unbounded inputs so partial batches are emitted promptly.
 ///
 /// For this, one shared [`LimitedBatchCoalescer`] per output partition is used:
 ///
@@ -1335,6 +1339,20 @@ impl ExecutionPlan for RepartitionExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        match self.partitioning() {
+            Partitioning::Hash(exprs, _) => crate::apply_expression_roots(exprs, f),
+            Partitioning::Range(range) => crate::apply_expression_roots(
+                range.ordering().iter().map(|sort_expr| &sort_expr.expr),
+                f,
+            ),
+            _ => Ok(TreeNodeRecursion::Continue),
+        }
     }
 
     fn with_new_children(
@@ -2224,6 +2242,7 @@ mod tests {
     use super::*;
     use crate::empty::EmptyExec;
     use crate::projection::ProjectionExpr;
+    use crate::streaming::{PartitionStream, StreamingTableExec};
     use crate::test::TestMemoryExec;
     use crate::{
         test::{
@@ -2247,6 +2266,27 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_physical_expr::{PhysicalSortExpr, RangePartitioning, SplitPoint};
     use insta::assert_snapshot;
+
+    #[derive(Debug)]
+    struct UnboundedTestPartition {
+        schema: SchemaRef,
+        batch: RecordBatch,
+    }
+
+    impl PartitionStream for UnboundedTestPartition {
+        fn schema(&self) -> &SchemaRef {
+            &self.schema
+        }
+
+        fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+            let stream = futures::stream::iter([Ok(self.batch.clone())])
+                .chain(futures::stream::pending());
+            Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&self.schema),
+                stream,
+            ))
+        }
+    }
 
     #[test]
     fn strength_reduced_u64_remainder_matches_modulo() {
@@ -2934,6 +2974,13 @@ mod tests {
             vec![]
         }
 
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
         fn with_new_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
@@ -2982,6 +3029,37 @@ mod tests {
                 assert_eq!(200, batch.num_rows());
             }
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unbounded_input_emits_before_batch_size() -> Result<()> {
+        let schema = test_schema(false);
+        let batch = create_batch();
+        let source = Arc::new(StreamingTableExec::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(UnboundedTestPartition {
+                schema: Arc::clone(&schema),
+                batch: batch.clone(),
+            })],
+            None,
+            vec![],
+            true,
+            None,
+        )?);
+        let exec = RepartitionExec::try_new(source, Partitioning::RoundRobinBatch(1))?;
+        let session_config = SessionConfig::new().with_batch_size(batch.num_rows() * 2);
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(session_config));
+
+        let mut stream = exec.execute(0, task_ctx)?;
+        let output =
+            tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+                .await
+                .expect("unbounded repartition withheld a partial batch")
+                .expect("unbounded input ended unexpectedly")?;
+
+        assert_eq!(batch, output);
         Ok(())
     }
 
@@ -4167,6 +4245,13 @@ mod test {
             ],
         )?);
         let exec = RepartitionExec::try_new(source, partitioning)?;
+
+        let mut expressions = vec![];
+        exec.apply_expressions(&mut |expr| {
+            expressions.push(expr.to_string());
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        assert_eq!(expressions, ["c0@0"]);
 
         // Range partition count is fixed by split points, so repartitioned()
         // cannot change it to an arbitrary target.

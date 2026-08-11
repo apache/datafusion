@@ -34,7 +34,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
-use crate::regex::compile_regex;
+use crate::regex::{compile_regex, start_to_byte_offset};
 
 #[user_doc(
     doc_section(label = "Regular Expression Functions"),
@@ -383,17 +383,7 @@ fn get_index(
         ));
     }
 
-    let Ok(start_index) = usize::try_from(start - 1) else {
-        return Ok(0);
-    };
-    // Include the terminal byte boundary so an empty pattern can match after
-    // the last character, including in an empty string.
-    let Some(byte_start_offset) = value
-        .char_indices()
-        .map(|(offset, _)| offset)
-        .chain(std::iter::once(value.len()))
-        .nth(start_index)
-    else {
+    let Some(byte_start_offset) = start_to_byte_offset(value, start) else {
         return Ok(0);
     };
     let search_slice = &value[byte_start_offset..];
