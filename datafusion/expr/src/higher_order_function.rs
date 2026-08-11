@@ -270,18 +270,6 @@ pub struct LambdaArgument {
 }
 
 impl LambdaArgument {
-    /// Build a [`LambdaArgument`] for a lambda whose body references the
-    /// subset of `params` named in `used_params`.
-    ///
-    /// [`Self::evaluate`] only materialises the closures whose parameter name
-    /// appears in `used_params`, preserving the original declaration order of
-    /// `params`. Unused declared parameters therefore leave no slot in the
-    /// merged batch, so the body's compressed column indices line up directly
-    /// with the columns the evaluator built.
-    ///
-    /// Callers with a `LambdaExpr` in hand should pass `lambda.used_params()`;
-    /// that method already computes the exact set required here (with
-    /// nested-lambda shadow tracking).
     pub fn new(
         params: Vec<FieldRef>,
         body: Arc<dyn PhysicalExpr>,
@@ -322,6 +310,11 @@ impl LambdaArgument {
     /// Evaluate this lambda
     /// `args` should evaluate to the value of each parameter
     /// of the correspondent lambda returned in [HigherOrderUDFImpl::lambda_parameters].
+    ///
+    /// Only the closures in `args` for parameters the lambda body actually
+    /// references are called; closures for declared-but-unused parameters
+    /// are skipped entirely. Callers should not rely on every closure in
+    /// `args` being invoked.
     ///
     /// `spread_captures` is responsible for transforming the captured column arrays
     /// so they align with the evaluation batch. Captures are snapshotted from the
@@ -1738,5 +1731,118 @@ mod tests {
             name.into(),
             Some(Arc::new(Field::new(name, dt, nullable))),
         ))
+    }
+
+    /// A physical expression that reads the column at a fixed index of the
+    /// batch it is evaluated against, for exercising [`LambdaArgument`]
+    /// directly without depending on `datafusion-physical-expr`.
+    #[derive(Debug, Eq, PartialEq, Hash)]
+    struct ColumnAt(usize);
+
+    impl std::fmt::Display for ColumnAt {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "column_at({})", self.0)
+        }
+    }
+
+    impl PhysicalExpr for ColumnAt {
+        fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Array(Arc::clone(batch.column(self.0))))
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            Ok(self)
+        }
+
+        fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{self}")
+        }
+    }
+
+    /// `(k, v) -> v` with only `v` used must push `v`'s array, not `k`'s.
+    #[test]
+    fn test_lambda_argument_evaluate_pushes_only_used_param() {
+        use arrow::array::Int32Array;
+
+        let k_field = Arc::new(Field::new("k", DataType::Int32, true));
+        let v_field = Arc::new(Field::new("v", DataType::Int32, true));
+
+        let body = Arc::new(ColumnAt(0)) as Arc<dyn PhysicalExpr>;
+        let used_params: HashSet<String> = ["v".to_string()].into_iter().collect();
+
+        let lambda_arg =
+            LambdaArgument::new(vec![k_field, v_field], body, None, &used_params);
+
+        let k_values: ArrayRef = Arc::new(Int32Array::from(vec![100, 200, 300]));
+        let v_values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let k_closure = || -> Result<ArrayRef> { Ok(Arc::clone(&k_values)) };
+        let v_closure = || -> Result<ArrayRef> { Ok(Arc::clone(&v_values)) };
+        let args: Vec<&dyn Fn() -> Result<ArrayRef>> = vec![&k_closure, &v_closure];
+
+        let result = lambda_arg
+            .evaluate(&args, |arrays| Ok(arrays.to_vec()))
+            .unwrap();
+        let ColumnarValue::Array(result) = result else {
+            unreachable!()
+        };
+
+        assert_eq!(
+            result.as_any().downcast_ref::<Int32Array>().unwrap(),
+            &Int32Array::from(vec![1, 2, 3]),
+            "body should read v's values, not k's"
+        );
+    }
+
+    /// Same as above, but with a capture occupying the leading slot.
+    #[test]
+    fn test_lambda_argument_evaluate_pushes_only_used_param_with_captures() {
+        use arrow::array::Int32Array;
+
+        let cap_field = Arc::new(Field::new("cap", DataType::Int32, true));
+        let k_field = Arc::new(Field::new("k", DataType::Int32, true));
+        let v_field = Arc::new(Field::new("v", DataType::Int32, true));
+
+        let body = Arc::new(ColumnAt(1)) as Arc<dyn PhysicalExpr>;
+        let used_params: HashSet<String> = ["v".to_string()].into_iter().collect();
+
+        let cap_values: ArrayRef = Arc::new(Int32Array::from(vec![9, 9, 9]));
+        let captures = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![cap_field])),
+            vec![cap_values],
+        )
+        .unwrap();
+
+        let lambda_arg = LambdaArgument::new(
+            vec![k_field, v_field],
+            body,
+            Some(captures),
+            &used_params,
+        );
+
+        let k_values: ArrayRef = Arc::new(Int32Array::from(vec![100, 200, 300]));
+        let v_values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let k_closure = || -> Result<ArrayRef> { Ok(Arc::clone(&k_values)) };
+        let v_closure = || -> Result<ArrayRef> { Ok(Arc::clone(&v_values)) };
+        let args: Vec<&dyn Fn() -> Result<ArrayRef>> = vec![&k_closure, &v_closure];
+
+        let result = lambda_arg
+            .evaluate(&args, |arrays| Ok(arrays.to_vec()))
+            .unwrap();
+        let ColumnarValue::Array(result) = result else {
+            unreachable!()
+        };
+
+        assert_eq!(
+            result.as_any().downcast_ref::<Int32Array>().unwrap(),
+            &Int32Array::from(vec![1, 2, 3]),
+            "body should read v's values, not k's or the capture's"
+        );
     }
 }

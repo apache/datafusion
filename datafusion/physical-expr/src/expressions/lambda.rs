@@ -43,14 +43,6 @@ pub struct LambdaExpr {
     body: Arc<dyn PhysicalExpr>,
     projected_body: Arc<dyn PhysicalExpr>,
     projection: Vec<usize>,
-    /// Subset of `params` (by name) that the body actually references,
-    /// computed with nested-lambda shadow tracking. Empty when no parameter
-    /// is referenced by this lambda's own body.
-    ///
-    /// The higher-order function uses this to only evaluate and push the
-    /// parameters the body actually needs into the merged evaluation batch,
-    /// which keeps the body's compressed column indices aligned with the
-    /// batch layout produced at runtime.
     used_params: HashSet<String>,
 }
 
@@ -185,11 +177,7 @@ impl LambdaExpr {
     }
 
     /// Subset of [`params`](Self::params) (by name) that the body actually
-    /// references, taking nested-lambda shadowing into account. Used by the
-    /// higher-order function evaluator to skip evaluating/pushing parameters
-    /// the lambda body does not need, so that unused declared parameters do
-    /// not shift the merged batch's column positions out of sync with the
-    /// body's compressed indices.
+    /// references. See `CollectUsedVisitor` in this module.
     pub fn used_params(&self) -> &HashSet<String> {
         &self.used_params
     }
@@ -201,14 +189,21 @@ impl LambdaExpr {
 ///   anywhere in the tree (including inside nested lambdas). This drives
 ///   the `projection` used to slice the outer batch.
 /// * `used_param_names` — the subset of *this* lambda's `own_params` that
-///   the body actually references, with nested-lambda parameters shadowing
-///   the outer ones. For example, in
-///   `(k, v) -> func(col, (k, v2) -> k + v2 + v)` the inner `k` shadows the
-///   outer `k`, so only `v` flows up as used.
+///   the body actually references.
 ///
-/// The shadow stack uses `TreeNodeVisitor`'s `f_down` / `f_up` callbacks
-/// directly: push a frame when entering a nested [`LambdaExpr`], pop it
-/// when leaving.
+///   A nested lambda can declare its own parameter with the same name as
+///   one of `own_params` — a distinct variable that happens to reuse the
+///   name (variable shadowing). E.g. in
+///   `(k, v) -> func(col, (k, v2) -> k + v2 + v)`, the inner `k` is not
+///   `own_params`' `k`; only `v` should flow up as used, not `k`.
+///
+///   `shadow_stack` holds one frame per nested `LambdaExpr` currently being
+///   visited, each frame being that lambda's own parameter names. A
+///   `LambdaVariable` only counts toward `used_param_names` if its name
+///   isn't in any active frame (i.e. not shadowed).
+///
+/// The stack is maintained via `TreeNodeVisitor`'s `f_down` / `f_up`:
+/// push a frame when entering a nested [`LambdaExpr`], pop it when leaving.
 struct CollectUsedVisitor<'a> {
     own_params: &'a HashSet<String>,
     used_indices: HashSet<usize>,
@@ -388,10 +383,7 @@ mod tests {
         assert_eq!(used.len(), 1);
     }
 
-    /// A lambda whose body references neither declared parameter (e.g. a
-    /// constant expression) must report an empty used-params set. This
-    /// exercises the merged-batch path that has no parameter columns to
-    /// push at all.
+    /// A body that references neither declared parameter reports no used params.
     #[test]
     fn test_used_params_all_unused() {
         let body = Arc::new(NoOp::new());
@@ -403,9 +395,7 @@ mod tests {
         assert!(lambda.used_params().is_empty());
     }
 
-    /// A three-parameter lambda whose body skips the middle parameter must
-    /// report only the first and last as used, preserving declaration
-    /// order regardless of how [`Self::used_params`] (a set) reports them.
+    /// A three-parameter lambda that skips the middle parameter reports only the ends as used.
     #[test]
     fn test_used_params_three_params_middle_unused() {
         let a_field = Arc::new(Field::new("a", DataType::Int32, true));
@@ -429,11 +419,7 @@ mod tests {
         assert_eq!(used.len(), 2);
     }
 
-    /// A two-parameter lambda whose body references both parameters, but in
-    /// the reverse of their declared order (`v` before `k`), must still
-    /// report both as used. Declaration order (not reference order) is what
-    /// downstream code (`LambdaArgument::new`) relies on when it maps these
-    /// names back to positions in the merged batch.
+    /// Referencing params out of declaration order still reports both as used.
     #[test]
     fn test_used_params_both_used_in_reverse_reference_order() {
         let k_field = Arc::new(Field::new("k", DataType::Int32, true));
