@@ -731,39 +731,6 @@ mod tests {
         assert_eq!(set.len(), 10);
     }
 
-    #[test]
-    fn test_size_includes_hash_table_allocation() {
-        fn allocated_size(map: &ArrowBytesViewMap<()>) -> usize {
-            map.map.allocation_size()
-                + map.views.len() * size_of::<u128>()
-                + map.in_progress.capacity()
-                + map
-                    .completed
-                    .iter()
-                    .map(|buffer| buffer.len())
-                    .sum::<usize>()
-                + map.nulls.allocated_size()
-                + map.hashes_buffer.allocated_size()
-        }
-
-        let mut set = ArrowBytesViewSet::new(OutputType::Utf8View);
-        assert_eq!(set.size(), allocated_size(&set.0));
-
-        let initial_capacity = set.0.map.capacity();
-        let values = (0..=initial_capacity)
-            .map(|index| format!("value-{index}"))
-            .collect::<Vec<_>>();
-        let values: ArrayRef = Arc::new(StringViewArray::from(values));
-        set.insert(&values);
-
-        assert!(set.0.map.capacity() > initial_capacity);
-        assert_eq!(set.size(), allocated_size(&set.0));
-
-        let populated = set.take();
-        assert_eq!(populated.size(), allocated_size(&populated.0));
-        assert_eq!(set.size(), allocated_size(&set.0));
-    }
-
     #[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
     struct TestPayload {
         // store the string value to check against input

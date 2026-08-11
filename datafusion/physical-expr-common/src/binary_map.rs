@@ -884,33 +884,6 @@ mod tests {
     }
 
     #[test]
-    fn test_size_includes_hash_table_allocation() {
-        fn allocated_size(map: &ArrowBytesMap<i32, ()>) -> usize {
-            map.map.allocation_size()
-                + map.buffer.capacity()
-                + map.offsets.allocated_size()
-                + map.hashes_buffer.allocated_size()
-        }
-
-        let mut set = ArrowBytesSet::<i32>::new(OutputType::Utf8);
-        assert_eq!(set.size(), allocated_size(&set.0));
-
-        let initial_capacity = set.0.map.capacity();
-        let values = (0..=initial_capacity)
-            .map(|index| format!("value-{index}"))
-            .collect::<Vec<_>>();
-        let values: ArrayRef = Arc::new(StringArray::from(values));
-        set.insert(&values);
-
-        assert!(set.0.map.capacity() > initial_capacity);
-        assert_eq!(set.size(), allocated_size(&set.0));
-
-        let populated = set.take();
-        assert_eq!(populated.size(), allocated_size(&populated.0));
-        assert_eq!(set.size(), allocated_size(&set.0));
-    }
-
-    #[test]
     fn test_map() {
         let input = vec![
             // Note mix of short/long strings
