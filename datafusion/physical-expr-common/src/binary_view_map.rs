@@ -756,6 +756,23 @@ mod tests {
             + map.hashes_buffer.allocated_size();
         assert_eq!(map.size(), expected_size);
 
+        // Verify the retained-capacity delta independently from the production formula.
+        let legacy_size = map.map_size
+            + map.views.len() * size_of::<u128>()
+            + map.in_progress.capacity()
+            + map.completed.iter().map(Buffer::len).sum::<usize>()
+            + map.nulls.allocated_size()
+            + map.hashes_buffer.allocated_size();
+        let retained_capacity_delta = (map.views.capacity() - map.views.len())
+            * size_of::<u128>()
+            + map.completed.capacity() * size_of::<Buffer>()
+            + map
+                .completed
+                .iter()
+                .map(|buffer| buffer.capacity() - buffer.len())
+                .sum::<usize>();
+        assert_eq!(map.size() - legacy_size, retained_capacity_delta);
+
         let size_after_insert = map.size();
         map.insert_if_new(&values, |_| (), |_| {});
         assert_eq!(map.size(), size_after_insert);
