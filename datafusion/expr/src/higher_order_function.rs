@@ -411,15 +411,16 @@ fn merge_captures_with_variables(
     };
 
     if columns.is_empty() {
-        // Constant lambda body with no captures and no used parameters. We
-        // still need a row count for the merged batch, so evaluate one
-        // variable just to derive it. This is essentially free in the common
-        // case (the variables already exist as closures over arrays the
-        // caller computed up front).
-        let row_count = match variables.first() {
-            Some(first) => first()?.len(),
-            None => 0,
-        };
+        // No columns to derive a row count from, so borrow one variable's
+        // array length instead (all variables have the same length).
+        let row_count = variables
+            .first()
+            .ok_or_else(|| {
+                internal_datafusion_err!(
+                    "merge_captures_with_variables: no variables to derive a row count from"
+                )
+            })?()?
+        .len();
         return Ok(RecordBatch::try_new_with_options(
             schema,
             vec![],
