@@ -555,6 +555,7 @@ mod parquet {
                         compression.clone()
                     }
                 }),
+                data_page_compression_ratio_threshold: None,
                 dictionary_enabled: proto.dictionary_enabled_opt.as_ref().map(|opt| {
                     match opt {
                         parquet_options::DictionaryEnabledOpt::DictionaryEnabled(
@@ -667,6 +668,7 @@ mod parquet {
             compression: proto
                 .compression_opt
                 .map(|parquet_column_options::CompressionOpt::Compression(v)| v),
+            data_page_compression_ratio_threshold: None,
             statistics_enabled: proto.statistics_enabled_opt.map(
                 |parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled(v)| v,
             ),

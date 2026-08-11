@@ -160,6 +160,13 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
                 builder = builder
                     .set_column_bloom_filter_max_ndv(path.clone(), bloom_filter_ndv);
             }
+
+            if let Some(compression_threshold) = options.data_page_compression_ratio_threshold {
+                builder = builder.set_column_data_page_v2_compression_ratio_threshold(
+                    path.clone(),
+                    compression_threshold,
+                );
+            }
         }
 
         Ok(builder)
@@ -215,6 +222,7 @@ impl ParquetOptions {
             write_batch_size,
             writer_version,
             compression,
+            data_page_compression_ratio_threshold: compression_threshold,
             dictionary_enabled,
             dictionary_page_size_limit,
             statistics_enabled,
@@ -284,6 +292,10 @@ impl ParquetOptions {
         // Therefore, only overwrite if these settings exist.
         if let Some(compression) = compression {
             builder = builder.set_compression(parse_compression_string(compression)?);
+        }
+        if let Some(compression_threshold) = compression_threshold {
+            builder = builder
+                .set_data_page_v2_compression_ratio_threshold(*compression_threshold);
         }
         if let Some(encoding) = encoding {
             builder = builder.set_encoding(parse_encoding_string(encoding)?);
@@ -450,6 +462,7 @@ mod tests {
     ) -> ParquetColumnOptions {
         ParquetColumnOptions {
             compression: Some("zstd(22)".into()),
+            data_page_compression_ratio_threshold: Some(0.9),
             dictionary_enabled: src_col_defaults.dictionary_enabled.map(|v| !v),
             statistics_enabled: Some("none".into()),
             encoding: Some("RLE".into()),
@@ -473,6 +486,7 @@ mod tests {
             write_batch_size: 42,
             writer_version,
             compression: Some("zstd(22)".into()),
+            data_page_compression_ratio_threshold: Some(0.9),
             dictionary_enabled: Some(!defaults.dictionary_enabled.unwrap_or(false)),
             dictionary_page_size_limit: 43,
             statistics_enabled: Some("chunk".into()),
@@ -528,6 +542,7 @@ mod tests {
                 }
                 _ => None,
             },
+            data_page_compression_ratio_threshold: Some(props.data_page_v2_compression_ratio_threshold()),
             statistics_enabled: Some(
                 match props.statistics_enabled(&col) {
                     EnabledStatistics::None => "none",
@@ -599,6 +614,7 @@ mod tests {
                 // global options which set the default column props
                 encoding: default_col_props.encoding,
                 compression: default_col_props.compression,
+                data_page_compression_ratio_threshold: default_col_props.data_page_compression_ratio_threshold,
                 dictionary_enabled: default_col_props.dictionary_enabled,
                 statistics_enabled: default_col_props.statistics_enabled,
                 bloom_filter_on_write: default_col_props
