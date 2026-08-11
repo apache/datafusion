@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Inviting New Committers and PMC Members &#8212; Apache DataFusion  documentation</title>
+    <title>Reviewing Pull Requests &#8212; Apache DataFusion  documentation</title>
   
   
   
@@ -42,13 +42,13 @@
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'contributor-guide/inviting';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'contributor-guide/pr_review';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
     <link rel="icon" href="../_static/favicon.svg"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Specifications" href="specification/index.html" />
-    <link rel="prev" title="Governance" href="governance.html" />
+    <link rel="next" title="Community Communication" href="communication.html" />
+    <link rel="prev" title="Introduction" href="index.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
@@ -338,7 +338,7 @@
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="index.html">Introduction</a></li>
 
-<li class="toctree-l1"><a class="reference internal" href="pr_review.html">Reviewing Pull Requests</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Reviewing Pull Requests</a></li>
 <li class="toctree-l1"><a class="reference internal" href="communication.html">Community Communication</a></li>
 <li class="toctree-l1"><a class="reference internal" href="development_environment.html">Development Environment</a></li>
 <li class="toctree-l1"><a class="reference internal" href="architecture.html">Architecture</a></li>
@@ -349,7 +349,7 @@
 <li class="toctree-l1"><a class="reference internal" href="release_management.html">Release Management</a></li>
 <li class="toctree-l1"><a class="reference internal" href="roadmap.html">Roadmap and Improvement Proposals</a></li>
 <li class="toctree-l1"><a class="reference internal" href="governance.html">Governance</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Inviting New Committers and PMC Members</a></li>
+<li class="toctree-l1"><a class="reference internal" href="inviting.html">Inviting New Committers and PMC Members</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="specification/index.html">Specifications</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="specification/invariants.html">Invariants</a></li>
 <li class="toctree-l2"><a class="reference internal" href="specification/output-field-name-semantic.html">Output field name semantics</a></li>
@@ -409,7 +409,7 @@
         <i class="fa-solid fa-home"></i>
       </a>
     </li>
-    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Inviting New Committers and PMC Members</span></li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Reviewing Pull Requests</span></li>
   </ul>
 </nav>
 </div>
@@ -444,371 +444,203 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="inviting-new-committers-and-pmc-members">
-<h1>Inviting New Committers and PMC Members<a class="headerlink" href="#inviting-new-committers-and-pmc-members" title="Link to this heading">#</a></h1>
-<p>This is a cookbook of the recommended DataFusion specific process for inviting
-new committers and PMC members. It is intended to follow the <a class="reference external" href="https://www.apache.org/dev/pmc.html">Apache Project
-Management Committee guidelines</a>, which takes precedence over this document if
-there is a conflict.</p>
-<p>This process is intended for PMC members. While the process is open, the actual
-discussions and invitations are not (one of the very few things that we do not
-do in the open).</p>
-<p>When following this process, in doubt, check the <code class="docutils literal notranslate"><span class="pre">private&#64;datafusion.apache.org</span></code>
-<a class="reference external" href="https://lists.apache.org/list.html?dev&#64;datafusion.apache.org">mailing list archive</a> for examples of previous emails.</p>
-<p>The general process is:</p>
+<section id="reviewing-pull-requests">
+<h1>Reviewing Pull Requests<a class="headerlink" href="#reviewing-pull-requests" title="Link to this heading">#</a></h1>
+<p>When reviewing PRs, our primary goal is to improve DataFusion and its community
+together. PR feedback should be constructive and help improve the code as well
+as the understanding of the contributor.</p>
+<p>Review bandwidth is currently our most limited resource, and reviews from the
+broader community are both welcomed and encouraged. Reviewing PRs is a great way
+to learn the codebase, and you do not need to be a committer to leave valuable
+review feedback. In fact, one of the best ways to become a committer is to
+thoughtfully review other PRs.</p>
+<p>Please ensure any comments you leave contain a rationale and suggested
+alternative – it is frustrating to be told “don’t do it this way” without any
+clear reason or alternative provided.</p>
+<p>The criteria in this guide are also a useful checklist when preparing your own
+PR for review.</p>
+<section id="pr-review-mechanics">
+<h2>PR Review Mechanics<a class="headerlink" href="#pr-review-mechanics" title="Link to this heading">#</a></h2>
+<p>Some helpful links:</p>
+<ul class="simple">
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+-review%3Aapproved+-is%3Adraft+">PRs Waiting for Review</a> on GitHub</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+review%3Aapproved+-is%3Adraft">Approved PRs Waiting for Merge</a> on GitHub</p></li>
+</ul>
+<p>The overall PR lifecycle (CI triggering, approval, the 24-hour rule for
+“major” PRs, and merging) is described in the
+<a class="reference internal" href="index.html#pull-request-overview"><span class="std std-ref">Pull Request Overview</span></a> section of the
+contributor guide.</p>
+<p>Practical tips:</p>
 <ol class="arabic simple">
-<li><p>A PMC member starts a discussion on <code class="docutils literal notranslate"><span class="pre">private&#64;datafusion.apache.org</span></code>
-about a candidate they feel should be considered who would use the additional
-trust granted to a committer or PMC member to help the community grow and thrive.</p></li>
-<li><p>When consensus is reached a formal <a class="reference external" href="https://www.apache.org/foundation/voting">vote</a> occurs</p></li>
-<li><p>Assuming the vote is successful, that person is granted the appropriate
-access via ASF systems.</p></li>
+<li><p>Check out the changes locally to explore them in your IDE or with an
+agent, e.g. <code class="docutils literal notranslate"><span class="pre">gh</span> <span class="pre">pr</span> <span class="pre">checkout</span> <span class="pre">&lt;PR</span> <span class="pre">number&gt;</span></code> using the <a class="reference external" href="https://cli.github.com/">GitHub CLI</a>.</p></li>
+<li><p>There is normally no need to rerun locally any tests that CI has already run.</p></li>
+<li><p>Leave comments on specific lines of the diff where possible, so the
+discussion has context.</p></li>
+<li><p>If you review a PR but don’t feel confident approving it, leaving comments
+is still valuable: a partial review (e.g. “I reviewed the tests and they
+look good”) helps the next reviewer focus their time.</p></li>
+<li><p>Anything that does not need to block the current PR can be noted as a
+potential follow-up (ideally by filing an issue), keeping the PR focused
+and quick to merge.</p></li>
 </ol>
-<section id="new-committers">
-<h2>New Committers<a class="headerlink" href="#new-committers" title="Link to this heading">#</a></h2>
-<section id="step-1-start-a-discussion-thread">
-<h3>Step 1: Start a Discussion Thread<a class="headerlink" href="#step-1-start-a-discussion-thread" title="Link to this heading">#</a></h3>
-<p>The goal of this step is to allow free form discussion prior to calling a vote.
-This helps the other PMC members understand why you are proposing to invite the
-person to become a committer and makes the voting process easier.</p>
-<p>Best practice is to include some details about why you are proposing to invite
-the person. Here is an example:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: private@datafusion.apache.org
-Subject: [DISCUSS] $PERSONS_NAME for Committer
-
-$PERSONS_NAME has been an active contributor to the DataFusion community for the
-last 6 months[1][2], helping others, answering questions, and improving the
-project&#39;s code.
-
-Are there any thoughts about inviting $PERSONS_NAME to become a committer?
-
-Thanks,
-Your Name
-
-[1]: https://github.com/apache/datafusion/issues?q=commenter%3A&lt;github id&gt;
-[2]: https://github.com/apache/datafusion/commits?author=&lt;github id&gt;
-</pre></div>
-</div>
 </section>
-<section id="step-2-formal-vote">
-<h3>Step 2: Formal Vote<a class="headerlink" href="#step-2-formal-vote" title="Link to this heading">#</a></h3>
-<p>Assuming the discussion thread goes well, start a formal vote, with an email like:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: private@datafusion.apache.org
-Subject: [VOTE] $PERSONS_NAME for DataFusion Committer
-I propose to invite $PERSONS_NAME to be a committer. See discussion here [1].
-
-[ ] +1 : Invite $PERSONS_NAME to become a committer
-[ ] +0: ...
-[ ] -1: I disagree because ...
-
-The vote will be open for at least 7 days.
-
-My vote: +1
-
-Thanks,
-Your Name
-
-[1] LINK TO DISCUSSION THREAD (e.g. https://lists.apache.org/thread/7rocc026wckknrjt9j6bsqk3z4c0g5yf)
-</pre></div>
-</div>
-<p>If the vote passes (requires 3 <code class="docutils literal notranslate"><span class="pre">+1</span></code>, and no <code class="docutils literal notranslate"><span class="pre">-1</span></code> votes) , send a result email
-like the following (substitute <code class="docutils literal notranslate"><span class="pre">N</span></code> with the number of <code class="docutils literal notranslate"><span class="pre">+1</span></code> votes)</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>to: private@datafusion.apache.org
-subject: [RESULT][VOTE] $PERSONS_NAME for DataFusion Committer
-
-The vote carries with N +1 votes.
-</pre></div>
-</div>
-</section>
-<section id="step-3-send-invitation-to-the-candidate">
-<h3>Step 3: Send Invitation to the Candidate<a class="headerlink" href="#step-3-send-invitation-to-the-candidate" title="Link to this heading">#</a></h3>
-<p>Once the vote on <code class="docutils literal notranslate"><span class="pre">private&#64;</span></code> has passed and the <code class="docutils literal notranslate"><span class="pre">[RESULT]</span></code> e-mail sent, send an
-invitation to the new committer and cc: <code class="docutils literal notranslate"><span class="pre">private&#64;datafusion.apache.org</span></code></p>
-<p>In order to be given write access, the committer needs an apache.org account (e.g. <code class="docutils literal notranslate"><span class="pre">name&#64;apache.org</span></code>). To get one they need:</p>
+<section id="review-the-pr-description">
+<h2>Review the PR Description<a class="headerlink" href="#review-the-pr-description" title="Link to this heading">#</a></h2>
+<p>The PR description is often what users and contributors will find when they have
+a question about the intention behind a change, or when the code itself is not
+clear. The PR description also becomes the extended commit message.</p>
+<p>Check that the description:</p>
 <ol class="arabic simple">
-<li><p>An <a class="reference external" href="http://www.apache.org/licenses/#clas">ICLA</a> on file. Note that Sending an ICLA to <code class="docutils literal notranslate"><span class="pre">secretary&#64;apache.org</span></code> will trigger account creation. If they already have an ICLA on file, but no Apache account, see instructions below.</p></li>
-<li><p>Add GitHub username to the account at <a class="reference external" href="http://id.apache.org/">id.apache.org</a></p></li>
-<li><p>Connect <a class="reference external" href="https://gitbox.apache.org">gitbox.apache.org</a> to their GitHub account</p></li>
-<li><p>Follow the instructions at <a class="reference external" href="https://gitbox.apache.org">gitbox.apache.org</a> to link your GitHub account with your</p></li>
+<li><p>Concisely describes the <strong>problem being solved from the user’s point of
+view</strong>.</p></li>
+<li><p>Follows the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/.github/pull_request_template.md">PR template</a>, and answers the template’s questions.</p></li>
+<li><p>Accurately describes the content of the PR, including any relevant context or
+background.
+Great descriptions have a high signal-to-noise ratio, summarizing
+important implementation changes without repeating technical minutiae that
+are already present in the code itself.</p></li>
+<li><p>Explicitly calls out any user-facing or API changes (see
+<a class="reference internal" href="#review-the-code">Review the Code</a> below).</p></li>
 </ol>
-<p>If the new committer is already a committer on another Apache project (so they
-already had an Apache account), The PMC Chair (or an ASF member) simply needs to
-explicitly add them to the roster on the <a class="reference external" href="https://whimsy.apache.org/roster/committee/datafusion">Whimsy Roster Tool</a>.</p>
 </section>
-<section id="step-4-announce-and-celebrate-the-new-committer">
-<h3>Step 4: Announce and Celebrate the New Committer<a class="headerlink" href="#step-4-announce-and-celebrate-the-new-committer" title="Link to this heading">#</a></h3>
-<p>Email to Send an email such as the following to
-<a class="reference external" href="mailto:dev&#37;&#52;&#48;datafusion&#46;apache&#46;org">dev<span>&#64;</span>datafusion<span>&#46;</span>apache<span>&#46;</span>org</a> to celebrate and
-acknowledge the new committer to the community.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: dev@datafusion.apache.org
-Subject: [ANNOUNCE] New DataFusion committer: $NEW_COMMITTER
-
-On behalf of the DataFusion PMC, I&#39;m happy to announce that $NEW_COMMITTER
-has accepted an invitation to become a committer on Apache
-DataFusion. Welcome, and thank you for your contributions!
-
-&lt;your name&gt;
-</pre></div>
-</div>
+<section id="review-the-code-comments">
+<h2>Review the Code Comments<a class="headerlink" href="#review-the-code-comments" title="Link to this heading">#</a></h2>
+<p>The goal of code comments is to help future readers of the code understand what
+is not obvious from reading the code itself. Great comments make the code easier
+to reason about for readers with the expected background, and help future
+maintainers.</p>
+<p>Some practical guidelines for reviewing comments:</p>
+<ol class="arabic simple">
+<li><p>The code has adequate comments focused on the <strong>rationale</strong> for any
+non-obvious change (the “why”), not a restatement of what the code does
+(the “what”), which is typically clear from reading the code itself.</p></li>
+<li><p>Comments do not narrate irrelevant internal implementation details or the
+history of how the change was developed (this is common in LLM-assisted
+code, e.g. “// changed to use a HashMap” or “// this handles the case
+mentioned above”). Such comments become irrelevant as soon as the PR merges.</p></li>
+<li><p>When comments refer to other structs, functions, or modules, they should use
+<a class="reference external" href="https://doc.rust-lang.org/rustdoc/write-documentation/linking-to-items-by-name.html">rustdoc intra-doc links</a> (e.g. <code class="docutils literal notranslate"><span class="pre">[`SessionContext`]</span></code>) rather than plain
+text names, so that <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">doc</span></code> link checking ensures the references stay
+valid as the code evolves.</p></li>
+<li><p>New public APIs have doc comments, including examples where appropriate
+(doc examples are also tested by CI, so they double as test coverage).</p></li>
+<li><p>When documenting modules, functions, or fields, start with simple examples
+and intuitive explanations, and optionally add formal, math-like
+definitions when necessary. This makes the implementation easier to reason
+about.</p></li>
+<li><p>When something is confusing on first read, treat that as a good
+opportunity to improve the comments.</p></li>
+</ol>
 </section>
+<section id="review-the-test-coverage">
+<h2>Review the Test Coverage<a class="headerlink" href="#review-the-test-coverage" title="Link to this heading">#</a></h2>
+<p>Check that the feature or fix is covered sufficiently with tests (see the
+<a class="reference internal" href="testing.html"><span class="std std-doc">Testing</span></a> guide for more details): the PR should include tests for
+any new functionality, and a bug fix should include a test that reproduces the
+reported problem.</p>
+<p>Guidelines for evaluating tests:</p>
+<ol class="arabic simple">
+<li><p>Prefer <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> (<code class="docutils literal notranslate"><span class="pre">.slt</span></code>) tests or DataFrame API tests where
+possible, as they exercise <strong>user-visible behavior</strong> and are less coupled
+to internal implementation details than unit tests.</p></li>
+<li><p>Verify tests cover edge cases and common failure scenarios, not just the
+common successful path. However, it is NOT necessary to test every possible
+error path, especially if it is difficult to trigger or unlikely to occur in
+practice.</p></li>
+<li><p>Verify test coverage of changed code using the <code class="docutils literal notranslate"><span class="pre">codecov</span></code> check on the PR,
+or by running <a class="reference external" href="https://github.com/taiki-e/cargo-llvm-cov"><code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">llvm-cov</span></code></a> locally for an HTML report. Use judgment
+about any uncovered lines – the goal is confidence in the change, not
+slavishly hitting some coverage number.</p></li>
+<li><p>Avoid tests with lots of repeated boilerplate: when many tests share
+near-identical setup, it is hard to understand what is different
+(and thus what is actually being tested) between them. Make the <em>difference</em>
+between cases obvious.</p></li>
+<li><p>Check that tests assert on specific expected values or plans (e.g. via
+<code class="docutils literal notranslate"><span class="pre">insta</span></code> snapshots or <code class="docutils literal notranslate"><span class="pre">.slt</span></code> expected output) rather than merely checking
+“no error occurred”.</p></li>
+<li><p>Verify tests actually cover the bug (“Ablation Testing”): For bug fixes, revert
+the fix locally and check that the new test fails without it (i.e. the test
+actually reproduces the bug or covers the new feature).</p></li>
+</ol>
 </section>
-<section id="email-templates-for-inviting-new-committers">
-<h2>Email Templates for Inviting New Committers<a class="headerlink" href="#email-templates-for-inviting-new-committers" title="Link to this heading">#</a></h2>
-<section id="committers-without-an-apache-account-and-without-icla-on-file">
-<h3>Committers WITHOUT an Apache account and WITHOUT ICLA on file<a class="headerlink" href="#committers-without-an-apache-account-and-without-icla-on-file" title="Link to this heading">#</a></h3>
-<p>You can check here to see if someone has an Apache account: http://people.apache.org/committer-index.html</p>
-<p>If you aren’t sure whether someone has an ICLA on file, ask the DataFusion PMC
-chair or an ASF Member to check <a class="reference external" href="https://whimsy.apache.org/officers/unlistedclas.cgi">the ICLA file list</a>.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: $EMAIL
-Cc: private@datafusion.apache.org
-Subject: Invitation to become a DataFusion Committer
-
-Dear $NEW_COMMITTER,
-
-The DataFusion Project Management Committee (PMC) hereby offers you
-committer privileges to the project. These privileges are offered on
-the understanding that you&#39;ll use them reasonably and with common
-sense. We like to work on trust rather than unnecessary constraints.
-
-Being a committer enables you to merge PRs to DataFusion git repositories.
-
-Being a committer does not require you to participate any more than
-you already do. It does tend to make one even more committed. You will
-probably find that you spend more time here.
-
-Of course, you can decline and instead remain as a contributor,
-participating as you do now.
-
-A. This personal invitation is a chance for you to accept or decline
-in private. Either way, please let us know in reply to this email, make sure to reply-all (it should send a copy to
-private@datafusion.apache.org) for record keeping / log of the project.
-
-B. If you accept, the next step is to register an ICLA:
-
-Details of the iCLA and how to submit them are found through this link:
-https://www.apache.org/licenses/contributor-agreements.html#clas
-
-When you transmit the completed ICLA, request to notify Apache
-DataFusion and choose a unique Apache id. Look to see if your preferred id
-is already taken at http://people.apache.org/committer-index.html This
-will allow the Secretary to notify the PMC when your ICLA has been
-recorded.
-
-Once you are notified that your Apache account has been created, you must then:
-
-1. Add your GitHub username to your account at id.apache.org
-
-2. Follow the instructions at gitbox.apache.org to link your GitHub account
-with your Apache account.
-
-You will then have write (but not admin) access to the DataFusion repositories.
-If you have questions or run into issues, please reply-all to this e-mail.
-</pre></div>
-</div>
-<p>After the new account has been created, you can announce the new committer on <code class="docutils literal notranslate"><span class="pre">dev&#64;</span></code></p>
+<section id="review-the-code">
+<h2>Review the Code<a class="headerlink" href="#review-the-code" title="Link to this heading">#</a></h2>
+<p>Check that:</p>
+<ol class="arabic simple">
+<li><p>The code is clear and fits the style of the existing codebase.</p></li>
+<li><p>New functions and tests are placed near similar functions and
+tests. For example, helper functions should be defined close to where they are used,
+and new tests should be placed in the same module as the code they test.
+SLT tests should be placed in an existing .slt file with related functionality,
+unless the new tests are large enough to justify their own file.</p></li>
+<li><p>New APIs are consistent with existing public APIs and patterns; where a
+similar mechanism already exists, the PR should extend it rather than
+introduce a parallel one.</p></li>
+<li><p>Any changes to the public API follow the <a class="reference internal" href="api-health.html"><span class="std std-doc">API health policy</span></a>.</p></li>
+<li><p>The change is appropriately scoped: unrelated refactoring, formatting
+churn, or drive-by changes make review longer and are better as separate
+PRs.</p></li>
+<li><p>New errors are actionable, mention the offending item, and use
+the right error variant (e.g. <code class="docutils literal notranslate"><span class="pre">plan_err!</span></code> for user-triggerable errors vs
+<code class="docutils literal notranslate"><span class="pre">internal_err!</span></code> for invariant violations).</p></li>
+</ol>
 </section>
-<section id="committers-without-an-apache-account-but-with-an-icla-on-file">
-<h3>Committers WITHOUT an Apache account but WITH an ICLA on file<a class="headerlink" href="#committers-without-an-apache-account-but-with-an-icla-on-file" title="Link to this heading">#</a></h3>
-<p>In this scenario, an officer (the project VP or an Apache Member) needs only to
-request an account to be created for the new committer, since through the
-ordinary process the ASF Secretary will do it automatically. This is done at
-https://whimsy.apache.org/officers/acreq. Before requesting the new account,
-send an e-mail to the new committer (cc’ing <code class="docutils literal notranslate"><span class="pre">private&#64;</span></code>) like this:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: $EMAIL
-Cc: private@datafusion.apache.org
-Subject: Invitation to become a DataFusion Committer
-
-Dear $NEW_COMMITTER,
-
-The DataFusion Project Management Committee (PMC) hereby offers you
-committer privileges to the project. These privileges are offered on
-the understanding that you&#39;ll use them reasonably and with common
-sense. We like to work on trust rather than unnecessary constraints.
-
-Being a committer enables you to merge PRs to DataFusion git repositories.
-
-Being a committer does not require you to participate any more than
-you already do. It does tend to make one even more committed. You will
-probably find that you spend more time here.
-
-Of course, you can decline and instead remain as a contributor,
-participating as you do now.
-
-This personal invitation is a chance for you to accept or decline
-in private. Either way, please let us know in reply to this email, make sure to reply-all (it should send a copy to
-private@datafusion.apache.org) for record keeping / log of the project. We will have to request an
-Apache account be created for you, so please let us know what user id
-you would prefer.
-
-Once you are notified that your Apache account has been created, you must then:
-
-1. Add your GitHub username to your account at id.apache.org
-
-2. Follow the instructions at gitbox.apache.org to link your GitHub account
-with your Apache account.
-
-You will then have write (but not admin) access to the DataFusion repositories.
-If you have questions or run into issues, please reply-all to this e-mail.
-</pre></div>
-</div>
+<section id="review-the-performance">
+<h2>Review the Performance<a class="headerlink" href="#review-the-performance" title="Link to this heading">#</a></h2>
+<p>Performance is a key feature of DataFusion. See <a class="reference internal" href="index.html#performance-improvements"><span class="std std-ref">Performance Improvements</span></a>
+for the project policy: an improvement should be “enough” to justify any
+added code complexity, and performance PRs should come with benchmark
+results.</p>
+<p>When reviewing:</p>
+<ol class="arabic simple">
+<li><p>Find any relevant existing benchmarks and run them against <code class="docutils literal notranslate"><span class="pre">main</span></code>:
+the <a class="reference external" href="https://github.com/apache/datafusion/tree/main/benchmarks">system-level SQL benchmarks</a> are run with <code class="docutils literal notranslate"><span class="pre">bench.sh</span></code> (see the
+<a class="reference external" href="https://github.com/apache/datafusion/blob/main/benchmarks/README.md">benchmarks README</a>), and microbenchmarks (e.g. in
+<code class="docutils literal notranslate"><span class="pre">datafusion/functions/benches</span></code>) are run with <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">bench</span></code>.</p></li>
+<li><p>Be aware that benchmarking on a machine where other
+work is being done will make results hard to reproduce. Prefer a quiet,
+dedicated machine and repeated runs.</p></li>
+<li><p>If the PR claims a performance improvement, check that the reported
+results are reproducible and that the benchmark exercises the changed
+code path.</p></li>
+</ol>
 </section>
-<section id="committers-with-an-existing-apache-account">
-<h3>Committers WITH an existing Apache account<a class="headerlink" href="#committers-with-an-existing-apache-account" title="Link to this heading">#</a></h3>
-<p>In this scenario, an officer (the project PMC Chair or an ASF Member) can simply add
-the new committer on the <a class="reference external" href="https://whimsy.apache.org/roster/committee/datafusion">Whimsy Roster Tool</a>. Before doing this, e-mail the new
-committer inviting them to be a committer like so (cc private&#64;):</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: $EMAIL
-Cc: private@datafusion.apache.org
-Subject: Invitation to become a DataFusion Committer
-
-Dear $NEW_COMMITTER,
-
-The DataFusion Project Management Committee (PMC) hereby offers you
-committer privileges to the project. These privileges are offered on
-the understanding that you&#39;ll use them reasonably and with common
-sense. We like to work on trust rather than unnecessary constraints.
-
-Being a committer enables you to merge PRs to DataFusion git repositories.
-
-Being a committer does not require you to participate any more than
-you already do. It does tend to make one even more committed. You will
-probably find that you spend more time here.
-
-Of course, you can decline and instead remain as a contributor,
-participating as you do now.
-
-If you accept, please let us know in reply to this email, make sure to reply-all (it should send a copy to
-private@datafusion.apache.org) for record keeping / log of the project.
-</pre></div>
-</div>
+<section id="best-practices-for-reviewers">
+<h2>Best Practices for Reviewers<a class="headerlink" href="#best-practices-for-reviewers" title="Link to this heading">#</a></h2>
+<p>Here are some suggested best practices to follow when reviewing PRs.</p>
+<section id="review-tone-thank-contributors-and-praise-good-work-specifically">
+<h3>Review Tone: Thank Contributors and Praise Good Work Specifically<a class="headerlink" href="#review-tone-thank-contributors-and-praise-good-work-specifically" title="Link to this heading">#</a></h3>
+<p>Open reviews by thanking the author by name, and when a PR is well done, say
+specifically what makes it good – positive feedback encourages people to keep
+contributing and helps them understand what is valued in the project.</p>
 </section>
+<section id="state-approval-conditions-explicitly">
+<h3>State Approval Conditions Explicitly<a class="headerlink" href="#state-approval-conditions-explicitly" title="Link to this heading">#</a></h3>
+<p>If you are not ready to approve, list concretely what you would need to see
+before approving (e.g. “benchmark results and an upgrade guide entry”) so
+the author has a clear path to merge.</p>
 </section>
-<section id="new-pmc-members">
-<h2>New PMC Members<a class="headerlink" href="#new-pmc-members" title="Link to this heading">#</a></h2>
-<p>This is a DataFusion specific cookbook for the Apache Software Foundation
-instructions on <a class="reference external" href="https://www.apache.org/dev/pmc.html#pmcmembers">how to add a PMC member</a>.</p>
-<section id="id1">
-<h3>Step 1: Start a Discussion Thread<a class="headerlink" href="#id1" title="Link to this heading">#</a></h3>
-<p>As for committers, start a discussion thread on the <code class="docutils literal notranslate"><span class="pre">private&#64;</span></code> mailing list</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: private@datafusion.apache.org
-Subject: [DISCUSS] $NEW_PMC_MEMBER for PMC
-
-I would like to propose adding $NEW_PMC_MEMBER[1] to the DataFusion PMC.
-
-$NEW_PMC_MEMBER has been a committer since $COMMITTER_MONTH [2], has a
-strong and sustained contribution record for more than a year, and focused on
-helping the community and the project grow[3].
-
-Are there any thoughts about inviting $NEW_PMC_MEMBER to become a PMC member?
-
-[1] https://github.com/$NEW_PMC_MEMBERS_GITHUB_ACCOUNT
-[2] LINK TO COMMITTER VOTE RESULT THREAD (e.g. https://lists.apache.org/thread/ovgp8z97l1vh0wzjkgn0ktktggomxq9t)
-[3]: https://github.com/apache/datafusion/pulls?q=commenter%3A&lt;$NEW_PMC_MEMBERS_GITHUB_ACCOUNT&gt;+
-
-Thanks,
-YOUR NAME
-</pre></div>
-</div>
+<section id="defer-non-blocking-work-to-follow-on-issues">
+<h3>Defer Non-Blocking Work to Follow-On Issues<a class="headerlink" href="#defer-non-blocking-work-to-follow-on-issues" title="Link to this heading">#</a></h3>
+<p>Explicitly defer non-critical suggestions to a follow-on PR and file
+(or ask the author to file) issues for them, so good PRs merge quickly
+without scope creep.</p>
+<p>Similarly, when a PR mixes refactoring with behavior changes or fixes a narrow
+problem with a broad mechanism, ask for it to be split or scoped down rather
+than reviewing it as-is.</p>
 </section>
-<section id="id2">
-<h3>Step 2: Formal Vote<a class="headerlink" href="#id2" title="Link to this heading">#</a></h3>
-<p>Assuming the discussion thread goes well, start a formal vote with an email like:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: private@datafusion.apache.org
-Subject: [VOTE] $NEW_PMC_MEMBER for PMC
-
-I propose inviting $NEW_PMC_MEMBER to join the DataFusion PMC. We previously
-discussed the merits of inviting $NEW_PMC_MEMBER to join the PMC [1].
-
-The vote will be open for at least 7 days.
-
-[ ] +1 : Invite $NEW_PMC_MEMBER to become a PMC member
-[ ] +0: ...
-[ ] -1: I disagree because ...
-
-My vote: +1
-
-[1] LINK TO DISCUSSION THREAD (e.g. https://lists.apache.org/thread/x2zno2hs1ormvfy13n7h82hmsxp3j66c)
-
-Thanks,
-Your Name
-</pre></div>
-</div>
-<p>If this vote succeeds, send a “RESULT” email to <code class="docutils literal notranslate"><span class="pre">private&#64;</span></code> like this:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: private@datafusion.apache.org
-Subject: [RESULT][VOTE] $NEW_PMC_MEMBER for PMC
-
-The vote carries with N +1 votes and no -1 votes. I will send an invitation
-</pre></div>
-</div>
+<section id="narrate-what-you-verified-when-approving">
+<h3>Narrate What You Verified When Approving<a class="headerlink" href="#narrate-what-you-verified-when-approving" title="Link to this heading">#</a></h3>
+<p>Rather than a bare “LGTM”, say what you actually checked (“traced the state
+transitions by hand”, “confirmed the hasher change cannot affect ordering”)
+so it is clear what was verified and what was not.</p>
 </section>
-<section id="step-3-send-invitation-email">
-<h3>Step 3: Send invitation email<a class="headerlink" href="#step-3-send-invitation-email" title="Link to this heading">#</a></h3>
-<p>Assuming the vote passes, the Chair sends an invitation e-mail to the new PMC
-member (cc’ing <code class="docutils literal notranslate"><span class="pre">private&#64;</span></code>) like this:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: $EMAIL
-Cc: private@datafusion.apache.org
-Subject: Invitation to join the DataFusion PMC
-Dear $NEW_PMC_MEMBER,
-
-In recognition of your demonstrated commitment to, and alignment with, the
-goals of the Apache DataFusion project, the DataFusion PMC has voted to offer you
-membership in the DataFusion PMC (&quot;Project Management Committee&quot;).
-
-Please let us know if you accept by subscribing to the private alias [by
-sending mail to private-subscribe@datafusion.apache.org], and posting
-a message to private@datafusion.apache.org.
-
-The PMC for every top-level project is tasked by the Apache Board of
-Directors with official oversight and binding votes in that project.
-
-As a PMC member, you are responsible for continuing the general project, code,
-and community oversight that you have exhibited so far. The votes of the PMC
-are legally binding.
-
-All PMC members are subscribed to the project&#39;s private mail list, which is
-used to discuss issues unsuitable for an open, public forum, such as people
-issues (e.g. new committers, problematic community members, etc.), security
-issues, and the like. It can&#39;t be emphasized enough that care should be taken
-to minimize the use of the private list, discussing everything possible on the
-appropriate public list.
-
-The private PMC list is *private* - it is strictly for the use of the
-PMC. Messages are not to be forwarded to anyone else without the express
-permission of the PMC. Also note that any Member of the Foundation has the
-right to review and participate in any PMC list, as a PMC is acting on behalf
-of the Membership.
-
-Finally, the PMC is not meant to create a hierarchy within the committership or
-the community. Therefore, in our day-to-day interactions with the rest of the
-community, we continue to interact as peers, where every reasonable opinion is
-considered, and all community members are invited to participate in our public
-voting. If there ever is a situation where the PMC&#39;s view differs significantly
-from that of the rest of the community, this is a symptom of a problem that
-needs to be addressed.
-
-With the expectation of your acceptance, welcome!
-
-The Apache DataFusion PMC
-</pre></div>
-</div>
-</section>
-<section id="step-4-chair-promotes-the-committer-to-pmc">
-<h3>Step 4: Chair Promotes the Committer to PMC<a class="headerlink" href="#step-4-chair-promotes-the-committer-to-pmc" title="Link to this heading">#</a></h3>
-<p>The PMC chair adds the user to the PMC using the <a class="reference external" href="https://whimsy.apache.org/roster/committee/datafusion">Whimsy Roster Tool</a>.</p>
-</section>
-<section id="step-5-announce-and-celebrate-the-new-pmc-member">
-<h3>Step 5: Announce and Celebrate the New PMC Member<a class="headerlink" href="#step-5-announce-and-celebrate-the-new-pmc-member" title="Link to this heading">#</a></h3>
-<p>Send an email such as the following to <code class="docutils literal notranslate"><span class="pre">dev&#64;datafusion.apache.org</span></code> to celebrate:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>To: dev@datafusion.apache.org
-Subject: [ANNOUNCE] New DataFusion PMC member: $NEW_PMC_MEMBER
-
-The Project Management Committee (PMC) for Apache DataFusion has invited
-$NEW_PMC_MEMBER to become a PMC member and we are pleased to announce
-that $NEW_PMC_MEMBER has accepted.
-
-Congratulations and welcome!
-</pre></div>
-</div>
+<section id="invite-additional-committers-on-core-changes">
+<h3>Invite Additional Committers on Core Changes<a class="headerlink" href="#invite-additional-committers-on-core-changes" title="Link to this heading">#</a></h3>
+<p>For changes to core, widely shared code, leave the PR open for other
+committers to look at and cc those who know the area, even after you have
+approved.</p>
 </section>
 </section>
 </section>
@@ -824,20 +656,20 @@ Congratulations and welcome!
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="governance.html"
+       href="index.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">Governance</p>
+        <p class="prev-next-title">Introduction</p>
       </div>
     </a>
     <a class="right-next"
-       href="specification/index.html"
+       href="communication.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Specifications</p>
+        <p class="prev-next-title">Community Communication</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -860,25 +692,18 @@ Congratulations and welcome!
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#new-committers">New Committers</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#step-1-start-a-discussion-thread">Step 1: Start a Discussion Thread</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#step-2-formal-vote">Step 2: Formal Vote</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#step-3-send-invitation-to-the-candidate">Step 3: Send Invitation to the Candidate</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#step-4-announce-and-celebrate-the-new-committer">Step 4: Announce and Celebrate the New Committer</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#email-templates-for-inviting-new-committers">Email Templates for Inviting New Committers</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#committers-without-an-apache-account-and-without-icla-on-file">Committers WITHOUT an Apache account and WITHOUT ICLA on file</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#committers-without-an-apache-account-but-with-an-icla-on-file">Committers WITHOUT an Apache account but WITH an ICLA on file</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#committers-with-an-existing-apache-account">Committers WITH an existing Apache account</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#new-pmc-members">New PMC Members</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">Step 1: Start a Discussion Thread</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">Step 2: Formal Vote</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#step-3-send-invitation-email">Step 3: Send invitation email</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#step-4-chair-promotes-the-committer-to-pmc">Step 4: Chair Promotes the Committer to PMC</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#step-5-announce-and-celebrate-the-new-pmc-member">Step 5: Announce and Celebrate the New PMC Member</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pr-review-mechanics">PR Review Mechanics</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#review-the-pr-description">Review the PR Description</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#review-the-code-comments">Review the Code Comments</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#review-the-test-coverage">Review the Test Coverage</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#review-the-code">Review the Code</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#review-the-performance">Review the Performance</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#best-practices-for-reviewers">Best Practices for Reviewers</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#review-tone-thank-contributors-and-praise-good-work-specifically">Review Tone: Thank Contributors and Praise Good Work Specifically</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#state-approval-conditions-explicitly">State Approval Conditions Explicitly</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#defer-non-blocking-work-to-follow-on-issues">Defer Non-Blocking Work to Follow-On Issues</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#narrate-what-you-verified-when-approving">Narrate What You Verified When Approving</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#invite-additional-committers-on-core-changes">Invite Additional Committers on Core Changes</a></li>
 </ul>
 </li>
 </ul>
@@ -888,7 +713,7 @@ Congratulations and welcome!
 
   
   <div class="tocsection editthispage">
-    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/contributor-guide/inviting.md">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/contributor-guide/pr_review.md">
       <i class="fa-solid fa-pencil"></i>
       
       
@@ -903,7 +728,7 @@ Congratulations and welcome!
   <div class="sidebar-secondary-item">
 
   <div class="tocsection sourcelink">
-    <a href="../_sources/contributor-guide/inviting.md.txt">
+    <a href="../_sources/contributor-guide/pr_review.md.txt">
       <i class="fa-solid fa-file-lines"></i> Show Source
     </a>
   </div>
