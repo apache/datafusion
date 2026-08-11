@@ -1194,6 +1194,10 @@ impl BoundedWindowAggStream {
         // ordering in between partitions after removal.
         self.partition_buffers
             .retain(|_, partition_batch_state| !partition_batch_state.is_end);
+        // Likewise, drop per-window-expression state for ended partitions.
+        for window_agg_state in self.window_agg_states.iter_mut() {
+            window_agg_state.retain(|_, WindowState { state, .. }| !state.is_end);
+        }
 
         // Calculate how many rows to prune from each partition's batch. For a
         // single window expression, rows before min(window_frame_range.start,
@@ -1204,23 +1208,18 @@ impl BoundedWindowAggStream {
         // it: the count to prune is the minimum across expressions. A partition
         // missing from the map has nothing to prune.
         let mut n_prune_each_partition = HashMap::new();
-        let mut first = true;
-        for window_agg_state in self.window_agg_states.iter_mut() {
-            window_agg_state.retain(|_, WindowState { state, .. }| !state.is_end);
-            if first {
-                // First window expression seeds the prune-count map
-                first = false;
-                for (partition_row, WindowState { state, .. }) in window_agg_state.iter()
-                {
-                    let n_prune =
-                        min(state.window_frame_range.start, state.last_calculated_index);
-                    if n_prune > 0 {
-                        n_prune_each_partition.insert(partition_row.clone(), n_prune);
-                    }
+        if let Some((first, rest)) = self.window_agg_states.split_first() {
+            // First window expression seeds the prune-count map
+            for (partition_row, WindowState { state, .. }) in first.iter() {
+                let n_prune =
+                    min(state.window_frame_range.start, state.last_calculated_index);
+                if n_prune > 0 {
+                    n_prune_each_partition.insert(partition_row.clone(), n_prune);
                 }
-            } else {
-                // Take the per-partition min of the prune-count for each
-                // additional window expression
+            }
+            // Take the per-partition min of the prune-count for each
+            // additional window expression
+            for window_agg_state in rest {
                 n_prune_each_partition.retain(|partition_row, current| {
                     let Some(WindowState { state, .. }) =
                         window_agg_state.get(partition_row)
