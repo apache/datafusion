@@ -48,7 +48,7 @@ use datafusion_common::{
     internal_err,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_execution::{TaskContext, async_try_stream};
+use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use async_trait::async_trait;
@@ -360,16 +360,12 @@ impl ExecutionPlan for CrossJoinExec {
             join_metrics,
             processed_right_data: None,
             left_data: RecordBatch::new_empty(self.left().schema()),
-            batch_transformer: if enforce_batch_size_in_joins {
-                BatchSplitter::new(batch_size)
-            } else {
-                NoopBatchTransformer::new() //todo: figure this out lol
-            },
+            batch_size: enforce_batch_size_in_joins.then(|| batch_size),
         };
 
         let stream = async_try_stream(|mut emitter| async move {
             state.start_join_time();
-            let result = state.join(&mut emitter).await;
+            let result = state.join(&context, &mut emitter).await;
             state.stop_join_time();
             result
         });
@@ -565,7 +561,7 @@ fn stats_cartesian_product(
 }
 
 /// A stream that issues [RecordBatch]es as they arrive from the right of the join.
-struct CrossJoinStream<T> {
+struct CrossJoinStream {
     /// Input schema
     schema: Arc<Schema>,
     /// Future for data from left side
@@ -580,8 +576,8 @@ struct CrossJoinStream<T> {
     processed_right_data: Option<RecordBatch>,
     /// Left data (copy of the entire buffered left side)
     left_data: RecordBatch,
-    /// Batch transformer
-    batch_transformer: T,
+    /// Max batch size
+    batch_size: Option<usize>,
 }
 
 fn build_batch(
@@ -612,8 +608,11 @@ fn build_batch(
     .map_err(Into::into)
 }
 
-impl<T: BatchTransformer> CrossJoinStream<T> {
-    async fn join(&mut self, cx: &mut std::task::Context<'_>) -> Result<()> {
+impl CrossJoinStream {
+    async fn join(
+        &mut self,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
         if !self.collect_build_side(cx)? {
             return Ok(());
         }
@@ -623,13 +622,13 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
         loop {
             return match self.state {
                 CrossJoinStreamState::WaitBuildSide => {
-                    handle_state!(ready!(self.collect_build_side(cx)))
+                    handle_state!(ready!(self.collect_build_side()))
                 }
                 CrossJoinStreamState::FetchProbeBatch => {
-                    handle_state!(ready!(self.fetch_probe_batch(cx)))
+                    handle_state!(ready!(self.fetch_probe_batch()))
                 }
                 CrossJoinStreamState::BuildBatches(_) => {
-                    let poll = handle_state!(self.build_batches());
+                    let poll = handle_state!(self.build_batches(emitter));
                     self.join_metrics.baseline.record_poll(poll)
                 }
             };
@@ -639,7 +638,7 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
     /// Collects build (left) side of the join into the state. In case of an empty build batch,
     /// the execution terminates. Otherwise, the state is updated to fetch probe (right) batch.
     /// Returns true if build side was loaded and non-empty
-    fn collect_build_side(&mut self, cx: &mut std::task::Context<'_>) -> Result<bool> {
+    fn collect_build_side(&mut self) -> Result<bool> {
         let build_timer = self.join_metrics.build_time.timer();
         let left_data = match self.left_fut.get(cx) {
             //todo: figure out how to make this async maybe
@@ -685,7 +684,8 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
     /// If all the results are produced, the state is set to fetch new probe batch.
     async fn build_batches(
         &mut self,
-    ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
         let right_batch = self
             .processed_right_data
             .ok_or(internal_err!("Expected RecordBatch for right side"))?;
@@ -708,6 +708,7 @@ impl<T: BatchTransformer> CrossJoinStream<T> {
                         self.left_index += 1;
                     }
 
+                    emitter.emit(batch);
                     return Ok(StatefulStreamResult::Ready(Some(batch)));
                 }
             }
