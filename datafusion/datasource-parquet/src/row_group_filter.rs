@@ -1398,7 +1398,10 @@ mod tests {
         let schema =
             Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
         let expr = logical2physical(&col("c1").eq(lit(15)), &schema);
-        let pruning_predicate = PruningPredicate::try_new(expr, schema).unwrap();
+        let pruning_predicate = PruningPredicateBuilder::new()
+            .with_file_schema(schema)
+            .build(expr)
+            .unwrap();
 
         // Row group 0 has no bloom filter; row group 1 has a bloom filter
         // whose values do not include 15, so it can be pruned.
