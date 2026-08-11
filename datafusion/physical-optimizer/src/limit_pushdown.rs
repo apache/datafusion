@@ -197,8 +197,10 @@ pub fn pushdown_limit_helper(
     }
 
     // If we have a non-limit operator with fetch capability, update global
-    // state as necessary:
+    // state as necessary. A fetched ordered merge selects the leading rows in
+    // its ordering, so preserve that ordering when pushing the fetch down.
     if pushdown_plan.fetch().is_some() {
+        global_state.preserve_order |= pushdown_plan.is::<SortPreservingMergeExec>();
         if global_state.skip == 0 {
             global_state.satisfied = true;
         }
