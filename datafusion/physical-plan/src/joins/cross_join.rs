@@ -362,7 +362,6 @@ impl ExecutionPlan for CrossJoinExec {
             processed_right_data: None,
             left_data: RecordBatch::new_empty(self.left().schema()),
             batch_size: enforce_batch_size_in_joins.then_some(batch_size),
-            batch_transformer: NoopBatchTransformer::new(), //todo fix,
         };
 
         let stream = async_try_stream(|mut emitter| async move {
@@ -563,25 +562,21 @@ fn stats_cartesian_product(
 }
 
 /// A stream that issues [RecordBatch]es as they arrive from the right of the join.
-struct CrossJoinStream<T> {
+struct CrossJoinStream {
     /// Input schema
     schema: Arc<Schema>,
     /// Future for data from left side
     left_fut: OnceFut<JoinLeftData>,
     /// Right side stream
     right: SendableRecordBatchStream,
-    /// Current value on the left
-    left_index: usize,
     /// Join execution metrics
     join_metrics: BuildProbeJoinMetrics,
     /// Currently processed right side batch
     processed_right_data: Option<RecordBatch>,
     /// Left data (copy of the entire buffered left side)
     left_data: RecordBatch,
-    /// Max batch size (todo: maybe remove)
+    /// Max batch size
     batch_size: Option<usize>,
-    // todo: add description if we're keeping it
-    batch_transformer: T,
 }
 
 fn build_batch(
@@ -612,10 +607,7 @@ fn build_batch(
     .map_err(Into::into)
 }
 
-impl<T> CrossJoinStream<T>
-where
-    T: BatchTransformer,
-{
+impl CrossJoinStream {
     async fn join(
         &mut self,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
@@ -659,7 +651,6 @@ where
     /// Fetches the probe (right) batch, updates the metrics, and save the batch in the state.
     /// Then, the state is updated to build result batches.
     async fn fetch_probe_batch(&mut self) -> Result<bool> {
-        self.left_index = 0;
         let right_data = match self.right.next().await {
             Some(Ok(right_data)) => right_data,
             Some(Err(e)) => return Err(e),
@@ -682,38 +673,26 @@ where
     /// Err -> error lol
     /// true -> emitted a batch, keep going
     /// false -> fetch more from the probe
-    async fn build_batches(
+    async fn process_right_batch(
         &mut self,
+        right_batch: &RecordBatch,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
-    ) -> Result<bool> {
-        let right_batch = self
-            .processed_right_data
-            .ok_or(internal_err!("Expected RecordBatch for right side"))?;
-        if self.left_index < self.left_data.num_rows() {
-            match self.batch_transformer.next() {
-                None => {
-                    let join_timer = self.join_metrics.join_time.timer();
-                    let result = build_batch(
-                        self.left_index,
-                        &right_batch,
-                        &self.left_data,
-                        &self.schema,
-                    );
-                    join_timer.done();
+    ) -> Result<()> {
+        for left_index in 0..self.left_data.num_rows() {
+            let join_timer = self.join_metrics.join_time.timer();
+            let result =
+                build_batch(left_index, right_batch, &self.left_data, &self.schema)?;
+            join_timer.done();
 
-                    self.batch_transformer.set_batch(result?);
-                }
-                Some((batch, last)) => {
-                    if last {
-                        self.left_index += 1;
-                    }
-
-                    emitter.emit(batch).await;
-                    return Ok(true);
-                }
+            // TODO: understand the batching stuff - do we only want one batch, then fetch more from the right, then continue here? Or what
+            if let Some(batch_size) = self.batch_size {
+                let x = result.slice(offset, length);
+            } else {
+                emitter.emit(result).await;
             }
         }
-        Ok(false)
+
+        Ok(())
     }
 }
 
