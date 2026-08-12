@@ -16,6 +16,7 @@
 // under the License.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use arrow::array::{RecordBatch, record_batch};
 use arrow_schema::{DataType, Field, Schema};
@@ -237,6 +238,8 @@ pub(crate) extern "C" fn create_exec_with_statistics() -> FFI_ExecutionPlan {
 struct TableWithStats {
     inner: Arc<dyn TableProvider>,
     stats: Statistics,
+    delete_calls: AtomicUsize,
+    update_calls: AtomicUsize,
 }
 
 #[async_trait]
@@ -268,10 +271,15 @@ impl TableProvider for TableWithStats {
         _state: &dyn Session,
         filters: Vec<Expr>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if filters != vec![col("a").gt(lit(10_i32)), col("b").lt(lit(2.5_f64))] {
-            return exec_err!("Unexpected DELETE filters");
+        let call = self.delete_calls.fetch_add(1, Ordering::Relaxed);
+        let valid = match call {
+            0 => filters == vec![col("a").gt(lit(10_i32)), col("b").lt(lit(2.5_f64))],
+            1 => filters.is_empty(),
+            _ => false,
+        };
+        if !valid {
+            return exec_err!("Unexpected DELETE filters for call {call}");
         }
-
         Ok(dml_count_plan())
     }
 
@@ -289,8 +297,16 @@ impl TableProvider for TableWithStats {
         {
             return exec_err!("Unexpected UPDATE assignments");
         }
-        if filters != vec![col("a").eq(lit(7_i32)), col("b").gt(lit(1.5_f64))] {
-            return exec_err!("Unexpected UPDATE filters");
+
+        let call = self.update_calls.fetch_add(1, Ordering::Relaxed);
+        let valid = match call {
+            0 => filters == vec![col("a").eq(lit(7_i32)), col("b").gt(lit(1.5_f64))],
+            1 => filters.is_empty(),
+            _ => false,
+        };
+
+        if !valid {
+            return exec_err!("Unexpected UPDATE filters for call {call}");
         }
 
         Ok(dml_count_plan())
@@ -310,6 +326,8 @@ pub(crate) extern "C" fn create_table_with_statistics(
     let provider = Arc::new(TableWithStats {
         inner,
         stats: make_test_statistics(),
+        delete_calls: AtomicUsize::new(0),
+        update_calls: AtomicUsize::new(0),
     });
     FFI_TableProvider::new_with_ffi_codec(provider, true, None, codec)
 }

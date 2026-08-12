@@ -112,18 +112,24 @@ mod tests {
             )
             .await?;
         assert_eq!(delete_plan.schema().field(0).name(), "count");
+        let delete_all_plan = foreign.delete_from(&state, vec![]).await?;
+        assert_eq!(delete_all_plan.schema().field(0).name(), "count");
 
+        let update_assignments = vec![
+            ("b".to_string(), lit(42_f64)),
+            ("a".to_string(), lit(7_i32)),
+        ];
         let update_plan = foreign
             .update(
                 &state,
-                vec![
-                    ("b".to_string(), lit(42_f64)),
-                    ("a".to_string(), lit(7_i32)),
-                ],
+                update_assignments.clone(),
                 vec![col("a").eq(lit(7_i32)), col("b").gt(lit(1.5_f64))],
             )
             .await?;
         assert_eq!(update_plan.schema().field(0).name(), "count");
+
+        let update_all_plan = foreign.update(&state, update_assignments, vec![]).await?;
+        assert_eq!(update_all_plan.schema().field(0).name(), "count");
 
         let truncate_plan = foreign.truncate(&state).await?;
         assert_eq!(truncate_plan.schema().field(0).name(), "count");

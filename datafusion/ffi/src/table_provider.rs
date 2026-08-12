@@ -28,13 +28,13 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_proto::logical_plan::from_proto::parse_exprs;
-use datafusion_proto::logical_plan::to_proto::serialize_exprs;
+use datafusion_proto::bytes::{
+    logical_exprs_from_bytes_with_extension_codec,
+    logical_exprs_to_bytes_with_extension_codec,
+};
 use datafusion_proto::logical_plan::{
     DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
-use datafusion_proto::protobuf::LogicalExprList;
-use prost::Message;
 
 use stabby::string::String as SString;
 use stabby::vec::Vec as SVec;
@@ -104,7 +104,7 @@ pub struct FFI_TableProvider {
     /// * `session` - session
     /// * `projections` - if specified, only a subset of the columns are returned
     /// * `filters_serialized` - filters to apply to the scan, which are a
-    ///   [`LogicalExprList`] protobuf message serialized into bytes to pass
+    ///   [`LogicalExprList`][datafusion_proto::protobuf::LogicalExprList] protobuf message serialized into bytes to pass
     ///   across the FFI boundary.
     /// * `limit` - if specified, limit the number of rows returned
     scan: unsafe extern "C" fn(
@@ -119,7 +119,7 @@ pub struct FFI_TableProvider {
     table_type: unsafe extern "C" fn(provider: &Self) -> FFI_TableType,
 
     /// Based upon the input filters, identify which are supported. The filters
-    /// are a [`LogicalExprList`] protobuf message serialized into bytes to pass
+    /// are a [`LogicalExprList`][datafusion_proto::protobuf::LogicalExprList] protobuf message serialized into bytes to pass
     /// across the FFI boundary.
     supports_filters_pushdown: Option<
         unsafe extern "C" fn(
@@ -233,31 +233,19 @@ fn parse_serialized_exprs(
     task_ctx: &Arc<TaskContext>,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<Vec<Expr>> {
-    match exprs_serialized.is_empty() {
-        true => Ok(vec![]),
-        false => {
-            let proto_exprs = LogicalExprList::decode(exprs_serialized)
-                .map_err(|e| DataFusionError::Plan(e.to_string()))?;
-
-            Ok(parse_exprs(
-                proto_exprs.expr.iter(),
-                task_ctx.as_ref(),
-                codec,
-            )?)
-        }
-    }
+    logical_exprs_from_bytes_with_extension_codec(
+        exprs_serialized,
+        task_ctx.as_ref(),
+        codec,
+    )
 }
 
 fn serialize_expr_list<'a>(
     exprs: impl IntoIterator<Item = &'a Expr>,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<SVec<u8>> {
-    Ok(LogicalExprList {
-        expr: serialize_exprs(exprs, codec)?,
-    }
-    .encode_to_vec()
-    .into_iter()
-    .collect())
+    let bytes = logical_exprs_to_bytes_with_extension_codec(exprs, codec)?;
+    Ok(SVec::from(bytes.as_ref()))
 }
 
 fn supports_filters_pushdown_internal(
@@ -394,7 +382,7 @@ unsafe extern "C" fn delete_from_fn_wrapper(
         let session = sresult_return!(
             session
                 .as_local()
-                .map(Ok::<&(dyn Session + Send + Sync), DataFusionError>)
+                .map(Ok::<&dyn Session, DataFusionError>)
                 .unwrap_or_else(|| {
                     foreign_session = Some(ForeignSession::try_from(&session)?);
                     Ok(foreign_session.as_ref().unwrap())
@@ -432,7 +420,7 @@ unsafe extern "C" fn update_fn_wrapper(
         let session = sresult_return!(
             session
                 .as_local()
-                .map(Ok::<&(dyn Session + Send + Sync), DataFusionError>)
+                .map(Ok::<&dyn Session, DataFusionError>)
                 .unwrap_or_else(|| {
                     foreign_session = Some(ForeignSession::try_from(&session)?);
                     Ok(foreign_session.as_ref().unwrap())
@@ -444,21 +432,23 @@ unsafe extern "C" fn update_fn_wrapper(
             assignments
                 .into_iter()
                 .map(|assignment| {
+                    let column = assignment.column.to_string();
                     let mut exprs = parse_serialized_exprs(
                         &assignment.expr_serialized,
                         &task_ctx,
                         logical_codec.as_ref(),
                     )?;
-                    let expr = match exprs.len() {
+                    let expression_count = exprs.len();
+                    let expr = match expression_count {
                         1 => exprs.remove(0),
                         _ => {
-                            return Err(DataFusionError::Plan(
-                                "Expected exactly one expression for update assignment"
-                                    .to_string(),
-                            ));
+                            return Err(DataFusionError::Plan(format!(
+                                "Expected exactly one expression for update assignment to column \
+                                 '{column}', got {expression_count}"
+                            )));
                         }
                     };
-                    Ok((assignment.column.to_string(), expr))
+                    Ok((column, expr))
                 })
                 .collect::<Result<Vec<_>>>()
         );
@@ -491,7 +481,7 @@ unsafe extern "C" fn truncate_fn_wrapper(
         let session = sresult_return!(
             session
                 .as_local()
-                .map(Ok::<&(dyn Session + Send + Sync), DataFusionError>)
+                .map(Ok::<&dyn Session, DataFusionError>)
                 .unwrap_or_else(|| {
                     foreign_session = Some(ForeignSession::try_from(&session)?);
                     Ok(foreign_session.as_ref().unwrap())
@@ -814,7 +804,7 @@ impl TableProvider for ForeignTableProvider {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::prelude::{SessionContext, col, lit};
@@ -846,6 +836,105 @@ mod tests {
             schema,
             vec![vec![batch1], vec![batch2]],
         )?))
+    }
+
+    #[derive(Debug)]
+    struct TableWithStats {
+        inner: Arc<dyn TableProvider>,
+        stats: Option<Statistics>,
+        delete_calls: AtomicUsize,
+        update_calls: AtomicUsize,
+    }
+
+    impl TableWithStats {
+        fn new(inner: Arc<dyn TableProvider>, stats: Option<Statistics>) -> Self {
+            Self {
+                inner,
+                stats,
+                delete_calls: AtomicUsize::new(0),
+                update_calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl TableProvider for TableWithStats {
+        fn schema(&self) -> SchemaRef {
+            self.inner.schema()
+        }
+
+        fn table_type(&self) -> TableType {
+            self.inner.table_type()
+        }
+
+        fn statistics(&self) -> Option<Statistics> {
+            self.stats.clone()
+        }
+
+        async fn scan(
+            &self,
+            session: &dyn Session,
+            projection: Option<&Vec<usize>>,
+            filters: &[Expr],
+            limit: Option<usize>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.inner.scan(session, projection, filters, limit).await
+        }
+
+        async fn delete_from(
+            &self,
+            _state: &dyn Session,
+            filters: Vec<Expr>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            let call = self.delete_calls.fetch_add(1, Ordering::Relaxed);
+            let valid = match call {
+                0 => filters == vec![col("a").gt(lit(10_i64)), col("b").lt(lit(2.5_f64))],
+                1 => filters.is_empty(),
+                _ => false,
+            };
+
+            if !valid {
+                return Err(DataFusionError::Internal(format!(
+                    "Unexpected DELETE filters for call {call}"
+                )));
+            }
+            Ok(dml_count_plan())
+        }
+
+        async fn update(
+            &self,
+            _state: &dyn Session,
+            assignments: Vec<(String, Expr)>,
+            filters: Vec<Expr>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            if assignments
+                != vec![
+                    ("b".to_string(), lit(42_f64)),
+                    ("a".to_string(), lit(7_i64)),
+                ]
+            {
+                return Err(DataFusionError::Internal(
+                    "Unexpected UPDATE assignments".to_string(),
+                ));
+            }
+            let call = self.update_calls.fetch_add(1, Ordering::Relaxed);
+            let valid = match call {
+                0 => filters == vec![col("a").eq(lit(7_i64)), col("b").gt(lit(1.5_f64))],
+                1 => filters.is_empty(),
+                _ => false,
+            };
+
+            if !valid {
+                return Err(DataFusionError::Internal(format!(
+                    "Unexpected UPDATE filters for call {call}"
+                )));
+            }
+            Ok(dml_count_plan())
+        }
+
+        async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(dml_count_plan())
+        }
     }
 
     #[tokio::test]
@@ -906,20 +995,6 @@ mod tests {
         Ok(())
     }
 
-    #[derive(Debug, Default)]
-    struct DmlCalls {
-        delete_filters: Option<Vec<Expr>>,
-        update_assignments: Option<Vec<(String, Expr)>>,
-        update_filters: Option<Vec<Expr>>,
-        truncated: bool,
-    }
-
-    #[derive(Debug)]
-    struct DmlTableProvider {
-        calls: Arc<Mutex<DmlCalls>>,
-        schema: SchemaRef,
-    }
-
     fn dml_count_plan() -> Arc<dyn ExecutionPlan> {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "count",
@@ -929,66 +1004,16 @@ mod tests {
         Arc::new(crate::execution_plan::tests::EmptyExec::new(schema))
     }
 
-    #[async_trait]
-    impl TableProvider for DmlTableProvider {
-        fn schema(&self) -> SchemaRef {
-            Arc::clone(&self.schema)
-        }
-
-        fn table_type(&self) -> TableType {
-            TableType::Base
-        }
-
-        async fn scan(
-            &self,
-            _session: &dyn Session,
-            _projection: Option<&Vec<usize>>,
-            _filters: &[Expr],
-            _limit: Option<usize>,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            Err(DataFusionError::Internal(
-                "DmlTableProvider scan should not be called".to_string(),
-            ))
-        }
-
-        async fn delete_from(
-            &self,
-            _state: &dyn Session,
-            filters: Vec<Expr>,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.calls.lock().unwrap().delete_filters = Some(filters);
-            Ok(dml_count_plan())
-        }
-
-        async fn update(
-            &self,
-            _state: &dyn Session,
-            assignments: Vec<(String, Expr)>,
-            filters: Vec<Expr>,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            let mut calls = self.calls.lock().unwrap();
-            calls.update_assignments = Some(assignments);
-            calls.update_filters = Some(filters);
-            Ok(dml_count_plan())
-        }
-
-        async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
-            self.calls.lock().unwrap().truncated = true;
-            Ok(dml_count_plan())
-        }
-    }
-
     #[tokio::test]
     async fn test_round_trip_ffi_table_provider_dml() -> Result<()> {
-        let calls = Arc::new(Mutex::new(DmlCalls::default()));
+        use datafusion::datasource::MemTable;
+
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, false),
             Field::new("b", DataType::Float64, true),
         ]));
-        let provider = Arc::new(DmlTableProvider {
-            calls: Arc::clone(&calls),
-            schema,
-        });
+        let inner = Arc::new(MemTable::try_new(schema, vec![vec![]])?);
+        let provider = Arc::new(TableWithStats::new(inner, None));
         let ctx = Arc::new(SessionContext::new());
         let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
         let task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
@@ -1006,36 +1031,33 @@ mod tests {
 
         let state = ctx.state();
         let delete_filters = vec![col("a").gt(lit(10_i64)), col("b").lt(lit(2.5_f64))];
+
         let delete_plan = foreign_table_provider
-            .delete_from(&state, delete_filters.clone())
+            .delete_from(&state, delete_filters)
             .await?;
         assert_eq!(delete_plan.schema().field(0).name(), "count");
-        assert_eq!(
-            calls.lock().unwrap().delete_filters.clone(),
-            Some(delete_filters)
-        );
+
+        let delete_all_plan = foreign_table_provider.delete_from(&state, vec![]).await?;
+        assert_eq!(delete_all_plan.schema().field(0).name(), "count");
 
         let update_assignments = vec![
             ("b".to_string(), lit(42_f64)),
             ("a".to_string(), lit(7_i64)),
         ];
         let update_filters = vec![col("a").eq(lit(7_i64)), col("b").gt(lit(1.5_f64))];
+
         let update_plan = foreign_table_provider
-            .update(&state, update_assignments.clone(), update_filters.clone())
+            .update(&state, update_assignments.clone(), update_filters)
             .await?;
         assert_eq!(update_plan.schema().field(0).name(), "count");
-        assert_eq!(
-            calls.lock().unwrap().update_assignments.clone(),
-            Some(update_assignments)
-        );
-        assert_eq!(
-            calls.lock().unwrap().update_filters.clone(),
-            Some(update_filters)
-        );
+
+        let update_all_plan = foreign_table_provider
+            .update(&state, update_assignments, vec![])
+            .await?;
+        assert_eq!(update_all_plan.schema().field(0).name(), "count");
 
         let truncate_plan = foreign_table_provider.truncate(&state).await?;
         assert_eq!(truncate_plan.schema().field(0).name(), "count");
-        assert!(calls.lock().unwrap().truncated);
 
         let session =
             FFI_SessionRef::new(&state, None, ffi_provider.logical_codec.clone());
@@ -1048,12 +1070,9 @@ mod tests {
         let result = unsafe {
             (ffi_provider.update)(&ffi_provider, session, assignments, SVec::new()).await
         };
-        assert!(
-            df_result!(result)
-                .unwrap_err()
-                .to_string()
-                .contains("Expected exactly one expression for update assignment")
-        );
+        assert!(df_result!(result).unwrap_err().to_string().contains(
+            "Expected exactly one expression for update assignment to column 'b', got 0",
+        ));
 
         Ok(())
     }
@@ -1201,35 +1220,6 @@ mod tests {
         use datafusion_common::stats::Precision;
         use datafusion_common::{ColumnStatistics, ScalarValue};
 
-        // A thin wrapper that lets us inject statistics onto any TableProvider.
-        #[derive(Debug)]
-        struct TableWithStats {
-            inner: Arc<dyn TableProvider>,
-            stats: Option<Statistics>,
-        }
-
-        #[async_trait]
-        impl TableProvider for TableWithStats {
-            fn schema(&self) -> SchemaRef {
-                self.inner.schema()
-            }
-            fn table_type(&self) -> TableType {
-                self.inner.table_type()
-            }
-            fn statistics(&self) -> Option<Statistics> {
-                self.stats.clone()
-            }
-            async fn scan(
-                &self,
-                session: &dyn Session,
-                projection: Option<&Vec<usize>>,
-                filters: &[Expr],
-                limit: Option<usize>,
-            ) -> Result<Arc<dyn ExecutionPlan>> {
-                self.inner.scan(session, projection, filters, limit).await
-            }
-        }
-
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
 
         let batch = RecordBatch::try_new(
@@ -1246,10 +1236,7 @@ mod tests {
             Arc::clone(&schema),
             vec![vec![batch.clone()]],
         )?);
-        let no_stats_provider = Arc::new(TableWithStats {
-            inner: no_stats_inner,
-            stats: None,
-        });
+        let no_stats_provider = Arc::new(TableWithStats::new(no_stats_inner, None));
         let mut ffi_provider = FFI_TableProvider::new(
             no_stats_provider,
             true,
@@ -1276,10 +1263,10 @@ mod tests {
         };
         let stats_inner =
             Arc::new(MemTable::try_new(Arc::clone(&schema), vec![vec![batch]])?);
-        let stats_provider = Arc::new(TableWithStats {
-            inner: stats_inner,
-            stats: Some(original_stats.clone()),
-        });
+        let stats_provider = Arc::new(TableWithStats::new(
+            stats_inner,
+            Some(original_stats.clone()),
+        ));
         let mut ffi_provider =
             FFI_TableProvider::new(stats_provider, true, None, task_ctx_provider, None);
         ffi_provider.library_marker_id = crate::mock_foreign_marker_id;
