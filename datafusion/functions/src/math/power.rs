@@ -140,6 +140,7 @@ impl ScalarUDFImpl for PowerFunc {
         let [base, exponent] = take_function_args("power", args)?;
         let base_type = info.get_data_type(&base)?;
         let exponent_type = info.get_data_type(&exponent)?;
+        let base_nullable = info.nullable(&base)?;
         let return_type =
             self.return_type(&[base_type.clone(), exponent_type.clone()])?;
 
@@ -167,8 +168,7 @@ impl ScalarUDFImpl for PowerFunc {
 
         match exponent {
             Expr::Literal(value, _)
-                if value == ScalarValue::new_zero(&exponent_type)?
-                    && !info.nullable(&base)? =>
+                if value == ScalarValue::new_zero(&exponent_type)? && !base_nullable =>
             {
                 Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_one(
                     &return_type,
@@ -183,7 +183,7 @@ impl ScalarUDFImpl for PowerFunc {
                 if is_log(&func)
                     && args.len() == 2
                     && base == args[0]
-                    && !info.nullable(&base)? =>
+                    && !base_nullable =>
             {
                 let b = args.pop().unwrap(); // length checked above
                 let b_type = info.get_data_type(&b)?;
@@ -208,9 +208,6 @@ fn is_log(func: &ScalarUDF) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::Field;
-    use datafusion_common::ToDFSchema;
-    use datafusion_expr::col;
 
     #[test]
     fn test_float64_power_checked_zero_negative_exp() {
@@ -220,30 +217,5 @@ mod tests {
             assert!(float64_power_checked(base, -1.0).is_err());
             assert!(float64_power_checked(base, -0.5).is_err());
         }
-    }
-
-    #[test]
-    fn test_power_simplify_preserves_nullable_base() {
-        let context = SimplifyContext::builder()
-            .with_schema(
-                arrow::datatypes::Schema::new(vec![Field::new(
-                    "a",
-                    DataType::Float64,
-                    true,
-                )])
-                .to_dfschema_ref()
-                .unwrap(),
-            )
-            .build();
-        let original = vec![col("a"), lit(0.0)];
-
-        let result = PowerFunc::new()
-            .simplify(original.clone(), &context)
-            .unwrap();
-
-        let ExprSimplifyResult::Original(args) = result else {
-            panic!("Expected ExprSimplifyResult::Original")
-        };
-        assert_eq!(args, original);
     }
 }

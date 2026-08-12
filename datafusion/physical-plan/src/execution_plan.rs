@@ -1655,6 +1655,13 @@ pub async fn collect_partitioned(
     plan: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<Vec<Vec<RecordBatch>>> {
+    // Avoid `JoinSet::spawn` for single partition
+    if plan.output_partitioning().partition_count() == 1 {
+        let stream = plan.execute(0, context)?;
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+        return Ok(vec![batches]);
+    }
+
     let streams = execute_stream_partitioned(plan, context)?;
 
     let mut join_set = JoinSet::new();

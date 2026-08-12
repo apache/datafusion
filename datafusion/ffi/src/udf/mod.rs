@@ -45,7 +45,7 @@ use crate::expr::columnar_value::FFI_ColumnarValue;
 use crate::expr::expr_properties::FFI_ExprProperties;
 use crate::placement::FFI_ExpressionPlacement;
 use crate::util::{
-    FFI_Result, rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped,
+    FFI_Option, FFI_Result, rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped,
 };
 use crate::volatility::FFI_Volatility;
 use crate::{df_result, sresult, sresult_return};
@@ -123,6 +123,13 @@ pub struct FFI_ScalarUDF {
         udf: &Self,
         inputs: SVec<FFI_ExprProperties>,
     ) -> FFI_Result<bool>,
+
+    /// FFI equivalent to [`ScalarUDFImpl::with_updated_config`].
+    pub with_updated_config:
+        unsafe extern "C" fn(
+            udf: &Self,
+            config: FFI_ConfigOptions,
+        ) -> FFI_Result<FFI_Option<FFI_ScalarUDF>>,
 }
 
 unsafe impl Send for FFI_ScalarUDF {}
@@ -197,6 +204,21 @@ unsafe extern "C" fn preserves_lex_ordering_fn_wrapper(
         .and_then(|inputs| udf.inner().preserves_lex_ordering(&inputs));
 
     sresult!(result)
+}
+
+unsafe extern "C" fn with_updated_config_fn_wrapper(
+    udf: &FFI_ScalarUDF,
+    config: FFI_ConfigOptions,
+) -> FFI_Result<FFI_Option<FFI_ScalarUDF>> {
+    let config = sresult_return!(ConfigOptions::try_from(config));
+
+    let updated: Option<FFI_ScalarUDF> = udf
+        .inner()
+        .inner()
+        .with_updated_config(&config)
+        .map(|updated| Arc::new(updated).into());
+
+    FFI_Result::Ok(updated.into())
 }
 
 unsafe extern "C" fn invoke_with_args_fn_wrapper(
@@ -298,6 +320,7 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
             private_data: Box::into_raw(private_data) as *mut c_void,
             library_marker_id: crate::get_library_marker_id,
             preserves_lex_ordering: preserves_lex_ordering_fn_wrapper,
+            with_updated_config: with_updated_config_fn_wrapper,
         }
     }
 }
@@ -324,6 +347,21 @@ pub struct ForeignScalarUDF {
 
 unsafe impl Send for ForeignScalarUDF {}
 unsafe impl Sync for ForeignScalarUDF {}
+
+impl ForeignScalarUDF {
+    fn new(udf: FFI_ScalarUDF) -> Self {
+        let name = udf.name.to_string();
+        let signature = Signature::user_defined((&udf.volatility).into());
+        let aliases = udf.aliases.iter().map(|s| s.to_string()).collect();
+
+        Self {
+            name,
+            aliases,
+            udf,
+            signature,
+        }
+    }
+}
 
 impl PartialEq for ForeignScalarUDF {
     fn eq(&self, other: &Self) -> bool {
@@ -356,22 +394,22 @@ impl Hash for ForeignScalarUDF {
     }
 }
 
+impl From<FFI_ScalarUDF> for Arc<dyn ScalarUDFImpl> {
+    fn from(udf: FFI_ScalarUDF) -> Self {
+        if (udf.library_marker_id)() == crate::get_library_marker_id() {
+            Arc::clone(udf.inner().inner())
+        } else {
+            Arc::new(ForeignScalarUDF::new(udf))
+        }
+    }
+}
+
 impl From<&FFI_ScalarUDF> for Arc<dyn ScalarUDFImpl> {
     fn from(udf: &FFI_ScalarUDF) -> Self {
         if (udf.library_marker_id)() == crate::get_library_marker_id() {
             Arc::clone(udf.inner().inner())
         } else {
-            let name = udf.name.to_string();
-            let signature = Signature::user_defined((&udf.volatility).into());
-
-            let aliases = udf.aliases.iter().map(|s| s.to_string()).collect();
-
-            Arc::new(ForeignScalarUDF {
-                name,
-                udf: udf.clone(),
-                aliases,
-                signature,
-            })
+            Arc::new(ForeignScalarUDF::new(udf.clone()))
         }
     }
 }
@@ -494,6 +532,22 @@ impl ScalarUDFImpl for ForeignScalarUDF {
                 df_result!(result)
             })
     }
+
+    fn with_updated_config(&self, config: &ConfigOptions) -> Option<ScalarUDF> {
+        let config: FFI_ConfigOptions = config.into();
+
+        let result = unsafe { (self.udf.with_updated_config)(&self.udf, config) };
+
+        let updated = match df_result!(result) {
+            Ok(updated) => updated.into_option()?,
+            Err(error) => {
+                log::warn!("Unable to update scalar UDF configuration over FFI: {error}");
+                return None;
+            }
+        };
+
+        Some(ScalarUDF::new_from_shared_impl(updated.into()))
+    }
 }
 
 #[cfg(test)]
@@ -542,6 +596,12 @@ mod tests {
 
             Ok(inputs.iter().all(|input| input.preserves_lex_ordering))
         }
+
+        fn with_updated_config(&self, _config: &ConfigOptions) -> Option<ScalarUDF> {
+            Some(ScalarUDF::from(Self {
+                signature: self.signature.clone(),
+            }))
+        }
     }
 
     #[test]
@@ -555,6 +615,11 @@ mod tests {
         let foreign_udf: Arc<dyn ScalarUDFImpl> = (&local_udf).into();
 
         assert_eq!(original_udf.name(), foreign_udf.name());
+        assert!(
+            foreign_udf
+                .with_updated_config(&ConfigOptions::default())
+                .is_none()
+        );
 
         Ok(())
     }
@@ -628,6 +693,15 @@ mod tests {
                 .unwrap()
         );
         assert!(foreign_udf.preserves_lex_ordering(&[]).is_err());
+
+        let updated = foreign_udf
+            .with_updated_config(&ConfigOptions::default())
+            .expect("provider should return an updated UDF");
+        assert_eq!(
+            updated
+                .placement(&[ExpressionPlacement::Column, ExpressionPlacement::Literal]),
+            ExpressionPlacement::MoveTowardsLeafNodes
+        );
 
         Ok(())
     }
