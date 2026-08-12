@@ -1,0 +1,6 @@
+subgroup string_agg
+
+template sql_benchmarks/aggregate/aggregate.benchmark.template
+SUBGROUP=string_agg
+QPAD=01
+NAME=Q01_string_agg_ordered
