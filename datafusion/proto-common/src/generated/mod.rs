@@ -18,6 +18,8 @@
 // This code is generated so we don't want to fix any lint violations manually
 #[allow(clippy::allow_attributes)]
 #[allow(clippy::all)]
+#[allow(clippy::uninlined_format_args)]
+#[allow(unused_qualifications)]
 #[rustfmt::skip]
 pub mod datafusion_proto_common {
     include!("prost.rs");
