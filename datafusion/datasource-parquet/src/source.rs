@@ -40,6 +40,7 @@ use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
 use datafusion_common::DataFusionError;
 use datafusion_common::config::TableParquetOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -1057,6 +1058,20 @@ impl FileSource for ParquetSource {
         Ok(SortOrderPushdownResult::Inexact {
             inner: Arc::new(new_source) as Arc<dyn FileSource>,
         })
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &Arc<dyn PhysicalExpr>,
+        ) -> datafusion_common::Result<TreeNodeRecursion>,
+    ) -> datafusion_common::Result<TreeNodeRecursion> {
+        datafusion_physical_plan::apply_expression_roots(
+            self.predicate
+                .iter()
+                .chain(self.projection.iter().map(|proj_expr| &proj_expr.expr)),
+            f,
+        )
     }
 
     /// Emit a `ParquetScan` node wrapping the shared base config plus the

@@ -22,6 +22,7 @@ use std::sync::Arc;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow_avro::reader::{Reader, ReaderBuilder};
 use datafusion_common::error::Result;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -167,6 +168,15 @@ impl FileSource for AvroSource {
     fn supports_repartitioning(&self) -> bool {
         // Avro OCF does not support safe byte-range splitting in this reader path.
         false
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        datafusion_physical_plan::apply_expression_roots(self.projection.source.iter(), f)
     }
 
     /// Emit an `AvroScan` node wrapping the shared base config.

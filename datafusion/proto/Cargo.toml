@@ -57,7 +57,6 @@ avro = ["datafusion-datasource-avro"]
 
 [dependencies]
 arrow = { workspace = true }
-chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-catalog-listing = { workspace = true }
 datafusion-common = { workspace = true }
@@ -68,7 +67,7 @@ datafusion-datasource-csv = { workspace = true, features = ["proto"] }
 datafusion-datasource-json = { workspace = true, features = ["proto"] }
 datafusion-datasource-parquet = { workspace = true, optional = true, features = ["proto"] }
 datafusion-execution = { workspace = true }
-datafusion-expr = { workspace = true }
+datafusion-expr = { workspace = true, features = ["proto"] }
 datafusion-functions-table = { workspace = true }
 datafusion-physical-expr = { workspace = true, features = ["proto"] }
 datafusion-physical-expr-common = { workspace = true, features = ["proto"] }
