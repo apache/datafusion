@@ -960,7 +960,7 @@ mod tests {
     use crate::{OptimizerContext, OptimizerRule};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{
-        Column, DFSchema, DFSchemaRef, JoinType, Result, TableReference,
+        Column, DFSchema, DFSchemaRef, JoinType, Result, ScalarValue, TableReference,
     };
     use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{
@@ -1243,17 +1243,30 @@ mod tests {
         let input = Arc::new(test_table_scan()?); // columns: a, b, c (UInt32, NOT NULL)
 
         // A deliberately mixed expression list: plain column, computed binary
-        // expr, alias, nullable literal, and a qualified column.
+        // expr, alias, nullable literal, and a qualified column. Every input
+        // column is NOT NULL, so the NULL literal is what makes nullability
+        // actually vary across the schema.
         let exprs = vec![
             col("a"),
             binary_expr(col("b"), Operator::Plus, col("c")),
             col("c").alias("c_alias"),
-            lit(1_i64).alias("one"),
+            lit(ScalarValue::Int64(None)).alias("null_one"),
             Expr::Column(Column::new(Some(TableReference::bare("test")), "b")),
         ];
 
         let full_schema =
             Arc::clone(&Projection::try_new(exprs.clone(), Arc::clone(&input))?.schema);
+
+        // Guard the premise above: if this ever stops holding, the subsets below
+        // would no longer exercise nullability propagation at all.
+        assert!(
+            full_schema.field(3).is_nullable(),
+            "the literal must be nullable for this test to cover nullability"
+        );
+        assert!(
+            !full_schema.field(0).is_nullable(),
+            "input columns are expected to be NOT NULL"
+        );
 
         // Every sorted, deduplicated subset RequiredIndices could produce,
         // including the "nothing pruned" identity case.
@@ -1291,6 +1304,20 @@ mod tests {
             assert_eq!(
                 reused_quals, recomputed_quals,
                 "qualifiers differ for indices {indices:?}"
+            );
+
+            // `project_schema_by_indices` also carries over schema-level
+            // metadata and projects functional dependencies through the kept
+            // indices, so both must match the from-scratch computation as well.
+            assert_eq!(
+                reused.metadata(),
+                recomputed.metadata(),
+                "schema metadata differs for indices {indices:?}"
+            );
+            assert_eq!(
+                reused.functional_dependencies(),
+                recomputed.functional_dependencies(),
+                "functional dependencies differ for indices {indices:?}"
             );
         }
 
