@@ -179,9 +179,11 @@ impl ScalarUDFImpl for ArrayHas {
                 let mut has_unsafe_nullable_element = false;
                 for arg in args.iter() {
                     // `needle IN (needle)` preserves NULL semantics. A different
-                    // nullable element does not: array_has([NULL], value) is
-                    // false, while value IN (NULL) is NULL.
-                    if info.nullable(arg)? && arg != &*needle {
+                    // nullable element does not: array_has([NULL], value) is false,
+                    // while value IN (NULL) is NULL. Volatile expressions are
+                    // evaluated separately, so syntactic equality is insufficient.
+                    let safe_same_expr = arg == &*needle && !arg.is_volatile();
+                    if info.nullable(arg)? && !safe_same_expr {
                         has_unsafe_nullable_element = true;
                         break;
                     }
