@@ -1027,7 +1027,10 @@ mod tests {
     use crate::filter::FilterExec;
     use crate::projection::ProjectionExec;
     use crate::statistics::StatisticsArgs;
-    use crate::{DisplayAs, DisplayFormatType, PlanProperties};
+    use crate::{
+        ChildrenPropertiesMode, DisplayAs, DisplayFormatType, PlanProperties,
+        ReplaceChildrenOptions,
+    };
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::stats::Precision;
     use datafusion_common::{ColumnStatistics, ScalarValue};
@@ -1107,11 +1110,22 @@ mod tests {
             vec![]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
-            _children: Vec<Arc<dyn ExecutionPlan>>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(self)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
 
         fn properties(&self) -> &Arc<PlanProperties> {
@@ -1214,13 +1228,24 @@ mod tests {
             vec![&self.input]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(Arc::new(CustomExec {
                 input: Arc::clone(&children[0]),
             }))
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
 
         fn properties(&self) -> &Arc<PlanProperties> {
