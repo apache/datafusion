@@ -56,7 +56,7 @@ impl<I: DecimalType + Debug, S: DecimalType + Debug> DecimalDistinctAvgAccumulat
         let data_type = I::TYPE_CONSTRUCTOR(I::MAX_PRECISION, sum_scale);
 
         Self {
-            sum_accumulator: DistinctSumAccumulator::new(&data_type),
+            sum_accumulator: DistinctSumAccumulator::new(data_type),
             sum_scale,
             target_precision,
             target_scale,
