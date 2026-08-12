@@ -43,8 +43,8 @@ pub use custom::CustomMetricValue;
 pub use elapsed_compute::{ElapsedComputeFuture, ElapsedComputeFutureExt};
 pub use expression::ExpressionEvaluatorMetrics;
 pub use value::{
-    Count, Gauge, MetricValue, PruningMetrics, RatioMergeStrategy, RatioMetrics,
-    ScopedTimerGuard, Time, Timestamp,
+    Count, Gauge, MetricValue, OutputBytesCount, PruningMetrics, RatioMergeStrategy,
+    RatioMetrics, ScopedTimerGuard, Time, Timestamp,
 };
 
 /// Something that tracks a value of interest (metric) during execution.
