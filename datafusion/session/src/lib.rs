@@ -15,27 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// Make sure fast / cheap clones on Arc are explicit:
-// https://github.com/apache/datafusion/issues/11143
-#![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
-//! Session APIs for the DataFusion query execution environment
+//! Session management for DataFusion query execution environment
 //!
-//! This crate defines shared interfaces for session-related APIs and extension
-//! points. Concrete query-engine implementations are provided by higher-level
-//! DataFusion crates.
+//! This module provides the core session management functionality for DataFusion,
+//! handling both Catalog (Table) and Datasource (File) configurations. It defines
+//! the fundamental interfaces and implementations for maintaining query execution
+//! state and configurations.
 //!
 //! Key components:
-//! * [`Session`] - Describes a query execution context, including configurations,
+//! * [`Session`] - Manages query execution context, including configurations,
 //!   catalogs, and runtime state
-//! * [`CatalogProviderList`], [`CatalogProvider`], and [`SchemaProvider`] -
-//!   Describe catalog hierarchies
-//! * [`TableProvider`] - Provides data for query planning and execution
-//! * [`QueryPlanner`], [`PhysicalPlanner`], and [`ExtensionPlanner`] - Query and
-//!   physical planning contracts
-//! * [`PhysicalOptimizerRule`] and [`PhysicalOptimizerContext`] - Physical
-//!   optimization contracts
 //! * [`SessionStore`] - Handles session persistence and retrieval
 //!
 //! The session system enables:
@@ -45,23 +36,6 @@
 //! * Runtime environment configuration
 //! * Query state persistence
 
-pub mod catalog;
-pub mod physical_optimizer;
-pub mod planner;
-pub mod schema;
 pub mod session;
-pub mod table;
 
-pub use crate::catalog::{
-    CatalogProvider, CatalogProviderList, EmptyCatalogProviderList,
-};
-pub use crate::physical_optimizer::{PhysicalOptimizerContext, PhysicalOptimizerRule};
-pub use crate::planner::{
-    ExtensionPlanner, PhysicalPlanner, QueryPlanner, UnsupportedQueryPlanner,
-};
-pub use crate::schema::SchemaProvider;
 pub use crate::session::{Session, SessionStore};
-pub use crate::table::{
-    ScanArgs, ScanResult, TableFunction, TableFunctionArgs, TableFunctionImpl,
-    TableProvider, TableProviderFactory,
-};

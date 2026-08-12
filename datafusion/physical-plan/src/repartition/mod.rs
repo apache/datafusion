@@ -20,7 +20,7 @@
 //! maintaining the order of the input rows in the output.
 
 use std::cmp::Ordering;
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::{Debug, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
@@ -39,41 +39,31 @@ use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::projection::{ProjectionExec, all_columns, make_with_child, update_expr};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
-use crate::spill::spill_pool::{self, SpillPoolSink, SpillPoolWriter};
-use crate::statistics::{ChildStats, StatisticsArgs};
+use crate::spill::spill_pool::{self, SpillPoolWriter};
+use crate::statistics::StatisticsArgs;
 use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
 use crate::{
     DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics,
     check_if_same_properties,
 };
 
-use arrow::array::{Array, PrimitiveArray, RecordBatch, RecordBatchOptions, UInt64Array};
+use arrow::array::{Array, PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take_arrays;
-use arrow::datatypes::{DataType, Schema, SchemaRef, UInt32Type};
+use arrow::datatypes::{SchemaRef, UInt32Type};
 use arrow_schema::SortOptions;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, transpose};
 use datafusion_common::{
     ColumnStatistics, DataFusionError, HashMap, ScalarValue, SplitPoint,
-    assert_or_internal_err, internal_datafusion_err, internal_err,
-    validate_range_split_points,
+    assert_or_internal_err, internal_err,
 };
 use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
-use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, RangePartitioning};
-use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-#[cfg(feature = "proto")]
-use datafusion_physical_expr_common::sort_expr::{
-    sort_exprs_try_from_proto, sort_exprs_try_to_proto,
-};
-#[cfg(feature = "proto")]
-use datafusion_proto_models::protobuf;
 
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
@@ -174,38 +164,8 @@ type InputPartitionsToCurrentPartitionReceiver = Vec<DistributionReceiver<MaybeB
 struct OutputChannel {
     sender: DistributionSender<MaybeBatch>,
     reservation: SharedMemoryReservation,
-    spill_writer: SpillPoolSink,
+    spill_writer: SpillPoolWriter,
     shared_coalescer: Option<SharedCoalescer>,
-}
-
-/// The set of spill-pool writers for a single output partition, before they are handed to the
-/// per-input tasks. The variant encodes the repartition mode so the wrong writer topology cannot
-/// be constructed for a given mode.
-enum PartitionSpillWriters {
-    /// `preserve_order`: one single-producer FIFO writer per input partition. Each is `take`n
-    /// exactly once (moved into the matching input task), so the pool always has one writer.
-    PerInput(Vec<Option<SpillPoolSink>>),
-    /// Non-preserve-order: one shared writer, cloned into every input task.
-    Shared(SpillPoolWriter),
-}
-
-impl PartitionSpillWriters {
-    /// Hand out the writer for input partition `input`.
-    ///
-    /// In `PerInput` mode this moves the dedicated writer out (it must only be requested once per
-    /// input); in `Shared` mode it clones the shared writer.
-    fn take_for_input(&mut self, input: usize) -> Result<SpillPoolSink> {
-        match self {
-            PartitionSpillWriters::PerInput(writers) => {
-                writers[input].take().ok_or_else(|| {
-                    internal_datafusion_err!(
-                        "spill writer for input partition requested more than once"
-                    )
-                })
-            }
-            PartitionSpillWriters::Shared(writer) => Ok(writer.new_sink()),
-        }
-    }
 }
 
 impl OutputChannel {
@@ -333,7 +293,7 @@ impl SharedCoalescer {
 ///
 /// See [`RepartitionExec`] for the overall N×M architecture.
 ///
-/// [`spill_pool::channel`]: crate::spill::spill_pool::spsc_channel
+/// [`spill_pool::channel`]: crate::spill::spill_pool::channel
 struct PartitionChannels {
     /// Senders for each input partition to send data to this output partition
     tx: InputPartitionsToCurrentPartitionSender,
@@ -345,11 +305,9 @@ struct PartitionChannels {
     /// partition. `None` in preserve-order mode (downstream
     /// `StreamingMergeBuilder` handles batching).
     shared_coalescer: Option<SharedCoalescer>,
-    /// Spill writers for writing spilled data, before they are handed to the per-input tasks.
-    /// The variant is chosen by the repartition mode (see [`PartitionSpillWriters`]): a dedicated
-    /// single-producer FIFO writer per input in preserve-order mode, or one shared writer in
-    /// non-preserve-order mode.
-    spill_writers: PartitionSpillWriters,
+    /// Spill writers for writing spilled data.
+    /// SpillPoolWriter is Clone, so multiple writers can share state in non-preserve-order mode.
+    spill_writers: Vec<SpillPoolWriter>,
     /// Spill readers for reading spilled data - one per input partition (FIFO semantics).
     /// Each (input, output) pair gets its own reader to maintain proper ordering.
     spill_readers: Vec<SendableRecordBatchStream>,
@@ -465,7 +423,6 @@ impl RepartitionExecState {
 
         let num_input_partitions = streams_and_metrics.len();
         let num_output_partitions = partitioning.partition_count();
-        let coalesce_batches = !preserve_order && !input.boundedness().is_unbounded();
 
         let spill_manager = Arc::new(spill_manager);
 
@@ -506,38 +463,22 @@ impl RepartitionExecState {
                 .session_config()
                 .options()
                 .execution
-                .max_spill_file_size_bytes
-                .get();
-
-            let (spill_writers, spill_readers) = if preserve_order {
-                // preserve_order: one dedicated single-producer FIFO pool per input partition.
-                // Each writer is moved into exactly one input task (never cloned), so the ordering
-                // the downstream merge relies on is preserved across the spill boundary.
-                let mut writers = Vec::with_capacity(num_input_partitions);
-                let mut readers = Vec::with_capacity(num_input_partitions);
-                for _ in 0..num_input_partitions {
-                    let (writer, reader) = spill_pool::spsc_channel(
-                        max_file_size,
-                        Arc::clone(&spill_manager),
-                    );
-                    writers.push(Some(writer));
-                    readers.push(reader);
-                }
-                (PartitionSpillWriters::PerInput(writers), readers)
+                .max_spill_file_size_bytes;
+            let num_spill_channels = if preserve_order {
+                num_input_partitions
             } else {
-                // non-preserve-order: one shared multi-producer pool per output partition, since
-                // all inputs share the same receiver and the output is an unordered multiset.
-                let (writer, reader) =
-                    spill_pool::mpsc_channel(max_file_size, Arc::clone(&spill_manager));
-                (PartitionSpillWriters::Shared(writer), vec![reader])
+                1
             };
+            let (spill_writers, spill_readers): (Vec<_>, Vec<_>) = (0
+                ..num_spill_channels)
+                .map(|_| spill_pool::channel(max_file_size, Arc::clone(&spill_manager)))
+                .unzip();
 
             // Coalesce on the producer side, before the channel's gate, so
             // the consumer never sees the per-input-task small batches.
-            // Skip in preserve-order mode, where `StreamingMergeBuilder`
-            // handles batching, and for unbounded inputs, where a residual
-            // batch could otherwise be withheld indefinitely.
-            let shared_coalescer = coalesce_batches.then(|| {
+            // Skip in preserve-order mode: each input has its own dedicated
+            // channel and `StreamingMergeBuilder` handles batching.
+            let shared_coalescer = (!preserve_order).then(|| {
                 SharedCoalescer::new(
                     input.schema(),
                     context.session_config().batch_size(),
@@ -564,22 +505,23 @@ impl RepartitionExecState {
             std::mem::take(streams_and_metrics).into_iter().enumerate()
         {
             let txs: HashMap<_, _> = channels
-                .iter_mut()
+                .iter()
                 .map(|(partition, channels)| {
-                    // Hand this input task its spill writer: in preserve_order mode this moves
-                    // the input's dedicated FIFO writer out; otherwise it clones the shared
-                    // writer. See [`PartitionSpillWriters::take_for_input`].
-                    Ok((
+                    // In preserve_order mode: each input gets its own spill writer (index i)
+                    // In non-preserve-order mode: all inputs share spill writer 0 via clone
+                    let spill_writer_idx = if preserve_order { i } else { 0 };
+                    (
                         *partition,
                         OutputChannel {
                             sender: channels.tx[i].clone(),
                             reservation: Arc::clone(&channels.reservation),
-                            spill_writer: channels.spill_writers.take_for_input(i)?,
+                            spill_writer: channels.spill_writers[spill_writer_idx]
+                                .clone(),
                             shared_coalescer: channels.shared_coalescer.clone(),
                         },
-                    ))
+                    )
                 })
-                .collect::<Result<HashMap<_, _>>>()?;
+                .collect();
 
             // Extract senders for wait_for_task before moving txs
             let senders: HashMap<_, _> = txs
@@ -648,219 +590,6 @@ enum BatchPartitionerState {
 /// Fixed RandomState used for hash repartitioning to ensure consistent behavior across
 /// executions and runs.
 pub const REPARTITION_RANDOM_STATE: SeededRandomState = SeededRandomState::with_seed(0);
-
-/// Physical expression that returns the Range partition for each input row.
-///
-/// This uses the same routing function as [`BatchPartitioner`], so dynamic
-/// filtering and repartitioning agree for every [`ScalarValue`] comparison.
-#[derive(Debug, Hash, PartialEq, Eq)]
-pub struct RangeExpr {
-    on_columns: Vec<PhysicalExprRef>,
-    split_points: Vec<SplitPoint>,
-    sort_options: Vec<SortOptions>,
-}
-
-impl RangeExpr {
-    /// Creates a Range expression for `on_columns` using the supplied routing
-    /// metadata.
-    pub fn try_new(
-        on_columns: Vec<PhysicalExprRef>,
-        range_partitioning: &RangePartitioning,
-    ) -> Result<Self> {
-        let sort_options = range_partitioning
-            .ordering()
-            .iter()
-            .map(|expr| expr.options)
-            .collect();
-        Self::try_new_parts(
-            on_columns,
-            range_partitioning.split_points().to_vec(),
-            sort_options,
-        )
-    }
-
-    fn try_new_parts(
-        on_columns: Vec<PhysicalExprRef>,
-        split_points: Vec<SplitPoint>,
-        sort_options: Vec<SortOptions>,
-    ) -> Result<Self> {
-        assert_or_internal_err!(!on_columns.is_empty(), "RangeExpr requires a key");
-        assert_or_internal_err!(
-            on_columns.len() == sort_options.len(),
-            "RangeExpr key count must match sort options"
-        );
-        validate_range_split_points(&split_points, &sort_options)?;
-        Ok(Self {
-            on_columns,
-            split_points,
-            sort_options,
-        })
-    }
-
-    /// Get the columns used to compute Range partition IDs.
-    pub fn on_columns(&self) -> &[PhysicalExprRef] {
-        &self.on_columns
-    }
-
-    /// Returns the Range split points used for routing.
-    pub fn split_points(&self) -> &[SplitPoint] {
-        &self.split_points
-    }
-
-    /// Returns the per-key sort options used for routing.
-    pub fn sort_options(&self) -> &[SortOptions] {
-        &self.sort_options
-    }
-}
-
-impl Display for RangeExpr {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "range_partition")
-    }
-}
-
-impl PhysicalExpr for RangeExpr {
-    fn children(&self) -> Vec<&PhysicalExprRef> {
-        self.on_columns.iter().collect()
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        children: Vec<PhysicalExprRef>,
-    ) -> Result<PhysicalExprRef> {
-        assert_or_internal_err!(
-            children.len() == self.on_columns.len(),
-            "RangeExpr expected {} children, got {}",
-            self.on_columns.len(),
-            children.len()
-        );
-        Ok(Arc::new(Self::try_new_parts(
-            children,
-            self.split_points.clone(),
-            self.sort_options.clone(),
-        )?))
-    }
-
-    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
-        Ok(DataType::UInt64)
-    }
-
-    fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
-        Ok(false)
-    }
-
-    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let arrays = evaluate_expressions_to_arrays(self.on_columns.iter(), batch)?;
-        let mut row_key_buffer = Vec::with_capacity(arrays.len());
-        let mut partition_ids = Vec::with_capacity(batch.num_rows());
-        for row_idx in 0..batch.num_rows() {
-            extract_row_at_idx_to_buf(&arrays, row_idx, &mut row_key_buffer)?;
-            partition_ids.push(range_partition_id(
-                &row_key_buffer,
-                &self.split_points,
-                &self.sort_options,
-            )? as u64);
-        }
-        Ok(ColumnarValue::Array(Arc::new(UInt64Array::from(
-            partition_ids,
-        ))))
-    }
-
-    fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "range_partition")
-    }
-
-    #[cfg(feature = "proto")]
-    fn try_to_proto(
-        &self,
-        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
-    ) -> Result<Option<protobuf::PhysicalExprNode>> {
-        // Encode the raw ordered children: rebuilding a `LexOrdering` would
-        // deduplicate equivalent children after dynamic-filter remapping.
-        let sort_exprs = self
-            .on_columns
-            .iter()
-            .zip(&self.sort_options)
-            .map(|(expr, options)| PhysicalSortExpr::new(Arc::clone(expr), *options))
-            .collect::<Vec<_>>();
-        let sort_expr = sort_exprs_try_to_proto(&sort_exprs, ctx)?;
-        let split_point = self
-            .split_points
-            .iter()
-            .map(|split_point| {
-                let value = split_point
-                    .values()
-                    .iter()
-                    .map(|value| value.try_into().map_err(Into::into))
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(protobuf::PhysicalRangeSplitPoint { value })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Some(protobuf::PhysicalExprNode {
-            expr_id: None,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::RangeExpr(
-                protobuf::PhysicalRangeExprNode {
-                    sort_expr,
-                    split_point,
-                },
-            )),
-        }))
-    }
-}
-
-#[cfg(feature = "proto")]
-impl RangeExpr {
-    /// Reconstructs a [`RangeExpr`] from its protobuf representation.
-    pub fn try_from_proto(
-        node: &protobuf::PhysicalExprNode,
-        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
-    ) -> Result<PhysicalExprRef> {
-        // Decode the raw ordered children for the same reason as `try_to_proto`.
-        let range_expr = match &node.expr_type {
-            Some(protobuf::physical_expr_node::ExprType::RangeExpr(expr)) => expr,
-            _ => return internal_err!("PhysicalExprNode is not a RangeExpr"),
-        };
-        let sort_exprs = sort_exprs_try_from_proto(&range_expr.sort_expr, ctx)?;
-        let (on_columns, sort_options) = sort_exprs
-            .into_iter()
-            .map(|sort_expr| (sort_expr.expr, sort_expr.options))
-            .unzip();
-        let split_points = range_expr
-            .split_point
-            .iter()
-            .map(|split_point| {
-                let values = split_point
-                    .value
-                    .iter()
-                    .map(|value| ScalarValue::try_from(value).map_err(Into::into))
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(SplitPoint::new(values))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Arc::new(Self::try_new_parts(
-            on_columns,
-            split_points,
-            sort_options,
-        )?))
-    }
-}
-
-fn range_partition_id(
-    row_key: &[ScalarValue],
-    split_points: &[SplitPoint],
-    sort_options: &[SortOptions],
-) -> Result<usize> {
-    let mut low = 0;
-    let mut high = split_points.len();
-    while low < high {
-        let mid = low + (high - low) / 2;
-        match compare_rows(row_key, split_points[mid].values(), sort_options)? {
-            Ordering::Less => high = mid,
-            Ordering::Equal | Ordering::Greater => low = mid + 1,
-        }
-    }
-    Ok(low)
-}
 
 /// Computes `value % divisor` without division in the hot loop when `divisor`
 /// is fixed for many values.
@@ -1196,9 +925,22 @@ impl BatchPartitioner {
             // Note that `extract_row_at_idx_to_buf` clears the `row_key_buffer` on each invocation, creating a new row key for comparison for each row
             extract_row_at_idx_to_buf(arrays, row_idx, row_key_buffer)?;
 
-            let partition =
-                range_partition_id(row_key_buffer, split_points, sort_options)?;
-            indices[partition].push(row_idx as u32)
+            let mut low = 0;
+            let mut high = split_points.len();
+            while low < high {
+                let mid = low + (high - low) / 2;
+                let comparison = compare_rows(
+                    row_key_buffer,
+                    split_points[mid].values(),
+                    sort_options,
+                )?;
+                match comparison {
+                    Ordering::Less => high = mid,
+                    Ordering::Equal | Ordering::Greater => low = mid + 1,
+                }
+            }
+
+            indices[low].push(row_idx as u32)
         }
 
         Ok(())
@@ -1338,8 +1080,7 @@ impl BatchPartitioner {
 /// Repartitioning one [`RecordBatch`] implies creating multiple smaller batches, potentially
 /// as many as the number of output partitions. [`RepartitionExec`] makes sure that the returned
 /// batches adhere to the configured `datafusion.execution.batch_size` for efficient operations,
-/// and for that, it will automatically coalesce batches right after repartitioning for bounded
-/// inputs. Coalescing is skipped for unbounded inputs so partial batches are emitted promptly.
+/// and for that, it will automatically coalesce batches right after repartitioning.
 ///
 /// For this, one shared [`LimitedBatchCoalescer`] per output partition is used:
 ///
@@ -1550,20 +1291,6 @@ impl ExecutionPlan for RepartitionExec {
         vec![&self.input]
     }
 
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        match self.partitioning() {
-            Partitioning::Hash(exprs, _) => crate::apply_expression_roots(exprs, f),
-            Partitioning::Range(range) => crate::apply_expression_roots(
-                range.ordering().iter().map(|sort_expr| &sort_expr.expr),
-                f,
-            ),
-            _ => Ok(TreeNodeRecursion::Continue),
-        }
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
@@ -1752,27 +1479,22 @@ impl ExecutionPlan for RepartitionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn child_stats_requests(&self, _partition: Option<usize>) -> Vec<ChildStats> {
-        vec![ChildStats::At(None)]
-    }
-
-    fn statistics_from_inputs(
-        &self,
-        input_stats: &[Arc<Statistics>],
-        args: &StatisticsArgs,
-    ) -> Result<Arc<Statistics>> {
-        if args.partition().is_some() {
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
+        if let Some(partition) = args.partition() {
             let partition_count = self.partitioning().partition_count();
-            // `StatisticsContext::compute` validates the partition index against
-            // this same count before calling, so it is non-zero here; guard
-            // defensively against a direct call so the division below cannot
-            // divide by zero
+            if partition_count == 0 {
+                return Ok(Arc::new(Statistics::new_unknown(&self.schema())));
+            }
+
             assert_or_internal_err!(
-                partition_count > 0,
-                "RepartitionExec statistics requested for a partition but the partition count is 0"
+                partition < partition_count,
+                "RepartitionExec invalid partition {} (expected less than {})",
+                partition,
+                partition_count
             );
 
-            let mut stats = input_stats[0].as_ref().clone();
+            let mut stats =
+                Arc::unwrap_or_clone(args.compute_child_statistics(&self.input, None)?);
 
             // Distribute statistics across partitions
             stats.num_rows = stats
@@ -1795,7 +1517,7 @@ impl ExecutionPlan for RepartitionExec {
 
             Ok(Arc::new(stats))
         } else {
-            Ok(Arc::clone(&input_stats[0]))
+            args.compute_child_statistics(&self.input, None)
         }
     }
 
@@ -1834,29 +1556,10 @@ impl ExecutionPlan for RepartitionExec {
                 }
                 Partitioning::Hash(new_partitions, *size)
             }
-            Partitioning::Range(range_partitioning) => {
-                // Rewrite range key expressions through the projection.
-                let mut sort_exprs =
-                    Vec::with_capacity(range_partitioning.ordering().len());
-                for sort_expr in range_partitioning.ordering() {
-                    let Some(new_expr) =
-                        update_expr(&sort_expr.expr, projection.expr(), false)?
-                    else {
-                        return Ok(None);
-                    };
-                    sort_exprs.push(PhysicalSortExpr::new(new_expr, sort_expr.options));
-                }
-
-                let Some(ordering) = LexOrdering::new(sort_exprs) else {
-                    return internal_err!(
-                        "failed to create LexOrdering for range partitioning"
-                    );
-                };
-
-                Partitioning::Range(RangePartitioning::try_new(
-                    ordering,
-                    range_partitioning.split_points().to_vec(),
-                )?)
+            Partitioning::Range(_) => {
+                // Range partitioning optimizer propagation is tracked in
+                // https://github.com/apache/datafusion/issues/23230
+                return Ok(None);
             }
             others => others.clone(),
         };
@@ -1894,6 +1597,16 @@ impl ExecutionPlan for RepartitionExec {
         if !self.maintains_input_order()[0] {
             return Ok(SortOrderPushdownResult::Unsupported);
         }
+        match self.partitioning() {
+            Partitioning::Range(_) => {
+                // Range partitioning optimizer propagation is tracked in
+                // https://github.com/apache/datafusion/issues/23230
+                return Ok(SortOrderPushdownResult::Unsupported);
+            }
+            Partitioning::RoundRobinBatch(_)
+            | Partitioning::Hash(_, _)
+            | Partitioning::UnknownPartitioning(_) => {}
+        }
 
         // Delegate to the child and wrap with a new RepartitionExec
         self.input.try_pushdown_sort(order)?.try_map(|new_input| {
@@ -1916,11 +1629,12 @@ impl ExecutionPlan for RepartitionExec {
         new_properties.partitioning = match new_properties.partitioning {
             RoundRobinBatch(_) => RoundRobinBatch(target_partitions),
             Hash(hash, _) => Hash(hash, target_partitions),
+            UnknownPartitioning(_) => UnknownPartitioning(target_partitions),
             Range(_) => {
-                // Number of partitions is constrained by the split points and cannot be changed
+                // Range repartition optimizations are tracked in
+                // https://github.com/apache/datafusion/issues/23230
                 return Ok(None);
             }
-            UnknownPartitioning(_) => UnknownPartitioning(target_partitions),
         };
         Ok(Some(Arc::new(Self {
             input: Arc::clone(&self.input),
@@ -1929,72 +1643,6 @@ impl ExecutionPlan for RepartitionExec {
             preserve_order: self.preserve_order,
             cache: new_properties.into(),
         })))
-    }
-
-    #[cfg(feature = "proto")]
-    fn try_to_proto(
-        &self,
-        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
-    ) -> Result<Option<protobuf::PhysicalPlanNode>> {
-        let input = ctx.encode_child(self.input())?;
-
-        let partitioning = self.partitioning().try_to_proto(&ctx.expr_ctx())?;
-
-        Ok(Some(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(
-                protobuf::physical_plan_node::PhysicalPlanType::Repartition(Box::new(
-                    protobuf::RepartitionExecNode {
-                        input: Some(Box::new(input)),
-                        partitioning: Some(partitioning),
-                        preserve_order: self.preserve_order(),
-                    },
-                )),
-            ),
-        }))
-    }
-}
-
-#[cfg(feature = "proto")]
-impl RepartitionExec {
-    /// Reconstruct a [`RepartitionExec`] from its protobuf representation.
-    pub fn try_from_proto(
-        node: &protobuf::PhysicalPlanNode,
-        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let repart = crate::expect_plan_variant!(
-            node,
-            protobuf::physical_plan_node::PhysicalPlanType::Repartition,
-            "RepartitionExec",
-        );
-        let input = ctx.decode_required_child(
-            repart.input.as_deref(),
-            "RepartitionExec",
-            "input",
-        )?;
-        let input_schema = input.schema();
-
-        let partitioning = repart
-            .partitioning
-            .as_ref()
-            .map(|partitioning| {
-                Partitioning::try_from_proto(
-                    partitioning,
-                    &ctx.expr_ctx(input_schema.as_ref()),
-                )
-            })
-            .transpose()?
-            .flatten()
-            .ok_or_else(|| {
-                datafusion_common::internal_datafusion_err!(
-                    "RepartitionExec is missing required field 'partitioning'"
-                )
-            })?;
-
-        let mut repart_exec = RepartitionExec::try_new(input, partitioning)?;
-        if repart.preserve_order {
-            repart_exec = repart_exec.with_preserve_order();
-        }
-        Ok(Arc::new(repart_exec))
     }
 }
 
@@ -2445,9 +2093,6 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
-    use crate::empty::EmptyExec;
-    use crate::projection::ProjectionExpr;
-    use crate::streaming::{PartitionStream, StreamingTableExec};
     use crate::test::TestMemoryExec;
     use crate::{
         test::{
@@ -2471,68 +2116,6 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_physical_expr::{PhysicalSortExpr, RangePartitioning, SplitPoint};
     use insta::assert_snapshot;
-
-    #[derive(Debug)]
-    struct UnboundedTestPartition {
-        schema: SchemaRef,
-        batch: RecordBatch,
-    }
-
-    impl PartitionStream for UnboundedTestPartition {
-        fn schema(&self) -> &SchemaRef {
-            &self.schema
-        }
-
-        fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
-            let stream = futures::stream::iter([Ok(self.batch.clone())])
-                .chain(futures::stream::pending());
-            Box::pin(RecordBatchStreamAdapter::new(
-                Arc::clone(&self.schema),
-                stream,
-            ))
-        }
-    }
-
-    #[test]
-    fn range_expr_preserves_duplicate_remapped_children() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::UInt32, false),
-            Field::new("b", DataType::UInt32, false),
-        ]));
-        let sort_options = [SortOptions::new(false, false), SortOptions::new(true, true)];
-        let split_points = vec![SplitPoint::new(vec![
-            ScalarValue::UInt32(Some(10)),
-            ScalarValue::UInt32(Some(20)),
-        ])];
-        let range_partitioning = RangePartitioning::try_new(
-            [
-                PhysicalSortExpr::new(col("a", &schema)?, sort_options[0]),
-                PhysicalSortExpr::new(col("b", &schema)?, sort_options[1]),
-            ]
-            .into(),
-            split_points.clone(),
-        )?;
-        let expr = Arc::new(RangeExpr::try_new(
-            vec![col("a", &schema)?, col("b", &schema)?],
-            &range_partitioning,
-        )?);
-        let remapped = col("a", &schema)?;
-        let rewritten =
-            expr.with_new_children(vec![Arc::clone(&remapped), Arc::clone(&remapped)])?;
-
-        let rewritten = rewritten
-            .downcast_ref::<RangeExpr>()
-            .expect("rewritten expression should remain a RangeExpr");
-        assert_eq!(rewritten.on_columns().len(), 2);
-        assert!(Arc::ptr_eq(
-            &rewritten.on_columns()[0],
-            &rewritten.on_columns()[1]
-        ));
-        assert_eq!(rewritten.sort_options(), sort_options);
-        assert_eq!(rewritten.split_points(), split_points);
-
-        Ok(())
-    }
 
     #[test]
     fn strength_reduced_u64_remainder_matches_modulo() {
@@ -2970,288 +2553,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn range_repartition_swaps_with_projection_rewrites_key_index() -> Result<()> {
-        // Three columns so the projection both narrows the schema (required for
-        // swap) and moves the range key from @0 to @1.
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::UInt32, false),
-            Field::new("region", DataType::Utf8, false),
-            Field::new("payload", DataType::UInt32, false),
-        ]));
-        let repartition = Arc::new(RepartitionExec::try_new(
-            Arc::new(EmptyExec::new(Arc::clone(&schema))),
-            range_partitioning_on_columns(&schema, &["id"], vec![vec![10]])?,
-        )?);
-
-        let projection =
-            projection_on_columns(&(Arc::clone(&repartition) as _), &["payload", "id"])?;
-
-        let swapped = repartition
-            .try_swapping_with_projection(&projection)?
-            .expect("swap should succeed when projection keeps the range key");
-        let swapped_repartition = swapped
-            .downcast_ref::<RepartitionExec>()
-            .expect("top node should be RepartitionExec");
-
-        assert!(swapped_repartition.input().is::<ProjectionExec>());
-        let range = expect_range_partitioning(swapped_repartition.partitioning());
-        assert_eq!(range.ordering()[0].to_string(), "id@1 ASC");
-        assert_eq!(
-            range.split_points(),
-            &[SplitPoint::new(vec![ScalarValue::UInt32(Some(10))])]
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn range_repartition_does_not_swap_when_projection_drops_key() -> Result<()> {
-        // Drop a simple range key.
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::UInt32, false),
-            Field::new("payload", DataType::UInt32, false),
-        ]));
-        let repartition = Arc::new(RepartitionExec::try_new(
-            Arc::new(EmptyExec::new(Arc::clone(&schema))),
-            range_partitioning_on_columns(&schema, &["id"], vec![vec![10]])?,
-        )?);
-        let projection =
-            projection_on_columns(&(Arc::clone(&repartition) as _), &["payload"])?;
-        assert!(
-            repartition
-                .try_swapping_with_projection(&projection)?
-                .is_none()
-        );
-
-        // Drop part of a compound range key.
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::UInt32, false),
-            Field::new("b", DataType::UInt32, false),
-            Field::new("c", DataType::UInt32, false),
-        ]));
-        let repartition = Arc::new(RepartitionExec::try_new(
-            Arc::new(EmptyExec::new(Arc::clone(&schema))),
-            range_partitioning_on_columns(&schema, &["a", "b"], vec![vec![10, 1]])?,
-        )?);
-        let projection =
-            projection_on_columns(&(Arc::clone(&repartition) as _), &["a", "c"])?;
-        assert!(
-            repartition
-                .try_swapping_with_projection(&projection)?
-                .is_none()
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn range_repartition_try_pushdown_sort_when_maintains_order() -> Result<()> {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("id", DataType::UInt32, false)]));
-        let ordering = LexOrdering::new([PhysicalSortExpr::new(
-            col("id", &schema)?,
-            SortOptions::default(),
-        )])
-        .expect("ordering must not be empty");
-
-        // Multi-partition source with preserve_order: Range maintains input order.
-        let source = Arc::new(ExactSortPushdownExec::new(
-            Arc::clone(&schema),
-            2,
-            ordering.clone(),
-        ));
-        let repartition = Arc::new(
-            RepartitionExec::try_new(
-                source,
-                range_partitioning_on_columns(&schema, &["id"], vec![vec![10]])?,
-            )?
-            .with_preserve_order(),
-        );
-        assert!(repartition.maintains_input_order()[0]);
-
-        match repartition.try_pushdown_sort(ordering.as_ref())? {
-            SortOrderPushdownResult::Exact { inner } => {
-                let pushed = inner
-                    .downcast_ref::<RepartitionExec>()
-                    .expect("pushdown should keep RepartitionExec");
-
-                assert!(pushed.preserve_order());
-                assert!(pushed.maintains_input_order()[0]);
-
-                let range = expect_range_partitioning(pushed.partitioning());
-                assert_eq!(range.ordering()[0].to_string(), "id@0 ASC");
-                assert_eq!(
-                    inner.properties().output_ordering().map(|o| o.to_string()),
-                    Some(ordering.to_string()),
-                    "pushed repartition output ordering should match the requested sort"
-                );
-            }
-            other => panic!("expected Exact sort pushdown, got {other:?}"),
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn range_repartition_try_pushdown_sort_unsupported_without_order_maintenance()
-    -> Result<()> {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("id", DataType::UInt32, false)]));
-        let ordering = LexOrdering::new([PhysicalSortExpr::new(
-            col("id", &schema)?,
-            SortOptions::default(),
-        )])
-        .expect("ordering must not be empty");
-
-        // Multi-partition source without preserve_order: Range does not maintain order.
-        let source = Arc::new(ExactSortPushdownExec::new(
-            Arc::clone(&schema),
-            2,
-            ordering.clone(),
-        ));
-        let repartition = Arc::new(RepartitionExec::try_new(
-            source,
-            range_partitioning_on_columns(&schema, &["id"], vec![vec![10]])?,
-        )?);
-        assert!(!repartition.maintains_input_order()[0]);
-
-        assert!(matches!(
-            repartition.try_pushdown_sort(ordering.as_ref())?,
-            SortOrderPushdownResult::Unsupported
-        ));
-
-        Ok(())
-    }
-
-    fn range_partitioning_on_columns(
-        schema: &SchemaRef,
-        key_columns: &[&str],
-        split_points: Vec<Vec<u32>>,
-    ) -> Result<Partitioning> {
-        let Some(ordering) = LexOrdering::new(
-            key_columns
-                .iter()
-                .map(|name| {
-                    Ok(PhysicalSortExpr::new(
-                        col(name, schema)?,
-                        SortOptions::default(),
-                    ))
-                })
-                .collect::<Result<Vec<_>>>()?,
-        ) else {
-            return exec_err!("range ordering must not be empty");
-        };
-        Ok(Partitioning::Range(RangePartitioning::try_new(
-            ordering,
-            split_points
-                .into_iter()
-                .map(|values| {
-                    SplitPoint::new(
-                        values
-                            .into_iter()
-                            .map(|value| ScalarValue::UInt32(Some(value)))
-                            .collect(),
-                    )
-                })
-                .collect(),
-        )?))
-    }
-
-    fn projection_on_columns(
-        input: &Arc<dyn ExecutionPlan>,
-        names: &[&str],
-    ) -> Result<ProjectionExec> {
-        let exprs = names
-            .iter()
-            .map(|name| {
-                Ok(ProjectionExpr {
-                    expr: col(name, &input.schema())?,
-                    alias: (*name).to_string(),
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        ProjectionExec::try_new(exprs, Arc::clone(input))
-    }
-
-    fn expect_range_partitioning(partitioning: &Partitioning) -> &RangePartitioning {
-        match partitioning {
-            Partitioning::Range(range) => range,
-            other => panic!("expected Range partitioning, got {other:?}"),
-        }
-    }
-
-    /// Test source that claims Exact support for any sort pushdown request.
-    #[derive(Debug, Clone)]
-    struct ExactSortPushdownExec {
-        cache: Arc<PlanProperties>,
-    }
-
-    impl ExactSortPushdownExec {
-        fn new(schema: SchemaRef, num_partitions: usize, ordering: LexOrdering) -> Self {
-            use crate::execution_plan::{Boundedness, EmissionType};
-            Self {
-                cache: Arc::new(PlanProperties::new(
-                    EquivalenceProperties::new_with_orderings(schema, [ordering]),
-                    Partitioning::UnknownPartitioning(num_partitions),
-                    EmissionType::Incremental,
-                    Boundedness::Bounded,
-                )),
-            }
-        }
-    }
-
-    impl DisplayAs for ExactSortPushdownExec {
-        fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-            write!(f, "ExactSortPushdownExec")
-        }
-    }
-
-    impl ExecutionPlan for ExactSortPushdownExec {
-        fn name(&self) -> &str {
-            "ExactSortPushdownExec"
-        }
-
-        fn properties(&self) -> &Arc<PlanProperties> {
-            &self.cache
-        }
-
-        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-            vec![]
-        }
-
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
-        }
-
-        fn with_new_children(
-            self: Arc<Self>,
-            _: Vec<Arc<dyn ExecutionPlan>>,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            Ok(self)
-        }
-
-        fn execute(
-            &self,
-            _partition: usize,
-            _context: Arc<TaskContext>,
-        ) -> Result<SendableRecordBatchStream> {
-            Ok(Box::pin(EmptyRecordBatchStream::new(self.schema())))
-        }
-
-        fn try_pushdown_sort(
-            &self,
-            _order: &[PhysicalSortExpr],
-        ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
-            Ok(SortOrderPushdownResult::Exact {
-                inner: Arc::new(self.clone()),
-            })
-        }
-    }
-
     #[tokio::test]
     async fn test_repartition_with_coalescing() -> Result<()> {
         let schema = test_schema(false);
@@ -3275,37 +2576,6 @@ mod tests {
                 assert_eq!(200, batch.num_rows());
             }
         }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn unbounded_input_emits_before_batch_size() -> Result<()> {
-        let schema = test_schema(false);
-        let batch = create_batch();
-        let source = Arc::new(StreamingTableExec::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(UnboundedTestPartition {
-                schema: Arc::clone(&schema),
-                batch: batch.clone(),
-            })],
-            None,
-            vec![],
-            true,
-            None,
-        )?);
-        let exec = RepartitionExec::try_new(source, Partitioning::RoundRobinBatch(1))?;
-        let session_config = SessionConfig::new().with_batch_size(batch.num_rows() * 2);
-        let task_ctx =
-            Arc::new(TaskContext::default().with_session_config(session_config));
-
-        let mut stream = exec.execute(0, task_ctx)?;
-        let output =
-            tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
-                .await
-                .expect("unbounded repartition withheld a partial batch")
-                .expect("unbounded input ended unexpectedly")?;
-
-        assert_eq!(batch, output);
         Ok(())
     }
 
@@ -4110,14 +3380,14 @@ mod tests {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use crate::test::TestMemoryExec;
-    use crate::union::UnionExec;
-    use arrow::array::{UInt32Array, record_batch};
+    use arrow::array::record_batch;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::assert_batches_eq;
-    use datafusion_common::config::ConfigNonZeroUsize;
+
+    use super::*;
+    use crate::test::TestMemoryExec;
+    use crate::union::UnionExec;
 
     use datafusion_physical_expr::expressions::col;
 
@@ -4296,95 +3566,6 @@ mod test {
         Ok(())
     }
 
-    /// Regression test for order preservation across spill *file rotation*.
-    ///
-    /// A `preserve_order` repartition relies on each per-(input, output) spill pool delivering
-    /// batches in strict FIFO order (see [`spill_pool::spsc_channel`] / [`SpillPoolSink`]). This uses
-    /// the same memory profile as [`Self::test_preserve_order_with_spilling`] — which is tuned to
-    /// force spilling while still completing — but additionally sets `max_spill_file_size_bytes`
-    /// to 1 so every spilled batch lands in its own file. That exercises the FIFO-across-rotation
-    /// path: if ordering were lost across rotated files (e.g. by feeding an ordered pool with a
-    /// shared multi-producer writer), the downstream `StreamingMerge` would emit out-of-order rows
-    /// and the sortedness assertion below would fail.
-    #[tokio::test]
-    async fn test_preserve_order_with_spill_file_rotation() -> Result<()> {
-        use datafusion_execution::config::SessionConfig;
-        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-
-        // Same sorted input as `test_preserve_order_with_spilling`:
-        // Partition1: [1,3], [5,7], [9,11]; Partition2: [2,4], [6,8], [10,12]
-        let batch1 = record_batch!(("c0", UInt32, [1, 3])).unwrap();
-        let batch2 = record_batch!(("c0", UInt32, [2, 4])).unwrap();
-        let batch3 = record_batch!(("c0", UInt32, [5, 7])).unwrap();
-        let batch4 = record_batch!(("c0", UInt32, [6, 8])).unwrap();
-        let batch5 = record_batch!(("c0", UInt32, [9, 11])).unwrap();
-        let batch6 = record_batch!(("c0", UInt32, [10, 12])).unwrap();
-        let schema = batch1.schema();
-        let sort_exprs = LexOrdering::new([PhysicalSortExpr {
-            expr: col("c0", &schema).unwrap(),
-            options: SortOptions::default().asc(),
-        }])
-        .unwrap();
-        let partition1 = vec![batch1, batch3, batch5];
-        let partition2 = vec![batch2, batch4, batch6];
-        let input_partitions = vec![partition1, partition2];
-
-        // Force a new spill file per spilled batch to exercise FIFO across rotation.
-        let mut session_config = SessionConfig::new();
-        session_config
-            .options_mut()
-            .execution
-            .max_spill_file_size_bytes = ConfigNonZeroUsize::try_new(1).unwrap();
-        // Same tight limit as `test_preserve_order_with_spilling`: forces spilling while leaving
-        // the merge enough non-spillable headroom to complete.
-        let runtime = RuntimeEnvBuilder::default()
-            .with_memory_limit(608, 1.0)
-            .build_arc()?;
-        let task_ctx = Arc::new(
-            TaskContext::default()
-                .with_session_config(session_config)
-                .with_runtime(runtime),
-        );
-
-        let exec = TestMemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?
-            .try_with_sort_information(vec![sort_exprs.clone(), sort_exprs])?;
-        let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
-        let exec = RepartitionExec::try_new(exec, Partitioning::RoundRobinBatch(3))?
-            .with_preserve_order();
-
-        // Each output partition merges sorted substreams, so its rows must be non-decreasing.
-        for i in 0..exec.partitioning().partition_count() {
-            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
-            let mut last: Option<u32> = None;
-            while let Some(result) = stream.next().await {
-                let batch = result?;
-                let col = batch
-                    .column(0)
-                    .as_any()
-                    .downcast_ref::<UInt32Array>()
-                    .unwrap();
-                for r in 0..col.len() {
-                    let v = col.value(r);
-                    if let Some(prev) = last {
-                        assert!(
-                            prev <= v,
-                            "output partition {i} not sorted: {prev} came before {v}"
-                        );
-                    }
-                    last = Some(v);
-                }
-            }
-        }
-
-        let metrics = exec.metrics().unwrap();
-        assert!(
-            metrics.spill_count().unwrap() > 0,
-            "Expected spilling to occur for order-preserving repartition at this \
-             memory limit. If this fails, the memory limit may need adjustment."
-        );
-        Ok(())
-    }
-
     #[tokio::test]
     async fn test_hash_partitioning_with_spilling() -> Result<()> {
         use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -4472,40 +3653,6 @@ mod test {
         RepartitionExec: partitioning=RoundRobinBatch(20), input_partitions=1, maintains_sort_order=true
           DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC
         ");
-        Ok(())
-    }
-
-    #[test]
-    fn test_range_repartitioned_returns_none() -> Result<()> {
-        let schema = test_schema();
-        let source = memory_exec(&schema);
-        let partitioning = Partitioning::Range(RangePartitioning::try_new(
-            [PhysicalSortExpr::new(
-                col("c0", &schema)?,
-                SortOptions::default(),
-            )]
-            .into(),
-            vec![
-                SplitPoint::new(vec![ScalarValue::UInt32(Some(10))]),
-                SplitPoint::new(vec![ScalarValue::UInt32(Some(20))]),
-            ],
-        )?);
-        let exec = RepartitionExec::try_new(source, partitioning)?;
-
-        let mut expressions = vec![];
-        exec.apply_expressions(&mut |expr| {
-            expressions.push(expr.to_string());
-            Ok(TreeNodeRecursion::Continue)
-        })?;
-        assert_eq!(expressions, ["c0@0"]);
-
-        // Range partition count is fixed by split points, so repartitioned()
-        // cannot change it to an arbitrary target.
-        let result = exec.repartitioned(10, &Default::default())?;
-        assert!(
-            result.is_none(),
-            "range repartitioning should not support changing partition count"
-        );
         Ok(())
     }
 

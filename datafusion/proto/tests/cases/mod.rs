@@ -32,11 +32,9 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
-mod plans;
-mod public_conversions;
 mod roundtrip_logical_plan;
+mod roundtrip_physical_plan;
 mod serialize;
-mod stack_safety;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct MyRegexUdf {

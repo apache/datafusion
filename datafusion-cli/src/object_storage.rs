@@ -56,10 +56,6 @@ use object_store::aws::resolve_bucket_region;
 
 // Provide a local mock when running tests so we don't make network calls
 #[cfg(test)]
-#[expect(
-    clippy::unused_async,
-    reason = "matches object_store::aws::resolve_bucket_region"
-)]
 async fn resolve_bucket_region(
     _bucket: &str,
     _client_options: &ClientOptions,
@@ -180,10 +176,7 @@ struct CredentialsFromConfig {
 impl CredentialsFromConfig {
     /// Attempt find AWS S3 credentials via the AWS SDK
     pub async fn try_new() -> Result<Self> {
-        // Loading the SDK config produces a large future, so box it to avoid
-        // potentially triggering the `large_futures` clippy lint.
-        let config =
-            Box::pin(aws_config::defaults(BehaviorVersion::latest()).load()).await;
+        let config = aws_config::defaults(BehaviorVersion::latest()).load().await;
         let region = config.region().map(|r| r.to_string());
 
         let credentials = config
@@ -607,7 +600,7 @@ mod tests {
 
     #[tokio::test]
     async fn s3_object_store_builder_default() -> Result<()> {
-        if let Err(DataFusionError::Execution(e)) = check_aws_envs() {
+        if let Err(DataFusionError::Execution(e)) = check_aws_envs().await {
             // Skip test if AWS envs are not set
             eprintln!("{e}");
             return Ok(());
@@ -772,7 +765,7 @@ mod tests {
 
     #[tokio::test]
     async fn s3_object_store_builder_resolves_region_when_none_provided() -> Result<()> {
-        if let Err(DataFusionError::Execution(e)) = check_aws_envs() {
+        if let Err(DataFusionError::Execution(e)) = check_aws_envs().await {
             // Skip test if AWS envs are not set
             eprintln!("{e}");
             return Ok(());
@@ -805,7 +798,7 @@ mod tests {
     #[tokio::test]
     async fn s3_object_store_builder_overrides_region_when_resolve_region_enabled()
     -> Result<()> {
-        if let Err(DataFusionError::Execution(e)) = check_aws_envs() {
+        if let Err(DataFusionError::Execution(e)) = check_aws_envs().await {
             // Skip test if AWS envs are not set
             eprintln!("{e}");
             return Ok(());
@@ -916,7 +909,7 @@ mod tests {
         table_options
     }
 
-    fn check_aws_envs() -> Result<()> {
+    async fn check_aws_envs() -> Result<()> {
         let aws_envs = [
             "AWS_ACCESS_KEY_ID",
             "AWS_SECRET_ACCESS_KEY",

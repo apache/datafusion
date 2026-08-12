@@ -301,7 +301,7 @@ config_namespace! {
         pub collect_spans: bool, default = false
 
         /// Specifies the recursion depth limit when parsing complex SQL Queries
-        pub recursion_limit: ConfigNonZeroUsize, default = non_zero_usize_default(50)
+        pub recursion_limit: usize, default = 50
 
         /// Specifies the default null ordering for query results. There are 4 options:
         /// - `nulls_max`: Nulls appear last in ascending order.
@@ -663,91 +663,6 @@ impl Display for ConfigNonZeroUsize {
     }
 }
 
-/// A `usize` configuration value that rejects 0 and 1 when set from strings.
-///
-/// Use this for options whose consumer divides the value in half to size an
-/// internal buffer (e.g. a bounded channel capacity): values below 2 would
-/// round down to a zero-capacity buffer and panic. Invalid values return a
-/// configuration error through [`ConfigField`] instead.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ConfigMinTwoUsize(usize);
-
-/// Private helper for hard-coded defaults in `config_namespace!`, which cannot
-/// use `?`. All external construction should use [`ConfigMinTwoUsize::try_new`].
-const fn min_two_usize_default(value: usize) -> ConfigMinTwoUsize {
-    if value >= 2 {
-        ConfigMinTwoUsize(value)
-    } else {
-        panic!("value must be at least 2")
-    }
-}
-
-impl ConfigMinTwoUsize {
-    /// Creates a [`ConfigMinTwoUsize`], returning a configuration error if
-    /// `value` is less than 2.
-    pub fn try_new(value: usize) -> Result<Self> {
-        if value >= 2 {
-            Ok(Self(value))
-        } else {
-            _config_err!("value must be at least 2")
-        }
-    }
-
-    /// Returns the wrapped `usize`.
-    pub const fn get(self) -> usize {
-        self.0
-    }
-}
-
-impl From<ConfigMinTwoUsize> for usize {
-    fn from(value: ConfigMinTwoUsize) -> Self {
-        value.get()
-    }
-}
-
-impl FromStr for ConfigMinTwoUsize {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::try_new(default_config_transform(s)?)
-    }
-}
-
-impl ConfigField for ConfigMinTwoUsize {
-    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
-        v.some(key, self, description)
-    }
-
-    fn set(&mut self, key: &str, value: &str) -> Result<()> {
-        if !key.is_empty() {
-            return _config_err!(
-                "Config field max_buffered_batches_per_output_file is a scalar ConfigMinTwoUsize and does not have nested field \"{}\"",
-                key
-            );
-        }
-
-        *self = ConfigMinTwoUsize::from_str(value)?;
-        Ok(())
-    }
-
-    fn reset(&mut self, key: &str) -> Result<()> {
-        if key.is_empty() {
-            Ok(())
-        } else {
-            _config_err!(
-                "Config field max_buffered_batches_per_output_file is a scalar ConfigMinTwoUsize and does not have nested field \"{}\"",
-                key
-            )
-        }
-    }
-}
-
-impl Display for ConfigMinTwoUsize {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.get())
-    }
-}
-
 /// Policy for handling duplicate keys in Spark-compatible map-construction
 /// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`). Mirrors
 /// Spark's [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961).
@@ -943,36 +858,28 @@ config_namespace! {
         /// may create spill files larger than the limit.
         ///
         /// Default: 128 MB
-        pub max_spill_file_size_bytes: ConfigNonZeroUsize, default = non_zero_usize_default(128 * 1024 * 1024)
+        pub max_spill_file_size_bytes: usize, default = 128 * 1024 * 1024
 
         /// Number of files to read in parallel when inferring schema and statistics
-        pub meta_fetch_concurrency: ConfigNonZeroUsize, default = non_zero_usize_default(32)
+        pub meta_fetch_concurrency: usize, default = 32
 
         /// Guarantees a minimum level of output files running in parallel.
         /// RecordBatches will be distributed in round robin fashion to each
         /// parallel writer. Each writer is closed and a new file opened once
         /// soft_max_rows_per_output_file is reached.
-        pub minimum_parallel_output_files: ConfigNonZeroUsize, default = non_zero_usize_default(4)
+        pub minimum_parallel_output_files: usize, default = 4
 
         /// Target number of rows in output files when writing multiple.
         /// This is a soft max, so it can be exceeded slightly. There also
         /// will be one file smaller than the limit if the total
         /// number of rows written is not roughly divisible by the soft max
-        pub soft_max_rows_per_output_file: ConfigNonZeroUsize, default = non_zero_usize_default(50000000)
+        pub soft_max_rows_per_output_file: usize, default = 50000000
 
         /// This is the maximum number of RecordBatches buffered
         /// for each output file being worked. Higher values can potentially
         /// give faster write performance at the cost of higher peak
-        /// memory consumption.
-        ///
-        /// This budget is split evenly between two independent points in the
-        /// write pipeline (see the demuxer diagram in #7791): how many files
-        /// can be in flight from the demuxer to a writer task, and how many
-        /// RecordBatches are buffered for a single file's writer. Must be at
-        /// least 2 so each half gets at least 1 unit of buffering - 0 or 1
-        /// would leave one side with a zero-capacity channel and panic at
-        /// write time.
-        pub max_buffered_batches_per_output_file: ConfigMinTwoUsize, default = min_two_usize_default(2)
+        /// memory consumption
+        pub max_buffered_batches_per_output_file: usize, default = 2
 
         /// Should sub directories be ignored when scanning directories for data
         /// files. Defaults to true (ignores subdirectories), consistent with
@@ -1281,17 +1188,6 @@ config_namespace! {
         /// but may increase IO and CPU usage. None means use the default
         /// parquet reader setting. 0 means no caching.
         pub max_predicate_cache_size: Option<usize>, default = None
-
-        /// Maximum number of values in an `IN (...)` list for which pruning will
-        /// occur. Longer lists will not be used to prune files, row groups, or
-        /// data pages.
-        ///
-        /// Higher values help in cases such as filtering on a list of
-        /// ~25-100 identifiers, but also make the predicate more expensive to
-        /// evaluate. Set to 0 to disable `IN (...)` list pruning entirely.
-        ///
-        /// Defaults to 20.
-        pub max_in_list_size: usize, default = 20
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties
@@ -2036,8 +1932,7 @@ impl ConfigOptions {
                 }
                 return Ok(());
             }
-            return ConfigField::set(self, inner_key, value)
-                .map_err(|e| e.context(format!("Error setting config {key}")));
+            return ConfigField::set(self, inner_key, value);
         }
 
         if !self.extensions.0.contains_key(prefix)
@@ -3876,7 +3771,6 @@ impl Display for OutputFormat {
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "parquet")]
-    use crate::assert_contains;
     use crate::config::TableParquetOptions;
     use crate::config::{
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
@@ -4437,7 +4331,7 @@ mod tests {
         let err = config
             .set("datafusion.execution.parquet.writer_version", "3.0")
             .unwrap_err();
-        assert_contains!(
+        assert_eq!(
             err.to_string(),
             "Invalid or Unsupported Configuration: Invalid parquet writer version: 3.0. Expected one of: 1.0, 2.0"
         );

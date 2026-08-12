@@ -72,30 +72,19 @@
                                 }
                               },
                               "virtualTable": {
-                                "expressions": [
-                                  {
-                                    "fields": [
-                                      {
-                                        "literal": {
-                                          "i64": "1",
-                                          "nullable": true,
-                                          "typeVariationReference": 0
-                                        }
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "fields": [
-                                      {
-                                        "literal": {
-                                          "i64": "2",
-                                          "nullable": true,
-                                          "typeVariationReference": 0
-                                        }
-                                      }
-                                    ]
-                                  }
-                                ]
+                                "values": [{
+                                  "fields": [{
+                                    "i64": "1",
+                                    "nullable": true,
+                                    "typeVariationReference": 0
+                                  }]
+                                }, {
+                                  "fields": [{
+                                    "i64": "2",
+                                    "nullable": true,
+                                    "typeVariationReference": 0
+                                  }]
+                                }]
                               }
                             }
                           },
@@ -164,44 +153,27 @@
                                 }
                               },
                               "virtualTable": {
-                                "expressions": [
-                                  {
-                                    "fields": [
-                                      {
-                                        "literal": {
-                                          "i64": "1",
-                                          "nullable": true,
-                                          "typeVariationReference": 0
-                                        }
-                                      },
-                                      {
-                                        "literal": {
-                                          "string": "info",
-                                          "nullable": true,
-                                          "typeVariationReference": 0
-                                        }
-                                      }
-                                    ]
-                                  },
-                                  {
-                                    "fields": [
-                                      {
-                                        "literal": {
-                                          "i64": "2",
-                                          "nullable": true,
-                                          "typeVariationReference": 0
-                                        }
-                                      },
-                                      {
-                                        "literal": {
-                                          "string": "low",
-                                          "nullable": true,
-                                          "typeVariationReference": 0
-                                        }
-                                      }
-                                    ]
-                                  }
-                                ]
+                                "values": [{
+                                  "fields": [{
+                                    "i64": "1",
+                                    "nullable": true,
+                                    "typeVariationReference": 0
+                                  }, {
+                                    "string": "info",
+                                    "nullable": true,
+                                    "typeVariationReference": 0
+                                  }]
+                                }, {
+                                  "fields": [{
+                                    "i64": "2",
+                                    "nullable": true,
+                                    "typeVariationReference": 0
+                                  }, {
+                                    "string": "low",
+                                    "nullable": true,
+                                    "typeVariationReference": 0
+                                  }]
+                                }]
                               }
                             }
                           },
@@ -300,30 +272,19 @@
                             }
                           },
                           "virtualTable": {
-                            "expressions": [
-                              {
-                                "fields": [
-                                  {
-                                    "literal": {
-                                      "i64": "1",
-                                      "nullable": true,
-                                      "typeVariationReference": 0
-                                    }
-                                  }
-                                ]
-                              },
-                              {
-                                "fields": [
-                                  {
-                                    "literal": {
-                                      "i64": "2",
-                                      "nullable": true,
-                                      "typeVariationReference": 0
-                                    }
-                                  }
-                                ]
-                              }
-                            ]
+                            "values": [{
+                              "fields": [{
+                                "i64": "1",
+                                "nullable": true,
+                                "typeVariationReference": 0
+                              }]
+                            }, {
+                              "fields": [{
+                                "i64": "2",
+                                "nullable": true,
+                                "typeVariationReference": 0
+                              }]
+                            }]
                           }
                         }
                       },
@@ -428,30 +389,19 @@
                         }
                       },
                       "virtualTable": {
-                        "expressions": [
-                          {
-                            "fields": [
-                              {
-                                "literal": {
-                                  "i64": "1",
-                                  "nullable": true,
-                                  "typeVariationReference": 0
-                                }
-                              }
-                            ]
-                          },
-                          {
-                            "fields": [
-                              {
-                                "literal": {
-                                  "i64": "2",
-                                  "nullable": true,
-                                  "typeVariationReference": 0
-                                }
-                              }
-                            ]
-                          }
-                        ]
+                        "values": [{
+                          "fields": [{
+                            "i64": "1",
+                            "nullable": true,
+                            "typeVariationReference": 0
+                          }]
+                        }, {
+                          "fields": [{
+                            "i64": "2",
+                            "nullable": true,
+                            "typeVariationReference": 0
+                          }]
+                        }]
                       }
                     }
                   },

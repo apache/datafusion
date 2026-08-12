@@ -94,7 +94,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{Result, Statistics};
 
 use crate::ExecutionPlan;
-use crate::statistics::{StatisticsArgs, StatisticsContext};
+use crate::statistics::StatisticsArgs;
 
 // ============================================================================
 // ExtendedStatistics: Statistics with type-safe extensions
@@ -267,7 +267,7 @@ impl StatisticsProvider for DefaultStatisticsProvider {
         plan: &dyn ExecutionPlan,
         _child_stats: &[ExtendedStatistics],
     ) -> Result<StatisticsResult> {
-        let base = StatisticsContext::new().compute(plan, &StatisticsArgs::new())?;
+        let base = plan.statistics_with_args(&StatisticsArgs::new())?;
         Ok(StatisticsResult::Computed(ExtendedStatistics::new_arc(
             base,
         )))
@@ -359,7 +359,7 @@ impl StatisticsRegistry {
     pub fn compute(&self, plan: &dyn ExecutionPlan) -> Result<ExtendedStatistics> {
         // Fast path: no providers registered, skip the walk entirely
         if self.providers.is_empty() {
-            let base = StatisticsContext::new().compute(plan, &StatisticsArgs::new())?;
+            let base = plan.statistics_with_args(&StatisticsArgs::new())?;
             return Ok(ExtendedStatistics::new_arc(base));
         }
 
@@ -383,7 +383,7 @@ impl StatisticsRegistry {
             }
         }
         // Fallback: use plan's built-in stats
-        let base = StatisticsContext::new().compute(plan, &StatisticsArgs::new())?;
+        let base = plan.statistics_with_args(&StatisticsArgs::new())?;
         Ok(ExtendedStatistics::new_arc(base))
     }
 
@@ -506,9 +506,8 @@ fn computed_with_row_count(
     plan: &dyn ExecutionPlan,
     num_rows: Precision<usize>,
 ) -> Result<StatisticsResult> {
-    let mut base = Arc::unwrap_or_clone(
-        StatisticsContext::new().compute(plan, &StatisticsArgs::new())?,
-    );
+    let mut base =
+        Arc::unwrap_or_clone(plan.statistics_with_args(&StatisticsArgs::new())?);
     rescale_byte_size(&mut base, num_rows);
     Ok(StatisticsResult::Computed(ExtendedStatistics::new(base)))
 }
@@ -1038,7 +1037,6 @@ mod tests {
     use std::fmt;
 
     use crate::execution_plan::{Boundedness, EmissionType};
-    use datafusion_common::tree_node::TreeNodeRecursion;
 
     fn make_schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![
@@ -1118,13 +1116,6 @@ mod tests {
             &self.cache
         }
 
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
-        }
-
         fn execute(
             &self,
             _partition: usize,
@@ -1133,9 +1124,8 @@ mod tests {
             unimplemented!()
         }
 
-        fn statistics_from_inputs(
+        fn statistics_with_args(
             &self,
-            _input_stats: &[Arc<Statistics>],
             _args: &StatisticsArgs,
         ) -> Result<Arc<Statistics>> {
             Ok(Arc::new(self.stats.clone()))
@@ -1225,13 +1215,6 @@ mod tests {
 
         fn properties(&self) -> &Arc<PlanProperties> {
             self.input.properties()
-        }
-
-        fn apply_expressions(
-            &self,
-            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
-        ) -> Result<TreeNodeRecursion> {
-            Ok(TreeNodeRecursion::Continue)
         }
 
         fn execute(

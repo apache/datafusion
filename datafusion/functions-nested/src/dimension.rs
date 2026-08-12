@@ -122,7 +122,7 @@ make_udf_expr_and_func!(
 #[user_doc(
     doc_section(label = "Array Functions"),
     description = "Returns the number of dimensions of the array.",
-    syntax_example = "array_ndims(array)",
+    syntax_example = "array_ndims(array, element)",
     sql_example = r#"```sql
 > select array_ndims([[1, 2, 3], [4, 5, 6]]);
 +----------------------------------+
@@ -134,7 +134,8 @@ make_udf_expr_and_func!(
     argument(
         name = "array",
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
-    )
+    ),
+    argument(name = "element", description = "Array element.")
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayNdims {

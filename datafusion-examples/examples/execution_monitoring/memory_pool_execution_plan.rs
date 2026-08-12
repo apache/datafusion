@@ -26,10 +26,9 @@
 //! - Handle memory pressure by spilling to disk
 //! - Release memory when done
 
-use arrow::array::record_batch;
 use arrow::record_batch::RecordBatch;
 use arrow_schema::SchemaRef;
-use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::common::record_batch;
 use datafusion::common::{exec_datafusion_err, internal_err};
 use datafusion::datasource::{DefaultTableSource, memory::MemTable};
 use datafusion::error::Result;
@@ -291,14 +290,5 @@ impl ExecutionPlan for BufferingExecutionPlan {
                     })
             }),
         )))
-    }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(
-            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
-        ) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
     }
 }

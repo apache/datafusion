@@ -155,25 +155,13 @@ impl PhysicalExpr for Column {
         use datafusion_proto_models::protobuf;
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::Column(self.into())),
+            expr_type: Some(protobuf::physical_expr_node::ExprType::Column(
+                protobuf::PhysicalColumn {
+                    name: self.name.clone(),
+                    index: self.index as u32,
+                },
+            )),
         }))
-    }
-}
-
-#[cfg(feature = "proto")]
-impl From<&datafusion_proto_models::protobuf::PhysicalColumn> for Column {
-    fn from(c: &datafusion_proto_models::protobuf::PhysicalColumn) -> Self {
-        Column::new(&c.name, c.index as usize)
-    }
-}
-
-#[cfg(feature = "proto")]
-impl From<&Column> for datafusion_proto_models::protobuf::PhysicalColumn {
-    fn from(c: &Column) -> Self {
-        Self {
-            name: c.name.clone(),
-            index: c.index as u32,
-        }
     }
 }
 
@@ -196,12 +184,12 @@ impl Column {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         use datafusion_physical_expr_common::expect_expr_variant;
         use datafusion_proto_models::protobuf;
-        let column = expect_expr_variant!(
+        let protobuf::PhysicalColumn { name, index } = expect_expr_variant!(
             node,
             protobuf::physical_expr_node::ExprType::Column,
             "Column",
         );
-        Ok(Arc::new(Column::from(column)))
+        Ok(Arc::new(Column::new(name, *index as usize)))
     }
 }
 

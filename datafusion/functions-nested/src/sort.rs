@@ -55,7 +55,7 @@ make_udf_expr_and_func!(
 #[user_doc(
     doc_section(label = "Array Functions"),
     description = "Sort array.",
-    syntax_example = "array_sort(array[, order[, nulls_order]])",
+    syntax_example = "array_sort(array, desc, nulls_first)",
     sql_example = r#"```sql
 > select array_sort([3, 1, 2]);
 +-----------------------------+
@@ -63,23 +63,17 @@ make_udf_expr_and_func!(
 +-----------------------------+
 | [1, 2, 3]                   |
 +-----------------------------+
-> select array_sort([3, 1, NULL, 2], 'desc', 'nulls last');
-+--------------------------------------------------+
-| array_sort(List(3,1,NULL,2),'desc','nulls last') |
-+--------------------------------------------------+
-| [3, 2, 1, NULL]                                  |
-+--------------------------------------------------+
 ```"#,
     argument(
         name = "array",
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     ),
     argument(
-        name = "order",
+        name = "desc",
         description = "Whether to sort in ascending (`ASC`) or descending (`DESC`) order. The default is `ASC`."
     ),
     argument(
-        name = "nulls_order",
+        name = "nulls_first",
         description = "Whether to sort nulls first (`NULLS FIRST`) or last (`NULLS LAST`). The default is `NULLS FIRST`."
     )
 )]
@@ -477,7 +471,12 @@ fn take_by_indices<OffsetSize: OffsetSizeTrait>(
 fn rebase_offsets<OffsetSize: OffsetSizeTrait>(
     offsets: &OffsetBuffer<OffsetSize>,
 ) -> OffsetBuffer<OffsetSize> {
-    offsets.clone().subtract(offsets[0])
+    if offsets[0].as_usize() == 0 {
+        offsets.clone()
+    } else {
+        let rebased: Vec<OffsetSize> = offsets.iter().map(|o| *o - offsets[0]).collect();
+        OffsetBuffer::new(rebased.into())
+    }
 }
 
 fn order_desc(modifier: &str) -> Result<bool> {

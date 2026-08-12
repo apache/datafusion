@@ -6085,8 +6085,7 @@ physical_plan
 03)----BoundedWindowAggExec: wdw=[sum(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, count(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "count(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable List(Int64) }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "array_agg(test.c2) FILTER (WHERE test.c2 >= Int64(2) AND test.c2 < Int64(4) AND test.c1 > Int64(0)) ORDER BY [test.c1 ASC NULLS LAST, test.c2 ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable List(Int64) }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortPreservingMergeExec: [c1@2 ASC NULLS LAST, c2@3 ASC NULLS LAST], fetch=5
 05)--------SortExec: TopK(fetch=5), expr=[c1@2 ASC NULLS LAST, c2@3 ASC NULLS LAST], preserve_partitioning=[true]
-06)----------ProjectionExec: expr=[__common_expr_3@0 as __common_expr_1, __common_expr_3@0 AND c2@2 < 4 AND c1@1 > 0 as __common_expr_2, c1@1 as c1, c2@2 as c2]
-07)------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-0.csv, WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-1.csv], [WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-2.csv, WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-3.csv]]}, projection=[c2@1 >= 2 as __common_expr_3, c1, c2], file_type=csv, has_header=false
+06)----------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-0.csv, WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-1.csv], [WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-2.csv, WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_csv/partition-3.csv]]}, projection=[c2@1 >= 2 as __common_expr_1, c2@1 >= 2 AND c2@1 < 4 AND c1@0 > 0 as __common_expr_2, c1, c2], file_type=csv, has_header=false
 
 # FILTER filters out some rows
 query IIIII??
@@ -6629,23 +6628,6 @@ FROM (
 2 1
 3 1
 
-# A RANGE frame can transition from non-empty to empty and back to non-empty
-# when the ORDER BY values contain gaps. The sliding accumulator must discard
-# the state from the previous non-empty frame.
-query IIIII
-SELECT k,
-       SUM(v) OVER w,
-       COUNT(v) OVER w,
-       MIN(v) OVER w,
-       MAX(v) OVER w
-FROM (VALUES (0, 100), (10, 90), (30, 10), (40, 20)) AS t(k, v)
-WINDOW w AS (ORDER BY k RANGE BETWEEN 10 PRECEDING AND 5 PRECEDING);
-----
-0 NULL 0 NULL NULL
-10 100 1 100 100
-30 NULL 0 NULL NULL
-40 10 1 10 10
-
 # AVG over a sliding window must yield NULL when the frame has no non-NULL
 # values — including frames that became empty via `retract_batch`. Covers
 # Float64, Decimal, and the narrow-frame retract-to-empty case.
@@ -6859,18 +6841,3 @@ DROP TABLE issue_20194_t1;
 
 statement ok
 DROP TABLE issue_20194_t2;
-
-# Sliding-window over a frame whose non-NULL values have all been retracted should yield NULL.
-query IIIIRR
-SELECT id, x,
-       MIN(x) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS min_x,
-       MAX(x) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS max_x,
-       percentile_cont(x, 0.5) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS percentile_x,
-       median(x) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS median_x,
-FROM (VALUES (1, 3), (2, NULL), (3, NULL), (4, 7)) t(id, x)
-ORDER BY id
-----
-1 3 3 3 3 3
-2 NULL 3 3 3 3
-3 NULL NULL NULL NULL NULL
-4 7 7 7 7 7

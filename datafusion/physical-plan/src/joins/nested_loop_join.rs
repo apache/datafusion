@@ -40,9 +40,9 @@ use crate::metrics::{
 };
 use crate::projection::{
     EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
-    try_pushdown_through_join_with_column_indices,
+    try_pushdown_through_join,
 };
-use crate::statistics::{ChildStats, StatisticsArgs};
+use crate::statistics::StatisticsArgs;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, RecordBatchStream, SendableRecordBatchStream,
@@ -61,7 +61,6 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::DataType;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinSide, NullEquality, Result, ScalarValue, Statistics, arrow_err,
     assert_eq_or_internal_err, internal_datafusion_err, internal_err, project_schema,
@@ -563,17 +562,6 @@ impl ExecutionPlan for NestedLoopJoinExec {
         vec![&self.left, &self.right]
     }
 
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&Arc<dyn crate::PhysicalExpr>) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        // Apply to join filter expressions if present
-        crate::apply_expression_roots(
-            self.filter.iter().map(|filter| filter.expression()),
-            f,
-        )
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -706,17 +694,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
-        // Left side is always broadcast, so it always needs overall stats.
-        // Right side is partitioned, so it needs per-partition stats.
-        vec![ChildStats::At(None), ChildStats::At(partition)]
-    }
-
-    fn statistics_from_inputs(
-        &self,
-        input_stats: &[Arc<Statistics>],
-        _args: &StatisticsArgs,
-    ) -> Result<Arc<Statistics>> {
+    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         // NestedLoopJoinExec is designed for joins without equijoin keys in the
         // ON clause (e.g., `t1 JOIN t2 ON (t1.v1 + t2.v1) % 2 = 0`). Any join
         // predicates are stored in `self.filter`, but `estimate_join_statistics`
@@ -726,8 +704,13 @@ impl ExecutionPlan for NestedLoopJoinExec {
         // unknown row counts.
         let join_columns = Vec::new();
 
-        let left_stats = input_stats[0].as_ref().clone();
-        let right_stats = input_stats[1].as_ref().clone();
+        // Left side is always broadcast, so it always needs overall stats
+        let left_stats =
+            Arc::unwrap_or_clone(args.compute_child_statistics(&self.left, None)?);
+        // Right side is partitioned, so it needs per-partition stats
+        let right_stats = Arc::unwrap_or_clone(
+            args.compute_child_statistics(&self.right, args.partition())?,
+        );
 
         let stats = estimate_join_statistics(
             left_stats,
@@ -753,21 +736,23 @@ impl ExecutionPlan for NestedLoopJoinExec {
             return Ok(None);
         }
 
+        // TODO: split by `col`/`JoinSide` instead so mark joins can also push down to children.
         let schema = self.schema();
-        if let Some(JoinData {
-            projected_left_child,
-            projected_right_child,
-            join_filter,
-            ..
-        }) = try_pushdown_through_join_with_column_indices(
-            projection,
-            self.left(),
-            self.right(),
-            &[],
-            &schema,
-            self.filter(),
-            self.column_indices.as_slice(),
-        )? {
+        if !matches!(self.join_type(), JoinType::LeftMark | JoinType::RightMark)
+            && let Some(JoinData {
+                projected_left_child,
+                projected_right_child,
+                join_filter,
+                ..
+            }) = try_pushdown_through_join(
+                projection,
+                self.left(),
+                self.right(),
+                &[],
+                &schema,
+                self.filter(),
+            )?
+        {
             Ok(Some(Arc::new(NestedLoopJoinExec::try_new(
                 Arc::new(projected_left_child),
                 Arc::new(projected_right_child),
@@ -779,91 +764,6 @@ impl ExecutionPlan for NestedLoopJoinExec {
         } else {
             try_embed_projection(projection, self)
         }
-    }
-    #[cfg(feature = "proto")]
-    fn try_to_proto(
-        &self,
-        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
-    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
-        use datafusion_proto_models::protobuf;
-
-        let left = ctx.encode_child(self.left())?;
-        let right = ctx.encode_child(self.right())?;
-
-        let join_type = crate::joins::proto::join_type_to_proto(*self.join_type());
-
-        let filter = self
-            .filter()
-            .map(|f| crate::joins::proto::join_filter_to_proto(f, ctx))
-            .transpose()?;
-
-        Ok(Some(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(
-                protobuf::physical_plan_node::PhysicalPlanType::NestedLoopJoin(Box::new(
-                    protobuf::NestedLoopJoinExecNode {
-                        left: Some(Box::new(left)),
-                        right: Some(Box::new(right)),
-                        join_type: join_type.into(),
-                        filter,
-                        projection: match self.projection.as_ref() {
-                            None => Vec::new(),
-                            Some(v) if v.is_empty() => vec![u32::MAX],
-                            Some(v) => v.iter().map(|x| *x as u32).collect(),
-                        },
-                    },
-                )),
-            ),
-        }))
-    }
-}
-
-#[cfg(feature = "proto")]
-impl NestedLoopJoinExec {
-    pub fn try_from_proto(
-        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
-        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        use datafusion_proto_models::protobuf;
-
-        let join = crate::expect_plan_variant!(
-            node,
-            protobuf::physical_plan_node::PhysicalPlanType::NestedLoopJoin,
-            "NestedLoopJoinExec",
-        );
-
-        let left = ctx.decode_required_child(
-            join.left.as_deref(),
-            "NestedLoopJoinExec",
-            "left",
-        )?;
-        let right = ctx.decode_required_child(
-            join.right.as_deref(),
-            "NestedLoopJoinExec",
-            "right",
-        )?;
-
-        let join_type = crate::joins::proto::join_type_from_proto(
-            join.join_type,
-            "NestedLoopJoinExec",
-        )?;
-
-        let filter = join
-            .filter
-            .as_ref()
-            .map(|f| {
-                crate::joins::proto::join_filter_from_proto(f, ctx, "NestedLoopJoinExec")
-            })
-            .transpose()?;
-
-        let projection = match join.projection.as_slice() {
-            [] => None,
-            [u32::MAX] => Some(Vec::new()),
-            indices => Some(indices.iter().map(|i| *i as usize).collect()),
-        };
-
-        Ok(Arc::new(NestedLoopJoinExec::try_new(
-            left, right, filter, &join_type, projection,
-        )?))
     }
 }
 
@@ -3166,7 +3066,7 @@ fn build_unmatched_batch(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::statistics::{StatisticsArgs, StatisticsContext};
+    use crate::statistics::StatisticsArgs;
     use crate::test::{TestMemoryExec, assert_join_metrics};
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
@@ -3546,8 +3446,7 @@ pub(crate) mod tests {
             &JoinType::Left,
             Some(vec![1, 2]),
         )?;
-        let stats = StatisticsContext::new()
-            .compute(&nested_loop_join, &StatisticsArgs::new())?;
+        let stats = nested_loop_join.statistics_with_args(&StatisticsArgs::new())?;
         assert_eq!(
             nested_loop_join.schema().fields().len(),
             stats.column_statistics.len(),

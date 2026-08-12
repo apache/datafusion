@@ -41,10 +41,6 @@ pub mod file_stream;
 pub mod memory;
 pub mod morsel;
 pub mod projection;
-/// Protobuf conversions for [`FileRange`], [`PartitionedFile`] and
-/// [`FileGroup`](crate::file_groups::FileGroup), gated on the `proto` feature.
-#[cfg(feature = "proto")]
-mod proto;
 pub mod schema_adapter;
 pub mod sink;
 pub mod source;

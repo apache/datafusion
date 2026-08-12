@@ -18,7 +18,6 @@
 use arrow::datatypes::SchemaRef;
 use arrow::{array::RecordBatch, compute::concat_batches};
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, config::ConfigOptions, internal_err};
 use datafusion_datasource::{
     PartitionedFile, file::FileSource, file_scan_config::FileScanConfig,
@@ -234,21 +233,6 @@ impl FileSource for TestSource {
 
     fn table_schema(&self) -> &datafusion_datasource::TableSchema {
         &self.table_schema
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        datafusion_physical_plan::apply_expression_roots(
-            self.predicate.iter().chain(
-                self.projection
-                    .iter()
-                    .flatten()
-                    .map(|proj_expr| &proj_expr.expr),
-            ),
-            f,
-        )
     }
 }
 
@@ -564,12 +548,5 @@ impl ExecutionPlan for TestNode {
             let res = FilterPushdownPropagation::if_all(child_pushdown_result);
             Ok(res)
         }
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        datafusion_physical_plan::apply_expression_roots([&self.predicate], f)
     }
 }

@@ -42,7 +42,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           submodules: true
           fetch-depth: 1
@@ -61,10 +61,8 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
       - name: Install cargo-machete
-        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad  # v2.85.10
-        with:
-          tool: cargo-machete@0.9
+        run: cargo install cargo-machete --version ^0.9 --locked
       - name: Detect unused dependencies
         run: cargo machete --with-metadata

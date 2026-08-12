@@ -211,12 +211,8 @@ pub struct CreateExternalTable {
     pub schema: DFSchemaRef,
     /// The table name
     pub name: TableReference,
-    /// The physical locations of the table files.
-    ///
-    /// More than one location may be supplied (for example
-    /// `CREATE EXTERNAL TABLE ... LOCATION ('a.parquet', 'b.parquet')`), in which
-    /// case the files are read together as a single table.
-    pub locations: Vec<String>,
+    /// The physical location
+    pub location: String,
     /// The file type of physical file
     pub file_type: String,
     /// Partition Columns
@@ -270,7 +266,7 @@ impl CreateExternalTable {
     ) -> CreateExternalTableBuilder {
         CreateExternalTableBuilder {
             name: name.into(),
-            locations: vec![location.into()],
+            location: location.into(),
             file_type: file_type.into(),
             schema,
             table_partition_cols: vec![],
@@ -293,7 +289,7 @@ impl CreateExternalTable {
 #[derive(Debug, Clone)]
 pub struct CreateExternalTableBuilder {
     name: TableReference,
-    locations: Vec<String>,
+    location: String,
     file_type: String,
     schema: DFSchemaRef,
     table_partition_cols: Vec<String>,
@@ -312,16 +308,6 @@ impl CreateExternalTableBuilder {
     /// Set the partition columns
     pub fn with_partition_cols(mut self, cols: Vec<String>) -> Self {
         self.table_partition_cols = cols;
-        self
-    }
-
-    /// Set the physical locations of the table files, replacing the single
-    /// location supplied to [`CreateExternalTable::builder`].
-    ///
-    /// When more than one location is provided the files are read together as
-    /// a single table.
-    pub fn with_locations(mut self, locations: Vec<String>) -> Self {
-        self.locations = locations;
         self
     }
 
@@ -387,7 +373,7 @@ impl CreateExternalTableBuilder {
         CreateExternalTable {
             schema: self.schema,
             name: self.name,
-            locations: self.locations,
+            location: self.location,
             file_type: self.file_type,
             table_partition_cols: self.table_partition_cols,
             if_not_exists: self.if_not_exists,
@@ -408,7 +394,7 @@ impl Hash for CreateExternalTable {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.schema.hash(state);
         self.name.hash(state);
-        self.locations.hash(state);
+        self.location.hash(state);
         self.file_type.hash(state);
         self.table_partition_cols.hash(state);
         self.if_not_exists.hash(state);
@@ -427,8 +413,8 @@ impl PartialOrd for CreateExternalTable {
         struct ComparableCreateExternalTable<'a> {
             /// The table name
             pub name: &'a TableReference,
-            /// The physical locations
-            pub locations: &'a Vec<String>,
+            /// The physical location
+            pub location: &'a String,
             /// The file type of physical file
             pub file_type: &'a String,
             /// Partition Columns
@@ -446,7 +432,7 @@ impl PartialOrd for CreateExternalTable {
         }
         let comparable_self = ComparableCreateExternalTable {
             name: &self.name,
-            locations: &self.locations,
+            location: &self.location,
             file_type: &self.file_type,
             table_partition_cols: &self.table_partition_cols,
             if_not_exists: &self.if_not_exists,
@@ -457,7 +443,7 @@ impl PartialOrd for CreateExternalTable {
         };
         let comparable_other = ComparableCreateExternalTable {
             name: &other.name,
-            locations: &other.locations,
+            location: &other.location,
             file_type: &other.file_type,
             table_partition_cols: &other.table_partition_cols,
             if_not_exists: &other.if_not_exists,

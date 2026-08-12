@@ -88,7 +88,7 @@ pub async fn from_scalar_function(
         // In those cases we build a balanced tree of BinaryExprs
         arg_list_to_binary_op_tree(op, args)
     } else if let Some(builder) = BuiltinExprBuilder::try_from_name(fn_name) {
-        builder.build(consumer, f, args)
+        builder.build(consumer, f, args).await
     } else {
         not_impl_err!("Unsupported function name: {fn_name:?}")
     }
@@ -206,32 +206,34 @@ impl BuiltinExprBuilder {
         }
     }
 
-    pub fn build(
+    pub async fn build(
         self,
         consumer: &impl SubstraitConsumer,
         f: &ScalarFunction,
         args: Vec<Expr>,
     ) -> Result<Expr> {
         match self.expr_name.as_str() {
-            "like" => Self::build_like_expr(false, false, f, args),
-            "ilike" => Self::build_like_expr(true, false, f, args),
-            "like_match" => Self::build_like_expr(false, false, f, args),
-            "like_imatch" => Self::build_like_expr(true, false, f, args),
-            "like_not_match" => Self::build_like_expr(false, true, f, args),
-            "like_not_imatch" => Self::build_like_expr(true, true, f, args),
+            "like" => Self::build_like_expr(false, false, f, args).await,
+            "ilike" => Self::build_like_expr(true, false, f, args).await,
+            "like_match" => Self::build_like_expr(false, false, f, args).await,
+            "like_imatch" => Self::build_like_expr(true, false, f, args).await,
+            "like_not_match" => Self::build_like_expr(false, true, f, args).await,
+            "like_not_imatch" => Self::build_like_expr(true, true, f, args).await,
             "not" | "negative" | "negate" | "is_null" | "is_not_null" | "is_true"
             | "is_false" | "is_not_true" | "is_not_false" | "is_unknown"
-            | "is_not_unknown" => Self::build_unary_expr(&self.expr_name, args),
-            "and_not" | "xor" => Self::build_binary_expr(&self.expr_name, args),
-            "between" => Self::build_between_expr(&self.expr_name, args),
-            "logb" => Self::build_custom_handling_expr(consumer, &self.expr_name, args),
+            | "is_not_unknown" => Self::build_unary_expr(&self.expr_name, args).await,
+            "and_not" | "xor" => Self::build_binary_expr(&self.expr_name, args).await,
+            "between" => Self::build_between_expr(&self.expr_name, args).await,
+            "logb" => {
+                Self::build_custom_handling_expr(consumer, &self.expr_name, args).await
+            }
             _ => {
                 not_impl_err!("Unsupported builtin expression: {}", self.expr_name)
             }
         }
     }
 
-    fn build_unary_expr(fn_name: &str, args: Vec<Expr>) -> Result<Expr> {
+    async fn build_unary_expr(fn_name: &str, args: Vec<Expr>) -> Result<Expr> {
         let [arg] = match args.try_into() {
             Ok(args_arr) => args_arr,
             Err(_) => return substrait_err!("Expected one argument for {fn_name} expr"),
@@ -255,7 +257,7 @@ impl BuiltinExprBuilder {
         Ok(expr)
     }
 
-    fn build_like_expr(
+    async fn build_like_expr(
         case_insensitive: bool,
         negated: bool,
         f: &ScalarFunction,
@@ -304,7 +306,7 @@ impl BuiltinExprBuilder {
         }))
     }
 
-    fn build_binary_expr(fn_name: &str, args: Vec<Expr>) -> Result<Expr> {
+    async fn build_binary_expr(fn_name: &str, args: Vec<Expr>) -> Result<Expr> {
         let [a, b] = match args.try_into() {
             Ok(args_arr) => args_arr,
             Err(_) => {
@@ -328,7 +330,7 @@ impl BuiltinExprBuilder {
         Self::build_and_not_expr(or_expr, and_expr)
     }
 
-    fn build_between_expr(fn_name: &str, args: Vec<Expr>) -> Result<Expr> {
+    async fn build_between_expr(fn_name: &str, args: Vec<Expr>) -> Result<Expr> {
         let [expression, low, high] = match args.try_into() {
             Ok(args_arr) => args_arr,
             Err(_) => {
@@ -345,18 +347,18 @@ impl BuiltinExprBuilder {
     }
 
     //This handles any functions that require custom handling
-    fn build_custom_handling_expr(
+    async fn build_custom_handling_expr(
         consumer: &impl SubstraitConsumer,
         fn_name: &str,
         args: Vec<Expr>,
     ) -> Result<Expr> {
         match fn_name {
-            "logb" => Self::build_logb_expr(consumer, args),
+            "logb" => Self::build_logb_expr(consumer, args).await,
             _ => not_impl_err!("Unsupported custom handled expression: {}", fn_name),
         }
     }
 
-    fn build_logb_expr(
+    async fn build_logb_expr(
         consumer: &impl SubstraitConsumer,
         args: Vec<Expr>,
     ) -> Result<Expr> {

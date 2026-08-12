@@ -211,7 +211,7 @@ async fn create_fn_wrapper_impl(
     let mut foreign_session = None;
     let session = session
         .as_local()
-        .map(Ok::<&dyn Session, DataFusionError>)
+        .map(Ok::<&(dyn Session + Send + Sync), DataFusionError>)
         .unwrap_or_else(|| {
             foreign_session = Some(ForeignSession::try_from(&session)?);
             Ok(foreign_session.as_ref().unwrap())
@@ -368,7 +368,7 @@ mod tests {
         let cmd = CreateExternalTable {
             schema: Schema::empty().to_dfschema_ref()?,
             name: TableReference::bare("test_table"),
-            locations: vec!["test".to_string()],
+            location: "test".to_string(),
             file_type: "test".to_string(),
             table_partition_cols: vec![],
             if_not_exists: false,
@@ -406,7 +406,7 @@ mod tests {
         let cmd = CreateExternalTable {
             schema: Schema::empty().to_dfschema_ref()?,
             name: TableReference::bare("cloned_test"),
-            locations: vec!["test".to_string()],
+            location: "test".to_string(),
             file_type: "test".to_string(),
             table_partition_cols: vec![],
             if_not_exists: false,

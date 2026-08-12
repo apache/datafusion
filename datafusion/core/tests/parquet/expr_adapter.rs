@@ -18,8 +18,8 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, FixedSizeListArray, Int32Array, Int64Array,
-    LargeListArray, ListArray, RecordBatch, StringArray, StructArray, record_batch,
+    Array, ArrayRef, BooleanArray, Int32Array, Int64Array, LargeListArray, ListArray,
+    RecordBatch, StringArray, StructArray, record_batch,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::compute::concat_batches;
@@ -60,19 +60,13 @@ async fn write_parquet(batch: RecordBatch, store: Arc<dyn ObjectStore>, path: &s
 enum NestedListKind {
     List,
     LargeList,
-    FixedSizeList,
 }
-
-const FIXED_SIZE_LIST_LEN: usize = 2;
 
 impl NestedListKind {
     fn field_data_type(self, item_field: Arc<Field>) -> DataType {
         match self {
             Self::List => DataType::List(item_field),
             Self::LargeList => DataType::LargeList(item_field),
-            Self::FixedSizeList => {
-                DataType::FixedSizeList(item_field, FIXED_SIZE_LIST_LEN as i32)
-            }
         }
     }
 
@@ -95,19 +89,6 @@ impl NestedListKind {
                 values,
                 None,
             )),
-            Self::FixedSizeList => {
-                assert_eq!(
-                    lengths.as_slice(),
-                    &[FIXED_SIZE_LIST_LEN],
-                    "FixedSizeList fixtures must contain exactly {FIXED_SIZE_LIST_LEN} elements per row"
-                );
-                Arc::new(FixedSizeListArray::new(
-                    item_field,
-                    FIXED_SIZE_LIST_LEN as i32,
-                    values,
-                    None,
-                ))
-            }
         }
     }
 
@@ -115,7 +96,6 @@ impl NestedListKind {
         match self {
             Self::List => "list",
             Self::LargeList => "large_list",
-            Self::FixedSizeList => "fixed_size_list",
         }
     }
 }
@@ -297,8 +277,7 @@ fn nested_list_table_schema(
 }
 
 // Helper to extract message values from a nested list column.
-// Returns the values at indices 0 and 1 from either a ListArray, LargeListArray,
-// or FixedSizeListArray.
+// Returns the values at indices 0 and 1 from either a ListArray or LargeListArray.
 fn extract_nested_list_values(
     kind: NestedListKind,
     column: &ArrayRef,
@@ -318,50 +297,7 @@ fn extract_nested_list_values(
                 .expect("messages should be a LargeListArray");
             (list.value(0), list.value(1))
         }
-        NestedListKind::FixedSizeList => {
-            let list = column
-                .as_any()
-                .downcast_ref::<FixedSizeListArray>()
-                .expect("messages should be a FixedSizeListArray");
-            (list.value(0), list.value(1))
-        }
     }
-}
-
-fn evolved_messages(kind: NestedListKind) -> Vec<NestedMessageRow<'static>> {
-    let mut messages = vec![NestedMessageRow {
-        id: 30,
-        name: "gamma",
-        chain: Some("eth"),
-        ignored: Some(99),
-    }];
-    if matches!(kind, NestedListKind::FixedSizeList) {
-        messages.push(NestedMessageRow {
-            id: 40,
-            name: "delta",
-            chain: Some("doge"),
-            ignored: Some(100),
-        });
-    }
-    messages
-}
-
-fn error_messages(kind: NestedListKind) -> Vec<NestedMessageRow<'static>> {
-    let mut messages = vec![NestedMessageRow {
-        id: 10,
-        name: "alpha",
-        chain: Some("eth"),
-        ignored: None,
-    }];
-    if matches!(kind, NestedListKind::FixedSizeList) {
-        messages.push(NestedMessageRow {
-            id: 20,
-            name: "beta",
-            chain: Some("doge"),
-            ignored: None,
-        });
-    }
-    messages
 }
 
 // Helper to set up a nested list test fixture.
@@ -416,11 +352,15 @@ async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Res
     );
 
     // new.parquet shape: messages item struct adds nullable `chain` and extra `ignored`.
-    let new_messages = evolved_messages(kind);
     let new_batch = nested_messages_batch(
         kind,
         2,
-        &new_messages,
+        &[NestedMessageRow {
+            id: 30,
+            name: "gamma",
+            chain: Some("eth"),
+            ignored: Some(99),
+        }],
         &message_fields(DataType::Utf8, true, true, true),
     );
 
@@ -489,12 +429,7 @@ async fn assert_nested_list_struct_schema_evolution(kind: NestedListKind) -> Res
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
-    let expected_new_chain = if matches!(kind, NestedListKind::FixedSizeList) {
-        vec![Some("eth"), Some("doge")]
-    } else {
-        vec![Some("eth")]
-    };
-    assert_eq!(new_chain.iter().collect::<Vec<_>>(), expected_new_chain);
+    assert_eq!(new_chain.iter().collect::<Vec<_>>(), vec![Some("eth")]);
 
     let projected = ctx
         .sql(
@@ -928,12 +863,12 @@ async fn test_struct_schema_evolution_projection_and_filter() -> Result<()> {
     Ok(())
 }
 
-/// Macro to generate schema evolution tests for list-like variants.
-macro_rules! test_struct_schema_evolution_variants {
+/// Macro to generate paired test functions for List and LargeList variants.
+/// Expands to two `#[tokio::test]` functions with the specified names.
+macro_rules! test_struct_schema_evolution_pair {
     (
         list: $list_test:ident,
         large_list: $large_list_test:ident,
-        fixed_size_list: $fixed_size_list_test:ident,
         fn: $assertion_fn:path $(, args: $($arg:expr),+)?
     ) => {
         #[tokio::test]
@@ -945,16 +880,10 @@ macro_rules! test_struct_schema_evolution_variants {
         async fn $large_list_test() {
             $assertion_fn(NestedListKind::LargeList $(, $($arg),+)?).await;
         }
-
-        #[tokio::test]
-        async fn $fixed_size_list_test() {
-            $assertion_fn(NestedListKind::FixedSizeList $(, $($arg),+)?).await;
-        }
     };
     (
         list: $list_test:ident,
         large_list: $large_list_test:ident,
-        fixed_size_list: $fixed_size_list_test:ident,
         fn_result: $assertion_fn:path
     ) => {
         #[tokio::test]
@@ -966,34 +895,31 @@ macro_rules! test_struct_schema_evolution_variants {
         async fn $large_list_test() -> Result<()> {
             $assertion_fn(NestedListKind::LargeList).await
         }
-
-        #[tokio::test]
-        async fn $fixed_size_list_test() -> Result<()> {
-            $assertion_fn(NestedListKind::FixedSizeList).await
-        }
     };
 }
 
-test_struct_schema_evolution_variants!(
+test_struct_schema_evolution_pair!(
     list: test_list_struct_schema_evolution_end_to_end,
     large_list: test_large_list_struct_schema_evolution_end_to_end,
-    fixed_size_list: test_fixed_size_list_struct_schema_evolution_end_to_end,
     fn_result: assert_nested_list_struct_schema_evolution
 );
 
 async fn assert_nested_list_struct_schema_evolution_errors(
     kind: NestedListKind,
-    source_includes_chain: bool,
     chain_type: DataType,
     chain_nullable: bool,
     expected_error: &str,
 ) {
-    let messages = error_messages(kind);
     let batch = nested_messages_batch(
         kind,
         1,
-        &messages,
-        &message_fields(DataType::Utf8, true, source_includes_chain, false),
+        &[NestedMessageRow {
+            id: 10,
+            name: "alpha",
+            chain: Some("eth"),
+            ignored: None,
+        }],
+        &message_fields(DataType::Utf8, true, true, false),
     );
 
     let table_schema =
@@ -1023,7 +949,6 @@ async fn assert_nested_list_struct_schema_evolution_errors(
 async fn assert_non_nullable_missing_chain_field_fails(kind: NestedListKind) {
     assert_nested_list_struct_schema_evolution_errors(
         kind,
-        false,
         DataType::Utf8,
         false,
         "non-nullable",
@@ -1034,7 +959,6 @@ async fn assert_non_nullable_missing_chain_field_fails(kind: NestedListKind) {
 async fn assert_incompatible_chain_field_fails(kind: NestedListKind) {
     assert_nested_list_struct_schema_evolution_errors(
         kind,
-        true,
         incompatible_chain_type(),
         true,
         "Cannot cast struct field 'chain'",
@@ -1046,17 +970,15 @@ fn incompatible_chain_type() -> DataType {
     DataType::Struct(vec![Arc::new(Field::new("value", DataType::Utf8, true))].into())
 }
 
-test_struct_schema_evolution_variants!(
+test_struct_schema_evolution_pair!(
     list: test_list_struct_schema_evolution_non_nullable_missing_field_fails,
     large_list: test_large_list_struct_schema_evolution_non_nullable_missing_field_fails,
-    fixed_size_list: test_fixed_size_list_struct_schema_evolution_non_nullable_missing_field_fails,
     fn: assert_non_nullable_missing_chain_field_fails
 );
 
-test_struct_schema_evolution_variants!(
+test_struct_schema_evolution_pair!(
     list: test_list_struct_schema_evolution_incompatible_field_fails,
     large_list: test_large_list_struct_schema_evolution_incompatible_field_fails,
-    fixed_size_list: test_fixed_size_list_struct_schema_evolution_incompatible_field_fails,
     fn: assert_incompatible_chain_field_fails
 );
 

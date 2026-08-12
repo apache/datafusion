@@ -27,7 +27,6 @@ use datafusion::arrow::array::{UInt8Builder, UInt64Builder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::assert_batches_eq;
-use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::datasource::{TableProvider, TableType, provider_as_source};
 use datafusion::error::Result;
 use datafusion::execution::context::TaskContext;
@@ -146,7 +145,7 @@ impl Debug for CustomDataSource {
 }
 
 impl CustomDataSource {
-    pub(crate) fn create_physical_plan(
+    pub(crate) async fn create_physical_plan(
         &self,
         projections: Option<&Vec<usize>>,
         schema: SchemaRef,
@@ -208,7 +207,7 @@ impl TableProvider for CustomDataSource {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.create_physical_plan(projection, self.schema())
+        return self.create_physical_plan(projection, self.schema()).await;
     }
 }
 
@@ -314,14 +313,5 @@ impl ExecutionPlan for CustomExec {
             self.projected_schema.clone(),
             None,
         )?))
-    }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(
-            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
-        ) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
     }
 }

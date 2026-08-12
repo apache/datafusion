@@ -21,10 +21,7 @@ use clap::Args;
 use datafusion::{
     execution::{
         disk_manager::DiskManagerBuilder,
-        memory_pool::{
-            FairSpillPool, GreedyMemoryPool, MemoryPool, PeakRecordingPool,
-            TrackConsumersPool,
-        },
+        memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool},
         object_store::ObjectStoreUrl,
         runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
     },
@@ -128,9 +125,6 @@ impl CommonOpt {
                     )));
                 }
             };
-            // Record the peak reservation so benchmarks can report it next to
-            // peak RSS. Purely observational: every call is delegated.
-            let pool: Arc<dyn MemoryPool> = Arc::new(PeakRecordingPool::new(pool));
             rt_builder = rt_builder
                 .with_memory_pool(pool)
                 .with_disk_manager_builder(DiskManagerBuilder::default());

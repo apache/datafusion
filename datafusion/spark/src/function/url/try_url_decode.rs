@@ -24,9 +24,7 @@ use datafusion_expr::{
 };
 use datafusion_functions::utils::make_scalar_function;
 
-use crate::function::url::url_decode::{
-    OnDecodeError, UrlDecode, spark_handled_url_decode,
-};
+use crate::function::url::url_decode::{UrlDecode, spark_handled_url_decode};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct TryUrlDecode {
@@ -69,7 +67,10 @@ impl ScalarUDFImpl for TryUrlDecode {
 }
 
 fn spark_try_url_decode(args: &[ArrayRef]) -> Result<ArrayRef> {
-    spark_handled_url_decode(args, OnDecodeError::Null)
+    spark_handled_url_decode(args, |x| match x {
+        Err(_) => Ok(None),
+        result => result,
+    })
 }
 
 #[cfg(test)]

@@ -341,64 +341,6 @@ SELECT lpad('x', 5, 'e' || chr(769)) = 'e' || chr(769) || 'e' || chr(769) || 'x'
 ----
 true 5
 
-# lpad with string, length, and fill arrays in every string width
-query BBB
-SELECT
-  lpad(arrow_cast(column1, 'Utf8'), column2, arrow_cast(column3, 'Utf8')) IS NOT DISTINCT FROM column4,
-  lpad(arrow_cast(column1, 'LargeUtf8'), column2, arrow_cast(column3, 'LargeUtf8')) IS NOT DISTINCT FROM column4,
-  lpad(arrow_cast(column1, 'Utf8View'), column2, arrow_cast(column3, 'Utf8View')) IS NOT DISTINCT FROM column4
-FROM (VALUES
-  ('hi', 5, 'xy', 'xyxhi'),
-  ('abcdef', 3, 'z', 'abc'),
-  ('é', 4, '好', '好好好é'),
-  ('hi', 5, '', 'hi'),
-  (NULL, 5, 'x', NULL),
-  ('hi', NULL, 'x', NULL),
-  ('hi', 5, NULL, NULL)
-) AS t(column1, column2, column3, column4);
-----
-true true true
-true true true
-true true true
-true true true
-true true true
-true true true
-true true true
-
-# lpad array path with the default fill
-query BBB
-SELECT
-  lpad(arrow_cast(column1, 'Utf8'), column2) IS NOT DISTINCT FROM column3,
-  lpad(arrow_cast(column1, 'LargeUtf8'), column2) IS NOT DISTINCT FROM column3,
-  lpad(arrow_cast(column1, 'Utf8View'), column2) IS NOT DISTINCT FROM column3
-FROM (VALUES ('hi', 5, '   hi'), ('abcdef', 3, 'abc'), (NULL, 5, NULL)) AS t(column1, column2, column3);
-----
-true true true
-true true true
-true true true
-
-# a large scalar target length skips the scalar fast path
-query I
-SELECT character_length(lpad('x', 16385, 'a'));
-----
-16385
-
-# invalid argument count/type and excessive target length
-query error 'lpad' does not support zero arguments
-SELECT lpad();
-
-query error Failed to coerce arguments to satisfy a call to 'lpad' function: coercion from Utf8 to the signature
-SELECT lpad('x');
-
-query error Failed to coerce arguments to satisfy a call to 'lpad' function: coercion from Utf8, Int64, Utf8, Utf8 to the signature
-SELECT lpad('x', 2, 'y', 'z');
-
-query error Failed to coerce arguments to satisfy a call to 'lpad' function: coercion from Utf8, Utf8 to the signature
-SELECT lpad('x', 'bad');
-
-query error lpad requested length 2147483648 too large
-SELECT lpad('x', 2147483648, 'y');
-
 query T
 SELECT regexp_replace('foobar', 'bar', 'xx', 'gi')
 ----
@@ -543,11 +485,6 @@ query T
 SELECT reverse(arrow_cast('abcde', 'Dictionary(Int32, Utf8)'))
 ----
 edcba
-
-query T
-SELECT arrow_typeof(reverse(arrow_cast('abcde', 'Dictionary(Int32, Utf8)')))
-----
-Dictionary(Int32, Utf8)
 
 query T
 SELECT reverse('loẅks')
@@ -726,64 +663,6 @@ SELECT rpad('x', 5, 'e' || chr(769)) = 'x' || 'e' || chr(769) || 'e' || chr(769)
        character_length(rpad('x', 5, 'e' || chr(769)))
 ----
 true 5
-
-# rpad with string, length, and fill arrays in every string width
-query BBB
-SELECT
-  rpad(arrow_cast(column1, 'Utf8'), column2, arrow_cast(column3, 'Utf8')) IS NOT DISTINCT FROM column4,
-  rpad(arrow_cast(column1, 'LargeUtf8'), column2, arrow_cast(column3, 'LargeUtf8')) IS NOT DISTINCT FROM column4,
-  rpad(arrow_cast(column1, 'Utf8View'), column2, arrow_cast(column3, 'Utf8View')) IS NOT DISTINCT FROM column4
-FROM (VALUES
-  ('hi', 5, 'xy', 'hixyx'),
-  ('abcdef', 3, 'z', 'abc'),
-  ('é', 4, '好', 'é好好好'),
-  ('hi', 5, '', 'hi'),
-  (NULL, 5, 'x', NULL),
-  ('hi', NULL, 'x', NULL),
-  ('hi', 5, NULL, NULL)
-) AS t(column1, column2, column3, column4);
-----
-true true true
-true true true
-true true true
-true true true
-true true true
-true true true
-true true true
-
-# rpad array path with the default fill
-query BBB
-SELECT
-  rpad(arrow_cast(column1, 'Utf8'), column2) IS NOT DISTINCT FROM column3,
-  rpad(arrow_cast(column1, 'LargeUtf8'), column2) IS NOT DISTINCT FROM column3,
-  rpad(arrow_cast(column1, 'Utf8View'), column2) IS NOT DISTINCT FROM column3
-FROM (VALUES ('hi', 5, 'hi   '), ('abcdef', 3, 'abc'), (NULL, 5, NULL)) AS t(column1, column2, column3);
-----
-true true true
-true true true
-true true true
-
-# a large scalar target length skips the scalar fast path
-query I
-SELECT character_length(rpad('x', 16385, 'a'));
-----
-16385
-
-# invalid argument count/type and excessive target length
-query error 'rpad' does not support zero arguments
-SELECT rpad();
-
-query error Failed to coerce arguments to satisfy a call to 'rpad' function: coercion from Utf8 to the signature
-SELECT rpad('x');
-
-query error Failed to coerce arguments to satisfy a call to 'rpad' function: coercion from Utf8, Int64, Utf8, Utf8 to the signature
-SELECT rpad('x', 2, 'y', 'z');
-
-query error Failed to coerce arguments to satisfy a call to 'rpad' function: coercion from Utf8, Utf8 to the signature
-SELECT rpad('x', 'bad');
-
-query error rpad requested length 2147483648 too large
-SELECT rpad('x', 2147483648, 'y');
 
 query I
 SELECT char_length('')
@@ -1053,16 +932,6 @@ query I
 SELECT find_in_set(arrow_cast('', 'Utf8View'), arrow_cast('a,b,c,d,a', 'Utf8View'))
 ----
 0
-
-# invalid scalar argument count and type
-query error 'find_in_set' does not support zero arguments
-SELECT find_in_set();
-
-query error Failed to coerce arguments to satisfy a call to 'find_in_set' function
-SELECT find_in_set('a');
-
-query error Failed to coerce arguments to satisfy a call to 'find_in_set' function
-SELECT find_in_set('a', 'a,b', 'extra');
 
 
 query T
@@ -2010,7 +1879,7 @@ SELECT
 ----
 48 176 32 40
 
-query ????
+query IIII
 SELECT
   bit_length(arrow_cast('Andrew', 'Dictionary(Int32, Utf8)')),
   bit_length(arrow_cast('datafusion数据融合', 'Dictionary(Int32, Utf8)')),

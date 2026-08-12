@@ -380,11 +380,6 @@ impl ScalarUDF {
         self.inner.preserves_lex_ordering(inputs)
     }
 
-    /// See [`ScalarUDFImpl::strictly_order_preserving`] for more details.
-    pub fn strictly_order_preserving(&self, inputs: &[ExprProperties]) -> Result<bool> {
-        self.inner.strictly_order_preserving(inputs)
-    }
-
     /// See [`ScalarUDFImpl::coerce_types`] for more details.
     pub fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         self.inner.coerce_types(arg_types)
@@ -985,16 +980,8 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// Returns true if the function preserves lexicographical ordering based on
     /// the input ordering.
     ///
-    /// See [`ExprProperties::preserves_lex_ordering`] for more details
+    /// For example, `concat(a || b)` preserves lexicographical ordering, but `abs(a)` does not.
     fn preserves_lex_ordering(&self, _inputs: &[ExprProperties]) -> Result<bool> {
-        Ok(false)
-    }
-
-    /// Returns true if the function is strictly order-preserving with respect
-    /// to its `Ordered` inputs, i.e. `a.cmp(b) == f(a).cmp(f(b))`.
-    ///
-    /// See [`ExprProperties::strictly_order_preserving`] for more details
-    fn strictly_order_preserving(&self, _inputs: &[ExprProperties]) -> Result<bool> {
         Ok(false)
     }
 
@@ -1207,10 +1194,6 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
         self.inner.preserves_lex_ordering(inputs)
-    }
-
-    fn strictly_order_preserving(&self, inputs: &[ExprProperties]) -> Result<bool> {
-        self.inner.strictly_order_preserving(inputs)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {

@@ -51,7 +51,6 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionParams, NullTreatment, physical_name,
 };
-use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{AggregateUDF, Expr, ReversedUDAF, SetMonotonicity};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
@@ -424,7 +423,6 @@ pub struct LoweredAggregateBuilder<'a> {
     logical_input_schema: &'a DFSchema,
     physical_input_schema: &'a Schema,
     execution_props: &'a ExecutionProps,
-    planning_ctx: &'a PhysicalPlanningContext,
 }
 
 impl<'a> LoweredAggregateBuilder<'a> {
@@ -432,17 +430,12 @@ impl<'a> LoweredAggregateBuilder<'a> {
     ///
     /// `logical_input_schema` is used to resolve logical expressions such as
     /// columns, while `physical_input_schema` is the input schema used by the
-    /// physical aggregate expression. `planning_ctx` is used when creating
-    /// physical expressions that reference uncorrelated scalar subqueries.
-    /// Callers creating physical aggregates outside of physical planning should
-    /// pass `&PhysicalPlanningContext::default()`, in which case converting a
-    /// scalar-subquery expression returns a planning error.
+    /// physical aggregate expression.
     pub fn new(
         expr: &'a Expr,
         logical_input_schema: &'a DFSchema,
         physical_input_schema: &'a Schema,
         execution_props: &'a ExecutionProps,
-        planning_ctx: &'a PhysicalPlanningContext,
     ) -> Self {
         Self {
             expr,
@@ -453,7 +446,6 @@ impl<'a> LoweredAggregateBuilder<'a> {
             logical_input_schema,
             physical_input_schema,
             execution_props,
-            planning_ctx,
         }
     }
 
@@ -492,7 +484,6 @@ impl<'a> LoweredAggregateBuilder<'a> {
             logical_input_schema,
             physical_input_schema,
             execution_props,
-            planning_ctx,
         } = self;
 
         let (name, human_display, output_metadata, expr) = lower_aggregate_display(
@@ -524,29 +515,16 @@ impl<'a> LoweredAggregateBuilder<'a> {
             physical_name(&expr)?
         };
 
-        let physical_args = create_physical_exprs(
-            args,
-            logical_input_schema,
-            execution_props,
-            planning_ctx,
-        )?;
+        let physical_args =
+            create_physical_exprs(args, logical_input_schema, execution_props)?;
         let filter = filter
             .as_ref()
             .map(|filter| {
-                create_physical_expr(
-                    filter,
-                    logical_input_schema,
-                    execution_props,
-                    planning_ctx,
-                )
+                create_physical_expr(filter, logical_input_schema, execution_props)
             })
             .transpose()?;
-        let order_bys = create_physical_sort_exprs(
-            order_by,
-            logical_input_schema,
-            execution_props,
-            planning_ctx,
-        )?;
+        let order_bys =
+            create_physical_sort_exprs(order_by, logical_input_schema, execution_props)?;
         let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
             == NullTreatment::IgnoreNulls;
 
@@ -880,7 +858,7 @@ impl AggregateFunctionExpr {
         // `retract_batch` method will not be called. In this case
         // having retract_batch is not a requirement.
         //
-        // This approach is a bit different than window function
+        // This approach is a a bit different than window function
         // approach. In window function (when they use a window frame)
         // they get all the desired range during evaluation.
         if !accumulator.supports_retract_batch() {
@@ -1184,7 +1162,6 @@ mod tests {
             &logical_schema,
             &schema,
             &ExecutionProps::new(),
-            &PhysicalPlanningContext::default(),
         )
         .build()?;
 
@@ -1208,7 +1185,6 @@ mod tests {
             &logical_schema,
             &schema,
             &ExecutionProps::new(),
-            &PhysicalPlanningContext::default(),
         )
         .with_human_display(expr.human_display().to_string())
         .build()?;

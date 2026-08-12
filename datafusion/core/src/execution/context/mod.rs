@@ -17,6 +17,7 @@
 
 //! [`SessionContext`] API for registering data sources and executing queries
 
+use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, Weak};
@@ -686,8 +687,8 @@ impl SessionContext {
     pub async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame> {
         match plan {
             LogicalPlan::Ddl(ddl) => {
-                // Box async DDL handlers to avoid reserving space for all of their
-                // futures in this function's state machine, decreasing the risk of
+                // Box::pin avoids allocating the stack space within this function's frame
+                // for every one of these individual async functions, decreasing the risk of
                 // stack overflows.
                 match ddl {
                     DdlStatement::CreateExternalTable(cmd) => {
@@ -702,26 +703,32 @@ impl SessionContext {
                         Box::pin(self.create_view(cmd)).await
                     }
                     DdlStatement::CreateCatalogSchema(cmd) => {
-                        self.create_catalog_schema(cmd)
+                        Box::pin(self.create_catalog_schema(cmd)).await
                     }
-                    DdlStatement::CreateCatalog(cmd) => self.create_catalog(cmd),
+                    DdlStatement::CreateCatalog(cmd) => {
+                        Box::pin(self.create_catalog(cmd)).await
+                    }
                     DdlStatement::DropTable(cmd) => Box::pin(self.drop_table(cmd)).await,
                     DdlStatement::DropView(cmd) => Box::pin(self.drop_view(cmd)).await,
-                    DdlStatement::DropCatalogSchema(cmd) => self.drop_schema(cmd),
+                    DdlStatement::DropCatalogSchema(cmd) => {
+                        Box::pin(self.drop_schema(cmd)).await
+                    }
                     DdlStatement::CreateFunction(cmd) => {
                         Box::pin(self.create_function(*cmd)).await
                     }
-                    DdlStatement::DropFunction(cmd) => self.drop_function(&cmd),
+                    DdlStatement::DropFunction(cmd) => {
+                        Box::pin(self.drop_function(cmd)).await
+                    }
                     ddl => Ok(DataFrame::new(self.state(), LogicalPlan::Ddl(ddl))),
                 }
             }
             // TODO what about the other statements (like TransactionStart and TransactionEnd)
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
-                self.set_variable(stmt)?;
+                self.set_variable(stmt).await?;
                 self.return_empty_dataframe()
             }
             LogicalPlan::Statement(Statement::ResetVariable(stmt)) => {
-                self.reset_variable(stmt)?;
+                self.reset_variable(stmt).await?;
                 self.return_empty_dataframe()
             }
             LogicalPlan::Statement(Statement::Prepare(Prepare {
@@ -980,7 +987,7 @@ impl SessionContext {
         Ok(())
     }
 
-    fn create_catalog_schema(&self, cmd: CreateCatalogSchema) -> Result<DataFrame> {
+    async fn create_catalog_schema(&self, cmd: CreateCatalogSchema) -> Result<DataFrame> {
         let CreateCatalogSchema {
             schema_name,
             if_not_exists,
@@ -1021,7 +1028,7 @@ impl SessionContext {
         }
     }
 
-    fn create_catalog(&self, cmd: CreateCatalog) -> Result<DataFrame> {
+    async fn create_catalog(&self, cmd: CreateCatalog) -> Result<DataFrame> {
         let CreateCatalog {
             catalog_name,
             if_not_exists,
@@ -1071,7 +1078,7 @@ impl SessionContext {
         }
     }
 
-    fn drop_schema(&self, cmd: DropCatalogSchema) -> Result<DataFrame> {
+    async fn drop_schema(&self, cmd: DropCatalogSchema) -> Result<DataFrame> {
         let DropCatalogSchema {
             name,
             if_exists: allow_missing,
@@ -1106,7 +1113,7 @@ impl SessionContext {
         exec_err!("Schema '{schema_ref}' doesn't exist.")
     }
 
-    fn set_variable(&self, stmt: SetVariable) -> Result<()> {
+    async fn set_variable(&self, stmt: SetVariable) -> Result<()> {
         let SetVariable {
             variable, value, ..
         } = stmt;
@@ -1141,7 +1148,7 @@ impl SessionContext {
         Ok(())
     }
 
-    fn reset_variable(&self, stmt: ResetVariable) -> Result<()> {
+    async fn reset_variable(&self, stmt: ResetVariable) -> Result<()> {
         let variable = stmt.variable;
         if variable.starts_with("datafusion.runtime.") {
             return self.reset_runtime_variable(&variable);
@@ -1524,7 +1531,7 @@ impl SessionContext {
         self.return_empty_dataframe()
     }
 
-    fn drop_function(&self, stmt: &DropFunction) -> Result<DataFrame> {
+    async fn drop_function(&self, stmt: DropFunction) -> Result<DataFrame> {
         // we don't know function type at this point
         // decision has been made to drop all functions
         let mut dropped = false;
@@ -2180,9 +2187,16 @@ impl From<SessionContext> for SessionStateBuilder {
     }
 }
 
-// Re-export from this module for backwards compatibility.
 /// A planner used to add extensions to DataFusion logical and physical plans.
-pub use datafusion_session::{QueryPlanner, UnsupportedQueryPlanner};
+#[async_trait]
+pub trait QueryPlanner: Any + Debug {
+    /// Given a [`LogicalPlan`], create an [`ExecutionPlan`] suitable for execution
+    async fn create_physical_plan(
+        &self,
+        logical_plan: &LogicalPlan,
+        session_state: &SessionState,
+    ) -> Result<Arc<dyn ExecutionPlan>>;
+}
 
 /// Interface for handling `CREATE FUNCTION` statements and interacting with
 /// [SessionState] to create and register functions ([`ScalarUDF`],
@@ -2369,7 +2383,6 @@ mod tests {
     use arrow_schema::FieldRef;
     use datafusion_common::DataFusionError;
     use datafusion_common::datatype::DataTypeExt;
-    use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
     use std::error::Error;
     use std::path::PathBuf;
 
@@ -2382,7 +2395,6 @@ mod tests {
     use crate::physical_planner::PhysicalPlanner;
     use async_trait::async_trait;
     use datafusion_expr::planner::TypePlanner;
-    use datafusion_session::Session;
     use sqlparser::ast;
     use tempfile::TempDir;
 
@@ -2829,7 +2841,7 @@ mod tests {
         async fn create_physical_plan(
             &self,
             _logical_plan: &LogicalPlan,
-            _session_state: &dyn Session,
+            _session_state: &SessionState,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             not_impl_err!("query not supported")
         }
@@ -2838,8 +2850,7 @@ mod tests {
             &self,
             _expr: &Expr,
             _input_dfschema: &DFSchema,
-            _session_state: &dyn Session,
-            _planning_ctx: &PhysicalPlanningContext,
+            _session_state: &SessionState,
         ) -> Result<Arc<dyn PhysicalExpr>> {
             unimplemented!()
         }
@@ -2853,7 +2864,7 @@ mod tests {
         async fn create_physical_plan(
             &self,
             logical_plan: &LogicalPlan,
-            session_state: &dyn Session,
+            session_state: &SessionState,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             let physical_planner = MyPhysicalPlanner {};
             physical_planner

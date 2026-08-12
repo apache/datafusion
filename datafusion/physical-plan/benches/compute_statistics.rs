@@ -33,7 +33,6 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, Statistics};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
@@ -48,7 +47,6 @@ use datafusion_physical_plan::joins::CrossJoinExec;
 use datafusion_physical_plan::statistics::StatisticsArgs;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, Partitioning, SendableRecordBatchStream,
-    StatisticsContext,
 };
 
 /// Minimal leaf node for benchmarking
@@ -98,13 +96,6 @@ impl ExecutionPlan for BenchLeaf {
         vec![]
     }
 
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
-    }
-
     fn with_new_children(
         self: Arc<Self>,
         _children: Vec<Arc<dyn ExecutionPlan>>,
@@ -120,11 +111,7 @@ impl ExecutionPlan for BenchLeaf {
         unimplemented!()
     }
 
-    fn statistics_from_inputs(
-        &self,
-        _input_stats: &[Arc<Statistics>],
-        _args: &StatisticsArgs,
-    ) -> Result<Arc<Statistics>> {
+    fn statistics_with_args(&self, _args: &StatisticsArgs) -> Result<Arc<Statistics>> {
         Ok(Arc::new(Statistics::new_unknown(&self.schema)))
     }
 }
@@ -188,10 +175,10 @@ fn build_mixed_chain(groups: usize) -> Arc<dyn ExecutionPlan> {
 }
 
 /// Recursive walk without a shared cross-node cache, simulating pre-cache behavior.
-/// Each node is computed with a fresh `StatisticsContext`, so every call triggers a
-/// fresh subtree walk, resulting in O(n^2) total node visits for a chain of depth n.
+/// Each operator's internal `compute_child_statistics` call triggers a fresh
+/// subtree walk, resulting in O(n^2) total node visits for a chain of depth n.
 ///
-/// Note: each `StatisticsContext::compute` re-walk still benefits from its own
+/// Note: each `compute_child_statistics` re-walk still benefits from its own
 /// ephemeral cache; only the cross-node sharing is removed.
 fn compute_statistics_without_shared_cache(
     plan: &dyn ExecutionPlan,
@@ -201,7 +188,7 @@ fn compute_statistics_without_shared_cache(
         compute_statistics_without_shared_cache(child.as_ref(), None)?;
     }
     let args = StatisticsArgs::new().with_partition(partition);
-    StatisticsContext::new().compute(plan, &args)
+    plan.statistics_with_args(&args)
 }
 
 fn bench_compute_statistics(c: &mut Criterion) {
@@ -211,11 +198,7 @@ fn bench_compute_statistics(c: &mut Criterion) {
     for depth in [10, 20, 50] {
         let plan = build_coalesce_chain(depth);
         group.bench_with_input(BenchmarkId::new("cached", depth), &plan, |b, plan| {
-            b.iter(|| {
-                StatisticsContext::new()
-                    .compute(plan.as_ref(), &StatisticsArgs::new())
-                    .unwrap()
-            });
+            b.iter(|| plan.statistics_with_args(&StatisticsArgs::new()).unwrap());
         });
         group.bench_with_input(
             BenchmarkId::new("no_shared_cache", depth),
@@ -232,7 +215,7 @@ fn bench_compute_statistics(c: &mut Criterion) {
     // --- Cross-join tree (balanced binary plan) ---
     // Binary trees arise from multi-way joins (e.g. physical_many_self_joins
     // in sql_planner.rs, see #19795). CrossJoinExec calls
-    // StatisticsContext::compute for per-partition stats, re-walking the left
+    // compute_child_statistics for per-partition stats, re-walking the left
     // subtree at each node. The gap between cached/uncached is smaller than
     // the linear chain because only the left child triggers a re-walk.
     let mut group = c.benchmark_group("compute_statistics_cross_join_tree");
@@ -242,11 +225,7 @@ fn bench_compute_statistics(c: &mut Criterion) {
         let label = format!("depth={depth}_leaves={}", 1usize << depth);
         group.bench_with_input(BenchmarkId::new("cached", &label), &plan, |b, plan| {
             b.iter(|| {
-                StatisticsContext::new()
-                    .compute(
-                        plan.as_ref(),
-                        &StatisticsArgs::new().with_partition(Some(0)),
-                    )
+                plan.statistics_with_args(&StatisticsArgs::new().with_partition(Some(0)))
                     .unwrap()
             });
         });
@@ -275,12 +254,10 @@ fn bench_compute_statistics(c: &mut Criterion) {
             &plan,
             |b, plan| {
                 b.iter(|| {
-                    StatisticsContext::new()
-                        .compute(
-                            plan.as_ref(),
-                            &StatisticsArgs::new().with_partition(Some(0)),
-                        )
-                        .unwrap()
+                    plan.statistics_with_args(
+                        &StatisticsArgs::new().with_partition(Some(0)),
+                    )
+                    .unwrap()
                 });
             },
         );
@@ -288,11 +265,7 @@ fn bench_compute_statistics(c: &mut Criterion) {
             BenchmarkId::new("cached_overall", depth),
             &plan,
             |b, plan| {
-                b.iter(|| {
-                    StatisticsContext::new()
-                        .compute(plan.as_ref(), &StatisticsArgs::new())
-                        .unwrap()
-                });
+                b.iter(|| plan.statistics_with_args(&StatisticsArgs::new()).unwrap());
             },
         );
         group.bench_with_input(
@@ -317,11 +290,7 @@ fn bench_compute_statistics(c: &mut Criterion) {
         let depth = groups * 3; // 2 filters + 1 coalesce per group
         group.bench_with_input(BenchmarkId::new("cached", depth), &plan, |b, plan| {
             b.iter(|| {
-                StatisticsContext::new()
-                    .compute(
-                        plan.as_ref(),
-                        &StatisticsArgs::new().with_partition(Some(0)),
-                    )
+                plan.statistics_with_args(&StatisticsArgs::new().with_partition(Some(0)))
                     .unwrap()
             });
         });

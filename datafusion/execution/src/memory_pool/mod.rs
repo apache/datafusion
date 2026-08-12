@@ -24,7 +24,6 @@ use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::{cmp::Ordering, sync::Arc, sync::atomic};
 
-mod peak_recording;
 mod pool;
 
 #[cfg(feature = "arrow_buffer_pool")]
@@ -37,7 +36,6 @@ pub mod proxy {
 pub use datafusion_common::{
     human_readable_count, human_readable_duration, human_readable_size, units,
 };
-pub use peak_recording::*;
 pub use pool::*;
 
 /// Tracks and potentially limits memory use across operators during execution.

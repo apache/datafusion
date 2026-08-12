@@ -35,7 +35,9 @@ Returns the current date in the session time zone.
 
 The `current_date()` return value is determined at query time and will return the same date, no matter when in the query plan the function executes.
 "#,
-    syntax_example = "current_date()",
+    syntax_example = r#"current_date()
+    (optional) SET datafusion.execution.time_zone = '+00:00';
+    SELECT current_date();"#,
     sql_example = r#"```sql
 > SELECT current_date();
 +----------------+

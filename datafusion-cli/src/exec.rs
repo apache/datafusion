@@ -148,7 +148,7 @@ pub async fn exec_from_repl(
                         Command::OutputFormat(subcommand) => {
                             if let Some(subcommand) = subcommand {
                                 if let Ok(command) = subcommand.parse::<OutputFormat>() {
-                                    if let Err(e) = command.execute(print_options) {
+                                    if let Err(e) = command.execute(print_options).await {
                                         eprintln!("{e}")
                                     }
                                 } else {
@@ -423,17 +423,16 @@ async fn create_plan(
 
         // Expose stdin (e.g. `cat data.csv | datafusion-cli`) as a `stdin://`
         // object store, registered like any other scheme in `get_object_store`.
-        for location in &mut cmd.locations {
-            *location = StdinUtils::rewrite_location(location, format.as_ref());
-            register_object_store_and_config_extensions(
-                ctx,
-                location,
-                &cmd.options,
-                format.clone(),
-                resolve_region,
-            )
-            .await?;
-        }
+        cmd.location = StdinUtils::rewrite_location(&cmd.location, format.as_ref());
+
+        register_object_store_and_config_extensions(
+            ctx,
+            &cmd.location,
+            &cmd.options,
+            format,
+            resolve_region,
+        )
+        .await?;
     }
 
     if let LogicalPlan::Copy(copy_to) = &mut plan {
@@ -536,16 +535,14 @@ mod tests {
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
             let format = config_file_type_from_str(&cmd.file_type);
-            for location in &cmd.locations {
-                register_object_store_and_config_extensions(
-                    &ctx,
-                    location,
-                    &cmd.options,
-                    format.clone(),
-                    false,
-                )
-                .await?;
-            }
+            register_object_store_and_config_extensions(
+                &ctx,
+                &cmd.location,
+                &cmd.options,
+                format,
+                false,
+            )
+            .await?;
         } else {
             return plan_err!("LogicalPlan is not a CreateExternalTable");
         }

@@ -22,9 +22,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::aggregate::AggregateFunctionExpr;
-use crate::window::window_expr::{
-    AggregateWindowExpr, WindowEvalContext, WindowFn, filter_array,
-};
+use crate::window::window_expr::{AggregateWindowExpr, WindowFn, filter_array};
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, PlainAggregateWindowExpr, WindowExpr,
 };
@@ -104,9 +102,8 @@ impl WindowExpr for SlidingAggregateWindowExpr {
         &self,
         partition_batches: &PartitionBatches,
         window_agg_state: &mut PartitionWindowAggStates,
-        eval_ctx: &WindowEvalContext<'_>,
     ) -> Result<()> {
-        self.aggregate_evaluate_stateful(partition_batches, window_agg_state, eval_ctx)
+        self.aggregate_evaluate_stateful(partition_batches, window_agg_state)
     }
 
     fn partition_by(&self) -> &[Arc<dyn PhysicalExpr>] {
@@ -210,23 +207,6 @@ impl AggregateWindowExpr for SlidingAggregateWindowExpr {
         filter_mask: Option<&BooleanArray>,
     ) -> Result<ScalarValue> {
         if cur_range.start == cur_range.end {
-            // Keep the accumulator synchronized with `last_range`. RANGE frames
-            // can become empty between two non-empty frames when the ORDER BY
-            // values contain gaps.
-            let retract_bound = last_range.end - last_range.start;
-            if retract_bound > 0 {
-                let slice_mask =
-                    filter_mask.map(|m| m.slice(last_range.start, retract_bound));
-                let retract: Vec<ArrayRef> = value_slice
-                    .iter()
-                    .map(|v| v.slice(last_range.start, retract_bound))
-                    .map(|arr| match &slice_mask {
-                        Some(m) => filter_array(&arr, m),
-                        None => Ok(arr),
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                accumulator.retract_batch(&retract)?
-            }
             self.aggregate
                 .default_value(self.aggregate.field().data_type())
         } else {

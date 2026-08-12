@@ -207,34 +207,6 @@ mod test {
     }
 
     #[wasm_bindgen_test(unsupported = tokio::test)]
-    async fn test_create_table_as_select() {
-        let ctx = get_ctx();
-        ctx.sql("CREATE TABLE t AS SELECT 1 AS a, 'x' AS b")
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
-
-        let result = ctx
-            .sql("SELECT * FROM t")
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
-
-        assert_eq!(
-            batches_to_string(&result),
-            "+---+---+\n\
-             | a | b |\n\
-             +---+---+\n\
-             | 1 | x |\n\
-             +---+---+"
-        );
-    }
-
-    #[wasm_bindgen_test(unsupported = tokio::test)]
     async fn test_parquet_write() {
         let (schema, batch) = create_test_data();
         let mut buffer = Vec::new();

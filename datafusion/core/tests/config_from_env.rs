@@ -16,7 +16,6 @@
 // under the License.
 
 use datafusion::config::ConfigOptions;
-use datafusion_common::assert_contains;
 use std::env;
 
 #[test]
@@ -35,7 +34,7 @@ fn from_env() {
         // invalid testing
         env::set_var(env_key, "ttruee");
         let err = ConfigOptions::from_env().unwrap_err().strip_backtrace();
-        assert_contains!(
+        assert_eq!(
             err,
             "Error parsing 'ttruee' as bool\ncaused by\nExternal error: provided string was not `true` or `false`"
         );
@@ -51,7 +50,7 @@ fn from_env() {
         // for invalid testing
         env::set_var(env_key, "abc");
         let err = ConfigOptions::from_env().unwrap_err().strip_backtrace();
-        assert_contains!(
+        assert_eq!(
             err,
             "Error parsing 'abc' as usize\ncaused by\nExternal error: invalid digit found in string"
         );

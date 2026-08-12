@@ -325,6 +325,11 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
         let output = apply_filter_as_nulls(&values[0], opt_filter)?;
         Ok(vec![output])
     }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
+    }
+
     fn size(&self) -> usize {
         self.inner.size()
     }

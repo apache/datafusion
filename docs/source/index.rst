@@ -126,7 +126,6 @@ To get started, see
    user-guide/sql/index
    user-guide/configs
    user-guide/explain-usage
-   user-guide/parquet-content-defined-chunking
    user-guide/metrics
    user-guide/faq
 
@@ -159,7 +158,6 @@ To get started, see
    :caption: Contributor Guide
 
    contributor-guide/index
-   contributor-guide/pr_review
    contributor-guide/communication
    contributor-guide/development_environment
    contributor-guide/architecture

@@ -25,9 +25,10 @@ use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::date_bin;
-use rand::prelude::*;
+use rand::Rng;
+use rand::rngs::ThreadRng;
 
-fn timestamps(rng: &mut StdRng) -> TimestampSecondArray {
+fn timestamps(rng: &mut ThreadRng) -> TimestampSecondArray {
     let mut seconds = vec![];
     for _ in 0..1000 {
         seconds.push(rng.random_range(0..1_000_000));
@@ -38,7 +39,7 @@ fn timestamps(rng: &mut StdRng) -> TimestampSecondArray {
 
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("date_bin_1000", |b| {
-        let mut rng = StdRng::seed_from_u64(0);
+        let mut rng = rand::rng();
         let timestamps_array = Arc::new(timestamps(&mut rng)) as ArrayRef;
         let batch_len = timestamps_array.len();
         let interval = ColumnarValue::Scalar(ScalarValue::new_interval_dt(0, 1_000_000));

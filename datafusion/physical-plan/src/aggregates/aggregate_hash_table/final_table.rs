@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
@@ -43,7 +41,6 @@ impl AggregateHashTable<FinalMarker> {
             agg,
             partition,
             output_schema,
-            Arc::clone(&agg.input().schema()),
             batch_size,
             vec![None; agg.aggr_expr.len()],
         )

@@ -79,7 +79,13 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
     ),
     argument(
         name = "flags",
-        description = r#"Optional regular expression flags that control the behavior of the regular expression. Refer to the flags reference above for supported flags."#
+        description = r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
+- **g**: (global) Search globally and don't return after the first match
+- **i**: case-insensitive: letters match both upper and lower case
+- **m**: multi-line mode: ^ and $ match begin/end of line
+- **s**: allow . to match \n
+- **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
+- **U**: swap the meaning of x* and x*?"#
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]

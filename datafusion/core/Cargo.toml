@@ -173,7 +173,6 @@ bytes = { workspace = true }
 env_logger = { workspace = true }
 glob = { workspace = true }
 insta = { workspace = true }
-half = { workspace = true }
 rand = { workspace = true, features = ["small_rng"] }
 rand_distr = "0.5"
 recursive = { workspace = true }
@@ -250,22 +249,7 @@ required-features = ["parquet"]
 
 [[bench]]
 harness = false
-name = "parquet_nested_schema_pruning"
-required-features = ["parquet"]
-
-[[bench]]
-harness = false
 name = "parquet_struct_projection"
-required-features = ["parquet"]
-
-[[bench]]
-harness = false
-name = "parquet_struct_shared_prefix_pushdown"
-required-features = ["parquet"]
-
-[[bench]]
-harness = false
-name = "cse_projection_pushdown"
 required-features = ["parquet"]
 
 [[bench]]

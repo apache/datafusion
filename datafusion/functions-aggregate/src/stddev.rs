@@ -352,6 +352,11 @@ impl GroupsAccumulator for StddevGroupsAccumulator {
     ) -> Result<Vec<ArrayRef>> {
         self.variance.convert_to_state(values, opt_filter)
     }
+
+    fn supports_convert_to_state(&self) -> bool {
+        true
+    }
+
     fn size(&self) -> usize {
         self.variance.size()
     }

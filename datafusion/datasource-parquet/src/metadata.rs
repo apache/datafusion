@@ -28,7 +28,6 @@ use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     ColumnStatistics, DataFusionError, HashMap, Result, ScalarValue, Statistics,
-    internal_datafusion_err,
 };
 use datafusion_execution::cache::cache_manager::{
     CachedFileMetadataEntry, FileMetadata, FileMetadataCache,
@@ -66,26 +65,11 @@ const PARTIAL_NDV_THRESHOLD: f64 = 0.75;
 /// [`ParquetFileReaderFactory`]: crate::ParquetFileReaderFactory
 #[derive(Debug)]
 pub struct DFParquetMetadata<'a> {
-    /// Source of the Parquet file's bytes.
     store: &'a dyn ObjectStore,
-    /// Location, size and last-modified time of the target Parquet file.
     object_meta: &'a ObjectMeta,
-    /// Hint for the number of trailing bytes to prefetch before parsing the
-    /// footer, mirroring [`ParquetMetaDataReader::with_prefetch_hint`].
     metadata_size_hint: Option<usize>,
-    /// Decryption properties used to read files encrypted with Parquet
-    /// Modular Encryption, mirroring
-    /// [`ParquetMetaDataReader::with_decryption_properties`].
     decryption_properties: Option<Arc<FileDecryptionProperties>>,
-    /// Optional cache of previously fetched [`ParquetMetaData`], keyed by
-    /// file location.
     file_metadata_cache: Option<Arc<FileMetadataCache>>,
-    /// Policy controlling whether the Parquet page index (column and offset
-    /// indexes) is fetched, mirroring
-    /// [`ParquetMetaDataReader::with_page_index_policy`].
-    ///
-    /// `None` means the effective policy is chosen automatically, see
-    /// [`DFParquetMetadata::effective_page_index_policy`].
     page_index_policy: Option<PageIndexPolicy>,
     /// timeunit to coerce INT96 timestamps to
     pub coerce_int96: Option<TimeUnit>,
@@ -94,10 +78,6 @@ pub struct DFParquetMetadata<'a> {
 }
 
 impl<'a> DFParquetMetadata<'a> {
-    /// Create a new `DFParquetMetadata` for the given file.
-    ///
-    /// Use the `with_*` builder methods to customize behavior
-    /// before calling [`Self::fetch_metadata`] or [`Self::fetch_schema`].
     pub fn new(store: &'a dyn ObjectStore, object_meta: &'a ObjectMeta) -> Self {
         Self {
             store,
@@ -111,23 +91,13 @@ impl<'a> DFParquetMetadata<'a> {
         }
     }
 
-    /// Set a hint for the number of trailing bytes to prefetch from the end
-    /// of the file, equivalent to
-    /// [`ParquetMetaDataReader::with_prefetch_hint`].
-    ///
-    /// Providing a good estimate of the footer (and, if requested, page index)
-    /// size can save an extra I/O round trip when fetching metadata from the
-    /// store.
+    /// set metadata size hint
     pub fn with_metadata_size_hint(mut self, metadata_size_hint: Option<usize>) -> Self {
         self.metadata_size_hint = metadata_size_hint;
         self
     }
 
-    /// Set the decryption properties used to read an encrypted Parquet file,
-    /// equivalent to [`ParquetMetaDataReader::with_decryption_properties`].
-    ///
-    /// Only needed when the target file was written with Parquet Modular
-    /// Encryption.
+    /// set decryption properties
     pub fn with_decryption_properties(
         mut self,
         decryption_properties: Option<Arc<FileDecryptionProperties>>,
@@ -136,8 +106,7 @@ impl<'a> DFParquetMetadata<'a> {
         self
     }
 
-    /// Set an optional [`FileMetadataCache`] used to avoid re-fetching
-    /// [`ParquetMetaData`] for files that have already been read.
+    /// set file metadata cache
     pub fn with_file_metadata_cache(
         mut self,
         file_metadata_cache: Option<Arc<FileMetadataCache>>,
@@ -146,12 +115,7 @@ impl<'a> DFParquetMetadata<'a> {
         self
     }
 
-    /// Sets the policy for loading parquet page index structures (column and
-    /// offset indexes), equivalent to
-    /// [`ParquetMetaDataReader::with_page_index_policy`].
-    ///
-    /// Passing `None` uses a default automatically, based on whether a metadata
-    /// cache is configured.
+    /// Sets the policy for loading parquet page index structures (column and offset indexes).
     pub fn with_page_index_policy(
         mut self,
         page_index_policy: Option<PageIndexPolicy>,
@@ -160,31 +124,19 @@ impl<'a> DFParquetMetadata<'a> {
         self
     }
 
-    /// Set the [`TimeUnit`] that INT96 timestamp columns should be coerced
-    /// to when reading the schema.
-    ///
-    /// INT96 in Parquet has no defined unit or timezone, so leaving this
-    /// `None` reads INT96 columns as nanosecond timestamps with no timezone
-    /// — DataFusion's default behavior.
+    /// Set timeunit to coerce INT96 timestamps to
     pub fn with_coerce_int96(mut self, time_unit: Option<TimeUnit>) -> Self {
         self.coerce_int96 = time_unit;
         self
     }
 
     /// Set the optional timezone applied to INT96-coerced timestamps.
-    ///
-    /// Only used when [`Self::with_coerce_int96`] has also been set, and
-    /// otherwise has no effect.
     pub fn with_coerce_int96_tz(mut self, timezone: Option<Arc<str>>) -> Self {
         self.coerce_int96_tz = timezone;
         self
     }
 
-    /// Fetch the [`ParquetMetaData`] for this file.
-    ///
-    /// Consults the [`FileMetadataCache`] first when one is configured and
-    /// falls back to reading from the object store via
-    /// [`ParquetMetaDataPushDecoder`] on a cache miss.
+    /// Fetch parquet metadata from the remote object store
     pub async fn fetch_metadata(&self) -> Result<Arc<ParquetMetaData>> {
         // fetch_metadata
         // │
@@ -229,27 +181,21 @@ impl<'a> DFParquetMetadata<'a> {
                 Self::load_page_index(self.store, self.object_meta, cached_metadata)
                     .await?;
             if cache_metadata {
-                self.cache_metadata(Arc::clone(&metadata))?;
+                self.cache_metadata(Arc::clone(&metadata)).await?;
             }
             return Ok(metadata);
         }
 
         let metadata = self.fetch_metadata_from_store(page_index_policy).await?;
         if cache_metadata {
-            self.cache_metadata(Arc::clone(&metadata))?;
+            self.cache_metadata(Arc::clone(&metadata)).await?;
         }
         Ok(metadata)
     }
 
-    /// Resolve the [`PageIndexPolicy`] to use for a fetch.
     fn effective_page_index_policy(&self, cache_metadata: bool) -> PageIndexPolicy {
         self.page_index_policy.unwrap_or_else(|| {
-            // fetching the page index often requires a second IO (after the
-            // main metadata), so it is not free.
             if cache_metadata && self.file_metadata_cache.is_some() {
-                // When there is a cache available, retrieve the page index
-                // heuristically on the assumption it will be used multiple
-                // times
                 PageIndexPolicy::Optional
             } else {
                 PageIndexPolicy::Skip
@@ -257,21 +203,11 @@ impl<'a> DFParquetMetadata<'a> {
         })
     }
 
-    /// Check whether `metadata` already has both the column index and the
-    /// offset index populated (see [`ParquetMetaData::column_index`] and
-    /// [`ParquetMetaData::offset_index`]).
-    ///
-    /// Used to decide whether page index I/O can be skipped.
     fn metadata_has_page_index(metadata: &ParquetMetaData) -> bool {
         metadata.column_index().is_some() && metadata.offset_index().is_some()
     }
 
-    /// Store `metadata` in the configured [`FileMetadataCache`], keyed by
-    /// the file's location.
-    ///
-    /// This is a no-op unless a cache has been configured via
-    /// [`Self::with_file_metadata_cache`].
-    fn cache_metadata(&self, metadata: Arc<ParquetMetaData>) -> Result<()> {
+    async fn cache_metadata(&self, metadata: Arc<ParquetMetaData>) -> Result<()> {
         if let Some(file_metadata_cache) = &self.file_metadata_cache {
             file_metadata_cache.put(
                 &self.object_meta.location,
@@ -284,8 +220,6 @@ impl<'a> DFParquetMetadata<'a> {
         Ok(())
     }
 
-    /// Fetch the full [`ParquetMetaData`] (including footer, and optional
-    /// page index) from the object store.
     async fn fetch_metadata_from_store(
         &self,
         page_index_policy: PageIndexPolicy,
@@ -343,8 +277,6 @@ impl<'a> DFParquetMetadata<'a> {
         Ok(Arc::new(metadata))
     }
 
-    /// If `metadata` does not already have a page index, fetch and attach the
-    /// column and offset indexes.
     async fn load_page_index(
         store: &dyn ObjectStore,
         object_meta: &ObjectMeta,
@@ -365,8 +297,7 @@ impl<'a> DFParquetMetadata<'a> {
         Ok(Arc::new(reader.finish().map_err(DataFusionError::from)?))
     }
 
-    /// Fetch this file's [`ParquetMetaData`] and convert its embedded Thrift
-    /// schema into an Arrow [`Schema`].
+    /// Read and parse the schema of the Parquet file
     pub async fn fetch_schema(&self) -> Result<Schema> {
         let metadata = self.fetch_metadata().await?;
 
@@ -387,8 +318,7 @@ impl<'a> DFParquetMetadata<'a> {
         Ok(schema)
     }
 
-    /// Convenience wrapper around [`Self::fetch_schema`] that also returns
-    /// the file's object store [`Path`].
+    /// Return (path, schema) tuple by fetching the schema from Parquet file
     pub(crate) async fn fetch_schema_with_location(&self) -> Result<(Path, Schema)> {
         let loc_path = self.object_meta.location.clone();
         let schema = self.fetch_schema().await?;
@@ -953,15 +883,10 @@ impl FileMetadata for CachedParquetMetaData {
 
 /// Convert a [`PhysicalSortExpr`] to a Parquet [`SortingColumn`].
 ///
-/// Returns `Ok(None)` if the referenced column is not in `writer_schema`, such as a
-/// hive partition column that is removed before writing the Parquet file. Returns
-/// `Err` if the expression is not a simple column reference or references a column
-/// outside `input_schema`.
+/// Returns `Err` if the expression is not a simple column reference.
 pub(crate) fn sort_expr_to_sorting_column(
     sort_expr: &PhysicalSortExpr,
-    input_schema: &Schema,
-    writer_schema: &Schema,
-) -> Result<Option<SortingColumn>> {
+) -> Result<SortingColumn> {
     let column = sort_expr.expr.downcast_ref::<Column>().ok_or_else(|| {
         DataFusionError::Plan(format!(
             "Parquet sorting_columns only supports simple column references, \
@@ -970,49 +895,27 @@ pub(crate) fn sort_expr_to_sorting_column(
         ))
     })?;
 
-    let input_field = input_schema.fields().get(column.index()).ok_or_else(|| {
-        internal_datafusion_err!(
-            "Parquet sorting column '{}' references index {} but the input schema has {} columns",
-            column.name(),
-            column.index(),
-            input_schema.fields().len()
-        )
-    })?;
-    let Some((writer_index, _)) = writer_schema.column_with_name(input_field.name())
-    else {
-        return Ok(None);
-    };
-
-    let column_idx: i32 = writer_index.try_into().map_err(|_| {
+    let column_idx: i32 = column.index().try_into().map_err(|_| {
         DataFusionError::Plan(format!(
-            "Column index {writer_index} is too large to be represented as i32"
+            "Column index {} is too large to be represented as i32",
+            column.index()
         ))
     })?;
 
-    Ok(Some(SortingColumn {
+    Ok(SortingColumn {
         column_idx,
         descending: sort_expr.options.descending,
         nulls_first: sort_expr.options.nulls_first,
-    }))
+    })
 }
 
 /// Convert a [`LexOrdering`] to `Vec<SortingColumn>` for Parquet.
 ///
-/// Columns that are not present in `writer_schema` are omitted from the resulting
-/// metadata. Returns `Err` if any expression is not a simple column reference or
-/// references a column outside `input_schema`.
+/// Returns `Err` if any expression is not a simple column reference.
 pub(crate) fn lex_ordering_to_sorting_columns(
     ordering: &LexOrdering,
-    input_schema: &Schema,
-    writer_schema: &Schema,
 ) -> Result<Vec<SortingColumn>> {
-    ordering
-        .iter()
-        .filter_map(|sort_expr| {
-            sort_expr_to_sorting_column(sort_expr, input_schema, writer_schema)
-                .transpose()
-        })
-        .collect()
+    ordering.iter().map(sort_expr_to_sorting_column).collect()
 }
 
 /// Extracts ordering information from Parquet metadata.
@@ -1086,57 +989,6 @@ fn sorting_columns_to_physical_exprs(
 mod tests {
     use super::*;
     use arrow::array::Int32Array;
-    use arrow::compute::SortOptions;
-    use arrow::datatypes::Field;
-
-    #[test]
-    fn test_lex_ordering_to_sorting_columns_uses_writer_schema() -> Result<()> {
-        let input_schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("part", DataType::Utf8, true),
-            Field::new("b", DataType::Utf8, true),
-        ]);
-        let writer_schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Utf8, true),
-        ]);
-        let ordering = LexOrdering::new(vec![
-            PhysicalSortExpr::new(
-                Arc::new(Column::new("part", 1)),
-                SortOptions::default(),
-            ),
-            PhysicalSortExpr::new(Arc::new(Column::new("a", 0)), SortOptions::default()),
-            PhysicalSortExpr::new(
-                Arc::new(Column::new("b", 2)),
-                SortOptions {
-                    descending: true,
-                    nulls_first: false,
-                },
-            ),
-        ])
-        .unwrap();
-
-        let sorting_columns =
-            lex_ordering_to_sorting_columns(&ordering, &input_schema, &writer_schema)?;
-
-        assert_eq!(
-            sorting_columns,
-            vec![
-                SortingColumn {
-                    column_idx: 0,
-                    descending: false,
-                    nulls_first: true,
-                },
-                SortingColumn {
-                    column_idx: 1,
-                    descending: true,
-                    nulls_first: false,
-                },
-            ]
-        );
-
-        Ok(())
-    }
 
     #[test]
     fn test_has_any_exact_match() {

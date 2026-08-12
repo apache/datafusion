@@ -546,25 +546,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }
 
-        // Build Unnest expression.
-        //
-        // `unnest(col)` drops `NULL` and empty input lists (default SQL
-        // semantics, matching DuckDB/PostgreSQL). `unnest_outer(col)` sets
-        // `outer = true` so the downstream planner picks
-        // `NullHandling::PreserveAndExpandEmpty`, which preserves `NULL`
-        // and empty input lists as a single `NULL` output row.
-        if name.eq("unnest") || name.eq("unnest_outer") {
-            let outer = name.eq("unnest_outer");
+        // Build Unnest expression
+        if name.eq("unnest") {
             let mut exprs = self.function_args_to_expr(args, schema, planner_context)?;
             if exprs.len() != 1 {
-                return plan_err!("{name}() requires exactly one argument");
+                return plan_err!("unnest() requires exactly one argument");
             }
             let expr = exprs.swap_remove(0);
             Self::check_unnest_arg(&expr, schema)?;
-            return Ok(Expr::Unnest(Unnest {
-                expr: Box::new(expr),
-                outer,
-            }));
+            return Ok(Expr::Unnest(Unnest::new(expr)));
         }
 
         if !order_by.is_empty() && is_function_window {

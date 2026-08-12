@@ -178,8 +178,7 @@ impl ScalarUDFImpl for LPadFunc {
 }
 
 use super::common::{
-    StringCharLen, char_count_or_boundary, pad_data_capacity, try_as_scalar_i64,
-    try_as_scalar_str,
+    StringCharLen, char_count_or_boundary, try_as_scalar_i64, try_as_scalar_str,
 };
 
 /// Optimized lpad for constant target_len and fill arguments.
@@ -374,10 +373,7 @@ where
     T: OffsetSizeTrait,
 {
     let array = if let Some(fill_array) = fill_array {
-        let mut builder: GenericStringBuilder<T> = GenericStringBuilder::with_capacity(
-            string_array.len(),
-            pad_data_capacity(length_array),
-        );
+        let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
         let mut fill_chars_buf = Vec::new();
 
         for ((string, target_len), fill) in string_array
@@ -453,10 +449,7 @@ where
 
         builder.finish()
     } else {
-        let mut builder: GenericStringBuilder<T> = GenericStringBuilder::with_capacity(
-            string_array.len(),
-            pad_data_capacity(length_array),
-        );
+        let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
 
         for (string, target_len) in string_array.iter().zip(length_array.iter()) {
             if let (Some(string), Some(target_len)) = (string, target_len) {

@@ -26,13 +26,10 @@
 
 //! `prost`-generated DataFusion protobuf model types.
 //!
-//! This crate contains the generated structs for DataFusion's logical and
-//! physical plan protobuf schemas (see `proto/datafusion.proto`), plus the
-//! [`From`] / [`TryFrom`] conversions between them and the `datafusion-common`
-//! types they mirror. Those conversions live here because their DataFusion side
-//! sits *below* this crate in the dependency graph and so cannot host the impls
-//! itself — see [`from_proto`] and [`to_proto`]. It is the schema source of
-//! truth for [`datafusion-proto`].
+//! This crate contains only the generated structs for DataFusion's logical and
+//! physical plan protobuf schemas (see `proto/datafusion.proto`). It is the
+//! schema source of truth for [`datafusion-proto`] and intentionally has no
+//! DataFusion dependencies beyond [`datafusion-proto-common`].
 //!
 //! Most users should depend on [`datafusion-proto`] instead, which re-exports
 //! these types under [`datafusion_proto::protobuf`].
@@ -41,9 +38,7 @@
 //! [`datafusion-proto-common`]: https://crates.io/crates/datafusion-proto-common
 //! [`datafusion_proto::protobuf`]: https://docs.rs/datafusion-proto/latest/datafusion_proto/protobuf/index.html
 
-pub mod from_proto;
 pub mod generated;
-pub mod to_proto;
 
 /// All DataFusion protobuf model types.
 ///

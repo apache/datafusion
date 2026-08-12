@@ -74,7 +74,7 @@ use datafusion_common::format::{
 };
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
-    Constraints, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, SplitPoint,
+    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, SplitPoint,
     TableReference, internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_execution::TaskContext;
@@ -150,7 +150,7 @@ fn roundtrip_expr_test_with_codec(
     let round_trip: Expr =
         from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), codec).unwrap();
 
-    assert_eq!(format!("{initial_struct:?}"), format!("{round_trip:?}"));
+    assert_eq!(format!("{:?}", initial_struct), format!("{round_trip:?}"));
 
     roundtrip_json_test(&proto);
 }
@@ -404,129 +404,6 @@ async fn roundtrip_custom_listing_tables() -> Result<()> {
     // Use exact matching to verify everything. Make sure during round-trip,
     // information like constraints, column defaults, and other aspects of the plan are preserved.
     assert_eq!(plan, logical_round_trip);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn roundtrip_create_external_table_multiple_locations() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    // Planning a CREATE EXTERNAL TABLE does not read the referenced files, so
-    // the paths need not exist. Multiple locations must survive the round-trip
-    // through the `repeated locations` proto field.
-    let query = "CREATE EXTERNAL TABLE t (a INTEGER, b INTEGER)
-            STORED AS CSV
-            LOCATION ('file_a.csv', 'file_b.csv')
-            OPTIONS ('format.has_header' 'true')";
-
-    let plan = ctx.state().create_logical_plan(query).await?;
-    let bytes = logical_plan_to_bytes(&plan)?;
-    let protobuf_plan = protobuf::LogicalPlanNode::decode(bytes.as_ref())
-        .expect("failed to decode CreateExternalTable proto");
-    #[cfg(feature = "json")]
-    {
-        let json = serde_json::to_string(&protobuf_plan).unwrap();
-        assert!(!json.contains("\"location\":"));
-        assert!(json.contains("\"locations\":[\"file_a.csv\",\"file_b.csv\"]"));
-    }
-    let Some(protobuf::logical_plan_node::LogicalPlanType::CreateExternalTable(
-        create_external_table,
-    )) = protobuf_plan.logical_plan_type
-    else {
-        panic!("expected a CreateExternalTable proto");
-    };
-    assert!(create_external_table.location.is_empty());
-    assert_eq!(
-        create_external_table.locations,
-        vec!["file_a.csv".to_string(), "file_b.csv".to_string()]
-    );
-
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
-    assert_eq!(plan, logical_round_trip);
-
-    let LogicalPlan::Ddl(datafusion_expr::DdlStatement::CreateExternalTable(rt)) =
-        logical_round_trip
-    else {
-        panic!("expected a CreateExternalTable plan");
-    };
-    assert_eq!(
-        rt.locations,
-        vec!["file_a.csv".to_string(), "file_b.csv".to_string()]
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn roundtrip_create_external_table_single_location_legacy_field() -> Result<()> {
-    let ctx = SessionContext::new();
-    let query = "CREATE EXTERNAL TABLE t (a INTEGER)
-            STORED AS CSV
-            LOCATION 'file.csv'";
-
-    let plan = ctx.state().create_logical_plan(query).await?;
-    let bytes = logical_plan_to_bytes(&plan)?;
-    let protobuf_plan = protobuf::LogicalPlanNode::decode(bytes.as_ref())
-        .expect("failed to decode CreateExternalTable proto");
-    #[cfg(feature = "json")]
-    {
-        let json = serde_json::to_string(&protobuf_plan).unwrap();
-        assert!(json.contains("\"location\":\"file.csv\""));
-        assert!(!json.contains("\"locations\""));
-    }
-    let Some(protobuf::logical_plan_node::LogicalPlanType::CreateExternalTable(
-        create_external_table,
-    )) = protobuf_plan.logical_plan_type
-    else {
-        panic!("expected a CreateExternalTable proto");
-    };
-    assert_eq!(create_external_table.location, "file.csv");
-    assert!(create_external_table.locations.is_empty());
-
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
-    assert_eq!(plan, logical_round_trip);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn roundtrip_create_external_table_legacy_location() -> Result<()> {
-    let ctx = SessionContext::new();
-    let schema = DFSchema::empty();
-    let create_external_table = protobuf::CreateExternalTableNode {
-        name: Some(protobuf::TableReference::from(TableReference::bare("t"))),
-        location: "legacy.csv".to_string(),
-        locations: vec![],
-        file_type: "CSV".to_string(),
-        schema: Some((&schema).try_into()?),
-        table_partition_cols: vec![],
-        if_not_exists: false,
-        or_replace: false,
-        temporary: false,
-        definition: String::new(),
-        order_exprs: vec![],
-        unbounded: false,
-        options: HashMap::new(),
-        constraints: Some(Constraints::default().into()),
-        column_defaults: HashMap::new(),
-    };
-    let protobuf_plan = protobuf::LogicalPlanNode {
-        logical_plan_type: Some(
-            protobuf::logical_plan_node::LogicalPlanType::CreateExternalTable(
-                create_external_table,
-            ),
-        ),
-    };
-    let bytes = protobuf_plan.encode_to_vec();
-
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
-    let LogicalPlan::Ddl(datafusion_expr::DdlStatement::CreateExternalTable(rt)) =
-        logical_round_trip
-    else {
-        panic!("expected a CreateExternalTable plan");
-    };
-    assert_eq!(rt.locations, vec!["legacy.csv".to_string()]);
 
     Ok(())
 }
@@ -1702,7 +1579,7 @@ pub mod proto {
         pub expr: Option<datafusion_proto::protobuf::LogicalExprNode>,
     }
 
-    #[expect(dead_code)]
+    #[allow(dead_code)]
     #[derive(Clone, PartialEq, Eq, ::prost::Message)]
     pub struct TopKExecProto {
         #[prost(uint64, tag = "1")]
@@ -2214,7 +2091,7 @@ fn round_trip_scalar_values_and_data_types() {
                 Arc::new(Field::new(
                     "entries",
                     DataType::Struct(Fields::from(vec![
-                        Field::new("key", DataType::Int32, false),
+                        Field::new("key", DataType::Int32, true),
                         Field::new("value", DataType::Utf8, false),
                     ])),
                     false,
@@ -2226,7 +2103,7 @@ fn round_trip_scalar_values_and_data_types() {
                 Arc::new(Field::new(
                     "entries",
                     DataType::Struct(Fields::from(vec![
-                        Field::new("key", DataType::Int32, false),
+                        Field::new("key", DataType::Int32, true),
                         Field::new("value", DataType::Utf8, true),
                     ])),
                     false,
@@ -2515,7 +2392,7 @@ fn roundtrip_null_scalar_values() {
     for test_case in test_types.into_iter() {
         let proto_scalar: protobuf::ScalarValue = (&test_case).try_into().unwrap();
         let returned_scalar: ScalarValue = (&proto_scalar).try_into().unwrap();
-        assert_eq!(format!("{test_case:?}"), format!("{returned_scalar:?}"));
+        assert_eq!(format!("{:?}", test_case), format!("{returned_scalar:?}"));
     }
 }
 
@@ -2734,18 +2611,6 @@ fn roundtrip_inlist() {
 fn roundtrip_unnest() {
     let test_expr = Expr::Unnest(Unnest {
         expr: Box::new(col("col")),
-        outer: false,
-    });
-
-    let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
-}
-
-#[test]
-fn roundtrip_unnest_outer() {
-    let test_expr = Expr::Unnest(Unnest {
-        expr: Box::new(col("col")),
-        outer: true,
     });
 
     let ctx = SessionContext::new();
@@ -3022,7 +2887,7 @@ fn roundtrip_scalar_udf_extension_codec() {
         from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), &UDFExtensionCodec)
             .expect("parse expr");
 
-    assert_eq!(format!("{test_expr:?}"), format!("{round_trip:?}"));
+    assert_eq!(format!("{:?}", test_expr), format!("{round_trip:?}"));
     roundtrip_json_test(&proto);
 }
 
@@ -3036,7 +2901,7 @@ fn roundtrip_aggregate_udf_extension_codec() {
         from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), &UDFExtensionCodec)
             .expect("parse expr");
 
-    assert_eq!(format!("{test_expr:?}"), format!("{round_trip:?}"));
+    assert_eq!(format!("{:?}", test_expr), format!("{round_trip:?}"));
     roundtrip_json_test(&proto);
 }
 
@@ -3145,7 +3010,7 @@ fn roundtrip_higher_order_udf_extension_codec() {
         from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), &UDFExtensionCodec)
             .expect("parse expr");
 
-    assert_eq!(format!("{test_expr:?}"), format!("{round_trip:?}"));
+    assert_eq!(format!("{:?}", test_expr), format!("{round_trip:?}"));
     roundtrip_json_test(&proto);
 }
 

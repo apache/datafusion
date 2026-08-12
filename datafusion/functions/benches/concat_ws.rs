@@ -23,8 +23,8 @@ use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string::concat_ws;
+use rand::Rng;
 use rand::distr::Alphanumeric;
-use rand::prelude::*;
 use std::hint::black_box;
 use std::sync::Arc;
 
@@ -38,8 +38,9 @@ fn create_array_args(size: usize, str_len: usize) -> Vec<ColumnarValue> {
     ]
 }
 
-fn generate_random_string(rng: &mut StdRng, str_len: usize) -> String {
-    rng.sample_iter(&Alphanumeric)
+fn generate_random_string(str_len: usize) -> String {
+    rand::rng()
+        .sample_iter(&Alphanumeric)
         .take(str_len)
         .map(char::from)
         .collect()
@@ -52,9 +53,8 @@ fn create_scalar_args(count: usize, str_len: usize) -> Vec<ColumnarValue> {
         ",".to_string(),
     ))));
 
-    let mut rng = StdRng::seed_from_u64(0);
     for _ in 0..count {
-        let s = generate_random_string(&mut rng, str_len);
+        let s = generate_random_string(str_len);
         args.push(ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))));
     }
     args

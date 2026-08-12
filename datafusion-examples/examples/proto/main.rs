@@ -64,10 +64,10 @@ impl ExampleKind {
                 }
             }
             ExampleKind::ComposedExtensionCodec => {
-                composed_extension_codec::composed_extension_codec()?
+                composed_extension_codec::composed_extension_codec().await?
             }
             ExampleKind::ExpressionDeduplication => {
-                expression_deduplication::expression_deduplication()?
+                expression_deduplication::expression_deduplication().await?
             }
         }
         Ok(())

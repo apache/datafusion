@@ -259,7 +259,7 @@ pub async fn spawn_writer_tasks_and_join(
         .execution
         .max_buffered_batches_per_output_file;
 
-    let (tx_file_bundle, rx_file_bundle) = mpsc::channel(rb_buffer_size.get() / 2);
+    let (tx_file_bundle, rx_file_bundle) = mpsc::channel(rb_buffer_size / 2);
     let (tx_row_cnt, rx_row_cnt) = tokio::sync::oneshot::channel();
     let write_coordinator_task = SpawnedTask::spawn(async move {
         stateless_serialize_and_write_files(rx_file_bundle, tx_row_cnt).await

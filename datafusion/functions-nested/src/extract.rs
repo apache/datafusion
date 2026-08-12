@@ -289,7 +289,7 @@ pub fn array_slice(array: Expr, begin: Expr, end: Expr, stride: Option<Expr>) ->
 #[user_doc(
     doc_section(label = "Array Functions"),
     description = "Returns a slice of the array based on 1-indexed start and end positions.",
-    syntax_example = "array_slice(array, begin, end[, stride])",
+    syntax_example = "array_slice(array, begin, end)",
     sql_example = r#"```sql
 > select array_slice([1, 2, 3, 4, 5, 6, 7, 8], 3, 6);
 +--------------------------------------------------------+
@@ -970,7 +970,7 @@ where
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Returns the first non-null element in the array. Returns NULL if the array is empty or NULL.",
+    description = "Returns the first non-null element in the array.",
     syntax_example = "array_any_value(array)",
     sql_example = r#"```sql
 > select array_any_value([NULL, 1, 2, 3]);
@@ -1062,17 +1062,9 @@ where
 
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
         let start = offset_window[0];
-        let end = offset_window[1];
 
-        // the list element is null
+        // array is null
         if array.is_null(row_index) {
-            mutable.try_extend_nulls(1)?;
-            continue;
-        }
-
-        // the list element is empty; there is no value to take, so the result
-        // is NULL.
-        if start == end {
             mutable.try_extend_nulls(1)?;
             continue;
         }

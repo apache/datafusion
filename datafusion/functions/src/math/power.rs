@@ -99,10 +99,6 @@ impl ScalarUDFImpl for PowerFunc {
         Ok(DataType::Float64)
     }
 
-    fn is_strict(&self) -> bool {
-        true
-    }
-
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
@@ -140,7 +136,6 @@ impl ScalarUDFImpl for PowerFunc {
         let [base, exponent] = take_function_args("power", args)?;
         let base_type = info.get_data_type(&base)?;
         let exponent_type = info.get_data_type(&exponent)?;
-        let base_nullable = info.nullable(&base)?;
         let return_type =
             self.return_type(&[base_type.clone(), exponent_type.clone()])?;
 
@@ -168,7 +163,7 @@ impl ScalarUDFImpl for PowerFunc {
 
         match exponent {
             Expr::Literal(value, _)
-                if value == ScalarValue::new_zero(&exponent_type)? && !base_nullable =>
+                if value == ScalarValue::new_zero(&exponent_type)? =>
             {
                 Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_one(
                     &return_type,
@@ -180,10 +175,7 @@ impl ScalarUDFImpl for PowerFunc {
                 )))
             }
             Expr::ScalarFunction(ScalarFunction { func, mut args })
-                if is_log(&func)
-                    && args.len() == 2
-                    && base == args[0]
-                    && !base_nullable =>
+                if is_log(&func) && args.len() == 2 && base == args[0] =>
             {
                 let b = args.pop().unwrap(); // length checked above
                 let b_type = info.get_data_type(&b)?;

@@ -137,7 +137,6 @@ impl RunOpt {
             self.hash_join_buffering_capacity;
         let rt = self.common.build_runtime()?;
         let ctx = SessionContext::new_with_config_rt(config, rt);
-        benchmark_run.set_memory_pool(&ctx.runtime_env().memory_pool);
         // register tables
         self.register_tables(&ctx).await?;
         let scale_factor = self.scale_factor()?;
@@ -209,7 +208,7 @@ impl RunOpt {
         println!("Query {query_id} avg time: {avg:.2} ms");
 
         // Print memory stats using mimalloc (only when compiled with --features mimalloc_extended)
-        print_memory_stats(&*ctx.runtime_env().memory_pool);
+        print_memory_stats();
 
         Ok(query_results)
     }

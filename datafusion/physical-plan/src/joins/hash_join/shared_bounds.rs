@@ -23,7 +23,6 @@ use std::sync::Arc;
 
 use crate::ExecutionPlan;
 use crate::ExecutionPlanProperties;
-use crate::Partitioning;
 use crate::joins::Map;
 use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::HASH_JOIN_SEED;
@@ -31,22 +30,16 @@ use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{
     HashExpr, HashTableLookupExpr, SeededRandomState,
 };
-use crate::repartition::RangeExpr;
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{
-    DataFusionError, NullEquality, Result, ScalarValue, SharedResult,
-    assert_or_internal_err,
-};
+use datafusion_common::{DataFusionError, Result, ScalarValue, SharedResult};
 use datafusion_expr::Operator;
 use datafusion_functions::core::r#struct as struct_func;
 use datafusion_physical_expr::expressions::{
-    BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr, IsNullExpr, lit,
+    BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr, lit,
 };
-use datafusion_physical_expr::{
-    PhysicalExpr, PhysicalExprRef, RangePartitioning, ScalarFunctionExpr,
-};
+use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef, ScalarFunctionExpr};
 
 use parking_lot::Mutex;
 use tokio::sync::Notify;
@@ -262,14 +255,6 @@ pub(crate) struct SharedBuildAccumulator {
     repartition_random_state: SeededRandomState,
     /// Schema of the probe (right) side for evaluating filter expressions
     probe_schema: Arc<Schema>,
-    /// Probe-side Range routing metadata for partitioned dynamic filters.
-    probe_range_partitioning: Option<RangePartitioning>,
-    /// Null equality of the join. Under `NullEqualsNull` a probe-side NULL can match a
-    /// build-side NULL, so the pushed filter must keep NULL rows here too.
-    null_equality: NullEquality,
-    /// Null-aware anti join (`NOT IN`). A probe-side NULL must reach the join so its
-    /// three-valued logic can collapse the result, so the pushed filter keeps NULL rows.
-    null_aware: bool,
 }
 
 /// Strategy for filter pushdown (decided at collection time)
@@ -289,12 +274,10 @@ pub(crate) enum PartitionBuildData {
         partition_id: usize,
         pushdown: PushdownStrategy,
         bounds: PartitionBounds,
-        keys_have_null: bool,
     },
     CollectLeft {
         pushdown: PushdownStrategy,
         bounds: PartitionBounds,
-        keys_have_null: bool,
     },
 }
 
@@ -303,9 +286,6 @@ pub(crate) enum PartitionBuildData {
 struct PartitionData {
     bounds: PartitionBounds,
     pushdown: PushdownStrategy,
-    /// Whether any build key of this partition is NULL. Decides whether the pushed
-    /// filter must keep probe-side NULL rows for a null-equal join to match them.
-    keys_have_null: bool,
 }
 
 /// Build-side data organized by partition mode
@@ -371,7 +351,6 @@ impl SharedBuildAccumulator {
     /// We cannot build a partial filter from some partitions - it would incorrectly eliminate
     /// valid join results. We must wait until we have complete information from ALL
     /// relevant partitions before updating the dynamic filter.
-    #[expect(clippy::too_many_arguments)]
     pub(crate) fn new_from_partition_mode(
         partition_mode: PartitionMode,
         left_child: &dyn ExecutionPlan,
@@ -379,8 +358,6 @@ impl SharedBuildAccumulator {
         dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
         on_right: Vec<PhysicalExprRef>,
         repartition_random_state: SeededRandomState,
-        null_equality: NullEquality,
-        null_aware: bool,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -417,14 +394,6 @@ impl SharedBuildAccumulator {
             ),
         };
 
-        let probe_range_partitioning =
-            match (partition_mode, right_child.output_partitioning()) {
-                (PartitionMode::Partitioned, Partitioning::Range(range)) => {
-                    Some(range.clone())
-                }
-                _ => None,
-            };
-
         Self {
             inner: Mutex::new(AccumulatorState {
                 data: mode_data,
@@ -435,9 +404,6 @@ impl SharedBuildAccumulator {
             on_right,
             repartition_random_state,
             probe_schema: right_child.schema(),
-            probe_range_partitioning,
-            null_equality,
-            null_aware,
         }
     }
 
@@ -490,7 +456,6 @@ impl SharedBuildAccumulator {
                     partition_id,
                     pushdown,
                     bounds,
-                    keys_have_null,
                 },
                 AccumulatedBuildData::Partitioned {
                     partitions,
@@ -500,18 +465,11 @@ impl SharedBuildAccumulator {
                 if matches!(partitions[partition_id], PartitionStatus::Pending) {
                     *completed_partitions += 1;
                 }
-                partitions[partition_id] = PartitionStatus::Reported(PartitionData {
-                    pushdown,
-                    bounds,
-                    keys_have_null,
-                });
+                partitions[partition_id] =
+                    PartitionStatus::Reported(PartitionData { pushdown, bounds });
             }
             (
-                PartitionBuildData::CollectLeft {
-                    pushdown,
-                    bounds,
-                    keys_have_null,
-                },
+                PartitionBuildData::CollectLeft { pushdown, bounds },
                 AccumulatedBuildData::CollectLeft {
                     data,
                     reported_count,
@@ -519,11 +477,7 @@ impl SharedBuildAccumulator {
                 },
             ) => {
                 if matches!(data, PartitionStatus::Pending) {
-                    *data = PartitionStatus::Reported(PartitionData {
-                        pushdown,
-                        bounds,
-                        keys_have_null,
-                    });
+                    *data = PartitionStatus::Reported(PartitionData { pushdown, bounds });
                 }
                 *reported_count += 1;
             }
@@ -625,10 +579,7 @@ impl SharedBuildAccumulator {
                     if let Some(filter_expr) =
                         combine_membership_and_bounds(membership_expr, bounds_expr)
                     {
-                        self.dynamic_filter.update(self.preserve_probe_nulls(
-                            filter_expr,
-                            partition_data.keys_have_null,
-                        )?)?;
+                        self.dynamic_filter.update(filter_expr)?;
                     }
                 }
                 PartitionStatus::Pending => {
@@ -644,11 +595,21 @@ impl SharedBuildAccumulator {
             },
             FinalizeInput::Partitioned(partitions) => {
                 let num_partitions = partitions.len();
-                let mut partition_filters = Vec::with_capacity(num_partitions);
-                let mut real_partition_ids = Vec::new();
+                let routing_hash_expr = Arc::new(HashExpr::new(
+                    self.on_right.clone(),
+                    self.repartition_random_state.clone(),
+                    "hash_repartition".to_string(),
+                )) as Arc<dyn PhysicalExpr>;
+
+                let modulo_expr = Arc::new(BinaryExpr::new(
+                    routing_hash_expr,
+                    Operator::Modulo,
+                    lit(ScalarValue::UInt64(Some(num_partitions as u64))),
+                )) as Arc<dyn PhysicalExpr>;
+
+                let mut real_branches = Vec::new();
                 let mut empty_partition_ids = Vec::new();
                 let mut has_canceled_unknown = false;
-                let mut keys_have_null = false;
 
                 for (partition_id, partition) in partitions.iter().enumerate() {
                     match partition {
@@ -656,11 +617,8 @@ impl SharedBuildAccumulator {
                             if matches!(partition.pushdown, PushdownStrategy::Empty) =>
                         {
                             empty_partition_ids.push(partition_id);
-                            partition_filters.push(lit(false));
                         }
                         PartitionStatus::Reported(partition) => {
-                            real_partition_ids.push(partition_id);
-                            keys_have_null |= partition.keys_have_null;
                             let membership_expr = create_membership_predicate(
                                 &self.on_right,
                                 partition.pushdown.clone(),
@@ -676,14 +634,13 @@ impl SharedBuildAccumulator {
                                 bounds_expr,
                             )
                             .unwrap_or_else(|| lit(true));
-                            partition_filters.push(then_expr);
+                            real_branches.push((
+                                lit(ScalarValue::UInt64(Some(partition_id as u64))),
+                                then_expr,
+                            ));
                         }
                         PartitionStatus::CanceledUnknown => {
                             has_canceled_unknown = true;
-                            partition_filters.push(lit(true));
-                            // A canceled partition's build content is unknown, so it
-                            // may hold a NULL key.
-                            keys_have_null = true;
                         }
                         PartitionStatus::Pending => {
                             return datafusion_common::internal_err!(
@@ -693,154 +650,46 @@ impl SharedBuildAccumulator {
                     }
                 }
 
-                let filter_expr = if has_canceled_unknown
-                    && real_partition_ids.is_empty()
-                    && empty_partition_ids.is_empty()
-                {
-                    lit(true)
-                } else if !has_canceled_unknown && real_partition_ids.is_empty() {
-                    lit(false)
-                } else if !has_canceled_unknown
-                    && real_partition_ids.len() == 1
-                    && empty_partition_ids.len() + 1 == num_partitions
-                {
-                    Arc::clone(&partition_filters[real_partition_ids[0]])
-                } else if let Some(range_partitioning) = &self.probe_range_partitioning {
-                    // Range partitioning
-                    assert_or_internal_err!(
-                        partition_filters.len() == range_partitioning.partition_count(),
-                        "Dynamic filter partition count {} does not match Range partition count {}",
-                        partition_filters.len(),
-                        range_partitioning.partition_count()
-                    );
-                    let routing_range_expr = Arc::new(RangeExpr::try_new(
-                        self.on_right.clone(),
-                        range_partitioning,
-                    )?)
-                        as Arc<dyn PhysicalExpr>;
-                    let else_expr = partition_filters
-                        .pop()
-                        .expect("Range partitioning always has at least one partition");
-
-                    // CASE range_partition(key)
-                    //   WHEN 0 THEN F0
-                    //   WHEN 1 THEN F1
-                    //   ...
-                    //   ELSE Fn
-                    // END
-                    let when_then_expr = partition_filters
+                let filter_expr = if has_canceled_unknown {
+                    let mut when_then_branches = empty_partition_ids
                         .into_iter()
-                        .enumerate()
-                        .map(|(partition_id, then_expr)| {
+                        .map(|partition_id| {
                             (
                                 lit(ScalarValue::UInt64(Some(partition_id as u64))),
-                                then_expr,
+                                lit(false),
                             )
                         })
-                        .collect();
+                        .collect::<Vec<_>>();
+                    when_then_branches.extend(real_branches);
 
-                    Arc::new(CaseExpr::try_new(
-                        Some(routing_range_expr),
-                        when_then_expr,
-                        Some(else_expr),
-                    )?) as Arc<dyn PhysicalExpr>
-                } else {
-                    // Hash partitioning
-                    let routing_hash_expr = Arc::new(HashExpr::new(
-                        self.on_right.clone(),
-                        self.repartition_random_state.clone(),
-                        "hash_repartition".to_string(),
-                    ))
-                        as Arc<dyn PhysicalExpr>;
-                    let modulo_expr = Arc::new(BinaryExpr::new(
-                        routing_hash_expr,
-                        Operator::Modulo,
-                        lit(ScalarValue::UInt64(Some(num_partitions as u64))),
-                    )) as Arc<dyn PhysicalExpr>;
-
-                    let mut when_then_branches = if has_canceled_unknown {
-                        empty_partition_ids
-                            .into_iter()
-                            .map(|partition_id| {
-                                (
-                                    lit(ScalarValue::UInt64(Some(partition_id as u64))),
-                                    lit(false),
-                                )
-                            })
-                            .collect::<Vec<_>>()
+                    if when_then_branches.is_empty() {
+                        lit(true)
                     } else {
-                        vec![]
-                    };
-                    when_then_branches.extend(real_partition_ids.into_iter().map(
-                        |partition_id| {
-                            (
-                                lit(ScalarValue::UInt64(Some(partition_id as u64))),
-                                Arc::clone(&partition_filters[partition_id]),
-                            )
-                        },
-                    ));
-
+                        Arc::new(CaseExpr::try_new(
+                            Some(modulo_expr),
+                            when_then_branches,
+                            Some(lit(true)),
+                        )?) as Arc<dyn PhysicalExpr>
+                    }
+                } else if real_branches.is_empty() {
+                    lit(false)
+                } else if real_branches.len() == 1
+                    && empty_partition_ids.len() + 1 == num_partitions
+                {
+                    Arc::clone(&real_branches[0].1)
+                } else {
                     Arc::new(CaseExpr::try_new(
                         Some(modulo_expr),
-                        when_then_branches,
-                        Some(lit(has_canceled_unknown)),
+                        real_branches,
+                        Some(lit(false)),
                     )?) as Arc<dyn PhysicalExpr>
                 };
 
-                self.dynamic_filter
-                    .update(self.preserve_probe_nulls(filter_expr, keys_have_null)?)?;
+                self.dynamic_filter.update(filter_expr)?;
             }
         }
 
         Ok(())
-    }
-
-    /// Keeps probe rows with a NULL key when the join semantics need them.
-    ///
-    /// The build-side predicate drops probe rows whose key is NULL. A null-aware anti join
-    /// (`NOT IN`) needs that NULL to reach the join so three-valued logic can collapse the
-    /// result, and a null-equal join needs it to match a build-side NULL. OR-ing `key IS NULL`
-    /// keeps those rows while preserving the filter's selectivity for the rest; the join refines
-    /// whatever the widened filter lets through.
-    fn preserve_probe_nulls(
-        &self,
-        filter_expr: Arc<dyn PhysicalExpr>,
-        build_keys_have_null: bool,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        // A null-aware anti join needs every probe NULL no matter what the build holds: one
-        // probe NULL makes `NOT IN` unknown for every build row. A null-equal join needs probe
-        // NULLs only to match an actual build-side NULL, so a NULL-free build keeps the filter
-        // at full selectivity.
-        let needs_probe_nulls = self.null_aware
-            || (self.null_equality == NullEquality::NullEqualsNull
-                && build_keys_have_null);
-        if !needs_probe_nulls {
-            return Ok(filter_expr);
-        }
-        // Only a key that can actually be NULL needs the disjunct; a NOT NULL key never widens.
-        // Null-aware joins are single-key; null-equal joins can be multi-key, so OR every nullable
-        // key. If every key is NOT NULL the filter is left untouched, at full selectivity.
-        let mut any_key_is_null: Option<Arc<dyn PhysicalExpr>> = None;
-        for key in &self.on_right {
-            // `nullable` fails only when a key is out of sync with the probe schema. That is
-            // a construction bug, so surface it instead of widening around it.
-            if !key.nullable(&self.probe_schema)? {
-                continue;
-            }
-            let is_null =
-                Arc::new(IsNullExpr::new(Arc::clone(key))) as Arc<dyn PhysicalExpr>;
-            any_key_is_null = Some(match any_key_is_null {
-                Some(acc) => Arc::new(BinaryExpr::new(acc, Operator::Or, is_null)) as _,
-                None => is_null,
-            });
-        }
-        // Cheap null check first short-circuits before the costlier dynamic filter.
-        Ok(match any_key_is_null {
-            Some(any_key_is_null) => {
-                Arc::new(BinaryExpr::new(any_key_is_null, Operator::Or, filter_expr))
-            }
-            None => filter_expr,
-        })
     }
 }
 
@@ -873,9 +722,6 @@ pub(super) fn make_partitioned_accumulator_for_test(
         on_right: vec![],
         repartition_random_state: SeededRandomState::with_seed(1),
         probe_schema,
-        probe_range_partitioning: None,
-        null_equality: NullEquality::NullEqualsNothing,
-        null_aware: false,
     }
 }
 
@@ -896,14 +742,8 @@ pub(super) fn completed_partitions_for_test(acc: &SharedBuildAccumulator) -> usi
 mod tests {
     use super::*;
 
-    use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int32Array};
-    use arrow::compute::SortOptions;
-    use arrow::record_batch::RecordBatch;
-    use datafusion_common::SplitPoint;
-    use datafusion_physical_expr::{
-        PhysicalSortExpr,
-        expressions::{Column, Literal},
-    };
+    use arrow::array::{ArrayRef, Int32Array};
+    use datafusion_physical_expr::expressions::{Column, Literal};
 
     fn test_on_right() -> Vec<PhysicalExprRef> {
         vec![Arc::new(Column::new("probe_key", 0))]
@@ -938,9 +778,6 @@ mod tests {
             on_right,
             repartition_random_state: SeededRandomState::with_seed(1),
             probe_schema: test_probe_schema(),
-            probe_range_partitioning: None,
-            null_equality: NullEquality::NullEqualsNothing,
-            null_aware: false,
         }
     }
 
@@ -983,11 +820,7 @@ mod tests {
     }
 
     fn reported(pushdown: PushdownStrategy, bounds: PartitionBounds) -> PartitionStatus {
-        PartitionStatus::Reported(PartitionData {
-            pushdown,
-            bounds,
-            keys_have_null: false,
-        })
+        PartitionStatus::Reported(PartitionData { pushdown, bounds })
     }
 
     fn current_expr(acc: &SharedBuildAccumulator) -> PhysicalExprRef {
@@ -1148,198 +981,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn partitioned_range_dynamic_filter_routes_with_range_expr() -> Result<()> {
-        let mut acc = make_partitioned_expr_accumulator_for_test(4);
-        acc.probe_range_partitioning = Some(RangePartitioning::try_new(
-            [PhysicalSortExpr::new(
-                Arc::clone(&acc.on_right[0]),
-                Default::default(),
-            )]
-            .into(),
-            vec![
-                SplitPoint::new(vec![ScalarValue::Int32(Some(10))]),
-                SplitPoint::new(vec![ScalarValue::Int32(Some(20))]),
-                SplitPoint::new(vec![ScalarValue::Int32(Some(30))]),
-            ],
-        )?);
-
-        acc.build_filter(FinalizeInput::Partitioned(vec![
-            reported(PushdownStrategy::Empty, no_bounds()),
-            PartitionStatus::CanceledUnknown,
-            reported(in_list(&[20, 29]), no_bounds()),
-            reported(in_list(&[30]), no_bounds()),
-        ]))?;
-
-        let expr = current_expr(&acc);
-        let case = case_expr(&expr);
-        assert!(
-            case.expr()
-                .and_then(|expr| expr.downcast_ref::<RangeExpr>())
-                .is_some(),
-            "Range routing must use RangeExpr"
-        );
-        assert_eq!(case.when_then_expr().len(), 3);
-
-        let batch = RecordBatch::try_new(
-            test_probe_schema(),
-            vec![Arc::new(Int32Array::from(vec![
-                9, 10, 19, 20, 21, 29, 30, 31,
-            ]))],
-        )?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
-        let result = result
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("dynamic filter should evaluate to BooleanArray");
-        assert_eq!(
-            result,
-            &BooleanArray::from(vec![false, true, true, true, false, true, true, false,])
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn partitioned_range_dynamic_filter_routes_compound_nullable_keys() -> Result<()> {
-        let probe_schema = Arc::new(Schema::new(vec![
-            Field::new("probe_key", DataType::Int32, true),
-            Field::new("probe_tie", DataType::Int32, true),
-        ]));
-        let on_right: Vec<PhysicalExprRef> = vec![
-            Arc::new(Column::new("probe_key", 0)),
-            Arc::new(Column::new("probe_tie", 1)),
-        ];
-        let mut acc = make_accumulator_for_test(
-            AccumulatedBuildData::Partitioned {
-                partitions: vec![PartitionStatus::Pending; 4],
-                completed_partitions: 0,
-            },
-            on_right,
-        );
-        acc.probe_schema = Arc::clone(&probe_schema);
-        acc.probe_range_partitioning = Some(RangePartitioning::try_new(
-            [
-                PhysicalSortExpr::new(
-                    Arc::clone(&acc.on_right[0]),
-                    SortOptions::new(false, true),
-                ),
-                PhysicalSortExpr::new(
-                    Arc::clone(&acc.on_right[1]),
-                    SortOptions::new(false, false),
-                ),
-            ]
-            .into(),
-            vec![
-                SplitPoint::new(vec![
-                    ScalarValue::Int32(None),
-                    ScalarValue::Int32(Some(10)),
-                ]),
-                SplitPoint::new(vec![ScalarValue::Int32(None), ScalarValue::Int32(None)]),
-                SplitPoint::new(vec![
-                    ScalarValue::Int32(Some(10)),
-                    ScalarValue::Int32(None),
-                ]),
-            ],
-        )?);
-
-        acc.build_filter(FinalizeInput::Partitioned(vec![
-            reported(PushdownStrategy::Empty, no_bounds()),
-            PartitionStatus::CanceledUnknown,
-            reported(PushdownStrategy::Empty, no_bounds()),
-            PartitionStatus::CanceledUnknown,
-        ]))?;
-
-        let expr = current_expr(&acc);
-        let case = case_expr(&expr);
-        assert!(case.expr().is_some());
-        assert_eq!(case.when_then_expr().len(), 3);
-
-        let batch = RecordBatch::try_new(
-            probe_schema,
-            vec![
-                Arc::new(Int32Array::from(vec![
-                    None,
-                    None,
-                    None,
-                    None,
-                    Some(9),
-                    Some(10),
-                    Some(10),
-                    Some(11),
-                ])),
-                Arc::new(Int32Array::from(vec![
-                    Some(9),
-                    Some(10),
-                    Some(11),
-                    None,
-                    None,
-                    Some(9),
-                    None,
-                    None,
-                ])),
-            ],
-        )?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
-        let result = result
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("dynamic filter should evaluate to BooleanArray");
-        assert_eq!(
-            result,
-            &BooleanArray::from(
-                vec![false, true, true, false, false, false, true, true,]
-            )
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn partitioned_range_dynamic_filter_preserves_signed_zero_routing() -> Result<()> {
-        let probe_schema = Arc::new(Schema::new(vec![Field::new(
-            "probe_key",
-            DataType::Float64,
-            false,
-        )]));
-        let on_right: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("probe_key", 0))];
-        let mut acc = make_accumulator_for_test(
-            AccumulatedBuildData::Partitioned {
-                partitions: vec![PartitionStatus::Pending; 2],
-                completed_partitions: 0,
-            },
-            on_right,
-        );
-        acc.probe_schema = Arc::clone(&probe_schema);
-        acc.probe_range_partitioning = Some(RangePartitioning::try_new(
-            [PhysicalSortExpr::new(
-                Arc::clone(&acc.on_right[0]),
-                SortOptions::default(),
-            )]
-            .into(),
-            vec![SplitPoint::new(vec![ScalarValue::Float64(Some(0.0))])],
-        )?);
-
-        acc.build_filter(FinalizeInput::Partitioned(vec![
-            PartitionStatus::CanceledUnknown,
-            reported(PushdownStrategy::Empty, no_bounds()),
-        ]))?;
-
-        let expr = current_expr(&acc);
-        let batch = RecordBatch::try_new(
-            probe_schema,
-            vec![Arc::new(Float64Array::from(vec![-0.0, 0.0]))],
-        )?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
-        let result = result
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("dynamic filter should evaluate to BooleanArray");
-        assert_eq!(result, &BooleanArray::from(vec![true, false]));
-
-        Ok(())
-    }
-
     // Regression guard for the build-report lifecycle fix: on `Drop`, a stream
     // in `BuildReportState::ReportScheduled` still calls `report_canceled_partition`
     // because it cannot tell whether the coordinator has already observed the
@@ -1360,7 +1001,6 @@ mod tests {
                     partition_id: 0,
                     pushdown: PushdownStrategy::Empty,
                     bounds: PartitionBounds::new(vec![]),
-                    keys_have_null: false,
                 },
             )
             .unwrap();
@@ -1396,121 +1036,5 @@ mod tests {
         let (partitions, completed) = partitioned_state(&acc);
         assert!(matches!(partitions[0], PartitionStatus::CanceledUnknown));
         assert_eq!(completed, 1);
-    }
-
-    fn null_semantics_accumulator(
-        probe_schema: Arc<Schema>,
-        on_right: Vec<PhysicalExprRef>,
-        null_equality: NullEquality,
-        null_aware: bool,
-    ) -> SharedBuildAccumulator {
-        SharedBuildAccumulator {
-            inner: Mutex::new(AccumulatorState {
-                data: AccumulatedBuildData::Partitioned {
-                    partitions: vec![PartitionStatus::Pending; 1],
-                    completed_partitions: 0,
-                },
-                completion: CompletionState::Pending,
-            }),
-            completion_notify: Notify::new(),
-            dynamic_filter: Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true))),
-            on_right,
-            repartition_random_state: SeededRandomState::with_seed(1),
-            probe_schema,
-            probe_range_partitioning: None,
-            null_equality,
-            null_aware,
-        }
-    }
-
-    fn null_equal_accumulator(
-        probe_schema: Arc<Schema>,
-        on_right: Vec<PhysicalExprRef>,
-    ) -> SharedBuildAccumulator {
-        null_semantics_accumulator(
-            probe_schema,
-            on_right,
-            NullEquality::NullEqualsNull,
-            false,
-        )
-    }
-
-    #[test]
-    fn preserve_probe_nulls_only_widens_nullable_keys() {
-        let probe_schema = Arc::new(Schema::new(vec![
-            Field::new("k_nullable", DataType::Int32, true),
-            Field::new("k_not_null", DataType::Int32, false),
-        ]));
-        let on_right: Vec<PhysicalExprRef> = vec![
-            Arc::new(Column::new("k_nullable", 0)),
-            Arc::new(Column::new("k_not_null", 1)),
-        ];
-        let acc = null_equal_accumulator(probe_schema, on_right);
-
-        // Only the nullable key earns an IS NULL disjunct; the NOT NULL key is left out.
-        let widened = acc.preserve_probe_nulls(lit(true), true).unwrap();
-        assert_eq!(format!("{widened}").matches("IS NULL").count(), 1);
-    }
-
-    #[test]
-    fn preserve_probe_nulls_leaves_all_not_null_keys_untouched() {
-        let probe_schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-        ]));
-        let on_right: Vec<PhysicalExprRef> =
-            vec![Arc::new(Column::new("a", 0)), Arc::new(Column::new("b", 1))];
-        let acc = null_equal_accumulator(probe_schema, on_right);
-
-        // Every key is NOT NULL, so there is nothing to OR in and the filter is returned as-is.
-        let filter = lit(true);
-        let result = acc.preserve_probe_nulls(Arc::clone(&filter), true).unwrap();
-        assert_eq!(format!("{result}"), format!("{filter}"));
-    }
-
-    #[test]
-    fn preserve_probe_nulls_rejects_out_of_sync_key() {
-        let probe_schema =
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
-        // The key's column index points past the probe schema: a construction bug that
-        // must surface as an error, not get widened around.
-        let on_right: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("b", 1))];
-        let acc = null_equal_accumulator(probe_schema, on_right);
-
-        assert!(acc.preserve_probe_nulls(lit(true), true).is_err());
-    }
-
-    #[test]
-    fn preserve_probe_nulls_skips_wrap_when_build_has_no_nulls() {
-        let probe_schema =
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
-        let on_right: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("a", 0))];
-        let acc = null_equal_accumulator(probe_schema, on_right);
-
-        // A NULL-free build has nothing for a probe NULL to null-match, so the
-        // filter keeps its full selectivity.
-        let filter = lit(true);
-        let result = acc
-            .preserve_probe_nulls(Arc::clone(&filter), false)
-            .unwrap();
-        assert_eq!(format!("{result}"), format!("{filter}"));
-    }
-
-    #[test]
-    fn preserve_probe_nulls_wraps_null_aware_regardless_of_build() {
-        let probe_schema =
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
-        let on_right: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("a", 0))];
-        let acc = null_semantics_accumulator(
-            probe_schema,
-            on_right,
-            NullEquality::NullEqualsNothing,
-            true,
-        );
-
-        // One probe NULL collapses `NOT IN` for every build row, so the wrap must not
-        // depend on the build content.
-        let widened = acc.preserve_probe_nulls(lit(true), false).unwrap();
-        assert_eq!(format!("{widened}").matches("IS NULL").count(), 1);
     }
 }

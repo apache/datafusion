@@ -154,7 +154,7 @@ static DOCUMENTATION_ASINH: LazyLock<Documentation> = LazyLock::new(|| {
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
     .with_sql_example(
-        r#" ```sql
+        r#" ```sql 
 > SELECT asinh(1);
 +------------+
 | asinh(1)   |
@@ -184,7 +184,7 @@ static DOCUMENTATION_ATAN: LazyLock<Documentation> = LazyLock::new(|| {
     .with_standard_argument("numeric_expression", Some("Numeric"))
     .with_sql_example(
         r#"```sql
-> SELECT atan(1);
+    > SELECT atan(1);
 +-----------+
 | atan(1)   |
 +-----------+
@@ -223,7 +223,7 @@ static DOCUMENTATION_ATANH: LazyLock<Documentation> =
     )
     .with_standard_argument("numeric_expression", Some("Numeric"))
     .with_sql_example(r#"```sql
-> SELECT atanh(0.5);
+    > SELECT atanh(0.5);
 +-------------+
 | atanh(0.5)  |
 +-------------+
@@ -394,7 +394,7 @@ static DOCUMENTATION_DEGREES: LazyLock<Documentation> = LazyLock::new(|| {
     .with_standard_argument("numeric_expression", Some("Numeric"))
     .with_sql_example(
         r#"```sql
-> SELECT degrees(pi());
+    > SELECT degrees(pi());
 +------------+
 | degrees(0) |
 +------------+
@@ -719,12 +719,12 @@ static DOCUMENTATION_TANH: LazyLock<Documentation> = LazyLock::new(|| {
     .with_standard_argument("numeric_expression", Some("Numeric"))
     .with_sql_example(
         r#"```sql
-> SELECT tanh(20);
-+----------+
-| tanh(20) |
-+----------+
-| 1.0      |
-+----------+
+  > SELECT tanh(20);
+  +----------+
+  | tanh(20) |
+  +----------+
+  | 1.0      |
+  +----------+
   ```"#,
     )
     .build()
@@ -761,7 +761,6 @@ mod tests {
                 .unwrap(),
                 sort_properties: sp,
                 preserves_lex_ordering: false,
-                strictly_order_preserving: false,
             }
         }
 

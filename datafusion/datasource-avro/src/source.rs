@@ -22,7 +22,6 @@ use std::sync::Arc;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow_avro::reader::{Reader, ReaderBuilder};
 use datafusion_common::error::Result;
-use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -168,66 +167,6 @@ impl FileSource for AvroSource {
     fn supports_repartitioning(&self) -> bool {
         // Avro OCF does not support safe byte-range splitting in this reader path.
         false
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(
-            &Arc<dyn datafusion_physical_plan::PhysicalExpr>,
-        ) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        datafusion_physical_plan::apply_expression_roots(self.projection.source.iter(), f)
-    }
-
-    /// Emit an `AvroScan` node wrapping the shared base config.
-    #[cfg(feature = "proto")]
-    fn try_to_proto(
-        &self,
-        base: &FileScanConfig,
-        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
-    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
-        use datafusion_proto_models::protobuf;
-        use protobuf::physical_plan_node::PhysicalPlanType;
-
-        let node = protobuf::AvroScanExecNode {
-            base_conf: Some(base.try_to_proto(ctx)?),
-        };
-        Ok(Some(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::AvroScan(node)),
-        }))
-    }
-}
-
-#[cfg(feature = "proto")]
-impl AvroSource {
-    /// Reconstructs a `DataSourceExec` from a protobuf `AvroScan`.
-    pub fn try_from_proto(
-        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
-        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
-    ) -> Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>> {
-        use datafusion_datasource::source::DataSourceExec;
-        use datafusion_proto_models::protobuf;
-
-        let scan = match &node.physical_plan_type {
-            Some(protobuf::physical_plan_node::PhysicalPlanType::AvroScan(scan)) => scan,
-            _ => {
-                return datafusion_common::internal_err!(
-                    "PhysicalPlanNode is not an AvroScan"
-                );
-            }
-        };
-
-        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
-            datafusion_common::internal_datafusion_err!(
-                "AvroScanExecNode is missing required field 'base_conf'"
-            )
-        })?;
-
-        let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
-        let source = Arc::new(AvroSource::new(table_schema));
-
-        let conf = FileScanConfig::try_from_proto(base_conf, ctx, source)?;
-        Ok(DataSourceExec::from_data_source(conf))
     }
 }
 

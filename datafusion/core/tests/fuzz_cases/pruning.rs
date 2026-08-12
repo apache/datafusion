@@ -249,7 +249,12 @@ impl Utf8Test {
         for (idx, truncation_length) in [Some(1), Some(2), None].iter().enumerate() {
             // parquet files only support 32767 row groups per file, so chunk up into multiple files so we don't error if running on a large number of row groups
             for (rg_idx, row_groups) in row_groups.chunks(32766).enumerate() {
-                let buf = write_parquet_file(*truncation_length, &schema, row_groups);
+                let buf = write_parquet_file(
+                    *truncation_length,
+                    Arc::clone(&schema),
+                    row_groups.to_vec(),
+                )
+                .await;
                 let filename = format!("test_fuzz_utf8_{idx}_{rg_idx}.parquet");
                 let size = buf.len();
                 let path = Path::from(filename);
@@ -309,10 +314,10 @@ async fn execute_with_predicate(
     values
 }
 
-fn write_parquet_file(
+async fn write_parquet_file(
     truncation_length: Option<usize>,
-    schema: &Arc<Schema>,
-    row_groups: &[Vec<String>],
+    schema: Arc<Schema>,
+    row_groups: Vec<Vec<String>>,
 ) -> Bytes {
     let mut buf = BytesMut::new().writer();
     let props = WriterProperties::builder()
@@ -321,11 +326,11 @@ fn write_parquet_file(
     let props = props.build();
     {
         let mut writer =
-            ArrowWriter::try_new(&mut buf, Arc::clone(schema), Some(props)).unwrap();
-        for rg_values in row_groups {
+            ArrowWriter::try_new(&mut buf, schema.clone(), Some(props)).unwrap();
+        for rg_values in row_groups.iter() {
             let arr = StringArray::from_iter_values(rg_values.iter());
             let batch =
-                RecordBatch::try_new(Arc::clone(schema), vec![Arc::new(arr)]).unwrap();
+                RecordBatch::try_new(schema.clone(), vec![Arc::new(arr)]).unwrap();
             writer.write(&batch).unwrap();
             writer.flush().unwrap(); // finishes the current row group and starts a new one
         }

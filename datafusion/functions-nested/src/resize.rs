@@ -49,8 +49,8 @@ make_udf_expr_and_func!(
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Resizes the list to contain size elements.",
-    syntax_example = "array_resize(array, size[, value])",
+    description = "Resizes the list to contain size elements. Initializes new elements with value or empty if value is not set.",
+    syntax_example = "array_resize(array, size, value)",
     sql_example = r#"```sql
 > select array_resize([1, 2, 3], 5, 0);
 +-------------------------------------+
@@ -66,7 +66,7 @@ make_udf_expr_and_func!(
     argument(name = "size", description = "New size of given array."),
     argument(
         name = "value",
-        description = "If expanding the array, defines the values to fill in. Defaults to null."
+        description = "Defines new elements' value or empty if value is not set."
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]

@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, Date32Array, StringArrayType};
 use arrow::datatypes::{DataType, Date32Type, Field, FieldRef};
-use chrono::{Datelike, Weekday};
+use chrono::{Datelike, Duration, Weekday};
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -229,17 +229,11 @@ fn spark_next_day(days: i32, day_of_week: &str) -> Option<i32> {
     if let Some(day_of_week) = day_of_week {
         let day_of_week = day_of_week.parse::<Weekday>();
         match day_of_week {
-            Ok(day_of_week) => {
-                // Advance 1..=7 days from `days` to the next occurrence of
-                // `day_of_week`. Compute the result on the epoch day directly
-                // instead of constructing a `NaiveDate`: the result can land
-                // past `NaiveDate::MAX` (epoch day 95026236), and building that
-                // date panics (`NaiveDate + TimeDelta overflowed`). Spark's
-                // `DateTimeUtils.getNextDateForDayOfWeek` is pure `Int`
-                // arithmetic and keeps producing a value up to `Int.MaxValue`.
-                let delta = 7 - date.weekday().days_since(day_of_week) as i32;
-                days.checked_add(delta)
-            }
+            Ok(day_of_week) => Some(Date32Type::from_naive_date(
+                date + Duration::days(
+                    (7 - date.weekday().days_since(day_of_week)) as i64,
+                ),
+            )),
             Err(_) => {
                 // TODO: if spark.sql.ansi.enabled is false,
                 //  returns NULL instead of an error for a malformed dayOfWeek.
@@ -290,18 +284,5 @@ mod tests {
     fn next_day_rejects_whitespace_padded_day_names() {
         let monday = 19723; // 2024-01-01
         assert_eq!(spark_next_day(monday, " MO "), None);
-    }
-
-    #[test]
-    fn next_day_handles_far_future_start_dates() {
-        // Regression for #23891: for start dates near the end of the
-        // representable `Date32` range, the next occurrence can land past
-        // `chrono::NaiveDate::MAX` (epoch day 95026236). Computing the result
-        // on the epoch day directly (as Spark does) must return a value rather
-        // than panicking with `NaiveDate + TimeDelta overflowed`.
-        //
-        // 95026236 is a Monday, so `next_day(.., "Mon")` advances a full week.
-        assert_eq!(spark_next_day(95026236, "Mon"), Some(95026243));
-        assert_eq!(spark_next_day(95026230, "Tue"), Some(95026237));
     }
 }

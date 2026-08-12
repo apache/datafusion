@@ -67,14 +67,13 @@ use arrow::{
     array::Int64Array, datatypes::SchemaRef, record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
-use datafusion::catalog::Session;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::{
     common::cast::as_int64_array,
     common::{DFSchemaRef, arrow_datafusion_err},
     error::{DataFusionError, Result},
     execution::{
-        context::{QueryPlanner, TaskContext},
+        context::{QueryPlanner, SessionState, TaskContext},
         runtime_env::RuntimeEnv,
     },
     logical_expr::{
@@ -91,9 +90,7 @@ use datafusion::{
     prelude::{SessionConfig, SessionContext},
 };
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
-};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{ScalarValue, assert_eq_or_internal_err, assert_or_internal_err};
 use datafusion_expr::{FetchType, InvariantLevel, Projection, SortExpr};
 use datafusion_optimizer::AnalyzerRule;
@@ -102,7 +99,6 @@ use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 use async_trait::async_trait;
 use datafusion_common::cast::as_string_view_array;
-use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use futures::{Stream, StreamExt};
 
 /// Execute the specified sql and return the resulting record batches
@@ -470,7 +466,7 @@ impl QueryPlanner for TopKQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &dyn Session,
+        session_state: &SessionState,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Teach the default physical planner how to plan TopK nodes.
         let physical_planner =
@@ -522,7 +518,7 @@ impl OptimizerRule for TopKOptimizerRule {
         if let LogicalPlan::Sort(Sort { expr, input, .. }) = limit.input.as_ref()
             && expr.len() == 1
         {
-            // we found a sort with a single sort expr, replace with a TopK
+            // we found a sort with a single sort expr, replace with a a TopK
             return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                 node: Arc::new(TopKPlanNode {
                     k: fetch,
@@ -633,8 +629,7 @@ impl ExtensionPlanner for TopKPlanner {
         node: &dyn UserDefinedLogicalNode,
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &dyn Session,
-        _planning_ctx: &PhysicalPlanningContext,
+        _session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         Ok(
             if let Some(topk_node) = node.as_any().downcast_ref::<TopKPlanNode>() {
@@ -750,15 +745,6 @@ impl ExecutionPlan for TopKExec {
             done: false,
             state: BTreeMap::new(),
         }))
-    }
-
-    fn apply_expressions(
-        &self,
-        _f: &mut dyn FnMut(
-            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
-        ) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        Ok(TreeNodeRecursion::Continue)
     }
 }
 
