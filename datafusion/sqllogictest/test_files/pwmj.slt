@@ -1046,5 +1046,123 @@ SELECT l.id FROM ex_fl l WHERE NOT EXISTS (SELECT 1 FROM ex_fr r WHERE l.v <= r.
 ----
 2
 
+# ------------------------------------------------------------------
+# Classic joins: final pass when the streamed side has fewer partitions than
+# `target_partitions`
+# ------------------------------------------------------------------
+# The final pass -- the only thing that emits unmatched buffered rows for `Left`/`Full` -- runs
+# on the last streamed partition to finish, gated by a counter seeded with the number of
+# partitions that will call `execute`. That is the streamed side's partition count, not
+# `target_partitions`: the streamed side carries no distribution requirement, so a small input
+# stays single-partition while `target_partitions` is 4 (asserted by the plan below). Seeding
+# from `target_partitions` leaves the counter at 3, no partition ever emits, and `x = 10`
+# disappears from both queries.
+statement ok
+CREATE TABLE pwmj_unmatched_l(x INT);
+
+statement ok
+INSERT INTO pwmj_unmatched_l VALUES (1), (10);
+
+statement ok
+CREATE TABLE pwmj_unmatched_r(y INT);
+
+statement ok
+INSERT INTO pwmj_unmatched_r VALUES (5);
+
+query II
+SELECT l.x, r.y FROM pwmj_unmatched_l l LEFT JOIN pwmj_unmatched_r r ON l.x < r.y ORDER BY 1;
+----
+1 5
+10 NULL
+
+query II
+SELECT l.x, r.y FROM pwmj_unmatched_l l FULL JOIN pwmj_unmatched_r r ON l.x < r.y ORDER BY 1;
+----
+1 5
+10 NULL
+
+query TT
+EXPLAIN SELECT l.x, r.y FROM pwmj_unmatched_l l LEFT JOIN pwmj_unmatched_r r ON l.x < r.y ORDER BY 1;
+----
+logical_plan
+01)Sort: l.x ASC NULLS LAST
+02)--Left Join:  Filter: l.x < r.y
+03)----SubqueryAlias: l
+04)------TableScan: pwmj_unmatched_l projection=[x]
+05)----SubqueryAlias: r
+06)------TableScan: pwmj_unmatched_r projection=[y]
+physical_plan
+01)SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--PiecewiseMergeJoin: operator=Lt, join_type=Left, on=(x < y)
+03)----SortExec: expr=[x@0 DESC], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# ------------------------------------------------------------------
+# Existence joins: dictionary-encoded keys
+# ------------------------------------------------------------------
+# Each streamed batch is reduced to its extreme key. Dictionaries have no typed arrow min/max
+# kernel, so they take the generic `ScalarValue`-per-row path -- this is the only coverage of
+# that path.
+statement ok
+CREATE TABLE ex_dict_l AS
+  SELECT column1 AS id, arrow_cast(column2, 'Dictionary(Int32, Utf8)') AS v
+  FROM (VALUES (1, 'a'), (2, 'c'), (3, 'e'), (4, NULL));
+
+statement ok
+CREATE TABLE ex_dict_r AS
+  SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS v FROM (VALUES ('c'));
+
+query T
+SELECT arrow_typeof(v) FROM ex_dict_l LIMIT 1;
+----
+Dictionary(Int32, Utf8)
+
+# `>` : only 'e' exceeds 'c'. The NULL key is never marked, so it stays in NOT EXISTS.
+query I
+SELECT l.id FROM ex_dict_l l WHERE EXISTS (SELECT 1 FROM ex_dict_r r WHERE l.v > r.v) ORDER BY 1;
+----
+3
+
+query I
+SELECT l.id FROM ex_dict_l l WHERE NOT EXISTS (SELECT 1 FROM ex_dict_r r WHERE l.v > r.v) ORDER BY 1;
+----
+1
+2
+4
+
+# `<=` : 'a' and 'c'.
+query I
+SELECT l.id FROM ex_dict_l l WHERE EXISTS (SELECT 1 FROM ex_dict_r r WHERE l.v <= r.v) ORDER BY 1;
+----
+1
+2
+
+query I
+SELECT l.id FROM ex_dict_l l WHERE NOT EXISTS (SELECT 1 FROM ex_dict_r r WHERE l.v <= r.v) ORDER BY 1;
+----
+3
+4
+
+query TT
+EXPLAIN SELECT l.id FROM ex_dict_l l WHERE EXISTS (SELECT 1 FROM ex_dict_r r WHERE l.v > r.v) ORDER BY 1;
+----
+logical_plan
+01)Sort: l.id ASC NULLS LAST
+02)--Projection: l.id
+03)----LeftSemi Join:  Filter: l.v > __correlated_sq_1.v
+04)------SubqueryAlias: l
+05)--------TableScan: ex_dict_l projection=[id, v]
+06)------SubqueryAlias: __correlated_sq_1
+07)--------SubqueryAlias: r
+08)----------TableScan: ex_dict_r projection=[v]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[id@0 as id]
+03)----PiecewiseMergeJoin: operator=Gt, join_type=LeftSemi, on=(v > v)
+04)------SortExec: expr=[v@1 ASC], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)------DataSourceExec: partitions=1, partition_sizes=[1]
+
 statement ok
 set datafusion.optimizer.enable_piecewise_merge_join = false;

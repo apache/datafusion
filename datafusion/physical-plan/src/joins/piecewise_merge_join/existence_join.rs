@@ -67,9 +67,8 @@
 //!
 //! Rows whose join key is NULL never satisfy a comparison predicate. Buffered NULLs sort to
 //! the front, so the scan starts past them and null-keyed buffered rows are left unmarked —
-//! correctly excluded from `LeftSemi` and included in `LeftAnti`. Each streamed batch is
-//! sorted NULLs-*last* instead, so the extreme key taken from it is non-null unless the whole
-//! batch is.
+//! correctly excluded from `LeftSemi` and included in `LeftAnti`. The extreme key is picked
+//! from each streamed batch with NULLs ignored, so it is non-null unless the whole batch is.
 //!
 //! # Output
 //!
@@ -91,11 +90,12 @@ use std::sync::atomic::Ordering as AtomicOrdering;
 use std::task::{Poll, ready};
 
 use arrow::array::{Array, ArrayRef, RecordBatch};
-use arrow::compute::{BatchCoalescer, sort_to_indices, take};
+use arrow::compute::BatchCoalescer;
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::{NullEquality, Result, internal_err};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_expr::{JoinType, Operator};
+use datafusion_functions_aggregate_common::min_max::{max_batch, min_batch};
 use datafusion_physical_expr::PhysicalExprRef;
 use futures::{Stream, StreamExt};
 
@@ -109,7 +109,7 @@ use crate::stream::EmptyRecordBatchStream;
 pub(super) enum ExistencePWMJStreamState {
     /// Load the buffered side into memory.
     WaitBufferedSide,
-    /// Fetch, sort and scan streamed batches, lowering the watermark. Emits nothing.
+    /// Fetch and scan streamed batches, lowering the watermark. Emits nothing.
     ScanStreamBatches,
     /// Emit the result. Reached only by the last streamed partition.
     EmitMatched,
@@ -210,7 +210,8 @@ impl ExistencePWMJStream {
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
-    /// Fetches one streamed batch, sorts it, and marks the buffered rows it matches.
+    /// Fetches one streamed batch, reduces it to its extreme compare key, and marks the
+    /// buffered rows that key matches.
     /// Never produces output: existence results come from the watermark in `emit_matched`.
     fn scan_stream_batch(
         &mut self,
@@ -237,23 +238,10 @@ impl ExistencePWMJStream {
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(batch.num_rows());
 
-                // Only the batch's extreme key is ever compared against the buffered
-                // side, so ask arrow for just that one index. `nulls_first: false` makes
-                // the chosen row non-null whenever the batch holds any non-null key, and
-                // leaves a null row only for an all-null batch, which marks nothing.
-                //
-                // The limit truncates the returned indices, not the work: `sort_impl`
-                // feeds it into the sort only when `nulls_first` is true, so this still
-                // fully sorts the batch's non-null keys.
-                let indices = sort_to_indices(
-                    stream_values.as_ref(),
-                    Some(SortOptions {
-                        descending: self.sort_option.descending,
-                        nulls_first: false,
-                    }),
-                    Some(1),
-                )?;
-                let stream_values = take(stream_values.as_ref(), &indices, None)?;
+                // Only the batch's extreme key is ever compared against the buffered side,
+                // so reduce the batch to that one key.
+                let stream_values =
+                    extreme_key(&stream_values, self.sort_option.descending)?;
 
                 self.mark_matched_buffered_rows(&stream_values)?;
             }
@@ -449,6 +437,26 @@ impl ExistencePWMJStream {
             }
         }
     }
+}
+
+/// Reduces `values` to a one-row array holding the batch's extreme compare key: the maximum
+/// when the batch's sort is `descending`, the minimum otherwise. Nulls are ignored, so that
+/// row is null only when every key in the batch is (or the batch is empty), which marks
+/// nothing.
+///
+/// Ordered the same way as [`JoinKeyComparator`]: both use IEEE 754 totalOrder for floats,
+/// and the comparator normalizes `-0.0` on either side of it.
+///
+/// Numeric, temporal, string, binary and boolean keys get a typed arrow kernel -- a linear
+/// scan that allocates nothing. Dictionary and nested keys fall to `min_max_batch_generic`, a
+/// `ScalarValue`-per-row comparator loop; specializing those is left to a follow-up.
+fn extreme_key(values: &ArrayRef, descending: bool) -> Result<ArrayRef> {
+    let extreme = if descending {
+        max_batch(values)?
+    } else {
+        min_batch(values)?
+    };
+    extreme.to_array_of_size(1)
 }
 
 impl RecordBatchStream for ExistencePWMJStream {
