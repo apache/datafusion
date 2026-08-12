@@ -1781,11 +1781,11 @@ explain select v from (values (1), (6), (10)) set_cmp_t(v) where v > any(select 
 ----
 logical_plan
 01)Projection: set_cmp_t.v
-02)--Filter: __correlated_sq_1.mark OR __correlated_sq_2.mark AND NOT __correlated_sq_3.mark AND Boolean(NULL)
-03)----LeftMark Join:  Filter: set_cmp_t.v > __correlated_sq_3.v IS TRUE
-04)------Filter: __correlated_sq_1.mark OR __correlated_sq_2.mark AND Boolean(NULL)
-05)--------LeftMark Join:  Filter: set_cmp_t.v > __correlated_sq_2.v IS NULL
-06)----------Filter: __correlated_sq_1.mark OR Boolean(NULL)
+02)--LeftMark Join:  Filter: set_cmp_t.v > __correlated_sq_3.v IS TRUE
+03)----Projection: set_cmp_t.v
+04)------LeftMark Join:  Filter: set_cmp_t.v > __correlated_sq_2.v IS NULL
+05)--------Projection: set_cmp_t.v
+06)----------Filter: __correlated_sq_1.mark
 07)------------LeftMark Join:  Filter: set_cmp_t.v > __correlated_sq_1.v IS TRUE
 08)--------------SubqueryAlias: set_cmp_t
 09)----------------Projection: column1 AS v
@@ -1794,14 +1794,14 @@ logical_plan
 12)----------------SubqueryAlias: set_cmp_s
 13)------------------Projection: column1 AS v
 14)--------------------Values: (Int64(5)), (Int64(NULL))
-15)----------SubqueryAlias: __correlated_sq_2
-16)------------SubqueryAlias: set_cmp_s
-17)--------------Projection: column1 AS v
-18)----------------Values: (Int64(5)), (Int64(NULL))
-19)------SubqueryAlias: __correlated_sq_3
-20)--------SubqueryAlias: set_cmp_s
-21)----------Projection: column1 AS v
-22)------------Values: (Int64(5)), (Int64(NULL))
+15)--------SubqueryAlias: __correlated_sq_2
+16)----------SubqueryAlias: set_cmp_s
+17)------------Projection: column1 AS v
+18)--------------Values: (Int64(5)), (Int64(NULL))
+19)----SubqueryAlias: __correlated_sq_3
+20)------SubqueryAlias: set_cmp_s
+21)--------Projection: column1 AS v
+22)----------Values: (Int64(5)), (Int64(NULL))
 
 # same-table `= ANY` / `<> ALL` must plan without
 # "duplicate unqualified field name mark".

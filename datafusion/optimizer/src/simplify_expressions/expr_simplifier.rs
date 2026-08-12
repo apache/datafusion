@@ -2412,7 +2412,7 @@ mod tests {
         array::{Int32Array, StructArray},
         datatypes::{FieldRef, Fields},
     };
-    use datafusion_common::{DFSchema, DFSchemaRef, ToDFSchema, assert_contains};
+    use datafusion_common::{DFSchemaRef, ToDFSchema, assert_contains};
     use datafusion_expr::{
         expr::WindowFunction,
         function::{
@@ -3060,8 +3060,6 @@ mod tests {
 
     #[test]
     fn test_simplify_composed_bitwise_xor() {
-        // XOR cancellation is only valid for non-nullable operands, so these
-        // algebraic tests use a non-nullable version of the expression schema.
         // with an even number of the column "c2"
         // c2 ^ ((c2 ^ (c2 | c1)) ^ (c1 & c2)) --> (c2 | c1) ^ (c1 & c2)
 
@@ -3081,7 +3079,7 @@ mod tests {
             bitwise_and(col("c1"), col("c2_non_null")),
         );
 
-        assert_eq!(simplify_with_non_nullable_schema(expr), expected);
+        assert_eq!(simplify(expr), expected);
 
         // with an odd number of the column "c2"
         // c2 ^ (c2 ^ (c2 | c1)) ^ ((c1 & c2) ^ c2) --> c2 ^ ((c2 | c1) ^ (c1 & c2))
@@ -3108,7 +3106,7 @@ mod tests {
             ),
         );
 
-        assert_eq!(simplify_with_non_nullable_schema(expr), expected);
+        assert_eq!(simplify(expr), expected);
 
         // with an even number of the column "c2"
         // ((c2 ^ (c2 | c1)) ^ (c1 & c2)) ^ c2 --> (c2 | c1) ^ (c1 & c2)
@@ -3129,7 +3127,7 @@ mod tests {
             bitwise_and(col("c1"), col("c2_non_null")),
         );
 
-        assert_eq!(simplify_with_non_nullable_schema(expr), expected);
+        assert_eq!(simplify(expr), expected);
 
         // with an odd number of the column "c2"
         // (c2 ^ (c2 | c1)) ^ ((c1 & c2) ^ c2) ^ c2 --> ((c2 | c1) ^ (c1 & c2)) ^ c2
@@ -3156,7 +3154,7 @@ mod tests {
             col("c2_non_null"),
         );
 
-        assert_eq!(simplify_with_non_nullable_schema(expr), expected);
+        assert_eq!(simplify(expr), expected);
     }
 
     #[test]
@@ -3276,10 +3274,6 @@ mod tests {
         let expected = lit(0i64);
 
         assert_eq!(simplify(expr), expected);
-
-        // Nullable inputs must remain nullable after XOR cancellation.
-        assert_no_change(col("c4").bitxor(col("c4")));
-        assert_no_change(col("c3").bitxor(col("c3")));
     }
 
     #[test]
@@ -3732,20 +3726,6 @@ mod tests {
 
     fn simplify(expr: Expr) -> Expr {
         try_simplify(expr).unwrap()
-    }
-
-    fn simplify_with_non_nullable_schema(expr: Expr) -> Expr {
-        let fields = expr_test_schema()
-            .fields()
-            .iter()
-            .map(|field| field.as_ref().clone().with_nullable(false))
-            .collect::<Vec<_>>();
-        let schema = Arc::new(
-            DFSchema::from_unqualified_fields(fields.into(), HashMap::new()).unwrap(),
-        );
-        ExprSimplifier::new(SimplifyContext::builder().with_schema(schema).build())
-            .simplify(expr)
-            .unwrap()
     }
 
     fn try_simplify_with_cycle_count(expr: Expr) -> Result<(Expr, u32)> {

@@ -948,21 +948,17 @@ physical_plan EmptyExec
 query TT
 EXPLAIN FORMAT INDENT SELECT * FROM t WHERE x < 5 AND (10 * NULL < x);
 ----
-logical_plan
-01)Filter: t.x < Int32(5) AND Boolean(NULL)
-02)--TableScan: t projection=[x]
-physical_plan
-01)FilterExec: x@0 < 5 AND NULL
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
+logical_plan EmptyRelation: rows=0
+physical_plan EmptyExec
 
 query TT
 EXPLAIN FORMAT INDENT SELECT * FROM t WHERE x < 5 OR (10 * NULL < x);
 ----
 logical_plan
-01)Filter: t.x < Int32(5) OR Boolean(NULL)
+01)Filter: t.x < Int32(5)
 02)--TableScan: t projection=[x]
 physical_plan
-01)FilterExec: x@0 < 5 OR NULL
+01)FilterExec: x@0 < 5
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
@@ -976,21 +972,17 @@ create table t(x int) as values (1), (2), (3);
 query TT
 explain select x from t where x IN (1,2,3) AND x IN (4,5);
 ----
-logical_plan
-01)Filter: t.x IS NULL AND Boolean(NULL)
-02)--TableScan: t projection=[x]
-physical_plan
-01)FilterExec: x@0 IS NULL AND NULL
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
+logical_plan EmptyRelation: rows=0
+physical_plan EmptyExec
 
 query TT
 explain select x from t where x NOT IN (1,2,3,4) OR x NOT IN (5,6,7,8);
 ----
 logical_plan
-01)Filter: t.x IS NOT NULL OR Boolean(NULL)
+01)Filter: t.x IS NOT NULL
 02)--TableScan: t projection=[x]
 physical_plan
-01)FilterExec: x@0 IS NOT NULL OR NULL
+01)FilterExec: x@0 IS NOT NULL
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
@@ -1006,12 +998,8 @@ physical_plan
 query TT
 explain select x from t where x NOT IN (1,2,3,4,5) AND x IN (1,2,3);
 ----
-logical_plan
-01)Filter: t.x IS NULL AND Boolean(NULL)
-02)--TableScan: t projection=[x]
-physical_plan
-01)FilterExec: x@0 IS NULL AND NULL
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
+logical_plan EmptyRelation: rows=0
+physical_plan EmptyExec
 
 query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression InSubquery\(InSubquery \{ expr: Literal\(Int64\(NULL\), None\), subquery: <subquery>, negated: false \}\)
 WITH empty AS (SELECT 10 WHERE false)
