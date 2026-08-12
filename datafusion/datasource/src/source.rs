@@ -33,7 +33,8 @@ use datafusion_physical_plan::metrics::{
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::stream::BatchSplitStream;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    ReplaceChildrenOptions,
 };
 use itertools::Itertools;
 
@@ -400,19 +401,30 @@ impl ExecutionPlan for DataSourceExec {
         Vec::new()
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
     fn apply_expressions(
         &self,
         f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Delegate to the underlying data source
         self.data_source.apply_expressions(f)
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        _: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(self)
     }
 
     /// Implementation of [`ExecutionPlan::repartitioned`] which relies upon the inner [`DataSource::repartitioned`].

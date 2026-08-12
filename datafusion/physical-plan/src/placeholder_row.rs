@@ -23,8 +23,9 @@ use crate::coop::cooperative;
 use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::memory::MemoryStream;
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    SendableRecordBatchStream, Statistics, common,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream, Statistics,
+    common,
 };
 
 use arrow::array::{ArrayRef, NullArray, RecordBatch, RecordBatchOptions};
@@ -145,11 +146,22 @@ impl ExecutionPlan for PlaceholderRowExec {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -250,16 +262,15 @@ impl PlaceholderRowExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test;
-    use crate::with_new_children_if_necessary;
+    use crate::{execution_plan::replace_children_if_necessary, test};
 
     #[test]
-    fn with_new_children() -> Result<()> {
+    fn replace_children() -> Result<()> {
         let schema = test::aggr_test_schema();
 
         let placeholder = Arc::new(PlaceholderRowExec::new(schema));
 
-        let placeholder_2 = with_new_children_if_necessary(
+        let placeholder_2 = replace_children_if_necessary(
             Arc::clone(&placeholder) as Arc<dyn ExecutionPlan>,
             vec![],
         )?;
@@ -267,7 +278,7 @@ mod tests {
 
         let too_many_kids = vec![placeholder_2];
         assert!(
-            with_new_children_if_necessary(placeholder, too_many_kids).is_err(),
+            replace_children_if_necessary(placeholder, too_many_kids).is_err(),
             "expected error when providing list of kids"
         );
         Ok(())
