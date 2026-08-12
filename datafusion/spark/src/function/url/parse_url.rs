@@ -18,8 +18,8 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, GenericStringBuilder, LargeStringArray, StringArray,
-    StringArrayType, StringViewArray,
+    Array, ArrayRef, AsArray, LargeStringArray, StringArray, StringArrayType,
+    StringViewArray, new_null_array,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{
@@ -272,20 +272,18 @@ pub fn spark_handled_parse_url(
             ),
         }
     } else {
-        // The 'key' argument is omitted, assume all values are null
-        // Create 'null' string array for 'key' argument
-        let mut builder: GenericStringBuilder<i32> = GenericStringBuilder::new();
-        for _ in 0..args[0].len() {
-            builder.append_null();
-        }
-        let key = builder.finish();
+        // The 'key' argument is omitted, assume all values are null.
+        // `new_null_array` allocates the null array outright, rather than
+        // appending one null per row through a builder.
+        let key_array = new_null_array(&DataType::Utf8, args[0].len());
+        let key = key_array.as_string::<i32>();
 
         match (url.data_type(), part.data_type()) {
             (DataType::Utf8, DataType::Utf8) => {
                 process_parse_url::<_, _, _, StringArray>(
                     as_string_array(url)?,
                     as_string_array(part)?,
-                    &key,
+                    key,
                     handler_err,
                     false,
                 )
@@ -294,7 +292,7 @@ pub fn spark_handled_parse_url(
                 process_parse_url::<_, _, _, StringViewArray>(
                     as_string_view_array(url)?,
                     as_string_view_array(part)?,
-                    &key,
+                    key,
                     handler_err,
                     false,
                 )
@@ -303,7 +301,7 @@ pub fn spark_handled_parse_url(
                 process_parse_url::<_, _, _, LargeStringArray>(
                     as_large_string_array(url)?,
                     as_large_string_array(part)?,
-                    &key,
+                    key,
                     handler_err,
                     false,
                 )
