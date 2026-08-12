@@ -201,9 +201,18 @@ where
     /// Process a slice of pre-computed hashes.
     /// The precision branch is hoisted outside the loop.
     pub(crate) fn add_hashed_slice(&mut self, hashes: &[u64]) {
-        let (p, q, p_mask) = self.hll_params();
-        for &hash in hashes {
-            hll_update_register(&mut self.registers, p, q, p_mask, hash);
+        if self.p == DEFAULT_HLL_P {
+            const P: usize = DEFAULT_HLL_P;
+            const Q: usize = 64 - DEFAULT_HLL_P;
+            const MASK: u64 = (1u64 << DEFAULT_HLL_P) - 1;
+            for &hash in hashes {
+                hll_update_register(&mut self.registers, P, Q, MASK, hash);
+            }
+        } else {
+            let (p, q, p_mask) = self.hll_params();
+            for &hash in hashes {
+                hll_update_register(&mut self.registers, p, q, p_mask, hash);
+            }
         }
     }
 
@@ -380,6 +389,21 @@ where
     T: Hash,
 {
     fn extend<S: IntoIterator<Item = T>>(&mut self, iter: S) {
+        if self.p == DEFAULT_HLL_P {
+            const P: usize = DEFAULT_HLL_P;
+            const Q: usize = 64 - DEFAULT_HLL_P;
+            const MASK: u64 = (1u64 << DEFAULT_HLL_P) - 1;
+            for elem in iter {
+                hll_update_register(
+                    &mut self.registers,
+                    P,
+                    Q,
+                    MASK,
+                    HLL_HASH_STATE.hash_one(&elem),
+                );
+            }
+            return;
+        }
         let (p, q, p_mask) = self.hll_params();
         for elem in iter {
             hll_update_register(
@@ -398,6 +422,21 @@ where
     T: 'a + Hash + ?Sized,
 {
     fn extend<S: IntoIterator<Item = &'a T>>(&mut self, iter: S) {
+        if self.p == DEFAULT_HLL_P {
+            const P: usize = DEFAULT_HLL_P;
+            const Q: usize = 64 - DEFAULT_HLL_P;
+            const MASK: u64 = (1u64 << DEFAULT_HLL_P) - 1;
+            for elem in iter {
+                hll_update_register(
+                    &mut self.registers,
+                    P,
+                    Q,
+                    MASK,
+                    HLL_HASH_STATE.hash_one(elem),
+                );
+            }
+            return;
+        }
         let (p, q, p_mask) = self.hll_params();
         for elem in iter {
             hll_update_register(
