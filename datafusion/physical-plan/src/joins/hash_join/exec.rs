@@ -1385,7 +1385,7 @@ impl ExecutionPlan for HashJoinExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
         match options.children_properties {
-            ChildrenPropertiesMode::SameProperties => {
+            ChildrenPropertiesMode::Keep => {
                 self.builder().with_new_children(children)?.build_exec()
             }
             ChildrenPropertiesMode::Recompute => self
@@ -1402,9 +1402,7 @@ impl ExecutionPlan for HashJoinExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.replace_children(
             children,
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )
     }
 
@@ -2564,9 +2562,7 @@ mod tests {
         ) -> Result<Arc<dyn ExecutionPlan>> {
             self.replace_children(
                 children,
-                ReplaceChildrenOptions {
-                    children_properties: ChildrenPropertiesMode::Recompute,
-                },
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
             )
         }
 

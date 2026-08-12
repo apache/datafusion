@@ -182,7 +182,7 @@ impl ExecutionPlan for GlobalLimitExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
         match options.children_properties {
-            ChildrenPropertiesMode::SameProperties => Ok(Arc::new(Self {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
                 input: children.swap_remove(0),
                 metrics: ExecutionPlanMetricsSet::new(),
                 ..Self::clone(&*self)
@@ -202,9 +202,7 @@ impl ExecutionPlan for GlobalLimitExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.replace_children(
             children,
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )
     }
 
@@ -214,9 +212,7 @@ impl ExecutionPlan for GlobalLimitExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.replace_children(
             children,
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::SameProperties,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
         )
     }
 
@@ -451,7 +447,7 @@ impl ExecutionPlan for LocalLimitExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
         match options.children_properties {
-            ChildrenPropertiesMode::SameProperties => Ok(Arc::new(Self {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
                 input: children.swap_remove(0),
                 metrics: ExecutionPlanMetricsSet::new(),
                 ..Self::clone(&*self)
@@ -471,9 +467,7 @@ impl ExecutionPlan for LocalLimitExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.replace_children(
             children,
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )
     }
 
@@ -483,9 +477,7 @@ impl ExecutionPlan for LocalLimitExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.replace_children(
             children,
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::SameProperties,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
         )
     }
 
@@ -935,9 +927,7 @@ mod tests {
         global.set_required_ordering(ordering.clone());
         let rebuilt = Arc::new(global).replace_children(
             vec![test::scan_partitioned(1)],
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )?;
         let rebuilt = rebuilt.downcast_ref::<GlobalLimitExec>().unwrap();
         assert_eq!(rebuilt.required_ordering(), &ordering);
@@ -946,9 +936,7 @@ mod tests {
         local.set_required_ordering(ordering.clone());
         let rebuilt = Arc::new(local).replace_children(
             vec![test::scan_partitioned(1)],
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )?;
         let rebuilt = rebuilt.downcast_ref::<LocalLimitExec>().unwrap();
         assert_eq!(rebuilt.required_ordering(), &ordering);

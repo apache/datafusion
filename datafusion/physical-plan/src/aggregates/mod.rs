@@ -2039,7 +2039,7 @@ impl ExecutionPlan for AggregateExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
         match options.children_properties {
-            ChildrenPropertiesMode::SameProperties => Ok(Arc::new(Self {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
                 input: children.swap_remove(0),
                 metrics: ExecutionPlanMetricsSet::new(),
                 ..Self::clone(&*self)
@@ -2067,9 +2067,7 @@ impl ExecutionPlan for AggregateExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.replace_children(
             children,
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )
     }
 
@@ -2116,9 +2114,7 @@ impl ExecutionPlan for AggregateExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.replace_children(
             children,
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::SameProperties,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
         )
     }
 
@@ -3717,9 +3713,7 @@ mod tests {
         ) -> Result<Arc<dyn ExecutionPlan>> {
             self.replace_children(
                 children,
-                ReplaceChildrenOptions {
-                    children_properties: ChildrenPropertiesMode::Recompute,
-                },
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
             )
         }
 
@@ -5066,9 +5060,7 @@ mod tests {
         )?);
         let new_agg = Arc::clone(&aggregate_exec).replace_children(
             vec![blocking_exec],
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )?;
         assert_eq!(new_agg.schema(), aggregate_exec.schema());
         Ok(())

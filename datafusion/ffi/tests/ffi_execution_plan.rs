@@ -140,9 +140,7 @@ mod tests {
 
         let child_plan = child_plan.replace_children(
             vec![grandchild_plan],
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )?;
 
         unsafe {
@@ -160,9 +158,7 @@ mod tests {
 
         let parent_plan = generate_local_plan().replace_children(
             vec![child_plan],
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )?;
 
         // Adding the grandchild beneath this FFI plan should get the runtime passed down.

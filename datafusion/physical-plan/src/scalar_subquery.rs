@@ -196,9 +196,7 @@ impl ExecutionPlan for ScalarSubqueryExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.replace_children(
             children,
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )
     }
 
@@ -492,9 +490,7 @@ mod tests {
         ) -> Result<Arc<dyn ExecutionPlan>> {
             self.replace_children(
                 children,
-                ReplaceChildrenOptions {
-                    children_properties: ChildrenPropertiesMode::Recompute,
-                },
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
             )
         }
 

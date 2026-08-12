@@ -1124,9 +1124,7 @@ impl ExecutionPlan for UnboundedExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.replace_children(
             children,
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )
     }
 
@@ -1241,9 +1239,7 @@ impl ExecutionPlan for StatisticsExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.replace_children(
             children,
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )
     }
 

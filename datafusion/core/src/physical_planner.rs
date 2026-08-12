@@ -4951,9 +4951,7 @@ mod tests {
         ) -> Result<Arc<dyn ExecutionPlan>> {
             self.replace_children(
                 children,
-                ReplaceChildrenOptions {
-                    children_properties: ChildrenPropertiesMode::Recompute,
-                },
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
             )
         }
 
@@ -5129,9 +5127,7 @@ digraph {
         ) -> Result<Arc<dyn ExecutionPlan>> {
             self.replace_children(
                 children,
-                ReplaceChildrenOptions {
-                    children_properties: ChildrenPropertiesMode::Recompute,
-                },
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
             )
         }
         fn schema(&self) -> SchemaRef {
@@ -5196,9 +5192,7 @@ digraph {
         ) -> Result<Arc<dyn ExecutionPlan>> {
             self.replace_children(
                 children,
-                ReplaceChildrenOptions {
-                    children_properties: ChildrenPropertiesMode::Recompute,
-                },
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
             )
         }
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -5258,15 +5252,11 @@ digraph {
             vec![
                 Arc::clone(&child).replace_children(
                     vec![Arc::clone(&child)],
-                    ReplaceChildrenOptions {
-                        children_properties: ChildrenPropertiesMode::Recompute,
-                    },
+                    ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
                 )?,
                 Arc::clone(&child),
             ],
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )?;
 
         // Test: check should pass with same schema
@@ -5303,15 +5293,11 @@ digraph {
             vec![
                 Arc::clone(&child).replace_children(
                     vec![Arc::clone(&failing_node)],
-                    ReplaceChildrenOptions {
-                        children_properties: ChildrenPropertiesMode::Recompute,
-                    },
+                    ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
                 )?,
                 Arc::clone(&child),
             ],
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )?;
         let result = OptimizationInvariantChecker::new(&rule)
             .check(&invalid_plan, &ok_plan.schema());
@@ -5358,9 +5344,7 @@ digraph {
         ) -> Result<Arc<dyn ExecutionPlan>> {
             self.replace_children(
                 children,
-                ReplaceChildrenOptions {
-                    children_properties: ChildrenPropertiesMode::Recompute,
-                },
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
             )
         }
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -5413,15 +5397,11 @@ digraph {
             vec![
                 Arc::clone(&child).replace_children(
                     vec![Arc::clone(&failing_node)],
-                    ReplaceChildrenOptions {
-                        children_properties: ChildrenPropertiesMode::Recompute,
-                    },
+                    ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
                 )?,
                 Arc::clone(&child),
             ],
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )?;
         let expected_err = InvariantChecker(InvariantLevel::Executable)
             .check(&plan)

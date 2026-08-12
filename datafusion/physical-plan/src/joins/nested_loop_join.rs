@@ -581,7 +581,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
         match options.children_properties {
-            ChildrenPropertiesMode::SameProperties => {
+            ChildrenPropertiesMode::Keep => {
                 let left = children.swap_remove(0);
                 let right = children.swap_remove(0);
                 Ok(Arc::new(Self {
@@ -617,9 +617,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.replace_children(
             children,
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )
     }
 
@@ -629,9 +627,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.replace_children(
             children,
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::SameProperties,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
         )
     }
 

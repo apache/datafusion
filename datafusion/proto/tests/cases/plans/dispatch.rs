@@ -88,9 +88,7 @@ impl ExecutionPlan for DowncastDelegatingExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let inner = Arc::clone(&self.inner).replace_children(
             children,
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )?;
         Ok(Arc::new(Self::new(inner)))
     }
@@ -101,9 +99,7 @@ impl ExecutionPlan for DowncastDelegatingExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.replace_children(
             children,
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )
     }
 

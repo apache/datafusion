@@ -1571,7 +1571,7 @@ impl ExecutionPlan for RepartitionExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
         match options.children_properties {
-            ChildrenPropertiesMode::SameProperties => Ok(Arc::new(Self {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
                 input: children.swap_remove(0),
                 metrics: ExecutionPlanMetricsSet::new(),
                 state: Default::default(),
@@ -1596,9 +1596,7 @@ impl ExecutionPlan for RepartitionExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.replace_children(
             children,
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )
     }
 
@@ -1608,9 +1606,7 @@ impl ExecutionPlan for RepartitionExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.replace_children(
             children,
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::SameProperties,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
         )
     }
 
@@ -3264,9 +3260,7 @@ mod tests {
         ) -> Result<Arc<dyn ExecutionPlan>> {
             self.replace_children(
                 children,
-                ReplaceChildrenOptions {
-                    children_properties: ChildrenPropertiesMode::Recompute,
-                },
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
             )
         }
 

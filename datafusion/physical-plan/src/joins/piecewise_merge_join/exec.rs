@@ -525,7 +525,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         validate_child_count!(self, children);
         match options.children_properties {
-            ChildrenPropertiesMode::SameProperties => {
+            ChildrenPropertiesMode::Keep => {
                 let buffered = children.swap_remove(0);
                 let streamed = children.swap_remove(0);
                 Ok(Arc::new(Self {
@@ -571,9 +571,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.replace_children(
             children,
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )
     }
 
@@ -583,9 +581,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.replace_children(
             children,
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::SameProperties,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
         )
     }
 
@@ -594,9 +590,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         let streamed = Arc::clone(&self.streamed);
         self.replace_children(
             vec![buffered, streamed],
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::SameProperties,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
         )
     }
 

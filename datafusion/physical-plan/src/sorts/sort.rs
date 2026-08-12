@@ -1341,15 +1341,11 @@ impl ExecutionPlan for SortExec {
         match has_same_children_properties(self.as_ref(), &children)? {
             true => self.replace_children(
                 children,
-                ReplaceChildrenOptions {
-                    children_properties: ChildrenPropertiesMode::SameProperties,
-                },
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
             ),
             false => self.replace_children(
                 children,
-                ReplaceChildrenOptions {
-                    children_properties: ChildrenPropertiesMode::Recompute,
-                },
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
             ),
         }
     }
@@ -1824,9 +1820,7 @@ mod tests {
         ) -> Result<Arc<dyn ExecutionPlan>> {
             self.replace_children(
                 children,
-                ReplaceChildrenOptions {
-                    children_properties: ChildrenPropertiesMode::Recompute,
-                },
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
             )
         }
 

@@ -151,9 +151,7 @@ fn roundtrip_limit_required_ordering_reaches_data_source() -> Result<()> {
         // Child replacement must not erase the decoded ordering before pushdown.
         let rebuilt = decoded.replace_children(
             vec![make_scan()],
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )?;
 
         let optimized =

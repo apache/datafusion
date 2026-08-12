@@ -260,7 +260,7 @@ impl ExecutionPlan for MyExecPlan {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ReplaceChildrenOptions { children_properties: ChildrenPropertiesMode::Recompute })
+        self.replace_children(children, ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute))
     }
 
     fn execute(
@@ -778,7 +778,7 @@ impl DatePartitionedTable {
 #         self: Arc<Self>,
 #         children: Vec<Arc<dyn ExecutionPlan>>,
 #     ) -> Result<Arc<dyn ExecutionPlan>> {
-#         self.replace_children(children, ReplaceChildrenOptions { children_properties: ChildrenPropertiesMode::Recompute })
+#         self.replace_children(children, ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute))
 #     }
 #
 #     fn execute(&self, _: usize, _: Arc<TaskContext>) -> Result<SendableRecordBatchStream> { todo!() }
@@ -900,7 +900,7 @@ impl ExecutionPlan for CountingExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(children, ReplaceChildrenOptions { children_properties: ChildrenPropertiesMode::Recompute })
+        self.replace_children(children, ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute))
     }
 
     fn execute(

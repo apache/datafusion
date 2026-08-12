@@ -187,9 +187,7 @@ unsafe extern "C" fn with_new_children_fn_wrapper(
     let children = sresult_return!(children);
     let new_plan = sresult_return!(inner_plan.replace_children(
         children,
-        ReplaceChildrenOptions {
-            children_properties: ChildrenPropertiesMode::Recompute
-        }
+        ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute)
     ));
 
     FFI_Result::Ok(FFI_ExecutionPlan::new(new_plan, runtime))
@@ -323,9 +321,7 @@ fn pass_runtime_to_children(
         Arc::clone(plan)
             .replace_children(
                 children,
-                ReplaceChildrenOptions {
-                    children_properties: ChildrenPropertiesMode::Recompute,
-                },
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
             )
             .map(Some)
     } else {
@@ -486,9 +482,7 @@ impl ExecutionPlan for ForeignExecutionPlan {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.replace_children(
             children,
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )
     }
 
@@ -667,9 +661,7 @@ pub mod tests {
         ) -> Result<Arc<dyn ExecutionPlan>> {
             self.replace_children(
                 children,
-                ReplaceChildrenOptions {
-                    children_properties: ChildrenPropertiesMode::Recompute,
-                },
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
             )
         }
 
@@ -817,9 +809,7 @@ pub mod tests {
 
         let parent_foreign = parent_foreign.replace_children(
             vec![child_foreign],
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )?;
         assert_eq!(parent_foreign.children().len(), 1);
 
@@ -832,9 +822,7 @@ pub mod tests {
         let parent_plan = Arc::new(EmptyExec::new(Arc::clone(&schema)));
         let parent_plan = parent_plan.replace_children(
             vec![child_foreign],
-            ReplaceChildrenOptions {
-                children_properties: ChildrenPropertiesMode::Recompute,
-            },
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
         )?;
         let mut parent_local = FFI_ExecutionPlan::new(parent_plan, None);
         parent_local.library_marker_id = crate::mock_foreign_marker_id;
