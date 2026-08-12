@@ -35,9 +35,10 @@ use std::{
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 
 use futures::Stream;
 use tokio::sync::Barrier;
@@ -124,6 +125,9 @@ pub struct MockExec {
     /// if true (the default), sends data using a separate task to ensure the
     /// batches are not available without this stream yielding first
     use_task: bool,
+    /// if true, report unknown statistics instead of deriving them from
+    /// `data` (which propagates any planted errors at planning time)
+    unknown_statistics: bool,
     cache: Arc<PlanProperties>,
 }
 
@@ -141,6 +145,7 @@ impl MockExec {
             data,
             schema,
             use_task: true,
+            unknown_statistics: false,
             cache: Arc::new(cache),
         }
     }
@@ -150,6 +155,17 @@ impl MockExec {
     /// not immediately ready
     pub fn with_use_task(mut self, use_task: bool) -> Self {
         self.use_task = use_task;
+        self
+    }
+
+    /// Report unknown statistics rather than computing them from `data`.
+    ///
+    /// By default statistics are derived from `data`, which propagates any
+    /// planted errors when statistics are requested during planning (for
+    /// example when a parent node computes its properties). Use this when a
+    /// planted error should only surface at execution time.
+    pub fn with_unknown_statistics(mut self) -> Self {
+        self.unknown_statistics = true;
         self
     }
 
@@ -193,6 +209,13 @@ impl ExecutionPlan for MockExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
@@ -248,13 +271,14 @@ impl ExecutionPlan for MockExec {
         }
     }
 
-    // Panics if one of the batches is an error
+    // Errors if one of the batches is an error, unless
+    // `with_unknown_statistics` was used
     fn statistics_from_inputs(
         &self,
         _input_stats: &[Arc<Statistics>],
         args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
-        if args.partition().is_some() {
+        if self.unknown_statistics || args.partition().is_some() {
             return Ok(Arc::new(Statistics::new_unknown(&self.schema)));
         }
         let data: Result<Vec<_>> = self
@@ -432,6 +456,13 @@ impl ExecutionPlan for BarrierExec {
         unimplemented!()
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     /// Returns a stream which yields data
     fn execute(
         &self,
@@ -568,6 +599,13 @@ impl ExecutionPlan for ErrorExec {
         unimplemented!()
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     /// Returns a stream which yields data
     fn execute(
         &self,
@@ -645,6 +683,13 @@ impl ExecutionPlan for StatisticsExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(
@@ -756,6 +801,13 @@ impl ExecutionPlan for BlockingExec {
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         internal_err!("Children cannot be replaced in {self:?}")
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn execute(
@@ -891,6 +943,13 @@ impl ExecutionPlan for PanicExec {
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         // this is a leaf node and has no children
         vec![]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn with_new_children(

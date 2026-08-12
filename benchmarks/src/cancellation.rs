@@ -37,8 +37,9 @@ use datafusion::prelude::*;
 use datafusion_common::instant::Instant;
 use futures::TryStreamExt;
 use object_store::ObjectStore;
+use object_store::buffered::BufWriter;
 use parquet::arrow::AsyncArrowWriter;
-use parquet::arrow::async_writer::ParquetObjectWriter;
+use rand::Rng;
 use rand::distr::Alphanumeric;
 use rand::prelude::*;
 use tokio::runtime::Runtime;
@@ -301,7 +302,7 @@ async fn generate_data(
         });
         let to_write = RecordBatch::try_from_iter(data).unwrap();
         let path = object_store::path::Path::from(format!("{file_num}.parquet").as_str());
-        let object_store_writer = ParquetObjectWriter::new(Arc::clone(&store) as _, path);
+        let object_store_writer = BufWriter::new(Arc::clone(&store) as _, path);
 
         let mut writer =
             AsyncArrowWriter::try_new(object_store_writer, to_write.schema(), None)?;

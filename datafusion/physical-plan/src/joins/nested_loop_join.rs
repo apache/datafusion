@@ -61,6 +61,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::DataType;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinSide, NullEquality, Result, ScalarValue, Statistics, arrow_err,
     assert_eq_or_internal_err, internal_datafusion_err, internal_err, project_schema,
@@ -560,6 +561,17 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.left, &self.right]
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn crate::PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to join filter expressions if present
+        crate::apply_expression_roots(
+            self.filter.iter().map(|filter| filter.expression()),
+            f,
+        )
     }
 
     fn with_new_children(

@@ -18,10 +18,9 @@
 //! Protobuf conversions for the file-scan leaf types owned by this crate:
 //! [`FileRange`], [`PartitionedFile`] and [`FileGroup`].
 //!
-//! These are the single copy of that wire logic. `datafusion-proto`'s
-//! `TryFromProto` implementations for the same types are thin shims that
-//! delegate here, so the format cannot drift between the central serializer and
-//! the per-source `try_to_proto` hooks.
+//! These are the single copy of that wire logic, used both by the central
+//! serializer in `datafusion-proto` and by the per-source `try_to_proto` hooks,
+//! so the format cannot drift between them.
 //!
 //! None of these conversions need a codec or an encode/decode context: every
 //! field is plain data or goes through `datafusion-proto-common`. That is why
@@ -205,6 +204,53 @@ mod tests {
     }
 
     #[test]
+    fn partitioned_file_path_roundtrip_percent_encoded() -> Result<()> {
+        // The wire format carries the *encoded* path, so a location that already
+        // contains percent escapes must survive without a second round of
+        // encoding or decoding.
+        let path_str = "foo/foo%2Fbar/baz%252Fqux";
+        let pf = PartitionedFile::new_from_meta(ObjectMeta {
+            location: Path::parse(path_str)?,
+            last_modified: Utc.timestamp_nanos(1_000),
+            size: 42,
+            e_tag: None,
+            version: None,
+        });
+
+        let encoded = protobuf::PartitionedFile::try_from(&pf)?;
+        assert_eq!(encoded.path, path_str);
+
+        let decoded = PartitionedFile::try_from(&encoded)?;
+        assert_eq!(decoded.object_meta.location.as_ref(), path_str);
+        assert_eq!(decoded.object_meta.location, pf.object_meta.location);
+        Ok(())
+    }
+
+    #[test]
+    fn partitioned_file_arrow_schema_roundtrip_preserves_metadata() -> Result<()> {
+        use std::collections::HashMap;
+
+        let arrow_schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("value", DataType::Utf8, true).with_metadata(HashMap::from([
+                    ("field_meta".to_string(), "field_value".to_string()),
+                ])),
+            ],
+            HashMap::from([("schema_meta".to_string(), "schema_value".to_string())]),
+        ));
+        let pf = PartitionedFile::new("foo/bar.parquet", 10)
+            .with_arrow_schema(Arc::clone(&arrow_schema));
+
+        let encoded = protobuf::PartitionedFile::try_from(&pf)?;
+        assert!(encoded.arrow_schema.is_some());
+
+        let decoded = PartitionedFile::try_from(&encoded)?;
+        assert_eq!(decoded.arrow_schema.as_deref(), Some(arrow_schema.as_ref()));
+        Ok(())
+    }
+
+    #[test]
     fn partitioned_file_from_proto_rejects_invalid_path() {
         let proto = protobuf::PartitionedFile {
             path: "foo//bar.parquet".to_string(),
@@ -216,6 +262,25 @@ mod tests {
             err.to_string().contains("Invalid object_store path"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn file_group_from_slice_matches_file_group() -> Result<()> {
+        // `protobuf::FileGroup: TryFrom<&[T]>` lives in `datafusion-proto-models`,
+        // generic over the element so that crate never names `PartitionedFile`.
+        // This is the caller-visible half: the bound resolves via
+        // `TryFrom<&PartitionedFile> for protobuf::PartitionedFile` above.
+        let files = vec![
+            PartitionedFile::new("a.parquet", 1),
+            PartitionedFile::new("b.parquet", 2),
+        ];
+
+        let from_slice = protobuf::FileGroup::try_from(&files[..])?;
+        let from_group = protobuf::FileGroup::try_from(&FileGroup::new(files))?;
+
+        assert_eq!(from_slice, from_group);
+        assert_eq!(from_slice.files.len(), 2);
+        Ok(())
     }
 
     #[test]
