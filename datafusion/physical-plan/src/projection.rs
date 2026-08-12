@@ -35,7 +35,7 @@ use crate::filter_pushdown::{
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{DisplayFormatType, ExecutionPlan, PhysicalExpr, check_if_same_properties};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -138,6 +138,15 @@ impl ProjectionExec {
     {
         let input_schema = input.schema();
         let expr_arc = expr.into_iter().map(Into::into).collect::<Arc<_>>();
+        let mut output_names = HashSet::with_capacity(expr_arc.len());
+        for expr in expr_arc.iter() {
+            if !output_names.insert(expr.alias.as_str()) {
+                return plan_err!(
+                    "ProjectionExec requires unique output column names, but found duplicate name '{}'",
+                    expr.alias
+                );
+            }
+        }
         let projection = ProjectionExprs::from_expressions(expr_arc);
         let projector = projection.make_projector(&input_schema)?;
         Self::try_from_projector(projector, input)
@@ -1305,7 +1314,7 @@ fn collect_column_indices(exprs: &[ProjectionExpr]) -> Vec<usize> {
     // expression tree to collect column references in traversal order.
     // This allows the embedded projection to match the desired output
     // column order, avoiding a residual ProjectionExec.
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     let mut indices = Vec::new();
     for proj_expr in exprs {
         if let Some(col) = proj_expr.expr.downcast_ref::<Column>() {
@@ -1682,6 +1691,28 @@ mod tests {
         )
         // expect this to succeed
         .unwrap();
+    }
+
+    #[test]
+    fn projection_rejects_duplicate_output_names() -> Result<()> {
+        let input = test::scan_partitioned(1);
+        let schema = input.schema();
+        let expr = col("i", &schema)?;
+
+        let error = ProjectionExec::try_new(
+            [
+                (Arc::clone(&expr), "duplicate".to_string()),
+                (expr, "duplicate".to_string()),
+            ],
+            input,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.strip_backtrace(),
+            "Error during planning: ProjectionExec requires unique output column names, but found duplicate name 'duplicate'"
+        );
+        Ok(())
     }
 
     #[test]
