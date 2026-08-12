@@ -309,9 +309,7 @@ enum GroupHll {
 /// the given precision.
 fn fold_sparse_to_hll(hashes: &[u64], p: usize) -> HyperLogLog<u8> {
     let mut hll = HyperLogLog::<u8>::with_precision(p);
-    for &h in hashes {
-        hll.add_hashed(h);
-    }
+    hll.add_hashed_slice(hashes);
     hll
 }
 
@@ -407,9 +405,7 @@ impl GroupHll {
             GroupHll::Sparse(v) => {
                 let cap_before = v.capacity();
                 let mut hll = other.clone();
-                for &h in v.iter() {
-                    hll.add_hashed(h);
-                }
+                hll.add_hashed_slice(v);
                 let num_registers = 1_usize << p;
                 *self = GroupHll::Dense(Box::new(hll));
                 (num_registers as isize) - ((cap_before * size_of::<u64>()) as isize)
