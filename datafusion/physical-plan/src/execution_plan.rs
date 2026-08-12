@@ -267,14 +267,18 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// joins).
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>>;
 
-    /// Returns a clone of the existing plan with the children replaced, skipping
-    /// recomputation of plan properties if possible as indicated by the options.
-    #[expect(deprecated)]
+    /// Returns a clone of the existing plan with the children replaced,
+    /// skipping recomputation of plan properties when the options indicate
+    /// the new children's properties are unchanged.
+    ///
+    /// Callers should typically call [`replace_children_if_necessary`] and
+    /// not invoke this method directly.
     fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
         options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        #[expect(deprecated)]
         match options.children_properties {
             ChildrenPropertiesMode::SameProperties => {
                 self.with_new_children_and_same_properties(children)
@@ -347,8 +351,85 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion>;
 
-    /// Returns a new `ExecutionPlan` where all existing children were replaced
-    /// by the `children`, in order
+    /// Deprecated.
+    ///
+    /// DataFusion will remove this method in the future in favor of
+    /// [`ExecutionPlan::replace_children`].
+    ///
+    /// Note that this method is still required by the trait; implementations
+    /// should delegate to [`ExecutionPlan::replace_children`] with
+    /// [`ChildrenPropertiesMode::Recompute`].
+    ///
+    /// # Example Implementation
+    /// ```
+    /// # #![allow(deprecated)]
+    /// # use std::fmt;
+    /// # use std::sync::Arc;
+    /// # use datafusion_common::Result;
+    /// # use datafusion_common::tree_node::TreeNodeRecursion;
+    /// # use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+    /// # use datafusion_physical_expr::PhysicalExpr;
+    /// # use datafusion_physical_plan::{
+    /// #     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
+    /// #     PlanProperties, ReplaceChildrenOptions,
+    /// # };
+    /// # #[derive(Debug)]
+    /// # struct MyExec {
+    /// #     input: Arc<dyn ExecutionPlan>,
+    /// # }
+    /// # impl DisplayAs for MyExec {
+    /// #     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+    /// #         write!(f, "MyExec")
+    /// #     }
+    /// # }
+    /// impl ExecutionPlan for MyExec {
+    ///     // ...
+    /// #    fn name(&self) -> &'static str {
+    /// #        "MyExec"
+    /// #    }
+    /// #    fn properties(&self) -> &Arc<PlanProperties> {
+    /// #        self.input.properties()
+    /// #    }
+    /// #    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+    /// #        vec![&self.input]
+    /// #    }
+    /// #    fn apply_expressions(
+    /// #        &self,
+    /// #        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    /// #    ) -> Result<TreeNodeRecursion> {
+    /// #        Ok(TreeNodeRecursion::Continue)
+    /// #    }
+    /// #    fn execute(
+    /// #        &self,
+    /// #        _partition: usize,
+    /// #        _context: Arc<TaskContext>,
+    /// #    ) -> Result<SendableRecordBatchStream> {
+    /// #        unimplemented!()
+    /// #    }
+    ///     fn replace_children(
+    ///         self: Arc<Self>,
+    ///         mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ///         _options: ReplaceChildrenOptions,
+    ///     ) -> Result<Arc<dyn ExecutionPlan>> {
+    ///         Ok(Arc::new(MyExec {
+    ///             input: children.swap_remove(0),
+    ///         }))
+    ///     }
+    ///
+    ///     fn with_new_children(
+    ///         self: Arc<Self>,
+    ///         children: Vec<Arc<dyn ExecutionPlan>>,
+    ///     ) -> Result<Arc<dyn ExecutionPlan>> {
+    ///         // call into `replace_children` with `ReplaceChildrenOptions`
+    ///         self.replace_children(
+    ///             children,
+    ///             ReplaceChildrenOptions {
+    ///                 children_properties: ChildrenPropertiesMode::Recompute,
+    ///             },
+    ///         )
+    ///     }
+    /// }
+    /// ```
     #[deprecated(
         since = "55.0.0",
         note = "Use `ExecutionPlan::replace_children` with `ReplaceChildrenOptions`"
@@ -358,20 +439,7 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
-    /// Fast-path used by [`replace_children_if_necessary`] when the new
-    /// `children` are known to have the same [`PlanProperties`] as the current
-    /// children. Implementations should swap the children in without
-    /// recomputing this plan's `PlanProperties` (typically by cloning `self`
-    /// and replacing the child pointers).
-    ///
-    /// The default implementation falls back to
-    /// [`ExecutionPlan::with_new_children`] which is always correct but
-    /// forfeits the fast-path: implementations that own an expensive
-    /// `PlanProperties` (e.g. projection mapping, complex equivalence
-    /// classes) should override this method.
-    ///
-    /// Callers should route through [`replace_children_if_necessary`] and
-    /// not invoke this method directly.
+    /// Deprecated. Implement [`ExecutionPlan::replace_children`] instead.
     #[deprecated(
         since = "55.0.0",
         note = "Use `ExecutionPlan::replace_children` with `ReplaceChildrenOptions`"
@@ -966,7 +1034,7 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     }
 }
 
-/// Options used when replacing children.
+/// Options for [`ExecutionPlan::replace_children`]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReplaceChildrenOptions {
     /// Describes how plan properties should be handled for the replacement
@@ -975,6 +1043,8 @@ pub struct ReplaceChildrenOptions {
 }
 
 /// Indicates whether the plan properties of the new children must be recomputed.
+///
+/// Part of [`ReplaceChildrenOptions`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChildrenPropertiesMode {
     /// The plan properties of the new children are identical to the properties
