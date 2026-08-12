@@ -938,6 +938,67 @@ the variant, dereference the box with <code class="docutils literal notranslate"
 details, including the per-variant size breakdown and benchmark
 results.</p>
 </section>
+<section id="executionplan-with-new-children-and-executionplan-with-new-children-and-same-properties-deprecated">
+<h3><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::with_new_children</span></code> and <code class="docutils literal notranslate"><span class="pre">ExecutionPlan::with_new_children_and_same_properties</span></code> deprecated<a class="headerlink" href="#executionplan-with-new-children-and-executionplan-with-new-children-and-same-properties-deprecated" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">with_new_children</span></code> and <code class="docutils literal notranslate"><span class="pre">with_new_children_and_same_properties</span></code> have been
+deprecated. These methods are used to replace the child plans of an
+<code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> while leaving the plan otherwise identical.</p>
+<p><code class="docutils literal notranslate"><span class="pre">with_new_children_if_necessary</span></code> has also been deprecated in favor of
+<code class="docutils literal notranslate"><span class="pre">replace_children_if_necessary</span></code> for consistency in naming.</p>
+<p>As noted <a class="reference external" href="https://github.com/apache/datafusion/pull/23332#discussion_r3554897693">here</a>,
+while the addition of <code class="docutils literal notranslate"><span class="pre">with_new_children_and_same_properties</span></code> has the benefit
+of skipping potentially expensive computation in the case that replacement children
+have the same properties as the original children, it widens the API surface area
+of <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> in a way that could be confusing for users.</p>
+<p>Thus, to rectify this, we unify these methods by introducing <code class="docutils literal notranslate"><span class="pre">replace_children</span></code>.
+<code class="docutils literal notranslate"><span class="pre">replace_children</span></code> solves this problem by taking <code class="docutils literal notranslate"><span class="pre">ReplaceChildrenOptions</span></code>,
+which includes a <code class="docutils literal notranslate"><span class="pre">ChildrenPropertiesMode</span></code>. The mode has two variants,
+<code class="docutils literal notranslate"><span class="pre">Keep</span></code> and <code class="docutils literal notranslate"><span class="pre">Recompute</span></code>, which tell <code class="docutils literal notranslate"><span class="pre">replace_children</span></code> whether plan
+properties can be reused or need to be recomputed.</p>
+<p>This method is called from <code class="docutils literal notranslate"><span class="pre">replace_children_if_necessary</span></code>, which is the
+standard entry point that should be used for replacing the children of a node.</p>
+<p><strong>Migration guide:</strong></p>
+<p>To migrate from <code class="docutils literal notranslate"><span class="pre">with_new_children</span></code> and <code class="docutils literal notranslate"><span class="pre">with_new_children_and_same_properties</span></code>
+to <code class="docutils literal notranslate"><span class="pre">replace_children</span></code>, it is recommended to implement <code class="docutils literal notranslate"><span class="pre">replace_children</span></code> with
+a <code class="docutils literal notranslate"><span class="pre">match</span></code> statement matching on the <code class="docutils literal notranslate"><span class="pre">ChildrenPropertiesMode</span></code>. In the case that
+the properties match the children, <code class="docutils literal notranslate"><span class="pre">ChildrenPropertiesMode::Keep</span></code>,
+follow the body of <code class="docutils literal notranslate"><span class="pre">with_new_children_and_same_properties</span></code>. In the case that
+the properties do not match the children, <code class="docutils literal notranslate"><span class="pre">ChildrenPropertiesMode::Recompute</span></code>,
+follow the body of <code class="docutils literal notranslate"><span class="pre">with_new_children</span></code>.</p>
+<p>For example, take a look at the implementation for <code class="docutils literal notranslate"><span class="pre">FilterExec</span></code>:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>    fn replace_children(
+        self: Arc&lt;Self&gt;,
+        mut children: Vec&lt;Arc&lt;dyn ExecutionPlan&gt;&gt;,
+        options: ReplaceChildrenOptions,
+    ) -&gt; Result&lt;Arc&lt;dyn ExecutionPlan&gt;&gt; {
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep =&gt; Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&amp;*self)
+            })),
+            ChildrenPropertiesMode::Recompute =&gt; {
+                let new_input = children.swap_remove(0);
+                FilterExecBuilder::from(&amp;*self)
+                    .with_input(new_input)
+                    .build()
+                    .map(|e| Arc::new(e) as _)
+            }
+        }
+    }
+</pre></div>
+</div>
+<p>In the case that the options indicate the properties are the same, we can simply
+swap the children without having to recompute the properties. In the other case,
+we create a new node from scratch.</p>
+<p>To ensure that this works correctly, it is recommended that users also look
+through their codebase and ensure that they use <code class="docutils literal notranslate"><span class="pre">replace_children_if_necessary</span></code>
+for these changes — <code class="docutils literal notranslate"><span class="pre">replace_children_if_necessary</span></code> should be preferred over
+manual use of <code class="docutils literal notranslate"><span class="pre">replace_children</span></code>, since <code class="docutils literal notranslate"><span class="pre">replace_children_if_necessary</span></code> will
+call <code class="docutils literal notranslate"><span class="pre">replace_children</span></code> with the correct options filled in.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/23903">PR #23903</a> for details.</p>
+</section>
 <section id="listingoptions-target-partitions-and-collect-stat-removed">
 <h3><code class="docutils literal notranslate"><span class="pre">ListingOptions::target_partitions</span></code> and <code class="docutils literal notranslate"><span class="pre">collect_stat</span></code> removed<a class="headerlink" href="#listingoptions-target-partitions-and-collect-stat-removed" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">target_partitions</span></code> and <code class="docutils literal notranslate"><span class="pre">collect_stat</span></code> fields on
@@ -1568,6 +1629,7 @@ changes.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#queryplanner-adds-any-as-a-supertrait"><code class="docutils literal notranslate"><span class="pre">QueryPlanner</span></code> adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionplan-partition-statistics-deprecated-in-favor-of-statistics-from-inputs"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::partition_statistics</span></code> deprecated in favor of <code class="docutils literal notranslate"><span class="pre">statistics_from_inputs</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ddlstatement-createexternaltable-and-createfunction-are-now-boxed"><code class="docutils literal notranslate"><span class="pre">DdlStatement::CreateExternalTable</span></code> and <code class="docutils literal notranslate"><span class="pre">CreateFunction</span></code> are now boxed</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionplan-with-new-children-and-executionplan-with-new-children-and-same-properties-deprecated"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::with_new_children</span></code> and <code class="docutils literal notranslate"><span class="pre">ExecutionPlan::with_new_children_and_same_properties</span></code> deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#listingoptions-target-partitions-and-collect-stat-removed"><code class="docutils literal notranslate"><span class="pre">ListingOptions::target_partitions</span></code> and <code class="docutils literal notranslate"><span class="pre">collect_stat</span></code> removed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#spark-map-functions-now-reject-duplicate-keys-by-default">Spark map functions now reject duplicate keys by default</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#unify-lru-memory-limiting-caches-into-one-generic-cache">Unify LRU memory-limiting caches into one generic cache</a></li>
