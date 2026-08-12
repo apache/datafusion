@@ -176,6 +176,7 @@ impl WindowExpr for StandardWindowExpr {
                         .or_insert(WindowState {
                             state: new_state.clone(),
                             window_fn: WindowFn::Builtin(evaluator),
+                            published: false,
                         })
                 };
             let evaluator = match &mut window_state.window_fn {

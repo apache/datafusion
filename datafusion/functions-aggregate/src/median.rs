@@ -53,6 +53,7 @@ use datafusion_expr::{
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
+use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 use datafusion_functions_aggregate_common::utils::{GenericDistinctBuffer, Hashable};
 use datafusion_macros::user_doc;
 use std::collections::HashMap;
@@ -138,6 +139,17 @@ impl AggregateUDFImpl for Median {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        if args.input_fields[0].data_type().is_null() {
+            return Ok(vec![
+                Field::new(
+                    format_state_name(args.name, self.name()),
+                    DataType::Null,
+                    true,
+                )
+                .into(),
+            ]);
+        }
+
         //Intermediate state is a list of the elements we have collected so far
         let field = Field::new_list_field(args.input_fields[0].data_type().clone(), true);
         let state_name = if args.is_distinct {
@@ -174,6 +186,10 @@ impl AggregateUDFImpl for Median {
         }
 
         let dt = acc_args.expr_fields[0].data_type().clone();
+        if dt.is_null() {
+            return Ok(Box::new(NoopAccumulator::default()));
+        }
+
         downcast_integer! {
             dt => (helper, dt),
             DataType::Float16 => helper!(Float16Type, dt),
@@ -192,7 +208,7 @@ impl AggregateUDFImpl for Median {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
-        !args.is_distinct
+        !args.is_distinct && !args.expr_fields[0].data_type().is_null()
     }
 
     fn create_groups_accumulator(

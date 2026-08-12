@@ -265,7 +265,8 @@ pub fn sort_exprs_try_to_proto<E: std::borrow::Borrow<PhysicalSortExpr>>(
 /// [`LexRequirement`], because callers differ in what an empty list means:
 /// `LexOrdering::new` / `LexRequirement::new` return `None` for it, which is
 /// "no ordering declared" for a scan and an error for an operator that requires
-/// one.
+/// one. Callers with the former convention can use
+/// [`optional_ordering_try_from_proto`] instead.
 ///
 /// [`PhysicalSortExprNode`]: datafusion_proto_models::protobuf::PhysicalSortExprNode
 #[cfg(feature = "proto")]
@@ -277,6 +278,25 @@ pub fn sort_exprs_try_from_proto(
         .iter()
         .map(|node| PhysicalSortExpr::try_from_proto(node, ctx))
         .collect()
+}
+
+/// Serialize an optional [`LexOrdering`], encoding `None` as an empty list.
+#[cfg(feature = "proto")]
+pub fn optional_ordering_try_to_proto(
+    ordering: Option<&LexOrdering>,
+    ctx: &crate::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+) -> Result<Vec<datafusion_proto_models::protobuf::PhysicalSortExprNode>> {
+    sort_exprs_try_to_proto(ordering.into_iter().flatten(), ctx)
+}
+
+/// Counterpart of [`optional_ordering_try_to_proto`]: an empty list decodes
+/// as `None`.
+#[cfg(feature = "proto")]
+pub fn optional_ordering_try_from_proto(
+    nodes: &[datafusion_proto_models::protobuf::PhysicalSortExprNode],
+    ctx: &crate::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+) -> Result<Option<LexOrdering>> {
+    Ok(LexOrdering::new(sort_exprs_try_from_proto(nodes, ctx)?))
 }
 
 impl PartialEq for PhysicalSortExpr {

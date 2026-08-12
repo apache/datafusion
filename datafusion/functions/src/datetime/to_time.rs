@@ -47,7 +47,7 @@ Timestamps will have the time portion extracted.
 Returns the corresponding time.
 
 Note: `to_time` returns Time64(Nanosecond), which represents the time of day in nanoseconds since midnight.",
-    syntax_example = "to_time(expression[, ..., format_n])",
+    syntax_example = "to_time(expression[, format1, ..., format_n])",
     sql_example = r#"```sql
 > select to_time('12:30:45');
 +---------------------------+
