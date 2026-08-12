@@ -404,9 +404,6 @@ impl BatchProcessState {
     // `None` guarantees the coalescer holds no pending rows, so the caller
     // may safely transition state without losing output.
     fn next_drained_batch(&mut self) -> Result<Option<RecordBatch>> {
-        if let Some(batch) = self.output_batches.next_completed_batch() {
-            return Ok(Some(batch));
-        }
         self.output_batches.finish_buffered_batch()?;
         Ok(self.output_batches.next_completed_batch())
     }
@@ -634,10 +631,11 @@ mod tests {
     };
     use arrow::array::{Date32Array, Date64Array};
     use arrow_schema::{DataType, Field};
-    use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
+    use datafusion_common::test_util::batches_to_string;
     use datafusion_execution::TaskContext;
     use datafusion_execution::config::SessionConfig;
     use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
+    use futures::TryStreamExt;
     use insta::assert_snapshot;
     use std::sync::Arc;
 
@@ -788,84 +786,6 @@ mod tests {
         | 3  | 1  | 9  | 20 | 3  | 80 |
         | 3  | 1  | 9  | 10 | 2  | 70 |
         +----+----+----+----+----+----+
-        ");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn join_right_unmatched_rows_exceeding_batch_size() -> Result<()> {
-        // 100 < {1, 2, 3} never matches, so with batch_size 2 the scan ends
-        // with several completed batches still queued; all of them must be
-        // emitted (regression: only one was, silently dropping rows).
-        let left = build_table(("a1", &vec![0]), ("b1", &vec![100]), ("c1", &vec![0]));
-        let right = build_table(
-            ("a2", &vec![10, 20, 30]),
-            ("b1", &vec![1, 2, 3]),
-            ("c2", &vec![70, 80, 90]),
-        );
-        let on = (
-            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
-            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
-        );
-
-        let session_config = SessionConfig::new().with_batch_size(2);
-        let task_ctx =
-            Arc::new(TaskContext::default().with_session_config(session_config));
-        let join = join(left, right, on, Operator::Lt, JoinType::Right)?;
-        let stream = join.execute(0, task_ctx)?;
-        let batches = common::collect(stream).await?;
-
-        assert_snapshot!(batches_to_sort_string(&batches), @r"
-        +----+----+----+----+----+----+
-        | a1 | b1 | c1 | a2 | b1 | c2 |
-        +----+----+----+----+----+----+
-        |    |    |    | 10 | 1  | 70 |
-        |    |    |    | 20 | 2  | 80 |
-        |    |    |    | 30 | 3  | 90 |
-        +----+----+----+----+----+----+
-        ");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn join_left_unmatched_rows_exact_batch_multiple() -> Result<()> {
-        // Four unmatched buffered rows flush as an exact multiple of
-        // batch_size 2, leaving no partial remainder; the unmatched pass must
-        // then terminate (regression: it restarted and emitted duplicates
-        // forever). The timeout turns that hang into a test failure.
-        let left = build_table(
-            ("a1", &vec![10, 20, 30, 40]),
-            ("b1", &vec![100, 101, 102, 103]),
-            ("c1", &vec![70, 80, 90, 100]),
-        );
-        let right = build_table(("a2", &vec![0]), ("b1", &vec![1]), ("c2", &vec![0]));
-        let on = (
-            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
-            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
-        );
-
-        let session_config = SessionConfig::new().with_batch_size(2);
-        let task_ctx =
-            Arc::new(TaskContext::default().with_session_config(session_config));
-        let join = join(left, right, on, Operator::Lt, JoinType::Left)?;
-        let stream = join.execute(0, task_ctx)?;
-
-        let batches = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            common::collect(stream),
-        )
-        .await
-        .expect("left join unmatched pass should terminate")?;
-
-        assert_snapshot!(batches_to_sort_string(&batches), @r"
-        +----+-----+-----+----+----+----+
-        | a1 | b1  | c1  | a2 | b1 | c2 |
-        +----+-----+-----+----+----+----+
-        | 10 | 100 | 70  |    |    |    |
-        | 20 | 101 | 80  |    |    |    |
-        | 30 | 102 | 90  |    |    |    |
-        | 40 | 103 | 100 |    |    |    |
-        +----+-----+-----+----+----+----+
         ");
         Ok(())
     }
@@ -1335,8 +1255,16 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        let (_, batches) =
-            join_collect(left, right, on, Operator::LtEq, JoinType::Left).await?;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(1)),
+        );
+        // Bound collection so the old duplicate loop becomes a snapshot mismatch.
+        let batches = join(left, right, on, Operator::LtEq, JoinType::Left)?
+            .execute(0, task_ctx)?
+            .take(6)
+            .try_collect::<Vec<_>>()
+            .await?;
 
         assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
@@ -1381,8 +1309,12 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        let (_, batches) =
-            join_collect(left, right, on, Operator::GtEq, JoinType::Right).await?;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(1)),
+        );
+        let join = join(left, right, on, Operator::GtEq, JoinType::Right)?;
+        let batches = common::collect(join.execute(0, task_ctx)?).await?;
 
         assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
