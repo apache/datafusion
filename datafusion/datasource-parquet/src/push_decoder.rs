@@ -453,78 +453,10 @@ impl PushDecoderStreamState {
             }
             if at_boundary && !self.rg_plan.is_empty() {
                 let pruned_count = self.prune_boundary_row_groups();
-
-                // Decide whether the per-row `RowFilter` needs to be
-                // toggled for the upcoming RG. `desired_filter` is
-                // `Some(true)` when the next RG needs a real filter,
-                // `Some(false)` when it's fully-matched (filter is a
-                // no-op, so we suppress it), and `None` when there is no
-                // pushdown predicate at all (toggling is meaningless).
-                let desired_filter: Option<bool> = self
-                    .row_filter_context
-                    .as_ref()
-                    .and_then(|_| self.rg_plan.front().map(|e| !e.fully_matched));
-                let filter_needs_toggle =
-                    desired_filter.is_some_and(|want| want != self.filter_installed);
-
-                if pruned_count > 0 || filter_needs_toggle {
-                    if self.rg_plan.is_empty() {
-                        return None;
-                    }
-                    let decoder = self.decoder.take().expect("decoder present");
-                    let new_indices: Vec<usize> =
-                        self.rg_plan.iter().map(|e| e.rg_index).collect();
-                    let rebuilt = match decoder.into_builder() {
-                        Ok(mut builder) => {
-                            builder = builder.with_row_groups(new_indices);
-                            if filter_needs_toggle {
-                                let want_filter = desired_filter
-                                    .expect("filter_needs_toggle ⇒ desired Some");
-                                if want_filter {
-                                    let ctx = self
-                                        .row_filter_context
-                                        .as_ref()
-                                        .expect("filter_needs_toggle ⇒ context set");
-                                    match ctx.build_row_filter() {
-                                        Some(filter) => {
-                                            builder = builder.with_row_filter(filter);
-                                            if let Some(cap) =
-                                                ctx.max_predicate_cache_size
-                                            {
-                                                builder = builder
-                                                    .with_max_predicate_cache_size(cap);
-                                            }
-                                            self.filter_installed = true;
-                                        }
-                                        None => {
-                                            // Filter could not be rebuilt;
-                                            // install empty filter so the
-                                            // decoder runs unfiltered for
-                                            // this run rather than failing.
-                                            builder = builder
-                                                .with_row_filter(RowFilter::new(vec![]));
-                                            self.filter_installed = false;
-                                        }
-                                    }
-                                } else {
-                                    // Skip per-row filtering for the
-                                    // upcoming fully-matched RG.
-                                    builder =
-                                        builder.with_row_filter(RowFilter::new(vec![]));
-                                    self.filter_installed = false;
-                                    self.row_filter_skipped_fully_matched.add(1);
-                                }
-                            }
-                            builder.build()
-                        }
-                        Err(e) => Err(e),
-                    };
-                    match rebuilt {
-                        Ok(d) => self.decoder = Some(d),
-                        Err(e) => {
-                            return Some((Err(DataFusionError::from(e)), self));
-                        }
-                    }
+                match self.rebuild_decoder_at_boundary(pruned_count) {
+                    Ok(true) => return None,
+                    Ok(false) => {}
+                    Err(e) => return Some((Err(e), self)),
                 }
             }
 
@@ -615,6 +547,72 @@ impl PushDecoderStreamState {
         }
         self.rg_plan = kept;
         pruned_count
+    }
+
+    /// At a row-group boundary, rebuild the decoder so it reads only the
+    /// surviving `rg_plan` and toggle the per-row `RowFilter` for the upcoming
+    /// RG. Rebuilds only when something changed (`pruned_count > 0` or the
+    /// filter status flips), doing at most one `into_builder` rebuild per
+    /// boundary. Returns `Ok(true)` when the plan is now empty (the stream
+    /// should finish).
+    fn rebuild_decoder_at_boundary(
+        &mut self,
+        pruned_count: usize,
+    ) -> Result<bool, DataFusionError> {
+        // `desired_filter` is `Some(true)` when the next RG needs a real
+        // filter, `Some(false)` when it is fully-matched (filter is a no-op, so
+        // we suppress it), and `None` when there is no pushdown predicate at
+        // all (toggling is meaningless).
+        let desired_filter: Option<bool> = self
+            .row_filter_context
+            .as_ref()
+            .and_then(|_| self.rg_plan.front().map(|e| !e.fully_matched));
+        let filter_needs_toggle =
+            desired_filter.is_some_and(|want| want != self.filter_installed);
+
+        if pruned_count == 0 && !filter_needs_toggle {
+            return Ok(false);
+        }
+        if self.rg_plan.is_empty() {
+            return Ok(true);
+        }
+
+        let decoder = self.decoder.take().expect("decoder present");
+        let new_indices: Vec<usize> = self.rg_plan.iter().map(|e| e.rg_index).collect();
+        let mut builder = decoder.into_builder().map_err(DataFusionError::from)?;
+        builder = builder.with_row_groups(new_indices);
+        if filter_needs_toggle {
+            let want_filter = desired_filter.expect("filter_needs_toggle ⇒ desired Some");
+            if want_filter {
+                let ctx = self
+                    .row_filter_context
+                    .as_ref()
+                    .expect("filter_needs_toggle ⇒ context set");
+                match ctx.build_row_filter() {
+                    Some(filter) => {
+                        builder = builder.with_row_filter(filter);
+                        if let Some(cap) = ctx.max_predicate_cache_size {
+                            builder = builder.with_max_predicate_cache_size(cap);
+                        }
+                        self.filter_installed = true;
+                    }
+                    None => {
+                        // Filter could not be rebuilt; install an empty filter
+                        // so the decoder runs unfiltered for this run rather
+                        // than failing.
+                        builder = builder.with_row_filter(RowFilter::new(vec![]));
+                        self.filter_installed = false;
+                    }
+                }
+            } else {
+                // Skip per-row filtering for the upcoming fully-matched RG.
+                builder = builder.with_row_filter(RowFilter::new(vec![]));
+                self.filter_installed = false;
+                self.row_filter_skipped_fully_matched.add(1);
+            }
+        }
+        self.decoder = Some(builder.build().map_err(DataFusionError::from)?);
+        Ok(false)
     }
 
     /// Copies metrics from ArrowReaderMetrics (the metrics collected by the
