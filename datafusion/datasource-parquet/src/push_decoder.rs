@@ -113,11 +113,8 @@ impl DecoderBuilderConfig<'_> {
 #[derive(Debug, Clone)]
 pub(crate) struct RgPlanEntry {
     pub(crate) rg_index: usize,
-    /// `true` when the static pruning predicate proved every row of this
-    /// RG satisfies the predicate. The push-decoder stream uses this to
-    /// skip installing the per-row `RowFilter` on RGs where it would be a
-    /// no-op, rebuilding the decoder via `into_builder` at boundaries
-    /// where the filter status flips.
+    /// `true` when static pruning proved every row of this RG satisfies the
+    /// predicate, so the per-row `RowFilter` can be skipped as a no-op.
     pub(crate) fully_matched: bool,
 }
 
@@ -282,10 +279,9 @@ pub(crate) struct PushDecoderStreamState {
     pub(crate) row_group_pruner: Option<RowGroupPruner>,
     /// Count of row groups skipped at runtime by [`Self::row_group_pruner`].
     pub(crate) row_groups_pruned_dynamic: Count,
-    /// Side-channel state for regenerating the parquet [`RowFilter`] when
-    /// the per-RG `fully_matched` toggle flips from skip → install. `None`
-    /// when the scan has no pushdown predicate, so no filter can be
-    /// installed (and the toggle is a no-op).
+    /// Cache that lets the per-RG `fully_matched` toggle reinstall the
+    /// parquet [`RowFilter`] when it flips from skip → install. `None` when
+    /// the scan has no pushdown predicate (the toggle is then a no-op).
     pub(crate) row_filter_context: Option<RowFilterContext>,
     /// Whether the currently-installed decoder is running with a non-empty
     /// row filter. Toggled per RG by the `fully_matched` skip path.
@@ -295,20 +291,40 @@ pub(crate) struct PushDecoderStreamState {
     pub(crate) row_filter_skipped_fully_matched: Count,
 }
 
-/// Side-channel state that lets [`PushDecoderStreamState`] **rebuild** the
-/// parquet [`RowFilter`] mid-scan.
+/// A reusable, `Arc`-shared list of prebuilt row-filter candidates.
 ///
-/// The decoder owns the filter once installed, but `Box<dyn ArrowPredicate>`
-/// has no clone path, so a filter that was replaced at a previous boundary
-/// cannot be reinstalled later. This struct keeps a pre-built candidate list
-/// alongside the stream so the next non-fully-matched row group can be
-/// wrapped into a fresh [`RowFilter`] without redoing the tree walks and
-/// column resolution that the initial build did.
+/// Wrapping the `Arc<Vec<_>>` keeps the "prebuilt candidates" concept behind
+/// a named type and makes cloning it into stream state cheap.
+#[derive(Clone)]
+pub(crate) struct PrebuiltRowFilterCandidateList {
+    inner: Arc<Vec<PrebuiltRowFilterCandidate>>,
+}
+
+impl PrebuiltRowFilterCandidateList {
+    fn new(candidates: Vec<PrebuiltRowFilterCandidate>) -> Self {
+        Self {
+            inner: Arc::new(candidates),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    fn as_slice(&self) -> &[PrebuiltRowFilterCandidate] {
+        &self.inner
+    }
+}
+
+/// Cache that lets [`PushDecoderStreamState`] rebuild the parquet
+/// [`RowFilter`] mid-scan: it keeps the prebuilt candidate list alongside the
+/// stream so a non-fully-matched row group can be re-wrapped into a fresh
+/// [`RowFilter`] without redoing the tree walks and column resolution the
+/// initial build did.
 pub(crate) struct RowFilterContext {
     /// Prebuilt candidates: expression already column-reassigned, projection
-    /// mask already resolved. Shared across the file's row groups. `Arc` so
-    /// cloning into stream state is cheap.
-    pub(crate) prebuilt: Arc<Vec<PrebuiltRowFilterCandidate>>,
+    /// mask already resolved. Shared across the file's row groups.
+    pub(crate) prebuilt: PrebuiltRowFilterCandidateList,
     pub(crate) reorder_predicates: bool,
     pub(crate) file_metrics: ParquetFileMetrics,
     pub(crate) max_predicate_cache_size: Option<usize>,
@@ -332,7 +348,7 @@ impl RowFilterContext {
             file_metadata.as_ref(),
         ) {
             Ok(Some(prebuilt)) => Some(Self {
-                prebuilt: Arc::new(prebuilt),
+                prebuilt: PrebuiltRowFilterCandidateList::new(prebuilt),
                 reorder_predicates,
                 file_metrics,
                 max_predicate_cache_size,
@@ -353,7 +369,7 @@ impl RowFilterContext {
             return None;
         }
         Some(row_filter_from_prebuilt(
-            &self.prebuilt,
+            self.prebuilt.as_slice(),
             self.reorder_predicates,
             &self.file_metrics,
         ))
@@ -423,50 +439,20 @@ impl PushDecoderStreamState {
             // been handed back yet), step 3 drives it forward and we get
             // another chance at the next boundary — the pruner is stateful
             // and idempotent, so deferring loses nothing.
-            let decoder_ref = self.decoder.as_ref().expect("decoder present");
-            let at_boundary = decoder_ref.is_at_row_group_boundary();
-            // Sync `rg_plan` with the row group the decoder will actually
-            // emit next. arrow-rs's `try_next_reader` silently advances
-            // past row groups whose row selection is empty (e.g. when
-            // page-index pruning has already eliminated every page of
-            // that RG via the `ColumnIndex` path inside `try_build`).
-            // Without this peek, `rg_plan.front()` would drift off-by-one
-            // from the decoder's frontier and the per-RG toggle below
-            // would target the wrong row group.
-            if at_boundary {
-                match decoder_ref.peek_next_row_group() {
-                    Ok(Some(actual)) => {
-                        while let Some(front) = self.rg_plan.front() {
-                            if front.rg_index == actual {
-                                break;
-                            }
-                            self.rg_plan.pop_front();
-                        }
-                    }
-                    Ok(None) => {
-                        if !self.rg_plan.is_empty() {
-                            // Decoder has nothing left to emit — drain our plan
-                            // so the stream finishes cleanly.
-                            self.rg_plan.clear();
-                        }
-                    }
-                    Err(e) => return Some((Err(DataFusionError::from(e)), self)),
-                }
+            let at_boundary = self
+                .decoder
+                .as_ref()
+                .expect("decoder present")
+                .is_at_row_group_boundary();
+            // Keep `rg_plan.front()` aligned with the row group the decoder
+            // will actually emit next: `try_next_reader` can silently advance
+            // past row groups whose row selection is empty, so without this
+            // sync the per-RG toggle below would target the wrong row group.
+            if at_boundary && let Err(e) = self.sync_rg_plan_to_decoder_frontier() {
+                return Some((Err(e), self));
             }
             if at_boundary && !self.rg_plan.is_empty() {
-                let mut pruned_count = 0usize;
-                if let Some(pruner) = self.row_group_pruner.as_mut() {
-                    let mut kept = VecDeque::with_capacity(self.rg_plan.len());
-                    while let Some(entry) = self.rg_plan.pop_front() {
-                        if pruner.should_prune(&[entry.rg_index]) {
-                            pruned_count += 1;
-                            self.row_groups_pruned_dynamic.add(1);
-                        } else {
-                            kept.push_back(entry);
-                        }
-                    }
-                    self.rg_plan = kept;
-                }
+                let pruned_count = self.prune_boundary_row_groups();
 
                 // Decide whether the per-row `RowFilter` needs to be
                 // toggled for the upcoming RG. `desired_filter` is
@@ -578,6 +564,57 @@ impl PushDecoderStreamState {
                 }
             }
         }
+    }
+
+    /// Keep `rg_plan.front()` aligned with the row group the decoder will emit
+    /// next. `try_next_reader` silently skips row groups whose row selection is
+    /// empty (e.g. page-index pruning removed every page), which would otherwise
+    /// leave `rg_plan` off-by-one from the decoder's frontier.
+    fn sync_rg_plan_to_decoder_frontier(&mut self) -> Result<(), DataFusionError> {
+        match self
+            .decoder
+            .as_ref()
+            .expect("decoder present")
+            .peek_next_row_group()
+            .map_err(DataFusionError::from)?
+        {
+            Some(actual) => self.advance_rg_plan_to(actual),
+            // Decoder has nothing left to emit — drain our plan so the stream
+            // finishes cleanly.
+            None => self.rg_plan.clear(),
+        }
+        Ok(())
+    }
+
+    /// Pop `rg_plan` entries until its front is `target` (or it empties).
+    fn advance_rg_plan_to(&mut self, target: usize) {
+        while let Some(front) = self.rg_plan.front() {
+            if front.rg_index == target {
+                break;
+            }
+            self.rg_plan.pop_front();
+        }
+    }
+
+    /// Drop every `rg_plan` entry the dynamic pruner proves cannot contribute,
+    /// returning how many were pruned. The single decoder rebuild that acts on
+    /// the survivors is left to the caller (at most one rebuild per boundary).
+    fn prune_boundary_row_groups(&mut self) -> usize {
+        let Some(pruner) = self.row_group_pruner.as_mut() else {
+            return 0;
+        };
+        let mut pruned_count = 0usize;
+        let mut kept = VecDeque::with_capacity(self.rg_plan.len());
+        while let Some(entry) = self.rg_plan.pop_front() {
+            if pruner.should_prune(&[entry.rg_index]) {
+                pruned_count += 1;
+                self.row_groups_pruned_dynamic.add(1);
+            } else {
+                kept.push_back(entry);
+            }
+        }
+        self.rg_plan = kept;
+        pruned_count
     }
 
     /// Copies metrics from ArrowReaderMetrics (the metrics collected by the
