@@ -383,7 +383,7 @@ FROM t1
 CROSS JOIN t2;
 ----
 Plan with Metrics
-01)CrossJoinExec, metrics=[output_bytes=96.0 B, build_mem_used=128.0 B]
+01)CrossJoinExec, metrics=[output_bytes=64.0 B, build_mem_used=128.0 B]
 02)--ProjectionExec: expr=[column1@0 as k], metrics=[output_bytes=32.0 B]
 03)----DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
 04)--ProjectionExec: expr=[column1@0 as k], metrics=[output_bytes=32.0 B]
