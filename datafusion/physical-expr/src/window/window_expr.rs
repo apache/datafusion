@@ -616,7 +616,7 @@ pub(crate) fn get_orderby_values(order_by_columns: Vec<SortColumn>) -> Vec<Array
 pub enum WindowFn {
     /// A "normal" window function, such as `lead` or `lag`, evaluated via a
     /// [`PartitionEvaluator`]. Despite the name, it is used for all window
-    /// function that is not an aggregate function.
+    /// functions that are not aggregate functions.
     Builtin(Box<dyn PartitionEvaluator>),
     /// An aggregate function used as a window function, such as `avg` or
     /// `sum`, which is evaluated via an [`Accumulator`].
