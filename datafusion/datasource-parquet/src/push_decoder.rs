@@ -53,7 +53,7 @@ use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
 use parquet::file::metadata::ParquetMetaData;
 
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_physical_expr::expressions::DynamicFilterTracking;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::{BaselineMetrics, Count, Gauge};
@@ -510,7 +510,7 @@ impl PushDecoderStreamState {
             .peek_next_row_group()
             .map_err(DataFusionError::from)?
         {
-            Some(actual) => self.advance_rg_plan_to(actual),
+            Some(actual) => self.advance_rg_plan_to(actual)?,
             // Decoder has nothing left to emit — drain our plan so the stream
             // finishes cleanly.
             None => self.rg_plan.clear(),
@@ -518,14 +518,26 @@ impl PushDecoderStreamState {
         Ok(())
     }
 
-    /// Pop `rg_plan` entries until its front is `target` (or it empties).
-    fn advance_rg_plan_to(&mut self, target: usize) {
+    /// Pop `rg_plan` entries until its front is `target`.
+    ///
+    /// `target` is the RG the decoder will emit next and must still be in our
+    /// plan. A missing `target` means the decoder's frontier and `rg_plan`
+    /// have diverged; we surface that as an internal error rather than
+    /// silently draining the plan, which would truncate the scan.
+    fn advance_rg_plan_to(&mut self, target: usize) -> Result<()> {
+        if !self.rg_plan.iter().any(|e| e.rg_index == target) {
+            return internal_err!(
+                "push decoder frontier RG {target} is not in rg_plan; \
+                 decoder and plan have diverged"
+            );
+        }
         while let Some(front) = self.rg_plan.front() {
             if front.rg_index == target {
                 break;
             }
             self.rg_plan.pop_front();
         }
+        Ok(())
     }
 
     /// Drop every `rg_plan` entry the dynamic pruner proves cannot contribute,

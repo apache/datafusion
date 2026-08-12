@@ -1510,9 +1510,17 @@ impl RowGroupsPrunedParquetOpen {
             let mut filter_installed = false;
             if let Some(row_filter) = initial_filter {
                 if first_rg_fully_matched {
+                    // The first RG is fully matched: install an empty filter
+                    // and count the suppression, exactly as the per-RG toggle
+                    // does mid-scan, so the metric is consistent whether the
+                    // skip happens at open time or at a later boundary.
                     builder = builder.with_row_filter(
                         parquet::arrow::arrow_reader::RowFilter::new(vec![]),
                     );
+                    prepared
+                        .file_metrics
+                        .row_filter_skipped_fully_matched
+                        .add(1);
                 } else {
                     builder = builder.with_row_filter(row_filter);
                     filter_installed = true;
