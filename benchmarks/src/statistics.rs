@@ -25,6 +25,7 @@ use std::sync::{Arc, LazyLock};
 
 use clap::Args;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion::physical_plan::{ExecutionPlan, collect};
@@ -153,6 +154,16 @@ impl RunOpt {
     ) -> Result<Vec<OperatorReport>> {
         let state = ctx.state();
         let logical_plan = state.statement_to_plan(statement).await?;
+        if matches!(
+            logical_plan,
+            LogicalPlan::Ddl(_) | LogicalPlan::Statement(_)
+        ) {
+            ctx.execute_logical_plan(logical_plan)
+                .await?
+                .collect()
+                .await?;
+            return Ok(vec![]);
+        }
         let logical_plan = state.optimize(&logical_plan)?;
         let physical_plan = state.create_physical_plan(&logical_plan).await?;
 
@@ -726,6 +737,35 @@ mod tests {
         let statements = sql_statements(sql, &config.options().sql_parser).unwrap();
 
         assert_eq!(statements.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn applies_session_changing_statements_before_reporting_queries() {
+        let directory = tempdir().unwrap();
+        let options = RunOpt {
+            query: None,
+            compare: None,
+            path: directory.path().to_path_buf(),
+            query_path: directory.path().to_path_buf(),
+        };
+        let ctx = SessionContext::new();
+        let mut statements = sql_statements(
+            "CREATE TABLE x AS VALUES (1); SELECT * FROM x",
+            &SessionConfig::new().options().sql_parser,
+        )
+        .unwrap();
+
+        let reports = options
+            .report_statement(&ctx, statements.pop_front().unwrap())
+            .await
+            .unwrap();
+        assert!(reports.is_empty());
+
+        let reports = options
+            .report_statement(&ctx, statements.pop_front().unwrap())
+            .await
+            .unwrap();
+        assert!(!reports.is_empty());
     }
 
     #[test]
