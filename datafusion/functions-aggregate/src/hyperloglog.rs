@@ -47,6 +47,12 @@ pub(crate) const NUM_REGISTERS: usize = 1_usize << DEFAULT_HLL_P;
 /// Minimum supported precision value.
 pub(crate) const HLL_P_MIN: usize = 4;
 
+// Pre-computed constants for the default precision path.
+// Used in the `if self.p == DEFAULT_HLL_P` fast path throughout all hot loops
+// so LLVM can constant-fold p/q/mask as instruction immediates.
+const DEFAULT_Q: usize = 64 - DEFAULT_HLL_P;
+const DEFAULT_MASK: u64 = (1u64 << DEFAULT_HLL_P) - 1;
+
 #[derive(Clone, Debug)]
 pub(crate) struct HyperLogLog<T>
 where
@@ -78,27 +84,6 @@ pub(crate) fn hll_update_register(
     let index = (hash & p_mask) as usize;
     let rho = ((hash >> p) | (1_u64 << q)).trailing_zeros() + 1;
     registers[index] = registers[index].max(rho as u8);
-}
-
-/// Update one register given a pre-computed hash.
-/// Uses compile-time constants for the default precision path.
-macro_rules! hll_update {
-    ($self:expr, $hash:expr) => {{
-        if $self.p == DEFAULT_HLL_P {
-            const P: usize = DEFAULT_HLL_P;
-            const Q: usize = 64 - DEFAULT_HLL_P;
-            const MASK: u64 = (1u64 << DEFAULT_HLL_P) - 1;
-            hll_update_register(&mut $self.registers, P, Q, MASK, $hash);
-        } else {
-            hll_update_register(
-                &mut $self.registers,
-                $self.p,
-                $self.q,
-                $self.p_mask,
-                $hash,
-            );
-        }
-    }};
 }
 
 impl<T> Default for HyperLogLog<T>
@@ -195,39 +180,34 @@ where
     /// by [`Self::add`].
     #[inline(always)]
     pub(crate) fn add_hashed(&mut self, hash: u64) {
-        hll_update!(self, hash);
+        self.for_each_hash(std::iter::once(hash));
     }
 
     /// Process a slice of pre-computed hashes.
     /// The precision branch is hoisted outside the loop.
     pub(crate) fn add_hashed_slice(&mut self, hashes: &[u64]) {
-        if self.p == DEFAULT_HLL_P {
-            const P: usize = DEFAULT_HLL_P;
-            const Q: usize = 64 - DEFAULT_HLL_P;
-            const MASK: u64 = (1u64 << DEFAULT_HLL_P) - 1;
-            for &hash in hashes {
-                hll_update_register(&mut self.registers, P, Q, MASK, hash);
-            }
-        } else {
-            let (p, q, p_mask) = self.hll_params();
-            for &hash in hashes {
-                hll_update_register(&mut self.registers, p, q, p_mask, hash);
-            }
-        }
+        self.for_each_hash(hashes.iter().copied());
     }
 
-    /// Returns `(p, q, p_mask)` as register-resident locals for hoisting into loops.
-    /// For the default precision returns compile-time constants.
+    /// Feed an iterator of hashes into the sketch.
+    /// Resolves the precision branch once, then loops with branch-free inner body.
     #[inline(always)]
-    pub(crate) fn hll_params(&self) -> (usize, usize, u64) {
+    fn for_each_hash(&mut self, hashes: impl Iterator<Item = u64>) {
         if self.p == DEFAULT_HLL_P {
-            (
-                DEFAULT_HLL_P,
-                64 - DEFAULT_HLL_P,
-                (1u64 << DEFAULT_HLL_P) - 1,
-            )
+            for hash in hashes {
+                hll_update_register(
+                    &mut self.registers,
+                    DEFAULT_HLL_P,
+                    DEFAULT_Q,
+                    DEFAULT_MASK,
+                    hash,
+                );
+            }
         } else {
-            (self.p, self.q, self.p_mask)
+            let (p, q, p_mask) = (self.p, self.q, self.p_mask);
+            for hash in hashes {
+                hll_update_register(&mut self.registers, p, q, p_mask, hash);
+            }
         }
     }
 
@@ -390,29 +370,26 @@ where
 {
     fn extend<S: IntoIterator<Item = T>>(&mut self, iter: S) {
         if self.p == DEFAULT_HLL_P {
-            const P: usize = DEFAULT_HLL_P;
-            const Q: usize = 64 - DEFAULT_HLL_P;
-            const MASK: u64 = (1u64 << DEFAULT_HLL_P) - 1;
             for elem in iter {
                 hll_update_register(
                     &mut self.registers,
-                    P,
-                    Q,
-                    MASK,
+                    DEFAULT_HLL_P,
+                    DEFAULT_Q,
+                    DEFAULT_MASK,
                     HLL_HASH_STATE.hash_one(&elem),
                 );
             }
-            return;
-        }
-        let (p, q, p_mask) = self.hll_params();
-        for elem in iter {
-            hll_update_register(
-                &mut self.registers,
-                p,
-                q,
-                p_mask,
-                HLL_HASH_STATE.hash_one(&elem),
-            );
+        } else {
+            let (p, q, p_mask) = (self.p, self.q, self.p_mask);
+            for elem in iter {
+                hll_update_register(
+                    &mut self.registers,
+                    p,
+                    q,
+                    p_mask,
+                    HLL_HASH_STATE.hash_one(&elem),
+                );
+            }
         }
     }
 }
@@ -423,29 +400,26 @@ where
 {
     fn extend<S: IntoIterator<Item = &'a T>>(&mut self, iter: S) {
         if self.p == DEFAULT_HLL_P {
-            const P: usize = DEFAULT_HLL_P;
-            const Q: usize = 64 - DEFAULT_HLL_P;
-            const MASK: u64 = (1u64 << DEFAULT_HLL_P) - 1;
             for elem in iter {
                 hll_update_register(
                     &mut self.registers,
-                    P,
-                    Q,
-                    MASK,
+                    DEFAULT_HLL_P,
+                    DEFAULT_Q,
+                    DEFAULT_MASK,
                     HLL_HASH_STATE.hash_one(elem),
                 );
             }
-            return;
-        }
-        let (p, q, p_mask) = self.hll_params();
-        for elem in iter {
-            hll_update_register(
-                &mut self.registers,
-                p,
-                q,
-                p_mask,
-                HLL_HASH_STATE.hash_one(elem),
-            );
+        } else {
+            let (p, q, p_mask) = (self.p, self.q, self.p_mask);
+            for elem in iter {
+                hll_update_register(
+                    &mut self.registers,
+                    p,
+                    q,
+                    p_mask,
+                    HLL_HASH_STATE.hash_one(elem),
+                );
+            }
         }
     }
 }
