@@ -174,22 +174,23 @@ fn cli_quick_test<'a>(
 }
 
 #[test]
-fn spark_functions_require_opt_in() {
-    let query = "SELECT next_day('2015-07-27'::DATE, 'Sun'::STRING);";
+fn spark_features_require_opt_in() {
+    let dialect_query = "SELECT CAST(1 AS LONG);";
+    let spark_query = "SELECT concat_ws(',', array(1, 2)), CAST(1 AS LONG);";
 
     let output = cli()
-        .args(["-q", "--command", query])
+        .args(["-q", "--command", dialect_query])
         .output()
         .expect("failed to run datafusion-cli without --spark");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!output.status.success(), "query unexpectedly succeeded");
     assert!(
-        stdout.contains("Invalid function 'next_day'"),
-        "expected next_day to be unavailable without --spark, got:\n{stdout}"
+        stdout.contains("Unsupported SQL type LONG"),
+        "expected Spark SQL syntax to be unavailable without --spark, got:\n{stdout}"
     );
 
     let output = cli()
-        .args(["-q", "--spark", "--command", query])
+        .args(["-q", "--spark", "--format", "csv", "--command", spark_query])
         .output()
         .expect("failed to run datafusion-cli with --spark");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -198,8 +199,8 @@ fn spark_functions_require_opt_in() {
         "query failed with --spark, got:\n{stdout}"
     );
     assert!(
-        stdout.contains("2015-08-02"),
-        "expected next_day result, got:\n{stdout}"
+        stdout.lines().any(|line| line == "\"1,2\",1"),
+        "expected Spark planner and dialect result, got:\n{stdout}"
     );
 }
 
