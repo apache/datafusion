@@ -35,9 +35,9 @@
 //! ) WHERE rk <= K;
 //! ```
 //!
-//! And replaces the `FilterExec → BoundedWindowAggExec → SortExec` pipeline
-//! with `BoundedWindowAggExec → PartitionedTopKExec(fetch=K)`, removing both
-//! the `FilterExec` and `SortExec`.
+//! And replaces the `FilterExec → BoundedWindowAggExec` pipeline with
+//! `BoundedWindowAggExec → PartitionedTopKExec(fetch=K)`, removing the
+//! `FilterExec` and inserting `PartitionedTopKExec` under the window.
 //!
 //! The appropriate [`WindowFnKind`] is forwarded to `PartitionedTopKExec`.
 //! RANK requires a non-empty `ORDER BY` clause (otherwise all rows tie at
@@ -58,6 +58,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion_physical_expr::window::StandardWindowExpr;
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::execution_plan::replace_children_if_necessary;
 use datafusion_physical_plan::filter::FilterExec;
@@ -66,7 +67,6 @@ use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partitioned_topk::{
     PartitionedTopKExec, WindowFnKind,
 };
-use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 
 /// Physical optimizer rule that converts per-partition `ROW_NUMBER` and
@@ -79,7 +79,6 @@ use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 /// FilterExec(<ranking fn output> <= K)
 ///   [optional ProjectionExec]
 ///     BoundedWindowAggExec(<ranking fn> PARTITION BY ... ORDER BY ...)
-///       SortExec(partition_keys, order_keys)
 /// ```
 ///
 /// # Replacement
@@ -90,7 +89,7 @@ use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 ///     PartitionedTopKExec(fn=<row_number|rank>, partition_keys, order_keys, fetch=K)
 /// ```
 ///
-/// The `FilterExec` is removed entirely. The `SortExec` is replaced by
+/// The `FilterExec` is removed entirely. The child of `BoundedWindowAggExec` is now
 /// `PartitionedTopKExec`, which maintains a per-partition top-K heap (and,
 /// for `RANK`, a sibling ties `Vec`) instead of sorting the whole dataset.
 ///
@@ -105,7 +104,7 @@ use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 ///
 /// All of the following must be true:
 /// - Config flag `enable_window_topn` is `true`
-/// - The plan matches `FilterExec → [ProjectionExec] → BoundedWindowAggExec → SortExec`
+/// - The plan matches `FilterExec → [ProjectionExec] → BoundedWindowAggExec`
 /// - The window function is `ROW_NUMBER` or `RANK` (not `DENSE_RANK`)
 /// - The window function has a `PARTITION BY` clause (global top-K is
 ///   already handled by `SortExec` with `fetch`)
@@ -127,7 +126,7 @@ impl WindowTopN {
     /// Attempt to transform a single plan node.
     ///
     /// Returns `Some(new_plan)` if the node matches the
-    /// `FilterExec → [ProjectionExec] → BoundedWindowAggExec → SortExec`
+    /// `FilterExec → [ProjectionExec] → BoundedWindowAggExec`
     /// pattern and can be rewritten, or `None` if the node should be
     /// left unchanged.
     fn try_transform(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPlan>> {
@@ -148,7 +147,6 @@ impl WindowTopN {
 
         // Step 4: Verify col_idx references a supported window function output column
         let window_exec_typed = window_exec.downcast_ref::<BoundedWindowAggExec>()?;
-        let sort_exec = window_exec_typed.input().downcast_ref::<SortExec>()?;
         let input_field_count = window_exec_typed.input().schema().fields().len();
         if col_idx < input_field_count {
             return None; // Filter is on an input column, not a window column
@@ -160,10 +158,7 @@ impl WindowTopN {
         }
         let fn_kind = supported_window_fn(&window_exprs[window_expr_idx])?;
 
-        // Step 5: child of window is SortExec (verified above)
-        let sort_child = sort_exec.input();
-
-        // Step 6: Determine partition_prefix_len from the window expression
+        // Step 5: Validate PARTITION BY / ORDER BY and collect sort keys from the window expr
         let partition_by = window_exprs[window_expr_idx].partition_by();
         let partition_prefix_len = partition_by.len();
 
@@ -176,28 +171,33 @@ impl WindowTopN {
         // For RANK: an empty ORDER BY makes every row tie at rank 1 —
         // the optimization is degenerate (we'd retain the entire input)
         // and tie storage would be unbounded.
-        if matches!(fn_kind, WindowFnKind::Rank)
-            && window_exprs[window_expr_idx].order_by().is_empty()
-        {
+        let order_by = window_exprs[window_expr_idx].order_by();
+        if matches!(fn_kind, WindowFnKind::Rank) && order_by.is_empty() {
             return None;
         }
 
-        // Step 7: Build PartitionedTopKExec using SortExec's expressions
+        // Step 6: Build PartitionedTopKExec from the window's partition/order keys
+        let expr_iterator = partition_by
+            .iter()
+            .map(|e| PhysicalSortExpr::new_default(Arc::clone(e)))
+            .chain(order_by.iter().cloned());
+        let expr = LexOrdering::new(expr_iterator)?;
+
         let partitioned_topk = PartitionedTopKExec::try_new(
-            Arc::clone(sort_child),
-            sort_exec.expr().clone(),
+            Arc::clone(window_exec_typed.input()),
+            expr,
             partition_prefix_len,
             limit_n,
             fn_kind,
         )
         .ok()?;
 
-        // Step 8: Rebuild window with new child
+        // Step 7: Rebuild window with PartitionedTopKExec as its child
         let mut result =
             replace_children_if_necessary(window_exec, vec![Arc::new(partitioned_topk)])
                 .ok()?;
 
-        // Step 9: Rebuild intermediate nodes (ProjectionExec/RepartitionExec)
+        // Step 8: Rebuild intermediate nodes (ProjectionExec/RepartitionExec)
         for node in intermediates.into_iter().rev() {
             result = replace_children_if_necessary(node, vec![result]).ok()?;
         }
