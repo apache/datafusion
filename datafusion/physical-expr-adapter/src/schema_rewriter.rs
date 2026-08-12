@@ -286,21 +286,25 @@ enum FieldPathResolution<'a> {
 
 /// Follow a `get_field` key path (`['a', 'b']` for `s['a']['b']`) through
 /// nested struct fields.
-fn resolve_field_path<'a>(fields: &'a Fields, path: &[&str]) -> FieldPathResolution<'a> {
-    let Some((field_name, rest)) = path.split_first() else {
-        // Defensive default: callers reject an empty key list before getting
-        // here, so this is unreachable rather than a claim that an empty path
-        // names a non-struct.
-        return FieldPathResolution::NotAStruct;
-    };
+///
+/// The first key is taken separately from the rest so that the "at least one
+/// key" invariant is carried by the signature: there is no empty path to
+/// resolve.
+fn resolve_field_path<'a>(
+    fields: &'a Fields,
+    field_name: &str,
+    rest: &[&str],
+) -> FieldPathResolution<'a> {
     let Some(field) = fields.iter().find(|f| f.name() == field_name) else {
         return FieldPathResolution::Missing;
     };
-    if rest.is_empty() {
+    let Some((next_field_name, rest)) = rest.split_first() else {
         return FieldPathResolution::Found(field);
-    }
+    };
     match field.data_type() {
-        DataType::Struct(nested_fields) => resolve_field_path(nested_fields, rest),
+        DataType::Struct(nested_fields) => {
+            resolve_field_path(nested_fields, next_field_name, rest)
+        }
         _ => FieldPathResolution::NotAStruct,
     }
 }
@@ -377,9 +381,6 @@ impl DefaultPhysicalExprAdapterRewriter {
         else {
             return Ok(None);
         };
-        if field_name_exprs.is_empty() {
-            return Ok(None);
-        }
         let Some(cast) = source_expr.downcast_ref::<CastExpr>() else {
             return Ok(None);
         };
@@ -396,13 +397,17 @@ impl DefaultPhysicalExprAdapterRewriter {
             };
             field_path.push(field_name);
         }
+        // A `get_field` with no keys is not a field access we can narrow.
+        let Some((first_key, rest_keys)) = field_path.split_first() else {
+            return Ok(None);
+        };
 
         let DataType::Struct(logical_struct_fields) = cast.target_field().data_type()
         else {
             return Ok(None);
         };
         let FieldPathResolution::Found(logical_struct_field) =
-            resolve_field_path(logical_struct_fields, &field_path)
+            resolve_field_path(logical_struct_fields, first_key, rest_keys)
         else {
             return Ok(None);
         };
@@ -414,7 +419,7 @@ impl DefaultPhysicalExprAdapterRewriter {
             return Ok(None);
         };
         let physical_struct_field =
-            match resolve_field_path(&physical_struct_fields, &field_path) {
+            match resolve_field_path(&physical_struct_fields, first_key, rest_keys) {
                 FieldPathResolution::Found(field) => field,
                 FieldPathResolution::Missing => {
                     // The file does not have this field at all, so reading it
