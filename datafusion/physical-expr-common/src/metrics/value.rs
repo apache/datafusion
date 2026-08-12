@@ -18,9 +18,11 @@
 //! Value representation of metrics
 
 use super::CustomMetricValue;
+use arrow::record_batch::RecordBatch;
 use chrono::{DateTime, Utc};
 use datafusion_common::{
     human_readable_count, human_readable_duration, human_readable_size, instant::Instant,
+    utils::memory::RecordBatchMemoryCounter,
 };
 use parking_lot::Mutex;
 use std::{
@@ -32,6 +34,52 @@ use std::{
     },
     time::Duration,
 };
+
+/// A counter to record deduplicated RecordBatch output bytes
+/// see [`RecordBatchMemoryCounter`] for details
+#[derive(Debug, Clone)]
+pub struct OutputBytesCount {
+    /// value of the metric counter
+    value: Arc<Mutex<RecordBatchMemoryCounter>>,
+}
+
+impl Default for OutputBytesCount {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PartialEq for OutputBytesCount {
+    fn eq(&self, other: &Self) -> bool {
+        self.value().eq(&other.value())
+    }
+}
+
+impl OutputBytesCount {
+    /// create a new counter
+    pub fn new() -> Self {
+        Self {
+            value: Arc::new(Mutex::new(RecordBatchMemoryCounter::new())),
+        }
+    }
+
+    /// Count the RecordBatch's memory
+    pub fn count_batch(&self, record_batch: &RecordBatch) {
+        let mut val = self.value.lock();
+        (*val).count_batch(record_batch);
+    }
+
+    /// Add `n` to the metric's value
+    pub fn add(&self, n: usize) {
+        let mut val = self.value.lock();
+        (*val).add(n);
+    }
+
+    /// Get the current value
+    pub fn value(&self) -> usize {
+        self.value.lock().memory_usage()
+    }
+}
 
 /// A counter to record things such as number of input or output rows
 ///
@@ -651,7 +699,7 @@ pub enum MetricValue {
     /// Total size of spilled bytes produced: "spilled_bytes" metric
     SpilledBytes(Count),
     /// Total size of output bytes produced: "output_bytes" metric
-    OutputBytes(Count),
+    OutputBytes(OutputBytesCount),
     /// Total number of output batches produced: "output_batches" metric
     OutputBatches(Count),
     /// Total size of spilled rows produced: "spilled_rows" metric
@@ -880,7 +928,7 @@ impl MetricValue {
             Self::OutputRows(_) => Self::OutputRows(Count::new()),
             Self::SpillCount(_) => Self::SpillCount(Count::new()),
             Self::SpilledBytes(_) => Self::SpilledBytes(Count::new()),
-            Self::OutputBytes(_) => Self::OutputBytes(Count::new()),
+            Self::OutputBytes(_) => Self::OutputBytes(OutputBytesCount::new()),
             Self::OutputBatches(_) => Self::OutputBatches(Count::new()),
             Self::SpilledRows(_) => Self::SpilledRows(Count::new()),
             Self::CurrentMemoryUsage(_) => Self::CurrentMemoryUsage(Gauge::new()),
@@ -940,7 +988,6 @@ impl MetricValue {
             (Self::OutputRows(count), Self::OutputRows(other_count))
             | (Self::SpillCount(count), Self::SpillCount(other_count))
             | (Self::SpilledBytes(count), Self::SpilledBytes(other_count))
-            | (Self::OutputBytes(count), Self::OutputBytes(other_count))
             | (Self::OutputBatches(count), Self::OutputBatches(other_count))
             | (Self::SpilledRows(count), Self::SpilledRows(other_count))
             | (
@@ -949,6 +996,9 @@ impl MetricValue {
                     count: other_count, ..
                 },
             ) => count.add(other_count.value()),
+            (Self::OutputBytes(count), Self::OutputBytes(other_count)) => {
+                count.add(other_count.value())
+            }
             (Self::CurrentMemoryUsage(gauge), Self::CurrentMemoryUsage(other_gauge))
             | (
                 Self::Gauge { gauge, .. },
@@ -1084,7 +1134,11 @@ impl Display for MetricValue {
             | Self::Count { count, .. } => {
                 write!(f, "{count}")
             }
-            Self::SpilledBytes(count) | Self::OutputBytes(count) => {
+            Self::SpilledBytes(count) => {
+                let readable_count = human_readable_size(count.value());
+                write!(f, "{readable_count}")
+            }
+            Self::OutputBytes(count) => {
                 let readable_count = human_readable_size(count.value());
                 write!(f, "{readable_count}")
             }

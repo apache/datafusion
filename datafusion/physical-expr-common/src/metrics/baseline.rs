@@ -20,10 +20,11 @@
 use std::{borrow::Cow, collections::BTreeMap, sync::Arc, task::Poll};
 
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, utils::memory::get_record_batch_memory_size};
+use datafusion_common::Result;
 
 use super::{
-    Count, ExecutionPlanMetricsSet, Metric, MetricBuilder, MetricsSet, Time, Timestamp,
+    Count, ExecutionPlanMetricsSet, Metric, MetricBuilder, MetricsSet, OutputBytesCount,
+    Time, Timestamp,
 };
 
 const OUTPUT_ROWS_SKEW_METRIC_NAME: &str = "output_rows_skew";
@@ -66,7 +67,7 @@ pub struct BaselineMetrics {
     /// instances share underlying memory buffers, their sizes will be counted
     /// multiple times.
     /// Issue: <https://github.com/apache/datafusion/issues/16841>
-    output_bytes: Count,
+    output_bytes: OutputBytesCount,
 
     /// output batches: the total output batch count
     output_batches: Count,
@@ -331,8 +332,7 @@ impl RecordOutput for usize {
 impl RecordOutput for RecordBatch {
     fn record_output(self, bm: &BaselineMetrics) -> Self {
         bm.record_output(self.num_rows());
-        let n_bytes = get_record_batch_memory_size(&self);
-        bm.output_bytes.add(n_bytes);
+        bm.output_bytes.count_batch(&self);
         bm.output_batches.add(1);
         self
     }
@@ -341,8 +341,7 @@ impl RecordOutput for RecordBatch {
 impl RecordOutput for &RecordBatch {
     fn record_output(self, bm: &BaselineMetrics) -> Self {
         bm.record_output(self.num_rows());
-        let n_bytes = get_record_batch_memory_size(self);
-        bm.output_bytes.add(n_bytes);
+        bm.output_bytes.count_batch(self);
         bm.output_batches.add(1);
         self
     }

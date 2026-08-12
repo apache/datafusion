@@ -25,8 +25,8 @@ use crate::metrics::{
 };
 
 use super::{
-    Count, ExecutionPlanMetricsSet, Gauge, Label, LabelValue, Metric, MetricValue, Time,
-    Timestamp,
+    Count, ExecutionPlanMetricsSet, Gauge, Label, LabelValue, Metric, MetricValue,
+    OutputBytesCount, Time, Timestamp,
 };
 
 /// Structure for constructing metrics, counters, timers, etc.
@@ -181,8 +181,8 @@ impl<'a> MetricBuilder<'a> {
     }
 
     /// Consume self and create a new counter for recording total output bytes
-    pub fn output_bytes(self, partition: usize) -> Count {
-        let count = Count::new();
+    pub fn output_bytes(self, partition: usize) -> OutputBytesCount {
+        let count = OutputBytesCount::new();
         self.with_category(MetricCategory::Bytes)
             .with_partition(partition)
             .build(MetricValue::OutputBytes(count.clone()));
