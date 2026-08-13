@@ -55,12 +55,19 @@ static DATASET: LazyLock<BenchmarkDataset> = LazyLock::new(|| {
     create_dataset().expect("failed to prepare fully-matched benchmark dataset")
 });
 
-fn sql() -> String {
+fn q39_like_sql() -> String {
     format!(
         "SELECT SUM(payload) FROM t \
          WHERE item_sk >= {LOWER_ITEM_SK} AND item_sk < {UPPER_ITEM_SK} \
            AND warehouse_sk >= 1 AND warehouse_sk <= 10 \
            AND sold_date_sk >= 2450905 AND sold_date_sk <= 2450934"
+    )
+}
+
+fn single_bound_sql() -> String {
+    format!(
+        "SELECT SUM(payload) FROM t \
+         WHERE item_sk >= {LOWER_ITEM_SK}"
     )
 }
 
@@ -93,33 +100,68 @@ fn metric_sum(plan: &Arc<dyn ExecutionPlan>, name: &str) -> usize {
         .sum::<usize>()
 }
 
+fn plan_metrics(plan: &Arc<dyn ExecutionPlan>) -> String {
+    let own = plan
+        .metrics()
+        .filter(|metrics| metrics.iter().next().is_some())
+        .map(|metrics| format!("{}=[{metrics}]", plan.name()));
+    own.into_iter()
+        .chain(
+            plan.children()
+                .into_iter()
+                .map(|child| plan_metrics(&child)),
+        )
+        .filter(|metrics| !metrics.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+struct ProbeResult {
+    sum: i64,
+    row_filter_matches: usize,
+    metrics: String,
+}
+
+fn probe(ctx: &SessionContext, rt: &Runtime, query: &str) -> ProbeResult {
+    rt.block_on(async {
+        let plan = ctx.sql(query).await?.create_physical_plan().await?;
+        let batches = collect(Arc::clone(&plan), ctx.task_ctx()).await?;
+        let sum = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("SUM(Int64) result")
+            .value(0);
+        Ok::<_, datafusion_common::DataFusionError>(ProbeResult {
+            sum,
+            row_filter_matches: metric_sum(&plan, "pushdown_rows_matched"),
+            metrics: plan_metrics(&plan),
+        })
+    })
+    .expect("execute fully-matched benchmark probe")
+}
+
 fn assert_fully_matched_groups_bypass_row_filter(
     ctx: &SessionContext,
     rt: &Runtime,
     query: &str,
 ) {
-    let (sum, row_filter_matches) = rt
-        .block_on(async {
-            let plan = ctx.sql(query).await?.create_physical_plan().await?;
-            let batches = collect(Arc::clone(&plan), ctx.task_ctx()).await?;
-            let sum = batches[0]
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .expect("SUM(Int64) result")
-                .value(0);
-            Ok::<_, datafusion_common::DataFusionError>((
-                sum,
-                metric_sum(&plan, "pushdown_rows_matched"),
-            ))
-        })
-        .expect("execute fully-matched benchmark probe");
+    let single_bound = probe(ctx, rt, &single_bound_sql());
+    let q39_like = probe(ctx, rt, query);
 
-    assert_eq!(sum, EXPECTED_ROWS as i64);
     assert_eq!(
-        row_filter_matches, EXPECTED_ROW_FILTER_MATCHES,
-        "38 fully-matched row groups should bypass RowFilter; only the two \
-         half-matched boundary groups should contribute matched-row metrics"
+        single_bound.sum,
+        (TOTAL_ROWS - LOWER_ITEM_SK as usize) as i64
+    );
+    assert_eq!(q39_like.sum, EXPECTED_ROWS as i64);
+    assert_eq!(
+        (single_bound.row_filter_matches, q39_like.row_filter_matches),
+        (ROW_GROUP_ROWS / 2, EXPECTED_ROW_FILTER_MATCHES),
+        "fully-matched row groups should bypass RowFilter.\n\
+         single-bound metrics:\n{}\n\
+         Q39-like metrics:\n{}",
+        single_bound.metrics,
+        q39_like.metrics,
     );
 }
 
@@ -131,7 +173,7 @@ fn run_query(ctx: &SessionContext, rt: &Runtime, query: &str) {
 fn parquet_fully_matched_row_filter(c: &mut Criterion) {
     let rt = Runtime::new().expect("create benchmark runtime");
     let ctx = create_context(DATASET.path(), &rt);
-    let query = sql();
+    let query = q39_like_sql();
 
     assert_fully_matched_groups_bypass_row_filter(&ctx, &rt, &query);
 

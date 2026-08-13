@@ -604,6 +604,7 @@ pub(crate) struct PreparedAccessPlan {
 
 impl PreparedAccessPlan {
     /// Create a new prepared access plan
+    #[cfg(test)]
     fn new(
         row_group_indexes: Vec<usize>,
         row_selection: Option<RowSelection>,
