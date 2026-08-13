@@ -795,14 +795,12 @@ impl BoolVecBuilder {
 
 fn is_always_true(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.downcast_ref::<phys_expr::Literal>()
-        .map(|l| matches!(l.value(), ScalarValue::Boolean(Some(true))))
-        .unwrap_or_default()
+        .is_some_and(|l| matches!(l.value(), ScalarValue::Boolean(Some(true))))
 }
 
 fn is_always_false(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.downcast_ref::<phys_expr::Literal>()
-        .map(|l| matches!(l.value(), ScalarValue::Boolean(Some(false))))
-        .unwrap_or_default()
+        .is_some_and(|l| matches!(l.value(), ScalarValue::Boolean(Some(false))))
 }
 
 /// Describes which columns statistics are necessary to evaluate a

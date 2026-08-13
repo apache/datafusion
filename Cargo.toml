@@ -266,6 +266,7 @@ macro_use_imports = "warn"
 manual_ilog2 = "warn"
 manual_instant_elapsed = "warn"
 manual_is_power_of_two = "warn"
+manual_is_variant_and = "warn"
 # `(a + b) / 2` can overflow; `a.midpoint(b)` cannot
 manual_midpoint = "warn"
 match_wild_err_arm = "warn"

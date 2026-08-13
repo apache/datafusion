@@ -185,11 +185,7 @@ pub fn check_subquery_expr(
                     }
                 }
                 _ => {
-                    if inner_plan
-                        .max_rows()
-                        .filter(|max_row| *max_row <= 1)
-                        .is_some()
-                    {
+                    if inner_plan.max_rows().is_some_and(|max_row| max_row <= 1) {
                         Ok(())
                     } else {
                         plan_err!(

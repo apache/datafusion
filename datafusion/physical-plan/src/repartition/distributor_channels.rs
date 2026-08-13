@@ -173,12 +173,7 @@ impl<T> Drop for DistributionSender<T> {
             // senders and it will decrement the `empty_channels` counter. It will also set `data` to `None`. The sender
             // side will then see that `data` is `None` and can therefore infer that the receiver end was dropped, and
             // hence it MUST NOT decrement the `empty_channels` counter.
-            if state
-                .data
-                .as_ref()
-                .map(|data| data.is_empty())
-                .unwrap_or_default()
-            {
+            if state.data.as_ref().is_some_and(|data| data.is_empty()) {
                 // channel is gone, so we need to clear our signal
                 self.gate.decr_empty_channels();
             }
