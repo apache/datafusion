@@ -66,7 +66,7 @@ const JSON_CONVERTER_BUFFER_SIZE: usize = 2 * 1024 * 1024;
 /// A stream wrapper that holds SpawnedTask handles to keep them alive
 /// until the stream is fully consumed or dropped.
 ///
-/// This ensures cancel-safety: when the stream is dropped, the tasks
+/// This ensures cancel-safety. When the stream is dropped, the tasks
 /// are properly aborted via SpawnedTask's Drop implementation.
 struct JsonArrayStream {
     inner: ReceiverStream<std::result::Result<RecordBatch, arrow::error::ArrowError>>,
