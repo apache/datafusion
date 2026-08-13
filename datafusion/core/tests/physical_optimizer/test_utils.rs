@@ -30,7 +30,9 @@ use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{
     ColumnStatistics, JoinType, NullEquality, Result, Statistics, internal_err,
@@ -68,9 +70,9 @@ use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, create_window_expr};
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, InputDistributionRequirements,
-    InputOrderMode, Partitioning, PlanProperties, SortOrderPushdownResult,
-    StatisticsArgs, displayable,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
+    InputDistributionRequirements, InputOrderMode, Partitioning, PlanProperties,
+    ReplaceChildrenOptions, SortOrderPushdownResult, StatisticsArgs, displayable,
 };
 
 /// Create a non sorted parquet exec
@@ -524,9 +526,10 @@ impl ExecutionPlan for RequirementsTestExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert_eq!(children.len(), 1);
         Ok(RequirementsTestExec::new(Arc::clone(&children[0]))
@@ -536,12 +539,29 @@ impl ExecutionPlan for RequirementsTestExec {
             .into_arc())
     }
 
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
     fn execute(
         &self,
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         unimplemented!("Test exec does not support execution")
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -1016,15 +1036,26 @@ impl ExecutionPlan for TestScan {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.is_empty() {
             Ok(self)
         } else {
             internal_err!("TestScan should have no children")
         }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -1091,6 +1122,13 @@ impl ExecutionPlan for TestScan {
             })
         }
     }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
 }
 
 /// Helper function to create a TestScan with ordering
@@ -1107,6 +1145,13 @@ struct InexactMemorySource {
 }
 
 impl DataSource for InexactMemorySource {
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        self.inner.apply_expressions(f)
+    }
+
     fn open(
         &self,
         partition: usize,

@@ -37,6 +37,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use arrow::row::SortField;
 use datafusion_common::Result;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_execution::TaskContext;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr::PhysicalExpr;
@@ -47,6 +48,7 @@ use futures::TryStreamExt;
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::metrics::ExecutionPlanMetricsSet;
 use crate::topk::{PartitionedTopK, PartitionedTopKRank, build_sort_fields};
+use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, SendableRecordBatchStream, stream::RecordBatchStreamAdapter,
@@ -365,9 +367,10 @@ impl ExecutionPlan for PartitionedTopKExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert_eq!(children.len(), 1);
         Ok(Arc::new(PartitionedTopKExec::try_new(
@@ -377,6 +380,26 @@ impl ExecutionPlan for PartitionedTopKExec {
             self.fetch,
             self.fn_kind,
         )?))
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        crate::apply_expression_roots(
+            self.expr.iter().map(|sort_expr| &sort_expr.expr),
+            f,
+        )
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(

@@ -108,7 +108,7 @@ use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 /// C: true  (rows might match x = 5)
 /// ```
 ///
-/// See [`PruningPredicate::try_new`] and [`PruningPredicate::prune`] for more information.
+/// See [`PruningPredicateBuilder`] and [`PruningPredicate::prune`] for more information.
 ///
 /// # Background
 ///
@@ -409,8 +409,6 @@ pub fn build_pruning_predicate(
 ///  - [`Self::try_build`]: returns a raw `Result<PruningPredicate>` for
 ///    callers that want to surface errors themselves.
 ///
-/// Callers that only need the historical `expr` / `schema` API can still
-/// use [`PruningPredicate::try_new`] directly.
 #[derive(Default)]
 pub struct PruningPredicateBuilder<'a> {
     file_schema: Option<SchemaRef>,
@@ -419,8 +417,7 @@ pub struct PruningPredicateBuilder<'a> {
 }
 
 impl<'a> PruningPredicateBuilder<'a> {
-    /// Create a new builder with defaults matching the historical
-    /// [`PruningPredicate::try_new`] behaviour.
+    /// Create a new builder with the default pruning predicate configuration.
     pub fn new() -> Self {
         Self {
             file_schema: None,
@@ -483,13 +480,56 @@ impl<'a> PruningPredicateBuilder<'a> {
     /// Build a [`PruningPredicate`], returning the construction error
     /// directly. Callers that want the always-true predicate elided or
     /// errors folded into a counter should use [`Self::build`] instead.
-    pub fn try_build(self, predicate: Arc<dyn PhysicalExpr>) -> Result<PruningPredicate> {
+    pub fn try_build(
+        self,
+        mut predicate: Arc<dyn PhysicalExpr>,
+    ) -> Result<PruningPredicate> {
         let file_schema = self.file_schema.ok_or_else(|| {
             _internal_datafusion_err!(
                 "PruningPredicateBuilder requires a file schema (call `with_file_schema`)"
             )
         })?;
-        PruningPredicate::try_new_inner(predicate, file_schema, self.max_in_list_size)
+
+        // Get a (simpler) snapshot of the physical expr here to use with `PruningPredicate`.
+        // In particular this unravels any `DynamicFilterPhysicalExpr`s by snapshotting them
+        // so that PruningPredicate can work with a static expression.
+        let tf = snapshot_physical_expr_opt(predicate)?;
+        if tf.transformed {
+            // If we had an expression such as Dynamic(part_col < 5 and col < 10)
+            // (this could come from something like `select * from t order by part_col, col, limit 10`)
+            // after snapshotting and because `DynamicFilterPhysicalExpr` applies child replacements to its
+            // children after snapshotting and previously `replace_columns_with_literals` may have been called with partition values
+            // the expression we have now is `8 < 5 and col < 10`.
+            // Thus we need as simplifier pass to get `false and col < 10` => `false` here.
+            let simplifier = PhysicalExprSimplifier::new(&file_schema);
+            predicate = simplifier.simplify(tf.data)?;
+        } else {
+            predicate = tf.data;
+        }
+        let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
+
+        // build predicate expression once
+        let mut required_columns = RequiredColumns::new();
+        let predicate_expr = build_predicate_expression(
+            &predicate,
+            &file_schema,
+            &mut required_columns,
+            &unhandled_hook,
+            self.max_in_list_size,
+        );
+        let predicate_schema = required_columns.schema();
+        // Simplify the newly created predicate to get rid of redundant casts, comparisons, etc.
+        let predicate_expr =
+            PhysicalExprSimplifier::new(&predicate_schema).simplify(predicate_expr)?;
+        let literal_guarantees = LiteralGuarantee::analyze(&predicate);
+
+        Ok(PruningPredicate {
+            schema: file_schema,
+            predicate_expr,
+            required_columns,
+            orig_expr: predicate,
+            literal_guarantees,
+        })
     }
 }
 
@@ -552,59 +592,13 @@ impl PruningPredicate {
     /// returns a new expression.
     /// It is recommended that you pass the expressions through [`PhysicalExprSimplifier`]
     /// before calling this method to make sure the expressions can be used for pruning.
+    ///
+    /// Use [`PruningPredicateBuilder`] to construct new pruning predicates.
+    #[deprecated(since = "55.0.0", note = "Use PruningPredicateBuilder instead")]
     pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
-        Self::try_new_inner(expr, schema, MAX_IN_LIST_SIZE)
-    }
-
-    /// Internal constructor with an explicit cap on the `IN (...)` rewrite
-    /// size. External callers should reach this through
-    /// [`PruningPredicateBuilder::with_max_in_list_size`] instead of
-    /// depending on this signature directly.
-    pub(crate) fn try_new_inner(
-        mut expr: Arc<dyn PhysicalExpr>,
-        schema: SchemaRef,
-        max_in_list_size: usize,
-    ) -> Result<Self> {
-        // Get a (simpler) snapshot of the physical expr here to use with `PruningPredicate`.
-        // In particular this unravels any `DynamicFilterPhysicalExpr`s by snapshotting them
-        // so that PruningPredicate can work with a static expression.
-        let tf = snapshot_physical_expr_opt(expr)?;
-        if tf.transformed {
-            // If we had an expression such as Dynamic(part_col < 5 and col < 10)
-            // (this could come from something like `select * from t order by part_col, col, limit 10`)
-            // after snapshotting and because `DynamicFilterPhysicalExpr` applies child replacements to its
-            // children after snapshotting and previously `replace_columns_with_literals` may have been called with partition values
-            // the expression we have now is `8 < 5 and col < 10`.
-            // Thus we need as simplifier pass to get `false and col < 10` => `false` here.
-            let simplifier = PhysicalExprSimplifier::new(&schema);
-            expr = simplifier.simplify(tf.data)?;
-        } else {
-            expr = tf.data;
-        }
-        let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
-
-        // build predicate expression once
-        let mut required_columns = RequiredColumns::new();
-        let predicate_expr = build_predicate_expression(
-            &expr,
-            &schema,
-            &mut required_columns,
-            &unhandled_hook,
-            max_in_list_size,
-        );
-        let predicate_schema = required_columns.schema();
-        // Simplify the newly created predicate to get rid of redundant casts, comparisons, etc.
-        let predicate_expr =
-            PhysicalExprSimplifier::new(&predicate_schema).simplify(predicate_expr)?;
-        let literal_guarantees = LiteralGuarantee::analyze(&expr);
-
-        Ok(Self {
-            schema,
-            predicate_expr,
-            required_columns,
-            orig_expr: expr,
-            literal_guarantees,
-        })
+        PruningPredicateBuilder::new()
+            .with_file_schema(schema)
+            .try_build(expr)
     }
 
     /// For each set of statistics, evaluates the pruning predicate
@@ -2594,7 +2588,10 @@ mod tests {
         ]));
         let expr = col("c1").eq(lit(100)).and(col("c2").eq(lit(200)));
         let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, Arc::clone(&schema)).unwrap();
+        let p = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .try_build(expr)
+            .unwrap();
         // note pruning expression refers to row_count twice
         assert_eq!(
             "c1_null_count@2 != row_count@3 AND c1_min@0 <= 100 AND 100 <= c1_max@1 AND c2_null_count@6 != row_count@3 AND c2_min@4 <= 200 AND 200 <= c2_max@5",
@@ -3234,8 +3231,10 @@ mod tests {
             dynamic_phys_expr.with_new_children(remapped_expr).unwrap();
         // After substitution the expression is c1 > 5 AND part = "B" which should prune the file since the partition value is "A"
         let expected = &[false];
-        let p =
-            PruningPredicate::try_new(dynamic_filter_expr, Arc::clone(&schema)).unwrap();
+        let p = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .try_build(dynamic_filter_expr)
+            .unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected);
     }
@@ -3553,6 +3552,30 @@ mod tests {
         assert!(
             raised_expr.contains(" <= 1 ") && raised_expr.contains(" <= 25 "),
             "raised-cap predicate should include per-value bounds, got: {raised_expr}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[expect(deprecated)]
+    fn deprecated_try_new_delegates_to_builder() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let expr = logical2physical(&col("c1").eq(lit(1)), &schema);
+
+        let deprecated =
+            PruningPredicate::try_new(Arc::clone(&expr), Arc::clone(&schema))?;
+        let builder = PruningPredicateBuilder::new()
+            .with_file_schema(schema)
+            .try_build(expr)?;
+
+        assert_eq!(
+            deprecated.predicate_expr().to_string(),
+            builder.predicate_expr().to_string()
+        );
+        assert_eq!(
+            deprecated.required_columns().schema(),
+            builder.required_columns().schema()
         );
         Ok(())
     }
@@ -5943,7 +5966,10 @@ mod tests {
     ) {
         println!("Pruning with expr: {expr}");
         let expr = logical2physical(&expr, schema);
-        let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema)).unwrap();
+        let p = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::<Schema>::clone(schema))
+            .try_build(expr)
+            .unwrap();
         let result = p.prune(statistics).unwrap();
         assert_eq!(result, expected);
     }
@@ -5958,7 +5984,10 @@ mod tests {
         let expr = logical2physical(&expr, schema);
         let simplifier = PhysicalExprSimplifier::new(schema);
         let expr = simplifier.simplify(expr).unwrap();
-        let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema)).unwrap();
+        let p = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::<Schema>::clone(schema))
+            .try_build(expr)
+            .unwrap();
         let result = p.prune(statistics).unwrap();
         assert_eq!(result, expected);
     }

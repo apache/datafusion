@@ -434,6 +434,10 @@ impl DynamicFilterPhysicalExpr {
     /// We check both Arc counts to handle two cases:
     /// - Transformed filters (via `with_new_children`) share the inner Arc (inner count > 1)
     /// - Direct clones (via `Arc::clone`) increment the outer count (outer count > 1)
+    #[deprecated(
+        since = "55.0.0",
+        note = "Traverse ExecutionPlan::apply_expressions and compare PhysicalExpr::expression_id instead"
+    )]
     pub fn is_used(self: &Arc<Self>) -> bool {
         // Strong count > 1 means at least one consumer is holding a reference beyond the producer.
         Arc::strong_count(self) > 1 || Arc::strong_count(&self.inner) > 1
@@ -1091,6 +1095,10 @@ mod test {
     }
 
     #[test]
+    #[expect(
+        deprecated,
+        reason = "covers the deprecated API during its retention period"
+    )]
     fn test_is_used() {
         let filter = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![],
