@@ -419,18 +419,38 @@ impl ArrayMap {
     #[cfg(feature = "proto")]
     pub fn to_proto_membership_only(
         &self,
-    ) -> datafusion_proto_models::protobuf::ArrayMapMembershipNode {
+    ) -> datafusion_proto_models::protobuf::ArrayMapMembership {
         use datafusion_proto_models::protobuf;
 
         let bits = BooleanBuffer::collect_bool(self.data.len(), |i| self.data[i] != 0);
         // SAFETY: This always succeeds. None of the 3 error conditions of
         // into_vec() are present.
         let presence = bits.sliced().into_vec().unwrap();
-        protobuf::ArrayMapMembershipNode {
+        protobuf::ArrayMapMembership {
             offset: self.offset,
             num_slots: self.data.len() as u64,
             presence,
         }
+    }
+
+    #[cfg(feature = "proto")]
+    pub fn try_from_proto_membership_only(
+        node: &datafusion_proto_models::protobuf::ArrayMapMembership,
+    ) -> Result<Self> {
+        use arrow_data::bit_iterator::BitIndexIterator;
+
+        let mut data = vec![0u32; node.num_slots as usize];
+        let mut num_of_distinct_key = 0;
+        for slot in BitIndexIterator::new(&node.presence, 0, node.num_slots as usize) {
+            data[slot] = 1;
+            num_of_distinct_key += 1;
+        }
+        Ok(Self {
+            data,
+            offset: node.offset,
+            next: Vec::new(),
+            num_of_distinct_key,
+        })
     }
 }
 

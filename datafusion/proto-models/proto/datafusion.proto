@@ -1052,7 +1052,7 @@ message PhysicalExprNode {
     PhysicalLambdaVariableExprNode lambda_variable = 26;
     PhysicalRangeExprNode range_expr = 27;
     PhysicalSqlSimilarToPatternNode sql_similar_to_pattern = 28;
-    PhysicalHashTableLookupExprNode hash_lookup_expr = 29;
+    PhysicalHashTableLookupExprNode hash_table_lookup_expr = 29;
   }
 }
 
@@ -1214,17 +1214,19 @@ message PhysicalHashTableLookupExprNode {
   uint64 seed0 = 2;
   string description = 3;
   oneof map {
-    HashSetMapMembership hash_map_membership = 4;
-    ArrayMap array_map = 5;
+    HashMapMembership hash_map_membership = 4;
+    ArrayMapMembership array_map_membership = 5;
   }
 }
 
-message HashSetMapMembership {
+message HashMapMembership {
   repeated fixed64 build_hashes = 1;
 }
 
-message ArrayMap {
-  repeated fixed64 keys = 1;
+message ArrayMapMembership {
+  uint64 offset = 1;
+  uint64 num_slots = 2;
+  bytes presence = 3;
 }
 
 message PhysicalRangeExprNode {

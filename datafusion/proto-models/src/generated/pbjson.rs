@@ -1445,7 +1445,7 @@ impl<'de> serde::Deserialize<'de> for AnalyzedLogicalPlanType {
         deserializer.deserialize_struct("datafusion.AnalyzedLogicalPlanType", FIELDS, GeneratedVisitor)
     }
 }
-impl serde::Serialize for ArrayMap {
+impl serde::Serialize for ArrayMapMembership {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
@@ -1453,29 +1453,52 @@ impl serde::Serialize for ArrayMap {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if !self.keys.is_empty() {
+        if self.offset != 0 {
             len += 1;
         }
-        let mut struct_ser = serializer.serialize_struct("datafusion.ArrayMap", len)?;
-        if !self.keys.is_empty() {
-            struct_ser.serialize_field("keys", &self.keys.iter().map(ToString::to_string).collect::<Vec<_>>())?;
+        if self.num_slots != 0 {
+            len += 1;
+        }
+        if !self.presence.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.ArrayMapMembership", len)?;
+        if self.offset != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("offset", ToString::to_string(&self.offset).as_str())?;
+        }
+        if self.num_slots != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("numSlots", ToString::to_string(&self.num_slots).as_str())?;
+        }
+        if !self.presence.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("presence", pbjson::private::base64::encode(&self.presence).as_str())?;
         }
         struct_ser.end()
     }
 }
-impl<'de> serde::Deserialize<'de> for ArrayMap {
+impl<'de> serde::Deserialize<'de> for ArrayMapMembership {
     #[allow(deprecated)]
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "keys",
+            "offset",
+            "num_slots",
+            "numSlots",
+            "presence",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
-            Keys,
+            Offset,
+            NumSlots,
+            Presence,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1497,7 +1520,9 @@ impl<'de> serde::Deserialize<'de> for ArrayMap {
                         E: serde::de::Error,
                     {
                         match value {
-                            "keys" => Ok(GeneratedField::Keys),
+                            "offset" => Ok(GeneratedField::Offset),
+                            "numSlots" | "num_slots" => Ok(GeneratedField::NumSlots),
+                            "presence" => Ok(GeneratedField::Presence),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1507,36 +1532,55 @@ impl<'de> serde::Deserialize<'de> for ArrayMap {
         }
         struct GeneratedVisitor;
         impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = ArrayMap;
+            type Value = ArrayMapMembership;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct datafusion.ArrayMap")
+                formatter.write_str("struct datafusion.ArrayMapMembership")
             }
 
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ArrayMap, V::Error>
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ArrayMapMembership, V::Error>
                 where
                     V: serde::de::MapAccess<'de>,
             {
-                let mut keys__ = None;
+                let mut offset__ = None;
+                let mut num_slots__ = None;
+                let mut presence__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
-                        GeneratedField::Keys => {
-                            if keys__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("keys"));
+                        GeneratedField::Offset => {
+                            if offset__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("offset"));
                             }
-                            keys__ = 
-                                Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
-                                    .into_iter().map(|x| x.0).collect())
+                            offset__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::NumSlots => {
+                            if num_slots__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("numSlots"));
+                            }
+                            num_slots__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Presence => {
+                            if presence__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("presence"));
+                            }
+                            presence__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
                     }
                 }
-                Ok(ArrayMap {
-                    keys: keys__.unwrap_or_default(),
+                Ok(ArrayMapMembership {
+                    offset: offset__.unwrap_or_default(),
+                    num_slots: num_slots__.unwrap_or_default(),
+                    presence: presence__.unwrap_or_default(),
                 })
             }
         }
-        deserializer.deserialize_struct("datafusion.ArrayMap", FIELDS, GeneratedVisitor)
+        deserializer.deserialize_struct("datafusion.ArrayMapMembership", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for ArrowIpcFormat {
@@ -9486,6 +9530,101 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
         deserializer.deserialize_struct("datafusion.HashJoinExecNode", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for HashMapMembership {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.build_hashes.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.HashMapMembership", len)?;
+        if !self.build_hashes.is_empty() {
+            struct_ser.serialize_field("buildHashes", &self.build_hashes.iter().map(ToString::to_string).collect::<Vec<_>>())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for HashMapMembership {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "build_hashes",
+            "buildHashes",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            BuildHashes,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "buildHashes" | "build_hashes" => Ok(GeneratedField::BuildHashes),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = HashMapMembership;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.HashMapMembership")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<HashMapMembership, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut build_hashes__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::BuildHashes => {
+                            if build_hashes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("buildHashes"));
+                            }
+                            build_hashes__ = 
+                                Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
+                                    .into_iter().map(|x| x.0).collect())
+                            ;
+                        }
+                    }
+                }
+                Ok(HashMapMembership {
+                    build_hashes: build_hashes__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.HashMapMembership", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for HashRepartition {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -9598,101 +9737,6 @@ impl<'de> serde::Deserialize<'de> for HashRepartition {
             }
         }
         deserializer.deserialize_struct("datafusion.HashRepartition", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for HashSetMapMembership {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if !self.build_hashes.is_empty() {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("datafusion.HashSetMapMembership", len)?;
-        if !self.build_hashes.is_empty() {
-            struct_ser.serialize_field("buildHashes", &self.build_hashes.iter().map(ToString::to_string).collect::<Vec<_>>())?;
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for HashSetMapMembership {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "build_hashes",
-            "buildHashes",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            BuildHashes,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl serde::de::Visitor<'_> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "buildHashes" | "build_hashes" => Ok(GeneratedField::BuildHashes),
-                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = HashSetMapMembership;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct datafusion.HashSetMapMembership")
-            }
-
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<HashSetMapMembership, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut build_hashes__ = None;
-                while let Some(k) = map_.next_key()? {
-                    match k {
-                        GeneratedField::BuildHashes => {
-                            if build_hashes__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("buildHashes"));
-                            }
-                            build_hashes__ = 
-                                Some(map_.next_value::<Vec<::pbjson::private::NumberDeserialize<_>>>()?
-                                    .into_iter().map(|x| x.0).collect())
-                            ;
-                        }
-                    }
-                }
-                Ok(HashSetMapMembership {
-                    build_hashes: build_hashes__.unwrap_or_default(),
-                })
-            }
-        }
-        deserializer.deserialize_struct("datafusion.HashSetMapMembership", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for HigherOrderUdfExprNode {
@@ -18774,8 +18818,8 @@ impl serde::Serialize for PhysicalExprNode {
                 physical_expr_node::ExprType::SqlSimilarToPattern(v) => {
                     struct_ser.serialize_field("sqlSimilarToPattern", v)?;
                 }
-                physical_expr_node::ExprType::HashLookupExpr(v) => {
-                    struct_ser.serialize_field("hashLookupExpr", v)?;
+                physical_expr_node::ExprType::HashTableLookupExpr(v) => {
+                    struct_ser.serialize_field("hashTableLookupExpr", v)?;
                 }
             }
         }
@@ -18836,8 +18880,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             "rangeExpr",
             "sql_similar_to_pattern",
             "sqlSimilarToPattern",
-            "hash_lookup_expr",
-            "hashLookupExpr",
+            "hash_table_lookup_expr",
+            "hashTableLookupExpr",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -18869,7 +18913,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
             LambdaVariable,
             RangeExpr,
             SqlSimilarToPattern,
-            HashLookupExpr,
+            HashTableLookupExpr,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -18918,7 +18962,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                             "lambdaVariable" | "lambda_variable" => Ok(GeneratedField::LambdaVariable),
                             "rangeExpr" | "range_expr" => Ok(GeneratedField::RangeExpr),
                             "sqlSimilarToPattern" | "sql_similar_to_pattern" => Ok(GeneratedField::SqlSimilarToPattern),
-                            "hashLookupExpr" | "hash_lookup_expr" => Ok(GeneratedField::HashLookupExpr),
+                            "hashTableLookupExpr" | "hash_table_lookup_expr" => Ok(GeneratedField::HashTableLookupExpr),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -19132,11 +19176,11 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                             expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::SqlSimilarToPattern)
 ;
                         }
-                        GeneratedField::HashLookupExpr => {
+                        GeneratedField::HashTableLookupExpr => {
                             if expr_type__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("hashLookupExpr"));
+                                return Err(serde::de::Error::duplicate_field("hashTableLookupExpr"));
                             }
-                            expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::HashLookupExpr)
+                            expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_expr_node::ExprType::HashTableLookupExpr)
 ;
                         }
                     }
@@ -19655,8 +19699,8 @@ impl serde::Serialize for PhysicalHashTableLookupExprNode {
                 physical_hash_table_lookup_expr_node::Map::HashMapMembership(v) => {
                     struct_ser.serialize_field("hashMapMembership", v)?;
                 }
-                physical_hash_table_lookup_expr_node::Map::ArrayMap(v) => {
-                    struct_ser.serialize_field("arrayMap", v)?;
+                physical_hash_table_lookup_expr_node::Map::ArrayMapMembership(v) => {
+                    struct_ser.serialize_field("arrayMapMembership", v)?;
                 }
             }
         }
@@ -19676,8 +19720,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalHashTableLookupExprNode {
             "description",
             "hash_map_membership",
             "hashMapMembership",
-            "array_map",
-            "arrayMap",
+            "array_map_membership",
+            "arrayMapMembership",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -19686,7 +19730,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalHashTableLookupExprNode {
             Seed0,
             Description,
             HashMapMembership,
-            ArrayMap,
+            ArrayMapMembership,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -19712,7 +19756,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalHashTableLookupExprNode {
                             "seed0" => Ok(GeneratedField::Seed0),
                             "description" => Ok(GeneratedField::Description),
                             "hashMapMembership" | "hash_map_membership" => Ok(GeneratedField::HashMapMembership),
-                            "arrayMap" | "array_map" => Ok(GeneratedField::ArrayMap),
+                            "arrayMapMembership" | "array_map_membership" => Ok(GeneratedField::ArrayMapMembership),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -19765,11 +19809,11 @@ impl<'de> serde::Deserialize<'de> for PhysicalHashTableLookupExprNode {
                             map__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_hash_table_lookup_expr_node::Map::HashMapMembership)
 ;
                         }
-                        GeneratedField::ArrayMap => {
+                        GeneratedField::ArrayMapMembership => {
                             if map__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("arrayMap"));
+                                return Err(serde::de::Error::duplicate_field("arrayMapMembership"));
                             }
-                            map__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_hash_table_lookup_expr_node::Map::ArrayMap)
+                            map__ = map_.next_value::<::std::option::Option<_>>()?.map(physical_hash_table_lookup_expr_node::Map::ArrayMapMembership)
 ;
                         }
                     }

@@ -1627,7 +1627,7 @@ pub mod physical_expr_node {
             ::prost::alloc::boxed::Box<super::PhysicalSqlSimilarToPatternNode>,
         ),
         #[prost(message, tag = "29")]
-        HashLookupExpr(super::PhysicalHashTableLookupExprNode),
+        HashTableLookupExpr(super::PhysicalHashTableLookupExprNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1889,20 +1889,24 @@ pub mod physical_hash_table_lookup_expr_node {
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Map {
         #[prost(message, tag = "4")]
-        HashMapMembership(super::HashSetMapMembership),
+        HashMapMembership(super::HashMapMembership),
         #[prost(message, tag = "5")]
-        ArrayMap(super::ArrayMap),
+        ArrayMapMembership(super::ArrayMapMembership),
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct HashSetMapMembership {
+pub struct HashMapMembership {
     #[prost(fixed64, repeated, tag = "1")]
     pub build_hashes: ::prost::alloc::vec::Vec<u64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ArrayMap {
-    #[prost(fixed64, repeated, tag = "1")]
-    pub keys: ::prost::alloc::vec::Vec<u64>,
+pub struct ArrayMapMembership {
+    #[prost(uint64, tag = "1")]
+    pub offset: u64,
+    #[prost(uint64, tag = "2")]
+    pub num_slots: u64,
+    #[prost(bytes = "vec", tag = "3")]
+    pub presence: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalRangeExprNode {
