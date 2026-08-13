@@ -311,6 +311,76 @@ impl JoinHashMapType for JoinHashMapU64 {
     }
 }
 
+/// Membership-only join map reconstructed from serialized distinct hashes.
+/// Supports `contain_hashes` lookups only; it has no build-side rows.
+pub struct JoinHashMembershipMap {
+    map: HashTable<(u64, ())>,
+}
+impl JoinHashMembershipMap {
+    pub fn new(hashes: &[u64]) -> Self {
+        let mut map = HashTable::with_capacity(hashes.len());
+
+        for h in hashes {
+            map.insert_unique(*h, (*h, ()), |(h, _)| *h);
+        }
+
+        Self { map }
+    }
+}
+
+impl JoinHashMapType for JoinHashMembershipMap {
+    fn extend_zero(&mut self, _len: usize) {
+        unimplemented!();
+    }
+
+    fn update_from_iter<'a>(
+        &mut self,
+        _iter: Box<dyn Iterator<Item = (usize, &'a u64)> + Send + 'a>,
+        _deleted_offset: usize,
+    ) {
+        unimplemented!();
+    }
+
+    fn get_matched_indices<'a>(
+        &self,
+        _iter: Box<dyn Iterator<Item = (usize, &'a u64)> + 'a>,
+        _deleted_offset: Option<usize>,
+    ) -> (Vec<u32>, Vec<u64>) {
+        unimplemented!();
+    }
+
+    fn get_matched_indices_with_limit_offset(
+        &self,
+        _hash_values: &[u64],
+        _valid_keys: Option<&NullBuffer>,
+        _limit: usize,
+        _offset: MapOffset,
+        _input_indices: &mut Vec<u32>,
+        _match_indices: &mut Vec<u64>,
+    ) -> Option<MapOffset> {
+        unimplemented!()
+    }
+
+    /// Returns a BooleanArray indicating which of the provided hashes exist in the map.
+    fn contain_hashes(&self, hash_values: &[u64]) -> BooleanArray {
+        contain_hashes(&self.map, hash_values)
+    }
+
+    /// Returns `true` if the join hash map contains no entries.
+    fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    /// Returns the number of entries in the join hash map.
+    fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    fn hashes(&self) -> Vec<u64> {
+        self.map.iter().map(|(h, _)| *h).collect()
+    }
+}
+
 use crate::joins::MapOffset;
 use crate::joins::chain::traverse_chain;
 

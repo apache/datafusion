@@ -19,6 +19,7 @@
 
 use std::{fmt::Display, hash::Hash, sync::Arc};
 
+use arrow::array::BooleanArray;
 use arrow::{
     array::{ArrayRef, UInt64Array},
     datatypes::{DataType, Schema},
@@ -32,8 +33,10 @@ use datafusion_common::internal_err;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr_common::dyn_eq::DynHash;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, PhysicalExprRef};
+use hashbrown::HashTable;
 
 use crate::joins::Map;
+use crate::joins::array_map::ArrayMap;
 
 /// RandomState wrapper that preserves the seed used to create it.
 ///
@@ -283,7 +286,7 @@ pub struct HashTableLookupExpr {
     /// Map to check against (hash table or array map)
     /// Safety: Post-deserialization, this is only safe for membership checks and
     /// should not be modified further.
-    map: Arc<Map>,
+    map: Arc<HashTableLookupExprMap>,
     /// Description for display
     description: String,
 }
@@ -307,7 +310,7 @@ impl HashTableLookupExpr {
         Self {
             on_columns,
             random_state,
-            map,
+            map: Arc::new(HashTableLookupExprMap::Normal(map)),
             description,
         }
     }
@@ -374,12 +377,12 @@ impl PhysicalExpr for HashTableLookupExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(HashTableLookupExpr::new(
-            children,
-            self.random_state.clone(),
-            Arc::clone(&self.map),
-            self.description.clone(),
-        )))
+        Ok(Arc::new(HashTableLookupExpr {
+            on_columns: children,
+            random_state: self.random_state.clone(),
+            map: Arc::clone(&self.map),
+            description: self.description.clone(),
+        }))
     }
 
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
@@ -395,13 +398,25 @@ impl PhysicalExpr for HashTableLookupExpr {
         let join_keys = evaluate_columns(&self.on_columns, batch)?;
 
         match self.map.as_ref() {
-            Map::HashMap(map) => {
+            HashTableLookupExprMap::Normal(normal) => match &**normal {
+                Map::HashMap(map) => {
+                    with_hashes(&join_keys, self.random_state.random_state(), |hashes| {
+                        let array = map.contain_hashes(hashes);
+                        Ok(ColumnarValue::Array(Arc::new(array)))
+                    })
+                }
+                Map::ArrayMap(map) => {
+                    let array = map.contain_keys(&join_keys)?;
+                    Ok(ColumnarValue::Array(Arc::new(array)))
+                }
+            },
+            HashTableLookupExprMap::MembershipOnlyHashMap(map) => {
                 with_hashes(&join_keys, self.random_state.random_state(), |hashes| {
                     let array = map.contain_hashes(hashes);
                     Ok(ColumnarValue::Array(Arc::new(array)))
                 })
             }
-            Map::ArrayMap(map) => {
+            HashTableLookupExprMap::MembershipOnlyArrayMap(map) => {
                 let array = map.contain_keys(&join_keys)?;
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
@@ -436,12 +451,13 @@ impl PhysicalExpr for HashTableLookupExpr {
         let on_columns = ctx.encode_children_expressions(&self.on_columns)?;
         let map = try_map_to_proto_membership_only(&self.map)?;
 
-        let expr = ExprType::HashLookupExpr(protobuf::PhysicalHashTableLookupExprNode {
-            on_columns,
-            seed0: self.random_state.seed,
-            description: self.description.clone(),
-            map: Some(map),
-        });
+        let expr =
+            ExprType::HashTableLookupExpr(protobuf::PhysicalHashTableLookupExprNode {
+                on_columns,
+                seed0: self.random_state.seed,
+                description: self.description.clone(),
+                map: Some(map),
+            });
 
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: self.expression_id(),
@@ -455,24 +471,88 @@ impl PhysicalExpr for HashTableLookupExpr {
 
 #[cfg(feature = "proto")]
 fn try_map_to_proto_membership_only(
-    map: &Map,
+    map: &HashTableLookupExprMap,
 ) -> Result<datafusion_proto_models::protobuf::physical_hash_table_lookup_expr_node::Map>
 {
     use datafusion_proto_models::protobuf;
 
     match map {
-        Map::ArrayMap(array_map) => Ok(
-            protobuf::physical_hash_table_lookup_expr_node::Map::ArrayMapMembership(
-                array_map.to_proto_membership_only(),
+        HashTableLookupExprMap::Normal(normal) => match &**normal {
+            Map::ArrayMap(array_map) => Ok(
+                protobuf::physical_hash_table_lookup_expr_node::Map::ArrayMapMembership(
+                    array_map.to_proto_membership_only(),
+                ),
             ),
-        ),
-        Map::HashMap(hash_map) => Ok(
+            Map::HashMap(hash_map) => Ok(
+                protobuf::physical_hash_table_lookup_expr_node::Map::HashMapMembership(
+                    protobuf::HashMapMembership {
+                        build_hashes: hash_map.hashes(),
+                    },
+                ),
+            ),
+        },
+        HashTableLookupExprMap::MembershipOnlyHashMap(hash_map) => Ok(
             protobuf::physical_hash_table_lookup_expr_node::Map::HashMapMembership(
-                protobuf::HashSetMapMembershipNode {
+                protobuf::HashMapMembership {
                     build_hashes: hash_map.hashes(),
                 },
             ),
         ),
+        HashTableLookupExprMap::MembershipOnlyArrayMap(array_map) => Ok(
+            protobuf::physical_hash_table_lookup_expr_node::Map::ArrayMapMembership(
+                array_map.0.to_proto_membership_only(),
+            ),
+        ),
+    }
+}
+
+#[cfg(feature = "proto")]
+impl HashTableLookupExpr {
+    /// Reconstruct a [`HashTableLookupExpr`] from its protobuf representation.
+    ///
+    /// Takes the whole [`PhysicalExprNode`], the exact inverse of what
+    /// [`PhysicalExpr::try_to_proto`] produces, so every expression's
+    /// `try_from_proto` shares one signature. Child sub-expressions are
+    /// decoded recursively via [`PhysicalExprDecodeCtx::decode`].
+    ///
+    /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
+    /// [`PhysicalExpr::try_to_proto`]: datafusion_physical_expr_common::physical_expr::PhysicalExpr::try_to_proto
+    /// [`PhysicalExprDecodeCtx::decode`]: datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx::decode
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_proto_models::protobuf::{
+            physical_expr_node::ExprType, physical_hash_table_lookup_expr_node::Map,
+        };
+
+        let hash_table_lookup_expr = match &node.expr_type {
+            Some(ExprType::HashTableLookupExpr(h)) => h,
+            _ => return internal_err!("PhysicalExprNode is not a HashTableLookupExpr"),
+        };
+        let on_columns =
+            ctx.decode_children_expressions(&hash_table_lookup_expr.on_columns)?;
+
+        let map = match &hash_table_lookup_expr.map {
+            Some(Map::HashMapMembership(membership)) => {
+                Arc::new(HashTableLookupExprMap::MembershipOnlyHashMap(
+                    JoinHashMembershipMap::new(&membership.build_hashes),
+                ))
+            }
+            Some(Map::ArrayMapMembership(membership)) => Arc::new(
+                HashTableLookupExprMap::MembershipOnlyArrayMap(JoinMembershipArrayMap(
+                    ArrayMap::try_from_proto_membership_only(membership)?,
+                )),
+            ),
+            None => return internal_err!("HashTableLookupExpr has no map"),
+        };
+
+        Ok(Arc::new(HashTableLookupExpr {
+            on_columns,
+            random_state: SeededRandomState::with_seed(hash_table_lookup_expr.seed0),
+            map,
+            description: hash_table_lookup_expr.description.clone(),
+        }))
     }
 }
 
@@ -485,6 +565,49 @@ fn evaluate_columns(
         .iter()
         .map(|c| c.evaluate(batch)?.into_array(num_rows))
         .collect()
+}
+
+enum HashTableLookupExprMap {
+    /// A regular build-side hash map
+    Normal(Arc<Map>),
+    /// A membership-checks only version of a hashmap, only constructed via expression deserialization
+    MembershipOnlyHashMap(JoinHashMembershipMap),
+    /// A membership-checks only version of an array map, only constructed via expression deserialization
+    MembershipOnlyArrayMap(JoinMembershipArrayMap),
+}
+
+/// Membership-only join map reconstructed from serialized distinct hashes.
+/// Supports `contain_hashes` lookups only; it has no build-side rows.
+struct JoinHashMembershipMap {
+    map: HashTable<(u64, ())>,
+}
+impl JoinHashMembershipMap {
+    fn new(hashes: &[u64]) -> Self {
+        let mut map = HashTable::with_capacity(hashes.len());
+
+        for h in hashes {
+            map.insert_unique(*h, (*h, ()), |(h, _)| *h);
+        }
+
+        Self { map }
+    }
+
+    fn contain_hashes(&self, hashes: &[u64]) -> BooleanArray {
+        crate::joins::join_hash_map::contain_hashes(&self.map, hashes)
+    }
+
+    fn hashes(&self) -> Vec<u64> {
+        self.map.iter().map(|(h, _)| *h).collect()
+    }
+}
+
+/// Wrapper type for ArrayMap to restrict it to membership checks only
+struct JoinMembershipArrayMap(ArrayMap);
+impl JoinMembershipArrayMap {
+    #[inline]
+    fn contain_keys(&self, keys: &[ArrayRef]) -> Result<BooleanArray> {
+        self.0.contain_keys(keys)
+    }
 }
 
 #[cfg(test)]
