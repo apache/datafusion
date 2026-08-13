@@ -173,10 +173,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::large_digit_groups,
-        reason = "The grouping spells out the decimal scale, e.g. 180_00000000 is 180 with scale 8"
-    )]
     fn test_decimal64_distinct_avg_accumulator() -> Result<()> {
         let precision = 10_u8;
         let scale = 4_i8;
@@ -206,10 +202,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::large_digit_groups,
-        reason = "The grouping spells out the decimal scale, e.g. 180_00000000 is 180 with scale 8"
-    )]
     fn test_decimal128_distinct_avg_accumulator() -> Result<()> {
         let precision = 10_u8;
         let scale = 4_i8;
@@ -239,10 +231,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::large_digit_groups,
-        reason = "The grouping spells out the decimal scale, e.g. 180_00000000 is 180 with scale 8"
-    )]
     fn test_decimal256_distinct_avg_accumulator() -> Result<()> {
         let precision = 50_u8;
         let scale = 2_i8;
