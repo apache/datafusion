@@ -2959,8 +2959,8 @@ mod tests {
         // Valid durations
         for (duration, want) in [
             ("1s", Duration::from_secs(1)),
-            ("1m", Duration::from_secs(60)),
-            ("1m0s", Duration::from_secs(60)),
+            ("1m", Duration::from_mins(1)),
+            ("1m0s", Duration::from_mins(1)),
             ("1m1s", Duration::from_secs(61)),
         ] {
             let have =
@@ -2996,7 +2996,7 @@ mod tests {
             ),
             (
                 "307445734561825860m",
-                Duration::from_secs(307445734561825860 * 60),
+                Duration::from_hours(5124095576030431),
             ),
             (
                 "307445734561825860m10s",
