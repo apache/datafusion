@@ -350,10 +350,6 @@ impl ExecutionPlan for CrossJoinExec {
         let reservation =
             MemoryConsumer::new("CrossJoinExec").register(context.memory_pool());
 
-        let batch_size = context.session_config().batch_size();
-        let enforce_batch_size_in_joins =
-            context.session_config().enforce_batch_size_in_joins();
-
         let left_fut = self.left_fut.try_once(|| {
             let left_stream = self.left.execute(0, context)?;
 
@@ -370,7 +366,6 @@ impl ExecutionPlan for CrossJoinExec {
             right: stream,
             join_metrics,
             left_data: RecordBatch::new_empty(self.left().schema()),
-            batch_size: enforce_batch_size_in_joins.then_some(batch_size),
         };
 
         let schema = Arc::clone(&self.schema);
@@ -579,8 +574,6 @@ struct CrossJoinStream {
     join_metrics: BuildProbeJoinMetrics,
     /// Left data (copy of the entire buffered left side)
     left_data: RecordBatch,
-    /// Max batch size
-    batch_size: Option<usize>,
 }
 
 fn build_batch(
@@ -673,17 +666,7 @@ impl CrossJoinStream {
                 build_batch(left_index, right_batch, &self.left_data, &self.schema)?;
             join_timer.done();
 
-            if let Some(batch_size) = self.batch_size {
-                let mut offset = 0;
-                while offset < result.num_rows() {
-                    let length = min(result.num_rows() - offset, batch_size);
-                    let sliced_result = result.slice(offset, length);
-                    emitter.emit(sliced_result).await;
-                    offset += length;
-                }
-            } else {
-                emitter.emit(result).await;
-            }
+            emitter.emit(result).await;
         }
 
         Ok(())
