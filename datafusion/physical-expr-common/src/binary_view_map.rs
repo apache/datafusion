@@ -27,6 +27,7 @@ use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 use std::fmt::Debug;
+use std::mem::size_of;
 use std::sync::Arc;
 
 /// HashSet optimized for storing string or binary values that can produce that
@@ -154,10 +155,13 @@ where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
 {
     pub fn new(output_type: OutputType) -> Self {
+        let map = hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY);
+        let map_size = map.capacity() * size_of::<Entry<V>>();
+
         Self {
             output_type,
-            map: hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY),
-            map_size: 0,
+            map,
+            map_size,
             views: Vec::new(),
             in_progress: Vec::new(),
             completed: Vec::new(),
@@ -529,7 +533,6 @@ where
 mod tests {
     use arrow::array::{GenericByteViewArray, StringViewArray};
     use datafusion_common::HashMap;
-    use std::mem::size_of;
 
     use super::*;
 
@@ -716,6 +719,13 @@ mod tests {
         assert!(size_after_values2 > size_after_values1);
 
         assert_eq!(set.len(), 10);
+    }
+
+    #[test]
+    fn test_size_counts_initial_hash_table_capacity() {
+        let map = ArrowBytesViewMap::<()>::new(OutputType::Utf8View);
+
+        assert_eq!(map.size(), map.map.capacity() * size_of::<Entry<()>>());
     }
 
     #[test]
