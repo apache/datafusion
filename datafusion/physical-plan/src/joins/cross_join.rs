@@ -34,10 +34,9 @@ use crate::projection::{
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::{EmptyRecordBatchStream, ObservedStream, RecordBatchStreamAdapter};
 use crate::{
-    ChildrenPropertiesMode, ColumnStatistics, DisplayAs, DisplayFormatType,
-    Distribution, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
-    ReplaceChildrenOptions, SendableRecordBatchStream, Statistics,
-    validate_child_count,
+    ChildrenPropertiesMode, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
+    ExecutionPlan, ExecutionPlanProperties, PlanProperties, ReplaceChildrenOptions,
+    SendableRecordBatchStream, Statistics, validate_child_count,
 };
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
