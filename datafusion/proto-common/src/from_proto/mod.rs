@@ -1081,6 +1081,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 })
                 .unwrap_or(None),
             max_row_group_size: value.max_row_group_size as usize,
+            max_in_list_size: value.max_in_list_size as usize,
             created_by: value.created_by.clone(),
             column_index_truncate_length: value
                 .column_index_truncate_length_opt.as_ref()
@@ -1259,9 +1260,7 @@ fn vec_to_array<T, const N: usize>(v: Vec<T>) -> [T; N] {
 }
 
 /// Converts a vector of `protobuf::Field`s to `Arc<arrow::Field>`s.
-pub fn parse_proto_fields_to_fields<'a, I>(
-    fields: I,
-) -> std::result::Result<Vec<Field>, Error>
+pub fn parse_proto_fields_to_fields<'a, I>(fields: I) -> Result<Vec<Field>, Error>
 where
     I: IntoIterator<Item = &'a protobuf::Field>,
 {

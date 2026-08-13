@@ -149,11 +149,26 @@ impl GroupedTopKAggregateStream {
         if has_nulls && self.is_group_by_only() {
             self.null_group_seen = true;
         }
+        // Keep the common no-NULL path free of NULL bookkeeping. Once a NULL
+        // group exists, use the NULL-aware path until it has been resolved.
+        let track_null_groups = !self.is_group_by_only()
+            && (has_nulls || self.priority_map.has_null_groups());
         for row_idx in 0..len {
             if has_nulls && vals.is_null(row_idx) {
+                // MIN/MAX ignore NULL inputs, but a group whose values are all
+                // NULL must still be emitted with a NULL aggregate value, so
+                // track it. (GROUP BY-only aggregations handle NULL group keys
+                // via `null_group_seen` instead.)
+                if !self.is_group_by_only() {
+                    self.priority_map.insert_null(row_idx);
+                }
                 continue;
             }
-            self.priority_map.insert(row_idx)?;
+            if track_null_groups {
+                self.priority_map.insert_with_null_groups(row_idx)?;
+            } else {
+                self.priority_map.insert(row_idx)?;
+            }
         }
         Ok(())
     }

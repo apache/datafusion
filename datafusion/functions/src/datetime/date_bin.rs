@@ -54,7 +54,7 @@ Calculates time intervals and returns the start of the interval nearest to the s
 
 For example, if you "bin" or "window" data into 15 minute intervals, an input timestamp of `2023-01-01T18:18:18Z` will be updated to the start time of the 15 minute bin it is in: `2023-01-01T18:15:00Z`.
 "#,
-    syntax_example = "date_bin(interval, expression, origin-timestamp)",
+    syntax_example = "date_bin(interval, expression[, origin_timestamp])",
     sql_example = r#"```sql
 -- Bin the timestamp into 1 day intervals
 > SELECT date_bin(interval '1 day', time) as bin
@@ -95,7 +95,7 @@ FROM VALUES (TIME '02:18:18'), (TIME '19:00:03')  t(time);
         description = "Time expression to operate on. Can be a constant, column, or function."
     ),
     argument(
-        name = "origin-timestamp",
+        name = "origin_timestamp",
         description = r#"Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC). The following intervals are supported:
 
     - nanoseconds

@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
@@ -34,6 +36,7 @@ impl AggregateHashTable<PartialReduceMarker> {
         Self::new_with_filters(
             agg,
             partition,
+            Arc::clone(&output_schema),
             output_schema,
             batch_size,
             vec![None; agg.aggr_expr.len()],
