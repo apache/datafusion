@@ -1491,13 +1491,17 @@ impl OrderSensitiveArrayAggAccumulator {
         ordering_values: &[ArrayRef],
         ignore_nulls: bool,
     ) -> Result<Option<Range<usize>>> {
-        if values.data_type() != &self.value_type {
+        let values = if values.data_type() == &self.value_type {
+            Arc::clone(values)
+        } else if self.value_type.contains(values.data_type()) {
+            cast(values.as_ref(), &self.value_type)?
+        } else {
             return exec_err!(
                 "ordered array_agg payload has type {}, expected {}",
                 values.data_type(),
                 self.value_type
             );
-        }
+        };
         assert_eq_or_internal_err!(
             ordering_values.len(),
             self.ordering_fields.len(),
@@ -1531,7 +1535,7 @@ impl OrderSensitiveArrayAggAccumulator {
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             (values, Some(ordering_values))
         } else {
-            (Arc::clone(values), None)
+            (values, None)
         };
         if values.is_empty() {
             return Ok(None);
@@ -2059,7 +2063,7 @@ mod tests {
         let mut acc = OrderSensitiveArrayAggAccumulator::try_new(
             &requested_element_type,
             std::slice::from_ref(&ordering_dtype),
-            asc_ordering,
+            &asc_ordering,
             /*is_input_pre_ordered=*/ true,
             /*reverse=*/ false,
             /*ignore_nulls=*/ false,
