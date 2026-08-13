@@ -262,6 +262,8 @@ pub struct HashTableLookupExpr {
     /// Random state for hashing (with seeds preserved for serialization)
     random_state: SeededRandomState,
     /// Map to check against (hash table or array map)
+    /// Safety: Post-deserialization, this is only safe for membership checks and
+    /// should not be modified further.
     map: Arc<Map>,
     /// Description for display
     description: String,
@@ -386,40 +388,60 @@ impl PhysicalExpr for HashTableLookupExpr {
             }
         }
     }
+
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
-        _ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
         use datafusion_proto_models::protobuf::physical_expr_node::ExprType;
 
         // HashTableLookupExpr holds a runtime Arc<Map> (the build-side hash
-        // table) that cannot be serialized, so it is replaced with lit(true).
-        //
-        // Dynamic filtering is a performance optimisation only — replacing the
-        // lookup with lit(true) preserves correctness by allowing all rows
-        // through.
-        //
-        // If a plan is serialized before execution, HashTableLookupExpr is not
-        // yet present in the dynamic filter expression.
-        //
-        // If a plan is serialized after execution, any runtime-created
-        // HashTableLookupExpr is replaced during serialization. Re-executing
-        // the plan requires reset_state(), after which HashJoinExec rebuilds
-        // fresh dynamic filters at runtime.
-        let value = datafusion_proto_common::ScalarValue {
-            value: Some(datafusion_proto_common::scalar_value::Value::BoolValue(
-                true,
-            )),
-        };
+        // table). This can be serialized, but only in a way that maintains
+        // the set membership of the Map. A round-tripped map is not useable for
+        // anything beyond expression evaluation
+
+        let on_columns = ctx.encode_children_expressions(&self.on_columns)?;
+        let map = try_map_to_proto_membership_only(&self.map)?;
+
+        let expr = ExprType::HashLookupExpr(protobuf::PhysicalHashTableLookupExprNode {
+            on_columns,
+            seed0: self.random_state.seed,
+            description: self.description.clone(),
+            map: Some(map),
+        });
+
         Ok(Some(protobuf::PhysicalExprNode {
-            expr_id: None,
-            expr_type: Some(ExprType::Literal(value)),
+            expr_id: self.expression_id(),
+            expr_type: Some(expr),
         }))
     }
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.description)
+    }
+}
+
+#[cfg(feature = "proto")]
+fn try_map_to_proto_membership_only(
+    map: &Map,
+) -> Result<datafusion_proto_models::protobuf::physical_hash_table_lookup_expr_node::Map>
+{
+    use datafusion_proto_models::protobuf;
+
+    match map {
+        Map::ArrayMap(array_map) => Ok(
+            protobuf::physical_hash_table_lookup_expr_node::Map::ArrayMapMembership(
+                array_map.to_proto_membership_only(),
+            ),
+        ),
+        Map::HashMap(hash_map) => Ok(
+            protobuf::physical_hash_table_lookup_expr_node::Map::HashMapMembership(
+                protobuf::HashSetMapMembershipNode {
+                    build_hashes: hash_map.hashes(),
+                },
+            ),
+        ),
     }
 }
 

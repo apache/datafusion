@@ -1557,7 +1557,7 @@ pub struct PhysicalExprNode {
     pub expr_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1626,6 +1626,8 @@ pub mod physical_expr_node {
         SqlSimilarToPattern(
             ::prost::alloc::boxed::Box<super::PhysicalSqlSimilarToPatternNode>,
         ),
+        #[prost(message, tag = "29")]
+        HashLookupExpr(super::PhysicalHashTableLookupExprNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1870,6 +1872,37 @@ pub struct PhysicalHashExprNode {
     pub seed0: u64,
     #[prost(string, tag = "6")]
     pub description: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalHashTableLookupExprNode {
+    #[prost(message, repeated, tag = "1")]
+    pub on_columns: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(uint64, tag = "2")]
+    pub seed0: u64,
+    #[prost(string, tag = "3")]
+    pub description: ::prost::alloc::string::String,
+    #[prost(oneof = "physical_hash_table_lookup_expr_node::Map", tags = "4, 5")]
+    pub map: ::core::option::Option<physical_hash_table_lookup_expr_node::Map>,
+}
+/// Nested message and enum types in `PhysicalHashTableLookupExprNode`.
+pub mod physical_hash_table_lookup_expr_node {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Map {
+        #[prost(message, tag = "4")]
+        HashMapMembership(super::HashSetMapMembership),
+        #[prost(message, tag = "5")]
+        ArrayMap(super::ArrayMap),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HashSetMapMembership {
+    #[prost(fixed64, repeated, tag = "1")]
+    pub build_hashes: ::prost::alloc::vec::Vec<u64>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ArrayMap {
+    #[prost(fixed64, repeated, tag = "1")]
+    pub keys: ::prost::alloc::vec::Vec<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalRangeExprNode {
