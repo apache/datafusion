@@ -15,72 +15,73 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Aggregate table for final aggregation when partial-state input is ordered.
+//! Aggregate table for single aggregation when raw input is ordered.
 //!
 //! See comments in [`super::ordered_partial_table`] for details.
-
-use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 
-use crate::InputOrderMode;
-use crate::aggregates::aggregate_hash_table::FinalMarker;
+use crate::aggregates::aggregate_hash_table::SingleMarker;
 use crate::aggregates::group_values::GroupByMetrics;
 use crate::aggregates::{AggregateExec, AggregateMode};
 
 use super::common::HashAggregateAccumulator;
 use super::common_ordered::OrderedAggregateTable;
 
-/// Implementation specific to final aggregation, where the table stores partial
-/// aggregate states and the input rows are also partial states.
+/// Implementation specific to single aggregation, where the table stores final
+/// aggregate values and the input rows are raw rows.
 ///
 /// Example: `AVG(x) GROUP BY k`
 ///
-/// - Aggregate table stores: `k, sum(x), count(x)`
-/// - Input rows: `k, sum(x), count(x)`
+/// - Aggregate table stores: `k, avg(x)`
+/// - Input rows: `k, x`
 ///
 /// See comments at [`OrderedAggregateTable`] for details.
-impl OrderedAggregateTable<FinalMarker> {
-    pub(in crate::aggregates) fn new_with_input_order(
+impl OrderedAggregateTable<SingleMarker> {
+    pub(in crate::aggregates) fn new(
         agg: &AggregateExec,
-        input_schema: &SchemaRef,
+        partition: usize,
         output_schema: SchemaRef,
+        state_schema: SchemaRef,
         batch_size: usize,
-        input_order_mode: &InputOrderMode,
-        group_by_metrics: GroupByMetrics,
     ) -> Result<Self> {
+        debug_assert!(matches!(
+            agg.mode,
+            AggregateMode::Single | AggregateMode::SinglePartitioned
+        ));
+
+        let input_schema = agg.input().schema();
+        let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
         Self::new_for_mode(
             agg,
-            input_schema,
+            &input_schema,
             output_schema,
-            Arc::clone(input_schema),
+            state_schema,
             batch_size,
-            input_order_mode,
-            &AggregateMode::Final,
-            vec![None; agg.aggr_expr.len()],
+            &agg.input_order_mode,
+            &agg.mode,
+            agg.filter_expr.iter().cloned().collect(),
             group_by_metrics,
         )
     }
 
-    /// Merges one partial-state input batch and updates ordering information for
-    /// any newly observed groups.
+    /// Aggregates one raw input batch and updates ordering information for any
+    /// newly observed groups.
     pub(in crate::aggregates) fn aggregate_batch(
         &mut self,
         batch: &RecordBatch,
     ) -> Result<()> {
         let evaluated_batch = self.evaluate_batch(batch)?;
-        // `PhysicalGroupBy::as_final()` removes grouping sets while planning
-        // final aggregation, so final ordered aggregation sees one grouping.
-        debug_assert_eq!(evaluated_batch.grouping_set_args.len(), 1);
         self.aggregate_evaluated_batch(
             &evaluated_batch,
-            HashAggregateAccumulator::merge_batch,
+            HashAggregateAccumulator::update_batch,
         )
     }
 
-    /// See comments in `ordered_partial_stream::next_output_batch`
+    /// Emits the next batch of final aggregate values for groups proven complete
+    /// by the input ordering.
     pub(in crate::aggregates) fn next_output_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
