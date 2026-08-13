@@ -28,8 +28,9 @@ use super::metrics::{
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
-    DisplayFormatType, Distribution, ExecutionPlan, RecordBatchStream,
-    SendableRecordBatchStream, check_if_same_properties,
+    ChildrenPropertiesMode, DisplayFormatType, Distribution, ExecutionPlan,
+    RecordBatchStream, ReplaceChildrenOptions, SendableRecordBatchStream,
+    validate_child_count,
 };
 
 use arrow::array::{
@@ -235,29 +236,46 @@ impl ExecutionPlan for UnnestExec {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        Ok(Arc::new(UnnestExec::new(
-            children.swap_remove(0),
-            self.list_column_indices.clone(),
-            self.struct_column_indices.clone(),
-            Arc::clone(&self.schema),
-            self.options.clone(),
-        )?))
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(UnnestExec::new(
+                children.swap_remove(0),
+                self.list_column_indices.clone(),
+                self.struct_column_indices.clone(),
+                Arc::clone(&self.schema),
+                self.options.clone(),
+            )?)),
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
