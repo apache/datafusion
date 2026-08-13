@@ -89,8 +89,8 @@ html_theme = "pydata_sphinx_theme"
 
 html_theme_options = {
      "logo": {
-        "image_light": "_static/images/original.svg", 
-        "image_dark": "_static/images/original_dark.svg", 
+        "image_light": "_static/images/original.svg",
+        "image_dark": "_static/images/original_dark.svg",
     },
     "use_edit_page_button": True,
     "navbar_center": [],
@@ -111,7 +111,7 @@ html_static_path = ["_static"]
 
 # Copy agent-facing files (llms.txt) verbatim to the site root so they
 # resolve at the conventional URL `https://datafusion.apache.org/llms.txt`.
-html_extra_path = ["llms.txt"]
+html_extra_path = ["llms.txt" , "robots.txt"]
 
 html_logo = "_static/images/2x_bgwhite_original.png"
 
