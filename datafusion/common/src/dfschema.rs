@@ -402,6 +402,9 @@ impl DFSchema {
         let finished_with_metadata = finished.with_metadata(metadata);
         self.inner = finished_with_metadata.into();
         self.field_qualifiers.extend(qualifiers);
+        // The fields just changed, so the name index no longer describes this
+        // schema. Drop it and let the next lookup rebuild it.
+        self.name_index = OnceLock::new();
     }
 
     /// Get a list of fields for this schema
@@ -1540,6 +1543,48 @@ mod tests {
                 "qualified_fields_with_unqualified_name disagrees for {name}"
             );
         }
+    }
+
+    /// `merge` mutates a schema in place, so a cache populated beforehand
+    /// must not survive it: the merged-in fields have to be visible to every
+    /// later lookup.
+    #[test]
+    fn name_index_survives_merge() {
+        let f = |name: &str| Arc::new(Field::new(name, DataType::Int32, true));
+        let t1 = TableReference::bare("t1");
+        let t2 = TableReference::bare("t2");
+
+        let mut schema =
+            DFSchema::new_with_metadata(vec![(Some(t1.clone()), f("a"))], HashMap::new())
+                .unwrap();
+        let other = DFSchema::new_with_metadata(
+            vec![(Some(t2.clone()), f("b")), (Some(t2.clone()), f("a"))],
+            HashMap::new(),
+        )
+        .unwrap();
+
+        // Populate the cache before mutating, which is what makes a stale
+        // cache observable.
+        assert_eq!(schema.index_of_column_by_name(Some(&t1), "a"), Some(0));
+
+        schema.merge(&other);
+
+        for (qualifier, name) in [
+            (Some(&t1), "a"),
+            (Some(&t2), "b"),
+            (Some(&t2), "a"),
+            (None, "b"),
+        ] {
+            assert_eq!(
+                schema.index_of_column_by_name(qualifier, name),
+                reference_index_of_column_by_name(&schema, qualifier, name),
+                "stale lookup after merge for qualifier {qualifier:?} name {name}"
+            );
+        }
+        assert_eq!(
+            schema.qualified_fields_with_unqualified_name("b"),
+            reference_qualified_fields_with_unqualified_name(&schema, "b")
+        );
     }
 
     /// The index is derived state, so it must survive the operations that
