@@ -415,6 +415,23 @@ impl ArrayMap {
         });
         Ok(BooleanArray::new(buffer, None))
     }
+
+    #[cfg(feature = "proto")]
+    pub fn to_proto_membership_only(
+        &self,
+    ) -> datafusion_proto_models::protobuf::ArrayMapMembershipNode {
+        use datafusion_proto_models::protobuf;
+
+        let bits = BooleanBuffer::collect_bool(self.data.len(), |i| self.data[i] != 0);
+        // SAFETY: This always succeeds. None of the 3 error conditions of
+        // into_vec() are present.
+        let presence = bits.sliced().into_vec().unwrap();
+        protobuf::ArrayMapMembershipNode {
+            offset: self.offset,
+            num_slots: self.data.len() as u64,
+            presence,
+        }
+    }
 }
 
 #[cfg(test)]

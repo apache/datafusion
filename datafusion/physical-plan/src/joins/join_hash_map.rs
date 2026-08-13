@@ -139,6 +139,8 @@ pub trait JoinHashMapType: Send + Sync {
 
     /// Returns the number of entries in the join hash map.
     fn len(&self) -> usize;
+
+    fn hashes(&self) -> Vec<u64>;
 }
 
 pub struct JoinHashMapU32 {
@@ -219,6 +221,10 @@ impl JoinHashMapType for JoinHashMapU32 {
     fn len(&self) -> usize {
         self.map.len()
     }
+
+    fn hashes(&self) -> Vec<u64> {
+        self.map.iter().map(|(hash, _)| *hash).collect()
+    }
 }
 
 pub struct JoinHashMapU64 {
@@ -298,6 +304,10 @@ impl JoinHashMapType for JoinHashMapU64 {
 
     fn len(&self) -> usize {
         self.map.len()
+    }
+
+    fn hashes(&self) -> Vec<u64> {
+        self.map.iter().map(|(hash, _)| *hash).collect()
     }
 }
 
