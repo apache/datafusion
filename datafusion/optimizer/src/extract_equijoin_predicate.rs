@@ -95,7 +95,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                     && equijoin_predicates.is_empty()
                     && non_equijoin_expr.is_some()
                 {
-                    // Checked in the outer `if`
+                    // SAFETY: checked in the outer `if`
                     let expr = non_equijoin_expr.clone().unwrap();
                     let (equijoin_predicates, non_equijoin_expr) =
                         split_is_not_distinct_from_and_other_join_predicate(

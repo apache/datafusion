@@ -154,10 +154,10 @@ where
         } else {
             let values: Vec<_> = (0..array.len())
                 .map(|i| {
+                    // Safety: we are iterating with array.len() so the index is always valid
                     if array.is_null(i) {
                         i32::default()
                     } else {
-                        // SAFETY: we are iterating with array.len() so the index is always valid
                         let value = unsafe { array.value_unchecked(i) };
                         if value.is_empty() {
                             i32::default()

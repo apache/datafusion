@@ -306,7 +306,7 @@ where
             // Doubling strategy: copy what we have so far until we reach the target
             while buffer.len() < src.len() * count {
                 let copy_len = buffer.len().min(src.len() * count - buffer.len());
-                // We're copying valid UTF-8 bytes that we already verified
+                // SAFETY: we're copying valid UTF-8 bytes that we already verified
                 buffer.extend_from_within(..copy_len);
             }
         }

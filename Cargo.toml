@@ -325,7 +325,6 @@ unnecessary_box_returns = "warn"
 # `{:?}` on a `Path` quotes and escapes it; `{}` on `.display()` does not
 unnecessary_debug_formatting = "warn"
 unnecessary_lazy_evaluations = "warn"
-unnecessary_safety_comment = "warn"
 unnecessary_safety_doc = "warn"
 unnecessary_self_imports = "warn"
 unnecessary_struct_initialization = "warn"
