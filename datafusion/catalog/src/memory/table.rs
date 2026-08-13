@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::future::ready;
 use std::sync::Arc;
 
 use crate::TableProvider;
@@ -51,6 +52,7 @@ use datafusion_physical_plan::{
 use datafusion_session::Session;
 
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 use log::debug;
 use parking_lot::Mutex;
 use tokio::sync::RwLock;
@@ -184,7 +186,95 @@ impl TableProvider for MemTable {
         TableType::Base
     }
 
-    async fn scan(
+    fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        projection: Option<&'life2 Vec<usize>>,
+        filters: &'life3 [Expr],
+        limit: Option<usize>,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        'life3: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.scan_boxed(state, projection, filters, limit)
+    }
+
+    /// Returns an ExecutionPlan that inserts the execution results of a given [`ExecutionPlan`] into this [`MemTable`].
+    ///
+    /// The [`ExecutionPlan`] must have the same schema as this [`MemTable`].
+    ///
+    /// # Arguments
+    ///
+    /// * `state` - The [`SessionState`] containing the context for executing the plan.
+    /// * `input` - The [`ExecutionPlan`] to execute and insert.
+    ///
+    /// # Returns
+    ///
+    /// * A plan that returns the number of rows written.
+    ///
+    /// [`SessionState`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html
+    fn insert_into<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        input: Arc<dyn ExecutionPlan>,
+        insert_op: InsertOp,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.insert_into_boxed(state, input, insert_op)
+    }
+
+    fn get_column_default(&self, column: &str) -> Option<&Expr> {
+        self.column_defaults.get(column)
+    }
+
+    fn delete_from<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        filters: Vec<Expr>,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.delete_from_boxed(state, filters)
+    }
+
+    fn update<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        assignments: Vec<(String, Expr)>,
+        filters: Vec<Expr>,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.update_boxed(state, assignments, filters)
+    }
+}
+
+impl MemTable {
+    fn scan_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a Vec<usize>>,
+        filters: &'a [Expr],
+        limit: Option<usize>,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(self.scan_inner(state, projection, filters, limit))
+    }
+
+    async fn scan_inner(
         &self,
         state: &dyn Session,
         projection: Option<&Vec<usize>>,
@@ -225,21 +315,16 @@ impl TableProvider for MemTable {
         Ok(DataSourceExec::from_data_source(source))
     }
 
-    /// Returns an ExecutionPlan that inserts the execution results of a given [`ExecutionPlan`] into this [`MemTable`].
-    ///
-    /// The [`ExecutionPlan`] must have the same schema as this [`MemTable`].
-    ///
-    /// # Arguments
-    ///
-    /// * `state` - The [`SessionState`] containing the context for executing the plan.
-    /// * `input` - The [`ExecutionPlan`] to execute and insert.
-    ///
-    /// # Returns
-    ///
-    /// * A plan that returns the number of rows written.
-    ///
-    /// [`SessionState`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html
-    async fn insert_into(
+    fn insert_into_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        input: Arc<dyn ExecutionPlan>,
+        insert_op: InsertOp,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(ready(self.insert_into_inner(state, input, insert_op)))
+    }
+
+    fn insert_into_inner(
         &self,
         _state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
@@ -260,11 +345,15 @@ impl TableProvider for MemTable {
         Ok(Arc::new(DataSinkExec::new(input, Arc::new(sink), None)))
     }
 
-    fn get_column_default(&self, column: &str) -> Option<&Expr> {
-        self.column_defaults.get(column)
+    fn delete_from_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        filters: Vec<Expr>,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(self.delete_from_inner(state, filters))
     }
 
-    async fn delete_from(
+    async fn delete_from_inner(
         &self,
         state: &dyn Session,
         filters: Vec<Expr>,
@@ -328,7 +417,16 @@ impl TableProvider for MemTable {
         Ok(Arc::new(DmlResultExec::new(total_deleted)))
     }
 
-    async fn update(
+    fn update_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        assignments: Vec<(String, Expr)>,
+        filters: Vec<Expr>,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(self.update_inner(state, assignments, filters))
+    }
+
+    async fn update_inner(
         &self,
         state: &dyn Session,
         assignments: Vec<(String, Expr)>,

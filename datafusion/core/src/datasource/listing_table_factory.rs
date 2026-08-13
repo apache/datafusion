@@ -36,6 +36,7 @@ use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use futures::future::BoxFuture;
 
 /// A `TableProviderFactory` capable of creating new `ListingTable`s
 #[derive(Debug, Default)]
@@ -50,7 +51,31 @@ impl ListingTableFactory {
 
 #[async_trait]
 impl TableProviderFactory for ListingTableFactory {
-    async fn create(
+    fn create<'life0, 'life1, 'life2, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        cmd: &'life2 CreateExternalTable,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn TableProvider>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.create_boxed(state, cmd)
+    }
+}
+
+impl ListingTableFactory {
+    fn create_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        cmd: &'a CreateExternalTable,
+    ) -> BoxFuture<'a, Result<Arc<dyn TableProvider>>> {
+        Box::pin(self.create_inner(state, cmd))
+    }
+
+    async fn create_inner(
         &self,
         state: &dyn Session,
         cmd: &CreateExternalTable,
