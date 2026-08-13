@@ -19,10 +19,16 @@
 
 use crate::error::_exec_datafusion_err;
 use crate::{HashSet, Result};
-use arrow::array::ArrayData;
+use arrow::array::types::ByteArrayType;
+use arrow::array::{Array, AsArray, downcast_run_array};
+use arrow::buffer::Buffer;
+use arrow::datatypes::DataType;
+use arrow::downcast_primitive_array;
 use arrow::record_batch::RecordBatch;
 use std::mem::size_of;
 use std::num::NonZero;
+
+const INLINE_BUFFER_IDS: usize = 16;
 
 /// Estimates the memory size required for a hash table prior to allocation.
 ///
@@ -151,7 +157,7 @@ pub fn get_record_batch_memory_size(batch: &RecordBatch) -> usize {
 pub struct RecordBatchMemoryCounter {
     /// Start addresses of `Buffer`s that have already been counted (instead of
     /// actual used data region's pointer represented by current `Array`)
-    counted_buffers: HashSet<NonZero<usize>>,
+    counted_buffers: BufferIdSet,
     /// Total memory of all unique buffers counted so far
     memory_usage: usize,
 }
@@ -167,9 +173,8 @@ impl RecordBatchMemoryCounter {
         let mut total_size = 0;
 
         for array in batch.columns() {
-            let array_data = array.to_data();
-            count_array_data_memory_size(
-                &array_data,
+            count_array_memory_size(
+                array.as_ref(),
                 &mut self.counted_buffers,
                 &mut total_size,
             );
@@ -185,29 +190,223 @@ impl RecordBatchMemoryCounter {
     }
 }
 
-/// Count the memory usage of `array_data` and its children recursively.
-fn count_array_data_memory_size(
-    array_data: &ArrayData,
-    counted_buffers: &mut HashSet<NonZero<usize>>,
+/// Tracks a small number of buffers inline, avoiding a heap allocation for
+/// typical batches, and promotes to a hash set when more buffers are seen.
+#[derive(Debug)]
+struct BufferIdSet {
+    inline: [Option<NonZero<usize>>; INLINE_BUFFER_IDS],
+    len: usize,
+    overflow: Option<HashSet<NonZero<usize>>>,
+}
+
+impl Default for BufferIdSet {
+    fn default() -> Self {
+        Self {
+            inline: [None; INLINE_BUFFER_IDS],
+            len: 0,
+            overflow: None,
+        }
+    }
+}
+
+impl BufferIdSet {
+    fn insert(&mut self, buffer_id: NonZero<usize>) -> bool {
+        if let Some(overflow) = &mut self.overflow {
+            return overflow.insert(buffer_id);
+        }
+
+        if self.inline[..self.len].contains(&Some(buffer_id)) {
+            return false;
+        }
+
+        if self.len < INLINE_BUFFER_IDS {
+            self.inline[self.len] = Some(buffer_id);
+            self.len += 1;
+            return true;
+        }
+
+        let mut overflow = HashSet::with_capacity(INLINE_BUFFER_IDS + 1);
+        overflow.extend(self.inline.iter().flatten().copied());
+        let inserted = overflow.insert(buffer_id);
+        self.overflow = Some(overflow);
+        inserted
+    }
+}
+
+fn count_buffer_memory_size(
+    buffer: &Buffer,
+    counted_buffers: &mut BufferIdSet,
     total_size: &mut usize,
 ) {
-    // Count memory usage for `array_data`
-    for buffer in array_data.buffers() {
-        if counted_buffers.insert(buffer.data_ptr().addr()) {
-            *total_size += buffer.capacity();
-        } // Otherwise the buffer's memory is already counted
+    if counted_buffers.insert(buffer.data_ptr().addr()) {
+        *total_size += buffer.capacity();
+    }
+}
+
+/// Count the memory usage of `array` and its children recursively.
+fn count_array_memory_size(
+    array: &dyn Array,
+    counted_buffers: &mut BufferIdSet,
+    total_size: &mut usize,
+) {
+    if let Some(nulls) = array.nulls() {
+        count_buffer_memory_size(nulls.buffer(), counted_buffers, total_size);
     }
 
-    if let Some(null_buffer) = array_data.nulls()
-        && counted_buffers.insert(null_buffer.inner().inner().data_ptr().addr())
-    {
-        *total_size += null_buffer.inner().inner().capacity();
+    downcast_primitive_array! {
+        array => count_buffer_memory_size(
+            array.values().inner(),
+            counted_buffers,
+            total_size,
+        ),
+        DataType::Null => {}
+        DataType::Boolean => count_buffer_memory_size(
+            array.as_boolean().values().inner(),
+            counted_buffers,
+            total_size,
+        ),
+        DataType::Binary => count_byte_array_memory_size(
+            array.as_binary::<i32>(),
+            counted_buffers,
+            total_size,
+        ),
+        DataType::LargeBinary => count_byte_array_memory_size(
+            array.as_binary::<i64>(),
+            counted_buffers,
+            total_size,
+        ),
+        DataType::Utf8 => count_byte_array_memory_size(
+            array.as_string::<i32>(),
+            counted_buffers,
+            total_size,
+        ),
+        DataType::LargeUtf8 => count_byte_array_memory_size(
+            array.as_string::<i64>(),
+            counted_buffers,
+            total_size,
+        ),
+        DataType::BinaryView => {
+            let array = array.as_binary_view();
+            count_buffer_memory_size(array.views().inner(), counted_buffers, total_size);
+            for buffer in array.data_buffers() {
+                count_buffer_memory_size(buffer, counted_buffers, total_size);
+            }
+        }
+        DataType::Utf8View => {
+            let array = array.as_string_view();
+            count_buffer_memory_size(array.views().inner(), counted_buffers, total_size);
+            for buffer in array.data_buffers() {
+                count_buffer_memory_size(buffer, counted_buffers, total_size);
+            }
+        }
+        DataType::FixedSizeBinary(_) => count_buffer_memory_size(
+            array.as_fixed_size_binary().values(),
+            counted_buffers,
+            total_size,
+        ),
+        DataType::List(_) => count_list_array_memory_size(
+            array.as_list::<i32>(),
+            counted_buffers,
+            total_size,
+        ),
+        DataType::LargeList(_) => count_list_array_memory_size(
+            array.as_list::<i64>(),
+            counted_buffers,
+            total_size,
+        ),
+        DataType::ListView(_) => {
+            let array = array.as_list_view::<i32>();
+            count_buffer_memory_size(array.offsets().inner(), counted_buffers, total_size);
+            count_buffer_memory_size(array.sizes().inner(), counted_buffers, total_size);
+            count_array_memory_size(array.values().as_ref(), counted_buffers, total_size);
+        }
+        DataType::LargeListView(_) => {
+            let array = array.as_list_view::<i64>();
+            count_buffer_memory_size(array.offsets().inner(), counted_buffers, total_size);
+            count_buffer_memory_size(array.sizes().inner(), counted_buffers, total_size);
+            count_array_memory_size(array.values().as_ref(), counted_buffers, total_size);
+        }
+        DataType::FixedSizeList(_, _) => count_array_memory_size(
+            array.as_fixed_size_list().values().as_ref(),
+            counted_buffers,
+            total_size,
+        ),
+        DataType::Struct(_) => {
+            for child in array.as_struct().columns() {
+                count_array_memory_size(child.as_ref(), counted_buffers, total_size);
+            }
+        }
+        DataType::Union(_, _) => {
+            let array = array.as_union();
+            count_buffer_memory_size(array.type_ids().inner(), counted_buffers, total_size);
+            if let Some(offsets) = array.offsets() {
+                count_buffer_memory_size(offsets.inner(), counted_buffers, total_size);
+            }
+            for (type_id, _) in array.fields().iter() {
+                count_array_memory_size(
+                    array.child(type_id).as_ref(),
+                    counted_buffers,
+                    total_size,
+                );
+            }
+        }
+        DataType::Dictionary(_, _) => {
+            let array = array.as_any_dictionary();
+            count_array_memory_size(array.keys(), counted_buffers, total_size);
+            count_array_memory_size(array.values().as_ref(), counted_buffers, total_size);
+        }
+        DataType::Map(_, _) => {
+            let array = array.as_map();
+            count_buffer_memory_size(
+                array.offsets().inner().inner(),
+                counted_buffers,
+                total_size,
+            );
+            count_array_memory_size(array.entries(), counted_buffers, total_size);
+        }
+        DataType::RunEndEncoded(_, _) => downcast_run_array! {
+            array => {
+                count_buffer_memory_size(
+                    array.run_ends().inner().inner(),
+                    counted_buffers,
+                    total_size,
+                );
+                count_array_memory_size(
+                    array.values().as_ref(),
+                    counted_buffers,
+                    total_size,
+                );
+            },
+            _ => unreachable!(),
+        }
+        _ => unreachable!("unsupported array type: {}", array.data_type()),
     }
+}
 
-    // Count all children `ArrayData` recursively
-    for child in array_data.child_data() {
-        count_array_data_memory_size(child, counted_buffers, total_size);
-    }
+fn count_byte_array_memory_size<T: ByteArrayType>(
+    array: &arrow::array::GenericByteArray<T>,
+    counted_buffers: &mut BufferIdSet,
+    total_size: &mut usize,
+) {
+    count_buffer_memory_size(
+        array.offsets().inner().inner(),
+        counted_buffers,
+        total_size,
+    );
+    count_buffer_memory_size(array.values(), counted_buffers, total_size);
+}
+
+fn count_list_array_memory_size<O: arrow::array::OffsetSizeTrait>(
+    array: &arrow::array::GenericListArray<O>,
+    counted_buffers: &mut BufferIdSet,
+    total_size: &mut usize,
+) {
+    count_buffer_memory_size(
+        array.offsets().inner().inner(),
+        counted_buffers,
+        total_size,
+    );
+    count_array_memory_size(array.values().as_ref(), counted_buffers, total_size);
 }
 
 #[cfg(test)]
@@ -247,9 +446,36 @@ mod tests {
 #[cfg(test)]
 mod record_batch_tests {
     use super::*;
-    use arrow::array::{Float64Array, Int32Array, ListArray};
-    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
+    use arrow::array::{ArrayData, Float64Array, Int32Array, ListArray, new_null_array};
+    use arrow::datatypes::{DataType, Field, Int32Type, Schema, UnionFields, UnionMode};
     use std::sync::Arc;
+
+    fn array_data_memory_size(array: &dyn Array) -> usize {
+        fn count(
+            array_data: &ArrayData,
+            counted_buffers: &mut HashSet<NonZero<usize>>,
+            total_size: &mut usize,
+        ) {
+            for buffer in array_data.buffers() {
+                if counted_buffers.insert(buffer.data_ptr().addr()) {
+                    *total_size += buffer.capacity();
+                }
+            }
+            if let Some(nulls) = array_data.nulls() {
+                let buffer = nulls.inner().inner();
+                if counted_buffers.insert(buffer.data_ptr().addr()) {
+                    *total_size += buffer.capacity();
+                }
+            }
+            for child in array_data.child_data() {
+                count(child, counted_buffers, total_size);
+            }
+        }
+
+        let mut total_size = 0;
+        count(&array.to_data(), &mut HashSet::default(), &mut total_size);
+        total_size
+    }
 
     #[test]
     fn test_get_record_batch_memory_size() {
@@ -357,6 +583,85 @@ mod record_batch_tests {
         let deduped: usize = slices.iter().map(|slice| counter.count_batch(slice)).sum();
         assert_eq!(deduped, get_record_batch_memory_size(&batch));
         assert_eq!(counter.memory_usage(), get_record_batch_memory_size(&batch));
+    }
+
+    #[test]
+    fn test_record_batch_memory_counter_promotes_buffer_set() {
+        let fields = (0..=INLINE_BUFFER_IDS)
+            .map(|index| Field::new(format!("col_{index}"), DataType::Int32, false))
+            .collect::<Vec<_>>();
+        let columns = (0..=INLINE_BUFFER_IDS)
+            .map(|value| Arc::new(Int32Array::from(vec![value as i32])) as _)
+            .collect::<Vec<_>>();
+        let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap();
+
+        let mut counter = RecordBatchMemoryCounter::new();
+        assert_eq!(
+            counter.count_batch(&batch),
+            (INLINE_BUFFER_IDS + 1) * size_of::<i32>()
+        );
+        assert!(counter.counted_buffers.overflow.is_some());
+        assert_eq!(counter.count_batch(&batch), 0);
+    }
+
+    #[test]
+    fn test_array_memory_size_matches_array_data_layouts() {
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let struct_fields = vec![Field::new("value", DataType::Int32, true)].into();
+        let union_fields = UnionFields::try_new(
+            vec![0],
+            vec![Field::new("value", DataType::Int32, true)],
+        )
+        .unwrap();
+        let map_entries = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(
+                vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Int32, true),
+                ]
+                .into(),
+            ),
+            false,
+        ));
+        let run_ends = Arc::new(Field::new("run_ends", DataType::Int32, false));
+        let run_values = Arc::new(Field::new("values", DataType::Utf8, true));
+        let data_types = vec![
+            DataType::Boolean,
+            DataType::Int32,
+            DataType::Binary,
+            DataType::LargeBinary,
+            DataType::FixedSizeBinary(4),
+            DataType::BinaryView,
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            DataType::Utf8View,
+            DataType::List(Arc::clone(&list_field)),
+            DataType::LargeList(Arc::clone(&list_field)),
+            DataType::ListView(Arc::clone(&list_field)),
+            DataType::LargeListView(Arc::clone(&list_field)),
+            DataType::FixedSizeList(Arc::clone(&list_field), 2),
+            DataType::Struct(struct_fields),
+            DataType::Union(union_fields, UnionMode::Dense),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            DataType::Map(map_entries, false),
+            DataType::RunEndEncoded(run_ends, run_values),
+        ];
+
+        for data_type in data_types {
+            let array = new_null_array(&data_type, 3);
+            let mut total_size = 0;
+            count_array_memory_size(
+                array.as_ref(),
+                &mut BufferIdSet::default(),
+                &mut total_size,
+            );
+            assert_eq!(
+                total_size,
+                array_data_memory_size(array.as_ref()),
+                "{data_type}"
+            );
+        }
     }
 
     #[test]
