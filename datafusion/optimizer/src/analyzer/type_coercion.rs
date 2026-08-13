@@ -1082,6 +1082,17 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
         Ok(DataType::Interval(IntervalUnit::MonthDayNano))
     } else if let DataType::Dictionary(_, value_type) = col_type {
         extract_window_frame_target_type(value_type)
+    } else if matches!(
+        col_type,
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+    ) || matches!(col_type, DataType::FixedSizeBinary(_))
+    {
+        // Binary family types are only supported for "free" RANGE frames
+        // (bounds limited to UNBOUNDED PRECEDING / CURRENT ROW / UNBOUNDED
+        // FOLLOWING), since finite offset bounds require arithmetic on the
+        // order key. The coerce_window_frame function rejects finite offsets
+        // with a planning error.
+        Ok(DataType::Null)
     } else {
         internal_err!("Cannot run range queries on datatype: {col_type}")
     }
@@ -1101,8 +1112,32 @@ fn coerce_window_frame(
                 .first()
                 .map(|s| s.expr.get_type(schema))
                 .transpose()?;
-            if let Some(col_type) = current_types {
-                extract_window_frame_target_type(&col_type)?
+            if let Some(ref col_type) = current_types {
+                // RANGE frames with binary ORDER BY keys only support
+                // "free" frames (UNBOUNDED PRECEDING / CURRENT ROW /
+                // UNBOUNDED FOLLOWING), since finite offset bounds require
+                // arithmetic on the order key (see #24327).
+                let is_binary = matches!(
+                    col_type,
+                    DataType::Binary
+                        | DataType::LargeBinary
+                        | DataType::BinaryView
+                ) || matches!(col_type, DataType::FixedSizeBinary(_));
+                if is_binary {
+                    let has_finite = |b: &WindowFrameBound| match b {
+                        WindowFrameBound::Preceding(v)
+                        | WindowFrameBound::Following(v) => !v.is_null(),
+                        WindowFrameBound::CurrentRow => false,
+                    };
+                    if has_finite(&window_frame.start_bound)
+                        || has_finite(&window_frame.end_bound)
+                    {
+                        return plan_err!(
+                            "RANGE frame with finite offset bounds is not                              supported for binary ORDER BY keys"
+                        );
+                    }
+                }
+                extract_window_frame_target_type(col_type)?
             } else {
                 return internal_err!("ORDER BY column cannot be empty");
             }
