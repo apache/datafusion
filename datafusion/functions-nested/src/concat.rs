@@ -33,7 +33,7 @@ use datafusion_common::utils::{
 };
 use datafusion_common::{
     cast::as_generic_list_array,
-    exec_err, plan_err,
+    exec_err, internal_err, plan_err,
     utils::{list_ndims, take_function_args},
 };
 use datafusion_expr::binary::type_union_resolution;
