@@ -333,7 +333,11 @@ where
     /// accumulated makes the fill rate meaningful, and costs only the range
     /// tracking done while hashing.
     fn try_migrate_to_dense(&mut self) {
-        debug_assert!(!self.dense_disabled);
+        // Tracking the range can itself rule the values out, e.g. the first
+        // batch of a type that cannot be direct mapped at all
+        if self.dense_disabled {
+            return;
+        }
         let Some(range) = self.observed_range else {
             return;
         };
@@ -706,8 +710,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Array, Int64Array};
-    use arrow::datatypes::Int64Type;
+    use arrow::array::{Array, Float64Array, Int64Array};
+    use arrow::datatypes::{Float64Type, Int64Type};
 
     fn is_dense(gv: &GroupValuesPrimitive<Int64Type>) -> bool {
         matches!(gv.store, GroupStore::Dense { .. })
@@ -893,6 +897,30 @@ mod tests {
         let emitted = emitted[0].as_primitive::<Int64Type>();
         assert_eq!(emitted.value(0), 5);
         assert!(emitted.is_null(1));
+
+        Ok(())
+    }
+
+    /// Types that cannot be direct mapped at all are ruled out while their
+    /// range is tracked, which must not be mistaken for a table worth building
+    #[test]
+    fn float_values_keep_hashing() -> Result<()> {
+        let mut gv = GroupValuesPrimitive::<Float64Type>::new(DataType::Float64);
+        let mut groups = vec![];
+
+        for batch in 0..3usize {
+            let values = (0..4).map(|v| Some((batch * 4 + v) as f64));
+            let input = Arc::new(Float64Array::from_iter(values)) as ArrayRef;
+            gv.intern(&[input], &mut groups)?;
+            // Each batch holds four values not seen before
+            let first = batch * 4;
+            assert_eq!(groups, (first..first + 4).collect::<Vec<_>>());
+        }
+
+        assert!(matches!(gv.store, GroupStore::Hash(_)));
+
+        let emitted = gv.emit(EmitTo::All)?;
+        assert_eq!(emitted[0].len(), 12);
 
         Ok(())
     }
