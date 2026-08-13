@@ -446,8 +446,13 @@ mod tests {
 #[cfg(test)]
 mod record_batch_tests {
     use super::*;
-    use arrow::array::{ArrayData, Float64Array, Int32Array, ListArray, new_null_array};
-    use arrow::datatypes::{DataType, Field, Int32Type, Schema, UnionFields, UnionMode};
+    use arrow::array::{
+        ArrayData, ArrayRef, Float64Array, Int16Array, Int32Array, Int64Array, ListArray,
+        RunArray, StringArray, new_null_array,
+    };
+    use arrow::datatypes::{
+        DataType, Field, Int16Type, Int32Type, Int64Type, Schema, UnionFields, UnionMode,
+    };
     use std::sync::Arc;
 
     fn array_data_memory_size(array: &dyn Array) -> usize {
@@ -624,8 +629,6 @@ mod record_batch_tests {
             ),
             false,
         ));
-        let run_ends = Arc::new(Field::new("run_ends", DataType::Int32, false));
-        let run_values = Arc::new(Field::new("values", DataType::Utf8, true));
         let data_types = vec![
             DataType::Boolean,
             DataType::Int32,
@@ -645,7 +648,6 @@ mod record_batch_tests {
             DataType::Union(union_fields, UnionMode::Dense),
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             DataType::Map(map_entries, false),
-            DataType::RunEndEncoded(run_ends, run_values),
         ];
 
         for data_type in data_types {
@@ -661,6 +663,41 @@ mod record_batch_tests {
                 array_data_memory_size(array.as_ref()),
                 "{data_type}"
             );
+        }
+
+        let run_values = StringArray::from(vec!["alpha", "beta"]);
+        let run_arrays = [
+            Arc::new(
+                RunArray::<Int16Type>::try_new(
+                    &Int16Array::from(vec![2_i16, 5]),
+                    &run_values,
+                )
+                .unwrap(),
+            ) as ArrayRef,
+            Arc::new(
+                RunArray::<Int32Type>::try_new(
+                    &Int32Array::from(vec![2_i32, 5]),
+                    &run_values,
+                )
+                .unwrap(),
+            ) as ArrayRef,
+            Arc::new(
+                RunArray::<Int64Type>::try_new(
+                    &Int64Array::from(vec![2_i64, 5]),
+                    &run_values,
+                )
+                .unwrap(),
+            ) as ArrayRef,
+        ];
+
+        for array in run_arrays {
+            let mut total_size = 0;
+            count_array_memory_size(
+                array.as_ref(),
+                &mut BufferIdSet::default(),
+                &mut total_size,
+            );
+            assert_eq!(total_size, array_data_memory_size(array.as_ref()));
         }
     }
 
