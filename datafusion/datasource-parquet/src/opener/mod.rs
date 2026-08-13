@@ -1493,12 +1493,10 @@ impl RowGroupsPrunedParquetOpen {
             {
                 builder = builder.with_row_filter(row_filter);
             }
-            if has_row_filter {
-                if let Some(max_predicate_cache_size) = prepared.max_predicate_cache_size
-                {
-                    builder =
-                        builder.with_max_predicate_cache_size(max_predicate_cache_size);
-                }
+            if has_row_filter
+                && let Some(max_predicate_cache_size) = prepared.max_predicate_cache_size
+            {
+                builder = builder.with_max_predicate_cache_size(max_predicate_cache_size);
             }
 
             let filter_configuration_changes = rg_plan
