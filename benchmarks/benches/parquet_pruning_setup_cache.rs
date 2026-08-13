@@ -15,10 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Benchmarks reusable Parquet pruning setup across same-schema files.
+//! Benchmarks end-to-end Parquet scan cost for a cache-favourable workload.
 //!
-//! The predicate matches every file so each scan must adapt the predicate and
-//! build (or reuse) the pruning setup for all files.
+//! The 128 files share one physical schema and use the same predicate and target
+//! partition count, so pruning setup is reusable in a cache-enabled comparison
+//! branch. The predicate matches every file, so each scan must adapt the
+//! predicate and build (or reuse) pruning setup for all files.
+//!
+//! This is a focused baseline for comparing cache-disabled and cache-enabled
+//! branches. It is not a general DataFusion benchmark and must not be
+//! interpreted as a ClickBench performance result.
 
 use std::{fs::File, sync::Arc};
 
