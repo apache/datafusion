@@ -32,11 +32,14 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use async_trait::async_trait;
 use datafusion_catalog::{MemoryCatalogProvider, TableProvider};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, exec_err};
 use datafusion_execution::RecordBatchStream;
 use datafusion_expr::Expr;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::{
+    ChildrenPropertiesMode, ExecutionPlan, ReplaceChildrenOptions,
+};
 use datafusion_session::Session;
 use futures::Stream;
 use tokio::runtime::Handle;
@@ -210,11 +213,22 @@ impl ExecutionPlan for AsyncTestExecutionPlan {
         Vec::default()
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -226,6 +240,15 @@ impl ExecutionPlan for AsyncTestExecutionPlan {
             batch_request: self.batch_request.clone(),
             batch_receiver: self.batch_receiver.resubscribe(),
         }))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

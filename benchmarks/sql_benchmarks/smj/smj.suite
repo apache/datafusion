@@ -1,0 +1,11 @@
+description = "Sort-merge join SQL benchmarks"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- smj"
+description = "Run all sort-merge join queries."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- smj --query 12"
+description = "Run sort-merge join query 12."

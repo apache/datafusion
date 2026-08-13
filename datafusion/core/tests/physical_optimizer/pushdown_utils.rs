@@ -18,6 +18,7 @@
 use arrow::datatypes::SchemaRef;
 use arrow::{array::RecordBatch, compute::concat_batches};
 use datafusion::{datasource::object_store::ObjectStoreUrl, physical_plan::PhysicalExpr};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, config::ConfigOptions, internal_err};
 use datafusion_datasource::{
     PartitionedFile, file::FileSource, file_scan_config::FileScanConfig,
@@ -29,6 +30,7 @@ use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter::batch_filter;
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPhase, PushedDown};
+use datafusion_physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, displayable,
     filter::FilterExec,
@@ -234,6 +236,21 @@ impl FileSource for TestSource {
     fn table_schema(&self) -> &datafusion_datasource::TableSchema {
         &self.table_schema
     }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        datafusion_physical_plan::apply_expression_roots(
+            self.predicate.iter().chain(
+                self.projection
+                    .iter()
+                    .flatten()
+                    .map(|proj_expr| &proj_expr.expr),
+            ),
+            f,
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -417,7 +434,7 @@ pub fn format_execution_plan(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
 }
 
 fn format_lines(s: &str) -> Vec<String> {
-    s.trim().split('\n').map(|s| s.to_string()).collect()
+    s.trim().lines().map(|s| s.to_string()).collect()
 }
 
 pub fn format_plan_for_test(plan: &Arc<dyn ExecutionPlan>) -> String {
@@ -473,9 +490,10 @@ impl ExecutionPlan for TestNode {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert!(children.len() == 1);
         Ok(Arc::new(TestNode::new(
@@ -483,6 +501,16 @@ impl ExecutionPlan for TestNode {
             children[0].clone(),
             self.predicate.clone(),
         )))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -548,5 +576,12 @@ impl ExecutionPlan for TestNode {
             let res = FilterPushdownPropagation::if_all(child_pushdown_result);
             Ok(res)
         }
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        datafusion_physical_plan::apply_expression_roots([&self.predicate], f)
     }
 }

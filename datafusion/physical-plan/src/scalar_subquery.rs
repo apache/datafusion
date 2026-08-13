@@ -27,15 +27,20 @@
 use std::fmt;
 use std::sync::Arc;
 
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, ScalarValue, Statistics, exec_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_expr::physical_planning_context::{ScalarSubqueryResults, SubqueryIndex};
+use datafusion_physical_expr::PhysicalExpr;
 
 use crate::execution_plan::{CardinalityEffect, ExecutionPlan, PlanProperties};
 use crate::joins::utils::{OnceAsync, OnceFut};
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{DisplayAs, DisplayFormatType, SendableRecordBatchStream};
+use crate::{
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ReplaceChildrenOptions,
+    SendableRecordBatchStream,
+};
 
 use futures::StreamExt;
 use futures::TryStreamExt;
@@ -162,9 +167,10 @@ impl ExecutionPlan for ScalarSubqueryExec {
         children
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // First child is the main input, the rest are subquery plans.
         let input = children.remove(0);
@@ -182,6 +188,16 @@ impl ExecutionPlan for ScalarSubqueryExec {
             subqueries,
             self.results.clone(),
         )))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
@@ -222,6 +238,13 @@ impl ExecutionPlan for ScalarSubqueryExec {
             })
             .try_flatten(),
         )))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -443,14 +466,32 @@ mod tests {
             vec![&self.inner]
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             mut children: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(Arc::new(Self::new(
                 children.remove(0),
                 Arc::clone(&self.execute_calls),
             )))
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
 
         fn execute(
