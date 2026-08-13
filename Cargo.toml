@@ -305,6 +305,8 @@ unchecked_time_subtraction = "warn"
 uninhabited_references = "warn"
 uninlined_format_args = "warn"
 unnecessary_box_returns = "warn"
+# `{:?}` on a `Path` quotes and escapes it; `{}` on `.display()` does not
+unnecessary_debug_formatting = "warn"
 unnecessary_lazy_evaluations = "warn"
 unnecessary_safety_comment = "warn"
 unnecessary_safety_doc = "warn"

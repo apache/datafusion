@@ -406,7 +406,8 @@ impl IndexedFile {
         let file_size = path.metadata()?.len();
 
         let file = File::open(path).map_err(|e| {
-            DataFusionError::from(e).context(format!("Error opening file {path:?}"))
+            DataFusionError::from(e)
+                .context(format!("Error opening file {}", path.display()))
         })?;
 
         let options = ArrowReaderOptions::new()
