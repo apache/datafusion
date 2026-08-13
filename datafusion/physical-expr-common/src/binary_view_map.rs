@@ -25,7 +25,6 @@ use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -473,7 +472,7 @@ where
     pub fn size(&self) -> usize {
         // All fields below own their allocations. Count retained capacity rather
         // than used length because this value drives memory accounting.
-        let views_size = self.views.heap_size(&mut DFHeapSizeCtx::default());
+        let views_size = self.views.allocated_size();
         let in_progress_size = self.in_progress.allocated_size();
         let completed_size = self.completed.allocated_size()
             + self.completed.iter().map(Buffer::capacity).sum::<usize>();
@@ -530,6 +529,7 @@ where
 mod tests {
     use arrow::array::{GenericByteViewArray, StringViewArray};
     use datafusion_common::HashMap;
+    use std::mem::size_of;
 
     use super::*;
 
