@@ -571,9 +571,17 @@ impl ParquetAccessPlan {
         row_group_meta_data: &[RowGroupMetaData],
     ) -> Result<PreparedAccessPlan> {
         let row_group_indexes = self.row_group_indexes();
+        let fully_matched = row_group_indexes
+            .iter()
+            .map(|&idx| self.is_fully_matched(idx))
+            .collect();
         let row_selection = self.into_overall_row_selection(row_group_meta_data)?;
 
-        PreparedAccessPlan::new(row_group_indexes, row_selection)
+        PreparedAccessPlan::new_with_fully_matched(
+            row_group_indexes,
+            row_selection,
+            fully_matched,
+        )
     }
 }
 
@@ -587,6 +595,9 @@ impl ParquetAccessPlan {
 pub(crate) struct PreparedAccessPlan {
     /// Row group indexes to read
     pub(crate) row_group_indexes: Vec<usize>,
+    /// Whether the predicate is proven true for every row in each row group.
+    /// This vector is parallel to [`Self::row_group_indexes`].
+    pub(crate) fully_matched: Vec<bool>,
     /// Optional row selection for filtering within row groups
     pub(crate) row_selection: Option<RowSelection>,
 }
@@ -597,8 +608,23 @@ impl PreparedAccessPlan {
         row_group_indexes: Vec<usize>,
         row_selection: Option<RowSelection>,
     ) -> Result<Self> {
+        let fully_matched = vec![false; row_group_indexes.len()];
+        Self::new_with_fully_matched(row_group_indexes, row_selection, fully_matched)
+    }
+
+    fn new_with_fully_matched(
+        row_group_indexes: Vec<usize>,
+        row_selection: Option<RowSelection>,
+        fully_matched: Vec<bool>,
+    ) -> Result<Self> {
+        assert_eq_or_internal_err!(
+            row_group_indexes.len(),
+            fully_matched.len(),
+            "PreparedAccessPlan row group and fully-matched lengths differ"
+        );
         Ok(Self {
             row_group_indexes,
+            fully_matched,
             row_selection,
         })
     }
@@ -754,10 +780,16 @@ impl PreparedAccessPlan {
 
         // Apply the reordering
         let original_indexes = self.row_group_indexes.clone();
+        let original_fully_matched = self.fully_matched.clone();
         self.row_group_indexes = sorted_indices
             .values()
             .iter()
             .map(|&i| original_indexes[i as usize])
+            .collect();
+        self.fully_matched = sorted_indices
+            .values()
+            .iter()
+            .map(|&i| original_fully_matched[i as usize])
             .collect();
 
         Ok(self)
@@ -770,6 +802,7 @@ impl PreparedAccessPlan {
 
         // Reverse the row group indexes
         self.row_group_indexes = self.row_group_indexes.into_iter().rev().collect();
+        self.fully_matched.reverse();
 
         // If we have a row selection, reverse it to match the new row group order
         if let Some(row_selection) = self.row_selection {
@@ -1045,6 +1078,21 @@ mod test {
             err,
             "Invalid ParquetAccessPlan Selection. Row group 1 has 20 rows but selection only specifies 22 rows"
         );
+    }
+
+    #[test]
+    fn prepare_keeps_fully_matched_flags_for_scanned_row_groups() {
+        let mut access_plan = ParquetAccessPlan::new(vec![
+            RowGroupAccess::Scan,
+            RowGroupAccess::Skip,
+            RowGroupAccess::Scan,
+            RowGroupAccess::Scan,
+        ]);
+        access_plan.mark_fully_matched(2);
+
+        let prepared = access_plan.prepare(&ROW_GROUP_METADATA).unwrap();
+        assert_eq!(prepared.row_group_indexes, vec![0, 2, 3]);
+        assert_eq!(prepared.fully_matched, vec![false, true, false]);
     }
 
     /// [`RowGroupMetaData`] that returns 4 row groups with 10, 20, 30, 40 rows
@@ -1357,6 +1405,44 @@ mod test {
             .unwrap();
 
         assert_eq!(result.row_group_indexes, vec![1, 2, 0]);
+    }
+
+    #[test]
+    fn reorder_by_statistics_keeps_fully_matched_flags_aligned() {
+        let metadata = parquet_metadata_with_int_mins(&[30, 10, 20]);
+        let plan = PreparedAccessPlan::new_with_fully_matched(
+            vec![0, 1, 2],
+            None,
+            vec![false, true, false],
+        )
+        .unwrap();
+
+        let result = plan
+            .reorder_by_statistics(
+                &lex_ordering_a_asc(),
+                &metadata,
+                &arrow_schema_a_int(),
+            )
+            .unwrap();
+
+        assert_eq!(result.row_group_indexes, vec![1, 2, 0]);
+        assert_eq!(result.fully_matched, vec![true, false, false]);
+    }
+
+    #[test]
+    fn reverse_keeps_fully_matched_flags_aligned() {
+        let metadata = parquet_metadata_with_int_mins(&[10, 20, 30]);
+        let plan = PreparedAccessPlan::new_with_fully_matched(
+            vec![0, 1, 2],
+            None,
+            vec![true, false, false],
+        )
+        .unwrap();
+
+        let result = plan.reverse(&metadata).unwrap();
+
+        assert_eq!(result.row_group_indexes, vec![2, 1, 0]);
+        assert_eq!(result.fully_matched, vec![false, false, true]);
     }
 
     /// `ORDER BY a ASC, b DESC`: the secondary key's direction is

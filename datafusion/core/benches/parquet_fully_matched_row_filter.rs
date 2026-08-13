@@ -18,12 +18,13 @@
 //! Benchmarks Parquet RowFilter evaluation when row-group statistics prove
 //! that almost every surviving row group fully matches the predicate.
 
+use std::hint::black_box;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
 use arrow::array::{Int32Array, Int64Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema};
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use parquet::arrow::ArrowWriter;

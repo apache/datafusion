@@ -1435,18 +1435,26 @@ impl RowGroupsPrunedParquetOpen {
             prepared.virtual_state.as_deref(),
         )?;
 
-        let (decoder, rg_plan) = {
+        let (decoder, rg_plan, row_filter_generator, row_filter_active) = {
             let pushdown_predicate = prepared
                 .pushdown_filters
-                .then_some(prepared.predicate.as_ref())
+                .then_some(prepared.predicate.clone())
                 .flatten();
+            let can_skip_fully_matched =
+                pushdown_predicate.as_ref().is_some_and(|predicate| {
+                    !matches!(
+                        DynamicFilterTracking::classify(predicate),
+                        DynamicFilterTracking::Watching(_)
+                    )
+                });
             let mut row_filter_generator = RowFilterGenerator::new(
                 pushdown_predicate,
-                &prepared.physical_file_schema,
-                file_metadata.as_ref(),
+                Arc::clone(&prepared.physical_file_schema),
+                Arc::clone(&file_metadata),
                 prepared.reorder_predicates,
-                &prepared.file_metrics,
+                prepared.file_metrics.clone(),
             );
+            let has_row_filter = row_filter_generator.has_row_filter();
 
             // Build the prepared access plan first — `prepare_access_plan` may
             // call `reorder_by_statistics` (for `sort_order_for_reorder`) and
@@ -1468,13 +1476,24 @@ impl RowGroupsPrunedParquetOpen {
                 .row_group_indexes
                 .iter()
                 .copied()
-                .map(|rg_index| RgPlanEntry { rg_index })
+                .zip(prepared_access_plan.fully_matched.iter().copied())
+                .map(|(rg_index, fully_matched)| RgPlanEntry {
+                    rg_index,
+                    needs_row_filter: has_row_filter
+                        && !(can_skip_fully_matched && fully_matched),
+                })
                 .collect();
+            let row_filter_active =
+                rg_plan.front().is_some_and(|entry| entry.needs_row_filter);
 
             let mut builder =
                 decoder_config.build(prepared_access_plan, reader_metadata.clone());
-            if let Some(row_filter) = row_filter_generator.next_filter() {
+            if row_filter_active
+                && let Some(row_filter) = row_filter_generator.next_filter()
+            {
                 builder = builder.with_row_filter(row_filter);
+            }
+            if has_row_filter {
                 if let Some(max_predicate_cache_size) = prepared.max_predicate_cache_size
                 {
                     builder =
@@ -1482,7 +1501,18 @@ impl RowGroupsPrunedParquetOpen {
                 }
             }
 
-            (builder.build()?, rg_plan)
+            let filter_configuration_changes = rg_plan
+                .iter()
+                .any(|entry| entry.needs_row_filter != row_filter_active);
+            let row_filter_generator =
+                filter_configuration_changes.then_some(row_filter_generator);
+
+            (
+                builder.build()?,
+                rg_plan,
+                row_filter_generator,
+                row_filter_active,
+            )
         };
 
         let predicate_cache_inner_records =
@@ -1537,6 +1567,8 @@ impl RowGroupsPrunedParquetOpen {
             predicate_cache_inner_records,
             predicate_cache_records,
             baseline_metrics: prepared.baseline_metrics,
+            row_filter_generator,
+            row_filter_active,
             row_group_pruner,
             row_groups_pruned_dynamic,
         }
@@ -3426,6 +3458,32 @@ mod test {
         // three rows must bypass the RowFilter, leaving only `3` and `7`
         // counted as rows matched by row-level predicate evaluation.
         assert_eq!(counter_metric_value(&metrics, "pushdown_rows_matched"), 2);
+    }
+
+    #[tokio::test]
+    async fn test_fully_matched_row_groups_keep_watching_dynamic_filter() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let (schema, file) = fully_matched_split_test_file(Arc::clone(&store)).await;
+        let predicate = logical2physical(&col("a").gt_eq(lit(3)), &schema);
+        let predicate = make_dynamic_expr(predicate);
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_row_group_stats_pruning(true)
+            .with_metrics(metrics.clone())
+            .build();
+
+        let values = collect_int32_values(open_file(&opener, file).await.unwrap()).await;
+        assert_eq!(values, vec![3, 4, 5, 6, 7]);
+
+        // The predicate is still Watching and may tighten after the access
+        // plan is built, so even RG1's three rows must keep the RowFilter.
+        assert_eq!(counter_metric_value(&metrics, "pushdown_rows_matched"), 5);
     }
 
     #[tokio::test]
