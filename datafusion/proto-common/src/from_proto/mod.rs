@@ -750,10 +750,6 @@ impl From<protobuf::Constraints> for Constraints {
     }
 }
 
-#[expect(
-    clippy::fallible_impl_from,
-    reason = "Making this fallible would be a breaking API change"
-)]
 impl From<protobuf::Constraint> for Constraint {
     fn from(value: protobuf::Constraint) -> Self {
         match value.constraint_mode.unwrap() {
@@ -886,10 +882,6 @@ impl From<protobuf::JoinSide> for JoinSide {
     }
 }
 
-#[expect(
-    clippy::fallible_impl_from,
-    reason = "Making this fallible would be a breaking API change"
-)]
 impl From<&protobuf::Constraint> for Constraint {
     fn from(value: &protobuf::Constraint) -> Self {
         match &value.constraint_mode {

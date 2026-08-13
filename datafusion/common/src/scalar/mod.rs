@@ -5353,10 +5353,6 @@ impl From<Option<&str>> for ScalarValue {
 }
 
 /// Wrapper to create ScalarValue::Struct for convenience
-#[expect(
-    clippy::fallible_impl_from,
-    reason = "Making this fallible would be a breaking API change"
-)]
 impl From<Vec<(&str, ScalarValue)>> for ScalarValue {
     fn from(value: Vec<(&str, ScalarValue)>) -> Self {
         value
