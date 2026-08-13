@@ -245,6 +245,11 @@ required-features = ["parquet"]
 
 [[bench]]
 harness = false
+name = "parquet_fully_matched_row_filter"
+required-features = ["parquet"]
+
+[[bench]]
+harness = false
 name = "parquet_struct_query"
 required-features = ["parquet"]
 

@@ -3403,6 +3403,32 @@ mod test {
     }
 
     #[tokio::test]
+    async fn test_fully_matched_row_groups_skip_row_filter() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let (schema, file) = fully_matched_split_test_file(Arc::clone(&store)).await;
+        let predicate = logical2physical(&col("a").gt_eq(lit(3)), &schema);
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_row_group_stats_pruning(true)
+            .with_metrics(metrics.clone())
+            .build();
+
+        let values = collect_int32_values(open_file(&opener, file).await.unwrap()).await;
+        assert_eq!(values, vec![3, 4, 5, 6, 7]);
+
+        // RG1 (4, 5, 6) is proven fully matched by row-group statistics. Its
+        // three rows must bypass the RowFilter, leaving only `3` and `7`
+        // counted as rows matched by row-level predicate evaluation.
+        assert_eq!(counter_metric_value(&metrics, "pushdown_rows_matched"), 2);
+    }
+
+    #[tokio::test]
     async fn test_fully_matched_runs_preserve_reverse_order() {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
         let (schema, file) = fully_matched_split_test_file(Arc::clone(&store)).await;
