@@ -98,9 +98,7 @@ hash_float!(f16, f32, f64);
 
 /// A trait to allow direct mapped ("dense") lookup of integer values, by
 /// indexing a vector of group indices with `value - min` instead of hashing.
-/// The join side maps keys the same way, see [`ArrayMap`]
-///
-/// [`ArrayMap`]: crate::joins::array_map::ArrayMap
+/// The join side maps keys the same way, see `joins::array_map::ArrayMap`
 pub trait DenseKey: Copy {
     /// Whether this type can be direct mapped at all
     const DENSE: bool;
@@ -152,8 +150,10 @@ const DENSE_EMPTY: u32 = u32::MAX;
 const DENSE_MAX_SLOTS: usize = 2 * 1024 * 1024;
 
 /// Minimum fill (1/8) of its range for a table above [`DENSE_SMALL_SLOTS`], so
-/// that sparse values are not given a mostly empty slot each. The join side
-/// admits keys the same way, see `perfect_hash_join_min_key_density`
+/// that sparse values are not given a mostly empty slot each. At 4 bytes a slot
+/// against 16 a bucket this is also where it stops using less memory than the
+/// hash table it replaces. The join side admits keys the same way, see
+/// `perfect_hash_join_min_key_density`
 const DENSE_MIN_FILL_DENOM: usize = 8;
 
 /// Tables this small (256KiB) are built whatever the fill rate: even empty they
@@ -518,7 +518,14 @@ where
 
         let array: PrimitiveArray<T> = match emit_to {
             EmitTo::All => {
-                self.store = GroupStore::Hash(HashTable::with_capacity(0));
+                match &mut self.store {
+                    // Cleared rather than dropped, so that the capacity built
+                    // up for these groups is reused by the next ones
+                    GroupStore::Hash(map) => map.clear(),
+                    GroupStore::Dense { .. } => {
+                        self.store = GroupStore::Hash(HashTable::with_capacity(0))
+                    }
+                }
                 self.observed_range = None;
                 // The next values may be dense even if these were not
                 self.dense_disabled = !T::Native::DENSE;
@@ -579,7 +586,10 @@ where
         self.values.shrink_to(num_rows);
         self.null_group = None;
         self.observed_range = None;
-        self.dense_disabled = !T::Native::DENSE;
+        // Only called when spilling. A direct mapped table is sized by the
+        // range of the keys, which spilling does not shrink, so rebuilding one
+        // would keep the operator at the memory it just tried to give back.
+        self.dense_disabled = true;
         match &mut self.store {
             GroupStore::Hash(map) => {
                 map.clear();
@@ -824,10 +834,10 @@ mod tests {
         Ok(())
     }
 
-    /// A stream is reused across spill cycles, so values found not to be dense
-    /// must not keep the next cycle hashing
+    /// Emitting every group starts the decision again, since the next values
+    /// may be dense even if these were not
     #[test]
-    fn draining_the_groups_reconsiders_dense() -> Result<()> {
+    fn emitting_all_groups_reconsiders_dense() -> Result<()> {
         let mut gv = GroupValuesPrimitive::<Int64Type>::new(DataType::Int64);
         let mut groups = vec![];
 
@@ -839,13 +849,22 @@ mod tests {
         gv.intern(&[array(&[Some(10), Some(11), Some(12)])], &mut groups)?;
         assert!(is_dense(&gv));
 
-        // `clear_shrink` drains the groups just as well
-        gv.clear_shrink(0);
-        gv.intern(&[array(&[Some(0), Some(i64::MAX)])], &mut groups)?;
-        assert!(!is_dense(&gv));
-        gv.clear_shrink(0);
-        gv.intern(&[array(&[Some(20), Some(21)])], &mut groups)?;
+        Ok(())
+    }
+
+    /// Spilling does not shrink the range of the keys, so a direct mapped
+    /// table would come straight back at the size the operator just gave up
+    #[test]
+    fn spilling_keeps_the_groups_hashed() -> Result<()> {
+        let mut gv = GroupValuesPrimitive::<Int64Type>::new(DataType::Int64);
+        let mut groups = vec![];
+
+        gv.intern(&[array(&[Some(10), Some(11), Some(12)])], &mut groups)?;
         assert!(is_dense(&gv));
+
+        gv.clear_shrink(0);
+        gv.intern(&[array(&[Some(20), Some(21), Some(22)])], &mut groups)?;
+        assert!(!is_dense(&gv));
 
         Ok(())
     }

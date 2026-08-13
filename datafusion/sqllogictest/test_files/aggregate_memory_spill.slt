@@ -198,6 +198,10 @@ FROM (
 statement ok
 SET datafusion.execution.target_partitions = 4
 
+# Four partitions share the pool, so give them the room one partition had
+statement ok
+SET datafusion.runtime.memory_limit = '4M'
+
 query II
 SELECT count(*), sum(total)
 FROM (
