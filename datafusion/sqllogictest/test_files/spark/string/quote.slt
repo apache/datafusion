@@ -159,3 +159,64 @@ query T
 SELECT quote('''');
 ----
 '\''
+
+query T
+SELECT quote(NULL);
+----
+NULL
+
+query T
+SELECT quote('');
+----
+''
+
+# LargeUtf8 and Utf8View inputs
+
+query T
+SELECT quote(arrow_cast('it''s', 'LargeUtf8'));
+----
+'it\'s'
+
+query T
+SELECT quote(arrow_cast('', 'LargeUtf8'));
+----
+''
+
+query T
+SELECT quote(arrow_cast('it''s', 'Utf8View'));
+----
+'it\'s'
+
+query T
+SELECT quote(arrow_cast('', 'Utf8View'));
+----
+''
+
+# Multi-row batches, so the output builder is reused across rows
+
+query T
+SELECT quote(c) FROM VALUES ('a'), ('it''s'), (NULL), (''), ('x''''y') AS t(c);
+----
+'a'
+'it\'s'
+NULL
+''
+'x\'\'y'
+
+query T
+SELECT quote(arrow_cast(c, 'LargeUtf8')) FROM VALUES ('a'), ('it''s'), (NULL) AS t(c);
+----
+'a'
+'it\'s'
+NULL
+
+# Mixes values that are inlined in the views (<= 12 bytes) with values held in a
+# data buffer, since the two are measured differently for the capacity hint.
+query T
+SELECT quote(arrow_cast(c, 'Utf8View'))
+FROM VALUES ('a'), ('it''s'), (NULL), ('a value that is longer than twelve bytes and has an '' embedded quote') AS t(c);
+----
+'a'
+'it\'s'
+NULL
+'a value that is longer than twelve bytes and has an \' embedded quote'

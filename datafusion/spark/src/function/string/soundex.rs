@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, OffsetSizeTrait, StringBuilder};
+use arrow::array::{ArrayRef, GenericStringBuilder, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::utils::take_function_args;
@@ -80,17 +80,23 @@ fn spark_soundex_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn soundex_array<T: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
-    Ok(soundex_impl(as_generic_string_array::<T>(array)?.iter()))
+    Ok(soundex_impl::<T, _>(
+        as_generic_string_array::<T>(array)?.iter(),
+    ))
 }
 
 fn soundex_view(str_view: &ArrayRef) -> Result<ArrayRef> {
-    Ok(soundex_impl(as_string_view_array(str_view)?.iter()))
+    Ok(soundex_impl::<i32, _>(
+        as_string_view_array(str_view)?.iter(),
+    ))
 }
 
-fn soundex_impl<'a>(input: impl Iterator<Item = Option<&'a str>>) -> ArrayRef {
+fn soundex_impl<'a, O: OffsetSizeTrait, I: Iterator<Item = Option<&'a str>>>(
+    input: I,
+) -> ArrayRef {
     let len = input.size_hint().0;
     // A soundex code is always exactly 4 ASCII characters.
-    let mut builder = StringBuilder::with_capacity(len, len * SOUNDEX_LEN);
+    let mut builder = GenericStringBuilder::<O>::with_capacity(len, len * SOUNDEX_LEN);
     for value in input {
         match value {
             Some(value) => append_soundex(&mut builder, value),
@@ -123,7 +129,7 @@ const SOUNDEX_LEN: usize = 4;
 ///
 /// Strings that do not start with an ASCII letter are passed through unchanged.
 /// Otherwise the code is built in a stack buffer, so no row allocates.
-fn append_soundex(builder: &mut StringBuilder, s: &str) {
+fn append_soundex<O: OffsetSizeTrait>(builder: &mut GenericStringBuilder<O>, s: &str) {
     let mut chars = s.chars();
 
     let first_char = match chars.next() {
@@ -163,6 +169,98 @@ fn append_soundex(builder: &mut StringBuilder, s: &str) {
         }
     }
 
-    // SAFETY: `soundex_code` holds an ASCII letter followed by ASCII digits.
-    builder.append_value(unsafe { std::str::from_utf8_unchecked(&soundex_code) });
+    // `soundex_code` holds an ASCII letter followed by ASCII digits, so the
+    // validation here is a four-byte check that never fails.
+    builder
+        .append_value(std::str::from_utf8(&soundex_code).expect("soundex code is ASCII"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{LargeStringArray, StringArray, StringViewArray};
+
+    fn soundex(array: ArrayRef) -> ArrayRef {
+        spark_soundex_inner(&[array]).unwrap()
+    }
+
+    fn as_strings(array: &ArrayRef) -> Vec<Option<&str>> {
+        as_generic_string_array::<i32>(array)
+            .unwrap()
+            .iter()
+            .collect()
+    }
+
+    #[test]
+    fn soundex_preserves_the_offset_width() {
+        let utf8 = soundex(Arc::new(StringArray::from(vec!["Miller"])) as ArrayRef);
+        assert_eq!(utf8.data_type(), &DataType::Utf8);
+        assert_eq!(as_strings(&utf8), vec![Some("M460")]);
+
+        let large = soundex(Arc::new(LargeStringArray::from(vec!["Miller"])) as ArrayRef);
+        assert_eq!(large.data_type(), &DataType::LargeUtf8);
+        assert_eq!(
+            as_generic_string_array::<i64>(&large).unwrap().value(0),
+            "M460"
+        );
+
+        // A view input has no offsets to preserve, so it narrows to `Utf8`.
+        let view = soundex(Arc::new(StringViewArray::from(vec!["Miller"])) as ArrayRef);
+        assert_eq!(view.data_type(), &DataType::Utf8);
+        assert_eq!(as_strings(&view), vec![Some("M460")]);
+    }
+
+    /// Values whose first character is not an ASCII letter are passed through
+    /// unchanged, so the output is not always the four-byte code.
+    #[test]
+    fn soundex_multi_row_batch() {
+        let array = Arc::new(StringArray::from(vec![
+            Some("Miller"),
+            None,
+            Some(""),
+            // Non-ASCII alphabetic first character: passthrough, not a code.
+            Some("Ñoño"),
+            Some("Éclair"),
+            Some("123"),
+            Some("Robert"),
+        ])) as ArrayRef;
+
+        assert_eq!(
+            as_strings(&soundex(array)),
+            vec![
+                Some("M460"),
+                None,
+                Some(""),
+                Some("Ñoño"),
+                Some("Éclair"),
+                Some("123"),
+                Some("R163"),
+            ]
+        );
+    }
+
+    #[test]
+    fn soundex_sliced_array() {
+        let array = Arc::new(StringArray::from(vec![
+            Some("Miller"),
+            Some("Ñoño"),
+            None,
+            Some("Robert"),
+        ])) as ArrayRef;
+
+        assert_eq!(
+            as_strings(&soundex(array.slice(1, 3))),
+            vec![Some("Ñoño"), None, Some("R163")]
+        );
+    }
+
+    #[test]
+    fn soundex_empty_array() {
+        let empty = soundex(Arc::new(StringArray::from(Vec::<&str>::new())) as ArrayRef);
+        assert_eq!(empty.len(), 0);
+
+        let empty_view =
+            soundex(Arc::new(StringViewArray::from(Vec::<&str>::new())) as ArrayRef);
+        assert_eq!(empty_view.len(), 0);
+    }
 }
