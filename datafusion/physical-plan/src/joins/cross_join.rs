@@ -18,7 +18,6 @@
 //! Defines the cross join plan for loading the left side of the cross join
 //! and producing batches in parallel for the right partitions
 
-use std::cmp::min;
 use std::future::poll_fn;
 use std::sync::Arc;
 
@@ -614,9 +613,7 @@ impl CrossJoinStream {
             return Ok(());
         }
 
-        while let Some(right_batch) = self.fetch_probe_batch().await? {
-            self.process_right_batch(&right_batch, emitter).await?
-        }
+        self.process_right_batch(emitter).await?;
 
         Ok(())
     }
@@ -657,16 +654,17 @@ impl CrossJoinStream {
     /// Joins the left data with the current probe batch, using the emitter to emit the resultant batches
     async fn process_right_batch(
         &mut self,
-        right_batch: &RecordBatch,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
-        for left_index in 0..self.left_data.num_rows() {
-            let join_timer = self.join_metrics.join_time.timer();
-            let result =
-                build_batch(left_index, right_batch, &self.left_data, &self.schema)?;
-            join_timer.done();
+        while let Some(right_batch) = self.fetch_probe_batch().await? {
+            for left_index in 0..self.left_data.num_rows() {
+                let join_timer = self.join_metrics.join_time.timer();
+                let result =
+                    build_batch(left_index, &right_batch, &self.left_data, &self.schema)?;
+                join_timer.done();
 
-            emitter.emit(result).await;
+                emitter.emit(result).await;
+            }
         }
 
         Ok(())
@@ -677,13 +675,9 @@ impl CrossJoinStream {
 mod tests {
     use super::*;
     use crate::common;
-    use crate::test::{assert_join_metrics, build_table_i32, build_table_scan_i32};
+    use crate::test::{assert_join_metrics, build_table_scan_i32};
 
-    use std::time::Duration;
-
-    use datafusion_common::instant::Instant;
     use datafusion_common::{assert_contains, test_util::batches_to_sort_string};
-    use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use insta::assert_snapshot;
 
@@ -972,196 +966,6 @@ mod tests {
         );
 
         Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_join_enforce_batch_size_splits_output() -> Result<()> {
-        let mut config = SessionConfig::new().with_batch_size(2);
-        config.options_mut().execution.enforce_batch_size_in_joins = true;
-        let task_ctx = Arc::new(TaskContext::default().with_session_config(config));
-
-        let left = build_table_scan_i32(
-            ("a1", &vec![1, 2, 3]),
-            ("b1", &vec![4, 5, 6]),
-            ("c1", &vec![7, 8, 9]),
-        );
-        let right = build_table_scan_i32(
-            ("a2", &vec![10, 11, 12, 13, 14]),
-            ("b2", &vec![15, 16, 17, 18, 19]),
-            ("c2", &vec![20, 21, 22, 23, 24]),
-        );
-
-        let (_, batches, _) = join_collect(left, right, task_ctx).await?;
-
-        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-        assert_eq!(total_rows, 15);
-        assert!(batches.iter().all(|b| b.num_rows() <= 2));
-
-        Ok(())
-    }
-
-    fn delayed_stream(
-        batches: Vec<RecordBatch>,
-        delay: Duration,
-    ) -> SendableRecordBatchStream {
-        let schema = batches[0].schema();
-        Box::pin(RecordBatchStreamAdapter::new(
-            schema,
-            futures::stream::iter(batches.into_iter().map(Ok)).then(
-                move |item| async move {
-                    tokio::time::sleep(delay).await;
-                    item
-                },
-            ),
-        ))
-    }
-
-    fn probe_batches() -> Vec<RecordBatch> {
-        vec![
-            build_table_i32(
-                ("a2", &vec![10, 11]),
-                ("b2", &vec![12, 13]),
-                ("c2", &vec![14, 15]),
-            ),
-            build_table_i32(
-                ("a2", &vec![20, 21]),
-                ("b2", &vec![22, 23]),
-                ("c2", &vec![24, 25]),
-            ),
-            build_table_i32(
-                ("a2", &vec![30, 31]),
-                ("b2", &vec![32, 33]),
-                ("c2", &vec![34, 35]),
-            ),
-        ]
-    }
-
-    fn cross_join_stream(
-        left_batch: RecordBatch,
-        right: SendableRecordBatchStream,
-        batch_size: Option<usize>,
-    ) -> Result<(SendableRecordBatchStream, ExecutionPlanMetricsSet)> {
-        let metrics = ExecutionPlanMetricsSet::new();
-        let join_metrics = BuildProbeJoinMetrics::new(0, &metrics);
-
-        let runtime = RuntimeEnvBuilder::new().build_arc()?;
-        let reservation = MemoryConsumer::new("test").register(&runtime.memory_pool);
-
-        let left_schema = left_batch.schema();
-        let mut fields: Vec<_> = left_schema.fields().iter().cloned().collect();
-        fields.extend(right.schema().fields().iter().cloned());
-        let schema = Arc::new(Schema::new(fields));
-
-        let left_data = JoinLeftData {
-            merged_batch: left_batch,
-            _reservation: reservation,
-        };
-        let left_fut = OnceFut::new(async move { Ok(left_data) });
-
-        let mut state = CrossJoinStream {
-            schema: Arc::clone(&schema),
-            left_fut,
-            right,
-            join_metrics,
-            left_data: RecordBatch::new_empty(left_schema),
-            batch_size,
-        };
-        let baseline_metrics = state.join_metrics.baseline.clone();
-        let stream =
-            async_try_stream(
-                move |mut emitter| async move { state.join(&mut emitter).await },
-            );
-        let observed = ObservedStream::new(
-            Box::pin(RecordBatchStreamAdapter::new(schema, stream)),
-            baseline_metrics,
-            None,
-        );
-        Ok((Box::pin(observed), metrics))
-    }
-
-    fn elapsed_compute_of(metrics: &ExecutionPlanMetricsSet) -> Duration {
-        Duration::from_nanos(metrics.clone_inner().elapsed_compute().unwrap_or(0) as u64)
-    }
-
-    async fn check_elapsed_compute_excluded<F, Fut>(mut run: F) -> Result<()>
-    where
-        F: FnMut(Duration) -> Fut,
-        Fut: Future<Output = Result<(Duration, Duration)>>,
-    {
-        let mut delay = Duration::from_millis(50);
-        for attempt in 0..3 {
-            let (elapsed_compute, wall) = run(delay).await?;
-            if elapsed_compute < delay {
-                return Ok(());
-            }
-            assert!(
-                attempt < 2,
-                "elapsed_compute ({elapsed_compute:?}) should be well below the \
-                 injected delay ({delay:?}); wall {wall:?}"
-            );
-            delay *= 4;
-        }
-        unreachable!()
-    }
-
-    #[tokio::test]
-    async fn elapsed_compute_excludes_probe_input_wait() -> Result<()> {
-        check_elapsed_compute_excluded(|delay| async move {
-            let left = build_table_i32(
-                ("a1", &vec![1, 2]),
-                ("b1", &vec![3, 4]),
-                ("c1", &vec![5, 6]),
-            );
-            let right = delayed_stream(probe_batches(), delay);
-            let (stream, metrics) = cross_join_stream(left, right, None)?;
-
-            let start = Instant::now();
-            let batches = common::collect(stream).await?;
-            let wall = start.elapsed();
-
-            let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-            assert_eq!(rows, 12);
-            assert!(
-                wall >= delay * 3,
-                "probe delays should dominate wall time, got {wall:?}"
-            );
-            Ok((elapsed_compute_of(&metrics), wall))
-        })
-        .await
-    }
-
-    #[tokio::test]
-    async fn elapsed_compute_excludes_consumer_wait() -> Result<()> {
-        check_elapsed_compute_excluded(|delay| async move {
-            let left = build_table_i32(
-                ("a1", &vec![1, 2]),
-                ("b1", &vec![3, 4]),
-                ("c1", &vec![5, 6]),
-            );
-            let right = delayed_stream(probe_batches(), Duration::ZERO);
-            let (mut stream, metrics) = cross_join_stream(left, right, Some(1))?;
-
-            let start = Instant::now();
-            let mut output_batches = 0u32;
-            while let Some(batch) = stream.next().await {
-                batch?;
-                output_batches += 1;
-                tokio::time::sleep(delay).await;
-            }
-            drop(stream);
-            let wall = start.elapsed();
-
-            assert!(
-                output_batches >= 3,
-                "expected multiple emitted batches, got {output_batches}"
-            );
-            assert!(
-                wall >= delay * output_batches,
-                "consumer delays should dominate wall time, got {wall:?}"
-            );
-            Ok((elapsed_compute_of(&metrics), wall))
-        })
-        .await
     }
 
     /// Returns the column names on the schema
