@@ -271,6 +271,7 @@ mismatching_type_param_order = "warn"
 mut_mut = "warn"
 # https://github.com/apache/datafusion/issues/18503
 needless_pass_by_value = "warn"
+needless_type_cast = "warn"
 negative_feature_names = "warn"
 # Prefer `std::sync::LazyLock` over the `lazy_static`/`once_cell` crates
 non_std_lazy_statics = "warn"
