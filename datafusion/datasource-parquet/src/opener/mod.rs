@@ -676,7 +676,7 @@ impl ParquetMorselPlanner {
 
 impl MorselPlanner for ParquetMorselPlanner {
     fn plan(self: Box<Self>) -> Result<Option<MorselPlan>> {
-        if let ParquetOpenState::Done = self.state {
+        if matches!(self.state, ParquetOpenState::Done) {
             return Ok(None);
         }
 

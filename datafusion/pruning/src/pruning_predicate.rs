@@ -755,7 +755,7 @@ impl BoolVecBuilder {
             // `false` for this conjunct means we know for sure no rows could
             // pass the predicate and thus we set the corresponding container
             // location to false.
-            if let Some(false) = new {
+            if new == Some(false) {
                 *cur = false;
             }
         }

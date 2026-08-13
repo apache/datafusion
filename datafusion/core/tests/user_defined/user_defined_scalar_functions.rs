@@ -1872,7 +1872,7 @@ impl ExtensionType for MyUserExtensionType {
         &self,
         data_type: &DataType,
     ) -> std::result::Result<(), ArrowError> {
-        if let DataType::Utf8 = data_type {
+        if matches!(data_type, DataType::Utf8) {
             Ok(())
         } else {
             Err(ArrowError::InvalidArgumentError(

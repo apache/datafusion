@@ -230,6 +230,7 @@ duration_suboptimal_units = "warn"
 elidable_lifetime_names = "warn"
 empty_enum_variants_with_brackets = "warn"
 empty_enums = "warn"
+equatable_if_let = "warn"
 exit = "warn"
 expl_impl_clone_on_copy = "warn"
 # Catches `From` impls that can panic

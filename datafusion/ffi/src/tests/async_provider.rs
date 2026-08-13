@@ -75,7 +75,7 @@ fn async_table_provider_thread(
 
     runtime.block_on(async move {
         let mut num_received = 0;
-        while let Some(true) = batch_request.recv().await {
+        while batch_request.recv().await == Some(true) {
             let record_batch = match num_received {
                 0 => Some(create_record_batch(1, 5)),
                 1 => Some(create_record_batch(6, 1)),
