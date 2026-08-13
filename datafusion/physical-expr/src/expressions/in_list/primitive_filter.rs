@@ -20,7 +20,6 @@
 //! This module provides membership tests for Arrow primitive types.
 
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
-use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::*;
 use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::{HashSet, Result, exec_datafusion_err};
@@ -324,84 +323,14 @@ macro_rules! primitive_static_filter {
                     )
                 })?;
 
-                let haystack_has_nulls = self.null_count > 0;
-                let needle_values = v.values();
-                let needle_nulls = v.nulls();
-                let needle_has_nulls = v.null_count() > 0;
-
-                // Truth table for `value [NOT] IN (set)` with SQL three-valued logic:
-                // ("-" means the value doesn't affect the result)
-                //
-                // | needle_null | haystack_null | negated | in set? | result |
-                // |-------------|---------------|---------|---------|--------|
-                // | true        | -             | false   | -       | null   |
-                // | true        | -             | true    | -       | null   |
-                // | false       | true          | false   | yes     | true   |
-                // | false       | true          | false   | no      | null   |
-                // | false       | true          | true    | yes     | false  |
-                // | false       | true          | true    | no      | null   |
-                // | false       | false         | false   | yes     | true   |
-                // | false       | false         | false   | no      | false  |
-                // | false       | false         | true    | yes     | false  |
-                // | false       | false         | true    | no      | true   |
-
-                // Compute the "contains" result using collect_bool (fast batched approach)
-                // This ignores nulls - we handle them separately
-                let contains_buffer = if negated {
-                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
-                        !self.values.contains(&($to_set_value)(needle_values[i]))
-                    })
-                } else {
-                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
-                        self.values.contains(&($to_set_value)(needle_values[i]))
-                    })
-                };
-
-                // Compute the null mask
-                // Output is null when:
-                // 1. needle value is null, OR
-                // 2. needle value is not in set AND haystack has nulls
-                let result_nulls = match (needle_has_nulls, haystack_has_nulls) {
-                    (false, false) => {
-                        // No nulls anywhere
-                        None
-                    }
-                    (true, false) => {
-                        // Only needle has nulls - just use needle's null mask
-                        needle_nulls.cloned()
-                    }
-                    (false, true) => {
-                        // Only haystack has nulls - result is null when value not in set
-                        // Valid (not null) when original "in set" is true
-                        // For NOT IN: contains_buffer = !original, so validity = !contains_buffer
-                        let validity = if negated {
-                            !&contains_buffer
-                        } else {
-                            contains_buffer.clone()
-                        };
-                        Some(NullBuffer::new(validity))
-                    }
-                    (true, true) => {
-                        // Both have nulls - combine needle nulls with haystack-induced nulls
-                        let needle_validity =
-                            needle_nulls.map(|n| n.inner().clone()).unwrap_or_else(
-                                || BooleanBuffer::new_set(needle_values.len()),
-                            );
-
-                        // Valid when original "in set" is true (see above)
-                        let haystack_validity = if negated {
-                            !&contains_buffer
-                        } else {
-                            contains_buffer.clone()
-                        };
-
-                        // Combined validity: valid only where both are valid
-                        let combined_validity = &needle_validity & &haystack_validity;
-                        Some(NullBuffer::new(combined_validity))
-                    }
-                };
-
-                Ok(BooleanArray::new(contains_buffer, result_nulls))
+                let input_values = v.values();
+                Ok(build_in_list_result(
+                    v.len(),
+                    v.nulls(),
+                    self.null_count > 0,
+                    negated,
+                    |index| self.values.contains(&($to_set_value)(input_values[index])),
+                ))
             }
         }
     };
