@@ -501,8 +501,20 @@ fn general_replace<O: OffsetSizeTrait>(
 
     let data = mutable.freeze();
 
+    // Preserve the input list's inner field (name, nullability, metadata) instead
+    // of creating a new default field, matching the promised return type.
+    let field = match list_array.data_type() {
+        DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
+        other => {
+            return internal_err!(
+                "array_replace got unexpected data type: {}",
+                other
+            );
+        }
+    };
+
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(list_array.value_type(), true)),
+        field,
         OffsetBuffer::<O>::new(offsets.into()),
         arrow::array::make_array(data),
         valid.finish(),
@@ -597,8 +609,20 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
 
     let data = mutable.freeze();
 
+    // Preserve the input list's inner field (name, nullability, metadata) instead
+    // of creating a new default field, matching the promised return type.
+    let field = match list_array.data_type() {
+        DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
+        other => {
+            return internal_err!(
+                "array_replace got unexpected data type: {}",
+                other
+            );
+        }
+    };
+
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(list_array.value_type(), true)),
+        field,
         OffsetBuffer::new(offsets.into()),
         arrow::array::make_array(data),
         list_array.nulls().cloned(),
