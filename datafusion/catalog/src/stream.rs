@@ -19,6 +19,7 @@
 
 use std::fmt::Formatter;
 use std::fs::{File, OpenOptions};
+use std::future::ready;
 use std::io::BufReader;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -40,6 +41,7 @@ use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 use async_trait::async_trait;
 use futures::StreamExt;
+use futures::future::BoxFuture;
 
 /// A [`TableProviderFactory`] for [`StreamTable`]
 #[derive(Debug, Default)]
@@ -47,7 +49,31 @@ pub struct StreamTableFactory {}
 
 #[async_trait]
 impl TableProviderFactory for StreamTableFactory {
-    async fn create(
+    fn create<'life0, 'life1, 'life2, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        cmd: &'life2 CreateExternalTable,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn TableProvider>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.create_boxed(state, cmd)
+    }
+}
+
+impl StreamTableFactory {
+    fn create_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        cmd: &'a CreateExternalTable,
+    ) -> BoxFuture<'a, Result<Arc<dyn TableProvider>>> {
+        Box::pin(ready(self.create_inner(state, cmd)))
+    }
+
+    fn create_inner(
         &self,
         state: &dyn Session,
         cmd: &CreateExternalTable,
@@ -322,7 +348,50 @@ impl TableProvider for StreamTable {
         TableType::Base
     }
 
-    async fn scan(
+    fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        projection: Option<&'life2 Vec<usize>>,
+        filters: &'life3 [Expr],
+        limit: Option<usize>,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        'life3: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.scan_boxed(state, projection, filters, limit)
+    }
+
+    fn insert_into<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        input: Arc<dyn ExecutionPlan>,
+        insert_op: InsertOp,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.insert_into_boxed(state, input, insert_op)
+    }
+}
+
+impl StreamTable {
+    fn scan_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a Vec<usize>>,
+        filters: &'a [Expr],
+        limit: Option<usize>,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(ready(self.scan_inner(state, projection, filters, limit)))
+    }
+
+    fn scan_inner(
         &self,
         state: &dyn Session,
         projection: Option<&Vec<usize>>,
@@ -351,15 +420,23 @@ impl TableProvider for StreamTable {
         )?))
     }
 
-    async fn insert_into(
+    fn insert_into_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        input: Arc<dyn ExecutionPlan>,
+        insert_op: InsertOp,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(ready(self.insert_into_inner(state, input, insert_op)))
+    }
+
+    fn insert_into_inner(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
         _insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = self.0.source.schema();
-        let orders =
-            create_lex_ordering(schema, &self.0.order, _state.execution_props())?;
+        let orders = create_lex_ordering(schema, &self.0.order, state.execution_props())?;
         // It is sufficient to pass only one of the equivalent orderings:
         let ordering = orders.into_iter().next().map(Into::into);
 
@@ -412,7 +489,30 @@ impl DataSink for StreamWrite {
         self.0.source.schema()
     }
 
-    async fn write_all(
+    fn write_all<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        data: SendableRecordBatchStream,
+        context: &'life1 Arc<TaskContext>,
+    ) -> BoxFuture<'async_trait, Result<u64>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.write_all_boxed(data, context)
+    }
+}
+
+impl StreamWrite {
+    fn write_all_boxed<'a>(
+        &'a self,
+        data: SendableRecordBatchStream,
+        context: &'a Arc<TaskContext>,
+    ) -> BoxFuture<'a, Result<u64>> {
+        Box::pin(self.write_all_inner(data, context))
+    }
+
+    async fn write_all_inner(
         &self,
         mut data: SendableRecordBatchStream,
         _context: &Arc<TaskContext>,
