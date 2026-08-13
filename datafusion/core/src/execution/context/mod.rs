@@ -2981,6 +2981,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::duration_suboptimal_units,
+        reason = "Each `Duration` deliberately uses the same unit as the suffix in the string it is parsed from"
+    )]
     fn test_parse_duration_with_overflow_check() {
         const LIST_FILES_CACHE_TTL: &str = "datafusion.runtime.list_files_cache_ttl";
 
@@ -2992,7 +2996,7 @@ mod tests {
             ),
             (
                 "307445734561825860m",
-                Duration::from_hours(5124095576030431),
+                Duration::from_mins(307445734561825860),
             ),
             (
                 "307445734561825860m10s",
