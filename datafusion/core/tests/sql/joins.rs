@@ -39,8 +39,7 @@ async fn join_change_in_planner() -> Result<()> {
     ]));
     // Specify the ordering:
     let file_sort_order = vec![
-        [col("a1")]
-            .into_iter()
+        std::iter::once(col("a1"))
             .map(|e| {
                 let ascending = true;
                 let nulls_first = false;
@@ -98,8 +97,7 @@ async fn join_no_order_on_filter() -> Result<()> {
     ]));
     // Specify the ordering:
     let file_sort_order = vec![
-        [col("a1")]
-            .into_iter()
+        std::iter::once(col("a1"))
             .map(|e| {
                 let ascending = true;
                 let nulls_first = false;

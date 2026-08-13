@@ -1646,8 +1646,7 @@ async fn test_metadata_based_udf() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("no_metadata", DataType::UInt64, true),
         Field::new("with_metadata", DataType::UInt64, true).with_metadata(
-            [("modify_values".to_string(), "double_output".to_string())]
-                .into_iter()
+            std::iter::once(("modify_values".to_string(), "double_output".to_string()))
                 .collect(),
         ),
     ]));
@@ -1661,8 +1660,7 @@ async fn test_metadata_based_udf() -> Result<()> {
     let t = ctx.table("t").await?;
     let no_output_meta_udf = ScalarUDF::from(MetadataBasedUdf::new(HashMap::new()));
     let with_output_meta_udf = ScalarUDF::from(MetadataBasedUdf::new(
-        [("output_metatype".to_string(), "custom_value".to_string())]
-            .into_iter()
+        std::iter::once(("output_metatype".to_string(), "custom_value".to_string()))
             .collect(),
     ));
 
@@ -1716,8 +1714,7 @@ async fn test_metadata_based_udf() -> Result<()> {
 async fn test_metadata_based_udf_with_literal() -> Result<()> {
     let ctx = SessionContext::new();
     let input_metadata: HashMap<String, String> =
-        [("modify_values".to_string(), "double_output".to_string())]
-            .into_iter()
+        std::iter::once(("modify_values".to_string(), "double_output".to_string()))
             .collect();
     let input_metadata = FieldMetadata::from(input_metadata);
     let df = ctx.sql("select 0;").await?.select(vec![
@@ -1728,8 +1725,7 @@ async fn test_metadata_based_udf_with_literal() -> Result<()> {
     ])?;
 
     let output_metadata: HashMap<String, String> =
-        [("output_metatype".to_string(), "custom_value".to_string())]
-            .into_iter()
+        std::iter::once(("output_metatype".to_string(), "custom_value".to_string()))
             .collect();
     let custom_udf = ScalarUDF::from(MetadataBasedUdf::new(output_metadata.clone()));
 
