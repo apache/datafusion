@@ -24,6 +24,7 @@ use arrow::datatypes::*;
 use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::{HashSet, Result, exec_datafusion_err};
 use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use super::branchless_filter::{BranchlessFilter, BranchlessFilterType};
@@ -49,13 +50,27 @@ pub(super) fn instantiate_primitive_filter(
         DataType::Int16 => Arc::new(BitmapFilter::<Int16Type>::try_new(in_array)?),
         DataType::UInt16 => Arc::new(BitmapFilter::<UInt16Type>::try_new(in_array)?),
         DataType::Float16 => Arc::new(BitmapFilter::<Float16Type>::try_new(in_array)?),
-        DataType::Int32 => Arc::new(Int32StaticFilter::try_new(in_array)?),
-        DataType::Int64 => Arc::new(Int64StaticFilter::try_new(in_array)?),
-        DataType::UInt32 => Arc::new(UInt32StaticFilter::try_new(in_array)?),
-        DataType::UInt64 => Arc::new(UInt64StaticFilter::try_new(in_array)?),
-        // Float primitive types use ordered wrappers for Hash/Eq.
-        DataType::Float32 => Arc::new(Float32StaticFilter::try_new(in_array)?),
-        DataType::Float64 => Arc::new(Float64StaticFilter::try_new(in_array)?),
+        DataType::Int32 => {
+            Arc::new(PrimitiveHashSetFilter::<Int32Type>::try_new(in_array)?)
+        }
+        DataType::Int64 => {
+            Arc::new(PrimitiveHashSetFilter::<Int64Type>::try_new(in_array)?)
+        }
+        DataType::UInt32 => {
+            Arc::new(PrimitiveHashSetFilter::<UInt32Type>::try_new(in_array)?)
+        }
+        DataType::UInt64 => {
+            Arc::new(PrimitiveHashSetFilter::<UInt64Type>::try_new(in_array)?)
+        }
+        // Float primitive types use ordered wrapper keys for Hash/Eq.
+        DataType::Float32 => Arc::new(PrimitiveHashSetFilter::<
+            Float32Type,
+            OrderedFloat32,
+        >::try_new(in_array)?),
+        DataType::Float64 => Arc::new(PrimitiveHashSetFilter::<
+            Float64Type,
+            OrderedFloat64,
+        >::try_new(in_array)?),
         _ => return Ok(None),
     };
 
@@ -364,87 +379,77 @@ impl From<f64> for OrderedFloat64 {
     }
 }
 
-// Macro to generate specialized StaticFilter implementations for primitive types
-macro_rules! primitive_static_filter {
-    ($Name:ident, $ArrowType:ty) => {
-        primitive_static_filter!(
-            $Name,
-            $ArrowType,
-            <$ArrowType as ArrowPrimitiveType>::Native,
-            |v| v
-        );
-    };
-    ($Name:ident, $ArrowType:ty, $SetValueType:ty, $to_set_value:expr) => {
-        struct $Name {
-            null_count: usize,
-            values: HashSet<$SetValueType>,
-        }
-
-        impl $Name {
-            fn try_new(in_array: &ArrayRef) -> Result<Self> {
-                let in_array =
-                    in_array.as_primitive_opt::<$ArrowType>().ok_or_else(|| {
-                        exec_datafusion_err!(
-                            "Failed to downcast an array to a '{}' array",
-                            stringify!($ArrowType)
-                        )
-                    })?;
-
-                let mut values = HashSet::with_capacity(in_array.len());
-                let null_count = in_array.null_count();
-
-                for v in in_array.iter().flatten() {
-                    values.insert(($to_set_value)(v));
-                }
-
-                Ok(Self { null_count, values })
-            }
-        }
-
-        impl StaticFilter for $Name {
-            fn null_count(&self) -> usize {
-                self.null_count
-            }
-
-            fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
-                handle_dictionary!(self, v, negated);
-
-                let v = v.as_primitive_opt::<$ArrowType>().ok_or_else(|| {
-                    exec_datafusion_err!(
-                        "Failed to downcast an array to a '{}' array",
-                        stringify!($ArrowType)
-                    )
-                })?;
-
-                let input_values = v.values();
-                Ok(build_in_list_result(
-                    v.len(),
-                    v.nulls(),
-                    self.null_count > 0,
-                    negated,
-                    |index| self.values.contains(&($to_set_value)(input_values[index])),
-                ))
-            }
-        }
-    };
+/// Hash-set membership for primitive types.
+///
+/// `K` defaults to the Arrow type's native value. Floats use an ordered wrapper
+/// key because their native values do not implement [`Eq`] and [`Hash`].
+struct PrimitiveHashSetFilter<
+    T: ArrowPrimitiveType,
+    K = <T as ArrowPrimitiveType>::Native,
+> {
+    null_count: usize,
+    values: HashSet<K>,
+    _marker: PhantomData<T>,
 }
 
-primitive_static_filter!(Int32StaticFilter, Int32Type);
-primitive_static_filter!(Int64StaticFilter, Int64Type);
-primitive_static_filter!(UInt32StaticFilter, UInt32Type);
-primitive_static_filter!(UInt64StaticFilter, UInt64Type);
+impl<T, K> PrimitiveHashSetFilter<T, K>
+where
+    T: ArrowPrimitiveType,
+    T::Native: Copy,
+    K: From<T::Native> + Eq + Hash,
+{
+    fn try_new(in_array: &ArrayRef) -> Result<Self> {
+        let in_array = in_array.as_primitive_opt::<T>().ok_or_else(|| {
+            exec_datafusion_err!(
+                "PrimitiveHashSetFilter: expected {} array",
+                T::DATA_TYPE
+            )
+        })?;
+        let mut values = HashSet::with_capacity(in_array.len() - in_array.null_count());
+        for value in in_array.iter().flatten() {
+            values.insert(K::from(value));
+        }
 
-// Macro to generate specialized StaticFilter implementations for float types
-// Floats require a wrapper type (OrderedFloat*) to implement Hash/Eq due to NaN semantics
-macro_rules! float_static_filter {
-    ($Name:ident, $ArrowType:ty, $OrderedType:ty) => {
-        primitive_static_filter!($Name, $ArrowType, $OrderedType, <$OrderedType>::from);
-    };
+        Ok(Self {
+            null_count: in_array.null_count(),
+            values,
+            _marker: PhantomData,
+        })
+    }
 }
 
-// Generate specialized filters for float types using ordered wrappers
-float_static_filter!(Float32StaticFilter, Float32Type, OrderedFloat32);
-float_static_filter!(Float64StaticFilter, Float64Type, OrderedFloat64);
+impl<T, K> StaticFilter for PrimitiveHashSetFilter<T, K>
+where
+    T: ArrowPrimitiveType + Send + Sync + 'static,
+    T::Native: Copy + Send + Sync,
+    K: From<T::Native> + Eq + Hash + Send + Sync + 'static,
+{
+    fn null_count(&self) -> usize {
+        self.null_count
+    }
+
+    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+        handle_dictionary!(self, v, negated);
+
+        let v = v.as_primitive_opt::<T>().ok_or_else(|| {
+            exec_datafusion_err!(
+                "PrimitiveHashSetFilter: expected {} array",
+                T::DATA_TYPE
+            )
+        })?;
+        let input_values = v.values();
+        Ok(build_in_list_result(
+            v.len(),
+            v.nulls(),
+            self.null_count > 0,
+            negated,
+            |index| {
+                let key = K::from(input_values[index]);
+                self.values.contains(&key)
+            },
+        ))
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -452,8 +457,8 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{
-        DictionaryArray, Float16Array, Int8Array, Int16Array, UInt8Array, UInt16Array,
-        UInt32Array,
+        DictionaryArray, Float16Array, Float32Array, Float64Array, Int8Array, Int16Array,
+        UInt8Array, UInt16Array, UInt32Array,
     };
     use half::f16;
 
@@ -497,6 +502,34 @@ mod tests {
         assert!(instantiate_branchless_filter(&array)?.is_some());
 
         Ok(())
+    }
+
+    #[test]
+    fn primitive_hash_filter_handles_float_keys() -> Result<()> {
+        let nan32 = f32::NAN;
+        let other_nan32 = f32::from_bits(nan32.to_bits() + 1);
+        let haystack: ArrayRef = Arc::new(Float32Array::from(vec![0.0, nan32]));
+        let filter =
+            PrimitiveHashSetFilter::<Float32Type, OrderedFloat32>::try_new(&haystack)?;
+        let needles = Float32Array::from(vec![
+            Some(0.0),
+            Some(-0.0),
+            Some(nan32),
+            Some(other_nan32),
+            None,
+        ]);
+        assert_contains(
+            &filter,
+            &needles,
+            vec![Some(true), Some(false), Some(true), Some(false), None],
+        )?;
+
+        let nan64 = f64::NAN;
+        let haystack: ArrayRef = Arc::new(Float64Array::from(vec![1.0, nan64]));
+        let filter =
+            PrimitiveHashSetFilter::<Float64Type, OrderedFloat64>::try_new(&haystack)?;
+        let needles = Float64Array::from(vec![Some(1.0), Some(nan64), Some(2.0)]);
+        assert_contains(&filter, &needles, vec![Some(true), Some(true), Some(false)])
     }
 
     #[test]
