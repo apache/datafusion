@@ -26,6 +26,7 @@ use datafusion_common::error::Result;
 use datafusion_expr::{Expr, LogicalPlan, TableProviderFilterPushDown, TableType};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::work_table::WorkTableExec;
+use futures::future::BoxFuture;
 
 use crate::{ScanArgs, ScanResult, Session, TableProvider};
 
@@ -78,18 +79,21 @@ impl TableProvider for CteWorkTable {
         TableType::Temporary
     }
 
-    async fn scan(
-        &self,
-        state: &dyn Session,
-        projection: Option<&Vec<usize>>,
-        filters: &[Expr],
+    fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        projection: Option<&'life2 Vec<usize>>,
+        filters: &'life3 [Expr],
         limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let options = ScanArgs::default()
-            .with_projection(projection.map(|p| p.as_slice()))
-            .with_filters(Some(filters))
-            .with_limit(limit);
-        Ok(self.scan_with_args(state, options).await?.into_inner())
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        'life3: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.scan_boxed(state, projection, filters, limit)
     }
 
     async fn scan_with_args<'a>(
@@ -113,5 +117,32 @@ impl TableProvider for CteWorkTable {
             TableProviderFilterPushDown::Unsupported;
             filters.len()
         ])
+    }
+}
+
+impl CteWorkTable {
+    // Compile-time optimization; see `MemTable::scan_boxed`.
+    fn scan_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a Vec<usize>>,
+        filters: &'a [Expr],
+        limit: Option<usize>,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(self.scan_inner(state, projection, filters, limit))
+    }
+
+    async fn scan_inner(
+        &self,
+        state: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let options = ScanArgs::default()
+            .with_projection(projection.map(|p| p.as_slice()))
+            .with_filters(Some(filters))
+            .with_limit(limit);
+        Ok(self.scan_with_args(state, options).await?.into_inner())
     }
 }
