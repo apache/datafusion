@@ -1061,11 +1061,10 @@ mod tests {
 
         let session =
             FFI_SessionRef::new(&state, None, ffi_provider.logical_codec.clone());
-        let assignments = [FFI_TableProviderUpdateAssignment {
+        let assignments = std::iter::once(FFI_TableProviderUpdateAssignment {
             column: SString::from("b"),
             expr_serialized: SVec::new(),
-        }]
-        .into_iter()
+        })
         .collect();
         let result = unsafe {
             (ffi_provider.update)(&ffi_provider, session, assignments, SVec::new()).await
