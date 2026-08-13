@@ -274,7 +274,25 @@ impl ClassicPWMJStream {
             .output_batches
             .next_completed_batch()
         {
+            // If scanning this stream batch is already done, keep draining the
+            // remaining completed batches before moving on. `finish_buffered_batch`
+            // can leave several completed batches queued and only one is returned
+            // per poll; advancing to `FetchStreamBatch` while any remain (as the
+            // block below used to do) strands them for the final stream batch and
+            // drops output rows.
+            if !self.batch_process_state.continue_process
+                && self.batch_process_state.output_batches.is_empty()
+            {
+                self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
+            }
             return Ok(StatefulStreamResult::Ready(Some(batch)));
+        }
+
+        // The scan finished on a previous poll and its output is now fully
+        // drained; advance without re-scanning (which would re-emit rows).
+        if !self.batch_process_state.continue_process {
+            self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
+            return Ok(StatefulStreamResult::Continue);
         }
 
         // Produce more work
@@ -289,7 +307,11 @@ impl ClassicPWMJStream {
         )?;
 
         if !self.batch_process_state.continue_process {
-            // We finished scanning this stream batch.
+            // We finished scanning this stream batch. Finalize the coalescer and
+            // return the first completed batch; any remaining completed batches are
+            // drained by the `next_completed_batch` loop at the head of this
+            // function on subsequent polls (we only advance to `FetchStreamBatch`
+            // once none remain).
             self.batch_process_state
                 .output_batches
                 .finish_buffered_batch()?;
@@ -298,7 +320,9 @@ impl ClassicPWMJStream {
                 .output_batches
                 .next_completed_batch()
             {
-                self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
+                if self.batch_process_state.output_batches.is_empty() {
+                    self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
+                }
                 return Ok(StatefulStreamResult::Ready(Some(b)));
             }
 
