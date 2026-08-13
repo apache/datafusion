@@ -9628,10 +9628,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::lossy_float_literal,
-        reason = "The literals below spell out exact powers of two, which float `Display` renders differently"
-    )]
     fn test_scalar_distance_u64_boundaries() {
         // 1. Full-domain integer ranges
         // i64::MIN to i64::MAX -> distance is u64::MAX
