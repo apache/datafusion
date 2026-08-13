@@ -267,7 +267,7 @@ pub struct HashTableLookupExpr {
     /// Map to check against (hash table or array map)
     /// Safety: Post-deserialization, this is only safe for membership checks and
     /// should not be modified further.
-    map: Arc<HashTableLookupExprMap>,
+    map: HashTableLookupExprMap,
     /// Description for display
     description: String,
 }
@@ -291,7 +291,7 @@ impl HashTableLookupExpr {
         Self {
             on_columns,
             random_state,
-            map: Arc::new(HashTableLookupExprMap::Normal(map)),
+            map: HashTableLookupExprMap::Normal(map),
             description,
         }
     }
@@ -314,30 +314,16 @@ impl Hash for HashTableLookupExpr {
         self.on_columns.dyn_hash(state);
         self.description.hash(state);
         self.random_state.seed().hash(state);
-        // Note that we compare hash_map by pointer equality.
-        // Actually comparing the contents of the hash maps would be expensive.
-        // The way these hash maps are used in actuality is that HashJoinExec creates
-        // one per partition per query execution, thus it is never possible for two different
-        // hash maps to have the same content in practice.
-        // Theoretically this is a public API and users could create identical hash maps,
-        // but that seems unlikely and not worth paying the cost of deep comparison all the time.
-        Arc::as_ptr(&self.map).hash(state);
+        self.map.hash(state);
     }
 }
 
 impl PartialEq for HashTableLookupExpr {
     fn eq(&self, other: &Self) -> bool {
-        // Note that we compare hash_map by pointer equality.
-        // Actually comparing the contents of the hash maps would be expensive.
-        // The way these hash maps are used in actuality is that HashJoinExec creates
-        // one per partition per query execution, thus it is never possible for two different
-        // hash maps to have the same content in practice.
-        // Theoretically this is a public API and users could create identical hash maps,
-        // but that seems unlikely and not worth paying the cost of deep comparison all the time.
         self.on_columns == other.on_columns
             && self.description == other.description
             && self.random_state.seed() == other.random_state.seed()
-            && Arc::ptr_eq(&self.map, &other.map)
+            && self.map == other.map
     }
 }
 
@@ -361,7 +347,7 @@ impl PhysicalExpr for HashTableLookupExpr {
         Ok(Arc::new(HashTableLookupExpr {
             on_columns: children,
             random_state: self.random_state.clone(),
-            map: Arc::clone(&self.map),
+            map: self.map.clone(),
             description: self.description.clone(),
         }))
     }
@@ -378,7 +364,7 @@ impl PhysicalExpr for HashTableLookupExpr {
         // Evaluate columns
         let join_keys = evaluate_columns(&self.on_columns, batch)?;
 
-        match self.map.as_ref() {
+        match &self.map {
             HashTableLookupExprMap::Normal(normal) => match &**normal {
                 Map::HashMap(map) => {
                     with_hashes(&join_keys, self.random_state.random_state(), |hashes| {
@@ -504,15 +490,17 @@ impl HashTableLookupExpr {
 
         let map = match &hash_table_lookup_expr.map {
             Some(Map::HashMapMembership(membership)) => {
-                Arc::new(HashTableLookupExprMap::MembershipOnlyHashMap(
+                HashTableLookupExprMap::MembershipOnlyHashMap(Arc::new(
                     JoinHashMembershipMap::new(&membership.build_hashes),
                 ))
             }
-            Some(Map::ArrayMapMembership(membership)) => Arc::new(
-                HashTableLookupExprMap::MembershipOnlyArrayMap(JoinMembershipArrayMap(
-                    ArrayMap::try_from_proto_membership_only(membership)?,
-                )),
-            ),
+            Some(Map::ArrayMapMembership(membership)) => {
+                HashTableLookupExprMap::MembershipOnlyArrayMap(Arc::new(
+                    JoinMembershipArrayMap(ArrayMap::try_from_proto_membership_only(
+                        membership,
+                    )?),
+                ))
+            }
             None => return internal_err!("HashTableLookupExpr has no map"),
         };
 
@@ -536,13 +524,53 @@ fn evaluate_columns(
         .collect()
 }
 
+#[derive(Clone)]
 enum HashTableLookupExprMap {
     /// A regular build-side hash map
     Normal(Arc<Map>),
     /// A membership-checks only version of a hashmap, only constructed via expression deserialization
-    MembershipOnlyHashMap(JoinHashMembershipMap),
+    MembershipOnlyHashMap(Arc<JoinHashMembershipMap>),
     /// A membership-checks only version of an array map, only constructed via expression deserialization
-    MembershipOnlyArrayMap(JoinMembershipArrayMap),
+    MembershipOnlyArrayMap(Arc<JoinMembershipArrayMap>),
+}
+impl Hash for HashTableLookupExprMap {
+    // Note that we compare hash_map by pointer equality.
+    // Actually comparing the contents of the hash maps would be expensive.
+    // The way these hash maps are used in actuality is that HashJoinExec creates
+    // one per partition per query execution, thus it is never possible for two different
+    // hash maps to have the same content in practice.
+    // Theoretically this is a public API and users could create identical hash maps,
+    // but that seems unlikely and not worth paying the cost of deep comparison all the time.
+
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            Self::Normal(a) => Arc::as_ptr(a).hash(state),
+            Self::MembershipOnlyHashMap(a) => Arc::as_ptr(a).hash(state),
+            Self::MembershipOnlyArrayMap(a) => Arc::as_ptr(a).hash(state),
+        }
+    }
+}
+impl PartialEq for HashTableLookupExprMap {
+    // Note that we compare hash_map by pointer equality.
+    // Actually comparing the contents of the hash maps would be expensive.
+    // The way these hash maps are used in actuality is that HashJoinExec creates
+    // one per partition per query execution, thus it is never possible for two different
+    // hash maps to have the same content in practice.
+    // Theoretically this is a public API and users could create identical hash maps,
+    // but that seems unlikely and not worth paying the cost of deep comparison all the time.
+
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Normal(a), Self::Normal(b)) => Arc::ptr_eq(a, b),
+            (Self::MembershipOnlyHashMap(a), Self::MembershipOnlyHashMap(b)) => {
+                Arc::ptr_eq(a, b)
+            }
+            (Self::MembershipOnlyArrayMap(a), Self::MembershipOnlyArrayMap(b)) => {
+                Arc::ptr_eq(a, b)
+            }
+            _ => false,
+        }
+    }
 }
 
 /// Membership-only join map reconstructed from serialized distinct hashes.

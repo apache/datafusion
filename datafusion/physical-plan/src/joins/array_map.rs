@@ -24,7 +24,7 @@ use crate::joins::chain::traverse_chain;
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
 use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::ArrowNumericType;
-use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err, internal_err};
 
 /// A macro to downcast only supported integer types (up to 64-bit) and invoke a generic function.
 ///
@@ -438,6 +438,16 @@ impl ArrayMap {
         node: &datafusion_proto_models::protobuf::ArrayMapMembership,
     ) -> Result<Self> {
         use arrow_data::bit_iterator::BitIndexIterator;
+
+        // Assert that i < num_slots is a valid index into node.presence
+        if node.num_slots.is_multiple_of(8) {
+            assert_eq_or_internal_err!(node.presence.len() as u64, node.num_slots / 8);
+        } else {
+            assert_eq_or_internal_err!(
+                node.presence.len() as u64,
+                (node.num_slots / 8) + 1
+            );
+        }
 
         let mut data = vec![0u32; node.num_slots as usize];
         let mut num_of_distinct_key = 0;
