@@ -23,9 +23,8 @@ use arrow::array::{
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
-use arrow::datatypes::{
-    DataType::{FixedSizeList, LargeList, LargeListView, List, ListView, Null},
-    Field,
+use arrow::datatypes::DataType::{
+    FixedSizeList, LargeList, LargeListView, List, ListView, Null,
 };
 use datafusion_common::cast::as_large_list_array;
 use datafusion_common::cast::as_list_array;
@@ -622,6 +621,15 @@ where
     let values = array.values();
     let original_data = values.to_data();
     let capacity = Capacities::Array(original_data.len());
+    // Carry the input's list field through to the output so that the returned
+    // type matches the one promised by `return_type` / `return_field_from_args`,
+    // including the field name, nullability and metadata.
+    let field = match array.data_type() {
+        List(field) | LargeList(field) => Arc::clone(field),
+        other => {
+            return internal_err!("array_slice got unexpected data type: {other}");
+        }
+    };
 
     let mut mutable =
         MutableArrayData::with_capacities(vec![&original_data], true, capacity);
@@ -638,9 +646,11 @@ where
         let end = offset_window[1];
         let len = end - start;
 
+        // The row is null, so its contents are never observed. Emit an empty
+        // slice rather than a null child element: the input's list field may be
+        // non-nullable, in which case a null child would be invalid.
         if nulls.as_ref().is_some_and(|n| n.is_null(row_index)) {
-            mutable.try_extend_nulls(1)?;
-            offsets.push(offsets[row_index] + O::usize_as(1));
+            offsets.push(offsets[row_index]);
             continue;
         }
 
@@ -682,7 +692,7 @@ where
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(array.value_type(), true)),
+        field,
         OffsetBuffer::<O>::new(offsets.into()),
         arrow::array::make_array(data),
         nulls,

@@ -450,6 +450,31 @@ NULL
 NULL
 [1, 3, 5]
 
+# maintains inner nullability
+query ?T
+select array_slice(column1, 2, 3), arrow_typeof(array_slice(column1, 2, 3))
+from values
+  (arrow_cast([], 'List(non-null Int32)')),
+  (arrow_cast(NULL, 'List(non-null Int32)')),
+  (arrow_cast([1, 3, 5, -5], 'List(non-null Int32)'))
+;
+----
+[] List(non-null Int32)
+NULL List(non-null Int32)
+[3, 5] List(non-null Int32)
+
+query ?T
+select column1, arrow_typeof(column1)
+from values (array_slice(arrow_cast([1, 3, 5, -5], 'LargeList(non-null Int32)'), 2, 3));
+----
+[3, 5] LargeList(non-null Int32)
+
+query ?T
+select array_slice(column1, 2, 3, 2), arrow_typeof(array_slice(column1, 2, 3, 2))
+from values (arrow_cast([1, 3, 5, -5], 'List(non-null Int32)'));
+----
+[3] List(non-null Int32)
+
 # Testing with empty arguments should result in an error
 query error DataFusion error: Error during planning: 'array_slice' does not support zero arguments
 select array_slice();
