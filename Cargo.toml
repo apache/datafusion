@@ -217,6 +217,7 @@ zstd = { version = "0.13", default-features = false }
 allow_attributes = "warn"
 as_ptr_cast_mut = "warn"
 assigning_clones = "warn"
+bool_to_int_with_if = "warn"
 branches_sharing_code = "warn"
 checked_conversions = "warn"
 clear_with_drain = "warn"
