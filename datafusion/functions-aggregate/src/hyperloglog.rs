@@ -47,9 +47,6 @@ pub(crate) const NUM_REGISTERS: usize = 1_usize << DEFAULT_HLL_P;
 /// Minimum supported precision value.
 pub(crate) const HLL_P_MIN: usize = 4;
 
-// Pre-computed constants for the default precision path.
-// Used in the `if self.p == DEFAULT_HLL_P` fast path throughout all hot loops
-// so LLVM can constant-fold p/q/mask as instruction immediates.
 const DEFAULT_Q: usize = 64 - DEFAULT_HLL_P;
 const DEFAULT_MASK: u64 = (1u64 << DEFAULT_HLL_P) - 1;
 
@@ -67,24 +64,6 @@ where
 }
 
 pub(crate) use datafusion_common::hash_utils::HLL_RANDOM_STATE as HLL_HASH_STATE;
-
-/// Write one hash into the register array using pre-hoisted `p`/`q`/`p_mask`.
-///
-/// Taking these as parameters (rather than reading from a struct) lets callers
-/// hoist them outside tight loops, keeping them in CPU registers across all
-/// iterations with zero per-element struct reads.
-#[inline(always)]
-pub(crate) fn hll_update_register(
-    registers: &mut [u8; 1 << DEFAULT_HLL_P],
-    p: usize,
-    q: usize,
-    p_mask: u64,
-    hash: u64,
-) {
-    let index = (hash & p_mask) as usize;
-    let rho = ((hash >> p) | (1_u64 << q)).trailing_zeros() + 1;
-    registers[index] = registers[index].max(rho as u8);
-}
 
 impl<T> Default for HyperLogLog<T>
 where
@@ -180,33 +159,29 @@ where
     /// by [`Self::add`].
     #[inline(always)]
     pub(crate) fn add_hashed(&mut self, hash: u64) {
-        self.for_each_hash(std::iter::once(hash));
+        let index = (hash & self.p_mask) as usize;
+        let rho = ((hash >> self.p) | (1_u64 << self.q)).trailing_zeros() + 1;
+        self.registers[index] = self.registers[index].max(rho as u8);
     }
 
     /// Process a slice of pre-computed hashes.
-    /// The precision branch is hoisted outside the loop.
     pub(crate) fn add_hashed_slice(&mut self, hashes: &[u64]) {
-        self.for_each_hash(hashes.iter().copied());
-    }
-
-    /// Feed an iterator of hashes into the sketch.
-    /// Resolves the precision branch once, then loops with branch-free inner body.
-    #[inline(always)]
-    fn for_each_hash(&mut self, hashes: impl Iterator<Item = u64>) {
+        // For p == DEFAULT_HLL_P, use compile-time constants so LLVM emits
+        // them as instruction immediates (same codegen as pre-refactor).
+        // For other precisions, hoist the struct fields outside the loop.
         if self.p == DEFAULT_HLL_P {
-            for hash in hashes {
-                hll_update_register(
-                    &mut self.registers,
-                    DEFAULT_HLL_P,
-                    DEFAULT_Q,
-                    DEFAULT_MASK,
-                    hash,
-                );
+            for &hash in hashes {
+                let index = (hash & DEFAULT_MASK) as usize;
+                let rho =
+                    ((hash >> DEFAULT_HLL_P) | (1_u64 << DEFAULT_Q)).trailing_zeros() + 1;
+                self.registers[index] = self.registers[index].max(rho as u8);
             }
         } else {
             let (p, q, p_mask) = (self.p, self.q, self.p_mask);
-            for hash in hashes {
-                hll_update_register(&mut self.registers, p, q, p_mask, hash);
+            for &hash in hashes {
+                let index = (hash & p_mask) as usize;
+                let rho = ((hash >> p) | (1_u64 << q)).trailing_zeros() + 1;
+                self.registers[index] = self.registers[index].max(rho as u8);
             }
         }
     }
@@ -371,24 +346,19 @@ where
     fn extend<S: IntoIterator<Item = T>>(&mut self, iter: S) {
         if self.p == DEFAULT_HLL_P {
             for elem in iter {
-                hll_update_register(
-                    &mut self.registers,
-                    DEFAULT_HLL_P,
-                    DEFAULT_Q,
-                    DEFAULT_MASK,
-                    HLL_HASH_STATE.hash_one(&elem),
-                );
+                let hash = HLL_HASH_STATE.hash_one(&elem);
+                let index = (hash & DEFAULT_MASK) as usize;
+                let rho =
+                    ((hash >> DEFAULT_HLL_P) | (1_u64 << DEFAULT_Q)).trailing_zeros() + 1;
+                self.registers[index] = self.registers[index].max(rho as u8);
             }
         } else {
             let (p, q, p_mask) = (self.p, self.q, self.p_mask);
             for elem in iter {
-                hll_update_register(
-                    &mut self.registers,
-                    p,
-                    q,
-                    p_mask,
-                    HLL_HASH_STATE.hash_one(&elem),
-                );
+                let hash = HLL_HASH_STATE.hash_one(&elem);
+                let index = (hash & p_mask) as usize;
+                let rho = ((hash >> p) | (1_u64 << q)).trailing_zeros() + 1;
+                self.registers[index] = self.registers[index].max(rho as u8);
             }
         }
     }
@@ -401,24 +371,19 @@ where
     fn extend<S: IntoIterator<Item = &'a T>>(&mut self, iter: S) {
         if self.p == DEFAULT_HLL_P {
             for elem in iter {
-                hll_update_register(
-                    &mut self.registers,
-                    DEFAULT_HLL_P,
-                    DEFAULT_Q,
-                    DEFAULT_MASK,
-                    HLL_HASH_STATE.hash_one(elem),
-                );
+                let hash = HLL_HASH_STATE.hash_one(elem);
+                let index = (hash & DEFAULT_MASK) as usize;
+                let rho =
+                    ((hash >> DEFAULT_HLL_P) | (1_u64 << DEFAULT_Q)).trailing_zeros() + 1;
+                self.registers[index] = self.registers[index].max(rho as u8);
             }
         } else {
             let (p, q, p_mask) = (self.p, self.q, self.p_mask);
             for elem in iter {
-                hll_update_register(
-                    &mut self.registers,
-                    p,
-                    q,
-                    p_mask,
-                    HLL_HASH_STATE.hash_one(elem),
-                );
+                let hash = HLL_HASH_STATE.hash_one(elem);
+                let index = (hash & p_mask) as usize;
+                let rho = ((hash >> p) | (1_u64 << q)).trailing_zeros() + 1;
+                self.registers[index] = self.registers[index].max(rho as u8);
             }
         }
     }
