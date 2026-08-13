@@ -25,7 +25,7 @@ use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::utils::ListCoercion;
-use datafusion_common::{Result, ScalarValue, exec_err, utils::take_function_args};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err, utils::take_function_args};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
