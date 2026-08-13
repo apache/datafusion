@@ -231,6 +231,7 @@ exit = "warn"
 expl_impl_clone_on_copy = "warn"
 # Catches `From` impls that can panic
 fallible_impl_from = "warn"
+filter_map_next = "warn"
 flat_map_option = "warn"
 float_cmp_const = "warn"
 fn_params_excessive_bools = "warn"
