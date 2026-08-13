@@ -96,7 +96,7 @@ fn plan_metrics(plan: &Arc<dyn ExecutionPlan>) -> String {
         .filter(|metrics| metrics.iter().next().is_some())
         .map(|metrics| format!("{}=[{metrics}]", plan.name()));
     own.into_iter()
-        .chain(plan.children().into_iter().map(|child| plan_metrics(child)))
+        .chain(plan.children().into_iter().map(plan_metrics))
         .filter(|metrics| !metrics.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
