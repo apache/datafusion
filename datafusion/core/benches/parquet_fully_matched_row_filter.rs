@@ -36,9 +36,8 @@ const ROW_GROUP_ROWS: usize = 65_536;
 const ROW_GROUPS: usize = 40;
 const TOTAL_ROWS: usize = ROW_GROUP_ROWS * ROW_GROUPS;
 const LOWER_ITEM_SK: i32 = (ROW_GROUP_ROWS / 2) as i32;
-const UPPER_ITEM_SK: i32 = (TOTAL_ROWS - ROW_GROUP_ROWS / 2) as i32;
-const EXPECTED_ROWS: usize = TOTAL_ROWS - ROW_GROUP_ROWS;
-const EXPECTED_ROW_FILTER_MATCHES: usize = ROW_GROUP_ROWS;
+const EXPECTED_ROWS: usize = TOTAL_ROWS - ROW_GROUP_ROWS / 2;
+const EXPECTED_ROW_FILTER_MATCHES: usize = ROW_GROUP_ROWS / 2;
 
 struct BenchmarkDataset {
     _tempdir: TempDir,
@@ -55,27 +54,18 @@ static DATASET: LazyLock<BenchmarkDataset> = LazyLock::new(|| {
     create_dataset().expect("failed to prepare fully-matched benchmark dataset")
 });
 
-fn q39_like_sql() -> String {
-    format!(
-        "SELECT SUM(payload) FROM t \
-         WHERE item_sk >= {LOWER_ITEM_SK} AND item_sk < {UPPER_ITEM_SK} \
-           AND warehouse_sk >= 1 AND warehouse_sk <= 10 \
-           AND sold_date_sk >= 2450905 AND sold_date_sk <= 2450934"
-    )
-}
-
-fn single_bound_sql() -> String {
+fn sql() -> String {
     format!(
         "SELECT SUM(payload) FROM t \
          WHERE item_sk >= {LOWER_ITEM_SK}"
     )
 }
 
-fn create_context(path: &Path, rt: &Runtime) -> SessionContext {
+fn create_context(path: &Path, rt: &Runtime, pruning: bool) -> SessionContext {
     let mut config = SessionConfig::new().with_target_partitions(1);
     config.options_mut().execution.parquet.pushdown_filters = true;
     config.options_mut().execution.parquet.reorder_filters = true;
-    config.options_mut().execution.parquet.pruning = true;
+    config.options_mut().execution.parquet.pruning = pruning;
 
     let ctx = SessionContext::new_with_config(config);
     rt.block_on(ctx.register_parquet(
@@ -142,26 +132,25 @@ fn probe(ctx: &SessionContext, rt: &Runtime, query: &str) -> ProbeResult {
 }
 
 fn assert_fully_matched_groups_bypass_row_filter(
-    ctx: &SessionContext,
+    optimized_ctx: &SessionContext,
+    baseline_ctx: &SessionContext,
     rt: &Runtime,
     query: &str,
 ) {
-    let single_bound = probe(ctx, rt, &single_bound_sql());
-    let q39_like = probe(ctx, rt, query);
+    let optimized = probe(optimized_ctx, rt, query);
+    let baseline = probe(baseline_ctx, rt, query);
 
+    assert_eq!(optimized.sum, EXPECTED_ROWS as i64);
+    assert_eq!(baseline.sum, EXPECTED_ROWS as i64);
     assert_eq!(
-        single_bound.sum,
-        (TOTAL_ROWS - LOWER_ITEM_SK as usize) as i64
-    );
-    assert_eq!(q39_like.sum, EXPECTED_ROWS as i64);
-    assert_eq!(
-        (single_bound.row_filter_matches, q39_like.row_filter_matches),
-        (ROW_GROUP_ROWS / 2, EXPECTED_ROW_FILTER_MATCHES),
-        "fully-matched row groups should bypass RowFilter.\n\
-         single-bound metrics:\n{}\n\
-         Q39-like metrics:\n{}",
-        single_bound.metrics,
-        q39_like.metrics,
+        (optimized.row_filter_matches, baseline.row_filter_matches),
+        (EXPECTED_ROW_FILTER_MATCHES, EXPECTED_ROWS),
+        "39 fully-matched row groups should bypass RowFilter when row-group \
+         statistics are enabled.\n\
+         optimized metrics:\n{}\n\
+         all-rows RowFilter metrics:\n{}",
+        optimized.metrics,
+        baseline.metrics,
     );
 }
 
@@ -172,15 +161,24 @@ fn run_query(ctx: &SessionContext, rt: &Runtime, query: &str) {
 
 fn parquet_fully_matched_row_filter(c: &mut Criterion) {
     let rt = Runtime::new().expect("create benchmark runtime");
-    let ctx = create_context(DATASET.path(), &rt);
-    let query = q39_like_sql();
+    let optimized_ctx = create_context(DATASET.path(), &rt, true);
+    let baseline_ctx = create_context(DATASET.path(), &rt, false);
+    let query = sql();
 
-    assert_fully_matched_groups_bypass_row_filter(&ctx, &rt, &query);
+    assert_fully_matched_groups_bypass_row_filter(
+        &optimized_ctx,
+        &baseline_ctx,
+        &rt,
+        &query,
+    );
 
     let mut group = c.benchmark_group("parquet_fully_matched_row_filter");
     group.throughput(Throughput::Elements(TOTAL_ROWS as u64));
-    group.bench_function("q39_like_three_integer_bounds", |b| {
-        b.iter(|| run_query(&ctx, &rt, &query));
+    group.bench_function("with_fully_matched_skip", |b| {
+        b.iter(|| run_query(&optimized_ctx, &rt, &query));
+    });
+    group.bench_function("row_filter_all_rows", |b| {
+        b.iter(|| run_query(&baseline_ctx, &rt, &query));
     });
     group.finish();
 }
