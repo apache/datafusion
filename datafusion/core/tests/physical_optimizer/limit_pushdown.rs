@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
     coalesce_partitions_exec, global_limit_exec, hash_join_exec, local_limit_exec,
-    parquet_exec_with_sort, sort_exec, sort_preserving_merge_exec,
+    parquet_exec, parquet_exec_with_sort, sort_exec, sort_preserving_merge_exec,
     sort_preserving_merge_exec_with_fetch, stream_exec,
 };
 
@@ -432,6 +432,36 @@ fn preserves_order_when_pushing_fetch_from_sort_preserving_merge() -> Result<()>
 
     assert_eq!(config.limit, Some(5));
     assert!(config.preserve_order);
+
+    Ok(())
+}
+
+#[test]
+fn does_not_preserve_order_for_independent_limit_below_sort() -> Result<()> {
+    let schema = create_schema();
+    let ordering: LexOrdering = [PhysicalSortExpr {
+        expr: col("c1", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+    let scan = parquet_exec(schema);
+    let local_limit = local_limit_exec(scan, 10);
+    let sort = sort_exec(ordering.clone(), local_limit);
+    let plan = sort_preserving_merge_exec_with_fetch(ordering, sort, 5);
+
+    let optimized = LimitPushdown::new().optimize(plan, &ConfigOptions::new())?;
+    let sort = optimized.children().swap_remove(0);
+    let scan = sort.children().swap_remove(0);
+    let scan = scan
+        .downcast_ref::<DataSourceExec>()
+        .expect("inner fetch should be pushed into the scan");
+    let config = scan
+        .data_source()
+        .downcast_ref::<FileScanConfig>()
+        .expect("parquet scan should use FileScanConfig");
+
+    assert_eq!(config.limit, Some(10));
+    assert!(!config.preserve_order);
 
     Ok(())
 }
