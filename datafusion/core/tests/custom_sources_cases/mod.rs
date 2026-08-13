@@ -38,11 +38,14 @@ use datafusion_catalog::Session;
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::project_schema;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_physical_expr::EquivalenceProperties;
-use datafusion_physical_plan::PlanProperties;
 use datafusion_physical_plan::StatisticsArgs;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
+use datafusion_physical_plan::{
+    ChildrenPropertiesMode, PlanProperties, ReplaceChildrenOptions,
+};
 
 use async_trait::async_trait;
 use futures::stream::Stream;
@@ -164,11 +167,22 @@ impl ExecutionPlan for CustomExecutionPlan {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -208,6 +222,15 @@ impl ExecutionPlan for CustomExecutionPlan {
                 })
                 .collect(),
         }))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

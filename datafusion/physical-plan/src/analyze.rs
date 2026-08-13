@@ -27,16 +27,21 @@ use super::{
 use crate::display::DisplayableExecutionPlan;
 use crate::execution_plan::EvaluationType;
 use crate::metrics::{MetricCategory, MetricType};
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
+use crate::{
+    ChildrenPropertiesMode, DisplayFormatType, ExecutionPlan, Partitioning,
+    ReplaceChildrenOptions,
+};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::format::ExplainFormat;
 use datafusion_common::instant::Instant;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     DataFusionError, Result, assert_eq_or_internal_err, internal_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::PhysicalExpr;
 
 use futures::StreamExt;
 
@@ -219,9 +224,17 @@ impl ExecutionPlan for AnalyzeExec {
         ])
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(
             AnalyzeExec::builder(
@@ -235,6 +248,16 @@ impl ExecutionPlan for AnalyzeExec {
             .with_format(self.format.clone())
             .build(),
         ))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -311,14 +334,32 @@ impl ExecutionPlan for AnalyzeExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
 
-        let input = ctx.encode_child(self.input())?;
-        let (has_metric_categories, metric_categories) = match self.metric_categories() {
+        // Exhaustive destructure: adding a field to `AnalyzeExec` without
+        // deciding how it is serialized is a compile error, not a silent
+        // round-trip gap.
+        let Self {
+            verbose,
+            show_statistics,
+            // TODO: not on the wire. `AnalyzeExecBuilder` always resets this to
+            // `[Summary, Dev]`, so a non-default selection is lost on
+            // round-trip. Fixing it needs a new proto field.
+            metric_types: _,
+            metric_categories,
+            format,
+            input,
+            schema,
+            // Derived at construction from `input` and `schema`.
+            cache: _,
+        } = self;
+
+        let input = ctx.encode_child(input)?;
+        let (has_metric_categories, metric_categories) = match metric_categories {
             Some(categories) => {
                 (true, categories.iter().map(ToString::to_string).collect())
             }
             None => (false, vec![]),
         };
-        let format = match self.format() {
+        let format = match format {
             ExplainFormat::Indent => protobuf::ExplainFormat::Indent,
             ExplainFormat::Tree => protobuf::ExplainFormat::Tree,
             ExplainFormat::PostgresJSON => protobuf::ExplainFormat::Pgjson,
@@ -328,10 +369,10 @@ impl ExecutionPlan for AnalyzeExec {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Analyze(Box::new(
                     protobuf::AnalyzeExecNode {
-                        verbose: self.verbose(),
-                        show_statistics: self.show_statistics(),
+                        verbose: *verbose,
+                        show_statistics: *show_statistics,
                         input: Some(Box::new(input)),
-                        schema: Some(self.schema().as_ref().try_into()?),
+                        schema: Some(schema.as_ref().try_into()?),
                         has_metric_categories,
                         metric_categories,
                         format,
@@ -356,12 +397,23 @@ impl AnalyzeExec {
             protobuf::physical_plan_node::PhysicalPlanType::Analyze,
             "AnalyzeExec",
         );
+        // Exhaustive destructure: a new field on `AnalyzeExecNode` is a compile
+        // error here rather than a silently ignored wire field.
+        let protobuf::AnalyzeExecNode {
+            verbose,
+            show_statistics,
+            input,
+            schema,
+            has_metric_categories,
+            metric_categories,
+            format,
+        } = analyze.as_ref();
+
         let input =
-            ctx.decode_required_child(analyze.input.as_deref(), "AnalyzeExec", "input")?;
-        let metric_categories = if analyze.has_metric_categories {
+            ctx.decode_required_child(input.as_deref(), "AnalyzeExec", "input")?;
+        let metric_categories = if *has_metric_categories {
             Some(
-                analyze
-                    .metric_categories
+                metric_categories
                     .iter()
                     .map(|category| category.parse::<MetricCategory>())
                     .collect::<Result<Vec<_>>>()?,
@@ -369,28 +421,26 @@ impl AnalyzeExec {
         } else {
             None
         };
-        let proto_format =
-            protobuf::ExplainFormat::try_from(analyze.format).map_err(|_| {
-                DataFusionError::Internal(format!(
-                    "Received an AnalyzeExecNode message with unknown ExplainFormat {}",
-                    analyze.format
-                ))
-            })?;
+        let proto_format = protobuf::ExplainFormat::try_from(*format).map_err(|_| {
+            DataFusionError::Internal(format!(
+                "Received an AnalyzeExecNode message with unknown ExplainFormat {format}"
+            ))
+        })?;
         let format = match proto_format {
             protobuf::ExplainFormat::Indent => ExplainFormat::Indent,
             protobuf::ExplainFormat::Tree => ExplainFormat::Tree,
             protobuf::ExplainFormat::Pgjson => ExplainFormat::PostgresJSON,
             protobuf::ExplainFormat::Graphviz => ExplainFormat::Graphviz,
         };
-        let schema = analyze.schema.as_ref().ok_or_else(|| {
+        let schema = schema.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "AnalyzeExec is missing required field 'schema'"
             )
         })?;
         Ok(Arc::new(
             AnalyzeExec::builder(
-                analyze.verbose,
-                analyze.show_statistics,
+                *verbose,
+                *show_statistics,
                 input,
                 Arc::new(arrow::datatypes::Schema::try_from(schema)?),
             )
