@@ -42,7 +42,6 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::WindowFunctionDefinition;
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::execution_props::SubqueryIndex;
 use datafusion_physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
@@ -366,26 +365,14 @@ pub fn parse_physical_expr_with_converter(
         }
         ExprType::LikeExpr(_) => LikeExpr::try_from_proto(proto, &decode_ctx)?,
         ExprType::HashExpr(_) => HashExpr::try_from_proto(proto, &decode_ctx)?,
-        ExprType::ScalarSubquery(sq) => {
-            let data_type: arrow::datatypes::DataType = sq
-                .data_type
-                .as_ref()
-                .ok_or_else(|| {
-                    proto_error("Missing data_type in PhysicalScalarSubqueryExprNode")
-                })?
-                .try_into()?;
+        ExprType::ScalarSubquery(_) => {
             let results = ctx.scalar_subquery_results().ok_or_else(|| {
                 proto_error(
                     "ScalarSubqueryExpr can only be deserialized as part \
                          of a surrounding ScalarSubqueryExec",
                 )
             })?;
-            Arc::new(ScalarSubqueryExpr::new(
-                data_type,
-                sq.nullable,
-                SubqueryIndex::new(sq.index as usize),
-                results.clone(),
-            ))
+            ScalarSubqueryExpr::try_from_proto(proto, &decode_ctx, results)?
         }
         ExprType::DynamicFilter(_) => {
             DynamicFilterPhysicalExpr::try_from_proto(proto, &decode_ctx)?

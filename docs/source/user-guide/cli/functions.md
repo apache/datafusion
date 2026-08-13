@@ -208,6 +208,7 @@ The columns of the returned table are:
 | path                | Utf8         | File path relative to the object store / filesystem root            |
 | metadata_size_bytes | UInt64       | Size of the cached metadata in memory (not its thrift encoded form) |
 | expires_in          | Duration(ms) | Last modified time of the file                                      |
+| hits                | UInt64       | Number of times the cached metadata has been accessed               |
 | metadata_list       | List(Struct) | List of metadatas, one for each file under the path.                |
 
 A metadata struct in the metadata_list contains the following fields:

@@ -1236,16 +1236,7 @@ pub fn adjust_offsets_for_slice<O: OffsetSizeTrait>(
 ) -> OffsetBuffer<O> {
     let offsets = list.offsets();
 
-    if let (Some(first), Some(last)) = (offsets.first(), offsets.last())
-        && (!first.is_zero() || last.as_usize() != list.values().len())
-    {
-        let offsets = offsets.iter().map(|offset| *offset - *first).collect();
-
-        //todo: use unsafe Offset::new_unchecked?
-        return OffsetBuffer::new(offsets);
-    }
-
-    offsets.clone()
+    offsets.clone().subtract(offsets[0])
 }
 
 /// For lists and large lists, truncates the sublist of null values

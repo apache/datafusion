@@ -52,7 +52,7 @@ pub use crate::execution_plan::{
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
 pub use crate::sort_pushdown::SortOrderPushdownResult;
-pub use crate::statistics::StatisticsArgs;
+pub use crate::statistics::{ChildStats, StatisticsArgs, StatisticsContext};
 pub use crate::stream::EmptyRecordBatchStream;
 pub use crate::topk::TopK;
 pub use crate::visitor::{ExecutionPlanVisitor, accept, visit_execution_plan};
@@ -88,6 +88,8 @@ pub mod metrics;
 pub mod operator_statistics;
 pub mod placeholder_row;
 pub mod projection;
+#[cfg(feature = "proto")]
+pub mod proto;
 pub mod recursive_query;
 pub mod repartition;
 pub mod scalar_subquery;

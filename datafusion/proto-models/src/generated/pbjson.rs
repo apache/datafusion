@@ -5857,9 +5857,15 @@ impl serde::Serialize for EmptyExecNode {
         if self.schema.is_some() {
             len += 1;
         }
+        if self.partitions != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.EmptyExecNode", len)?;
         if let Some(v) = self.schema.as_ref() {
             struct_ser.serialize_field("schema", v)?;
+        }
+        if self.partitions != 0 {
+            struct_ser.serialize_field("partitions", &self.partitions)?;
         }
         struct_ser.end()
     }
@@ -5872,11 +5878,13 @@ impl<'de> serde::Deserialize<'de> for EmptyExecNode {
     {
         const FIELDS: &[&str] = &[
             "schema",
+            "partitions",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Schema,
+            Partitions,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -5899,6 +5907,7 @@ impl<'de> serde::Deserialize<'de> for EmptyExecNode {
                     {
                         match value {
                             "schema" => Ok(GeneratedField::Schema),
+                            "partitions" => Ok(GeneratedField::Partitions),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -5919,6 +5928,7 @@ impl<'de> serde::Deserialize<'de> for EmptyExecNode {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut schema__ = None;
+                let mut partitions__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Schema => {
@@ -5927,10 +5937,19 @@ impl<'de> serde::Deserialize<'de> for EmptyExecNode {
                             }
                             schema__ = map_.next_value()?;
                         }
+                        GeneratedField::Partitions => {
+                            if partitions__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partitions"));
+                            }
+                            partitions__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(EmptyExecNode {
                     schema: schema__,
+                    partitions: partitions__.unwrap_or_default(),
                 })
             }
         }
@@ -22125,9 +22144,15 @@ impl serde::Serialize for PlaceholderRowExecNode {
         if self.schema.is_some() {
             len += 1;
         }
+        if self.partitions != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PlaceholderRowExecNode", len)?;
         if let Some(v) = self.schema.as_ref() {
             struct_ser.serialize_field("schema", v)?;
+        }
+        if self.partitions != 0 {
+            struct_ser.serialize_field("partitions", &self.partitions)?;
         }
         struct_ser.end()
     }
@@ -22140,11 +22165,13 @@ impl<'de> serde::Deserialize<'de> for PlaceholderRowExecNode {
     {
         const FIELDS: &[&str] = &[
             "schema",
+            "partitions",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Schema,
+            Partitions,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -22167,6 +22194,7 @@ impl<'de> serde::Deserialize<'de> for PlaceholderRowExecNode {
                     {
                         match value {
                             "schema" => Ok(GeneratedField::Schema),
+                            "partitions" => Ok(GeneratedField::Partitions),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -22187,6 +22215,7 @@ impl<'de> serde::Deserialize<'de> for PlaceholderRowExecNode {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut schema__ = None;
+                let mut partitions__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Schema => {
@@ -22195,10 +22224,19 @@ impl<'de> serde::Deserialize<'de> for PlaceholderRowExecNode {
                             }
                             schema__ = map_.next_value()?;
                         }
+                        GeneratedField::Partitions => {
+                            if partitions__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("partitions"));
+                            }
+                            partitions__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(PlaceholderRowExecNode {
                     schema: schema__,
+                    partitions: partitions__.unwrap_or_default(),
                 })
             }
         }

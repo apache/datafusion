@@ -45,7 +45,7 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::statistics::StatisticsArgs;
+use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -65,7 +65,8 @@ async fn check_stats_precision_with_filter_pushdown() {
     // Scan without filter, stats are exact
     let exec = table.scan(&state, None, &[], None).await.unwrap();
     assert_eq!(
-        exec.statistics_with_args(&StatisticsArgs::new())
+        StatisticsContext::new()
+            .compute(exec.as_ref(), &StatisticsArgs::new())
             .unwrap()
             .num_rows,
         Precision::Exact(8),
@@ -99,8 +100,8 @@ async fn check_stats_precision_with_filter_pushdown() {
     );
     // Scan with filter pushdown, stats are inexact
     assert_eq!(
-        optimized_exec
-            .statistics_with_args(&StatisticsArgs::new())
+        StatisticsContext::new()
+            .compute(optimized_exec.as_ref(), &StatisticsArgs::new())
             .unwrap()
             .num_rows,
         Precision::Inexact(8),
@@ -135,15 +136,15 @@ async fn load_table_stats_with_session_level_cache() {
     let exec1 = table1.scan(&state1, None, &[], None).await.unwrap();
 
     assert_eq!(
-        exec1
-            .statistics_with_args(&StatisticsArgs::new())
+        StatisticsContext::new()
+            .compute(exec1.as_ref(), &StatisticsArgs::new())
             .unwrap()
             .num_rows,
         Precision::Exact(8)
     );
     assert_eq!(
-        exec1
-            .statistics_with_args(&StatisticsArgs::new())
+        StatisticsContext::new()
+            .compute(exec1.as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         // Byte size is absent because we cannot estimate the output size
@@ -157,15 +158,15 @@ async fn load_table_stats_with_session_level_cache() {
     assert_eq!(get_static_cache_size(&state2), 0);
     let exec2 = table2.scan(&state2, None, &[], None).await.unwrap();
     assert_eq!(
-        exec2
-            .statistics_with_args(&StatisticsArgs::new())
+        StatisticsContext::new()
+            .compute(exec2.as_ref(), &StatisticsArgs::new())
             .unwrap()
             .num_rows,
         Precision::Exact(8)
     );
     assert_eq!(
-        exec2
-            .statistics_with_args(&StatisticsArgs::new())
+        StatisticsContext::new()
+            .compute(exec2.as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         // Absent because the data contains variable length columns
@@ -178,15 +179,15 @@ async fn load_table_stats_with_session_level_cache() {
     assert_eq!(get_static_cache_size(&state1), 1);
     let exec3 = table1.scan(&state1, None, &[], None).await.unwrap();
     assert_eq!(
-        exec3
-            .statistics_with_args(&StatisticsArgs::new())
+        StatisticsContext::new()
+            .compute(exec3.as_ref(), &StatisticsArgs::new())
             .unwrap()
             .num_rows,
         Precision::Exact(8)
     );
     assert_eq!(
-        exec3
-            .statistics_with_args(&StatisticsArgs::new())
+        StatisticsContext::new()
+            .compute(exec3.as_ref(), &StatisticsArgs::new())
             .unwrap()
             .total_byte_size,
         // Absent because the data contains variable length columns
@@ -252,7 +253,9 @@ async fn anonymous_parquet_stats_cache_with_explicit_wider_schema() {
         .await
         .unwrap();
 
-    let stats = plan.statistics_with_args(&StatisticsArgs::new()).unwrap();
+    let stats = StatisticsContext::new()
+        .compute(plan.as_ref(), &StatisticsArgs::new())
+        .unwrap();
     assert_eq!(stats.column_statistics.len(), 2);
     assert_eq!(stats.column_statistics[1].null_count, Precision::Exact(1));
 

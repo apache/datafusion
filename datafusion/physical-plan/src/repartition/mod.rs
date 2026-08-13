@@ -39,8 +39,8 @@ use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::projection::{ProjectionExec, all_columns, make_with_child, update_expr};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
-use crate::spill::spill_pool::{self, SpillPoolWriter};
-use crate::statistics::StatisticsArgs;
+use crate::spill::spill_pool::{self, SpillPoolSink, SpillPoolWriter};
+use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
 use crate::{
     DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics,
@@ -56,7 +56,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, transpose};
 use datafusion_common::{
     ColumnStatistics, DataFusionError, HashMap, ScalarValue, SplitPoint,
-    assert_or_internal_err, internal_err,
+    assert_or_internal_err, internal_datafusion_err, internal_err,
 };
 use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
@@ -164,8 +164,38 @@ type InputPartitionsToCurrentPartitionReceiver = Vec<DistributionReceiver<MaybeB
 struct OutputChannel {
     sender: DistributionSender<MaybeBatch>,
     reservation: SharedMemoryReservation,
-    spill_writer: SpillPoolWriter,
+    spill_writer: SpillPoolSink,
     shared_coalescer: Option<SharedCoalescer>,
+}
+
+/// The set of spill-pool writers for a single output partition, before they are handed to the
+/// per-input tasks. The variant encodes the repartition mode so the wrong writer topology cannot
+/// be constructed for a given mode.
+enum PartitionSpillWriters {
+    /// `preserve_order`: one single-producer FIFO writer per input partition. Each is `take`n
+    /// exactly once (moved into the matching input task), so the pool always has one writer.
+    PerInput(Vec<Option<SpillPoolSink>>),
+    /// Non-preserve-order: one shared writer, cloned into every input task.
+    Shared(SpillPoolWriter),
+}
+
+impl PartitionSpillWriters {
+    /// Hand out the writer for input partition `input`.
+    ///
+    /// In `PerInput` mode this moves the dedicated writer out (it must only be requested once per
+    /// input); in `Shared` mode it clones the shared writer.
+    fn take_for_input(&mut self, input: usize) -> Result<SpillPoolSink> {
+        match self {
+            PartitionSpillWriters::PerInput(writers) => {
+                writers[input].take().ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "spill writer for input partition requested more than once"
+                    )
+                })
+            }
+            PartitionSpillWriters::Shared(writer) => Ok(writer.new_sink()),
+        }
+    }
 }
 
 impl OutputChannel {
@@ -293,7 +323,7 @@ impl SharedCoalescer {
 ///
 /// See [`RepartitionExec`] for the overall N×M architecture.
 ///
-/// [`spill_pool::channel`]: crate::spill::spill_pool::channel
+/// [`spill_pool::channel`]: crate::spill::spill_pool::spsc_channel
 struct PartitionChannels {
     /// Senders for each input partition to send data to this output partition
     tx: InputPartitionsToCurrentPartitionSender,
@@ -305,9 +335,11 @@ struct PartitionChannels {
     /// partition. `None` in preserve-order mode (downstream
     /// `StreamingMergeBuilder` handles batching).
     shared_coalescer: Option<SharedCoalescer>,
-    /// Spill writers for writing spilled data.
-    /// SpillPoolWriter is Clone, so multiple writers can share state in non-preserve-order mode.
-    spill_writers: Vec<SpillPoolWriter>,
+    /// Spill writers for writing spilled data, before they are handed to the per-input tasks.
+    /// The variant is chosen by the repartition mode (see [`PartitionSpillWriters`]): a dedicated
+    /// single-producer FIFO writer per input in preserve-order mode, or one shared writer in
+    /// non-preserve-order mode.
+    spill_writers: PartitionSpillWriters,
     /// Spill readers for reading spilled data - one per input partition (FIFO semantics).
     /// Each (input, output) pair gets its own reader to maintain proper ordering.
     spill_readers: Vec<SendableRecordBatchStream>,
@@ -463,16 +495,31 @@ impl RepartitionExecState {
                 .session_config()
                 .options()
                 .execution
-                .max_spill_file_size_bytes;
-            let num_spill_channels = if preserve_order {
-                num_input_partitions
+                .max_spill_file_size_bytes
+                .get();
+
+            let (spill_writers, spill_readers) = if preserve_order {
+                // preserve_order: one dedicated single-producer FIFO pool per input partition.
+                // Each writer is moved into exactly one input task (never cloned), so the ordering
+                // the downstream merge relies on is preserved across the spill boundary.
+                let mut writers = Vec::with_capacity(num_input_partitions);
+                let mut readers = Vec::with_capacity(num_input_partitions);
+                for _ in 0..num_input_partitions {
+                    let (writer, reader) = spill_pool::spsc_channel(
+                        max_file_size,
+                        Arc::clone(&spill_manager),
+                    );
+                    writers.push(Some(writer));
+                    readers.push(reader);
+                }
+                (PartitionSpillWriters::PerInput(writers), readers)
             } else {
-                1
+                // non-preserve-order: one shared multi-producer pool per output partition, since
+                // all inputs share the same receiver and the output is an unordered multiset.
+                let (writer, reader) =
+                    spill_pool::mpsc_channel(max_file_size, Arc::clone(&spill_manager));
+                (PartitionSpillWriters::Shared(writer), vec![reader])
             };
-            let (spill_writers, spill_readers): (Vec<_>, Vec<_>) = (0
-                ..num_spill_channels)
-                .map(|_| spill_pool::channel(max_file_size, Arc::clone(&spill_manager)))
-                .unzip();
 
             // Coalesce on the producer side, before the channel's gate, so
             // the consumer never sees the per-input-task small batches.
@@ -505,23 +552,22 @@ impl RepartitionExecState {
             std::mem::take(streams_and_metrics).into_iter().enumerate()
         {
             let txs: HashMap<_, _> = channels
-                .iter()
+                .iter_mut()
                 .map(|(partition, channels)| {
-                    // In preserve_order mode: each input gets its own spill writer (index i)
-                    // In non-preserve-order mode: all inputs share spill writer 0 via clone
-                    let spill_writer_idx = if preserve_order { i } else { 0 };
-                    (
+                    // Hand this input task its spill writer: in preserve_order mode this moves
+                    // the input's dedicated FIFO writer out; otherwise it clones the shared
+                    // writer. See [`PartitionSpillWriters::take_for_input`].
+                    Ok((
                         *partition,
                         OutputChannel {
                             sender: channels.tx[i].clone(),
                             reservation: Arc::clone(&channels.reservation),
-                            spill_writer: channels.spill_writers[spill_writer_idx]
-                                .clone(),
+                            spill_writer: channels.spill_writers.take_for_input(i)?,
                             shared_coalescer: channels.shared_coalescer.clone(),
                         },
-                    )
+                    ))
                 })
-                .collect();
+                .collect::<Result<HashMap<_, _>>>()?;
 
             // Extract senders for wait_for_task before moving txs
             let senders: HashMap<_, _> = txs
@@ -1479,22 +1525,27 @@ impl ExecutionPlan for RepartitionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn statistics_with_args(&self, args: &StatisticsArgs) -> Result<Arc<Statistics>> {
-        if let Some(partition) = args.partition() {
-            let partition_count = self.partitioning().partition_count();
-            if partition_count == 0 {
-                return Ok(Arc::new(Statistics::new_unknown(&self.schema())));
-            }
+    fn child_stats_requests(&self, _partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(None)]
+    }
 
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        if args.partition().is_some() {
+            let partition_count = self.partitioning().partition_count();
+            // `StatisticsContext::compute` validates the partition index against
+            // this same count before calling, so it is non-zero here; guard
+            // defensively against a direct call so the division below cannot
+            // divide by zero
             assert_or_internal_err!(
-                partition < partition_count,
-                "RepartitionExec invalid partition {} (expected less than {})",
-                partition,
-                partition_count
+                partition_count > 0,
+                "RepartitionExec statistics requested for a partition but the partition count is 0"
             );
 
-            let mut stats =
-                Arc::unwrap_or_clone(args.compute_child_statistics(&self.input, None)?);
+            let mut stats = input_stats[0].as_ref().clone();
 
             // Distribute statistics across partitions
             stats.num_rows = stats
@@ -1517,7 +1568,7 @@ impl ExecutionPlan for RepartitionExec {
 
             Ok(Arc::new(stats))
         } else {
-            args.compute_child_statistics(&self.input, None)
+            Ok(Arc::clone(&input_stats[0]))
         }
     }
 
@@ -3380,14 +3431,14 @@ mod tests {
 
 #[cfg(test)]
 mod test {
-    use arrow::array::record_batch;
-    use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::assert_batches_eq;
-
     use super::*;
     use crate::test::TestMemoryExec;
     use crate::union::UnionExec;
+    use arrow::array::{UInt32Array, record_batch};
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::assert_batches_eq;
+    use datafusion_common::config::ConfigNonZeroUsize;
 
     use datafusion_physical_expr::expressions::col;
 
@@ -3557,6 +3608,95 @@ mod test {
         }
 
         // We should have spilled
+        let metrics = exec.metrics().unwrap();
+        assert!(
+            metrics.spill_count().unwrap() > 0,
+            "Expected spilling to occur for order-preserving repartition at this \
+             memory limit. If this fails, the memory limit may need adjustment."
+        );
+        Ok(())
+    }
+
+    /// Regression test for order preservation across spill *file rotation*.
+    ///
+    /// A `preserve_order` repartition relies on each per-(input, output) spill pool delivering
+    /// batches in strict FIFO order (see [`spill_pool::spsc_channel`] / [`SpillPoolSink`]). This uses
+    /// the same memory profile as [`Self::test_preserve_order_with_spilling`] — which is tuned to
+    /// force spilling while still completing — but additionally sets `max_spill_file_size_bytes`
+    /// to 1 so every spilled batch lands in its own file. That exercises the FIFO-across-rotation
+    /// path: if ordering were lost across rotated files (e.g. by feeding an ordered pool with a
+    /// shared multi-producer writer), the downstream `StreamingMerge` would emit out-of-order rows
+    /// and the sortedness assertion below would fail.
+    #[tokio::test]
+    async fn test_preserve_order_with_spill_file_rotation() -> Result<()> {
+        use datafusion_execution::config::SessionConfig;
+        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+
+        // Same sorted input as `test_preserve_order_with_spilling`:
+        // Partition1: [1,3], [5,7], [9,11]; Partition2: [2,4], [6,8], [10,12]
+        let batch1 = record_batch!(("c0", UInt32, [1, 3])).unwrap();
+        let batch2 = record_batch!(("c0", UInt32, [2, 4])).unwrap();
+        let batch3 = record_batch!(("c0", UInt32, [5, 7])).unwrap();
+        let batch4 = record_batch!(("c0", UInt32, [6, 8])).unwrap();
+        let batch5 = record_batch!(("c0", UInt32, [9, 11])).unwrap();
+        let batch6 = record_batch!(("c0", UInt32, [10, 12])).unwrap();
+        let schema = batch1.schema();
+        let sort_exprs = LexOrdering::new([PhysicalSortExpr {
+            expr: col("c0", &schema).unwrap(),
+            options: SortOptions::default().asc(),
+        }])
+        .unwrap();
+        let partition1 = vec![batch1, batch3, batch5];
+        let partition2 = vec![batch2, batch4, batch6];
+        let input_partitions = vec![partition1, partition2];
+
+        // Force a new spill file per spilled batch to exercise FIFO across rotation.
+        let mut session_config = SessionConfig::new();
+        session_config
+            .options_mut()
+            .execution
+            .max_spill_file_size_bytes = ConfigNonZeroUsize::try_new(1).unwrap();
+        // Same tight limit as `test_preserve_order_with_spilling`: forces spilling while leaving
+        // the merge enough non-spillable headroom to complete.
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(608, 1.0)
+            .build_arc()?;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(runtime),
+        );
+
+        let exec = TestMemoryExec::try_new(&input_partitions, Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![sort_exprs.clone(), sort_exprs])?;
+        let exec = Arc::new(TestMemoryExec::update_cache(&Arc::new(exec)));
+        let exec = RepartitionExec::try_new(exec, Partitioning::RoundRobinBatch(3))?
+            .with_preserve_order();
+
+        // Each output partition merges sorted substreams, so its rows must be non-decreasing.
+        for i in 0..exec.partitioning().partition_count() {
+            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
+            let mut last: Option<u32> = None;
+            while let Some(result) = stream.next().await {
+                let batch = result?;
+                let col = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<UInt32Array>()
+                    .unwrap();
+                for r in 0..col.len() {
+                    let v = col.value(r);
+                    if let Some(prev) = last {
+                        assert!(
+                            prev <= v,
+                            "output partition {i} not sorted: {prev} came before {v}"
+                        );
+                    }
+                    last = Some(v);
+                }
+            }
+        }
+
         let metrics = exec.metrics().unwrap();
         assert!(
             metrics.spill_count().unwrap() > 0,

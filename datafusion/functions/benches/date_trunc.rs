@@ -18,52 +18,64 @@
 use std::hint::black_box;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, TimestampSecondArray};
+use arrow::array::{Array, ArrayRef, TimestampNanosecondArray, TimestampSecondArray};
 use arrow::datatypes::Field;
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs};
 use datafusion_functions::datetime::date_trunc;
-use rand::Rng;
-use rand::rngs::ThreadRng;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
-fn timestamps(rng: &mut ThreadRng) -> TimestampSecondArray {
-    let mut seconds = vec![];
-    for _ in 0..1000 {
-        seconds.push(rng.random_range(0..1_000_000));
-    }
+const NUM_ROWS: usize = 1000;
+const NANOS_PER_SECOND: i64 = 1_000_000_000;
+/// Roughly 30 years, so that values span many months, quarters and years.
+const RANGE_SECONDS: i64 = 30 * 365 * 24 * 60 * 60;
 
-    TimestampSecondArray::from(seconds)
+fn seedable_rng() -> StdRng {
+    StdRng::seed_from_u64(42)
 }
 
-fn criterion_benchmark(c: &mut Criterion) {
-    c.bench_function("date_trunc_minute_1000", |b| {
-        let mut rng = rand::rng();
-        let timestamps_array = Arc::new(timestamps(&mut rng)) as ArrayRef;
-        let batch_len = timestamps_array.len();
-        let precision =
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some("minute".to_string())));
-        let timestamps = ColumnarValue::Array(timestamps_array);
-        let udf = date_trunc();
-        let args = vec![precision, timestamps];
-        let arg_fields = args
-            .iter()
-            .enumerate()
-            .map(|(idx, arg)| {
-                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
-            })
-            .collect::<Vec<_>>();
+fn second_timestamps() -> TimestampSecondArray {
+    let mut rng = seedable_rng();
+    (0..NUM_ROWS)
+        .map(|_| Some(rng.random_range(0..1_000_000i64)))
+        .collect()
+}
 
-        let scalar_arguments = vec![None; arg_fields.len()];
-        let return_field = udf
-            .return_field_from_args(ReturnFieldArgs {
-                arg_fields: &arg_fields,
-                scalar_arguments: &scalar_arguments,
-            })
-            .unwrap();
-        let config_options = Arc::new(ConfigOptions::default());
+fn nanosecond_timestamps() -> TimestampNanosecondArray {
+    let mut rng = seedable_rng();
+    (0..NUM_ROWS)
+        .map(|_| {
+            let seconds = rng.random_range(-RANGE_SECONDS..RANGE_SECONDS);
+            Some(seconds * NANOS_PER_SECOND + rng.random_range(0..NANOS_PER_SECOND))
+        })
+        .collect()
+}
 
+fn run_benchmark(c: &mut Criterion, name: &str, granularity: &str, array: ArrayRef) {
+    let batch_len = array.len();
+    let precision =
+        ColumnarValue::Scalar(ScalarValue::Utf8(Some(granularity.to_string())));
+    let udf = date_trunc();
+    let args = vec![precision, ColumnarValue::Array(array)];
+    let arg_fields = args
+        .iter()
+        .enumerate()
+        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
+        .collect::<Vec<_>>();
+
+    let scalar_arguments = vec![None; arg_fields.len()];
+    let return_field = udf
+        .return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })
+        .unwrap();
+    let config_options = Arc::new(ConfigOptions::default());
+
+    c.bench_function(name, |b| {
         b.iter(|| {
             black_box(
                 udf.invoke_with_args(ScalarFunctionArgs {
@@ -77,6 +89,24 @@ fn criterion_benchmark(c: &mut Criterion) {
             )
         })
     });
+}
+
+fn criterion_benchmark(c: &mut Criterion) {
+    let seconds: ArrayRef = Arc::new(second_timestamps());
+    run_benchmark(c, "date_trunc_minute_1000", "minute", Arc::clone(&seconds));
+    run_benchmark(c, "date_trunc_month_second_1000", "month", seconds);
+
+    // Coarse granularities on an untimezoned array: these need calendar
+    // arithmetic rather than a plain division.
+    let nanos: ArrayRef = Arc::new(nanosecond_timestamps());
+    for granularity in ["week", "month", "quarter", "year"] {
+        run_benchmark(
+            c,
+            &format!("date_trunc_{granularity}_nanos_1000"),
+            granularity,
+            Arc::clone(&nanos),
+        );
+    }
 }
 
 criterion_group!(benches, criterion_benchmark);

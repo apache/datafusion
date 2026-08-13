@@ -341,6 +341,14 @@ physical_plan
 05)--------FilterExec: id@0 = 1 OR id@0 = 2
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
+# Regression: schema recomputation must preserve the unqualified UNION
+# output labels while unions_to_filter is enabled.
+query IT rowsort
+SELECT id, name FROM t1 WHERE id = 1 UNION SELECT id, name FROM t1 WHERE id = 2
+----
+1 Alex
+2 Bob
+
 statement ok
 set datafusion.optimizer.enable_unions_to_filter = false;
 

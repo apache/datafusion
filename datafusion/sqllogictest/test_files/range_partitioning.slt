@@ -506,9 +506,8 @@ set datafusion.optimizer.preserve_file_partitions = 0;
 
 ##########
 # TEST 15: Nested Range Joins
-# Compatible Range partitioning satisfies the lower join inputs. The upper join
-# still repairs the intermediate join output with Hash repartitioning because
-# HashJoinExec does not currently expose Range output partitioning.
+# Compatible Range partitioning is preserved through the lower join, allowing
+# the upper join to consume it without Hash repartitioning either input.
 ##########
 
 query TT
@@ -519,12 +518,10 @@ JOIN range_partitioned s ON r.range_key = s.range_key;
 ----
 physical_plan
 01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(range_key@2, range_key@0)], projection=[range_key@0, value@1, value@3, value@5]
-02)--RepartitionExec: partitioning=Hash([range_key@2], 4), input_partitions=4
-03)----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(range_key@0, range_key@0)]
-04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
-05)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
-06)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
-07)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+02)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(range_key@0, range_key@0)]
+03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+05)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 
 query IIII
 SELECT l.range_key, l.value, r.value, s.value
@@ -599,9 +596,8 @@ ORDER BY l.range_key;
 
 ##########
 # TEST 17: Range Join Feeds Aggregate
-# The join inputs avoid Hash repartitioning, but the aggregate above the join
-# still repartitions because HashJoinExec does not currently expose Range
-# output partitioning.
+# The join preserves compatible Range partitioning on range_key, allowing the
+# aggregate above it to avoid Hash repartitioning.
 ##########
 
 query TT
@@ -611,12 +607,10 @@ JOIN range_partitioned r ON l.range_key = r.range_key
 GROUP BY l.range_key;
 ----
 physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[range_key@0 as range_key], aggr=[sum(l.value + r.value)]
-02)--RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
-03)----AggregateExec: mode=Partial, gby=[range_key@0 as range_key], aggr=[sum(l.value + r.value)]
-04)------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(range_key@0, range_key@0)], projection=[range_key@0, value@1, value@3]
-05)--------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
-06)--------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+01)AggregateExec: mode=SinglePartitioned, gby=[range_key@0 as range_key], aggr=[sum(l.value + r.value)]
+02)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(range_key@0, range_key@0)], projection=[range_key@0, value@1, value@3]
+03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 
 query II
 SELECT l.range_key, SUM(l.value + r.value)
@@ -634,6 +628,149 @@ ORDER BY l.range_key;
 30 600
 35 700
 
+##########
+# TEST 18: Sort Merge Join Avoids Repartition for Compatible Range Inputs
+# Compatible Range inputs satisfy SortMergeJoinExec's co-partitioned
+# KeyPartitioned requirements.
+##########
+
+statement ok
+set datafusion.optimizer.prefer_hash_join = false;
+
+query TT
+EXPLAIN SELECT l.range_key, l.value, r.value
+FROM range_partitioned l
+JOIN range_partitioned r ON l.range_key = r.range_key;
+----
+physical_plan
+01)ProjectionExec: expr=[range_key@0 as range_key, value@1 as value, value@3 as value]
+02)--SortMergeJoinExec: join_type=Inner, on=[(range_key@0, range_key@0)]
+03)----SortExec: expr=[range_key@0 ASC], preserve_partitioning=[true]
+04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+05)----SortExec: expr=[range_key@0 ASC], preserve_partitioning=[true]
+06)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query III
+SELECT l.range_key, l.value, r.value
+FROM range_partitioned l
+JOIN range_partitioned r ON l.range_key = r.range_key
+ORDER BY l.range_key;
+----
+1 10 10
+5 50 50
+10 100 100
+15 150 150
+20 200 200
+25 250 250
+30 300 300
+35 350 350
+
+##########
+# TEST 19: Sort Merge Join Repartitions Incompatible Range Inputs
+# Different Range split points do not satisfy SortMergeJoinExec's
+# co-partitioned KeyPartitioned requirements.
+##########
+
+query TT
+EXPLAIN SELECT l.range_key, l.value, r.value
+FROM range_partitioned l
+JOIN range_partitioned_shifted r ON l.range_key = r.range_key;
+----
+physical_plan
+01)ProjectionExec: expr=[range_key@0 as range_key, value@1 as value, value@3 as value]
+02)--SortMergeJoinExec: join_type=Inner, on=[(range_key@0, range_key@0)]
+03)----SortExec: expr=[range_key@0 ASC], preserve_partitioning=[true]
+04)------RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
+05)--------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+06)----SortExec: expr=[range_key@0 ASC], preserve_partitioning=[true]
+07)------RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
+08)--------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(15), (20), (30)], 4), file_type=csv, has_header=false
+
+query III
+SELECT l.range_key, l.value, r.value
+FROM range_partitioned l
+JOIN range_partitioned_shifted r ON l.range_key = r.range_key
+ORDER BY l.range_key;
+----
+1 10 10
+5 50 50
+10 100 100
+15 150 150
+20 200 200
+25 250 250
+30 300 300
+35 350 350
+
+statement ok
+reset datafusion.optimizer.prefer_hash_join;
+
+##########
+# TEST 20: Symmetric Hash Join Avoids Repartition for Compatible Range Inputs
+# Compatible Range streams satisfy SymmetricHashJoinExec's co-partitioned
+# KeyPartitioned requirements.
+##########
+
+statement ok
+set datafusion.optimizer.prefer_hash_join = true;
+
+query TT
+EXPLAIN SELECT l.range_key, l.value, r.value
+FROM unbounded_range_like l
+FULL JOIN unbounded_range_like r ON l.range_key = r.range_key;
+----
+physical_plan
+01)ProjectionExec: expr=[range_key@0 as range_key, value@1 as value, value@3 as value]
+02)--SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(range_key@0, range_key@0)]
+03)----StreamingTableExec: partition_sizes=4, projection=[range_key, value], infinite_source=true, output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4)
+04)----StreamingTableExec: partition_sizes=4, projection=[range_key, value], infinite_source=true, output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4)
+
+query III rowsort
+SELECT l.range_key, l.value, r.value
+FROM unbounded_range_like l
+FULL JOIN unbounded_range_like r ON l.range_key = r.range_key;
+----
+1 10 10
+10 100 100
+15 150 150
+20 200 200
+25 250 250
+30 300 300
+35 350 350
+5 50 50
+
+##########
+# TEST 21: Symmetric Hash Join Repartitions Incompatible Range Inputs
+# Different Range split points do not satisfy SymmetricHashJoinExec's
+# co-partitioned KeyPartitioned requirements.
+##########
+
+query TT
+EXPLAIN SELECT l.range_key, l.value, r.value
+FROM unbounded_range_like l
+FULL JOIN unbounded_range_like_shifted r ON l.range_key = r.range_key;
+----
+physical_plan
+01)ProjectionExec: expr=[range_key@0 as range_key, value@1 as value, value@3 as value]
+02)--SymmetricHashJoinExec: mode=Partitioned, join_type=Full, on=[(range_key@0, range_key@0)]
+03)----RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
+04)------StreamingTableExec: partition_sizes=4, projection=[range_key, value], infinite_source=true, output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4)
+05)----RepartitionExec: partitioning=Hash([range_key@0], 4), input_partitions=4
+06)------StreamingTableExec: partition_sizes=4, projection=[range_key, value], infinite_source=true, output_partitioning=Range([range_key@0 ASC], [(15), (20), (30)], 4)
+
+query III rowsort
+SELECT l.range_key, l.value, r.value
+FROM unbounded_range_like l
+FULL JOIN unbounded_range_like_shifted r ON l.range_key = r.range_key;
+----
+1 10 10
+10 100 100
+15 150 150
+20 200 200
+25 250 250
+30 300 300
+35 350 350
+5 50 50
+
 statement ok
 reset datafusion.optimizer.prefer_hash_join;
 
@@ -644,9 +781,9 @@ statement ok
 reset datafusion.optimizer.preserve_file_partitions;
 
 ##########
-# TEST 18: Union of Range Partitioned Inputs
-# Each input exposes Range partitioning on range_key. These changes do not add a
-# cross-child Range relationship for UNION ALL.
+# TEST 22: Union of Range Partitioned Inputs
+# Each input exposes the same Range partitioning on range_key, so the optimizer
+# converts UnionExec to InterleaveExec to avoid redundant repartitioning.
 ##########
 
 query TT
@@ -655,7 +792,7 @@ UNION ALL
 SELECT range_key, value FROM range_partitioned;
 ----
 physical_plan
-01)UnionExec
+01)InterleaveExec
 02)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 03)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
 
@@ -681,6 +818,525 @@ ORDER BY range_key, value;
 30 300
 35 350
 35 350
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+set datafusion.optimizer.subset_repartition_threshold = 4;
+
+statement ok
+set datafusion.optimizer.preserve_file_partitions = 0;
+
+
+##########
+# TEST 23: Window on Range Partition Column
+# Range([range_key]) colocates equal range_key values, so
+# PARTITION BY range_key is satisfied without a hash repartition.
+##########
+
+query TT
+EXPLAIN SELECT range_key, SUM(value) OVER (PARTITION BY range_key ORDER BY value) FROM range_partitioned;
+----
+physical_plan
+01)ProjectionExec: expr=[range_key@0 as range_key, sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+02)--BoundedWindowAggExec: wdw=[sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----SortExec: expr=[range_key@0 ASC NULLS LAST, value@1 ASC NULLS LAST], preserve_partitioning=[true]
+04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query II
+SELECT range_key, SUM(value) OVER (PARTITION BY range_key ORDER BY value) FROM range_partitioned ORDER BY range_key;
+----
+1 10
+5 50
+10 100
+15 150
+20 200
+25 250
+30 300
+35 350
+
+
+##########
+# TEST 24: Unbounded-Frame Window on Range Partition Column
+# The unbounded frame makes DataFusion use WindowAggExec instead of
+# BoundedWindowAggExec, which likewise reuses Range partitioning without a
+# hash repartition.
+##########
+
+query TT
+EXPLAIN SELECT range_key, SUM(value) OVER (PARTITION BY range_key ORDER BY value ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM range_partitioned;
+----
+physical_plan
+01)ProjectionExec: expr=[range_key@0 as range_key, sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]
+02)--WindowAggExec: wdw=[sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+03)----SortExec: expr=[range_key@0 ASC NULLS LAST, value@1 ASC NULLS LAST], preserve_partitioning=[true]
+04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query II
+SELECT range_key, SUM(value) OVER (PARTITION BY range_key ORDER BY value ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM range_partitioned ORDER BY range_key;
+----
+1 10
+5 50
+10 100
+15 150
+20 200
+25 250
+30 300
+35 350
+
+
+##########
+# TEST 25: Window on Non-Range Column Rehashes
+# Range([range_key]) does not colocate non_range_key values, so
+# PARTITION BY non_range_key still requires a hash repartition.
+##########
+
+query TT
+EXPLAIN SELECT non_range_key, SUM(value) OVER (PARTITION BY non_range_key ORDER BY value) FROM range_partitioned;
+----
+physical_plan
+01)ProjectionExec: expr=[non_range_key@0 as non_range_key, sum(range_partitioned.value) PARTITION BY [range_partitioned.non_range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as sum(range_partitioned.value) PARTITION BY [range_partitioned.non_range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+02)--BoundedWindowAggExec: wdw=[sum(range_partitioned.value) PARTITION BY [range_partitioned.non_range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(range_partitioned.value) PARTITION BY [range_partitioned.non_range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----SortExec: expr=[non_range_key@0 ASC NULLS LAST, value@1 ASC NULLS LAST], preserve_partitioning=[true]
+04)------RepartitionExec: partitioning=Hash([non_range_key@0], 4), input_partitions=4
+05)--------DataSourceExec: file_groups=<slt:ignore>, projection=[non_range_key, value], output_partitioning=UnknownPartitioning(4), file_type=csv, has_header=false
+
+query III
+SELECT non_range_key, value, SUM(value) OVER (PARTITION BY non_range_key ORDER BY value) FROM range_partitioned ORDER BY non_range_key, value;
+----
+1 10 10
+1 100 110
+1 200 310
+1 300 610
+2 50 50
+2 150 200
+2 250 450
+2 350 800
+
+
+##########
+# TEST 26: Unbounded-Frame Window on Non-Range Column Rehashes
+# The unbounded frame makes DataFusion use WindowAggExec; Range([range_key])
+# does not colocate non_range_key values, so PARTITION BY non_range_key
+# still requires a hash repartition.
+##########
+
+query TT
+EXPLAIN SELECT non_range_key, SUM(value) OVER (PARTITION BY non_range_key ORDER BY value ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM range_partitioned;
+----
+physical_plan
+01)ProjectionExec: expr=[non_range_key@0 as non_range_key, sum(range_partitioned.value) PARTITION BY [range_partitioned.non_range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as sum(range_partitioned.value) PARTITION BY [range_partitioned.non_range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]
+02)--WindowAggExec: wdw=[sum(range_partitioned.value) PARTITION BY [range_partitioned.non_range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(range_partitioned.value) PARTITION BY [range_partitioned.non_range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+03)----SortExec: expr=[non_range_key@0 ASC NULLS LAST, value@1 ASC NULLS LAST], preserve_partitioning=[true]
+04)------RepartitionExec: partitioning=Hash([non_range_key@0], 4), input_partitions=4
+05)--------DataSourceExec: file_groups=<slt:ignore>, projection=[non_range_key, value], output_partitioning=UnknownPartitioning(4), file_type=csv, has_header=false
+
+query III
+SELECT non_range_key, value, SUM(value) OVER (PARTITION BY non_range_key ORDER BY value ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM range_partitioned ORDER BY non_range_key, value;
+----
+1 10 610
+1 100 610
+1 200 610
+1 300 610
+2 50 800
+2 150 800
+2 250 800
+2 350 800
+
+
+##########
+# TEST 27: Window Subset Satisfaction on Range Partition Column
+# With the subset threshold met, Range([range_key]) satisfies
+# PARTITION BY (range_key, non_range_key): equal composite keys share the
+# same range_key, so they are already colocated.
+##########
+
+statement ok
+set datafusion.optimizer.subset_repartition_threshold = 4;
+
+query TT
+EXPLAIN SELECT range_key, SUM(value) OVER (PARTITION BY range_key, non_range_key ORDER BY value) FROM range_partitioned;
+----
+physical_plan
+01)ProjectionExec: expr=[range_key@0 as range_key, sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+02)--BoundedWindowAggExec: wdw=[sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----SortExec: expr=[range_key@0 ASC NULLS LAST, non_range_key@1 ASC NULLS LAST, value@2 ASC NULLS LAST], preserve_partitioning=[true]
+04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query II
+SELECT range_key, SUM(value) OVER (PARTITION BY range_key, non_range_key ORDER BY value) FROM range_partitioned ORDER BY range_key;
+----
+1 10
+5 50
+10 100
+15 150
+20 200
+25 250
+30 300
+35 350
+
+
+##########
+# TEST 28: Window Subset Rehashes Below Subset Threshold
+# Range([range_key]) is only a subset of PARTITION BY
+# (range_key, non_range_key), so it should not satisfy the window key when
+# subset satisfaction is disabled.
+##########
+
+statement ok
+set datafusion.optimizer.subset_repartition_threshold = 5;
+
+query TT
+EXPLAIN SELECT range_key, SUM(value) OVER (PARTITION BY range_key, non_range_key ORDER BY value) FROM range_partitioned;
+----
+physical_plan
+01)ProjectionExec: expr=[range_key@0 as range_key, sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+02)--BoundedWindowAggExec: wdw=[sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(range_partitioned.value) PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----SortExec: expr=[range_key@0 ASC NULLS LAST, non_range_key@1 ASC NULLS LAST, value@2 ASC NULLS LAST], preserve_partitioning=[true]
+04)------RepartitionExec: partitioning=Hash([range_key@0, non_range_key@1], 4), input_partitions=4
+05)--------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query II
+SELECT range_key, SUM(value) OVER (PARTITION BY range_key, non_range_key ORDER BY value) FROM range_partitioned ORDER BY range_key;
+----
+1 10
+5 50
+10 100
+15 150
+20 200
+25 250
+30 300
+35 350
+
+statement ok
+reset datafusion.optimizer.subset_repartition_threshold;
+
+statement ok
+reset datafusion.optimizer.preserve_file_partitions;
+
+
+##########
+# TEST 29: Window Without Partition Keys Uses a Single Partition
+# A window with no PARTITION BY requires a single partition; range
+# partitioning is not applicable.
+##########
+
+query TT
+EXPLAIN SELECT range_key, SUM(value) OVER (ORDER BY value) FROM range_partitioned;
+----
+physical_plan
+01)ProjectionExec: expr=[range_key@0 as range_key, sum(range_partitioned.value) ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as sum(range_partitioned.value) ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+02)--BoundedWindowAggExec: wdw=[sum(range_partitioned.value) ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(range_partitioned.value) ORDER BY [range_partitioned.value ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----SortPreservingMergeExec: [value@1 ASC NULLS LAST]
+04)------SortExec: expr=[value@1 ASC NULLS LAST], preserve_partitioning=[true]
+05)--------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query II
+SELECT range_key, SUM(value) OVER (ORDER BY value) FROM range_partitioned ORDER BY range_key;
+----
+1 10
+5 60
+10 160
+15 310
+20 510
+25 760
+30 1060
+35 1410
+
+
+
+##########
+# TEST 30: PartitionedTopK on Range Partition Column
+# Exact Range([range_key]) satisfies the TopK partition key and avoids repartitioning.
+##########
+
+statement ok
+set datafusion.optimizer.enable_window_topn = true;
+
+statement ok
+set datafusion.optimizer.subset_repartition_threshold = 4;
+
+statement ok
+set datafusion.optimizer.preserve_file_partitions = 0;
+
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT range_key, value, ROW_NUMBER() OVER (PARTITION BY range_key ORDER BY value DESC) as rn
+    FROM range_partitioned
+) WHERE rn <= 1;
+----
+physical_plan
+01)ProjectionExec: expr=[range_key@0 as range_key, value@1 as value, row_number() PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rn]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [range_partitioned.range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----PartitionedTopKExec: fn=row_number, fetch=1, partition=[range_key@0], order=[value@1 DESC]
+04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query III
+SELECT * FROM (
+    SELECT range_key, value, ROW_NUMBER() OVER (PARTITION BY range_key ORDER BY value DESC) as rn
+    FROM range_partitioned
+) WHERE rn <= 1
+ORDER BY range_key;
+----
+1 10 1
+5 50 1
+10 100 1
+15 150 1
+20 200 1
+25 250 1
+30 300 1
+35 350 1
+
+
+##########
+# TEST 31: PartitionedTopK on Non-Range Column
+# Partitioning on a non-range key cannot reuse Range([range_key]) and
+# requires hash repartitioning.
+##########
+
+statement ok
+set datafusion.optimizer.subset_repartition_threshold = 4;
+
+statement ok
+set datafusion.optimizer.preserve_file_partitions = 0;
+
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT non_range_key, value, ROW_NUMBER() OVER (PARTITION BY non_range_key ORDER BY value DESC) as rn
+    FROM range_partitioned
+) WHERE rn <= 1;
+----
+physical_plan
+01)ProjectionExec: expr=[non_range_key@0 as non_range_key, value@1 as value, row_number() PARTITION BY [range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rn]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----PartitionedTopKExec: fn=row_number, fetch=1, partition=[non_range_key@0], order=[value@1 DESC]
+04)------RepartitionExec: partitioning=Hash([non_range_key@0], 4), input_partitions=4
+05)--------DataSourceExec: file_groups=<slt:ignore>, projection=[non_range_key, value], output_partitioning=UnknownPartitioning(4), file_type=csv, has_header=false
+
+query III
+SELECT * FROM (
+    SELECT non_range_key, value, ROW_NUMBER() OVER (PARTITION BY non_range_key ORDER BY value DESC) as rn
+    FROM range_partitioned
+) WHERE rn <= 1
+ORDER BY non_range_key;
+----
+1 300 1
+2 350 1
+
+
+##########
+# TEST 32: PartitionedTopK Reuses Range Subset Partitioning
+# With subset threshold met and preserve-file disabled, Range([range_key])
+# satisfies partitioning by (range_key, non_range_key).
+##########
+
+statement ok
+set datafusion.optimizer.subset_repartition_threshold = 4;
+
+statement ok
+set datafusion.optimizer.preserve_file_partitions = 0;
+
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT range_key, non_range_key, value, ROW_NUMBER() OVER (PARTITION BY range_key, non_range_key ORDER BY value DESC) as rn
+    FROM range_partitioned
+) WHERE rn <= 1;
+----
+physical_plan
+01)ProjectionExec: expr=[range_key@0 as range_key, non_range_key@1 as non_range_key, value@2 as value, row_number() PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----PartitionedTopKExec: fn=row_number, fetch=1, partition=[range_key@0, non_range_key@1], order=[value@2 DESC]
+04)------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query IIII
+SELECT * FROM (
+    SELECT range_key, non_range_key, value, ROW_NUMBER() OVER (PARTITION BY range_key, non_range_key ORDER BY value DESC) as rn
+    FROM range_partitioned
+) WHERE rn <= 1
+ORDER BY range_key, non_range_key;
+----
+1 1 10 1
+5 2 50 1
+10 1 100 1
+15 2 150 1
+20 1 200 1
+25 2 250 1
+30 1 300 1
+35 2 350 1
+
+
+##########
+# TEST 33: Range Subset PartitionedTopK Rehashes Below Subset Threshold
+# Range([range_key]) is only a subset of PARTITION BY (range_key, non_range_key),
+# so it should not satisfy the TopK partition key when subset satisfaction is
+# disabled.
+##########
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+set datafusion.optimizer.subset_repartition_threshold = 5;
+
+statement ok
+set datafusion.optimizer.preserve_file_partitions = 0;
+
+query TT
+EXPLAIN SELECT * FROM (
+    SELECT range_key, non_range_key, value, ROW_NUMBER() OVER (PARTITION BY range_key, non_range_key ORDER BY value DESC) as rn
+    FROM range_partitioned
+) WHERE rn <= 1;
+----
+physical_plan
+01)ProjectionExec: expr=[range_key@0 as range_key, non_range_key@1 as non_range_key, value@2 as value, row_number() PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [range_partitioned.range_key, range_partitioned.non_range_key] ORDER BY [range_partitioned.value DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----PartitionedTopKExec: fn=row_number, fetch=1, partition=[range_key@0, non_range_key@1], order=[value@2 DESC]
+04)------RepartitionExec: partitioning=Hash([range_key@0, non_range_key@1], 4), input_partitions=4
+05)--------DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+statement ok
+reset datafusion.optimizer.subset_repartition_threshold;
+
+statement ok
+reset datafusion.explain.physical_plan_only;
+
+statement ok
+reset datafusion.optimizer.enable_window_topn;
+
+##########
+# TEST 34: Subset of Inputs Compatible Does Not Trigger InterleaveExec
+# In a three-way union, two inputs share the same Range split points [10,20,30]
+# while the third has a partially-overlapping but different set [15,20,30].
+# can_interleave requires ALL inputs to match, so UnionExec is kept.
+##########
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT range_key, value FROM range_partitioned
+UNION ALL
+SELECT range_key, value FROM range_partitioned
+UNION ALL
+SELECT range_key, value FROM range_partitioned_shifted;
+----
+physical_plan
+01)UnionExec
+02)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+03)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(15), (20), (30)], 4), file_type=csv, has_header=false
+
+query II
+SELECT range_key, value FROM range_partitioned
+UNION ALL
+SELECT range_key, value FROM range_partitioned
+UNION ALL
+SELECT range_key, value FROM range_partitioned_shifted
+ORDER BY range_key, value;
+----
+1 10
+1 10
+1 10
+5 50
+5 50
+5 50
+10 100
+10 100
+10 100
+15 150
+15 150
+15 150
+20 200
+20 200
+20 200
+25 250
+25 250
+25 250
+30 300
+30 300
+30 300
+35 350
+35 350
+35 350
+
+##########
+# TEST 35: Incompatible Range Split Points Falls Back to UnionExec
+# Two range-partitioned inputs with different split points cannot be interleaved,
+# so the optimizer keeps UnionExec instead of converting to InterleaveExec.
+##########
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT range_key, value FROM range_partitioned
+UNION ALL
+SELECT range_key, value FROM range_partitioned_shifted;
+----
+physical_plan
+01)UnionExec
+02)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+03)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(15), (20), (30)], 4), file_type=csv, has_header=false
+
+query II
+SELECT range_key, value FROM range_partitioned
+UNION ALL
+SELECT range_key, value FROM range_partitioned_shifted
+ORDER BY range_key, value;
+----
+1 10
+1 10
+5 50
+5 50
+10 100
+10 100
+15 150
+15 150
+20 200
+20 200
+25 250
+25 250
+30 300
+30 300
+35 350
+35 350
+
+##########
+# TEST 36: InterleaveExec Propagates Range Partitioning to Aggregate
+# InterleaveExec outputs the same Range partitioning as its compatible inputs,
+# allowing a downstream aggregate on range_key to run SinglePartitioned without
+# a Hash repartition.
+##########
+
+query TT
+EXPLAIN SELECT range_key, SUM(value) FROM (
+  SELECT range_key, value FROM range_partitioned
+  UNION ALL
+  SELECT range_key, value FROM range_partitioned
+) GROUP BY range_key;
+----
+physical_plan
+01)AggregateExec: mode=SinglePartitioned, gby=[range_key@0 as range_key], aggr=[sum(value)]
+02)--InterleaveExec
+03)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+04)----DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(10), (20), (30)], 4), file_type=csv, has_header=false
+
+query II
+SELECT range_key, SUM(value) FROM (
+  SELECT range_key, value FROM range_partitioned
+  UNION ALL
+  SELECT range_key, value FROM range_partitioned
+) GROUP BY range_key ORDER BY range_key;
+----
+1 20
+5 100
+10 200
+15 300
+20 400
+25 500
+30 600
+35 700
 
 statement ok
 reset datafusion.explain.physical_plan_only;

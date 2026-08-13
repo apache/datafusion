@@ -21,7 +21,7 @@
 //! `CREATE EXTERNAL TABLE`
 
 use datafusion_common::DataFusionError;
-use datafusion_common::config::SqlParserOptions;
+use datafusion_common::config::{ConfigNonZeroUsize, SqlParserOptions};
 use datafusion_common::format::{ExplainFormat, ExplainStatementOptions};
 use datafusion_common::{Diagnostic, Span, sql_err};
 use sqlparser::ast::{ExprWithAlias, Ident, OrderByOptions};
@@ -472,7 +472,7 @@ impl<'a, 'b> DFParserBuilder<'a, 'b> {
                 .with_tokens_with_locations(tokens)
                 .with_recursion_limit(self.recursion_limit),
             options: SqlParserOptions {
-                recursion_limit: self.recursion_limit,
+                recursion_limit: ConfigNonZeroUsize::try_new(self.recursion_limit)?,
                 ..Default::default()
             },
             supports_explain_with_utility_options: self
