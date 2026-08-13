@@ -41,6 +41,7 @@ use datafusion_expr::expr::{BinaryExpr, Cast};
 use datafusion_functions_aggregate::expr_fn::count;
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 
 use async_trait::async_trait;
 
@@ -117,9 +118,10 @@ impl ExecutionPlan for CustomPlan {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // CustomPlan has no children
         if children.is_empty() {
@@ -127,6 +129,16 @@ impl ExecutionPlan for CustomPlan {
         } else {
             internal_err!("Children cannot be replaced in {self:?}")
         }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(

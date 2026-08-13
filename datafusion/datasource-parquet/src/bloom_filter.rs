@@ -61,6 +61,11 @@ impl BloomFilterStatistics {
         }
     }
 
+    /// Returns true if no per-column Bloom filters have been loaded.
+    pub fn is_empty(&self) -> bool {
+        self.column_sbbf.is_empty()
+    }
+
     /// Add a Bloom filter for the specified column, along with the column's
     /// Parquet physical [`Type`] and type length from the column descriptor.
     pub fn insert(
