@@ -39,6 +39,13 @@ all-features = true
 workspace = true
 
 [features]
+# Enables the `print_config_docs`, `print_runtime_config_docs` and
+# `print_functions_docs` binaries, which regenerate the docs under
+# `docs/source/user-guide`. Off by default: they are only run by
+# `dev/update_config_docs.sh` and `dev/update_function_docs.sh`, and each one
+# links a ~174MB binary that would otherwise be relinked on every build of this
+# crate.
+docs_generation = []
 nested_expressions = ["datafusion-functions-nested"]
 # This feature is deprecated. Use the `nested_expressions` feature instead.
 array_expressions = ["nested_expressions"]
@@ -189,6 +196,21 @@ ignored = ["datafusion-doc", "datafusion-macros", "dashmap"]
 
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 nix = { version = "0.31.3", features = ["fs"] }
+
+[[bin]]
+name = "print_config_docs"
+path = "src/bin/print_config_docs.rs"
+required-features = ["docs_generation"]
+
+[[bin]]
+name = "print_runtime_config_docs"
+path = "src/bin/print_runtime_config_docs.rs"
+required-features = ["docs_generation"]
+
+[[bin]]
+name = "print_functions_docs"
+path = "src/bin/print_functions_docs.rs"
+required-features = ["docs_generation"]
 
 [[bench]]
 harness = false
