@@ -32,7 +32,7 @@ COPY (
 )
 TO 'sql_benchmarks/parquet_row_filter_skip/scratch/clustered.parquet'
 STORED AS PARQUET
-OPTIONS ('max_row_group_size' '${RG_SIZE:-1000000}');
+OPTIONS ('format.max_row_group_size' '${RG_SIZE:-1000000}');
 
 CREATE EXTERNAL TABLE t
 STORED AS PARQUET

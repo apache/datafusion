@@ -107,10 +107,10 @@ wide_schema:            Small-projection queries on a wide synthetic dataset (10
 predicate_eval:         Conjunctive (AND) filter-evaluation micro-benchmarks; each subgroup is a different predicate pattern, to test how an
                           adaptive predicate-ordering system behaves across them (see https://github.com/apache/datafusion/issues/11262)
                           (subgroups via BENCH_SUBGROUP: costsel, cost, selectivity, cardinality, width, scale, neutral, correlation, drift)
+                          (toggle a system under test with its native DATAFUSION_* env var; size data with PRED_ROWS, string width with PRED_FILL)
 parquet_row_filter_skip: Per-RG fully-matched RowFilter skip on Parquet (apache/datafusion#23696); clustered string key + low-selectivity
                           range filter + pushdown, so most row groups are fully matched and the per-row RowFilter is skipped on them
                           (data generated inline by the suite's load SQL; knobs: PRED_ROWS, RG_SIZE)
-                          (toggle a system under test with its native DATAFUSION_* env var; size data with PRED_ROWS, string width with PRED_FILL)
 
 # ClickBench Benchmarks
 clickbench_1:           ClickBench queries against a single parquet file
