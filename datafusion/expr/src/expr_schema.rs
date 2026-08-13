@@ -541,7 +541,6 @@ impl ExprSchemable for Expr {
                 let WindowFunction {
                     fun,
                     params: WindowFunctionParams { args, .. },
-                    ..
                 } = window_function.as_ref();
 
                 let fields = args

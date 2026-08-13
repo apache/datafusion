@@ -1772,7 +1772,7 @@ impl PartitionedTopKRank {
         let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), batch_size);
 
         for pk in sorted_pks {
-            let RankPartitionState { mut heap, ties, .. } =
+            let RankPartitionState { mut heap, ties } =
                 states.remove(&pk).expect("key from states.keys()");
             if let Some(batch) = heap.emit()? {
                 (&batch).record_output(&metrics.baseline);

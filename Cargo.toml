@@ -298,6 +298,7 @@ pub_without_shorthand = "warn"
 rc_mutex = "warn"
 ref_as_ptr = "warn"
 ref_option_ref = "warn"
+rest_pat_in_fully_bound_structs = "warn"
 # Catches copy-paste bugs in `if`/`else if` chains
 same_functions_in_if_condition = "warn"
 same_length_and_capacity = "warn"
