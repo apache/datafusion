@@ -21,6 +21,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, OnceLock};
 
 use crate::error::{_plan_err, _schema_err, DataFusionError, Result};
@@ -108,6 +109,12 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// let schema: &Schema = df_schema.as_arrow();
 /// assert_eq!(schema.fields().len(), 1);
 /// ```
+/// Number of by-name probes a schema takes on the linear path before it is
+/// worth building [`DFSchema::name_index`]. Building allocates per distinct
+/// field name, so a schema looked up only a couple of times is cheaper to
+/// scan.
+const NAME_INDEX_PROBE_THRESHOLD: usize = 8;
+
 pub struct DFSchema {
     /// Inner Arrow schema reference.
     inner: SchemaRef,
@@ -116,10 +123,13 @@ pub struct DFSchema {
     field_qualifiers: Vec<Option<TableReference>>,
     /// Stores functional dependencies in the schema.
     functional_dependencies: FunctionalDependencies,
-    /// Lazily built accelerator for name lookups: maps a field name to the
-    /// ascending list of indices carrying it. Purely derived from `inner`, so
-    /// it takes no part in equality or `Debug`.
+    /// Accelerator for name lookups: maps a field name to the ascending list
+    /// of indices carrying it. Built only once a schema has been probed often
+    /// enough to pay for it (see `NAME_INDEX_PROBE_THRESHOLD`). Purely derived
+    /// from `inner`, so it takes no part in equality or `Debug`.
     name_index: OnceLock<HashMap<String, Vec<usize>>>,
+    /// How many times this schema has been probed by name while unindexed.
+    name_probes: AtomicUsize,
 }
 
 impl std::fmt::Debug for DFSchema {
@@ -143,6 +153,7 @@ impl Clone for DFSchema {
             field_qualifiers: self.field_qualifiers.clone(),
             functional_dependencies: self.functional_dependencies.clone(),
             name_index: OnceLock::new(),
+            name_probes: AtomicUsize::new(0),
         }
     }
 }
@@ -165,6 +176,7 @@ impl DFSchema {
             field_qualifiers: vec![],
             functional_dependencies: FunctionalDependencies::empty(),
             name_index: OnceLock::new(),
+            name_probes: AtomicUsize::new(0),
         }
     }
 
@@ -204,6 +216,7 @@ impl DFSchema {
             field_qualifiers: qualifiers,
             functional_dependencies: FunctionalDependencies::empty(),
             name_index: OnceLock::new(),
+            name_probes: AtomicUsize::new(0),
         };
         dfschema.check_names()?;
         Ok(dfschema)
@@ -221,6 +234,7 @@ impl DFSchema {
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
             name_index: OnceLock::new(),
+            name_probes: AtomicUsize::new(0),
         };
         dfschema.check_names()?;
         Ok(dfschema)
@@ -240,6 +254,7 @@ impl DFSchema {
             field_qualifiers: vec![Some(qualifier); schema.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
             name_index: OnceLock::new(),
+            name_probes: AtomicUsize::new(0),
         };
         schema.check_names()?;
         Ok(schema)
@@ -255,6 +270,7 @@ impl DFSchema {
             field_qualifiers: qualifiers,
             functional_dependencies: FunctionalDependencies::empty(),
             name_index: OnceLock::new(),
+            name_probes: AtomicUsize::new(0),
         };
         dfschema.check_names()?;
         Ok(dfschema)
@@ -277,6 +293,7 @@ impl DFSchema {
             field_qualifiers: qualifiers,
             functional_dependencies: self.functional_dependencies.clone(),
             name_index: OnceLock::new(),
+            name_probes: AtomicUsize::new(0),
         })
     }
 
@@ -346,6 +363,7 @@ impl DFSchema {
             field_qualifiers: new_qualifiers,
             functional_dependencies: FunctionalDependencies::empty(),
             name_index: OnceLock::new(),
+            name_probes: AtomicUsize::new(0),
         };
         new_self.check_names()?;
         Ok(new_self)
@@ -405,6 +423,7 @@ impl DFSchema {
         // The fields just changed, so the name index no longer describes this
         // schema. Drop it and let the next lookup rebuild it.
         self.name_index = OnceLock::new();
+        self.name_probes = AtomicUsize::new(0);
     }
 
     /// Get a list of fields for this schema
@@ -426,16 +445,30 @@ impl DFSchema {
         (self.field_qualifiers[i].as_ref(), self.field(i))
     }
 
-    /// Lazily built map from field name to the ascending indices carrying it.
-    fn name_index(&self) -> &HashMap<String, Vec<usize>> {
-        self.name_index.get_or_init(|| {
+    /// Map from field name to the ascending indices carrying it, or `None`
+    /// while this schema has not been probed enough to justify building it.
+    ///
+    /// Building the map allocates per distinct field name, which costs more
+    /// than several linear scans. Most schemas produced during planning are
+    /// looked up once or twice, so paying that up front is a net loss; the
+    /// schemas that dominate are the ones probed once per column. Counting
+    /// probes lets both cases win: one-shot lookups keep scanning, repeated
+    /// lookups switch over and amortise the build.
+    fn name_index(&self) -> Option<&HashMap<String, Vec<usize>>> {
+        if let Some(index) = self.name_index.get() {
+            return Some(index);
+        }
+        if self.name_probes.fetch_add(1, Ordering::Relaxed) < NAME_INDEX_PROBE_THRESHOLD {
+            return None;
+        }
+        Some(self.name_index.get_or_init(|| {
             let mut map: HashMap<String, Vec<usize>> =
                 HashMap::with_capacity(self.inner.fields().len());
             for (idx, field) in self.inner.fields().iter().enumerate() {
                 map.entry(field.name().to_owned()).or_default().push(idx);
             }
             map
-        })
+        }))
     }
 
     pub fn index_of_column_by_name(
@@ -443,18 +476,35 @@ impl DFSchema {
         qualifier: Option<&TableReference>,
         name: &str,
     ) -> Option<usize> {
-        // Every arm below requires the field name to match, so only indices
-        // carrying `name` can match. Look those up instead of scanning the
-        // whole schema, then apply the qualifier rules in index order so the
-        // first match is still the one returned.
-        let candidates = self.name_index().get(name)?;
-        candidates.iter().copied().find(|&idx| {
-            match (qualifier, self.field_qualifiers[idx].as_ref()) {
+        let matches_qualifier =
+            |idx: usize| match (qualifier, self.field_qualifiers[idx].as_ref()) {
+                // field to lookup is qualified.
+                // current field is qualified and not shared between relations, compare both
+                // qualifier and name.
                 (Some(q), Some(field_q)) => q.resolved_eq(field_q),
+                // field to lookup is qualified but current field is unqualified.
                 (Some(_), None) => false,
+                // field to lookup is unqualified, no need to compare qualifier
                 (None, Some(_)) | (None, None) => true,
-            }
-        })
+            };
+
+        // Every arm above also requires the field name to match, so once the
+        // index exists only the indices carrying `name` can match. Either way
+        // the first match in index order is the one returned.
+        match self.name_index() {
+            Some(index) => index
+                .get(name)?
+                .iter()
+                .copied()
+                .find(|&idx| matches_qualifier(idx)),
+            None => self
+                .inner
+                .fields()
+                .iter()
+                .enumerate()
+                .find(|(idx, f)| f.name() == name && matches_qualifier(*idx))
+                .map(|(idx, _)| idx),
+        }
     }
 
     /// Find the index of the column with the given qualifier and name,
@@ -543,17 +593,21 @@ impl DFSchema {
         &self,
         name: &str,
     ) -> Vec<(Option<&TableReference>, &FieldRef)> {
-        // Fields are looked up by name far more often than schemas are built,
-        // so go through the name index rather than scanning every field.
-        self.name_index()
-            .get(name)
-            .map(|indices| {
-                indices
-                    .iter()
-                    .map(|&idx| self.qualified_field(idx))
-                    .collect()
-            })
-            .unwrap_or_default()
+        match self.name_index() {
+            Some(index) => index
+                .get(name)
+                .map(|indices| {
+                    indices
+                        .iter()
+                        .map(|&idx| self.qualified_field(idx))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            None => self
+                .iter()
+                .filter(|(_, field)| field.name() == name)
+                .collect(),
+        }
     }
 
     /// Find all fields that match the given name and convert to column
@@ -909,6 +963,7 @@ impl DFSchema {
             inner: self.inner,
             functional_dependencies: self.functional_dependencies,
             name_index: OnceLock::new(),
+            name_probes: AtomicUsize::new(0),
         }
     }
 
@@ -920,6 +975,7 @@ impl DFSchema {
             inner: self.inner,
             functional_dependencies: self.functional_dependencies,
             name_index: OnceLock::new(),
+            name_probes: AtomicUsize::new(0),
         }
     }
 
@@ -1192,6 +1248,7 @@ impl TryFrom<SchemaRef> for DFSchema {
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
             name_index: OnceLock::new(),
+            name_probes: AtomicUsize::new(0),
         };
         // Without checking names, because schema here may have duplicate field names.
         // For example, Partial AggregateMode will generate duplicate field names from
@@ -1254,6 +1311,7 @@ impl ToDFSchema for Vec<Field> {
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
             name_index: OnceLock::new(),
+            name_probes: AtomicUsize::new(0),
         };
         Ok(dfschema)
     }
@@ -1541,6 +1599,54 @@ mod tests {
                 schema.qualified_fields_with_unqualified_name(name),
                 reference_qualified_fields_with_unqualified_name(&schema, name),
                 "qualified_fields_with_unqualified_name disagrees for {name}"
+            );
+        }
+    }
+
+    /// The scanning path and the indexed path must agree. A schema only
+    /// switches over after `NAME_INDEX_PROBE_THRESHOLD` probes, so both are
+    /// live in production and a divergence would be data dependent.
+    #[test]
+    fn name_index_and_scan_paths_agree() {
+        let t1 = TableReference::bare("t1");
+        let t2 = TableReference::partial("s", "t2");
+        let probes: Vec<(Option<&TableReference>, &str)> = vec![
+            (None, "a"),
+            (Some(&t1), "a"),
+            (Some(&t2), "a"),
+            (Some(&t1), "missing"),
+            (None, "c"),
+            (Some(&t2), "d"),
+            (None, "\u{1f600}"),
+        ];
+
+        // A fresh schema per probe never reaches the threshold, so each of
+        // these is answered by the scan.
+        let scanned: Vec<Option<usize>> = probes
+            .iter()
+            .map(|(q, name)| ambiguous_schema().index_of_column_by_name(*q, name))
+            .collect();
+
+        // One schema probed past the threshold answers from the index.
+        let indexed_schema = ambiguous_schema();
+        for _ in 0..=NAME_INDEX_PROBE_THRESHOLD {
+            let _ = indexed_schema.index_of_column_by_name(None, "a");
+        }
+        assert!(
+            indexed_schema.name_index.get().is_some(),
+            "schema should have switched to the index by now"
+        );
+        let indexed: Vec<Option<usize>> = probes
+            .iter()
+            .map(|(q, name)| indexed_schema.index_of_column_by_name(*q, name))
+            .collect();
+
+        assert_eq!(scanned, indexed);
+        for ((q, name), got) in probes.iter().zip(&scanned) {
+            assert_eq!(
+                *got,
+                reference_index_of_column_by_name(&ambiguous_schema(), *q, name),
+                "both paths disagree with the reference for {q:?} {name}"
             );
         }
     }
@@ -1918,6 +2024,7 @@ mod tests {
             field_qualifiers: vec![None; arrow_schema_ref.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
             name_index: OnceLock::new(),
+            name_probes: AtomicUsize::new(0),
         };
         let df_schema_ref = Arc::new(df_schema.clone());
 
@@ -1965,6 +2072,7 @@ mod tests {
             field_qualifiers: vec![None; schema.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
             name_index: OnceLock::new(),
+            name_probes: AtomicUsize::new(0),
         };
 
         assert_eq!(df_schema.inner.metadata(), schema.metadata())
