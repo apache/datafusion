@@ -20,7 +20,10 @@
 use std::sync::Arc;
 
 use crate::memory::MemoryStream;
-use crate::{DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
+use crate::{
+    ChildrenPropertiesMode, DisplayAs, PlanProperties, ReplaceChildrenOptions,
+    SendableRecordBatchStream, Statistics,
+};
 use crate::{
     DisplayFormatType, ExecutionPlan, Partitioning,
     execution_plan::{Boundedness, EmissionType},
@@ -127,11 +130,22 @@ impl ExecutionPlan for EmptyExec {
         Ok(TreeNodeRecursion::Continue)
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -247,8 +261,8 @@ impl EmptyExec {
 mod tests {
     use super::*;
     use crate::common;
+    use crate::execution_plan::replace_children_if_necessary;
     use crate::test;
-    use crate::with_new_children_if_necessary;
 
     #[tokio::test]
     async fn empty() -> Result<()> {
@@ -271,7 +285,7 @@ mod tests {
         let schema = test::aggr_test_schema();
         let empty = Arc::new(EmptyExec::new(Arc::clone(&schema)));
 
-        let empty2 = with_new_children_if_necessary(
+        let empty2 = replace_children_if_necessary(
             Arc::clone(&empty) as Arc<dyn ExecutionPlan>,
             vec![],
         )?;
@@ -279,7 +293,7 @@ mod tests {
 
         let too_many_kids = vec![empty2];
         assert!(
-            with_new_children_if_necessary(empty, too_many_kids).is_err(),
+            replace_children_if_necessary(empty, too_many_kids).is_err(),
             "expected error when providing list of kids"
         );
         Ok(())

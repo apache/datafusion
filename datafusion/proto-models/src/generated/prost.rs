@@ -1557,7 +1557,7 @@ pub struct PhysicalExprNode {
     pub expr_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1621,6 +1621,8 @@ pub mod physical_expr_node {
         #[prost(message, tag = "26")]
         LambdaVariable(super::PhysicalLambdaVariableExprNode),
         #[prost(message, tag = "27")]
+        RangeExpr(super::PhysicalRangeExprNode),
+        #[prost(message, tag = "28")]
         SqlSimilarToPattern(
             ::prost::alloc::boxed::Box<super::PhysicalSqlSimilarToPatternNode>,
         ),
@@ -1696,6 +1698,8 @@ pub struct PhysicalAggregateExprNode {
     pub fun_definition: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(string, tag = "8")]
     pub human_display: ::prost::alloc::string::String,
+    #[prost(bool, tag = "9")]
+    pub is_reversed: bool,
     #[prost(oneof = "physical_aggregate_expr_node::AggregateFunction", tags = "4")]
     pub aggregate_function: ::core::option::Option<
         physical_aggregate_expr_node::AggregateFunction,
@@ -1866,6 +1870,13 @@ pub struct PhysicalHashExprNode {
     pub seed0: u64,
     #[prost(string, tag = "6")]
     pub description: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalRangeExprNode {
+    #[prost(message, repeated, tag = "1")]
+    pub sort_expr: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
+    #[prost(message, repeated, tag = "2")]
+    pub split_point: ::prost::alloc::vec::Vec<PhysicalRangeSplitPoint>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FilterExecNode {
@@ -2239,6 +2250,9 @@ pub struct AggregateExecNode {
     /// Optional dynamic filter expression for pushing down to the child.
     #[prost(message, optional, tag = "13")]
     pub dynamic_filter: ::core::option::Option<PhysicalExprNode>,
+    /// Output schema preserved by physical optimizer rewrites.
+    #[prost(message, optional, tag = "14")]
+    pub schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GlobalLimitExecNode {
@@ -2250,6 +2264,9 @@ pub struct GlobalLimitExecNode {
     /// Maximum number of rows to fetch; negative means no limit
     #[prost(int64, tag = "3")]
     pub fetch: i64,
+    /// Ordering the limit must preserve; empty means none
+    #[prost(message, repeated, tag = "4")]
+    pub required_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LocalLimitExecNode {
@@ -2257,6 +2274,9 @@ pub struct LocalLimitExecNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(uint32, tag = "2")]
     pub fetch: u32,
+    /// Ordering the limit must preserve; empty means none
+    #[prost(message, repeated, tag = "3")]
+    pub required_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SortExecNode {

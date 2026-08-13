@@ -1050,8 +1050,8 @@ message PhysicalExprNode {
     PhysicalHigherOrderUdfNode higher_order_udf = 24;
     PhysicalLambdaExprNode lambda = 25;
     PhysicalLambdaVariableExprNode lambda_variable = 26;
-
-    PhysicalSqlSimilarToPatternNode sql_similar_to_pattern = 27;
+    PhysicalRangeExprNode range_expr = 27;
+    PhysicalSqlSimilarToPatternNode sql_similar_to_pattern = 28;
   }
 }
 
@@ -1102,6 +1102,7 @@ message PhysicalAggregateExprNode {
   bool ignore_nulls = 6;
   optional bytes fun_definition = 7;
   string human_display = 8;
+  bool is_reversed = 9;
 }
 
 message PhysicalWindowExprNode {
@@ -1205,6 +1206,11 @@ message PhysicalHashExprNode {
   repeated PhysicalExprNode on_columns = 1;
   uint64 seed0 = 2;
   string description = 6;
+}
+
+message PhysicalRangeExprNode {
+  repeated PhysicalSortExprNode sort_expr = 1;
+  repeated PhysicalRangeSplitPoint split_point = 2;
 }
 
 message FilterExecNode {
@@ -1478,6 +1484,8 @@ message AggregateExecNode {
   bool has_grouping_set = 12;
   // Optional dynamic filter expression for pushing down to the child.
   PhysicalExprNode dynamic_filter = 13;
+  // Output schema preserved by physical optimizer rewrites.
+  datafusion_common.Schema schema = 14;
 }
 
 message GlobalLimitExecNode {
@@ -1486,11 +1494,15 @@ message GlobalLimitExecNode {
   uint32 skip = 2;
   // Maximum number of rows to fetch; negative means no limit
   int64 fetch = 3;
+  // Ordering the limit must preserve; empty means none
+  repeated PhysicalSortExprNode required_ordering = 4;
 }
 
 message LocalLimitExecNode {
   PhysicalPlanNode input = 1;
   uint32 fetch = 2;
+  // Ordering the limit must preserve; empty means none
+  repeated PhysicalSortExprNode required_ordering = 3;
 }
 
 message SortExecNode {
