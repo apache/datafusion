@@ -1683,7 +1683,7 @@ async fn new_test_grammar() -> Result<()> {
 #[tokio::test]
 async fn extension_logical_plan() -> Result<()> {
     let ctx = create_context().await?;
-    let validation_bytes = "MockUserDefinedLogicalPlan".as_bytes().to_vec();
+    let validation_bytes = b"MockUserDefinedLogicalPlan".to_vec();
     let ext_plan = LogicalPlan::Extension(Extension {
         node: Arc::new(MockUserDefinedLogicalPlan {
             validation_bytes,

@@ -223,7 +223,7 @@ async fn join_using_uppercase_column() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let file_path = tmp_dir.path().join("uppercase-column.csv");
     let mut file = File::create(file_path.clone())?;
-    file.write_all("0".as_bytes())?;
+    file.write_all(b"0")?;
     drop(file);
 
     let ctx = SessionContext::new();
