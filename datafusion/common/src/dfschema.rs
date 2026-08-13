@@ -21,7 +21,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 
 use crate::error::{_plan_err, _schema_err, DataFusionError, Result};
 use crate::{
@@ -108,7 +108,6 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// let schema: &Schema = df_schema.as_arrow();
 /// assert_eq!(schema.fields().len(), 1);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DFSchema {
     /// Inner Arrow schema reference.
     inner: SchemaRef,
@@ -117,7 +116,46 @@ pub struct DFSchema {
     field_qualifiers: Vec<Option<TableReference>>,
     /// Stores functional dependencies in the schema.
     functional_dependencies: FunctionalDependencies,
+    /// Lazily built accelerator for name lookups: maps a field name to the
+    /// ascending list of indices carrying it. Purely derived from `inner`, so
+    /// it takes no part in equality or `Debug`.
+    name_index: OnceLock<HashMap<String, Vec<usize>>>,
 }
+
+impl std::fmt::Debug for DFSchema {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // Mirrors the previously derived output: `name_index` is a derived
+        // lookup accelerator and must not appear (its iteration order is not
+        // deterministic, and plan snapshots compare this string).
+        f.debug_struct("DFSchema")
+            .field("inner", &self.inner)
+            .field("field_qualifiers", &self.field_qualifiers)
+            .field("functional_dependencies", &self.functional_dependencies)
+            .finish()
+    }
+}
+
+impl Clone for DFSchema {
+    fn clone(&self) -> Self {
+        // Derived state; rebuild on demand rather than copying on every clone.
+        Self {
+            inner: Arc::clone(&self.inner),
+            field_qualifiers: self.field_qualifiers.clone(),
+            functional_dependencies: self.functional_dependencies.clone(),
+            name_index: OnceLock::new(),
+        }
+    }
+}
+
+impl PartialEq for DFSchema {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner
+            && self.field_qualifiers == other.field_qualifiers
+            && self.functional_dependencies == other.functional_dependencies
+    }
+}
+
+impl Eq for DFSchema {}
 
 impl DFSchema {
     /// Creates an empty `DFSchema`
@@ -126,6 +164,7 @@ impl DFSchema {
             inner: Arc::new(Schema::new([])),
             field_qualifiers: vec![],
             functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
         }
     }
 
@@ -164,6 +203,7 @@ impl DFSchema {
             inner: schema,
             field_qualifiers: qualifiers,
             functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
         };
         dfschema.check_names()?;
         Ok(dfschema)
@@ -180,6 +220,7 @@ impl DFSchema {
             inner: schema,
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
         };
         dfschema.check_names()?;
         Ok(dfschema)
@@ -198,6 +239,7 @@ impl DFSchema {
             inner: schema.clone().into(),
             field_qualifiers: vec![Some(qualifier); schema.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
         };
         schema.check_names()?;
         Ok(schema)
@@ -212,6 +254,7 @@ impl DFSchema {
             inner: Arc::clone(schema),
             field_qualifiers: qualifiers,
             functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
         };
         dfschema.check_names()?;
         Ok(dfschema)
@@ -233,6 +276,7 @@ impl DFSchema {
             inner: Arc::clone(&self.inner),
             field_qualifiers: qualifiers,
             functional_dependencies: self.functional_dependencies.clone(),
+            name_index: OnceLock::new(),
         })
     }
 
@@ -301,6 +345,7 @@ impl DFSchema {
             inner: Arc::new(new_schema_with_metadata),
             field_qualifiers: new_qualifiers,
             functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
         };
         new_self.check_names()?;
         Ok(new_self)
@@ -378,26 +423,35 @@ impl DFSchema {
         (self.field_qualifiers[i].as_ref(), self.field(i))
     }
 
+    /// Lazily built map from field name to the ascending indices carrying it.
+    fn name_index(&self) -> &HashMap<String, Vec<usize>> {
+        self.name_index.get_or_init(|| {
+            let mut map: HashMap<String, Vec<usize>> =
+                HashMap::with_capacity(self.inner.fields().len());
+            for (idx, field) in self.inner.fields().iter().enumerate() {
+                map.entry(field.name().to_owned()).or_default().push(idx);
+            }
+            map
+        })
+    }
+
     pub fn index_of_column_by_name(
         &self,
         qualifier: Option<&TableReference>,
         name: &str,
     ) -> Option<usize> {
-        let mut matches = self
-            .iter()
-            .enumerate()
-            .filter(|(_, (q, f))| match (qualifier, q) {
-                // field to lookup is qualified.
-                // current field is qualified and not shared between relations, compare both
-                // qualifier and name.
-                (Some(q), Some(field_q)) => q.resolved_eq(field_q) && f.name() == name,
-                // field to lookup is qualified but current field is unqualified.
+        // Every arm below requires the field name to match, so only indices
+        // carrying `name` can match. Look those up instead of scanning the
+        // whole schema, then apply the qualifier rules in index order so the
+        // first match is still the one returned.
+        let candidates = self.name_index().get(name)?;
+        candidates.iter().copied().find(|&idx| {
+            match (qualifier, self.field_qualifiers[idx].as_ref()) {
+                (Some(q), Some(field_q)) => q.resolved_eq(field_q),
                 (Some(_), None) => false,
-                // field to lookup is unqualified, no need to compare qualifier
-                (None, Some(_)) | (None, None) => f.name() == name,
-            })
-            .map(|(idx, _)| idx);
-        matches.next()
+                (None, Some(_)) | (None, None) => true,
+            }
+        })
     }
 
     /// Find the index of the column with the given qualifier and name,
@@ -486,9 +540,17 @@ impl DFSchema {
         &self,
         name: &str,
     ) -> Vec<(Option<&TableReference>, &FieldRef)> {
-        self.iter()
-            .filter(|(_, field)| field.name() == name)
-            .collect()
+        // Fields are looked up by name far more often than schemas are built,
+        // so go through the name index rather than scanning every field.
+        self.name_index()
+            .get(name)
+            .map(|indices| {
+                indices
+                    .iter()
+                    .map(|&idx| self.qualified_field(idx))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Find all fields that match the given name and convert to column
@@ -843,6 +905,7 @@ impl DFSchema {
             field_qualifiers: vec![None; self.inner.fields.len()],
             inner: self.inner,
             functional_dependencies: self.functional_dependencies,
+            name_index: OnceLock::new(),
         }
     }
 
@@ -853,6 +916,7 @@ impl DFSchema {
             field_qualifiers: vec![Some(qualifier); self.inner.fields.len()],
             inner: self.inner,
             functional_dependencies: self.functional_dependencies,
+            name_index: OnceLock::new(),
         }
     }
 
@@ -1124,6 +1188,7 @@ impl TryFrom<SchemaRef> for DFSchema {
             inner: schema,
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
         };
         // Without checking names, because schema here may have duplicate field names.
         // For example, Partial AggregateMode will generate duplicate field names from
@@ -1185,6 +1250,7 @@ impl ToDFSchema for Vec<Field> {
             inner: schema.into(),
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
         };
         Ok(dfschema)
     }
@@ -1381,6 +1447,141 @@ mod tests {
     use crate::assert_contains;
 
     use super::*;
+
+    /// Reference implementation of `index_of_column_by_name` as it was before
+    /// the name index was introduced: a linear scan over every field, taking
+    /// the first match in index order.
+    fn reference_index_of_column_by_name(
+        schema: &DFSchema,
+        qualifier: Option<&TableReference>,
+        name: &str,
+    ) -> Option<usize> {
+        schema
+            .iter()
+            .enumerate()
+            .filter(|(_, (q, f))| match (qualifier, q) {
+                (Some(q), Some(field_q)) => q.resolved_eq(field_q) && f.name() == name,
+                (Some(_), None) => false,
+                (None, Some(_)) | (None, None) => f.name() == name,
+            })
+            .map(|(idx, _)| idx)
+            .next()
+    }
+
+    /// Reference implementation of `qualified_fields_with_unqualified_name`
+    /// before the name index: a linear scan keeping schema order.
+    fn reference_qualified_fields_with_unqualified_name<'a>(
+        schema: &'a DFSchema,
+        name: &str,
+    ) -> Vec<(Option<&'a TableReference>, &'a FieldRef)> {
+        schema
+            .iter()
+            .filter(|(_, field)| field.name() == name)
+            .collect()
+    }
+
+    /// A schema exercising the cases the lookup rules distinguish: the same
+    /// name under different qualifiers, the same name both qualified and
+    /// unqualified, a name unique to one relation, and a non-ASCII name.
+    fn ambiguous_schema() -> DFSchema {
+        let f = |name: &str| Arc::new(Field::new(name, DataType::Int32, true));
+        let t1 = TableReference::bare("t1");
+        let t2 = TableReference::partial("s", "t2");
+        DFSchema::new_with_metadata(
+            vec![
+                // Same name under two different relations: the qualifier is
+                // what disambiguates, and an unqualified lookup must still
+                // return the first one in schema order.
+                (Some(t1.clone()), f("a")),
+                (Some(t1.clone()), f("b")),
+                (Some(t2.clone()), f("a")),
+                (Some(t2.clone()), f("d")),
+                (None, f("c")),
+                (None, f("\u{1f600}")),
+            ],
+            HashMap::new(),
+        )
+        .unwrap()
+    }
+
+    /// The name index must be a pure lookup accelerator: for every qualifier
+    /// and name it has to return exactly what the previous linear scan did,
+    /// including which duplicate wins and which lookups miss.
+    #[test]
+    fn name_index_matches_linear_scan() {
+        let schema = ambiguous_schema();
+
+        let qualifiers: Vec<Option<TableReference>> = vec![
+            None,
+            Some(TableReference::bare("t1")),
+            Some(TableReference::partial("s", "t2")),
+            // Same table, spelled with and without its schema.
+            Some(TableReference::bare("t2")),
+            Some(TableReference::full("c", "s", "t2")),
+            // A relation that is not in the schema at all.
+            Some(TableReference::bare("nope")),
+        ];
+        let names = ["a", "b", "c", "d", "\u{1f600}", "missing", "A"];
+
+        for q in &qualifiers {
+            for name in names {
+                assert_eq!(
+                    schema.index_of_column_by_name(q.as_ref(), name),
+                    reference_index_of_column_by_name(&schema, q.as_ref(), name),
+                    "index_of_column_by_name disagrees for qualifier {q:?} name {name}"
+                );
+            }
+        }
+
+        for name in names {
+            assert_eq!(
+                schema.qualified_fields_with_unqualified_name(name),
+                reference_qualified_fields_with_unqualified_name(&schema, name),
+                "qualified_fields_with_unqualified_name disagrees for {name}"
+            );
+        }
+    }
+
+    /// The index is derived state, so it must survive the operations that
+    /// rebuild a schema's qualifiers and must not leak into equality.
+    #[test]
+    fn name_index_is_derived_state() {
+        let schema = ambiguous_schema();
+
+        // Populate the cache, then check a clone agrees with a fresh schema.
+        let _ = schema.index_of_column_by_name(None, "a");
+        let cloned = schema.clone();
+        assert_eq!(schema, cloned);
+        assert_eq!(
+            cloned.index_of_column_by_name(None, "a"),
+            reference_index_of_column_by_name(&cloned, None, "a")
+        );
+
+        // Stripping qualifiers changes which field a qualified lookup finds;
+        // the rebuilt schema must not reuse the old schema's answers.
+        let stripped = schema.clone().strip_qualifiers();
+        for name in ["a", "b", "c"] {
+            assert_eq!(
+                stripped.index_of_column_by_name(Some(&TableReference::bare("t1")), name),
+                reference_index_of_column_by_name(
+                    &stripped,
+                    Some(&TableReference::bare("t1")),
+                    name
+                ),
+                "stripped schema disagrees for {name}"
+            );
+        }
+
+        let replaced = schema.replace_qualifier("t9");
+        assert_eq!(
+            replaced.index_of_column_by_name(Some(&TableReference::bare("t9")), "a"),
+            reference_index_of_column_by_name(
+                &replaced,
+                Some(&TableReference::bare("t9")),
+                "a"
+            )
+        );
+    }
 
     /// `qualified_name` doesn't use `TableReference::Display` for performance
     /// reasons, but check that the output is consistent.
@@ -1671,6 +1872,7 @@ mod tests {
             inner: Arc::clone(&arrow_schema_ref),
             field_qualifiers: vec![None; arrow_schema_ref.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
         };
         let df_schema_ref = Arc::new(df_schema.clone());
 
@@ -1717,6 +1919,7 @@ mod tests {
             inner: Arc::clone(&schema),
             field_qualifiers: vec![None; schema.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
         };
 
         assert_eq!(df_schema.inner.metadata(), schema.metadata())

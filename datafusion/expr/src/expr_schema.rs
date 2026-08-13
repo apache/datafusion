@@ -491,15 +491,18 @@ impl ExprSchemable for Expr {
                 metadata,
                 ..
             }) => {
-                let mut combined_metadata = expr.metadata(schema)?;
+                // Resolve the aliased expression once. `Expr::metadata` is
+                // itself `to_field(..).1.metadata()`, so calling both walks the
+                // inner expression -- and, for columns, linearly scans the
+                // input schema -- a second time for no extra information.
+                let inner_field = expr.to_field(schema).map(|(_, f)| f)?;
+
+                let mut combined_metadata = FieldMetadata::from(inner_field.metadata());
                 if let Some(metadata) = metadata {
                     combined_metadata.extend(metadata.clone());
                 }
 
-                Ok(expr
-                    .to_field(schema)
-                    .map(|(_, f)| f)?
-                    .with_field_metadata(&combined_metadata))
+                Ok(inner_field.with_field_metadata(&combined_metadata))
             }
             Expr::Negative(expr) => expr.to_field(schema).map(|(_, f)| f),
             Expr::Column(c) => schema.field_from_column(c).map(Arc::clone),
