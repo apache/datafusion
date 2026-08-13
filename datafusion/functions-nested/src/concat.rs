@@ -439,10 +439,21 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 
     let data_type = list_arrays[0].value_type();
+    // Preserve the input list's inner field (name, nullability, metadata) instead
+    // of creating a new default field, matching the promised return type.
+    let field = match list_arrays[0].data_type() {
+        DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
+        other => {
+            return internal_err!(
+                "array_concat got unexpected data type: {}",
+                other
+            );
+        }
+    };
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(data_type, true)),
+        field,
         OffsetBuffer::new(offsets.into()),
         arrow::array::make_array(data),
         valid,
@@ -564,8 +575,20 @@ where
 
     let data = mutable.freeze();
 
+    // Preserve the input list's inner field (name, nullability, metadata) instead
+    // of creating a new default field, matching the promised return type.
+    let field = match list_array.data_type() {
+        DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
+        other => {
+            return internal_err!(
+                "array_append/array_prepend got unexpected data type: {}",
+                other
+            );
+        }
+    };
+
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(data_type.to_owned(), true)),
+        field,
         OffsetBuffer::new(offsets.into()),
         arrow::array::make_array(data),
         None,
