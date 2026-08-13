@@ -38,9 +38,12 @@ use crate::aggregates::{
     evaluate_group_by,
 };
 
-use super::common::{AggregateAccumulator, EvaluatedAggregateBatch};
+use super::common::{
+    AggregateAccumulator, AggregateBatchFn, EvaluatedAggregateBatch,
+    MaterializeAccumulatorFn,
+};
 
-/// Aggregate table shared by the ordered partial and final paths.
+/// Aggregate table shared by the ordered single, partial and final paths.
 ///
 /// # Ordering optimization
 ///
@@ -48,10 +51,11 @@ use super::common::{AggregateAccumulator, EvaluatedAggregateBatch};
 /// are proven complete. Completed groups can be emitted before the input stream
 /// ends, which keeps memory bounded by the active ordered key range.
 ///
-/// # Partial and final variant difference
+/// # Single, partial and final variant difference
 ///
 /// The partial and final aggregate tables implement the two stages of grouped
-/// aggregation. See
+/// aggregation, while the single aggregate table implements both stages in one
+/// table. See
 /// [`OrderedPartialAggregateStream`](crate::aggregates::ordered_partial_stream::OrderedPartialAggregateStream)
 /// for the high-level plan shape.
 ///
@@ -67,6 +71,11 @@ use super::common::{AggregateAccumulator, EvaluatedAggregateBatch};
 /// - Table stores: `k, sum(v), count(v)`
 /// - Output schema: `k, avg(v)`
 ///
+/// Single table ([`AggregateMode::Single`], with optional filter from query):
+/// - Input rows: `k, v`
+/// - Table stores: `k, sum(v), count(v)`
+/// - Output schema: `k, avg(v)`
+///
 /// # Marker Type
 ///
 /// `OrderedAggrMode` selects the aggregate semantics. For example,
@@ -75,7 +84,7 @@ use super::common::{AggregateAccumulator, EvaluatedAggregateBatch};
 /// `OrderedAggregateTable::<FinalMarker>::new_with_input_order(...)`
 /// consumes partial states and emits final values.
 ///
-/// Shared methods live on `impl<T>`; partial/final behavior lives on
+/// Shared methods live on `impl<T>`; single/partial/final behavior lives on
 /// marker-specific impls.
 pub(in crate::aggregates) struct OrderedAggregateTable<OrderedAggrMode> {
     /// Output schema: group columns followed by aggregate state or final values.
@@ -129,7 +138,7 @@ pub(super) struct OrderedAggregateTableBuffer {
 impl<AggrMode> OrderedAggregateTable<AggrMode> {
     #[expect(
         clippy::too_many_arguments,
-        reason = "keeps ordered partial and final table construction explicit"
+        reason = "keeps ordered single, partial and final table construction explicit"
     )]
     pub(super) fn new_for_mode(
         agg: &AggregateExec,
@@ -259,8 +268,8 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
     ///
     /// Unlike normal ordered emission, this operation is allowed to take the
     /// active (incomplete) groups. Partial aggregation can pass those states to
-    /// its final stage, while final aggregation sorts and spills them before
-    /// replay.
+    /// its final stage, while single and final aggregation sort and spill them
+    /// before replay.
     pub(in crate::aggregates) fn take_state_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
@@ -304,18 +313,18 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             EmitTo::All => (EmitTo::First(self.batch_size), false),
         }
     }
-    /// Aggregates one evaluated input batch.
+
+    /// Aggregates one evaluated input batch after selecting the mode-specific
+    /// accumulator operation.
     ///
-    /// This common utility is used by ordered partial and ordered final aggregation.
-    ///
-    /// # Argument: `is_final`
-    ///
-    /// - `true`: merge partial aggregate states for final aggregation.
-    /// - `false`: update aggregate states from raw input for partial aggregation.
+    /// Each aggregation mode chooses a different `aggregate_fn` according to its
+    /// semantics. For example, partial aggregation takes raw inputs and updates
+    /// stored partial states, so it uses
+    /// [`datafusion_expr::GroupsAccumulator::update_batch`].
     pub(super) fn aggregate_evaluated_batch(
         &mut self,
         evaluated_batch: &EvaluatedAggregateBatch,
-        is_final: bool,
+        aggregate_fn: AggregateBatchFn,
     ) -> Result<()> {
         for group_values in &evaluated_batch.grouping_set_args {
             let starting_num_groups = self.buffer.group_values.len();
@@ -338,19 +347,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
                 .iter_mut()
                 .zip(evaluated_batch.accumulator_args.iter())
             {
-                if is_final {
-                    acc.merge_batch(
-                        values,
-                        &self.buffer.group_indices,
-                        total_num_groups,
-                    )?;
-                } else {
-                    acc.update_batch(
-                        values,
-                        &self.buffer.group_indices,
-                        total_num_groups,
-                    )?;
-                }
+                aggregate_fn(acc, values, &self.buffer.group_indices, total_num_groups)?;
             }
             drop(timer);
         }
@@ -361,15 +358,13 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
     /// Emits groups allowed by `GroupOrdering`, leaving only the current
     /// unfinished ordered-key range buffered.
     ///
-    /// This common utility is used by ordered partial and ordered final aggregation.
-    ///
-    /// # Argument: `is_final`
-    ///
-    /// - `true`: output final aggregate values.
-    /// - `false`: output partial accumulator states.
-    pub(super) fn next_output_batch_for_mode(
+    /// Each aggregation mode chooses a different `materialize_accumulator_fn`
+    /// according to its semantics. For example, partial aggregation emits
+    /// partial states to feed the final stage, so it uses
+    /// [`datafusion_expr::GroupsAccumulator::state`].
+    pub(super) fn next_output_batch_inner(
         &mut self,
-        is_final: bool,
+        materialize_accumulator_fn: MaterializeAccumulatorFn,
     ) -> Result<Option<RecordBatch>> {
         if self.buffer.group_values.is_empty() {
             return Ok(None);
@@ -394,11 +389,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         }
 
         for acc in &mut self.buffer.accumulators {
-            if is_final {
-                output.push(acc.evaluate(emit_to)?);
-            } else {
-                output.extend(acc.state(emit_to)?);
-            }
+            output.extend(materialize_accumulator_fn(acc, emit_to)?);
         }
         drop(timer);
 

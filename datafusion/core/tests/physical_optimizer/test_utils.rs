@@ -838,7 +838,7 @@ pub fn format_execution_plan(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
 }
 
 fn format_lines(s: &str) -> Vec<String> {
-    s.trim().split('\n').map(|s| s.to_string()).collect()
+    s.trim().lines().map(|s| s.to_string()).collect()
 }
 
 /// Create a simple ProjectionExec with column indices (simplified version)
