@@ -28,6 +28,10 @@ use arrow::record_batch::RecordBatch;
 use std::mem::size_of;
 use std::num::NonZero;
 
+/// Maximum number of distinct buffer IDs retained inline before promotion to
+/// a [`HashSet`]. Sixteen keeps small buffer sets allocation-free while
+/// limiting linear lookup and inline storage to 16 pointer-sized entries.
+/// This is a performance heuristic, not a semantic limit.
 const INLINE_BUFFER_IDS: usize = 16;
 
 /// Estimates the memory size required for a hash table prior to allocation.
