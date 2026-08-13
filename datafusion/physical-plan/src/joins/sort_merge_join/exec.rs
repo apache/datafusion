@@ -40,13 +40,14 @@ use crate::projection::{
 use crate::spill::spill_manager::SpillManager;
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    InputDistributionRequirements, PlanProperties, SendableRecordBatchStream, Statistics,
-    check_if_same_properties,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, InputDistributionRequirements, PlanProperties,
+    ReplaceChildrenOptions, SendableRecordBatchStream, Statistics, validate_child_count,
 };
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err, internal_err,
     plan_err,
@@ -81,8 +82,7 @@ use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequiremen
 /// on the output batch size of the execution plan. There is no spilling support for streamed input.
 /// The comparisons are performed from values of join keys in streamed input with the values of
 /// join keys in buffered input. One row in streamed record batch could be matched with multiple rows in
-/// buffered input batches. The streamed input is managed through the states in `StreamedState`
-/// and streamed input batches are represented by `StreamedBatch`.
+/// buffered input batches. Streamed input batches are represented by `StreamedBatch`.
 ///
 /// Buffered input is buffered for all record batches having the same value of join key.
 /// If the memory limit increases beyond the specified value and spilling is enabled,
@@ -92,8 +92,7 @@ use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequiremen
 /// memory/disk depends on the number of rows of buffered input having the same value
 /// of join key as that of streamed input rows currently present in memory. Due to pre-sorted inputs,
 /// the algorithm understands when it is not needed anymore, and releases the buffered batches
-/// from memory/disk. The buffered input is managed through the states in `BufferedState`
-/// and buffered input batches are represented by `BufferedBatch`.
+/// from memory/disk. Buffered input batches are represented by `BufferedBatch`.
 ///
 /// Depending on the type of join, left or right input may be selected as streamed or buffered
 /// respectively. For example, in a left-outer join, the left execution plan will be selected as
@@ -441,37 +440,65 @@ impl ExecutionPlan for SortMergeJoinExec {
         vec![&self.left, &self.right]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn crate::PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let join_keys = self.on.iter().flat_map(|(left, right)| [left, right]);
+        let filter = self.filter.iter().map(|filter| filter.expression());
+        crate::apply_expression_roots(join_keys.chain(filter), f)
+    }
+
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => {
+                let left = children.swap_remove(0);
+                let right = children.swap_remove(0);
+                Ok(Arc::new(Self {
+                    left,
+                    right,
+                    metrics: ExecutionPlanMetricsSet::new(),
+                    ..Self::clone(&*self)
+                }))
+            }
+            ChildrenPropertiesMode::Recompute => match &children[..] {
+                [left, right] => Ok(Arc::new(SortMergeJoinExec::try_new(
+                    Arc::clone(left),
+                    Arc::clone(right),
+                    self.on.clone(),
+                    self.filter.clone(),
+                    self.join_type,
+                    self.sort_options.clone(),
+                    self.null_equality,
+                )?)),
+                _ => internal_err!("SortMergeJoin wrong number of children"),
+            },
+        }
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        match &children[..] {
-            [left, right] => Ok(Arc::new(SortMergeJoinExec::try_new(
-                Arc::clone(left),
-                Arc::clone(right),
-                self.on.clone(),
-                self.filter.clone(),
-                self.join_type,
-                self.sort_options.clone(),
-                self.null_equality,
-            )?)),
-            _ => internal_err!("SortMergeJoin wrong number of children"),
-        }
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let left = children.swap_remove(0);
-        let right = children.swap_remove(0);
-        Ok(Arc::new(Self {
-            left,
-            right,
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -546,7 +573,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 context.runtime_env(),
             )
         } else {
-            Ok(Box::pin(MaterializingSortMergeJoinStream::try_new(
+            MaterializingSortMergeJoinStream::try_new(
                 Arc::clone(&self.schema),
                 self.sort_options.clone(),
                 self.null_equality,
@@ -561,7 +588,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 reservation,
                 spill_manager,
                 context.runtime_env(),
-            )?))
+            )
         }
     }
 

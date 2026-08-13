@@ -248,6 +248,7 @@ impl ParquetOptions {
             coerce_int96_tz: _,  // not used for writer props
             skip_arrow_metadata: _,
             max_predicate_cache_size: _,
+            max_in_list_size: _,
         } = self;
 
         let mut builder = WriterProperties::builder()
@@ -473,7 +474,7 @@ mod tests {
             writer_version,
             compression: Some("zstd(22)".into()),
             dictionary_enabled: Some(!defaults.dictionary_enabled.unwrap_or(false)),
-            dictionary_page_size_limit: 42,
+            dictionary_page_size_limit: 43,
             statistics_enabled: Some("chunk".into()),
             max_row_group_size: 42,
             max_row_group_bytes: Some(MaxRowGroupBytes::try_new(42).unwrap()),
@@ -489,6 +490,7 @@ mod tests {
             // not in WriterProperties, but itemizing here to not skip newly added props
             enable_page_index: defaults.enable_page_index,
             pruning: defaults.pruning,
+            max_in_list_size: defaults.max_in_list_size,
             skip_metadata: defaults.skip_metadata,
             metadata_size_hint: defaults.metadata_size_hint,
             pushdown_filters: defaults.pushdown_filters,
@@ -579,7 +581,7 @@ mod tests {
         TableParquetOptions {
             global: ParquetOptions {
                 // global options
-                data_pagesize_limit: props.dictionary_page_size_limit(),
+                data_pagesize_limit: props.data_page_size_limit(),
                 write_batch_size: props.write_batch_size(),
                 writer_version: props.writer_version().into(),
                 dictionary_page_size_limit: props.dictionary_page_size_limit(),
@@ -608,6 +610,7 @@ mod tests {
                 // not in WriterProperties
                 enable_page_index: global_options_defaults.enable_page_index,
                 pruning: global_options_defaults.pruning,
+                max_in_list_size: global_options_defaults.max_in_list_size,
                 skip_metadata: global_options_defaults.skip_metadata,
                 metadata_size_hint: global_options_defaults.metadata_size_hint,
                 pushdown_filters: global_options_defaults.pushdown_filters,

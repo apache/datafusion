@@ -200,7 +200,7 @@ atan(numeric_expression)
 #### Example
 
 ```sql
-    > SELECT atan(1);
+> SELECT atan(1);
 +-----------+
 | atan(1)   |
 +-----------+
@@ -249,7 +249,7 @@ atanh(numeric_expression)
 #### Example
 
 ```sql
-    > SELECT atanh(0.5);
+> SELECT atanh(0.5);
 +-------------+
 | atanh(0.5)  |
 +-------------+
@@ -387,7 +387,7 @@ degrees(numeric_expression)
 #### Example
 
 ```sql
-    > SELECT degrees(pi());
+> SELECT degrees(pi());
 +------------+
 | degrees(0) |
 +------------+
@@ -913,12 +913,12 @@ tanh(numeric_expression)
 #### Example
 
 ```sql
-  > SELECT tanh(20);
-  +----------+
-  | tanh(20) |
-  +----------+
-  | 1.0      |
-  +----------+
+> SELECT tanh(20);
++----------+
+| tanh(20) |
++----------+
+| 1.0      |
++----------+
 ```
 
 ### `trunc`
@@ -2195,6 +2195,15 @@ encode(expression, format)
 Apache DataFusion uses a [PCRE-like](https://en.wikibooks.org/wiki/Regular_Expressions/Perl-Compatible_Regular_Expressions)
 regular expression [syntax](https://docs.rs/regex/latest/regex/#syntax)
 (minus support for several features including look-around and backreferences).
+
+The following flags are optionally supported in functions:
+
+- **i**: case-insensitive: letters match both upper and lower case
+- **m**: multi-line mode: `^` and `$` match begin/end of line
+- **s**: allow `.` to match `\n`
+- **R**: enables CRLF mode: when multi-line mode is enabled, `\r\n` is used
+- **U**: swap the meaning of `x*` and `x*?`
+
 The following regular expression functions are supported:
 
 - [regexp_count](#regexp_count)
@@ -2208,20 +2217,15 @@ The following regular expression functions are supported:
 Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
 
 ```sql
-regexp_count(str, regexp[, start, flags])
+regexp_count(str, regexp[, start[, flags]])
 ```
 
 #### Arguments
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **regexp**: Regular expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **start**: - **start**: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function.
-- **flags**: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
-  - **i**: case-insensitive: letters match both upper and lower case
-  - **m**: multi-line mode: ^ and $ match begin/end of line
-  - **s**: allow . to match \n
-  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-  - **U**: swap the meaning of x* and x*?
+- **start**: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function.
+- **flags**: Optional regular expression flags that control the behavior of the regular expression. Refer to the flags reference above for supported flags.
 
 #### Example
 
@@ -2246,14 +2250,9 @@ regexp_instr(str, regexp[, start[, N[, flags[, subexpr]]]])
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **regexp**: Regular expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **start**: - **start**: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function. Defaults to 1
-- **N**: - **N**: Optional The N-th occurrence of pattern to find. Defaults to 1 (first match). Can be a constant, column, or function.
-- **flags**: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
-  - **i**: case-insensitive: letters match both upper and lower case
-  - **m**: multi-line mode: ^ and $ match begin/end of line
-  - **s**: allow . to match \n
-  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-  - **U**: swap the meaning of x* and x*?
+- **start**: Optional start position (the first position is 1) to search for the regular expression. Can be a constant, column, or function. Defaults to 1
+- **N**: Optional The N-th occurrence of pattern to find. Defaults to 1 (first match). Can be a constant, column, or function.
+- **flags**: Optional regular expression flags that control the behavior of the regular expression. Refer to the flags reference above for supported flags.
 - **subexpr**: Optional Specifies which capture group (subexpression) to return the position for. Defaults to 0, which returns the position of the entire match.
 
 #### Example
@@ -2279,12 +2278,7 @@ regexp_like(str, regexp[, flags])
 
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **regexp**: Regular expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **flags**: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
-  - **i**: case-insensitive: letters match both upper and lower case
-  - **m**: multi-line mode: ^ and $ match begin/end of line
-  - **s**: allow . to match \n
-  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-  - **U**: swap the meaning of x* and x*?
+- **flags**: Optional regular expression flags that control the behavior of the regular expression. Refer to the flags reference above for supported flags.
 
 #### Example
 
@@ -2318,12 +2312,7 @@ regexp_match(str, regexp[, flags])
 - **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **regexp**: Regular expression to match against.
   Can be a constant, column, or function.
-- **flags**: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
-  - **i**: case-insensitive: letters match both upper and lower case
-  - **m**: multi-line mode: ^ and $ match begin/end of line
-  - **s**: allow . to match \n
-  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-  - **U**: swap the meaning of x* and x*?
+- **flags**: Optional regular expression flags that control the behavior of the regular expression. Refer to the flags reference above for supported flags.
 
 #### Example
 
@@ -2358,13 +2347,7 @@ regexp_replace(str, regexp, replacement[, flags])
 - **regexp**: Regular expression to match against.
   Can be a constant, column, or function.
 - **replacement**: Replacement string expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **flags**: Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
-- **g**: (global) Search globally and don't return after the first match
-- **i**: case-insensitive: letters match both upper and lower case
-- **m**: multi-line mode: ^ and $ match begin/end of line
-- **s**: allow . to match \n
-- **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-- **U**: swap the meaning of x* and x*?
+- **flags**: Optional regular expression flags that control the behavior of the regular expression. Refer to the flags reference above for supported flags.
 
 #### Example
 
@@ -2420,8 +2403,6 @@ The `current_date()` return value is determined at query time and will return th
 
 ```sql
 current_date()
-    (optional) SET datafusion.execution.time_zone = '+00:00';
-    SELECT current_date();
 ```
 
 #### Example
@@ -2458,8 +2439,6 @@ The session time zone can be set using the statement 'SET datafusion.execution.t
 
 ```sql
 current_time()
-    (optional) SET datafusion.execution.time_zone = '+00:00';
-    SELECT current_time();
 ```
 
 #### Example
@@ -2493,14 +2472,14 @@ Calculates time intervals and returns the start of the interval nearest to the s
 For example, if you "bin" or "window" data into 15 minute intervals, an input timestamp of `2023-01-01T18:18:18Z` will be updated to the start time of the 15 minute bin it is in: `2023-01-01T18:15:00Z`.
 
 ```sql
-date_bin(interval, expression, origin-timestamp)
+date_bin(interval, expression[, origin_timestamp])
 ```
 
 #### Arguments
 
 - **interval**: Bin interval.
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
-- **origin-timestamp**: Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC). The following intervals are supported:
+- **origin_timestamp**: Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC). The following intervals are supported:
 
   - nanoseconds
   - microseconds
@@ -2813,7 +2792,6 @@ to_char(expression, format)
 
 - **expression**: Expression to operate on. Can be a constant, column, or function that results in a date, time, timestamp or duration.
 - **format**: A [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) string to use to convert the expression.
-- **day**: Day to use when making the date. Can be a constant, column or function, and any combination of arithmetic operators.
 
 #### Example
 
@@ -2843,7 +2821,7 @@ Returns the corresponding date.
 Note: `to_date` returns Date32, which represents its values as the number of days since unix epoch(`1970-01-01`) stored as signed 32 bit value. The largest supported date value is `9999-12-31`.
 
 ```sql
-to_date('2017-05-31', '%Y-%m-%d')
+to_date(expression[, format1, ..., format_n])
 ```
 
 #### Arguments
@@ -2944,7 +2922,7 @@ Returns the corresponding time.
 Note: `to_time` returns Time64(Nanosecond), which represents the time of day in nanoseconds since midnight.
 
 ```sql
-to_time('12:30:45', '%H:%M:%S')
+to_time(expression[, format1, ..., format_n])
 ```
 
 #### Arguments
@@ -3611,7 +3589,7 @@ array_dims(array)
 
 ### `array_distance`
 
-Returns the Euclidean distance between two input arrays of equal length.
+Returns the Euclidean distance between two one-dimensional input arrays of equal length.
 
 ```sql
 array_distance(array1, array2)
@@ -3824,26 +3802,26 @@ array_has(array, element)
 
 ### `array_has_all`
 
-Returns true if all elements of sub-array exist in array.
+Returns true if all elements of sub_array exist in array.
 
 ```sql
-array_has_all(array, sub-array)
+array_has_all(array, sub_array)
 ```
 
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **sub-array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
+- **sub_array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 
 #### Example
 
 ```sql
 > select array_has_all([1, 2, 3, 4], [2, 3]);
-+--------------------------------------------+
++---------------------------------------------+
 | array_has_all(List([1,2,3,4]), List([2,3])) |
-+--------------------------------------------+
-| true                                       |
-+--------------------------------------------+
++---------------------------------------------+
+| true                                        |
++---------------------------------------------+
 ```
 
 #### Aliases
@@ -3926,13 +3904,13 @@ _Alias of [array_to_string](#array_to_string)._
 Returns the length of the array dimension.
 
 ```sql
-array_length(array, dimension)
+array_length(array[, dimension])
 ```
 
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **dimension**: Array dimension.
+- **dimension**: Array dimension. Default is 1
 
 #### Example
 
@@ -4004,13 +3982,12 @@ array_min(array)
 Returns the number of dimensions of the array.
 
 ```sql
-array_ndims(array, element)
+array_ndims(array)
 ```
 
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **element**: Array element.
 
 #### Example
 
@@ -4113,15 +4090,14 @@ array_pop_front(array)
 Returns the position of the first occurrence of the specified element in the array, or NULL if not found. Comparisons are done using `IS DISTINCT FROM` semantics, so NULL is considered to match NULL.
 
 ```sql
-array_position(array, element)
-array_position(array, element, index)
+array_position(array, element[, index])
 ```
 
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 - **element**: Element to search for in the array.
-- **index**: Index at which to start searching (1-indexed).
+- **index**: Index at which to start searching (1-indexed). Defaults to searching from the start
 
 #### Example
 
@@ -4469,17 +4445,17 @@ array_replace_n(array, from, to, max)
 
 ### `array_resize`
 
-Resizes the list to contain size elements. Initializes new elements with value or empty if value is not set.
+Resizes the list to contain size elements.
 
 ```sql
-array_resize(array, size, value)
+array_resize(array, size[, value])
 ```
 
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 - **size**: New size of given array.
-- **value**: Defines new elements' value or empty if value is not set.
+- **value**: If expanding the array, defines the values to fill in. Defaults to null.
 
 #### Example
 
@@ -4556,7 +4532,7 @@ array_scale(array, scalar)
 Returns a slice of the array based on 1-indexed start and end positions.
 
 ```sql
-array_slice(array, begin, end)
+array_slice(array, begin, end[, stride])
 ```
 
 #### Arguments
@@ -4586,14 +4562,14 @@ array_slice(array, begin, end)
 Sort array.
 
 ```sql
-array_sort(array, desc, nulls_first)
+array_sort(array[, order[, nulls_order]])
 ```
 
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **desc**: Whether to sort in ascending (`ASC`) or descending (`DESC`) order. The default is `ASC`.
-- **nulls_first**: Whether to sort nulls first (`NULLS FIRST`) or last (`NULLS LAST`). The default is `NULLS FIRST`.
+- **order**: Whether to sort in ascending (`ASC`) or descending (`DESC`) order. The default is `ASC`.
+- **nulls_order**: Whether to sort nulls first (`NULLS FIRST`) or last (`NULLS LAST`). The default is `NULLS FIRST`.
 
 #### Example
 
@@ -4604,6 +4580,12 @@ array_sort(array, desc, nulls_first)
 +-----------------------------+
 | [1, 2, 3]                   |
 +-----------------------------+
+> select array_sort([3, 1, NULL, 2], 'desc', 'nulls last');
++--------------------------------------------------+
+| array_sort(List(3,1,NULL,2),'desc','nulls last') |
++--------------------------------------------------+
+| [3, 2, 1, NULL]                                  |
++--------------------------------------------------+
 ```
 
 #### Aliases
@@ -4701,13 +4683,13 @@ array_to_string(array, delimiter[, null_string])
 transforms the values of an array
 
 ```sql
-array_transform(array, x -> x*2)
+array_transform(array, lambda)
 ```
 
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **lambda**: Lambda
+- **lambda**: The lambda function used to transform each value of the array.
 
 #### Example
 
@@ -5178,7 +5160,7 @@ _Alias of [arrays_zip](#arrays_zip)._
 Returns an array using the specified input expressions.
 
 ```sql
-make_array(expression1[, ..., expression_n])
+make_array([expression1, ..., expression_n])
 ```
 
 #### Arguments
@@ -5397,7 +5379,7 @@ The `make_map` function creates a map from two lists: one for keys and one for v
 
 ```sql
 map(key, value)
-map(key: value)
+map {key: value}
 make_map(['key1', 'key2'], ['value1', 'value2'])
 ```
 
