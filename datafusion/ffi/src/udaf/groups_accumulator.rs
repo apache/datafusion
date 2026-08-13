@@ -540,8 +540,9 @@ mod tests {
         // Verify local libraries can be downcast to their original
         let foreign_accum: Box<dyn GroupsAccumulator> = ffi_accum.into();
         unsafe {
-            let concrete = &*(foreign_accum.as_ref() as *const dyn GroupsAccumulator
-                as *const StddevGroupsAccumulator);
+            let concrete =
+                &*(std::ptr::from_ref::<dyn GroupsAccumulator>(foreign_accum.as_ref())
+                    as *const StddevGroupsAccumulator);
             assert_eq!(original_size, concrete.size());
         }
 
@@ -552,8 +553,9 @@ mod tests {
         ffi_accum.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_accum: Box<dyn GroupsAccumulator> = ffi_accum.into();
         unsafe {
-            let concrete = &*(foreign_accum.as_ref() as *const dyn GroupsAccumulator
-                as *const ForeignGroupsAccumulator);
+            let concrete =
+                &*(std::ptr::from_ref::<dyn GroupsAccumulator>(foreign_accum.as_ref())
+                    as *const ForeignGroupsAccumulator);
             assert_eq!(original_size, concrete.size());
         }
 

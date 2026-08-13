@@ -394,8 +394,9 @@ mod tests {
         // Verify local libraries can be downcast to their original
         let foreign_accum: Box<dyn PartitionEvaluator> = ffi_accum.into();
         unsafe {
-            let concrete = &*(foreign_accum.as_ref() as *const dyn PartitionEvaluator
-                as *const TestPartitionEvaluator);
+            let concrete =
+                &*(std::ptr::from_ref::<dyn PartitionEvaluator>(foreign_accum.as_ref())
+                    as *const TestPartitionEvaluator);
             assert!(!concrete.uses_window_frame());
         }
 
@@ -406,8 +407,9 @@ mod tests {
         ffi_accum.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_accum: Box<dyn PartitionEvaluator> = ffi_accum.into();
         unsafe {
-            let concrete = &*(foreign_accum.as_ref() as *const dyn PartitionEvaluator
-                as *const ForeignPartitionEvaluator);
+            let concrete =
+                &*(std::ptr::from_ref::<dyn PartitionEvaluator>(foreign_accum.as_ref())
+                    as *const ForeignPartitionEvaluator);
             assert!(!concrete.uses_window_frame());
         }
 
