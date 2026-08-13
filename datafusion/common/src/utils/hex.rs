@@ -162,7 +162,6 @@ pub fn encode_bytes_to_slice(bytes: &[u8], case: HexCase, out: &mut [u8]) -> Res
 /// Returns the hex encoding of `bytes` as an owned `String`.
 ///
 /// Prefer [`encode_bytes_into`] when you already have a reusable output buffer.
-#[deprecated(note = "use encode_bytes_into or encode_bytes_to_slice instead")]
 ///
 /// # Example
 ///
@@ -240,7 +239,6 @@ fn write_digits(v: u64, case: HexCase, buf: &mut [u8; 16]) -> usize {
 }
 
 #[cfg(test)]
-#[expect(deprecated)]
 mod tests {
     use super::*;
 

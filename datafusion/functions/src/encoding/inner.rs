@@ -34,7 +34,7 @@ use datafusion_common::{
     not_impl_err, plan_err,
     types::{NativeType, logical_string},
     utils::{
-        hex::{HexCase, encode_bytes_into, encode_bytes_to_slice},
+        hex::{HexCase, encode_bytes, encode_bytes_to_slice},
         take_function_args,
     },
 };
@@ -373,11 +373,7 @@ impl Encoding {
         match self {
             Self::Base64 => BASE64_ENGINE.encode(value),
             Self::Base64Padded => BASE64_ENGINE_PADDED.encode(value),
-            Self::Hex => {
-                let mut out = Vec::with_capacity(value.len() * 2);
-                encode_bytes_into(value, HexCase::Lower, &mut out);
-                unsafe { String::from_utf8_unchecked(out) }
-            }
+            Self::Hex => encode_bytes(value, HexCase::Lower),
         }
     }
 
