@@ -1477,6 +1477,10 @@ async fn roundtrip_literal_named_struct() -> Result<()> {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::literal_string_with_formatting_args,
+    reason = "The braces are part of the expected struct output, not format args"
+)]
 async fn roundtrip_literal_renamed_struct() -> Result<()> {
     // This test aims to hit a case where the struct column itself has the expected name, but its
     // inner field needs to be renamed.
