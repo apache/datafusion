@@ -251,6 +251,7 @@ large_include_file = "warn"
 # Like `large_futures`, these guard against stack overflows
 large_stack_arrays = "warn"
 large_stack_frames = "warn"
+large_types_passed_by_value = "warn"
 linkedlist = "warn"
 # Catches `"{foo}"` where the string is never actually formatted
 literal_string_with_formatting_args = "warn"
