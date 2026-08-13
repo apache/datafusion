@@ -110,15 +110,7 @@ macro_rules! value_transition {
             Int16(Some(value)) if value == i16::$bound => Int16(None),
             Int32(Some(value)) if value == i32::$bound => Int32(None),
             Int64(Some(value)) if value == i64::$bound => Int64(None),
-            #[expect(
-                clippy::float_cmp_const,
-                reason = "We really do want to detect the exact bound here"
-            )]
             Float32(Some(value)) if value == f32::$bound => Float32(None),
-            #[expect(
-                clippy::float_cmp_const,
-                reason = "We really do want to detect the exact bound here"
-            )]
             Float64(Some(value)) if value == f64::$bound => Float64(None),
             DurationSecond(Some(value)) if value == i64::$bound => DurationSecond(None),
             DurationMillisecond(Some(value)) if value == i64::$bound => {
