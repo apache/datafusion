@@ -24,16 +24,111 @@ use arrow::datatypes::*;
 use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::{HashSet, Result, exec_datafusion_err};
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
+use super::branchless_filter::{BranchlessFilter, BranchlessFilterType};
 use super::result::build_in_list_result;
-use super::static_filter::{StaticFilter, handle_dictionary};
+use super::static_filter::{StaticFilter, StaticFilterRef, handle_dictionary};
+
+/// Selects an optimized filter for a primitive representation.
+///
+/// Supported short lists use a branchless filter. Larger supported lists use a
+/// bitmap or hash-set filter. Returns `None` for primitive types without a
+/// specialized filter. Representation adapters call this after conversion and
+/// use the same cutoffs and fallback policy as native primitive arrays.
+pub(super) fn instantiate_primitive_filter(
+    in_array: &ArrayRef,
+) -> Result<Option<StaticFilterRef>> {
+    if let Some(filter) = instantiate_branchless_filter(in_array)? {
+        return Ok(Some(filter));
+    }
+
+    let filter: StaticFilterRef = match in_array.data_type() {
+        DataType::Int8 => Arc::new(BitmapFilter::<Int8Type>::try_new(in_array)?),
+        DataType::UInt8 => Arc::new(BitmapFilter::<UInt8Type>::try_new(in_array)?),
+        DataType::Int16 => Arc::new(BitmapFilter::<Int16Type>::try_new(in_array)?),
+        DataType::UInt16 => Arc::new(BitmapFilter::<UInt16Type>::try_new(in_array)?),
+        DataType::Float16 => Arc::new(BitmapFilter::<Float16Type>::try_new(in_array)?),
+        DataType::Int32 => Arc::new(Int32StaticFilter::try_new(in_array)?),
+        DataType::Int64 => Arc::new(Int64StaticFilter::try_new(in_array)?),
+        DataType::UInt32 => Arc::new(UInt32StaticFilter::try_new(in_array)?),
+        DataType::UInt64 => Arc::new(UInt64StaticFilter::try_new(in_array)?),
+        // Float primitive types use ordered wrappers for Hash/Eq.
+        DataType::Float32 => Arc::new(Float32StaticFilter::try_new(in_array)?),
+        DataType::Float64 => Arc::new(Float64StaticFilter::try_new(in_array)?),
+        _ => return Ok(None),
+    };
+
+    Ok(Some(filter))
+}
+
+fn instantiate_branchless_filter(in_array: &ArrayRef) -> Result<Option<StaticFilterRef>> {
+    let non_null_count = in_array.len() - in_array.null_count();
+
+    macro_rules! branchless {
+        ($arrow_type:ty) => {{
+            // Larger lists use the standard primitive filter. `try_new`
+            // checks the limit again when called directly.
+            if non_null_count > <$arrow_type as BranchlessFilterType>::MAX_LIST_LEN {
+                Ok(None)
+            } else {
+                let filter: StaticFilterRef =
+                    Arc::new(BranchlessFilter::<$arrow_type>::try_new(in_array)?);
+                Ok(Some(filter))
+            }
+        }};
+    }
+
+    match in_array.data_type() {
+        DataType::Int8 => branchless!(Int8Type),
+        DataType::UInt8 => branchless!(UInt8Type),
+        DataType::Int16 => branchless!(Int16Type),
+        DataType::UInt16 => branchless!(UInt16Type),
+        DataType::Float16 => branchless!(Float16Type),
+        DataType::Int32 => branchless!(Int32Type),
+        DataType::UInt32 => branchless!(UInt32Type),
+        DataType::Float32 => branchless!(Float32Type),
+        DataType::Date32 => branchless!(Date32Type),
+        DataType::Time32(unit) => match unit {
+            TimeUnit::Second => branchless!(Time32SecondType),
+            TimeUnit::Millisecond => branchless!(Time32MillisecondType),
+            _ => Ok(None),
+        },
+        DataType::Int64 => branchless!(Int64Type),
+        DataType::UInt64 => branchless!(UInt64Type),
+        DataType::Float64 => branchless!(Float64Type),
+        DataType::Date64 => branchless!(Date64Type),
+        DataType::Time64(unit) => match unit {
+            TimeUnit::Microsecond => branchless!(Time64MicrosecondType),
+            TimeUnit::Nanosecond => branchless!(Time64NanosecondType),
+            _ => Ok(None),
+        },
+        DataType::Timestamp(unit, _) => match unit {
+            TimeUnit::Second => branchless!(TimestampSecondType),
+            TimeUnit::Millisecond => branchless!(TimestampMillisecondType),
+            TimeUnit::Microsecond => branchless!(TimestampMicrosecondType),
+            TimeUnit::Nanosecond => branchless!(TimestampNanosecondType),
+        },
+        DataType::Duration(unit) => match unit {
+            TimeUnit::Second => branchless!(DurationSecondType),
+            TimeUnit::Millisecond => branchless!(DurationMillisecondType),
+            TimeUnit::Microsecond => branchless!(DurationMicrosecondType),
+            TimeUnit::Nanosecond => branchless!(DurationNanosecondType),
+        },
+        DataType::Decimal128(_, _) => branchless!(Decimal128Type),
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            branchless!(IntervalMonthDayNanoType)
+        }
+        _ => Ok(None),
+    }
+}
 
 /// Storage for the bits used by [`BitmapFilter`].
 ///
 /// `BitmapFilter` represents an `IN` list with one bit for each possible
 /// value, so membership checks become direct bit tests. This trait lets the
 /// same filter code use different storage sizes for different integer widths.
-pub(super) trait BitmapStorage: Send + Sync {
+trait BitmapStorage: Send + Sync {
     fn new_zeroed() -> Self;
     fn set_bit(&mut self, index: usize);
     fn get_bit(&self, index: usize) -> bool;
@@ -80,9 +175,7 @@ impl BitmapStorage for Box<[u64; 1024]> {
 /// supplies the bitmap storage size and maps values to their bit-pattern index
 /// for the primitive domains that are small enough to represent with one bit
 /// per possible value.
-pub(super) trait BitmapFilterType:
-    ArrowPrimitiveType + Send + Sync + 'static
-{
+trait BitmapFilterType: ArrowPrimitiveType + Send + Sync + 'static {
     type Storage: BitmapStorage;
 
     /// Returns the index in the bitmap to check for this value.
@@ -150,7 +243,7 @@ impl BitmapFilterType for Float16Type {
 /// the bit selected by each value. Evaluating input values checks the same bit
 /// position. Null handling and `NOT IN` inversion are handled by
 /// `build_in_list_result`.
-pub(super) struct BitmapFilter<T: BitmapFilterType> {
+struct BitmapFilter<T: BitmapFilterType> {
     null_count: usize,
     bits: T::Storage,
 }
@@ -159,7 +252,7 @@ impl<T> BitmapFilter<T>
 where
     T: BitmapFilterType,
 {
-    pub(super) fn try_new(in_array: &ArrayRef) -> Result<Self> {
+    fn try_new(in_array: &ArrayRef) -> Result<Self> {
         let prim_array = in_array.as_primitive_opt::<T>().ok_or_else(|| {
             exec_datafusion_err!("BitmapFilter: expected {} array", T::DATA_TYPE)
         })?;
@@ -282,13 +375,13 @@ macro_rules! primitive_static_filter {
         );
     };
     ($Name:ident, $ArrowType:ty, $SetValueType:ty, $to_set_value:expr) => {
-        pub(super) struct $Name {
+        struct $Name {
             null_count: usize,
             values: HashSet<$SetValueType>,
         }
 
         impl $Name {
-            pub(super) fn try_new(in_array: &ArrayRef) -> Result<Self> {
+            fn try_new(in_array: &ArrayRef) -> Result<Self> {
                 let in_array =
                     in_array.as_primitive_opt::<$ArrowType>().ok_or_else(|| {
                         exec_datafusion_err!(
@@ -360,8 +453,13 @@ mod tests {
 
     use arrow::array::{
         DictionaryArray, Float16Array, Int8Array, Int16Array, UInt8Array, UInt16Array,
+        UInt32Array,
     };
     use half::f16;
+
+    fn uint32_array(values: Vec<Option<u32>>) -> ArrayRef {
+        Arc::new(UInt32Array::from(values))
+    }
 
     fn assert_contains(
         filter: &dyn StaticFilter,
@@ -372,6 +470,32 @@ mod tests {
             filter.contains(needles, false)?,
             BooleanArray::from(expected)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn branchless_routing_respects_max_list_len() -> Result<()> {
+        let max_len = <UInt32Type as BranchlessFilterType>::MAX_LIST_LEN;
+
+        let values = (0..max_len)
+            .map(|value| Some(value as u32))
+            .collect::<Vec<_>>();
+        assert!(instantiate_branchless_filter(&uint32_array(values))?.is_some());
+
+        let values = (0..=max_len)
+            .map(|value| Some(value as u32))
+            .collect::<Vec<_>>();
+        assert!(instantiate_branchless_filter(&uint32_array(values))?.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn branchless_routing_handles_zero_non_null_values() -> Result<()> {
+        let array = uint32_array(vec![None; 3]);
+
+        assert!(instantiate_branchless_filter(&array)?.is_some());
+
         Ok(())
     }
 
