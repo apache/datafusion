@@ -31,6 +31,7 @@ use datafusion_common::plan_datafusion_err;
 use datafusion_session::SessionStore;
 
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 
 /// [DynamicListTableFactory] is a factory that can create a [ListingTable] from the given url.
 #[derive(Default, Debug)]
@@ -53,7 +54,28 @@ impl DynamicListTableFactory {
 
 #[async_trait]
 impl UrlTableFactory for DynamicListTableFactory {
-    async fn try_new(&self, url: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+    fn try_new<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        url: &'life1 str,
+    ) -> BoxFuture<'async_trait, Result<Option<Arc<dyn TableProvider>>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.try_new_boxed(url)
+    }
+}
+
+impl DynamicListTableFactory {
+    fn try_new_boxed<'a>(
+        &'a self,
+        url: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn TableProvider>>>> {
+        Box::pin(self.try_new_inner(url))
+    }
+
+    async fn try_new_inner(&self, url: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         let Ok(table_url) = ListingTableUrl::parse(url) else {
             return Ok(None);
         };

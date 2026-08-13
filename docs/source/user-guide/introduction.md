@@ -115,6 +115,7 @@ Here are some active projects using DataFusion:
 - [HoraeDB] Distributed Time-Series Database
 - [Hotdata](https://www.hotdata.dev) On-demand databases for AI agents with a unified query engine for vector, OLAP, and full-text search.
 - [Iceberg-rust](https://github.com/apache/iceberg-rust) Rust implementation of Apache Iceberg
+- [IceGate](https://icegate.tech) Observability data lake engine for metrics, traces, logs, and events, built on Apache Iceberg with OpenTelemetry ingestion
 - [InfluxDB] Time Series Database
 - [Kamu] Planet-scale streaming data pipeline
 - [Kubeflow Trainer](https://github.com/kubeflow/trainer) Kubernetes-native project designed for
