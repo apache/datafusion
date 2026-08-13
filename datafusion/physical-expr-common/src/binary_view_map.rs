@@ -155,10 +155,12 @@ where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
 {
     pub fn new(output_type: OutputType) -> Self {
+        let map = hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY);
+        let map_size = map.allocation_size();
         Self {
             output_type,
-            map: hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY),
-            map_size: 0,
+            map,
+            map_size,
             views: Vec::new(),
             in_progress: Vec::new(),
             completed: Vec::new(),
@@ -175,6 +177,21 @@ where
         let mut new_self = Self::new(self.output_type);
         std::mem::swap(self, &mut new_self);
         new_self
+    }
+
+    fn insert_entry(
+        map: &mut hashbrown::hash_table::HashTable<Entry<V>>,
+        map_size: &mut usize,
+        entry: Entry<V>,
+    ) {
+        let capacity = map.capacity();
+        map.insert_accounted(entry, |entry| entry.hash, map_size);
+
+        // `insert_accounted` estimates growth from capacity. Keep `map_size`
+        // consistent with the exact allocation recorded by `new` after a resize.
+        if map.capacity() != capacity {
+            *map_size = map.allocation_size();
+        }
     }
 
     /// Inserts each value from `values` into the map, invoking `payload_fn` for
@@ -367,8 +384,7 @@ where
                     payload,
                 };
 
-                self.map
-                    .insert_accounted(new_header, |h| h.hash, &mut self.map_size);
+                Self::insert_entry(&mut self.map, &mut self.map_size, new_header);
                 payload
             };
             observe_payload_fn(payload);
