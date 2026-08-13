@@ -86,7 +86,7 @@ fn metric_sum(plan: &Arc<dyn ExecutionPlan>, name: &str) -> usize {
     own + plan
         .children()
         .into_iter()
-        .map(|child| metric_sum(&child, name))
+        .map(|child| metric_sum(child, name))
         .sum::<usize>()
 }
 
@@ -96,11 +96,7 @@ fn plan_metrics(plan: &Arc<dyn ExecutionPlan>) -> String {
         .filter(|metrics| metrics.iter().next().is_some())
         .map(|metrics| format!("{}=[{metrics}]", plan.name()));
     own.into_iter()
-        .chain(
-            plan.children()
-                .into_iter()
-                .map(|child| plan_metrics(&child)),
-        )
+        .chain(plan.children().into_iter().map(|child| plan_metrics(child)))
         .filter(|metrics| !metrics.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
