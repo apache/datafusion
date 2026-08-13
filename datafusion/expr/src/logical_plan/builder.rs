@@ -2177,7 +2177,7 @@ pub fn wrap_projection_for_join_if_necessary(
         // Expr contains Arc with interior mutability but is intentionally used as hash key
         let join_key_items = alias_join_keys
             .iter()
-            .flat_map(|expr| expr.try_as_col().is_none().then_some(expr))
+            .filter(|expr| expr.try_as_col().is_none())
             .cloned()
             .collect::<HashSet<Expr>>();
         projection.extend(join_key_items);

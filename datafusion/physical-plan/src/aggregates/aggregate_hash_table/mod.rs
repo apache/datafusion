@@ -20,6 +20,7 @@ mod common_ordered;
 mod final_table;
 mod ordered_final_table;
 mod ordered_partial_table;
+mod ordered_single_table;
 mod partial_reduce_table;
 mod partial_table;
 mod single_table;
