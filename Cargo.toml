@@ -227,6 +227,8 @@ empty_enum_variants_with_brackets = "warn"
 empty_enums = "warn"
 exit = "warn"
 expl_impl_clone_on_copy = "warn"
+# Catches `From` impls that can panic
+fallible_impl_from = "warn"
 flat_map_option = "warn"
 fn_params_excessive_bools = "warn"
 fn_to_numeric_cast_any = "warn"
