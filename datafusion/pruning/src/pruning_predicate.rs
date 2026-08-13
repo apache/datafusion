@@ -2304,10 +2304,10 @@ mod tests {
                 .map(|(_values, contained)| Arc::new(contained.clone()) as ArrayRef);
 
             [
-                self.min.as_ref().cloned(),
-                self.max.as_ref().cloned(),
-                self.null_counts.as_ref().cloned(),
-                self.row_counts.as_ref().cloned(),
+                self.min.clone(),
+                self.max.clone(),
+                self.null_counts.clone(),
+                self.row_counts.clone(),
             ]
             .into_iter()
             .flatten()
