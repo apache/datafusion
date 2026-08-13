@@ -1816,11 +1816,11 @@ impl ScalarUDFImpl for ExtensionBasedUdf {
 
         // If we have the extension type set, we are outputting a boolean value.
         // Otherwise we output a string representation of the numeric value.
-        fn print_value(v: Option<i8>, as_bool: bool) -> Option<String> {
-            v.map(|x| match as_bool {
+        fn print_value(x: i8, as_bool: bool) -> String {
+            match as_bool {
                 true => format!("{}", x != 0),
                 false => format!("{x}"),
-            })
+            }
         }
 
         match &args.args[0] {
@@ -1830,7 +1830,7 @@ impl ScalarUDFImpl for ExtensionBasedUdf {
                     .downcast_ref::<Int8Array>()
                     .unwrap()
                     .iter()
-                    .map(|v| print_value(v, output_as_bool))
+                    .map(|v| v.map(|v| print_value(v, output_as_bool)))
                     .collect();
                 let array_ref = Arc::new(StringArray::from(array_values)) as ArrayRef;
                 Ok(ColumnarValue::Array(array_ref))
@@ -1840,10 +1840,9 @@ impl ScalarUDFImpl for ExtensionBasedUdf {
                     return exec_err!("incorrect data type");
                 };
 
-                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(print_value(
-                    *value,
-                    output_as_bool,
-                ))))
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
+                    value.map(|v| print_value(v, output_as_bool)),
+                )))
             }
         }
     }

@@ -293,6 +293,7 @@ same_length_and_capacity = "warn"
 self_only_used_in_recursion = "warn"
 # Avoids hashing the key twice
 set_contains_or_insert = "warn"
+single_option_map = "warn"
 str_split_at_newline = "warn"
 string_add_assign = "warn"
 string_lit_as_bytes = "warn"
