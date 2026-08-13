@@ -18,6 +18,7 @@
 //! CteWorkTable implementation used for recursive queries
 
 use std::borrow::Cow;
+use std::future::ready;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
@@ -96,16 +97,18 @@ impl TableProvider for CteWorkTable {
         self.scan_boxed(state, projection, filters, limit)
     }
 
-    async fn scan_with_args<'a>(
-        &self,
-        _state: &dyn Session,
+    fn scan_with_args<'a, 'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
         args: ScanArgs<'a>,
-    ) -> Result<ScanResult> {
-        Ok(ScanResult::new(Arc::new(WorkTableExec::new(
-            self.name.clone(),
-            Arc::clone(&self.table_schema),
-            args.projection().map(|p| p.to_vec()),
-        )?)))
+    ) -> BoxFuture<'async_trait, Result<ScanResult>>
+    where
+        'a: 'async_trait,
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(ready(self.scan_with_args_inner(state, &args)))
     }
 
     fn supports_filters_pushdown(
@@ -121,7 +124,18 @@ impl TableProvider for CteWorkTable {
 }
 
 impl CteWorkTable {
-    // Compile-time optimization; see `MemTable::scan_boxed`.
+    fn scan_with_args_inner<'a>(
+        &self,
+        _state: &dyn Session,
+        args: &ScanArgs<'a>,
+    ) -> Result<ScanResult> {
+        Ok(ScanResult::new(Arc::new(WorkTableExec::new(
+            self.name.clone(),
+            Arc::clone(&self.table_schema),
+            args.projection().map(|p| p.to_vec()),
+        )?)))
+    }
+
     fn scan_boxed<'a>(
         &'a self,
         state: &'a dyn Session,

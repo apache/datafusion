@@ -115,7 +115,6 @@ impl TableProvider for ViewTable {
 }
 
 impl ViewTable {
-    // Compile-time optimization; see `MemTable::scan_boxed`.
     fn scan_boxed<'a>(
         &'a self,
         state: &'a dyn Session,

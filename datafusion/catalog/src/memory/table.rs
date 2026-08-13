@@ -264,9 +264,6 @@ impl TableProvider for MemTable {
 }
 
 impl MemTable {
-    // Compile-time optimization: outside `#[async_trait]`'s `'life0: 'async_trait`
-    // bounds, rustc caches the future's `Send`/`Sync` proofs globally instead of
-    // re-proving the whole `Expr`/`LogicalPlan` graph per method (~4x faster).
     fn scan_boxed<'a>(
         &'a self,
         state: &'a dyn Session,

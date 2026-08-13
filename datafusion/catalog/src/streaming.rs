@@ -142,7 +142,6 @@ impl TableProvider for StreamingTable {
 }
 
 impl StreamingTable {
-    // Compile-time optimization; see `MemTable::scan_boxed`.
     fn scan_boxed<'a>(
         &'a self,
         state: &'a dyn Session,

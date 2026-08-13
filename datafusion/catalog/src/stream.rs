@@ -65,7 +65,6 @@ impl TableProviderFactory for StreamTableFactory {
 }
 
 impl StreamTableFactory {
-    // Compile-time optimization; see `MemTable::scan_boxed`.
     fn create_boxed<'a>(
         &'a self,
         state: &'a dyn Session,
