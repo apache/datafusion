@@ -680,9 +680,15 @@ where
     }
 
     let data = mutable.freeze();
+    let field = match array.data_type() {
+        DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
+        other => {
+            return internal_err!("array_slice got unexpected data type: {}", other);
+        }
+    };
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(array.value_type(), true)),
+        field,
         OffsetBuffer::<O>::new(offsets.into()),
         arrow::array::make_array(data),
         nulls,
@@ -1107,7 +1113,7 @@ where
 mod tests {
     use super::{
         array_element_udf, general_array_any_value, general_array_element,
-        general_list_view_array_slice,
+        general_array_slice, general_list_view_array_slice,
     };
     use arrow::array::{
         Array, ArrayRef, GenericListViewArray, Int32Array, Int64Array, ListViewArray,
@@ -1401,6 +1407,29 @@ mod tests {
             .collect();
         assert_eq!(first_row, vec![Some(1), None]);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_slice_preserves_inner_field() -> Result<()> {
+        // Regression test for https://github.com/apache/datafusion/issues/24341
+        // general_array_slice must preserve the input list's inner field name,
+        // nullability, and metadata instead of creating a new default field.
+        let values = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 3]));
+        let inner_field = Arc::new(Field::new("my_elem", DataType::Int32, false));
+        let array = ListArray::try_new(inner_field.clone(), offsets, Arc::new(values), None)?;
+        let from = Int64Array::from(vec![1]);
+        let to = Int64Array::from(vec![3]);
+        let result = general_array_slice::<i32>(&array, &from, &to, None)?;
+        let result_type = result.data_type();
+        match result_type {
+            DataType::List(result_field) => {
+                assert_eq!(result_field.name(), "my_elem", "inner field name should be preserved from input");
+                assert!(!result_field.is_nullable(), "inner field nullability should be preserved from input");
+            }
+            _ => panic!("expected List type"),
+        }
         Ok(())
     }
 }
