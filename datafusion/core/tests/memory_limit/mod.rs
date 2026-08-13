@@ -941,11 +941,10 @@ impl TestCase {
 
         match df.collect().await {
             Ok(_batches) => {
-                if !expected_success {
-                    panic!(
-                        "Unexpected success when running, expected memory limit failure"
-                    )
-                }
+                assert!(
+                    expected_success,
+                    "Unexpected success when running, expected memory limit failure"
+                );
             }
             Err(e) => {
                 if expected_success {

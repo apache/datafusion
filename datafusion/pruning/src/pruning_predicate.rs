@@ -2601,11 +2601,10 @@ mod tests {
         let mut fields = HashSet::new();
         for (_col, _ty, field) in p.required_columns().iter() {
             let was_new = fields.insert(field);
-            if !was_new {
-                panic!(
-                    "Duplicate field in required schema: {field:?}. Previous fields:\n{fields:#?}"
-                );
-            }
+            assert!(
+                was_new,
+                "Duplicate field in required schema: {field:?}. Previous fields:\n{fields:#?}"
+            )
         }
     }
 
