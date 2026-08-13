@@ -681,7 +681,7 @@ enum StreamType {
     ///
     /// Note this is being incrementally migrated to dedicated streams like
     /// [`StreamType::PartialHash`], [`StreamType::FinalHash`],
-    /// [`StreamType::OrderedPartialAggregate`], and
+    /// [`StreamType::OrderedPartialAggregate`],
     /// [`StreamType::OrderedFinalAggregate`], and
     /// [`StreamType::OrderedSingleAggregate`]
     ///
