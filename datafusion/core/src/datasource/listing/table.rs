@@ -48,9 +48,6 @@ pub trait ListingTableConfigExt {
 
 #[async_trait]
 impl ListingTableConfigExt for ListingTableConfig {
-    // Compile-time optimization; the coroutine is built by `infer_options_boxed`,
-    // whose `ParamEnv` is empty, so rustc caches the future's `Send`/`Sync` proofs
-    // globally instead of re-proving `ListingTableConfig`'s type graph here.
     fn infer_options<'life0, 'async_trait>(
         self,
         state: &'life0 dyn Session,
@@ -62,13 +59,27 @@ impl ListingTableConfigExt for ListingTableConfig {
         infer_options_boxed(self, state)
     }
 
-    async fn infer(self, state: &dyn Session) -> datafusion_common::Result<Self> {
-        self.infer_options(state).await?.infer_schema(state).await
+    fn infer<'life0, 'async_trait>(
+        self,
+        state: &'life0 dyn Session,
+    ) -> BoxFuture<'async_trait, datafusion_common::Result<Self>>
+    where
+        'life0: 'async_trait,
+        Self: 'async_trait,
+    {
+        infer_boxed(self, state)
     }
 }
 
-/// Body of [`ListingTableConfigExt::infer_options`], boxed in a function with no
-/// where-clauses so its auto-trait obligations are proved in an empty `ParamEnv`.
+/// Body of [`ListingTableConfigExt::infer`].
+fn infer_boxed<'a>(
+    config: ListingTableConfig,
+    state: &'a dyn Session,
+) -> BoxFuture<'a, datafusion_common::Result<ListingTableConfig>> {
+    Box::pin(async move { config.infer_options(state).await?.infer_schema(state).await })
+}
+
+/// Body of [`ListingTableConfigExt::infer_options`].
 fn infer_options_boxed<'a>(
     config: ListingTableConfig,
     state: &'a dyn Session,

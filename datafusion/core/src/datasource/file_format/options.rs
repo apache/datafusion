@@ -604,11 +604,6 @@ pub trait ReadOptions<'a> {
     }
 
     /// helper function to reduce repetitive code. Infers the schema from sources if not provided. Infinite data sources not supported through this function.
-    // Compile-time optimization: written as the desugaring of `async fn` so the
-    // coroutine is built by `infer_schema_boxed`, whose `ParamEnv` is empty.
-    // Under `#[async_trait]`'s `'a: 'async_trait` bounds rustc cannot cache the
-    // future's `Send`/`Sync` proofs globally, and re-proves `SessionState`'s
-    // whole type graph for every impl of this trait.
     fn _get_resolved_schema<'life0, 'async_trait>(
         &'a self,
         config: &'life0 SessionConfig,
@@ -619,7 +614,7 @@ pub trait ReadOptions<'a> {
     where
         'a: 'async_trait,
         'life0: 'async_trait,
-        Self: Sync + 'async_trait,
+        Self: 'async_trait,
     {
         if let Some(s) = schema {
             return Box::pin(ready(Ok(Arc::new(s.to_owned()))));
@@ -632,10 +627,6 @@ pub trait ReadOptions<'a> {
 }
 
 /// Infers a schema from `table_path`, boxed for [`ReadOptions::_get_resolved_schema`].
-///
-/// Free function on purpose: it has no where-clauses, so the returned future's
-/// auto-trait obligations are proved in an empty `ParamEnv` and land in rustc's
-/// global evaluation cache, shared by every `ReadOptions` impl.
 fn infer_schema_boxed(
     listing_options: ListingOptions,
     state: SessionState,
@@ -671,7 +662,6 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
             .with_file_sort_order(self.file_sort_order.clone())
     }
 
-    // Compile-time optimization; see `ReadOptions::_get_resolved_schema`.
     fn get_resolved_schema<'life0, 'life1, 'async_trait>(
         &'life0 self,
         config: &'life1 SessionConfig,
@@ -723,7 +713,6 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
             .with_file_sort_order(self.file_sort_order.clone())
     }
 
-    // Compile-time optimization; see `ReadOptions::_get_resolved_schema`.
     fn get_resolved_schema<'life0, 'life1, 'async_trait>(
         &'life0 self,
         config: &'life1 SessionConfig,
@@ -762,7 +751,6 @@ impl ReadOptions<'_> for JsonReadOptions<'_> {
             .with_file_sort_order(self.file_sort_order.clone())
     }
 
-    // Compile-time optimization; see `ReadOptions::_get_resolved_schema`.
     fn get_resolved_schema<'life0, 'life1, 'async_trait>(
         &'life0 self,
         config: &'life1 SessionConfig,
@@ -797,7 +785,6 @@ impl ReadOptions<'_> for AvroReadOptions<'_> {
             .with_table_partition_cols(self.table_partition_cols.clone())
     }
 
-    // Compile-time optimization; see `ReadOptions::_get_resolved_schema`.
     fn get_resolved_schema<'life0, 'life1, 'async_trait>(
         &'life0 self,
         config: &'life1 SessionConfig,
@@ -831,7 +818,6 @@ impl ReadOptions<'_> for ArrowReadOptions<'_> {
             .with_table_partition_cols(self.table_partition_cols.clone())
     }
 
-    // Compile-time optimization; see `ReadOptions::_get_resolved_schema`.
     fn get_resolved_schema<'life0, 'life1, 'async_trait>(
         &'life0 self,
         config: &'life1 SessionConfig,
