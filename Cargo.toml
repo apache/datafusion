@@ -233,6 +233,7 @@ empty_enums = "warn"
 equatable_if_let = "warn"
 exit = "warn"
 expl_impl_clone_on_copy = "warn"
+explicit_deref_methods = "warn"
 # Catches `From` impls that can panic
 fallible_impl_from = "warn"
 filter_map_next = "warn"

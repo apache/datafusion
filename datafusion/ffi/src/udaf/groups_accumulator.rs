@@ -17,7 +17,6 @@
 
 use std::any::Any;
 use std::ffi::c_void;
-use std::ops::Deref;
 use std::ptr::null_mut;
 use std::sync::Arc;
 
@@ -103,7 +102,7 @@ impl FFI_GroupsAccumulator {
     unsafe fn inner(&self) -> &dyn GroupsAccumulator {
         unsafe {
             let private_data = self.private_data as *const GroupsAccumulatorPrivateData;
-            (*private_data).accumulator.deref()
+            &*(*private_data).accumulator
         }
     }
 }

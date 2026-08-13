@@ -17,7 +17,6 @@
 
 use std::any::Any;
 use std::ffi::c_void;
-use std::ops::Deref;
 use std::ptr::null_mut;
 
 use arrow::array::ArrayRef;
@@ -96,7 +95,7 @@ impl FFI_Accumulator {
     unsafe fn inner(&self) -> &dyn Accumulator {
         unsafe {
             let private_data = self.private_data as *const AccumulatorPrivateData;
-            (*private_data).accumulator.deref()
+            &*(*private_data).accumulator
         }
     }
 }
