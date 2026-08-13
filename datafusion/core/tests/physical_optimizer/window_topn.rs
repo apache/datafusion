@@ -64,23 +64,15 @@ fn optimize_disabled(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPl
     WindowTopN::new().optimize(plan, &config)
 }
 
-/// Build: FilterExec(rn <= limit) → BoundedWindowAggExec(ROW_NUMBER PBY pk OBY val) → SortExec(pk, val)
+/// Build: FilterExec(rn <= limit) → BoundedWindowAggExec(ROW_NUMBER PBY pk OBY val)
+///
+/// Matches the pre-`EnsureRequirements` plan shape (no `SortExec` under the window).
 fn build_window_topn_plan(
     limit_value: i64,
     op: Operator,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let s = schema();
     let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
-
-    // Sort by pk ASC, val ASC
-    let ordering = LexOrdering::new(vec![
-        PhysicalSortExpr::new_default(col("pk", &s)?).asc(),
-        PhysicalSortExpr::new_default(col("val", &s)?).asc(),
-    ])
-    .unwrap();
-
-    let sort: Arc<dyn ExecutionPlan> =
-        Arc::new(SortExec::new(ordering.clone(), input).with_preserve_partitioning(true));
 
     // ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val)
     let partition_by = vec![col("pk", &s)?];
@@ -105,7 +97,7 @@ fn build_window_topn_plan(
 
     let window: Arc<dyn ExecutionPlan> = Arc::new(BoundedWindowAggExec::try_new(
         vec![window_expr],
-        sort,
+        input,
         InputOrderMode::Sorted,
         true,
     )?);
@@ -252,16 +244,6 @@ fn flipped_3_gteq_rn() -> Result<()> {
         let input: Arc<dyn ExecutionPlan> =
             Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
 
-        let ordering = LexOrdering::new(vec![
-            PhysicalSortExpr::new_default(col("pk", &s)?).asc(),
-            PhysicalSortExpr::new_default(col("val", &s)?).asc(),
-        ])
-        .unwrap();
-
-        let sort: Arc<dyn ExecutionPlan> = Arc::new(
-            SortExec::new(ordering.clone(), input).with_preserve_partitioning(true),
-        );
-
         let partition_by = vec![col("pk", &s)?];
         let order_by = vec![PhysicalSortExpr::new_default(col("val", &s)?).asc()];
 
@@ -284,7 +266,7 @@ fn flipped_3_gteq_rn() -> Result<()> {
 
         let window: Arc<dyn ExecutionPlan> = Arc::new(BoundedWindowAggExec::try_new(
             vec![window_expr],
-            sort,
+            input,
             InputOrderMode::Sorted,
             true,
         )?);
@@ -353,15 +335,6 @@ fn with_projection_between() -> Result<()> {
     let s = schema();
     let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
 
-    let ordering = LexOrdering::new(vec![
-        PhysicalSortExpr::new_default(col("pk", &s)?).asc(),
-        PhysicalSortExpr::new_default(col("val", &s)?).asc(),
-    ])
-    .unwrap();
-
-    let sort: Arc<dyn ExecutionPlan> =
-        Arc::new(SortExec::new(ordering.clone(), input).with_preserve_partitioning(true));
-
     let partition_by = vec![col("pk", &s)?];
     let order_by = vec![PhysicalSortExpr::new_default(col("val", &s)?).asc()];
 
@@ -384,7 +357,7 @@ fn with_projection_between() -> Result<()> {
 
     let window: Arc<dyn ExecutionPlan> = Arc::new(BoundedWindowAggExec::try_new(
         vec![window_expr],
-        sort,
+        input,
         InputOrderMode::Sorted,
         true,
     )?);
@@ -429,7 +402,9 @@ fn with_projection_between() -> Result<()> {
 // RANK rule tests
 // ----------------------------------------------------------------------
 
-/// Build: FilterExec(rk op limit) → BoundedWindowAggExec(<udwf> PBY pk OBY val) → SortExec(pk, val)
+/// Build: FilterExec(rk op limit) → BoundedWindowAggExec(<udwf> PBY pk OBY val)
+///
+/// Matches the pre-`EnsureRequirements` plan shape (no `SortExec` under the window).
 ///
 /// `udwf_factory` selects the window UDWF (rank, dense_rank, ...) and
 /// `udwf_name` is the column name produced by that UDWF (matters because
@@ -443,15 +418,6 @@ fn build_ranking_topn_plan(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let s = schema();
     let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
-
-    let ordering = LexOrdering::new(vec![
-        PhysicalSortExpr::new_default(col("pk", &s)?).asc(),
-        PhysicalSortExpr::new_default(col("val", &s)?).asc(),
-    ])
-    .unwrap();
-
-    let sort: Arc<dyn ExecutionPlan> =
-        Arc::new(SortExec::new(ordering.clone(), input).with_preserve_partitioning(true));
 
     let partition_by = vec![col("pk", &s)?];
     let order_by = vec![PhysicalSortExpr::new_default(col("val", &s)?).asc()];
@@ -469,7 +435,7 @@ fn build_ranking_topn_plan(
 
     let window: Arc<dyn ExecutionPlan> = Arc::new(BoundedWindowAggExec::try_new(
         vec![window_expr],
-        sort,
+        input,
         InputOrderMode::Sorted,
         true,
     )?);

@@ -48,6 +48,7 @@ use crate::PhysicalOptimizerRule;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_physical_plan::execution_plan::replace_children_if_necessary;
 use std::sync::Arc;
 // CoalesceBatchesExec is deprecated on main (replaced by arrow-rs BatchCoalescer),
 // but older DataFusion versions may still insert it between SortExec and RepartitionExec.
@@ -151,7 +152,7 @@ impl PhysicalOptimizerRule for TopKRepartition {
 
             // Rebuild the tree above the repartition
             let new_sort_input = if let Some(parent) = repart_parent {
-                parent.with_new_children(vec![new_repartition])?
+                replace_children_if_necessary(parent, vec![new_repartition])?
             } else {
                 new_repartition
             };

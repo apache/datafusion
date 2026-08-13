@@ -130,7 +130,10 @@ impl PhysicalOptimizerRule for EnsureCooperative {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_physical_plan::{displayable, test::scan_partitioned};
+    use datafusion_physical_plan::{
+        ChildrenPropertiesMode, ReplaceChildrenOptions, displayable,
+        test::scan_partitioned,
+    };
     use insta::assert_snapshot;
 
     #[tokio::test]
@@ -328,9 +331,10 @@ mod tests {
             fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
                 vec![&self.input]
             }
-            fn with_new_children(
+            fn replace_children(
                 self: Arc<Self>,
                 children: Vec<Arc<dyn ExecutionPlan>>,
+                _: ReplaceChildrenOptions,
             ) -> Result<Arc<dyn ExecutionPlan>> {
                 Ok(Arc::new(DummyExec::new(
                     &self.name,
@@ -338,6 +342,15 @@ mod tests {
                     self.scheduling_type,
                     self.evaluation_type,
                 )))
+            }
+            fn with_new_children(
+                self: Arc<Self>,
+                children: Vec<Arc<dyn ExecutionPlan>>,
+            ) -> Result<Arc<dyn ExecutionPlan>> {
+                self.replace_children(
+                    children,
+                    ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+                )
             }
             fn execute(
                 &self,
