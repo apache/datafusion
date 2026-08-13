@@ -29,6 +29,7 @@ use arrow::{
     },
 };
 use datafusion_common::hash_utils::RandomState;
+use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::{
     HashMap, Result, ScalarValue, downcast_value, exec_err, internal_err, not_impl_err,
     stats::Precision, utils::expr::COUNT_STAR_EXPANSION,
@@ -774,7 +775,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         Ok(vec![state_array])
     }
     fn size(&self) -> usize {
-        self.counts.capacity() * size_of::<usize>()
+        self.counts.heap_size(&mut DFHeapSizeCtx::default())
     }
 }
 
@@ -930,6 +931,23 @@ mod tests {
             keys,
             Arc::new(values),
         )?)
+    }
+
+    #[test]
+    fn count_groups_size_includes_vec_capacity() -> Result<()> {
+        let mut acc = CountGroupsAccumulator::new();
+        let empty_size = acc.size();
+        assert_eq!(empty_size, 0);
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
+        acc.update_batch(&[values], &[0, 1, 2], None, 3)?;
+
+        assert!(acc.counts.capacity() > 0);
+        let allocated_size = acc.counts.heap_size(&mut DFHeapSizeCtx::default());
+        assert_eq!(allocated_size, acc.counts.capacity() * size_of::<i64>());
+        assert_eq!(acc.size(), allocated_size);
+        assert!(acc.size() > empty_size);
+
+        Ok(())
     }
 
     #[test]

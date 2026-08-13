@@ -18,6 +18,7 @@
 use std::any::Any;
 use std::borrow::Cow;
 use std::fmt::Debug;
+use std::future::ready;
 use std::sync::Arc;
 
 use crate::session::Session;
@@ -27,6 +28,7 @@ use datafusion_common::{Constraints, Statistics, not_impl_err};
 use datafusion_common::{DFSchemaRef, Result, internal_err};
 use datafusion_expr::Expr;
 use datafusion_expr::statistics::StatisticsRequest;
+use futures::future::BoxFuture;
 
 use datafusion_expr::dml::{InsertOp, MergeIntoClause};
 use datafusion_expr::{
@@ -351,25 +353,41 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     ///
     /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
     /// Empty `filters` deletes all rows.
-    async fn delete_from(
-        &self,
-        _state: &dyn Session,
+    fn delete_from<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        _state: &'life1 dyn Session,
         _filters: Vec<Expr>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        not_impl_err!("DELETE not supported for {} table", self.table_type())
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(ready(not_impl_err!(
+            "DELETE not supported for {} table",
+            self.table_type()
+        )))
     }
 
     /// Update rows matching the filter predicates.
     ///
     /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
     /// Empty `filters` updates all rows.
-    async fn update(
-        &self,
-        _state: &dyn Session,
+    fn update<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        _state: &'life1 dyn Session,
         _assignments: Vec<(String, Expr)>,
         _filters: Vec<Expr>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        not_impl_err!("UPDATE not supported for {} table", self.table_type())
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(ready(not_impl_err!(
+            "UPDATE not supported for {} table",
+            self.table_type()
+        )))
     }
 
     /// Remove all rows from the table.
@@ -391,15 +409,23 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// The `clauses` describe the WHEN MATCHED / WHEN NOT MATCHED actions.
     ///
     /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
-    async fn merge_into(
-        &self,
-        _state: &dyn Session,
+    fn merge_into<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        _state: &'life1 dyn Session,
         _source: Arc<dyn ExecutionPlan>,
         _merge_schema: DFSchemaRef,
         _on: Expr,
         _clauses: Vec<MergeIntoClause>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        not_impl_err!("MERGE INTO not supported for {} table", self.table_type())
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(ready(not_impl_err!(
+            "MERGE INTO not supported for {} table",
+            self.table_type()
+        )))
     }
 }
 

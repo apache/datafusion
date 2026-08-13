@@ -1050,6 +1050,7 @@ message PhysicalExprNode {
     PhysicalHigherOrderUdfNode higher_order_udf = 24;
     PhysicalLambdaExprNode lambda = 25;
     PhysicalLambdaVariableExprNode lambda_variable = 26;
+    PhysicalRangeExprNode range_expr = 27;
   }
 }
 
@@ -1200,6 +1201,11 @@ message PhysicalHashExprNode {
   repeated PhysicalExprNode on_columns = 1;
   uint64 seed0 = 2;
   string description = 6;
+}
+
+message PhysicalRangeExprNode {
+  repeated PhysicalSortExprNode sort_expr = 1;
+  repeated PhysicalRangeSplitPoint split_point = 2;
 }
 
 message FilterExecNode {
