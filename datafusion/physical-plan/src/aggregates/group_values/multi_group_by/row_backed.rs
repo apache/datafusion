@@ -213,8 +213,13 @@ impl RowsGroupColumn {
             .row_converter
             .convert_rows(rows)
             .expect("row conversion during emit");
-        debug_assert_eq!(arrays.len(), 1, "single-field row converter");
-        let array = arrays.swap_remove(0);
+        assert_eq!(
+            arrays.len(),
+            1,
+            "Single field row converter must produce exactly one array, actual length is {}",
+            arrays.len()
+        );
+        let array = arrays.pop().unwrap();
         encode_array_if_necessary(&array, &self.output_type)
             .expect("dictionary re-encode during emit")
     }
@@ -297,7 +302,11 @@ impl GroupColumn for RowsGroupColumn {
 
         // Shift the remaining rows to the front by rebuilding the buffer.
         // TODO: mirror the arrow-rs efficiency TODO in `GroupValuesRows::emit`.
-        let mut remaining = self.row_converter.empty_rows(0, 0);
+        let remaining_rows = self.group_values.num_rows() - n;
+        let remaining_bytes = self.group_values.lengths().skip(n).sum();
+        let mut remaining = self
+            .row_converter
+            .empty_rows(remaining_rows, remaining_bytes);
         for row in self.group_values.iter().skip(n) {
             remaining.push(row);
         }
@@ -311,13 +320,37 @@ impl GroupColumn for RowsGroupColumn {
 mod tests {
     use super::*;
 
-    use arrow::array::{Array, ArrayRef, FixedSizeListArray, Int32Array, StructArray};
+    use arrow::array::{
+        Array, ArrayRef, FixedSizeListArray, Int32Array, StringArray, StructArray,
+    };
     use arrow::datatypes::{DataType, Field, Int32Type};
     use std::sync::Arc;
 
     fn fsl_i32(data: Vec<Option<Vec<Option<i32>>>>, list_len: i32) -> ArrayRef {
         Arc::new(FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
             data, list_len,
+        ))
+    }
+
+    /// Build a `FixedSizeList<Utf8>` with `list_len == 1`. Each entry is one
+    /// row holding a single (optionally null) string, and an outer `None`
+    /// marks a null list. Variable-length string payloads give retained rows
+    /// distinct encoded lengths, which is what `take_n`'s byte preallocation
+    /// depends on.
+    fn fsl_utf8(rows: Vec<Option<Option<&str>>>) -> ArrayRef {
+        let child = StringArray::from(
+            rows.iter()
+                .map(|row| row.and_then(|inner| inner))
+                .collect::<Vec<_>>(),
+        );
+        let outer_nulls = arrow::buffer::NullBuffer::from(
+            rows.iter().map(|row| row.is_some()).collect::<Vec<_>>(),
+        );
+        Arc::new(FixedSizeListArray::new(
+            Arc::new(Field::new("item", DataType::Utf8, true)),
+            1,
+            Arc::new(child),
+            Some(outer_nulls),
         ))
     }
 
@@ -418,6 +451,88 @@ mod tests {
             .unwrap()
             .value(0);
         assert_eq!(g0, 20);
+    }
+
+    /// `take_n` preallocates the retained-row buffer from the known retained
+    /// row count and byte size
+    ///
+    /// To exercise the byte-sum path directly, the retained rows are
+    /// `FixedSizeList<Utf8>` values with deliberately unequal payload
+    /// lengths plus an inner-null. Here we assert every emitted and
+    /// every shifted-down value is byte-for-byte unchanged.
+    #[test]
+    fn take_n_preallocated_rebuild_preserves_variable_length_rows() {
+        let dt = DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Utf8, true)),
+            1,
+        );
+        let mut col = RowsGroupColumn::try_new(dt).unwrap();
+
+        // Rows 0-2 are emitted; rows 3-6 are retained and shifted to the
+        // front. The retained rows intentionally have different encoded
+        // lengths so `lengths().skip(3).sum()` is not a simple row_count * k.
+        let input = fsl_utf8(vec![
+            Some(Some("emit_a")),                       // 0: emitted
+            Some(None),                                 // 1: emitted (inner-null)
+            None,                                       // 2: emitted (outer-null)
+            Some(Some("")),                             // 3: retained, empty payload
+            Some(Some("xyz")),                          // 4: retained, short payload
+            Some(None),                                 // 5: retained, inner-null
+            Some(Some("a_much_longer_payload_string")), // 6: retained, long payload
+        ]);
+        col.vectorized_append(&input, &[0, 1, 2, 3, 4, 5, 6])
+            .unwrap();
+        assert_eq!(col.len(), 7);
+
+        // Emit the first three rows; four rows should remain.
+        let emitted = col.take_n(3);
+        let emitted = emitted
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
+        assert_eq!(emitted.len(), 3);
+        assert_eq!(
+            emitted
+                .value(0)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .value(0),
+            "emit_a"
+        );
+        // Row 1 was an inner-null; row 2 was an outer-null.
+        assert!(
+            emitted
+                .value(1)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .is_null(0)
+        );
+        assert!(emitted.is_null(2));
+
+        assert_eq!(col.len(), 4);
+
+        // The four retained rows must survive the rebuild intact, in order:
+        // "", "xyz", inner-null, "a_much_longer_payload_string".
+        let rest = Box::new(col).build();
+        let rest = rest.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+        assert_eq!(rest.len(), 4);
+
+        let value_at = |idx: usize| {
+            rest.value(idx)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(value_at(0).value(0), "");
+        assert_eq!(value_at(1).value(0), "xyz");
+        assert!(
+            value_at(2).is_null(0),
+            "retained inner-null row must be preserved"
+        );
+        assert_eq!(value_at(3).value(0), "a_much_longer_payload_string");
     }
 
     /// Works for `Struct<a: Int32>` too — proves the column is type-generic.

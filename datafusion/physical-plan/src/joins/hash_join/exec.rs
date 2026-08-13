@@ -22,10 +22,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::vec;
 
-use crate::ExecutionPlanProperties;
 use crate::execution_plan::{
     EmissionType, boundedness_from_children, has_same_children_properties,
-    stub_properties,
+    plan_contains_expression_id, stub_properties,
 };
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
@@ -55,6 +54,10 @@ use crate::projection::{
 use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
+    ChildrenPropertiesMode, ExecutionPlanProperties, ReplaceChildrenOptions,
+    validate_child_count,
+};
+use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     InputDistributionRequirements, Partitioning, PlanProperties,
     SendableRecordBatchStream, Statistics,
@@ -74,6 +77,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_schema::{DataType, Schema};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::memory::{RecordBatchMemoryCounter, estimate_memory_size};
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
@@ -866,14 +870,6 @@ impl HashJoinExec {
             return false;
         }
 
-        // Bounds and membership filters derived from the build side do not
-        // account for null-equal matching: a probe-side NULL key evaluates
-        // such predicates to NULL and would be pruned, even though it can
-        // match a build-side NULL when nulls compare equal.
-        if self.null_equality == NullEquality::NullEqualsNull {
-            return false;
-        }
-
         // A null-aware anti join emits a build-side NULL only when the probe
         // is truly empty. The pushed filter can empty the probe by pruning
         // every row, which would surface that NULL wrongly. A NOT NULL build
@@ -886,14 +882,24 @@ impl HashJoinExec {
             return false;
         }
 
-        // `preserve_file_partitions` can report Hash partitioning for Hive-style
-        // file groups, but those partitions are not actually hash-distributed.
-        // Partitioned dynamic filters rely on hash routing, so disable them in
-        // this mode to avoid incorrect results. Follow-up work: enable dynamic
-        // filtering for preserve_file_partitioned scans (issue #20195).
+        // `preserve_file_partitions` can report Hive-style file groups as Hash
+        // partitioned even though their partition indexes do not follow the
+        // hash router used by partitioned dynamic filters. Reject Hash inputs
+        // because the metadata cannot distinguish those scans from a real hash
+        // repartition. Compatible Range inputs remain safe because matching
+        // ordering and split points align each build filter with its probe
+        // partition. Other unsupported layouts are rejected.
+        // Follow-up work: enable dynamic filtering for preserve_file_partitioned scans (issue #20195).
         // https://github.com/apache/datafusion/issues/20195
         if config.optimizer.preserve_file_partitions > 0
             && self.mode == PartitionMode::Partitioned
+            && matches!(
+                (
+                    self.left.output_partitioning(),
+                    self.right.output_partitioning()
+                ),
+                (Partitioning::Hash(_, _), Partitioning::Hash(_, _))
+            )
         {
             return false;
         }
@@ -901,9 +907,6 @@ impl HashJoinExec {
         if self.mode == PartitionMode::Partitioned
             && !self.has_partitioned_dynamic_filter_routing()
         {
-            // TODO: support partition-routed dynamic filters for compatible
-            // range co-partitioned joins.
-            // <https://github.com/apache/datafusion/issues/23376>.
             return false;
         }
 
@@ -919,6 +922,14 @@ impl HashJoinExec {
                 Partitioning::Hash(_, left_partition_count),
                 Partitioning::Hash(_, right_partition_count),
             ) => left_partition_count == right_partition_count,
+            (Partitioning::Range(_), Partitioning::Range(_)) => {
+                let children = [self.left.as_ref(), self.right.as_ref()];
+                matches!(
+                    self.input_distribution_requirements()
+                        .unsatisfied_co_partitioned_children(self.name(), &children),
+                    Ok(unsatisfied) if unsatisfied.is_empty()
+                )
+            }
             (left_partitioning, right_partitioning) => {
                 left_partitioning.partition_count() == 1
                     && right_partitioning.partition_count() == 1
@@ -967,8 +978,11 @@ impl HashJoinExec {
         self.null_equality
     }
 
-    /// Get the dynamic filter expression for testing purposes.
-    /// Returns the dynamic filter expression for this hash join, if set.
+    /// Returns the dynamic filter expression produced by this hash join, if set.
+    #[deprecated(
+        since = "55.0.0",
+        note = "Use ExecutionPlan::dynamic_expressions_produced instead"
+    )]
     pub fn dynamic_filter_expr(&self) -> Option<&Arc<DynamicFilterPhysicalExpr>> {
         self.dynamic_filter.as_ref().map(|df| &df.filter)
     }
@@ -1333,16 +1347,66 @@ impl ExecutionPlan for HashJoinExec {
         vec![&self.left, &self.right]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let join_keys = self
+            .on
+            .iter()
+            .flat_map(|(left, right)| [Arc::clone(left), Arc::clone(right)]);
+        let filter = self
+            .filter
+            .iter()
+            .map(|filter| Arc::clone(filter.expression()));
+        let dynamic_filter = self.dynamic_filter.iter().map(|dynamic_filter| {
+            Arc::<DynamicFilterPhysicalExpr>::clone(&dynamic_filter.filter)
+                as Arc<dyn PhysicalExpr>
+        });
+        crate::apply_expression_roots(join_keys.chain(filter).chain(dynamic_filter), f)
+    }
+
+    fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.dynamic_filter
+            .iter()
+            .map(|dynamic_filter| {
+                Arc::<DynamicFilterPhysicalExpr>::clone(&dynamic_filter.filter)
+                    as Arc<dyn PhysicalExpr>
+            })
+            .collect()
+    }
+
     /// Creates a new HashJoinExec with different children while preserving configuration.
     ///
     /// This method is called during query optimization when the optimizer creates new
     /// plan nodes. Importantly, it creates a fresh bounds_accumulator via `try_new`
     /// rather than cloning the existing one because partitioning may have changed.
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => {
+                self.builder().with_new_children(children)?.build_exec()
+            }
+            ChildrenPropertiesMode::Recompute => self
+                .builder()
+                .recompute_properties()
+                .with_new_children(children)?
+                .build_exec(),
+        }
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.builder().with_new_children(children)?.build_exec()
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1375,18 +1439,20 @@ impl ExecutionPlan for HashJoinExec {
              consider using CoalescePartitionsExec or the EnforceDistribution rule"
         );
 
-        // Only enable dynamic filter pushdown if:
-        // - The session config enables dynamic filter pushdown
-        // - A dynamic filter exists
-        // - At least one consumer is holding a reference to it, this avoids expensive filter
-        //   computation when disabled or when no consumer will use it.
-        let enable_dynamic_filter_pushdown = self
+        // Only compute a dynamic filter when the probe subtree contains a consumer.
+        // Searching from `self` would always find the producer expression owned by this join.
+        let enable_dynamic_filter_pushdown = if self
             .allow_join_dynamic_filter_pushdown(context.session_config().options())
-            && self
-                .dynamic_filter
+        {
+            self.dynamic_filter
                 .as_ref()
-                .map(|df| df.filter.is_used())
-                .unwrap_or(false);
+                .and_then(|df| df.filter.expression_id())
+                .map(|id| plan_contains_expression_id(&self.right, id))
+                .transpose()?
+                .unwrap_or(false)
+        } else {
+            false
+        };
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
@@ -1422,6 +1488,7 @@ impl ExecutionPlan for HashJoinExec {
                                 filter,
                                 on_right,
                                 repartition_random_state,
+                                self.null_equality,
                                 self.null_aware,
                                 membership_predicates_elided,
                             ),
@@ -1658,14 +1725,11 @@ impl ExecutionPlan for HashJoinExec {
                 };
             });
 
-        // For semi/anti joins, the non-preserved side's columns are not in the
-        // output, but filters on join key columns can still be pushed there.
-        // We find output columns that are join keys on the preserved side and
-        // add their output indices to the non-preserved side's allowed set.
-        // The name-based remap in FilterRemapper will then match them to the
-        // corresponding column in the non-preserved child's schema.
+        // For semi joins, filters on output join keys can also be pushed to the
+        // non-output side: every emitted row has an equal key there. This is not
+        // true for anti joins, whose emitted rows have no match.
         match self.join_type {
-            JoinType::LeftSemi | JoinType::LeftAnti => {
+            JoinType::LeftSemi => {
                 let left_key_indices: HashSet<usize> = self
                     .on
                     .iter()
@@ -1679,7 +1743,7 @@ impl ExecutionPlan for HashJoinExec {
                     }
                 }
             }
-            JoinType::RightSemi | JoinType::RightAnti => {
+            JoinType::RightSemi => {
                 let right_key_indices: HashSet<usize> = self
                     .on
                     .iter()
@@ -1824,12 +1888,10 @@ impl ExecutionPlan for HashJoinExec {
             .transpose()?;
 
         let dynamic_filter = self
-            .dynamic_filter_expr()
-            .map(|df| {
-                let df_expr: Arc<dyn PhysicalExpr> =
-                    Arc::clone(df) as Arc<dyn PhysicalExpr>;
-                ctx.encode_expr(&df_expr)
-            })
+            .dynamic_expressions_produced()
+            .into_iter()
+            .next()
+            .map(|expr| ctx.encode_expr(&expr))
             .transpose()?;
 
         Ok(Some(protobuf::PhysicalPlanNode {
@@ -1857,6 +1919,7 @@ impl ExecutionPlan for HashJoinExec {
                         },
                         null_aware: self.null_aware,
                         dynamic_filter,
+                        fetch: self.fetch.map(|f| f as u64),
                     },
                 )),
             ),
@@ -1871,7 +1934,7 @@ impl HashJoinExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        use datafusion_common::internal_datafusion_err;
+        use datafusion_common::{internal_datafusion_err, plan_datafusion_err};
         use datafusion_proto_models::protobuf;
         use std::any::Any;
 
@@ -1948,17 +2011,35 @@ impl HashJoinExec {
             indices => Some(indices.iter().map(|i| *i as usize).collect()),
         };
 
-        let mut hash_join = HashJoinExec::try_new(
-            left,
-            right,
-            on,
-            filter,
-            &join_type,
-            projection,
-            partition_mode,
-            null_equality,
-            hashjoin.null_aware,
-        )?;
+        // Restore the row limit that `limit_pushdown` may have pushed into the
+        // join. The field is presence-tracked, so a message written before it
+        // existed decodes to `None` (no limit) rather than to `Some(0)`.
+        //
+        // The conversion is checked, not `as usize`: `fetch` is a `u64` on the
+        // wire but a `usize` in the plan, and on a 32-bit target `as usize`
+        // truncates. A fetch of `1 << 32` would become `0` -- not merely a
+        // wrong limit but the worst one, silently turning the query into an
+        // empty result. Report the out-of-range value instead. Please do not
+        // "simplify" this back to `as usize`.
+        let fetch = hashjoin
+            .fetch
+            .map(|f| {
+                usize::try_from(f).map_err(|_| {
+                    plan_datafusion_err!(
+                        "HashJoinExec: fetch value {f} cannot be represented as usize on this target"
+                    )
+                })
+            })
+            .transpose()?;
+
+        let mut hash_join = HashJoinExecBuilder::new(left, right, on, join_type)
+            .with_filter(filter)
+            .with_projection(projection)
+            .with_partition_mode(partition_mode)
+            .with_null_equality(null_equality)
+            .with_null_aware(hashjoin.null_aware)
+            .with_fetch(fetch)
+            .build()?;
 
         if let Some(dynamic_filter_proto) = &hashjoin.dynamic_filter {
             // The dynamic filter is a `DynamicFilterPhysicalExpr` over the probe
@@ -1982,21 +2063,18 @@ impl HashJoinExec {
 /// Determines which sides of a join are "preserved" for filter pushdown.
 ///
 /// A preserved side means filters on that side's columns can be safely pushed
-/// below the join. This mirrors the logic in the logical optimizer's
-/// `lr_is_preserved` in `datafusion/optimizer/src/push_down_filter.rs`.
+/// below the join. This mostly mirrors the logical optimizer's `lr_is_preserved`;
+/// semi joins additionally allow join-key filters on the non-output side.
 fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     match join_type {
         JoinType::Inner => (true, true),
         JoinType::Left => (true, false),
         JoinType::Right => (false, true),
         JoinType::Full => (false, false),
-        // Filters in semi/anti joins are either on the preserved side, or on join keys,
-        // as all output columns come from the preserved side. Join key filters can be
-        // safely pushed down into the other side.
-        JoinType::LeftSemi | JoinType::LeftAnti => (true, true),
-        JoinType::RightSemi | JoinType::RightAnti => (true, true),
-        JoinType::LeftMark => (true, false),
-        JoinType::RightMark => (false, true),
+        // Callers restrict the non-output side of semi joins to join-key columns.
+        JoinType::LeftSemi | JoinType::RightSemi => (true, true),
+        JoinType::LeftAnti | JoinType::LeftMark => (true, false),
+        JoinType::RightAnti | JoinType::RightMark => (false, true),
     }
 }
 
@@ -2407,8 +2485,10 @@ mod tests {
 
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::execution_plan::Boundedness;
+    use crate::filter::FilterExecBuilder;
     use crate::joins::hash_join::stream::lookup_join_hashmap;
     use crate::test::{TestMemoryExec, assert_join_metrics};
+    use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions};
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
         test::exec::MockExec,
@@ -2474,11 +2554,29 @@ mod tests {
             vec![]
         }
 
-        fn with_new_children(
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn replace_children(
             self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(self)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
 
         fn execute(
@@ -2622,7 +2720,12 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right_schema).unwrap()) as _,
         )];
         let right: Arc<dyn ExecutionPlan> = Arc::new(
-            MockExec::new(vec![Ok(right_batch), err], right_schema).with_use_task(false),
+            MockExec::new(vec![Ok(right_batch), err], right_schema)
+                .with_use_task(false)
+                // The planted error must only surface if the probe side is
+                // polled, not when a parent node computes statistics during
+                // planning.
+                .with_unknown_statistics(),
         );
 
         (left, right, on)
@@ -2702,6 +2805,8 @@ mod tests {
         mode: PartitionMode,
     ) -> Result<(HashJoinExec, Arc<DynamicFilterPhysicalExpr>)> {
         let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
+        let consumer: Arc<dyn PhysicalExpr> = Arc::clone(&dynamic_filter) as _;
+        let right = Arc::new(FilterExecBuilder::new(consumer, right).build()?);
         let mut join = HashJoinExec::try_new(
             left,
             right,
@@ -6872,10 +6977,10 @@ mod tests {
         assert_eq!(lr_is_preserved(JoinType::Right), (false, true));
         assert_eq!(lr_is_preserved(JoinType::Full), (false, false));
         assert_eq!(lr_is_preserved(JoinType::LeftSemi), (true, true));
-        assert_eq!(lr_is_preserved(JoinType::LeftAnti), (true, true));
+        assert_eq!(lr_is_preserved(JoinType::LeftAnti), (true, false));
         assert_eq!(lr_is_preserved(JoinType::LeftMark), (true, false));
         assert_eq!(lr_is_preserved(JoinType::RightSemi), (true, true));
-        assert_eq!(lr_is_preserved(JoinType::RightAnti), (true, true));
+        assert_eq!(lr_is_preserved(JoinType::RightAnti), (false, true));
         assert_eq!(lr_is_preserved(JoinType::RightMark), (false, true));
     }
 
@@ -6896,7 +7001,7 @@ mod tests {
             NullEquality::NullEqualsNothing,
             false,
         )?;
-        assert!(join.dynamic_filter_expr().is_none());
+        assert!(join.dynamic_expressions_produced().is_empty());
 
         let df = Arc::new(DynamicFilterPhysicalExpr::new(
             vec![Arc::new(Column::new("b1", 1)) as _],
@@ -6904,11 +7009,10 @@ mod tests {
         ));
         let join = join.with_dynamic_filter_expr(Arc::clone(&df))?;
 
-        let restored = join
-            .dynamic_filter_expr()
-            .expect("should have dynamic filter");
+        let produced = join.dynamic_expressions_produced();
+        assert_eq!(produced.len(), 1);
         assert_eq!(
-            restored
+            produced[0]
                 .expression_id()
                 .expect("DynamicFilterPhysicalExpr always has an expression_id"),
             df.expression_id()
@@ -6957,7 +7061,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dynamic_filter_pushdown_rejects_null_equal_join() -> Result<()> {
+    fn test_dynamic_filter_pushdown_allowed_for_null_equal_join() -> Result<()> {
         let (_, _, on) = build_schema_and_on()?;
         let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![1]));
         let right = build_table(("a2", &vec![1]), ("b1", &vec![1]), ("c2", &vec![1]));
@@ -6980,7 +7084,9 @@ mod tests {
             false,
         )?;
 
-        assert!(!join.allow_join_dynamic_filter_pushdown(session_config.options()));
+        // Null-equal joins keep dynamic filter pushdown: the pushed predicate carries an
+        // `IS NULL` disjunct so a probe-side NULL still reaches the join.
+        assert!(join.allow_join_dynamic_filter_pushdown(session_config.options()));
 
         Ok(())
     }
@@ -7058,9 +7164,10 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_partitioned_dynamic_filter_pushdown_rejects_range_partitioning() -> Result<()>
-    {
+    fn range_partitioned_dynamic_filter_test_join(
+        left_split: i32,
+        right_split: i32,
+    ) -> Result<(HashJoinExec, JoinOn)> {
         let (left_schema, right_schema, on) = build_schema_and_on()?;
         let left_partitioning = Partitioning::Range(RangePartitioning::try_new(
             [PhysicalSortExpr {
@@ -7068,7 +7175,7 @@ mod tests {
                 options: Default::default(),
             }]
             .into(),
-            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(left_split))])],
         )?);
         let right_partitioning = Partitioning::Range(RangePartitioning::try_new(
             [PhysicalSortExpr {
@@ -7076,7 +7183,7 @@ mod tests {
                 options: Default::default(),
             }]
             .into(),
-            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(right_split))])],
         )?);
         let left = Arc::new(PartitionedTestExec::try_new(
             left_schema,
@@ -7087,16 +7194,10 @@ mod tests {
             right_partitioning,
         )?);
 
-        let mut session_config = SessionConfig::default();
-        session_config
-            .options_mut()
-            .optimizer
-            .enable_join_dynamic_filter_pushdown = true;
-
         let join = HashJoinExec::try_new(
             left,
             right,
-            on,
+            on.clone(),
             None,
             &JoinType::Inner,
             None,
@@ -7104,8 +7205,73 @@ mod tests {
             NullEquality::NullEqualsNothing,
             false,
         )?;
+        Ok((join, on))
+    }
 
-        assert!(!join.allow_join_dynamic_filter_pushdown(session_config.options()));
+    fn with_hash_partitioned_children(
+        join: &HashJoinExec,
+        on: &JoinOn,
+    ) -> Result<HashJoinExec> {
+        join.builder()
+            .with_new_children(vec![
+                Arc::new(PartitionedTestExec::try_new(
+                    join.left().schema(),
+                    Partitioning::Hash(vec![Arc::clone(&on[0].0)], 2),
+                )?),
+                Arc::new(PartitionedTestExec::try_new(
+                    join.right().schema(),
+                    Partitioning::Hash(vec![Arc::clone(&on[0].1)], 2),
+                )?),
+            ])?
+            .build()
+    }
+
+    #[test]
+    fn test_partitioned_dynamic_filter_pushdown_allows_supported_partitioning()
+    -> Result<()> {
+        let (range_join, on) = range_partitioned_dynamic_filter_test_join(10, 10)?;
+        let hash_join = with_hash_partitioned_children(&range_join, &on)?;
+        let mut session_config = SessionConfig::default();
+        session_config
+            .options_mut()
+            .optimizer
+            .enable_join_dynamic_filter_pushdown = true;
+
+        assert!(range_join.allow_join_dynamic_filter_pushdown(session_config.options()));
+        assert!(hash_join.allow_join_dynamic_filter_pushdown(session_config.options()));
+
+        session_config
+            .options_mut()
+            .optimizer
+            .preserve_file_partitions = 1;
+        assert!(range_join.allow_join_dynamic_filter_pushdown(session_config.options()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_partitioned_dynamic_filter_pushdown_rejects_unsupported_partitioning()
+    -> Result<()> {
+        let (range_join, on) = range_partitioned_dynamic_filter_test_join(10, 10)?;
+        let hash_join = with_hash_partitioned_children(&range_join, &on)?;
+        let (mismatched_range_join, _) =
+            range_partitioned_dynamic_filter_test_join(10, 11)?;
+        let mut session_config = SessionConfig::default();
+        session_config
+            .options_mut()
+            .optimizer
+            .enable_join_dynamic_filter_pushdown = true;
+
+        assert!(
+            !mismatched_range_join
+                .allow_join_dynamic_filter_pushdown(session_config.options())
+        );
+
+        session_config
+            .options_mut()
+            .optimizer
+            .preserve_file_partitions = 1;
+        assert!(!hash_join.allow_join_dynamic_filter_pushdown(session_config.options()));
 
         Ok(())
     }

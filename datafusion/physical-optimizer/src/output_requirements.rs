@@ -27,12 +27,16 @@ use std::sync::Arc;
 use crate::PhysicalOptimizerRule;
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{Result, Statistics, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::Distribution;
 use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
-use datafusion_physical_plan::execution_plan::Boundedness;
+use datafusion_physical_plan::execution_plan::{
+    Boundedness, replace_children_if_necessary,
+};
 use datafusion_physical_plan::projection::{
     ProjectionExec, make_with_child, update_expr, update_ordering_requirement,
 };
@@ -40,8 +44,9 @@ use datafusion_physical_plan::scalar_subquery::ScalarSubqueryExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{
-    ChildStats, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties, SendableRecordBatchStream, StatisticsArgs,
+    ChildStats, ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
+    ExecutionPlanProperties, PlanProperties, ReplaceChildrenOptions,
+    SendableRecordBatchStream, StatisticsArgs,
 };
 
 /// This rule either adds or removes [`OutputRequirements`]s to/from the physical
@@ -231,9 +236,10 @@ impl ExecutionPlan for OutputRequirementExec {
         vec![self.order_requirement.clone()]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self::new(
             children.remove(0), // has a single child
@@ -241,6 +247,16 @@ impl ExecutionPlan for OutputRequirementExec {
             self.dist_requirement.clone(),
             self.fetch,
         )))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -323,6 +339,15 @@ impl ExecutionPlan for OutputRequirementExec {
 
     fn fetch(&self) -> Option<usize> {
         self.fetch
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion_physical_expr_common::physical_expr::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -460,7 +485,7 @@ fn require_top_ordering_helper(
                 require_top_ordering_helper(Arc::clone(&children[idx]))?;
             if is_changed {
                 children[idx] = new_child;
-                return Ok((plan.with_new_children(children)?, true));
+                return Ok((replace_children_if_necessary(plan, children)?, true));
             }
         }
         Ok((plan, false))

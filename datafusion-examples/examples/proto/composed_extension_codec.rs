@@ -37,7 +37,9 @@ use std::sync::Arc;
 
 use datafusion::common::Result;
 use datafusion::common::internal_err;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::TaskContext;
+use datafusion::physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::{
@@ -110,11 +112,22 @@ impl ExecutionPlan for ParentExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         unreachable!()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -123,6 +136,15 @@ impl ExecutionPlan for ParentExec {
         _context: Arc<TaskContext>,
     ) -> Result<datafusion::physical_plan::SendableRecordBatchStream> {
         unreachable!()
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -188,11 +210,22 @@ impl ExecutionPlan for ChildExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         unreachable!()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -201,6 +234,15 @@ impl ExecutionPlan for ChildExec {
         _context: Arc<TaskContext>,
     ) -> Result<datafusion::physical_plan::SendableRecordBatchStream> {
         unreachable!()
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion::physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
