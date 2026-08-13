@@ -11,4 +11,5 @@ dependencies = [
   "jinja2>=3.1.6,<4",
   "sphinx-sitemap>=2.9.0,<3",
   "setuptools>=84.0.0,<85",
+  "sphinx-sitemap>=2.9.0,<3",
 ]
