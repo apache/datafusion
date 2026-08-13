@@ -487,10 +487,8 @@ fn resolve_classic_join(
         // `NullEqualsNothing`, so for `Right`/`Full` those rows are unmatched and
         // must still be emitted; record them here since the scan will skip them.
         if matches!(join_type, JoinType::Right | JoinType::Full) {
-            for row_idx in 0..stream_null_idx {
-                batch_process_state
-                    .unmatched_indices
-                    .append_value(row_idx as u32);
+            for row_idx in 0..stream_null_idx as u32 {
+                batch_process_state.unmatched_indices.append_value(row_idx);
             }
         }
     }
