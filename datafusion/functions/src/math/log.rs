@@ -362,23 +362,27 @@ impl ScalarUDFImpl for LogFunc {
         } else {
             lit(ScalarValue::new_ten(&number_datatype)?)
         };
+        let base_nullable = info.nullable(&base)?;
 
         match number {
             Expr::Literal(value, _)
-                if value == ScalarValue::new_one(&number_datatype)? =>
+                if value == ScalarValue::new_one(&number_datatype)? && !base_nullable =>
             {
                 Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_zero(
                     &info.get_data_type(&base)?,
                 )?)))
             }
             Expr::ScalarFunction(ScalarFunction { func, mut args })
-                if is_pow(&func) && args.len() == 2 && base == args[0] =>
+                if is_pow(&func)
+                    && args.len() == 2
+                    && base == args[0]
+                    && !base_nullable =>
             {
                 let b = args.pop().unwrap(); // length checked above
                 Ok(ExprSimplifyResult::Simplified(b))
             }
             number => {
-                if number == base {
+                if number == base && !base_nullable {
                     Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_one(
                         &number_datatype,
                     )?)))

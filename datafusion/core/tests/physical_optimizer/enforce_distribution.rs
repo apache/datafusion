@@ -74,7 +74,8 @@ use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlanProperties, PlanProperties, displayable,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
+    PlanProperties, ReplaceChildrenOptions, displayable,
 };
 use insta::Settings;
 
@@ -193,9 +194,10 @@ impl ExecutionPlan for SortRequiredExec {
         vec![Some(OrderingRequirements::from(self.expr.clone()))]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert_eq!(children.len(), 1);
         let child = children.pop().unwrap();
@@ -203,6 +205,16 @@ impl ExecutionPlan for SortRequiredExec {
             child,
             self.expr.clone(),
         )))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn apply_expressions(
@@ -290,13 +302,24 @@ impl ExecutionPlan for SinglePartitionMaintainsOrderExec {
         vec![false]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert_eq!(children.len(), 1);
         let child = children.pop().unwrap();
         Ok(Arc::new(Self::new(child)))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn apply_expressions(
