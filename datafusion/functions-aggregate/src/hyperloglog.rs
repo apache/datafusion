@@ -47,6 +47,8 @@ pub(crate) const NUM_REGISTERS: usize = 1_usize << DEFAULT_HLL_P;
 /// Minimum supported precision value.
 pub(crate) const HLL_P_MIN: usize = 4;
 
+// Derived constants for the default precision — used as instruction immediates
+// in hot loops to avoid loading p/q/p_mask from the struct on every iteration.
 const DEFAULT_Q: usize = 64 - DEFAULT_HLL_P;
 const DEFAULT_MASK: u64 = (1u64 << DEFAULT_HLL_P) - 1;
 
@@ -153,10 +155,7 @@ where
         self.add_hashed(hash);
     }
 
-    /// Adds a pre-computed hash value directly to the HyperLogLog.
-    ///
-    /// The hash should be computed using [`HLL_HASH_STATE`], the same hasher used
-    /// by [`Self::add`].
+    /// Adds a pre-computed hash. Hash must be produced by [`HLL_HASH_STATE`].
     #[inline(always)]
     pub(crate) fn add_hashed(&mut self, hash: u64) {
         let index = (hash & self.p_mask) as usize;
@@ -164,11 +163,10 @@ where
         self.registers[index] = self.registers[index].max(rho as u8);
     }
 
-    /// Process a slice of pre-computed hashes.
+    /// Adds a slice of pre-computed hashes. Hashes must use [`HLL_HASH_STATE`].
     pub(crate) fn add_hashed_slice(&mut self, hashes: &[u64]) {
-        // For p == DEFAULT_HLL_P, use compile-time constants so LLVM emits
-        // them as instruction immediates (same codegen as pre-refactor).
-        // For other precisions, hoist the struct fields outside the loop.
+        // Default precision: use module-level constants so LLVM emits immediates.
+        // Other precisions: hoist struct fields outside the loop.
         if self.p == DEFAULT_HLL_P {
             for &hash in hashes {
                 let index = (hash & DEFAULT_MASK) as usize;
