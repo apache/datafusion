@@ -250,6 +250,7 @@ iter_not_returning_iterator = "warn"
 iter_on_empty_collections = "warn"
 iter_on_single_items = "warn"
 iter_without_into_iter = "warn"
+large_digit_groups = "warn"
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
 large_futures = "warn"
 large_include_file = "warn"
