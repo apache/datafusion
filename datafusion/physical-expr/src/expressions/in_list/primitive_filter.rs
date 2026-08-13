@@ -62,6 +62,9 @@ pub(super) fn instantiate_primitive_filter(
         DataType::UInt64 => {
             Arc::new(PrimitiveHashSetFilter::<UInt64Type>::try_new(in_array)?)
         }
+        DataType::Decimal128(_, _) => {
+            Arc::new(PrimitiveHashSetFilter::<Decimal128Type>::try_new(in_array)?)
+        }
         // Float primitive types use ordered wrapper keys for Hash/Eq.
         DataType::Float32 => Arc::new(PrimitiveHashSetFilter::<
             Float32Type,
