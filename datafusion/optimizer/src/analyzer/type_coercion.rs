@@ -1069,6 +1069,8 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     if col_type.is_numeric()
         || col_type.is_string()
         || col_type.is_null()
+        || col_type.is_binary()
+        || col_type.is_fixed_size_binary()
         || matches!(
             col_type,
             DataType::List(_)
@@ -1109,10 +1111,31 @@ fn coerce_window_frame(
         }
         WindowFrameUnits::Rows | WindowFrameUnits::Groups => DataType::UInt64,
     };
+    // For RANGE frames on binary types, finite offsets (e.g. RANGE BETWEEN 1
+    // PRECEDING) are not supported because they require arithmetic on the
+    // order key. Free RANGE frames (only UNBOUNDED / CURRENT ROW) are fine.
+    if window_frame.units == WindowFrameUnits::Range
+        && (target_type.is_binary() || target_type.is_fixed_size_binary())
+        && (has_finite_offset(&window_frame.start_bound)
+            || has_finite_offset(&window_frame.end_bound))
+    {
+        return plan_err!(
+            "RANGE frame with finite offset is not supported for binary ORDER BY type: {target_type}"
+        );
+    }
     window_frame.start_bound =
         coerce_frame_bound(&target_type, window_frame.start_bound)?;
     window_frame.end_bound = coerce_frame_bound(&target_type, window_frame.end_bound)?;
     Ok(window_frame)
+}
+
+/// Returns true if the window frame bound is a finite offset (not UNBOUNDED
+/// or CURRENT ROW).
+fn has_finite_offset(bound: &WindowFrameBound) -> bool {
+    match bound {
+        WindowFrameBound::Preceding(v) | WindowFrameBound::Following(v) => !v.is_null(),
+        WindowFrameBound::CurrentRow => false,
+    }
 }
 
 // Support the `IsTrue` `IsNotTrue` `IsFalse` `IsNotFalse` type coercion.
