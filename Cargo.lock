@@ -2623,14 +2623,13 @@ dependencies = [
  "crc32fast",
  "criterion",
  "datafusion",
- "datafusion-catalog",
  "datafusion-common",
- "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions",
  "datafusion-functions-aggregate",
  "datafusion-functions-aggregate-common",
  "datafusion-functions-nested",
+ "datafusion-session",
  "log",
  "num-traits",
  "percent-encoding",
@@ -2648,7 +2647,6 @@ name = "datafusion-sql"
 version = "54.1.0"
 dependencies = [
  "arrow",
- "bigdecimal",
  "chrono",
  "ctor",
  "datafusion-common",

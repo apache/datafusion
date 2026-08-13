@@ -52,7 +52,6 @@ recursive_protection = ["dep:recursive", "dep:stacker"]
 # They are used for testing purposes only, so they are in the dev-dependencies section.
 [dependencies]
 arrow = { workspace = true }
-bigdecimal = { workspace = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true, features = ["sql"] }
 datafusion-expr = { workspace = true, features = ["sql"] }
