@@ -32,7 +32,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int64Array, RecordBatch};
+use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 
 use crate::parquet::Unit::RowGroup;
@@ -583,5 +583,104 @@ async fn dynamic_rg_pruning_fires_for_multi_column_sort_leading_tied() {
         "with the leading key tied everywhere, the secondary key must \
          drive RG reorder + pruning; pruned={pruned}\n{}",
         output.description(),
+    );
+}
+
+/// Build the #24352 fixture: four 2048-row row groups where the filter column
+/// (`search_phrase`) differs from the sort column (`event_time`), and one row
+/// group (the second) has an empty post-predicate selection invisible to
+/// statistics — its only small `event_time` (50) sits on the row whose
+/// `search_phrase` is `''`.
+///
+///   RG 0: event_time = i*1000                       (i in 0..2048)
+///   RG 1: i=2048 -> (50, ''), else (20000+i, 'p'||i) (i in 2048..4096)
+///   RG 2: event_time = 100 + (i-4096)               (i in 4096..6144)
+///   RG 3: event_time = 5000 + (i-6144)              (i in 6144..8192)
+fn build_q26_batches(schema: &Arc<Schema>) -> Vec<RecordBatch> {
+    (0..4i64)
+        .map(|rg| {
+            let mut event_time = Vec::with_capacity(2048);
+            let mut search_phrase: Vec<String> = Vec::with_capacity(2048);
+            for j in 0..2048i64 {
+                let i = rg * 2048 + j;
+                let (et, sp) = if i < 2048 {
+                    (i * 1000, format!("p{i}"))
+                } else if i < 4096 {
+                    if i == 2048 {
+                        (50, String::new())
+                    } else {
+                        (20000 + i, format!("p{i}"))
+                    }
+                } else if i < 6144 {
+                    (100 + (i - 4096), format!("p{i}"))
+                } else {
+                    (5000 + (i - 6144), format!("p{i}"))
+                };
+                event_time.push(et);
+                search_phrase.push(sp);
+            }
+            RecordBatch::try_new(
+                Arc::clone(schema),
+                vec![
+                    Arc::new(Int64Array::from(event_time)) as ArrayRef,
+                    Arc::new(StringArray::from(search_phrase)) as ArrayRef,
+                ],
+            )
+            .unwrap()
+        })
+        .collect()
+}
+
+/// Regression for #24352: with `pushdown_filters` + TopK dynamic filter, a row
+/// group whose post-predicate selection is empty is silently finished by
+/// arrow-rs without handing back a reader. Before `rg_plan` was synced to the
+/// decoder frontier (`peek_next_row_group`), it trailed the decoder by one, so
+/// a later runtime prune rebuilt the decoder from a stale plan and re-read an
+/// already-delivered row group — the duplicate rows displaced the true top-k.
+#[tokio::test]
+async fn topk_pushdown_does_not_reread_delivered_row_group() {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("event_time", DataType::Int64, false),
+        Field::new("search_phrase", DataType::Utf8, false),
+    ]));
+    let batches = build_q26_batches(&schema);
+
+    // `RowGroup(2048)` writes one row group per 2048-row batch (4 RGs) and
+    // enables `pushdown_filters`, required for the dynamic filter to reach the
+    // parquet scan.
+    let mut ctx = ContextWithParquet::with_custom_data(
+        Scenario::Int,
+        RowGroup(2048),
+        Arc::clone(&schema),
+        batches,
+    )
+    .await;
+
+    let output = ctx
+        .query(
+            "SELECT search_phrase FROM t \
+             WHERE search_phrase <> '' ORDER BY event_time LIMIT 10",
+        )
+        .await;
+
+    // `search_phrase` is unique per row, so any repeated value is the same
+    // source row emitted twice. The correct answer is the 10 smallest-
+    // `event_time` non-empty phrases, matching DuckDB / pushdown-off.
+    assert_eq!(output.result_rows, 10, "{}", output.description());
+    let formatted = output.pretty_results();
+    for p in [
+        "p0", "p4096", "p4097", "p4098", "p4099", "p4100", "p4101", "p4102", "p4103",
+        "p4104",
+    ] {
+        assert!(
+            formatted.contains(&format!("| {p} ")),
+            "missing {p} from top-k; got:\n{formatted}",
+        );
+    }
+    // The bug emitted p4096 twice (and dropped p4101..=p4104); assert no dup.
+    assert_eq!(
+        formatted.matches("| p4096 ").count(),
+        1,
+        "p4096 emitted more than once — rg_plan/decoder desync; got:\n{formatted}",
     );
 }
