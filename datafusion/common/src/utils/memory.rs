@@ -503,6 +503,30 @@ mod record_batch_tests {
         );
     }
 
+    fn assert_recursive_shared_child_memory(
+        name: &str,
+        first: ArrayRef,
+        second: ArrayRef,
+        shared_memory: usize,
+    ) {
+        let first_memory = first.get_array_memory_size();
+        let second_memory = second.get_array_memory_size();
+        let first_batch = RecordBatch::try_from_iter(vec![(name, first)]).unwrap();
+        let second_batch = RecordBatch::try_from_iter(vec![(name, second)]).unwrap();
+        let mut counter = RecordBatchMemoryCounter::new();
+
+        assert_eq!(
+            counter.count_batch_with_array_overhead(&first_batch),
+            first_memory,
+            "{name}: first batch"
+        );
+        assert_eq!(
+            counter.count_batch_with_array_overhead(&second_batch),
+            second_memory - shared_memory,
+            "{name}: shared child"
+        );
+    }
+
     #[test]
     fn test_record_batch_memory_counter_deduplicates_recursive_shared_children() {
         let shared_child: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
@@ -636,22 +660,7 @@ mod record_batch_tests {
         ];
 
         for (name, first, second, shared_memory) in arrays {
-            let first_batch =
-                RecordBatch::try_from_iter(vec![(name, first.clone())]).unwrap();
-            let second_batch =
-                RecordBatch::try_from_iter(vec![(name, second.clone())]).unwrap();
-            let mut counter = RecordBatchMemoryCounter::new();
-
-            assert_eq!(
-                counter.count_batch_with_array_overhead(&first_batch),
-                first.get_array_memory_size(),
-                "{name}: first batch"
-            );
-            assert_eq!(
-                counter.count_batch_with_array_overhead(&second_batch),
-                second.get_array_memory_size() - shared_memory,
-                "{name}: shared child"
-            );
+            assert_recursive_shared_child_memory(name, first, second, shared_memory);
         }
     }
 
