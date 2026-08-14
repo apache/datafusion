@@ -35,10 +35,10 @@ use crate::windows::{
     window_equivalence_properties,
 };
 use crate::{
-    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    ExecutionPlanProperties, InputDistributionRequirements, InputOrderMode,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
-    check_if_same_properties,
+    ChildrenPropertiesMode, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
+    ExecutionPlan, ExecutionPlanProperties, InputDistributionRequirements,
+    InputOrderMode, PlanProperties, RecordBatchStream, ReplaceChildrenOptions,
+    SendableRecordBatchStream, Statistics, WindowExpr, validate_child_count,
 };
 
 use arrow::compute::take_record_batch;
@@ -463,30 +463,49 @@ impl ExecutionPlan for BoundedWindowAggExec {
         vec![true]
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => {
+                let new = BoundedWindowAggExec::try_new(
+                    self.window_expr.clone(),
+                    Arc::clone(&children[0]),
+                    self.input_order_mode.clone(),
+                    self.can_repartition,
+                )?
+                .with_state_observer(self.state_observer.clone())?;
+                Ok(Arc::new(new))
+            }
+        }
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        let new = BoundedWindowAggExec::try_new(
-            self.window_expr.clone(),
-            Arc::clone(&children[0]),
-            self.input_order_mode.clone(),
-            self.can_repartition,
-        )?
-        .with_state_observer(self.state_observer.clone())?;
-        Ok(Arc::new(new))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -1157,14 +1176,9 @@ pub struct BoundedWindowAggStream {
     /// The record batch executor receives as input (i.e. the columns needed
     /// while calculating aggregation results).
     input_buffer: RecordBatch,
-    /// We separate `input_buffer` based on partitions (as
-    /// determined by PARTITION BY columns) and store them per partition
-    /// in `partition_batches`. We use this variable when calculating results
-    /// for each window expression. This enables us to use the same batch for
-    /// different window expressions without copying.
-    // Note that we could keep record batches for each window expression in
-    // `PartitionWindowAggStates`. However, this would use more memory (as
-    // many times as the number of window expressions).
+    /// Each partition's rows, accumulated across input batches. All window
+    /// expressions calculate their results against these shared rows without
+    /// copying.
     partition_buffers: PartitionBatches,
     /// An executor can run multiple window expressions if the PARTITION BY
     /// and ORDER BY sections are same. We keep state of the each window
@@ -1240,13 +1254,13 @@ impl BoundedWindowAggStream {
     /// results (as determined by window frame boundaries and number of results generated).
     // For instance, if first `n` (not necessarily same with `n_out`) elements are no longer needed to
     // calculate window expression result (outside the window frame boundary) we retract first `n` elements
-    // from `self.partition_batches` in corresponding partition.
+    // from the corresponding partition's batch in `self.partition_buffers`.
     // For instance, if `n_out` number of rows are calculated, we can remove
     // first `n_out` rows from `self.input_buffer`.
     fn prune_state(&mut self, n_out: usize) -> Result<()> {
         // Prune `self.window_agg_states`:
         self.prune_out_columns();
-        // Prune `self.partition_batches`:
+        // Prune `self.partition_buffers`:
         self.prune_partition_batches();
         // Prune `self.input_buffer`:
         self.prune_input_batch(n_out)?;
@@ -1394,51 +1408,73 @@ impl BoundedWindowAggStream {
         }
     }
 
-    /// Prunes the sections of the record batch (for each partition)
-    /// that we no longer need to calculate the window function result.
+    /// Removes partitions that have ended. For the remaining partitions,
+    /// drops buffered rows that no window expression will need again.
     fn prune_partition_batches(&mut self) {
+        // Check that per-state and per-partition end-flags are consistent;
+        // otherwise, the pruning code below might produce inconsistent state.
+        #[cfg(debug_assertions)]
+        for window_agg_state in self.window_agg_states.iter() {
+            for (partition_row, WindowState { state, .. }) in window_agg_state.iter() {
+                debug_assert_eq!(
+                    state.is_end, self.partition_buffers[partition_row].is_end,
+                    "window state's recorded end flag is out of sync with its partition"
+                );
+            }
+        }
+
         // Remove partitions which we know already ended (is_end flag is true).
         // Since the retain method preserves insertion order, we still have
         // ordering in between partitions after removal.
         self.partition_buffers
             .retain(|_, partition_batch_state| !partition_batch_state.is_end);
-
-        // The data in `self.partition_batches` is used by all window expressions.
-        // Therefore, when removing from `self.partition_batches`, we need to remove
-        // from the earliest range boundary among all window expressions. Variable
-        // `n_prune_each_partition` fill the earliest range boundary information for
-        // each partition. This way, we can delete the no-longer-needed sections from
-        // `self.partition_batches`.
-        // For instance, if window frame one uses [10, 20] and window frame two uses
-        // [5, 15]; we only prune the first 5 elements from the corresponding record
-        // batch in `self.partition_batches`.
-
-        // Calculate how many elements to prune for each partition batch
-        let mut n_prune_each_partition = HashMap::new();
+        // Likewise, drop per-window-expression state for ended partitions.
         for window_agg_state in self.window_agg_states.iter_mut() {
             window_agg_state.retain(|_, WindowState { state, .. }| !state.is_end);
-            for (partition_row, WindowState { state: value, .. }) in window_agg_state {
+        }
+
+        // Calculate how many rows to prune from each partition's batch. For a
+        // single window expression, rows before min(window_frame_range.start,
+        // last_calculated_index) are prunable: their results are already
+        // calculated, and frame boundaries never move backwards, so no future
+        // frame can include them. All window expressions share the partition
+        // batch, so a row can only be pruned once every expression is done with
+        // it: the count to prune is the minimum across expressions. A partition
+        // missing from the map has nothing to prune.
+        let mut n_prune_each_partition = HashMap::new();
+        if let Some((first, rest)) = self.window_agg_states.split_first() {
+            // First window expression seeds the prune-count map
+            for (partition_row, WindowState { state, .. }) in first.iter() {
                 let n_prune =
-                    min(value.window_frame_range.start, value.last_calculated_index);
-                if let Some(current) = n_prune_each_partition.get_mut(partition_row) {
-                    if n_prune < *current {
-                        *current = n_prune;
-                    }
-                } else {
+                    min(state.window_frame_range.start, state.last_calculated_index);
+                if n_prune > 0 {
                     n_prune_each_partition.insert(partition_row.clone(), n_prune);
                 }
             }
+            // Take the per-partition min of the prune-count for each
+            // additional window expression
+            for window_agg_state in rest {
+                n_prune_each_partition.retain(|partition_row, current| {
+                    let Some(WindowState { state, .. }) =
+                        window_agg_state.get(partition_row)
+                    else {
+                        return false;
+                    };
+                    let n_prune =
+                        min(state.window_frame_range.start, state.last_calculated_index);
+                    *current = min(*current, n_prune);
+                    *current > 0
+                });
+            }
         }
 
-        // Retract no longer needed parts during window calculations from partition batch:
+        // Drop the prunable prefix of each partition's buffered batch:
         for (partition_row, n_prune) in n_prune_each_partition.iter() {
+            debug_assert!(
+                *n_prune > 0,
+                "prune-count map must only contain positive entries"
+            );
             let pb_state = &mut self.partition_buffers[partition_row];
-            pb_state.n_out_row = 0;
-
-            // If there is nothing to prune, leave the batch as-is
-            if *n_prune == 0 {
-                continue;
-            }
 
             let batch = &pb_state.record_batch;
             pb_state.record_batch = batch.slice(*n_prune, batch.num_rows() - n_prune);
@@ -1475,23 +1511,29 @@ impl BoundedWindowAggStream {
         // field of `WindowAggState`. Given how many rows are emitted, we remove
         // these sections from state.
         for partition_window_agg_states in self.window_agg_states.iter_mut() {
-            // Remove `n_out` entries from the `out_col` field of `WindowAggState`.
-            // `n_out` is stored in `self.partition_buffers` for each partition.
-            // If `is_end` is set, directly remove them; this shrinks the hash map.
+            // If `is_end` is set, directly remove the entry; this shrinks the
+            // hash map.
             partition_window_agg_states
                 .retain(|_, partition_batch_state| !partition_batch_state.state.is_end);
-            for (
-                partition_key,
-                WindowState {
-                    state: WindowAggState { out_col, .. },
-                    ..
-                },
-            ) in partition_window_agg_states
-            {
-                let partition_batch = &mut self.partition_buffers[partition_key];
-                let n_to_del = partition_batch.n_out_row;
-                let n_to_keep = out_col.len() - n_to_del;
-                *out_col = out_col.slice(n_to_del, n_to_keep);
+        }
+        // Only partitions that emitted rows since the previous pruning pass
+        // have output columns to shrink. Their emitted-row counts are
+        // consumed and reset here, so partitions that emitted nothing keep
+        // a count of zero and are passed over without any hash lookups.
+        for (partition_key, partition_batch) in self.partition_buffers.iter_mut() {
+            let n_emitted = partition_batch.n_out_row;
+            if n_emitted == 0 {
+                continue;
+            }
+            partition_batch.n_out_row = 0;
+            for partition_window_agg_states in self.window_agg_states.iter_mut() {
+                if let Some(WindowState { state, .. }) =
+                    partition_window_agg_states.get_mut(partition_key)
+                {
+                    let out_col = &mut state.out_col;
+                    let n_to_keep = out_col.len() - n_emitted;
+                    *out_col = out_col.slice(n_emitted, n_to_keep);
+                }
             }
         }
     }
@@ -1599,6 +1641,7 @@ mod tests {
         WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
     };
     use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_functions_aggregate::sum::sum_udaf;
     use datafusion_functions_window::nth_value::last_value_udwf;
     use datafusion_functions_window::nth_value::nth_value_udwf;
     use datafusion_physical_expr::expressions::{Column, Literal, col};
@@ -2034,6 +2077,108 @@ mod tests {
         | 2 | 2    | 2             | 1             |
         | 3 | 3    | 3             | 2             |
         +---+------+---------------+---------------+
+        ");
+        Ok(())
+    }
+
+    // In `Linear` mode, a partition may receive no new rows for several
+    // input batches while other partitions keep growing. Once all of a
+    // partition's buffered rows have results, the evaluation sweep skips
+    // it until it receives rows again, so this test drives a partition
+    // through quiet batches and then resumes it: the results after the
+    // gap must continue from the retained accumulator state. Both frames
+    // are causal, so results finalize in the batch their row arrives in
+    // and the quiet partition is fully calculated while it waits.
+    #[tokio::test]
+    async fn bounded_window_linear_quiet_partition_resume() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("pk", DataType::UInt64, false),
+            Field::new("ts", DataType::UInt64, false),
+        ]));
+        let make_batch = |rows: &[(u64, u64)]| -> Result<RecordBatch> {
+            let mut pk = UInt64Builder::with_capacity(rows.len());
+            let mut ts = UInt64Builder::with_capacity(rows.len());
+            for (p, t) in rows {
+                pk.append_value(*p);
+                ts.append_value(*t);
+            }
+            Ok(RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(pk.finish()), Arc::new(ts.finish())],
+            )?)
+        };
+        // `ts` ascends globally; partition 0 is absent from the middle batches.
+        let batches = vec![
+            make_batch(&[(0, 0), (0, 1), (1, 2)])?,
+            make_batch(&[(1, 3), (1, 4)])?,
+            make_batch(&[(1, 5)])?,
+            make_batch(&[(0, 6), (1, 7)])?,
+        ];
+        let memory_exec =
+            TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+
+        let partition_by = vec![col("pk", &schema)?];
+        let order_by = [PhysicalSortExpr {
+            expr: col("ts", &schema)?,
+            options: SortOptions::default(),
+        }];
+        // A running COUNT (plain aggregate) and a SUM over the previous and
+        // current row (sliding aggregate).
+        let count_expr = create_window_expr(
+            &WindowFunctionDefinition::AggregateUDF(count_udaf()),
+            "count".to_string(),
+            &[col("ts", &schema)?],
+            &partition_by,
+            &order_by,
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            )),
+            Arc::clone(&schema),
+            false,
+            false,
+            None,
+        )?;
+        let sum_expr = create_window_expr(
+            &WindowFunctionDefinition::AggregateUDF(sum_udaf()),
+            "sum".to_string(),
+            &[col("ts", &schema)?],
+            &partition_by,
+            &order_by,
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))),
+                WindowFrameBound::CurrentRow,
+            )),
+            Arc::clone(&schema),
+            false,
+            false,
+            None,
+        )?;
+        let physical_plan = BoundedWindowAggExec::try_new(
+            vec![count_expr, sum_expr],
+            memory_exec,
+            InputOrderMode::Linear,
+            true,
+        )
+        .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>)?;
+
+        let batches = collect(physical_plan.execute(0, task_context())?).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+-------+-----+
+        | pk | ts | count | sum |
+        +----+----+-------+-----+
+        | 0  | 0  | 1     | 0   |
+        | 0  | 1  | 2     | 1   |
+        | 1  | 2  | 1     | 2   |
+        | 1  | 3  | 2     | 5   |
+        | 1  | 4  | 3     | 7   |
+        | 1  | 5  | 4     | 9   |
+        | 0  | 6  | 3     | 7   |
+        | 1  | 7  | 5     | 12  |
+        +----+----+-------+-----+
         ");
         Ok(())
     }

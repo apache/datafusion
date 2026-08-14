@@ -17,6 +17,7 @@
 
 //! A simplified [`TableProvider`] for streaming partitioned datasets
 
+use std::future::ready;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
@@ -31,6 +32,7 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
+use futures::future::BoxFuture;
 use log::debug;
 
 use crate::{Session, TableProvider};
@@ -121,7 +123,38 @@ impl TableProvider for StreamingTable {
         TableType::View
     }
 
-    async fn scan(
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        projection: Option<&'life2 Vec<usize>>,
+        filters: &'life3 [Expr],
+        limit: Option<usize>,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        'life3: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.scan_boxed(state, projection, filters, limit)
+    }
+}
+
+impl StreamingTable {
+    fn scan_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a Vec<usize>>,
+        filters: &'a [Expr],
+        limit: Option<usize>,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(ready(self.scan_inner(state, projection, filters, limit)))
+    }
+
+    fn scan_inner(
         &self,
         state: &dyn Session,
         projection: Option<&Vec<usize>>,
