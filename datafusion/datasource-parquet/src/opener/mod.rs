@@ -1471,7 +1471,10 @@ impl RowGroupsPrunedParquetOpen {
             // drops row groups without slicing that selection to match, so record
             // whether a selection is present and disable runtime pruning below
             // when it is (mirroring `reorder_by_statistics`, which also bails when
-            // a row selection is present).
+            // a row selection is present). The proper fix that keeps pruning
+            // under a live selection is tracked in
+            // https://github.com/apache/arrow-rs/issues/10624 /
+            // https://github.com/apache/datafusion/issues/24358.
             let has_row_selection = prepared_access_plan.row_selection.is_some();
             let rg_plan: VecDeque<RgPlanEntry> = prepared_access_plan
                 .row_group_indexes

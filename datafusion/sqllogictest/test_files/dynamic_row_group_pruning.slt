@@ -195,22 +195,23 @@ RESET datafusion.optimizer.enable_dynamic_filter_pushdown;
 statement ok
 RESET datafusion.optimizer.enable_topk_dynamic_filter_pushdown;
 
-# Regression test for #24355: the runtime row-group pruner rebuilds the decoder
-# via `into_builder().with_row_groups(...)`, which drops row groups without
-# slicing the carried page-index `RowSelection` to match — a dropped RG's
-# selectors are then applied to the next surviving RG. Layout (RG size 100):
+# Regression test for a scan where two pruning mechanisms are live at once:
+# page-index pruning leaves an intra-row-group `RowSelection`, and a TopK
+# dynamic filter prunes row groups at runtime. The property under test is that
+# a `WHERE a >= 50 ORDER BY b ASC LIMIT 5` query returns the correct top-5 by
+# `b` while the dynamic predicate prunes a row group during the application of
+# multiple predicates. Layout (RG size 100):
 #   RG 0: b=1000..1099, a=100..199  (a>=50 keeps all)
 #   RG 1: b=2000..2099, a=0..99     (a>=50 keeps rows 50..99 — page-index prunes
 #                                     the first 5 pages, leaving `skip 50, select 50`)
 #   RG 2: b=3000..3099, a=100..199  (keeps all)
 #   RG 3: b=0..99,      a=100..199  (keeps all)
-# `ORDER BY b ASC LIMIT 5` tightens the TopK threshold; the runtime pruner drops
-# RG 1 and RG 2, rebuilds with row_groups=[3], but the unsliced `skip 50,
-# select 50` is applied to RG 3 — dropping b=0..49, which is the correct answer.
-# Without the fix (#24355) this returns 50..54; with it the pruner is disabled
-# while a row selection is live, so the answer is correct.
+# The correct top-5 by `b` (0..4) lives entirely in RG 3.
 # `data_page_row_count_limit`/`write_batch_size` force multiple pages per RG so
-# page-index pruning can produce an intra-RG selection.
+# page-index pruning can produce the intra-RG selection.
+# Tracking issue for the behavior change (keeping both mechanisms):
+# https://github.com/apache/arrow-rs/issues/10624 /
+# https://github.com/apache/datafusion/issues/24358
 statement ok
 set datafusion.execution.target_partitions = 1;
 
@@ -248,7 +249,7 @@ STORED AS PARQUET
 LOCATION 'test_files/scratch/dynamic_row_group_pruning/rgsel.parquet';
 
 # The correct top-5 by `b` among rows with `a >= 50` is b = 0..4 (they live in
-# RG 3, all of whose rows satisfy `a >= 50`). The bug returns 50..54.
+# RG 3, all of whose rows satisfy `a >= 50`).
 query I
 SELECT b FROM rgsel WHERE a >= 50 ORDER BY b ASC LIMIT 5;
 ----
@@ -257,6 +258,23 @@ SELECT b FROM rgsel WHERE a >= 50 ORDER BY b ASC LIMIT 5;
 2
 3
 4
+
+# The same query without filter pushdown never engages the runtime pruner, so
+# its answer is the ground truth the pushdown path above must match.
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+query I
+SELECT b FROM rgsel WHERE a >= 50 ORDER BY b ASC LIMIT 5;
+----
+0
+1
+2
+3
+4
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
 
 statement ok
 drop table rgsel;

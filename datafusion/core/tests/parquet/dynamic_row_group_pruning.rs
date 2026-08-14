@@ -297,12 +297,18 @@ fn build_five_thousand_row_rgs(schema: &Arc<Schema>) -> Vec<RecordBatch> {
         .collect()
 }
 
-/// Regression test for #24355: when a page-index `RowSelection` is live,
-/// the runtime dynamic row-group pruner is intentionally **not built**, so
-/// its `into_builder` rebuild can never drop a row group without slicing the
-/// carried selection (which would silently return wrong rows). Correctness is
-/// bought at the cost of the dynamic-pruning optimization for this scan; the
-/// proper fix that keeps both is tracked upstream in arrow-rs #10624 / #24358.
+/// Regression test for <https://github.com/apache/datafusion/issues/24355>:
+/// when a page-index `RowSelection` is live, the runtime dynamic row-group
+/// pruner is intentionally **not built**, so its `into_builder` rebuild can
+/// never drop a row group without slicing the carried selection (which would
+/// silently return wrong rows). Correctness is bought at the cost of the
+/// dynamic-pruning optimization for this scan.
+///
+/// The behavior asserted below (pruner disabled →
+/// `row_groups_pruned_dynamic_filter == 0`) is expected to change once the
+/// proper upstream fix lands, which keeps both mechanisms:
+/// <https://github.com/apache/arrow-rs/issues/10624> (tracked on the
+/// DataFusion side in <https://github.com/apache/datafusion/issues/24358>).
 ///
 /// Layout: 5 RGs × 1000 rows, with `data_page_row_count_limit=100` so
 /// each RG has 10 pages of 100 rows.
