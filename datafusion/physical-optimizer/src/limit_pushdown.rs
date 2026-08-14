@@ -86,11 +86,10 @@ pub struct LimitPushdown {}
 
 /// State carried through [`LimitPushdown`] while it pushes limits down the plan.
 ///
-/// `pending` keeps the semantic requirement's scope separate from its numeric
-/// payload. `Some(LimitScope::Local)` means a per-output-partition cap is
-/// still owed, and `Some(LimitScope::Global)` means a subtree-wide cap is
-/// still owed. When `pending` is `None`, no semantic enforcement remains
-/// outstanding; a retained `fetch` is a descendant early-stop hint only.
+/// `fetch` and `skip` hold the limit currently being pushed down. `pending`
+/// says whether a local or global limit still has to be enforced. After it
+/// becomes `None`, `fetch` may still be copied to children to help them stop
+/// early, but it is no longer responsible for correctness.
 ///
 /// [`LimitPushdown`]: crate::limit_pushdown::LimitPushdown
 #[derive(Default, Clone, Debug)]
@@ -159,9 +158,9 @@ pub fn pushdown_limit_helper(
     if global_state.pending == Some(LimitScope::Local)
         && pushdown_plan.output_partitioning().partition_count() == 1
     {
-        // Local and global scope are equivalent with one output partition, but
-        // retain the global scope in case recursion later exposes multi-partition
-        // children, including through extension combiners.
+        // A local limit on one output partition also limits the total output.
+        // Treat it as global before descending because this node may have
+        // multi-partition children.
         global_state.pending = Some(LimitScope::Global);
     }
 
@@ -169,24 +168,11 @@ pub fn pushdown_limit_helper(
         && global_limit.skip() == 0
         && global_limit.fetch().is_none()
     {
-        // A `GlobalLimitExec` with `skip == 0` and `fetch == None` is a pure
-        // pass-through: it skips no rows and emits every input row, so the node
-        // itself carries no semantics and removing it cannot change the result.
-        //
-        // The inherited `pending` state must be preserved, not cleared: the
-        // still-owed requirement (which may have been promoted from
-        // `LimitScope::Local` to `LimitScope::Global` at a one-output-partition
-        // boundary) must continue to be enforced further down. The point of this
-        // short-circuit is to keep peeling such wrappers while carrying that
-        // state unchanged.
-        //
-        // We deliberately do not fall through to the generic `GlobalLimitExec`
-        // handling below: that branch exists to absorb a real `skip`/`fetch`
-        // payload into the carried state, whereas this node has no payload to
-        // absorb. It would also unconditionally re-assert
-        // `pending = Some(LimitScope::Global)` (and fold in
-        // `required_ordering()`), which could turn an already-satisfied or
-        // absent requirement into a forced global materialization further down.
+        // A `GlobalLimitExec` with no skip and no fetch enforces nothing, so
+        // remove it and keep the carried state unchanged. General limit handling
+        // would mark a global limit as pending even when none is needed. Keep the
+        // local-to-global promotion above: it remains valid because this node has
+        // one output partition.
         return Ok((
             Transformed {
                 data: Arc::clone(global_limit.input()),
@@ -200,10 +186,10 @@ pub fn pushdown_limit_helper(
     if global_state.pending == Some(LimitScope::Global)
         && pushdown_plan.output_partitioning().partition_count() > 1
     {
-        // This must precede generic `plan.fetch()` handling: a fetch on multiple
-        // outputs cannot by itself prove a global cap, because the `ExecutionPlan`
-        // trait does not formally encode scope. Retain it only as a per-partition
-        // hint; an existing smaller hint does not imply a smaller global cap.
+        // Handle this before the generic `fetch` case: on a multi-partition plan,
+        // `fetch` limits partitions separately and cannot limit their combined output.
+        // Keep it for early stopping, then combine the partitions to enforce the
+        // global limit.
         let hint = global_state.fetch.map(|fetch| fetch + global_state.skip);
         if let Some(hint) = hint {
             let hint = pushdown_plan.fetch().map_or(hint, |fetch| fetch.min(hint));
@@ -279,17 +265,11 @@ pub fn pushdown_limit_helper(
         ));
     }
 
-    // Merge a fetch already present on a non-limit operator into global state.
-    //
-    // A `fetch` on a non-limit operator is an early-stop bound on the
-    // operator's own output, and the `ExecutionPlan` trait exposes it without
-    // formally encoding scope, so it can only ever prove a per-partition cap.
-    // It can therefore satisfy a still-pending requirement only when no skip
-    // is owed and the existing bound is at least as tight as the owed fetch:
-    // an existing `fetch = 10` does not satisfy an owed `fetch = 5`, and if
-    // the operator cannot absorb a tighter fetch via `with_fetch`, dropping
-    // the pending requirement here would silently lose the global `LIMIT`.
-    // The numeric early-stop bound is still merged unconditionally below.
+    // An existing `fetch` satisfies the carried limit only if there is no
+    // offset and it is no larger than the requested fetch. For example,
+    // `fetch=10` does not enforce `LIMIT 5`; if the operator cannot be changed to
+    // `fetch=5`, the explicit limit must remain. Still combine the fetch values
+    // below so descendants can use the tighter value to stop early.
     if let Some(existing_fetch) = pushdown_plan.fetch() {
         if global_state.skip == 0
             && let Some(required_fetch) = global_state.fetch
@@ -326,8 +306,8 @@ pub fn pushdown_limit_helper(
             // continue:
             Ok((Transformed::no(pushdown_plan), global_state))
         } else if let Some(plan_with_fetch) = pushdown_plan.with_fetch(skip_and_fetch) {
-            // This operator combines input partitions. Apply the carried fetch when
-            // supported. If it cannot, only a pending requirement needs an explicit limit.
+            // This partition-combining operator accepted `fetch`, so the fetch now
+            // bounds its combined output.
             let mut new_plan = plan_with_fetch;
             // Execution plans can't (yet) handle skip, so if we have one,
             // we still need to add a global limit.
@@ -340,7 +320,7 @@ pub fn pushdown_limit_helper(
             global_state.pending = None;
             Ok((Transformed::yes(new_plan), global_state))
         } else if global_state.pending.is_none() {
-            // No semantic requirement remains pending, so do not add another limit.
+            // The required limit is already enforced, so do not add another one.
             Ok((Transformed::no(pushdown_plan), global_state))
         } else {
             let new_plan = add_limit(pushdown_plan, global_state.skip, global_fetch);
@@ -348,8 +328,8 @@ pub fn pushdown_limit_helper(
             Ok((Transformed::yes(new_plan), global_state))
         }
     } else {
-        // This operator blocks pushdown. If no semantic requirement remains pending,
-        // apply only an optional fetch hint; otherwise enforce the requirement here.
+        // This operator stops limit pushdown. If the limit is already enforced, try
+        // only to add a fetch for early stopping; otherwise enforce the limit here.
 
         // There's no push down, change fetch & skip to default values:
         let global_skip = global_state.skip;
@@ -460,9 +440,10 @@ pub(crate) fn pushdown_limits(
         (new_node, global_state) = pushdown_limit_helper(new_node.data, global_state)?;
     }
 
-    // No semantic enforcement remains pending for a child subtree. Descendants
-    // may inherit the `fetch` budget for early stopping, but `OFFSET` must not
-    // cross this point or combine with nested limits.
+    // Once the limit is enforced, clear `skip` before visiting children so it
+    // cannot combine with a nested limit and skip rows twice. Each child may
+    // receive the same `fetch` for early stopping; those values are not added
+    // together because the limit has already been enforced above.
     if global_state.pending.is_none() {
         global_state.skip = 0;
     }
@@ -509,10 +490,9 @@ fn add_limit(
     }
 }
 
-/// Materializes a global requirement at a single-partition boundary. A fetch on
-/// a multi-partition plan cannot by itself prove a global cap, because the
-/// `ExecutionPlan` trait does not formally encode scope. It is retained only as
-/// a per-partition hint, so a partition combiner must satisfy the requirement.
+/// Enforces one limit across all output partitions. Multiple partitions are
+/// merged first, preserving order when required, because a fetch on each
+/// partition cannot limit their combined output.
 fn materialize_global_requirement(
     pushdown_plan: Arc<dyn ExecutionPlan>,
     skip: usize,
