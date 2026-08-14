@@ -1,2 +1,26 @@
-name = "parquet_row_filter_skip"
-description = "Micro-benchmark for the per-row-group fully-matched RowFilter skip on Parquet scans (apache/datafusion#23696). Builds a clustered Parquet file whose fixed-width string key is monotonically increasing, so each row group holds a disjoint sorted range. With filter pushdown enabled, a low-selectivity range predicate leaves the first row group straddling and the rest fully matched by statistics, so the decoder can skip the per-row RowFilter (and decoding the filter column) on the fully-matched run. Size the data with PRED_ROWS and the row-group size with RG_SIZE."
+description = "Micro-benchmark for the per-row-group fully-matched RowFilter skip on Parquet scans (apache/datafusion#23696). Builds a clustered Parquet file whose fixed-width string key is monotonically increasing, so each row group holds a disjoint sorted range. With filter pushdown enabled, a low-selectivity range predicate leaves the first row group straddling and the rest fully matched by statistics, so the decoder can skip the per-row RowFilter (and decoding the filter column) on the fully-matched run. The control subgroup runs the same predicate over a scrambled key, where no row group is ever fully matched, to measure the overhead of the check when it cannot fire. Size the data with PRED_ROWS and the row-group size with RG_SIZE."
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[[options]]
+name = "rows"
+short = "r"
+env = "PRED_ROWS"
+default = "10000000"
+values = ["10000000", "..."]
+help = "Sets the number of rows in the generated Parquet datasets (must be greater than 100000, the fixed predicate cutoff)."
+
+[[options]]
+name = "rg-size"
+env = "RG_SIZE"
+default = "1000000"
+values = ["1000000", "..."]
+help = "Sets the Parquet max_row_group_size used when writing the generated datasets."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- parquet_row_filter_skip"
+description = "Run every subgroup with the default 10M rows and 1M-row row groups."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- parquet_row_filter_skip --subgroup skip --rg-size 100000"
+description = "Run only the skip subgroup with 100 row groups instead of 10."
