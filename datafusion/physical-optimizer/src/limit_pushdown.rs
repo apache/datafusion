@@ -78,6 +78,7 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 /// This rule inspects [`ExecutionPlan`]'s and pushes down the fetch limit from
 /// the parent to the child if applicable.
@@ -301,6 +302,30 @@ pub fn pushdown_limit_helper(
     let skip_and_fetch = Some(global_fetch + global_state.skip);
 
     if pushdown_plan.supports_limit_pushdown() {
+        // A pending limit cannot be replicated to every child of a multi-child
+        // node: each child would enforce it and their merged output could
+        // exceed it. Only a unary node can pass it through transparently, plus
+        // `UnionExec` with `Local` (each output partition comes from one child).
+        let can_delegate_pending = global_state.pending.is_none()
+            || pushdown_plan.children().len() <= 1
+            || (global_state.pending == Some(LimitScope::Local)
+                && pushdown_plan.is::<UnionExec>());
+        if !can_delegate_pending {
+            // Enforce the limit at this node's output, then let children stop
+            // early with the same fetch hint.
+            let new_plan = if global_state.skip > 0 {
+                add_limit(pushdown_plan, global_state.skip, global_fetch)
+            } else if let Some(plan_with_fetch) = pushdown_plan.with_fetch(skip_and_fetch)
+            {
+                plan_with_fetch
+            } else {
+                add_limit(pushdown_plan, 0, global_fetch)
+            };
+            global_state.fetch = skip_and_fetch;
+            global_state.skip = 0;
+            global_state.pending = None;
+            return Ok((Transformed::yes(new_plan), global_state));
+        }
         if !combines_input_partitions(&pushdown_plan) {
             // We have information in the global state and the plan pushes down,
             // continue:
