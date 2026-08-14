@@ -316,13 +316,7 @@ impl FileSource for CsvSource {
             &Arc<dyn datafusion_physical_plan::PhysicalExpr>,
         ) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        datafusion_physical_plan::apply_expression_roots(
-            self.projection
-                .source
-                .iter()
-                .map(|proj_expr| &proj_expr.expr),
-            f,
-        )
+        datafusion_physical_plan::apply_expression_roots(self.projection.source.iter(), f)
     }
 
     /// Emit a `CsvScan` node wrapping the shared base config and CSV options.

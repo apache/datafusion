@@ -434,6 +434,15 @@ impl RowGroupAccessPlanFilter {
                 continue;
             }
 
+            // A row group without any loaded bloom filter cannot be pruned by this pass: with no
+            // bloom statistics to consult, evaluation can only conclude "may match". Skip the
+            // evaluation in that case: it runs once per row group and can be expensive for wide
+            // predicates, a cost files written without bloom filters would pay for nothing.
+            if stats.is_empty() {
+                metrics.row_groups_pruned_bloom_filter.add_matched(1);
+                continue;
+            }
+
             // Can this group be pruned?
             let prune_group = match predicate.prune(stats) {
                 Ok(values) => !values[0],
@@ -544,6 +553,7 @@ mod tests {
     use parquet::arrow::ArrowSchemaConverter;
     use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
     use parquet::basic::LogicalType;
+    use parquet::bloom_filter::Sbbf;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
     use parquet::file::metadata::ColumnChunkMetaData;
     use parquet::{
@@ -1380,6 +1390,40 @@ mod tests {
             &metrics,
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![1, 2]));
+    }
+
+    #[test]
+    fn bloom_filter_pruning_evaluates_row_groups_with_bloom_filters() {
+        // c1 = 15
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let expr = logical2physical(&col("c1").eq(lit(15)), &schema);
+        let pruning_predicate = PruningPredicateBuilder::new()
+            .with_file_schema(schema)
+            .build(expr)
+            .unwrap();
+
+        // Row group 0 has no bloom filter; row group 1 has a bloom filter
+        // whose values do not include 15, so it can be pruned.
+        let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
+        sbbf.insert(&1_i32);
+        sbbf.insert(&2_i32);
+        let mut with_bloom_filter = BloomFilterStatistics::new();
+        with_bloom_filter.insert("c1", sbbf, PhysicalType::INT32, 4);
+
+        let metrics = parquet_file_metrics();
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(2));
+        row_groups.prune_by_bloom_filters(
+            &pruning_predicate,
+            &metrics,
+            &[BloomFilterStatistics::new(), with_bloom_filter],
+        );
+
+        // The bloom-filter-less row group is kept without evaluation while
+        // the row group with a bloom filter is still evaluated and pruned.
+        assert_pruned(row_groups, ExpectedPruning::Some(vec![0]));
+        assert_eq!(metrics.row_groups_pruned_bloom_filter.pruned(), 1);
+        assert_eq!(metrics.row_groups_pruned_bloom_filter.matched(), 1);
     }
 
     fn get_row_group_meta_data(

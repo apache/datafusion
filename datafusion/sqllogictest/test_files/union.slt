@@ -572,7 +572,7 @@ logical_plan
 physical_plan
 01)CoalescePartitionsExec: fetch=3
 02)--UnionExec
-03)----ProjectionExec: expr=[count(Int64(1))@0 as cnt]
+03)----ProjectionExec: expr=[CAST(count(Int64(1))@0 AS Int64) as cnt]
 04)------GlobalLimitExec: skip=0, fetch=3
 05)--------AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
 06)----------CoalescePartitionsExec
@@ -584,7 +584,7 @@ physical_plan
 12)----------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434, projection=[c1@0]
 13)------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 14)--------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], file_type=csv, has_header=true
-15)----ProjectionExec: expr=[1 as cnt]
+15)----ProjectionExec: expr=[CAST(1 AS Int64) as cnt]
 16)------PlaceholderRowExec
 17)----ProjectionExec: expr=[lead(b.c1,Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as cnt]
 18)------GlobalLimitExec: skip=0, fetch=3
@@ -721,7 +721,7 @@ logical_plan
 11)----------EmptyRelation: rows=1
 physical_plan
 01)UnionExec
-02)--ProjectionExec: expr=[count(Int64(1))@1 as count, n@0 as n]
+02)--ProjectionExec: expr=[count(Int64(1))@1 as count, CAST(n@0 AS Int64) as n]
 03)----AggregateExec: mode=SinglePartitioned, gby=[n@0 as n], aggr=[count(Int64(1))], ordering_mode=Sorted
 04)------ProjectionExec: expr=[5 as n]
 05)--------PlaceholderRowExec

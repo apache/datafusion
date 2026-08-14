@@ -55,7 +55,8 @@ use crate::joins::piecewise_merge_join::utils::{
 use crate::joins::utils::asymmetric_join_output_partitioning;
 use crate::metrics::MetricsSet;
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlanProperties, check_if_same_properties,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
+    ReplaceChildrenOptions, validate_child_count,
 };
 use crate::{
     ExecutionPlan, PlanProperties,
@@ -524,56 +525,80 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         }
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => {
+                let buffered = children.swap_remove(0);
+                let streamed = children.swap_remove(0);
+                Ok(Arc::new(Self {
+                    buffered,
+                    streamed,
+                    on: self.on.clone(),
+                    operator: self.operator,
+                    join_type: self.join_type,
+                    schema: Arc::clone(&self.schema),
+                    left_child_plan_required_order: self
+                        .left_child_plan_required_order
+                        .clone(),
+                    right_batch_required_orders: self.right_batch_required_orders.clone(),
+                    sort_options: self.sort_options,
+                    cache: Arc::clone(&self.cache),
+                    num_partitions: self.num_partitions,
+
+                    // Re-set state.
+                    metrics: ExecutionPlanMetricsSet::new(),
+                    buffered_fut: Default::default(),
+                }))
+            }
+            ChildrenPropertiesMode::Recompute => match &children[..] {
+                [left, right] => Ok(Arc::new(PiecewiseMergeJoinExec::try_new(
+                    Arc::clone(left),
+                    Arc::clone(right),
+                    self.on.clone(),
+                    self.operator,
+                    self.join_type,
+                    self.num_partitions,
+                )?)),
+                _ => internal_err!(
+                    "PiecewiseMergeJoin should have 2 children, found {}",
+                    children.len()
+                ),
+            },
+        }
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        match &children[..] {
-            [left, right] => Ok(Arc::new(PiecewiseMergeJoinExec::try_new(
-                Arc::clone(left),
-                Arc::clone(right),
-                self.on.clone(),
-                self.operator,
-                self.join_type,
-                self.num_partitions,
-            )?)),
-            _ => internal_err!(
-                "PiecewiseMergeJoin should have 2 children, found {}",
-                children.len()
-            ),
-        }
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let buffered = children.swap_remove(0);
-        let streamed = children.swap_remove(0);
-        Ok(Arc::new(Self {
-            buffered,
-            streamed,
-            on: self.on.clone(),
-            operator: self.operator,
-            join_type: self.join_type,
-            schema: Arc::clone(&self.schema),
-            left_child_plan_required_order: self.left_child_plan_required_order.clone(),
-            right_batch_required_orders: self.right_batch_required_orders.clone(),
-            sort_options: self.sort_options,
-            cache: Arc::clone(&self.cache),
-            num_partitions: self.num_partitions,
-
-            // Re-set state.
-            metrics: ExecutionPlanMetricsSet::new(),
-            buffered_fut: Default::default(),
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         let buffered = Arc::clone(&self.buffered);
         let streamed = Arc::clone(&self.streamed);
-        self.with_new_children_and_same_properties(vec![buffered, streamed])
+        self.replace_children(
+            vec![buffered, streamed],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
