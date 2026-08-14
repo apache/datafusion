@@ -480,6 +480,8 @@ Options:
 <span class="w">          </span><span class="o">[</span>possible<span class="w"> </span>values:<span class="w"> </span>numbers<span class="o">(</span><span class="m">0</span>/10/...<span class="o">)</span>,<span class="w"> </span>inf<span class="o">(</span>no<span class="w"> </span>limit<span class="o">)]</span><span class="w"> </span><span class="o">[</span>default:<span class="w"> </span><span class="m">40</span><span class="o">]</span>
 <span class="w">      </span>--color
 <span class="w">          </span>Enables<span class="w"> </span>console<span class="w"> </span>syntax<span class="w"> </span>highlighting
+<span class="w">      </span>--spark
+<span class="w">          </span>Enable<span class="w"> </span>Apache<span class="w"> </span>Spark-compatible<span class="w"> </span>SQL<span class="w"> </span>dialect,<span class="w"> </span>functions,<span class="w"> </span>and<span class="w"> </span>expression<span class="w"> </span>planning
 <span class="w">  </span>-d,<span class="w"> </span>--disk-limit<span class="w"> </span>&lt;DISK_LIMIT&gt;
 <span class="w">          </span>Available<span class="w"> </span>disk<span class="w"> </span>space<span class="w"> </span><span class="k">for</span><span class="w"> </span>spilling<span class="w"> </span>queries<span class="w"> </span><span class="o">(</span>e.g.<span class="w"> </span><span class="s1">&#39;10g&#39;</span><span class="o">)</span>,<span class="w"> </span>default<span class="w"> </span>to<span class="w"> </span>None<span class="w"> </span><span class="o">(</span>uses<span class="w"> </span>DataFusion<span class="s1">&#39;s default value of &#39;</span>100g<span class="s1">&#39;)</span>
 <span class="s1">      --object-store-profiling &lt;OBJECT_STORE_PROFILING&gt;</span>
@@ -491,6 +493,16 @@ Options:
 <span class="w">          </span>Print<span class="w"> </span>version
 </pre></div>
 </div>
+<section id="apache-spark-compatibility">
+<h2>Apache Spark compatibility<a class="headerlink" href="#apache-spark-compatibility" title="Link to this heading">#</a></h2>
+<p>Use <code class="docutils literal notranslate"><span class="pre">--spark</span></code> to enable the Apache Spark SQL dialect, expression planner, and
+function library for the CLI session:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>datafusion-cli<span class="w"> </span>--spark<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;SELECT next_day(&#39;2015-07-27&#39;::DATE, &#39;Sun&#39;::STRING);&quot;</span>
+</pre></div>
+</div>
+<p>Spark compatibility is disabled by default. Enabling it overrides DataFusion
+functions with the same name for the duration of the session.</p>
+</section>
 <section id="commands">
 <h2>Commands<a class="headerlink" href="#commands" title="Link to this heading">#</a></h2>
 <p>Available commands inside DataFusion CLI are:</p>
@@ -721,6 +733,7 @@ for details.</p>
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#apache-spark-compatibility">Apache Spark compatibility</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#commands">Commands</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#supported-sql">Supported SQL</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#show-all-verbose"><code class="docutils literal notranslate"><span class="pre">SHOW</span> <span class="pre">ALL</span> <span class="pre">[VERBOSE]</span></code></a></li>
