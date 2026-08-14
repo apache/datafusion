@@ -110,3 +110,87 @@ RESET datafusion.execution.parquet.pushdown_filters;
 
 statement ok
 RESET datafusion.explain.analyze_level;
+
+# Regression test for #24352: TopK dynamic filter + `pushdown_filters` must not
+# re-read an already-delivered row group. The filter column (`search_phrase`)
+# differs from the sort column (`event_time`), and one row group has an empty
+# post-predicate selection that row-group statistics cannot see — its only small
+# `event_time` (50) sits on the row where `search_phrase = ''`. arrow-rs finishes
+# that RG without handing back a reader; without syncing `rg_plan` to the decoder
+# frontier via `peek_next_row_group`, `rg_plan` trailed the decoder by one, so a
+# later runtime prune rebuilt the decoder from a stale plan and re-read an
+# already-delivered RG — duplicating rows and dropping the true top-k tail.
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+# Both dynamic-filter switches are on by default; set them explicitly so this
+# test keeps exercising the prune/rebuild path even if the defaults change.
+statement ok
+set datafusion.optimizer.enable_dynamic_filter_pushdown = true;
+
+statement ok
+set datafusion.optimizer.enable_topk_dynamic_filter_pushdown = true;
+
+statement ok
+CREATE TABLE q26_src AS
+SELECT
+  CAST(CASE
+    WHEN i < 2048 THEN i * 1000
+    WHEN i < 4096 THEN (CASE WHEN i = 2048 THEN 50 ELSE 20000 + i END)
+    WHEN i < 6144 THEN 100 + (i - 4096)
+    ELSE 5000 + (i - 6144)
+  END AS BIGINT) AS event_time,
+  CASE WHEN i = 2048 THEN '' ELSE 'p' || CAST(i AS VARCHAR) END AS search_phrase
+FROM generate_series(0, 8191) AS t(i);
+
+statement ok
+COPY (SELECT * FROM q26_src)
+TO 'test_files/scratch/dynamic_row_group_pruning/q26.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '2048');
+
+statement ok
+drop table q26_src;
+
+statement ok
+CREATE EXTERNAL TABLE q26 (event_time BIGINT NOT NULL, search_phrase VARCHAR NOT NULL)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_row_group_pruning/q26.parquet';
+
+# Each search_phrase is unique, so any repeated value would be the same source
+# row emitted twice. The result must be the 10 smallest-`event_time` non-empty
+# phrases with no duplicates (matches DuckDB and pushdown-off DataFusion).
+query T
+SELECT search_phrase FROM q26 WHERE search_phrase <> '' ORDER BY event_time LIMIT 10;
+----
+p0
+p4096
+p4097
+p4098
+p4099
+p4100
+p4101
+p4102
+p4103
+p4104
+
+statement ok
+drop table q26;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
+# restore it explicitly rather than RESET (which would revert to the system
+# default = num_cpus and leak modified config out of this file).
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+RESET datafusion.optimizer.enable_dynamic_filter_pushdown;
+
+statement ok
+RESET datafusion.optimizer.enable_topk_dynamic_filter_pushdown;
