@@ -41,6 +41,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::{
     DEFAULT_SCHEMA_INFER_MAX_RECORD, FileFormat, FileFormatFactory,
+    ensure_unique_field_names,
 };
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
@@ -396,6 +397,12 @@ impl FileFormat for CsvFormat {
                         Box::new(err),
                     )
                 })?;
+            ensure_unique_field_names(&schema).map_err(|err| {
+                DataFusionError::Context(
+                    format!("Error when processing CSV file {}", object.location),
+                    Box::new(err),
+                )
+            })?;
             records_to_read -= records_read;
             schemas.push(schema);
             if records_to_read == 0 {
