@@ -53,7 +53,7 @@ use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
 use parquet::file::metadata::ParquetMetaData;
 
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_physical_expr::expressions::DynamicFilterTracking;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::{BaselineMetrics, Count, Gauge};
@@ -342,6 +342,20 @@ impl PushDecoderStreamState {
                 .as_ref()
                 .expect("decoder present")
                 .is_at_row_group_boundary();
+            // Only the runtime pruner rebuilds the decoder from `rg_plan`, so
+            // only it needs `rg_plan` kept in sync with the decoder frontier.
+            // arrow-rs silently finishes row groups whose post-predicate
+            // selection is empty without handing back a reader, so without this
+            // sync `rg_plan` trails the decoder by one and a rebuild re-reads an
+            // already-delivered row group (#24352). Gating on the pruner also
+            // avoids the O(remaining row groups) cost of `peek_next_row_group()`
+            // on ordinary scans that never rebuild.
+            if at_boundary
+                && self.row_group_pruner.is_some()
+                && let Err(e) = self.sync_rg_plan_to_decoder_frontier()
+            {
+                return Some((Err(e), self));
+            }
             if at_boundary && !self.rg_plan.is_empty() {
                 let mut pruned_count = 0usize;
                 if let Some(pruner) = self.row_group_pruner.as_mut() {
@@ -412,6 +426,51 @@ impl PushDecoderStreamState {
                 }
             }
         }
+    }
+
+    /// Keep `rg_plan.front()` aligned with the row group the decoder will emit
+    /// next. `try_next_reader` silently finishes row groups whose post-predicate
+    /// selection is empty (no reader handed back), which would otherwise leave
+    /// `rg_plan` trailing the decoder by one — a later prune/rebuild would then
+    /// re-include an already-delivered row group (#24352).
+    fn sync_rg_plan_to_decoder_frontier(&mut self) -> Result<()> {
+        match self
+            .decoder
+            .as_ref()
+            .expect("decoder present")
+            .peek_next_row_group()
+            .map_err(DataFusionError::from)?
+        {
+            Some(actual) => Self::advance_rg_plan_to(&mut self.rg_plan, actual)?,
+            // Decoder has nothing left to emit — drain our plan so the stream
+            // finishes cleanly.
+            None => self.rg_plan.clear(),
+        }
+        Ok(())
+    }
+
+    /// Pop entries off `rg_plan` until its front is `target`.
+    ///
+    /// `target` is the RG the decoder will emit next and must still be in the
+    /// plan. A missing `target` means the decoder's frontier and `rg_plan` have
+    /// diverged; we surface that as an internal error rather than silently
+    /// draining the plan, which would truncate the scan. Kept free-standing on
+    /// `rg_plan` (rather than `&mut self`) so the pop/guard logic is
+    /// unit-testable without constructing a full stream state.
+    fn advance_rg_plan_to(
+        rg_plan: &mut VecDeque<RgPlanEntry>,
+        target: usize,
+    ) -> Result<()> {
+        while let Some(front) = rg_plan.front() {
+            if front.rg_index == target {
+                return Ok(());
+            }
+            rg_plan.pop_front();
+        }
+        internal_err!(
+            "push decoder frontier RG {target} is not in rg_plan; \
+             decoder and plan have diverged"
+        )
     }
 
     /// Copies metrics from ArrowReaderMetrics (the metrics collected by the
@@ -606,5 +665,33 @@ mod tests {
         assert!(!pruner.should_prune(&[0]));
         assert!(!pruner.should_prune(&[1]));
         assert!(!pruner.should_prune(&[2]));
+    }
+
+    #[test]
+    fn advance_rg_plan_to_pops_up_to_target() {
+        let mut plan: VecDeque<RgPlanEntry> = [0usize, 1, 2, 3]
+            .into_iter()
+            .map(|rg_index| RgPlanEntry { rg_index })
+            .collect();
+        PushDecoderStreamState::advance_rg_plan_to(&mut plan, 2).unwrap();
+        assert_eq!(
+            plan.iter().map(|e| e.rg_index).collect::<Vec<_>>(),
+            vec![2, 3],
+            "must pop the entries before `target` and stop at it",
+        );
+    }
+
+    #[test]
+    fn advance_rg_plan_to_errors_when_target_absent() {
+        let mut plan: VecDeque<RgPlanEntry> = [0usize, 1, 2]
+            .into_iter()
+            .map(|rg_index| RgPlanEntry { rg_index })
+            .collect();
+        let err = PushDecoderStreamState::advance_rg_plan_to(&mut plan, 5)
+            .expect_err("a target absent from the plan must be an internal error");
+        assert!(
+            err.to_string().contains("diverged"),
+            "expected a divergence internal error, got: {err}",
+        );
     }
 }
