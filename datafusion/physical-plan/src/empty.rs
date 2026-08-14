@@ -20,7 +20,10 @@
 use std::sync::Arc;
 
 use crate::memory::MemoryStream;
-use crate::{DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
+use crate::{
+    ChildrenPropertiesMode, DisplayAs, PlanProperties, ReplaceChildrenOptions,
+    SendableRecordBatchStream, Statistics,
+};
 use crate::{
     DisplayFormatType, ExecutionPlan, Partitioning,
     execution_plan::{Boundedness, EmissionType},
@@ -29,9 +32,10 @@ use crate::{
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{ColumnStatistics, Result, ScalarValue, assert_or_internal_err};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 
 use crate::execution_plan::SchedulingType;
 use crate::statistics::StatisticsArgs;
@@ -119,11 +123,29 @@ impl ExecutionPlan for EmptyExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -185,14 +207,62 @@ impl ExecutionPlan for EmptyExec {
 
         Ok(Arc::new(stats))
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let schema = self.schema().as_ref().try_into()?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Empty(
+                    protobuf::EmptyExecNode {
+                        schema: Some(schema),
+                        partitions: self
+                            .properties()
+                            .output_partitioning()
+                            .partition_count() as u32,
+                    },
+                ),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl EmptyExec {
+    /// Reconstruct an [`EmptyExec`] from its protobuf representation.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        _ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let empty = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Empty,
+            "EmptyExec",
+        );
+        let schema = empty.schema.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "EmptyExec is missing required field 'schema'"
+            )
+        })?;
+        let schema = Arc::new(arrow::datatypes::Schema::try_from(schema)?);
+        // A zero (absent) partition count comes from a plan encoded before the
+        // field existed, which always meant a single partition.
+        let partitions = empty.partitions.max(1) as usize;
+        Ok(Arc::new(EmptyExec::new(schema).with_partitions(partitions)))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::common;
+    use crate::execution_plan::replace_children_if_necessary;
     use crate::test;
-    use crate::with_new_children_if_necessary;
 
     #[tokio::test]
     async fn empty() -> Result<()> {
@@ -215,7 +285,7 @@ mod tests {
         let schema = test::aggr_test_schema();
         let empty = Arc::new(EmptyExec::new(Arc::clone(&schema)));
 
-        let empty2 = with_new_children_if_necessary(
+        let empty2 = replace_children_if_necessary(
             Arc::clone(&empty) as Arc<dyn ExecutionPlan>,
             vec![],
         )?;
@@ -223,7 +293,7 @@ mod tests {
 
         let too_many_kids = vec![empty2];
         assert!(
-            with_new_children_if_necessary(empty, too_many_kids).is_err(),
+            replace_children_if_necessary(empty, too_many_kids).is_err(),
             "expected error when providing list of kids"
         );
         Ok(())

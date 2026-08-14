@@ -195,8 +195,12 @@ impl Precision<usize> {
     /// Return the estimate of applying a filter with estimated selectivity
     /// `selectivity` to this Precision. A selectivity of `1.0` means that all
     /// rows are selected. A selectivity of `0.5` means half the rows are
-    /// selected. Will always return inexact statistics.
+    /// selected. An exact zero is preserved, since filtering an empty input
+    /// cannot produce rows; any other known value is demoted to inexact.
     pub fn with_estimated_selectivity(self, selectivity: f64) -> Self {
+        if self == Precision::Exact(0) {
+            return self;
+        }
         self.map(|v| ((v as f64 * selectivity).ceil()) as usize)
             .to_inexact()
     }
@@ -423,7 +427,9 @@ impl Statistics {
     }
 
     /// Calculates `total_byte_size` based on the schema and `num_rows`.
-    /// If any of the columns has non-primitive width, `total_byte_size` is set to inexact.
+    /// If any of the columns has non-primitive width, or `num_rows` is unknown,
+    /// the previous `total_byte_size` is kept but downgraded to inexact rather
+    /// than discarded.
     pub fn calculate_total_byte_size(&mut self, schema: &Schema) {
         let mut row_size = Some(0);
         for field in schema.fields() {
@@ -437,11 +443,11 @@ impl Statistics {
                 }
             }
         }
-        match row_size {
-            None => {
+        match (row_size, &self.num_rows) {
+            (None, _) | (Some(_), Precision::Absent) => {
                 self.total_byte_size = self.total_byte_size.to_inexact();
             }
-            Some(size) => {
+            (Some(size), _) => {
                 self.total_byte_size = self.num_rows.multiply(&Precision::Exact(size));
             }
         }
@@ -545,6 +551,10 @@ impl Statistics {
         skip: usize,
         n_partitions: usize,
     ) -> Result<Self> {
+        if fetch.is_none() && skip == 0 {
+            return Ok(self);
+        }
+
         let fetch_val = fetch.unwrap_or(usize::MAX);
 
         // Get the ratio of rows after / rows before on a per-partition basis
@@ -598,18 +608,18 @@ impl Statistics {
                 ..
             } => check_num_rows(fetch.and_then(|v| v.checked_mul(n_partitions)), false),
         };
-        let ratio: f64 = match (num_rows_before, self.num_rows) {
+        let ratio: Option<f64> = match (num_rows_before, self.num_rows) {
             (
                 Precision::Exact(nr_before) | Precision::Inexact(nr_before),
                 Precision::Exact(nr_after) | Precision::Inexact(nr_after),
             ) => {
                 if nr_before == 0 {
-                    0.0
+                    Some(0.0)
                 } else {
-                    nr_after as f64 / nr_before as f64
+                    Some(nr_after as f64 / nr_before as f64)
                 }
             }
-            _ => 0.0,
+            _ => None,
         };
         self.column_statistics = self
             .column_statistics
@@ -617,11 +627,11 @@ impl Statistics {
             .map(|cs| {
                 let mut cs = cs.to_inexact();
                 // Scale byte_size by the row ratio
-                cs.byte_size = match cs.byte_size {
-                    Precision::Exact(n) | Precision::Inexact(n) => {
+                cs.byte_size = match (cs.byte_size, ratio) {
+                    (Precision::Exact(n) | Precision::Inexact(n), Some(ratio)) => {
                         Precision::Inexact((n as f64 * ratio) as usize)
                     }
-                    Precision::Absent => Precision::Absent,
+                    _ => Precision::Absent,
                 };
                 // NDV can never exceed the number of rows
                 if let Some(&rows) = self.num_rows.get_value() {
@@ -643,11 +653,11 @@ impl Statistics {
             Some(sum) => Precision::Inexact(sum),
             None => {
                 // Fall back to scaling original total_byte_size if not all columns have byte_size
-                match &self.total_byte_size {
-                    Precision::Exact(n) | Precision::Inexact(n) => {
+                match (&self.total_byte_size, ratio) {
+                    (Precision::Exact(n) | Precision::Inexact(n), Some(ratio)) => {
                         Precision::Inexact((*n as f64 * ratio) as usize)
                     }
-                    Precision::Absent => Precision::Absent,
+                    _ => Precision::Absent,
                 }
             }
         };
@@ -1196,6 +1206,44 @@ mod tests {
         assert_eq!(*exact_precision.get_value().unwrap(), 42);
         assert_eq!(*inexact_precision.get_value().unwrap(), 23);
         assert_eq!(absent_precision.get_value(), None);
+    }
+
+    #[test]
+    fn test_with_estimated_selectivity() {
+        // Filtering an empty input cannot produce rows, so the zero stays exact.
+        assert_eq!(
+            Precision::Exact(0).with_estimated_selectivity(0.5),
+            Precision::Exact(0)
+        );
+        assert_eq!(
+            Precision::Exact(0).with_estimated_selectivity(1.0),
+            Precision::Exact(0)
+        );
+
+        // Any other known value is scaled and demoted, since the selectivity is
+        // itself an estimate.
+        assert_eq!(
+            Precision::Exact(100).with_estimated_selectivity(0.5),
+            Precision::Inexact(50)
+        );
+        assert_eq!(
+            Precision::Exact(100).with_estimated_selectivity(1.0),
+            Precision::Inexact(100)
+        );
+        assert_eq!(
+            Precision::Exact(3).with_estimated_selectivity(0.5),
+            Precision::Inexact(2)
+        );
+
+        // An inexact zero is an estimate, not a proof, and stays inexact.
+        assert_eq!(
+            Precision::Inexact(0).with_estimated_selectivity(0.5),
+            Precision::Inexact(0)
+        );
+        assert_eq!(
+            Precision::<usize>::Absent.with_estimated_selectivity(0.5),
+            Precision::Absent
+        );
     }
 
     #[test]
@@ -2377,6 +2425,38 @@ mod tests {
     }
 
     #[test]
+    fn test_with_fetch_no_limit_preserves_absent_num_rows() {
+        let original_stats = Statistics {
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Exact(800),
+            column_statistics: vec![col_stats_i64(10)],
+        };
+
+        let result = original_stats.clone().with_fetch(None, 0, 1).unwrap();
+
+        assert_eq!(result, original_stats);
+    }
+
+    #[test]
+    fn test_with_fetch_absent_num_rows_does_not_zero_byte_size() {
+        let original_stats = Statistics {
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Exact(800),
+            column_statistics: vec![col_stats_i64(10)],
+        };
+
+        let result = original_stats.with_fetch(Some(1), 0, 1).unwrap();
+
+        assert_eq!(result.num_rows, Precision::Inexact(1));
+        assert_eq!(result.total_byte_size, Precision::Absent);
+        assert_eq!(result.column_statistics[0].byte_size, Precision::Absent);
+        assert_eq!(
+            result.column_statistics[0].distinct_count,
+            Precision::Inexact(1)
+        );
+    }
+
+    #[test]
     fn test_with_fetch_with_skip() {
         // Test with both skip and fetch
         let original_stats = Statistics {
@@ -3266,5 +3346,34 @@ mod tests {
         let mut lhs = Precision::Exact(ScalarValue::Int64(Some(10)));
         precision_add_for_sum_in_place(&mut lhs, &Precision::Absent);
         assert_eq!(lhs, Precision::Absent);
+    }
+
+    #[test]
+    fn test_calculate_total_byte_size() {
+        let primitive_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let non_primitive_schema =
+            Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+
+        // All-primitive schema with a known row count computes an exact size.
+        let mut stats = Statistics::new_unknown(&primitive_schema);
+        stats.num_rows = Precision::Exact(10);
+        stats.calculate_total_byte_size(&primitive_schema);
+        assert_eq!(stats.total_byte_size, Precision::Exact(40));
+
+        // All-primitive schema with an unknown row count keeps a previously
+        // known `total_byte_size`, downgraded to inexact, instead of
+        // discarding it to `Absent`.
+        let mut stats = Statistics::new_unknown(&primitive_schema);
+        stats.total_byte_size = Precision::Exact(1234);
+        stats.calculate_total_byte_size(&primitive_schema);
+        assert_eq!(stats.total_byte_size, Precision::Inexact(1234));
+
+        // Non-primitive schema always downgrades any existing
+        // `total_byte_size` to inexact, regardless of `num_rows`.
+        let mut stats = Statistics::new_unknown(&non_primitive_schema);
+        stats.num_rows = Precision::Exact(10);
+        stats.total_byte_size = Precision::Exact(999);
+        stats.calculate_total_byte_size(&non_primitive_schema);
+        assert_eq!(stats.total_byte_size, Precision::Inexact(999));
     }
 }

@@ -39,10 +39,11 @@ use crate::expr_rewriter::{
 };
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
-use crate::logical_plan::{DmlStatement, Statement};
+use crate::logical_plan::{DmlStatement, Statement, WriteOp};
 use crate::utils::{
-    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
-    grouping_set_expr_count, grouping_set_to_exprlist, merge_schema, split_conjunction,
+    check_aggregate_and_window_nesting, enumerate_grouping_sets, exprlist_to_fields,
+    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
+    merge_schema, split_conjunction,
 };
 use crate::{
     BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, GroupingSet,
@@ -810,12 +811,20 @@ impl LogicalPlan {
                 op,
                 ..
             }) => {
-                self.assert_no_expressions(expr)?;
                 let input = self.only_input(inputs)?;
+                let op = match op {
+                    WriteOp::MergeInto(merge_op) => {
+                        WriteOp::MergeInto(Box::new(merge_op.with_new_exprs(expr)?))
+                    }
+                    other => {
+                        self.assert_no_expressions(expr)?;
+                        other.clone()
+                    }
+                };
                 Ok(LogicalPlan::Dml(DmlStatement::new(
                     table_name.clone(),
                     Arc::clone(target),
-                    op.clone(),
+                    op,
                     Arc::new(input),
                 )))
             }
@@ -2779,6 +2788,11 @@ pub struct Window {
 impl Window {
     /// Create a new window operator.
     pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
+        // Reject e.g. `sum(sum(x) OVER ()) OVER ()` here rather than letting it
+        // reach physical planning, which has no equivalent for a nested window
+        // function.
+        check_aggregate_and_window_nesting(window_expr.iter())?;
+
         let fields: Vec<(Option<TableReference>, Arc<Field>)> = input
             .schema()
             .iter()
@@ -3892,6 +3906,10 @@ impl Aggregate {
         group_expr: Vec<Expr>,
         aggr_expr: Vec<Expr>,
     ) -> Result<Self> {
+        // Reject e.g. `sum(sum(x))` here rather than letting it reach physical
+        // planning, which has no equivalent for a nested aggregate.
+        check_aggregate_and_window_nesting(group_expr.iter().chain(aggr_expr.iter()))?;
+
         let group_expr = enumerate_grouping_sets(group_expr)?;
 
         let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);

@@ -27,18 +27,19 @@ use crate::projection::ProjectionExec;
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
-    DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
-    check_if_same_properties,
+    ChildrenPropertiesMode, DisplayFormatType, ExecutionPlan, RecordBatchStream,
+    ReplaceChildrenOptions, SendableRecordBatchStream, validate_child_count,
 };
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{CardinalityEffect, replace_children_if_necessary};
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
@@ -173,26 +174,50 @@ impl ExecutionPlan for CoalesceBatchesExec {
         vec![false]
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        Ok(Arc::new(
-            CoalesceBatchesExec::new(children.swap_remove(0), self.target_batch_size)
-                .with_fetch(self.fetch),
-        ))
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(
+                CoalesceBatchesExec::new(children.swap_remove(0), self.target_batch_size)
+                    .with_fetch(self.fetch),
+            )),
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -252,9 +277,10 @@ impl ExecutionPlan for CoalesceBatchesExec {
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         match self.input.try_swapping_with_projection(projection)? {
-            Some(new_input) => Ok(Some(
-                Arc::new(self.clone()).with_new_children(vec![new_input])?,
-            )),
+            Some(new_input) => Ok(Some(replace_children_if_necessary(
+                Arc::new(self.clone()),
+                vec![new_input],
+            )?)),
             None => Ok(None),
         }
     }
@@ -289,6 +315,61 @@ impl ExecutionPlan for CoalesceBatchesExec {
                     .with_fetch(self.fetch),
             ) as Arc<dyn ExecutionPlan>)
         })
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        let input = ctx.encode_child(self.input())?;
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::CoalesceBatches(
+                    Box::new(protobuf::CoalesceBatchesExecNode {
+                        input: Some(Box::new(input)),
+                        target_batch_size: self.target_batch_size() as u32,
+                        fetch: self.fetch().map(|n| n as u32),
+                    }),
+                ),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+#[expect(deprecated)]
+impl CoalesceBatchesExec {
+    /// Reconstruct a [`CoalesceBatchesExec`] from its protobuf representation.
+    ///
+    /// The exact inverse of [`ExecutionPlan::try_to_proto`]: it takes the whole
+    /// [`PhysicalPlanNode`] so every plan's `try_from_proto` shares one
+    /// signature. The child plan is decoded recursively via the
+    /// [`ExecutionPlanDecodeCtx`].
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    /// [`ExecutionPlan::try_to_proto`]: crate::ExecutionPlan::try_to_proto
+    /// [`ExecutionPlanDecodeCtx`]: crate::proto::ExecutionPlanDecodeCtx
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+        let coalesce_batches = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::CoalesceBatches,
+            "CoalesceBatchesExec",
+        );
+        let input = ctx.decode_required_child(
+            coalesce_batches.input.as_deref(),
+            "CoalesceBatchesExec",
+            "input",
+        )?;
+        Ok(Arc::new(
+            CoalesceBatchesExec::new(input, coalesce_batches.target_batch_size as usize)
+                .with_fetch(coalesce_batches.fetch.map(|f| f as usize)),
+        ))
     }
 }
 

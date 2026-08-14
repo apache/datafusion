@@ -44,9 +44,9 @@ use crate::projection::{
 };
 use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream,
-    check_if_same_properties,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, PlanProperties, RecordBatchStream, ReplaceChildrenOptions,
+    SendableRecordBatchStream, validate_child_count,
 };
 
 use arrow::array::{
@@ -61,6 +61,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::DataType;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     JoinSide, NullEquality, Result, ScalarValue, Statistics, arrow_err,
     assert_eq_or_internal_err, internal_datafusion_err, internal_err, project_schema,
@@ -562,43 +563,72 @@ impl ExecutionPlan for NestedLoopJoinExec {
         vec![&self.left, &self.right]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn crate::PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Apply to join filter expressions if present
+        crate::apply_expression_roots(
+            self.filter.iter().map(|filter| filter.expression()),
+            f,
+        )
+    }
+
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => {
+                let left = children.swap_remove(0);
+                let right = children.swap_remove(0);
+                Ok(Arc::new(Self {
+                    left,
+                    right,
+                    metrics: ExecutionPlanMetricsSet::new(),
+                    build_side_data: Default::default(),
+                    left_spill_data: Arc::new(OnceAsync::default()),
+                    cache: Arc::clone(&self.cache),
+                    filter: self.filter.clone(),
+                    join_type: self.join_type,
+                    join_schema: Arc::clone(&self.join_schema),
+                    column_indices: self.column_indices.clone(),
+                    projection: self.projection.clone(),
+                }))
+            }
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(
+                NestedLoopJoinExecBuilder::new(
+                    Arc::clone(&children[0]),
+                    Arc::clone(&children[1]),
+                    self.join_type,
+                )
+                .with_filter(self.filter.clone())
+                .with_projection_ref(self.projection.clone())
+                .build()?,
+            )),
+        }
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        Ok(Arc::new(
-            NestedLoopJoinExecBuilder::new(
-                Arc::clone(&children[0]),
-                Arc::clone(&children[1]),
-                self.join_type,
-            )
-            .with_filter(self.filter.clone())
-            .with_projection_ref(self.projection.clone())
-            .build()?,
-        ))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let left = children.swap_remove(0);
-        let right = children.swap_remove(0);
-
-        Ok(Arc::new(Self {
-            left,
-            right,
-            metrics: ExecutionPlanMetricsSet::new(),
-            build_side_data: Default::default(),
-            left_spill_data: Arc::new(OnceAsync::default()),
-            cache: Arc::clone(&self.cache),
-            filter: self.filter.clone(),
-            join_type: self.join_type,
-            join_schema: Arc::clone(&self.join_schema),
-            column_indices: self.column_indices.clone(),
-            projection: self.projection.clone(),
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -767,6 +797,91 @@ impl ExecutionPlan for NestedLoopJoinExec {
         } else {
             try_embed_projection(projection, self)
         }
+    }
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        let left = ctx.encode_child(self.left())?;
+        let right = ctx.encode_child(self.right())?;
+
+        let join_type = crate::joins::proto::join_type_to_proto(*self.join_type());
+
+        let filter = self
+            .filter()
+            .map(|f| crate::joins::proto::join_filter_to_proto(f, ctx))
+            .transpose()?;
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::NestedLoopJoin(Box::new(
+                    protobuf::NestedLoopJoinExecNode {
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
+                        join_type: join_type.into(),
+                        filter,
+                        projection: match self.projection.as_ref() {
+                            None => Vec::new(),
+                            Some(v) if v.is_empty() => vec![u32::MAX],
+                            Some(v) => v.iter().map(|x| *x as u32).collect(),
+                        },
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl NestedLoopJoinExec {
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let join = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::NestedLoopJoin,
+            "NestedLoopJoinExec",
+        );
+
+        let left = ctx.decode_required_child(
+            join.left.as_deref(),
+            "NestedLoopJoinExec",
+            "left",
+        )?;
+        let right = ctx.decode_required_child(
+            join.right.as_deref(),
+            "NestedLoopJoinExec",
+            "right",
+        )?;
+
+        let join_type = crate::joins::proto::join_type_from_proto(
+            join.join_type,
+            "NestedLoopJoinExec",
+        )?;
+
+        let filter = join
+            .filter
+            .as_ref()
+            .map(|f| {
+                crate::joins::proto::join_filter_from_proto(f, ctx, "NestedLoopJoinExec")
+            })
+            .transpose()?;
+
+        let projection = match join.projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Vec::new()),
+            indices => Some(indices.iter().map(|i| *i as usize).collect()),
+        };
+
+        Ok(Arc::new(NestedLoopJoinExec::try_new(
+            left, right, filter, &join_type, projection,
+        )?))
     }
 }
 

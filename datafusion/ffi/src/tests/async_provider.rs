@@ -31,12 +31,15 @@ use std::sync::Arc;
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use async_trait::async_trait;
-use datafusion_catalog::TableProvider;
+use datafusion_catalog::{MemoryCatalogProvider, TableProvider};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, exec_err};
 use datafusion_execution::RecordBatchStream;
 use datafusion_expr::Expr;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::{
+    ChildrenPropertiesMode, ExecutionPlan, ReplaceChildrenOptions,
+};
 use datafusion_session::Session;
 use futures::Stream;
 use tokio::runtime::Handle;
@@ -135,11 +138,28 @@ impl TableProvider for AsyncTableProvider {
 
     async fn scan(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         _projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let catalog = state.catalog_list().catalog("datafusion").ok_or_else(|| {
+            datafusion_common::exec_datafusion_err!("missing datafusion catalog")
+        })?;
+        let schema = catalog.schema("public").ok_or_else(|| {
+            datafusion_common::exec_datafusion_err!("missing public schema")
+        })?;
+        if schema.table("external_table").await?.is_none() {
+            return exec_err!("missing external_table");
+        }
+
+        // Register a catalog from the dynamically loaded library so the host
+        // can verify that catalog mutations cross the FFI boundary as well.
+        state.catalog_list().register_catalog(
+            "ffi_registered".to_owned(),
+            Arc::new(MemoryCatalogProvider::new()),
+        );
+
         Ok(Arc::new(AsyncTestExecutionPlan::new(
             self.batch_request.clone(),
             self.batch_receiver.resubscribe(),
@@ -193,11 +213,22 @@ impl ExecutionPlan for AsyncTestExecutionPlan {
         Vec::default()
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -209,6 +240,15 @@ impl ExecutionPlan for AsyncTestExecutionPlan {
             batch_request: self.batch_request.clone(),
             batch_receiver: self.batch_receiver.resubscribe(),
         }))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
