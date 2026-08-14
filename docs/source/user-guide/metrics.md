@@ -53,7 +53,7 @@ subsequent join processing time.
 | build_time              | Total time spent collecting and building the build side of the join.                                      |
 | build_input_batches     | Number of input batches consumed from the build side.                                                     |
 | build_input_rows        | Number of input rows consumed from the build side.                                                        |
-| build_mem_used          | Peak memory used by the build side, in bytes.                                                             |
+| build_mem_used          | Peak tracked memory used by the build side, in bytes.                                                     |
 | join_time               | Total time spent processing the join after build-side collection.                                         |
 | input_batches           | Number of input batches consumed from the probe side.                                                     |
 | input_rows              | Number of input rows consumed from the probe side.                                                        |
