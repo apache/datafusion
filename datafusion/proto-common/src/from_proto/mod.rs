@@ -28,7 +28,7 @@ use arrow::datatypes::{
     TimeUnit, UnionFields, UnionMode, i256,
 };
 use arrow::ipc::{
-    convert::try_fb_to_schema,
+    convert::fb_to_schema,
     reader::{read_dictionary, read_record_batch},
     root_as_message,
     writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions},
@@ -461,11 +461,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                                 .to_string(),
                         )
                     })?;
-                    try_fb_to_schema(ipc_schema).map_err(|e| {
-                        Error::General(format!(
-                            "Error converting IPC schema while deserializing nested ScalarValue: {e}"
-                        ))
-                    })?
+                    fb_to_schema(ipc_schema)
                 };
 
                 let message = root_as_message(ipc_message.as_slice()).map_err(|e| {
