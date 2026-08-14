@@ -180,6 +180,105 @@ impl ExecutionPlan for TestCombinerExec {
     }
 }
 
+/// A test [`ExecutionPlan`] that reports an existing `fetch` bound on its own
+/// output but cannot absorb a new fetch: `with_fetch` uses the trait default
+/// and returns `None`. `supports_limit_pushdown` defaults to the trait default
+/// (`false`) and can be enabled via
+/// [`Self::with_supports_limit_pushdown`]. This simulates an operator whose
+/// trait-level fetch cannot be tightened, so a still-pending global limit must
+/// be enforced explicitly (either above the operator or, when pushdown is
+/// supported, at the seam between the operator and its child).
+#[derive(Debug)]
+struct TestFetchOnlyExec {
+    input: Arc<dyn ExecutionPlan>,
+    fetch: Option<usize>,
+    supports_limit_pushdown: bool,
+    properties: Arc<PlanProperties>,
+}
+
+impl TestFetchOnlyExec {
+    fn new(input: Arc<dyn ExecutionPlan>, fetch: Option<usize>) -> Self {
+        let properties = PlanProperties::new(
+            EquivalenceProperties::new(input.schema()),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        );
+        Self {
+            input,
+            fetch,
+            supports_limit_pushdown: false,
+            properties: Arc::new(properties),
+        }
+    }
+
+    /// Set whether `supports_limit_pushdown()` reports `true`, allowing a
+    /// pending limit to pass through this operator to its child.
+    fn with_supports_limit_pushdown(mut self, supports: bool) -> Self {
+        self.supports_limit_pushdown = supports;
+        self
+    }
+}
+
+impl DisplayAs for TestFetchOnlyExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "TestFetchOnlyExec")?;
+        if let Some(fetch) = self.fetch {
+            write!(f, ": fetch={fetch}")?;
+        }
+        Ok(())
+    }
+}
+
+impl ExecutionPlan for TestFetchOnlyExec {
+    fn name(&self) -> &str {
+        "TestFetchOnlyExec"
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert_eq!(children.len(), 1);
+        Ok(Arc::new(
+            Self::new(children[0].clone(), self.fetch)
+                .with_supports_limit_pushdown(self.supports_limit_pushdown),
+        ))
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        unreachable!("TestFetchOnlyExec is only used by optimizer tests")
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())))
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        self.supports_limit_pushdown
+    }
+}
+
 #[test]
 fn transforms_streaming_table_exec_into_fetching_version_when_skip_is_zero() -> Result<()>
 {
@@ -1246,6 +1345,143 @@ fn outer_offset_with_same_sort_key_still_pushes_limit() -> Result<()> {
       SortExec: expr=[c1@0 ASC], preserve_partitioning=[false]
         SortExec: TopK(fetch=8), expr=[c1@0 ASC], preserve_partitioning=[false]
           EmptyExec
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn keeps_global_limit_when_existing_fetch_is_looser_than_owed() -> Result<()> {
+    // Regression test: an existing `fetch=10` on an operator that cannot
+    // absorb a tighter fetch (`with_fetch` returns `None`) does not satisfy an
+    // owed `fetch=5`. Before the fix, the pending global requirement was
+    // cleared solely because `skip == 0` and `fetch().is_some()`, so the
+    // `GlobalLimitExec` was removed entirely and the global `LIMIT` was lost.
+    let schema = create_schema();
+    let scan = Arc::new(TestScan::new(schema, vec![]));
+    let fetch_only = Arc::new(TestFetchOnlyExec::new(scan, Some(10)));
+    let global_limit = global_limit_exec(fetch_only, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    GlobalLimitExec: skip=0, fetch=5
+      TestFetchOnlyExec: fetch=10
+        TestScan
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn pushes_owed_limit_below_fetch_only_unary_when_limit_pushdown_supported() -> Result<()>
+{
+    // Regression test for the `supports_limit_pushdown() == true` variant of
+    // `keeps_global_limit_when_existing_fetch_is_looser_than_owed`: the unary
+    // reports `supports_limit_pushdown() == true` so the rule takes the
+    // push-down-continue branch (no `GlobalLimitExec` above the unary), while
+    // `with_fetch` keeps the trait default (`None`) so the looser existing
+    // `fetch=10` cannot be tightened to the owed `fetch=5`. The owed global
+    // requirement must therefore survive the unary and be enforced at the seam
+    // between the unary and its child — the child also cannot absorb the limit
+    // (`TestScan::with_fetch` returns `None` by default), so the
+    // `GlobalLimitExec` must be materialized directly above the child instead
+    // of being dropped.
+    let schema = create_schema();
+    let scan = Arc::new(TestScan::new(schema, vec![]));
+    let fetch_only = Arc::new(
+        TestFetchOnlyExec::new(scan, Some(10)).with_supports_limit_pushdown(true),
+    );
+    let global_limit = global_limit_exec(fetch_only, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    TestFetchOnlyExec: fetch=10
+      GlobalLimitExec: skip=0, fetch=5
+        TestScan
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn does_not_add_redundant_wrapper_when_existing_fetch_is_tighter_than_owed() -> Result<()>
+{
+    // An existing `fetch=3` on a single-partition operator is at least as
+    // tight as the owed `fetch=5`, so the pending requirement is satisfied
+    // without inserting a redundant `GlobalLimitExec`.
+    let schema = create_schema();
+    let scan = Arc::new(TestScan::new(schema, vec![]));
+    let fetch_only = Arc::new(TestFetchOnlyExec::new(scan, Some(3)));
+    let global_limit = global_limit_exec(fetch_only, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    TestFetchOnlyExec: fetch=3
+      TestScan
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn tightens_existing_sort_fetch_to_owed_limit() -> Result<()> {
+    // When an existing `fetch=10` is looser than the owed `fetch=5` and the
+    // operator can absorb a tighter fetch (`SortExec::with_fetch`), the fetch
+    // is tightened to the owed value instead of keeping the loose bound.
+    let schema = create_schema();
+    let scan = Arc::new(TestScan::new(schema.clone(), vec![]));
+    let ordering: LexOrdering = [PhysicalSortExpr {
+        expr: col("c1", &schema)?,
+        options: SortOptions::default(),
+    }]
+    .into();
+    let sort = sort_exec(ordering, scan).with_fetch(Some(10)).unwrap();
+    let global_limit = global_limit_exec(sort, 0, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    SortExec: TopK(fetch=5), expr=[c1@0 ASC], preserve_partitioning=[false]
+      TestScan
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn keeps_global_offset_limit_when_existing_fetch_is_looser() -> Result<()> {
+    // An existing `fetch=10` cannot satisfy an owed `skip=2, fetch=5`: an
+    // existing fetch alone must never satisfy the offset part of a
+    // requirement, so the `GlobalLimitExec` must be preserved.
+    let schema = create_schema();
+    let scan = Arc::new(TestScan::new(schema, vec![]));
+    let fetch_only = Arc::new(TestFetchOnlyExec::new(scan, Some(10)));
+    let global_limit = global_limit_exec(fetch_only, 2, Some(5));
+
+    let optimized = LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    insta::assert_snapshot!(
+        format_plan(&optimized),
+        @r"
+    GlobalLimitExec: skip=2, fetch=5
+      TestFetchOnlyExec: fetch=10
+        TestScan
     "
     );
 
