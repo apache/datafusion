@@ -1119,6 +1119,9 @@ impl Coercion {
 
     /// Create a new coercion to a native logical type with implicit coercion rules.
     ///
+    /// This is a convenience method for coercing to a specific logical type,
+    /// avoiding the need to separately pass the matching native default cast type.
+    ///
     /// The native type of `desired_type` is used as the default type when coercing
     /// from `allowed_source_types`.
     pub fn new_implicit_native(
