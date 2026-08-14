@@ -433,7 +433,7 @@ impl PushDecoderStreamState {
     /// selection is empty (no reader handed back), which would otherwise leave
     /// `rg_plan` trailing the decoder by one — a later prune/rebuild would then
     /// re-include an already-delivered row group (#24352).
-    fn sync_rg_plan_to_decoder_frontier(&mut self) -> Result<(), DataFusionError> {
+    fn sync_rg_plan_to_decoder_frontier(&mut self) -> Result<()> {
         match self
             .decoder
             .as_ref()
@@ -456,19 +456,19 @@ impl PushDecoderStreamState {
     /// have diverged; we surface that as an internal error rather than
     /// silently draining the plan, which would truncate the scan.
     fn advance_rg_plan_to(&mut self, target: usize) -> Result<()> {
-        if !self.rg_plan.iter().any(|e| e.rg_index == target) {
-            return internal_err!(
-                "push decoder frontier RG {target} is not in rg_plan; \
-                 decoder and plan have diverged"
-            );
-        }
         while let Some(front) = self.rg_plan.front() {
             if front.rg_index == target {
-                break;
+                return Ok(());
             }
             self.rg_plan.pop_front();
         }
-        Ok(())
+        // Drained without finding `target`: the decoder frontier names an RG
+        // our plan does not know, so decoder and plan have diverged. Surface it
+        // rather than continuing on with a truncated (now empty) plan.
+        internal_err!(
+            "push decoder frontier RG {target} is not in rg_plan; \
+             decoder and plan have diverged"
+        )
     }
 
     /// Copies metrics from ArrowReaderMetrics (the metrics collected by the
