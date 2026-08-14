@@ -47,8 +47,10 @@ use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::joins::piecewise_merge_join::classic_join::{
     ClassicPWMJStream, PiecewiseMergeJoinStreamState,
 };
+use crate::joins::piecewise_merge_join::existence_join::ExistencePWMJStream;
 use crate::joins::piecewise_merge_join::utils::{
     build_visited_indices_map, is_existence_join, is_right_existence_join,
+    is_supported_existence_join,
 };
 use crate::joins::utils::asymmetric_join_output_partitioning;
 use crate::metrics::MetricsSet;
@@ -164,17 +166,15 @@ use crate::{
 /// ```
 ///
 /// ## Existence Joins (Semi, Anti, Mark)
-/// Existence joins are made magnitudes of times faster with a `PiecewiseMergeJoin` as we only need to find
-/// the min/max value of the streamed side to be able to emit all matches on the buffered side. By putting
-/// the side we need to mark onto the sorted buffer side, we can emit all these matches at once.
+/// Currently only `LeftSemi` and `LeftAnti` are supported. For these the marked side is
+/// already the left (buffered) side, so no input swap is needed. The rest are rejected in
+/// [`Self::try_new`]: `RightSemi`/`RightAnti`/`RightMark` mark the right side and need an
+/// input swap, and `LeftMark` needs an extra boolean column rather than a filtered slice.
 ///
-/// For less than operations (`<`) both inputs are to be sorted in descending order and vice versa for greater
-/// than (`>`) operations. `SortExec` is used to enforce sorting on the buffered side and streamed side does not
-/// need to be sorted due to only needing to find the min/max.
-///
-/// For Left Semi, Anti, and Mark joins we swap the inputs so that the marked side is on the buffered side.
-///
-/// The pseudocode for the algorithm looks like this:
+/// `LeftSemi`/`LeftAnti` are served by a dedicated stream, `ExistencePWMJStream` (see
+/// `existence_join.rs`). Instead of materializing row pairs it records the matched set as a
+/// single index -- the start of the matched suffix of the buffered side -- and slices the
+/// buffered batch at that index once every streamed partition has been consumed.
 ///
 /// ```text
 /// // Using the example of a less than `<` operation
@@ -296,10 +296,12 @@ impl PiecewiseMergeJoinExec {
         join_type: JoinType,
         num_partitions: usize,
     ) -> Result<Self> {
-        // TODO: Implement existence joins for PiecewiseMergeJoin
-        if is_existence_join(join_type) {
+        // Left Semi/Anti are handled by `ExistencePWMJStream` (the marked side is
+        // already the buffered side, so no input swap is needed). Right existence joins
+        // and Mark joins are not yet supported.
+        if is_existence_join(join_type) && !is_supported_existence_join(join_type) {
             return not_impl_err!(
-                "Existence Joins are currently not supported for PiecewiseMergeJoin"
+                "Existence join {join_type} is currently not supported for PiecewiseMergeJoin"
             );
         }
 
@@ -506,7 +508,12 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         // Existence joins don't need to be sorted on one side.
         if is_right_existence_join(self.join_type) {
-            unimplemented!()
+            // Unreachable: `try_new` rejects right existence joins, and this signature
+            // cannot return `Result`. They swap the inputs, so whoever implements them
+            // must require the order on the streamed side instead.
+            unimplemented!(
+                "required_input_ordering for right existence joins; guarded by try_new"
+            )
         } else {
             // Sort the right side in memory, so we do not need to enforce any sorting
             vec![
@@ -603,6 +610,14 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         let on_streamed = Arc::clone(&self.on.1);
 
         let metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
+        // The final pass over unmatched/existence rows must run exactly once, on the
+        // last streamed partition to finish. That is coordinated by an atomic counter
+        // seeded with the number of streamed partitions that will actually call
+        // `execute`, which is the streamed side's output partition count — not the
+        // planner's `target_partitions` (they can differ, e.g. when the streamed input
+        // has a single partition), otherwise the counter never reaches 1 and the final
+        // pass is skipped.
+        let streamed_partitions = self.streamed.output_partitioning().partition_count();
         let buffered_fut = self.buffered_fut.try_once(|| {
             let reservation = MemoryConsumer::new("PiecewiseMergeJoinInput")
                 .register(context.memory_pool());
@@ -614,7 +629,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                 metrics.clone(),
                 reservation,
                 build_visited_indices_map(self.join_type),
-                self.num_partitions,
+                streamed_partitions,
             ))
         })?;
 
@@ -622,9 +637,27 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
 
         let batch_size = context.session_config().batch_size();
 
-        // TODO: Add existence joins + this is guarded at physical planner
-        if is_existence_join(self.join_type()) {
-            unreachable!()
+        let buffered_side =
+            BufferedSide::Initial(BufferedSideInitialState { buffered_fut });
+
+        if is_supported_existence_join(self.join_type) {
+            Ok(Box::pin(ExistencePWMJStream::try_new(
+                Arc::clone(&self.schema),
+                on_streamed,
+                self.join_type,
+                self.operator,
+                streamed,
+                buffered_side,
+                self.sort_options,
+                metrics,
+                batch_size,
+            )))
+        } else if is_existence_join(self.join_type) {
+            // Right existence joins and Mark joins are rejected in `try_new`.
+            internal_err!(
+                "PiecewiseMergeJoin does not support existence join {} (should have been rejected in try_new)",
+                self.join_type
+            )
         } else {
             Ok(Box::pin(ClassicPWMJStream::try_new(
                 Arc::clone(&self.schema),
@@ -632,7 +665,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                 self.join_type,
                 self.operator,
                 streamed,
-                BufferedSide::Initial(BufferedSideInitialState { buffered_fut }),
+                buffered_side,
                 PiecewiseMergeJoinStreamState::WaitBufferedSide,
                 self.sort_options,
                 metrics,
@@ -745,6 +778,11 @@ pub(super) struct BufferedSideData {
     values: ArrayRef,
     pub(super) visited_indices_bitmap: SharedBitmapBuilder,
     pub(super) remaining_partitions: AtomicUsize,
+    /// Existence joins only: the start of the matched suffix of the buffered side, or
+    /// `usize::MAX` before the first match. `[existence_min_marked, len)` *is* the matched
+    /// set -- no bitmap is allocated. Shared so each partition benefits from what the
+    /// others have marked; it only ever decreases, so a stale read is safe.
+    pub(super) existence_min_marked: AtomicUsize,
     _reservation: MemoryReservation,
 }
 
@@ -761,6 +799,7 @@ impl BufferedSideData {
             values,
             visited_indices_bitmap,
             remaining_partitions: AtomicUsize::new(remaining_partitions),
+            existence_min_marked: AtomicUsize::new(usize::MAX),
             _reservation: reservation,
         }
     }
