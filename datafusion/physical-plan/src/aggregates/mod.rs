@@ -1196,6 +1196,7 @@ impl AggregateExec {
             .enable_migration_aggregate
         {
             if self.should_use_ordered_partial_aggregate_stream(context) {
+                assert!(self.limit_options().is_none());
                 return Ok(StreamType::OrderedPartialAggregate(
                     OrderedPartialAggregateStream::new(self, context, partition)?,
                 ));
@@ -1208,12 +1209,14 @@ impl AggregateExec {
             }
 
             if self.should_use_partial_reduce_hash_stream(context) {
+                assert!(self.limit_options().is_none());
                 return Ok(StreamType::PartialReduceHash(
                     PartialReduceHashAggregateStream::new(self, context, partition)?,
                 ));
             }
 
             if self.should_use_ordered_final_aggregate_stream(context) {
+                assert!(self.limit_options().is_none());
                 return Ok(StreamType::OrderedFinalAggregate(
                     OrderedFinalAggregateStream::new(self, context, partition)?,
                 ));
@@ -1226,19 +1229,21 @@ impl AggregateExec {
             }
 
             if self.should_use_ordered_single_aggregate_stream(context) {
+                assert!(self.limit_options().is_none());
                 return Ok(StreamType::OrderedSingleAggregate(
                     OrderedSingleAggregateStream::new(self, context, partition)?,
                 ));
             }
 
             if self.should_use_single_hash_stream(context) {
+                assert!(self.limit_options().is_none());
                 return Ok(StreamType::SingleHash(SingleHashAggregateStream::new(
                     self, context, partition,
                 )?));
             }
 
             return internal_err!(
-                "No migrated aggregate stream supports mode={:?}, input_order_mode={:?}, grouping_sets={}",
+                "No migrated aggregate stream supports mode={:?}, input_order_mode={:?}, grouping_sets={}.",
                 self.mode,
                 self.input_order_mode,
                 self.group_by.has_grouping_set()
