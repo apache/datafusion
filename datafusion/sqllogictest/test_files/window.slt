@@ -6948,6 +6948,11 @@ ORDER BY x
 62 2
 62 2
 
+# Unsupported RANGE ORDER BY types still propagate the type-coercion error.
+query error DataFusion error: type_coercion\ncaused by\nInternal error: Cannot run range queries on datatype: Struct\("c0": Int64\)\.
+SELECT COUNT(*) OVER (ORDER BY x)
+FROM (VALUES (struct(1))) t(x)
+
 # An order key only needs to be comparable for a free range frame, whose bounds
 # are all UNBOUNDED or CURRENT ROW. A finite offset such as `1 PRECEDING` instead
 # has to be computed as `current_value - 1`, so it additionally requires
