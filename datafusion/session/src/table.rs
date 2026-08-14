@@ -211,13 +211,6 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// See [`Self::scan`] for detailed documentation about projection, filters, and limits.
     // Hand-written `#[async_trait]` expansion to reduce compile time. See
     // <https://github.com/apache/datafusion/issues/13814>.
-    //
-    // `scan` is called eagerly here so the returned future captures only the
-    // already-boxed future it awaits. An `async fn` body would instead capture
-    // `args`, and proving that coroutine `Send` walks the whole `Expr` /
-    // `LogicalPlan` type graph -- which, under `#[async_trait]`'s
-    // `'life0: 'async_trait` bounds, rustc cannot cache and so re-proves for
-    // every such method.
     fn scan_with_args<'a, 'life0, 'life1, 'async_trait>(
         &'life0 self,
         state: &'life1 dyn Session,
